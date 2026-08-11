@@ -37,6 +37,7 @@ A complete, buildable blueprint for an open-source, self-hosted personal AI team
 - [Research: MCP landscape for Gmail, GitHub, Linear + credential management](tickets/08-research-mcp-integrations.md) — GitHub and Linear are solved (official servers, token-as-Bearer headless auth); Gmail is the weak spot (no official send-capable server, no device flow, GCP-project-per-user onboarding → a guided setup wizard is effectively mandatory); poll-first triggers; `.env` + data-volume secrets baseline. Unblocks the integration-architecture decision.
 - [Research: web chat interface options for a Python agent backend](tickets/10-research-web-chat-ui.md) — top candidate: own a small React frontend (assistant-ui + FastAPI/SSE, outbox-table push); Chainlit as fastest-throwaway alternative; Open WebUI/Gradio/Streamlit ruled out. Unblocks the web-interface decision.
 - [Choose the project name](tickets/01-project-name.md) — **kinby** (invented, *kin* + *by*: kin at your side); PyPI/GitHub/domains verified clean 2026-08-10; runner-up was *sidekin*. Unblocks repo creation.
+- [Create the GitHub repository](tickets/02-create-github-repo.md) — live at [github.com/jorgesolerrr/kinby](https://github.com/jorgesolerrr/kinby) (public, Apache-2.0, thesis README); full working directory pushed as first commit, so the map, tickets, and research now live in the repo — commit resolutions as they land.
 
 ## Not yet specified
 
