@@ -26,6 +26,7 @@ A complete, buildable blueprint for an open-source, self-hosted personal AI team
   - Autonomy: **per-routine setting, approval-first default** for outward-facing actions (notify/question/review vocabulary).
   - Naming: **invented-word project name** (trademark/search-safe); agent persona name is a per-instance config field.
   - License/home: **Apache-2.0**, user's personal GitHub account.
+- **Learning objective (standing preference, added 2026-08-14):** Jorge's goal is to *learn AI-agent construction from the ground up* while building kinby. Future sessions on this map should run as **teach sessions** — he will invoke a teach skill; the ticket roadmap doubles as the curriculum. Understanding first, artifacts second.
 - **Key asset:** [Landscape research — Lindy + open-source personal agents](../research/landscape-lindy-and-personal-agents.md) (read before any decision ticket; covers Lindy's routines/skills/memory design, OpenHands/Letta/Khoj/LangGraph/Huginn, Graphiti vs mem0 graph-memory evidence, context-engineering practice).
 
 ## Decisions so far
@@ -38,12 +39,14 @@ A complete, buildable blueprint for an open-source, self-hosted personal AI team
 - [Research: web chat interface options for a Python agent backend](tickets/10-research-web-chat-ui.md) — top candidate: own a small React frontend (assistant-ui + FastAPI/SSE, outbox-table push); Chainlit as fastest-throwaway alternative; Open WebUI/Gradio/Streamlit ruled out. Unblocks the web-interface decision.
 - [Choose the project name](tickets/01-project-name.md) — **kinby** (invented, *kin* + *by*: kin at your side); PyPI/GitHub/domains verified clean 2026-08-10; runner-up was *sidekin*. Unblocks repo creation.
 - [Create the GitHub repository](tickets/02-create-github-repo.md) — live at [github.com/jorgesolerrr/kinby](https://github.com/jorgesolerrr/kinby) (public, Apache-2.0, thesis README); full working directory pushed as first commit, so the map, tickets, and research now live in the repo — commit resolutions as they land.
+- [Decide the memory architecture](tickets/04-memory-architecture.md) — hybrid, three memories: profile file (always injected) + transcript store (canonical) + knowledge graph (Neo4j CE + wrapped Graphiti — a Karpathy-style life wiki fed primarily by content ingestion, chunk-by-size, incremental with cost-estimated backfills) + a reasoning-trace log; retrieval is agentic-RAG via kinby-owned tools (`memory_search`, `memory_timeline`, `remember`, `forget`, `update_profile`); inspection via rendered entity/timeline pages; embedder pluggable, Voyage default; `forget` hard-deletes.
 
 ## Not yet specified
 
 - **Behavior testing / eval harness in Docker** — the user wants agent behavior tested in Docker; what an eval suite for a personal teammate even looks like (scenario replays? routine dry-runs?) sharpens after the SDK, memory, and routines decisions.
 - **Teachable routines (the ambition level)** — "I noticed you do this weekly, want me to take it over?": propose/create/edit flow, versioning, trust escalation. Ticketable once the v0.1 routines model is locked.
-- **Sleep-time memory consolidation** — a background agent distilling/reorganizing memory during downtime (Letta pattern). Depends on the memory architecture decision.
+- **Sleep-time memory consolidation** — skeleton now decided (memory architecture: async background pass distilling sessions into episodes, `add_triplet` for structured facts, never inline). Still foggy: curation/reorganization scope (Letta-style rewrites?), and whether the pass is scheduled *as a routine* — sharpens with the routines decision.
+- **Reasoning-trace store** — named as a memory layer (memory architecture decision): append-only per-task reasoning log with edges into short- and long-term memory. Concrete form — schema, retention, how edges are represented, whether it feeds the graph — sharpens with the context/skills decision.
 - **Security model detail** — sandboxing of agent actions, secrets storage in the Compose deployment, blast-radius limits. Sharpens after integration architecture.
 - **Persona/identity config** — how the per-instance agent name/personality is expressed. Trivial but unspecifiable until the context model exists.
 - **Sub-agent orchestration** — whether/how the agent spawns isolated sub-agents for context economy. Depends on Claude Agent SDK findings.
