@@ -6,6 +6,7 @@ import re
 import unicodedata
 from pathlib import Path
 
+from kinby.instance.errors import InstanceExistsError
 from kinby.instance.layout import (
     ENV_NAME,
     GITIGNORE_NAME,
@@ -23,10 +24,6 @@ from kinby.instance.layout import (
 
 PLACEHOLDER_MODEL = "provider:model"
 README_NAME = "README.md"
-
-
-class InstanceExistsError(Exception):
-    """Raised when init would overwrite an existing instance."""
 
 
 def _slugify(name: str) -> str:

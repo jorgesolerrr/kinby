@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,55 +15,11 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised by the Python 3.10 test run
     import tomli as tomllib
 
+from kinby.instance.dataclasses import Instance, Manifest, Memory, Models, Workspace
+from kinby.instance.errors import ManifestError
 from kinby.instance.layout import ENV_NAME, MANIFEST_NAME, STATE_DIR, WORKSPACE_DIR
 
 _MODEL_PATTERN = re.compile(r"^[^:\s]+:[^:\s]+$")
-
-
-class ManifestError(ValueError):
-    """Raised when an instance manifest cannot be loaded or validated."""
-
-
-@dataclass(frozen=True)
-class Models:
-    """Models selected for one instance."""
-
-    main: str
-    recap: str
-    embed: str | None
-
-
-@dataclass(frozen=True)
-class Workspace:
-    """The workspace configured for one instance."""
-
-    path: Path
-    source: str | None
-
-
-@dataclass(frozen=True)
-class Memory:
-    """Reserved memory configuration."""
-
-
-@dataclass(frozen=True)
-class Manifest:
-    """Validated settings from ``kinby.toml``."""
-
-    id: str
-    persona_name: str | None
-    state_dir: Path
-    models: Models
-    workspace: Workspace
-    memory: Memory
-
-
-@dataclass(frozen=True)
-class Instance:
-    """An explicit instance directory and its validated manifest."""
-
-    path: Path
-    manifest: Manifest
 
 
 def _reject_unknown(

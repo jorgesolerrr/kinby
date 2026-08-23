@@ -1,15 +1,9 @@
 """On-disk shape of an instance: directory model, kinby.toml manifest, and discovery."""
 
-from kinby.instance.init import InstanceExistsError, init_instance
-from kinby.instance.manifest import (
-    Instance,
-    Manifest,
-    ManifestError,
-    Memory,
-    Models,
-    Workspace,
-    load_instance,
-)
+from kinby.instance.dataclasses import Instance, Manifest, Memory, Models, Workspace
+from kinby.instance.errors import InstanceExistsError, ManifestError
+from kinby.instance.init import init_instance
+from kinby.instance.manifest import load_instance
 
 __all__ = [
     "Instance",
