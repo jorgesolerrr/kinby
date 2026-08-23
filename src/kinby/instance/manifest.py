@@ -15,7 +15,14 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised by the Python 3.10 test run
     import tomli as tomllib
 
-from kinby.instance.dataclasses import Instance, Manifest, Memory, Models, Workspace
+from kinby.instance.dataclasses import (
+    Instance,
+    Manifest,
+    MatchingRule,
+    Memory,
+    Models,
+    Workspace,
+)
 from kinby.instance.errors import ManifestError
 from kinby.instance.layout import ENV_NAME, MANIFEST_NAME, STATE_DIR, WORKSPACE_DIR
 
@@ -104,8 +111,9 @@ def _parse_manifest(instance_path: Path, values: Mapping[str, Any]) -> Manifest:
     )
 
 
-def load_instance(directory: Path, *, resolved_by: str = "explicit directory") -> Instance:
-    """Load an instance from an explicit directory."""
+def load_instance(
+    directory: Path, *, matching_rule: MatchingRule = "explicit directory"
+) -> Instance:
     instance_path = Path(directory).resolve()
     load_dotenv(instance_path / ENV_NAME, override=False)
     manifest_path = instance_path / MANIFEST_NAME
@@ -119,5 +127,5 @@ def load_instance(directory: Path, *, resolved_by: str = "explicit directory") -
     return Instance(
         path=instance_path,
         manifest=_parse_manifest(instance_path, values),
-        resolved_by=resolved_by,
+        matching_rule=matching_rule,
     )

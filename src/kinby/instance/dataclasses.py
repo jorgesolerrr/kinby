@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+MatchingRule = Literal[
+    "explicit directory",
+    "KINBY_INSTANCE",
+    "walk-up",
+    "home default",
+]
 
 
 @dataclass(frozen=True)
@@ -42,8 +50,6 @@ class Manifest:
 
 @dataclass(frozen=True)
 class Instance:
-    """A resolved instance directory and its validated manifest."""
-
     path: Path
     manifest: Manifest
-    resolved_by: str = "explicit directory"
+    matching_rule: MatchingRule

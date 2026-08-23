@@ -23,7 +23,7 @@ def _print_instance(instance: Instance) -> None:
     if manifest.persona_name is not None:
         print(f"persona name: {manifest.persona_name}")
     print(f"path: {instance.path}")
-    print(f"resolved by: {instance.resolved_by}")
+    print(f"matching rule: {instance.matching_rule}")
     print("models:")
     print(f"  main: {manifest.models.main}")
     print(f"  recap: {manifest.models.recap}")

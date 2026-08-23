@@ -56,7 +56,7 @@ source = "https://example.com/alice/project.git"
     assert "id: alice" in captured.out
     assert "persona name: Ada" in captured.out
     assert f"path: {instance.resolve()}" in captured.out
-    assert "resolved by: explicit directory" in captured.out
+    assert "matching rule: explicit directory" in captured.out
     assert "main: openai:gpt-5" in captured.out
     assert "recap: openai:gpt-5" in captured.out
     assert "embed: openai:text-embedding-3-small" in captured.out
@@ -223,7 +223,7 @@ def test_instance_show_uses_kinby_instance(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "id: from-env" in captured.out
-    assert "resolved by: KINBY_INSTANCE" in captured.out
+    assert "matching rule: KINBY_INSTANCE" in captured.out
     assert captured.err == ""
 
 
@@ -244,7 +244,7 @@ def test_instance_show_walks_up_from_the_workspace(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "id: walked-up" in captured.out
-    assert "resolved by: walk-up" in captured.out
+    assert "matching rule: walk-up" in captured.out
     assert captured.err == ""
 
 
@@ -262,7 +262,7 @@ def test_instance_show_uses_the_home_default(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "id: home-default" in captured.out
-    assert "resolved by: home default" in captured.out
+    assert "matching rule: home default" in captured.out
     assert captured.err == ""
 
 
@@ -301,7 +301,7 @@ def test_instance_option_beats_other_discovery_rules(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "id: explicit" in captured.out
-    assert "resolved by: explicit directory" in captured.out
+    assert "matching rule: explicit directory" in captured.out
     assert captured.err == ""
 
 
@@ -322,7 +322,7 @@ def test_kinby_instance_beats_walk_up_and_home_default(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "id: environment" in captured.out
-    assert "resolved by: KINBY_INSTANCE" in captured.out
+    assert "matching rule: KINBY_INSTANCE" in captured.out
     assert captured.err == ""
 
 
@@ -340,5 +340,5 @@ def test_walk_up_beats_the_home_default(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "id: walk-up" in captured.out
-    assert "resolved by: walk-up" in captured.out
+    assert "matching rule: walk-up" in captured.out
     assert captured.err == ""

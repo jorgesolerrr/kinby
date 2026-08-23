@@ -6,7 +6,7 @@ class InstanceExistsError(Exception):
 
 
 class InstanceNotFoundError(Exception):
-    """Raised when no discovery rule finds an instance."""
+    pass
 
 
 class ManifestError(ValueError):
