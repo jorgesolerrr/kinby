@@ -21,38 +21,28 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
     gitignore = (target / ".gitignore").read_text(encoding="utf-8")
     assert ".state/" in gitignore
     assert ".env" in gitignore
-    assert 'main = "provider:model"' in (target / "kinby.toml").read_text(
-        encoding="utf-8"
-    )
+    assert 'main = "provider:model"' in (target / "kinby.toml").read_text(encoding="utf-8")
     assert (target / "kinby.toml").read_text(encoding="utf-8").startswith("#")
     assert (target / "SYSTEM.md").read_text(encoding="utf-8").startswith("<!--")
     assert (target / "permissions.toml").read_text(encoding="utf-8").startswith("#")
-    assert (target / "memory" / "profile.md").read_text(encoding="utf-8").startswith(
-        "<!--"
-    )
+    assert (target / "memory" / "profile.md").read_text(encoding="utf-8").startswith("<!--")
     assert (target / ".gitignore").read_text(encoding="utf-8").startswith("#")
-    assert (target / "tools" / "README.md").read_text(encoding="utf-8").startswith(
-        "<!--"
-    )
-    assert (target / "skills" / "README.md").read_text(encoding="utf-8").startswith(
-        "<!--"
-    )
-    assert (target / "routines" / "README.md").read_text(encoding="utf-8").startswith(
-        "<!--"
-    )
+    assert (target / "tools" / "README.md").read_text(encoding="utf-8").startswith("<!--")
+    assert (target / "skills" / "README.md").read_text(encoding="utf-8").startswith("<!--")
+    assert (target / "routines" / "README.md").read_text(encoding="utf-8").startswith("<!--")
 
 
 def test_init_refuses_an_existing_instance_and_changes_nothing(tmp_path, capsys):
     target = tmp_path / "alice"
     target.mkdir()
-    (target / "kinby.toml").write_text("id = \"keep-me\"\n", encoding="utf-8")
+    (target / "kinby.toml").write_text('id = "keep-me"\n', encoding="utf-8")
     (target / "marker.txt").write_text("untouched\n", encoding="utf-8")
 
     exit_code = main(["init", str(target)])
 
     captured = capsys.readouterr()
     assert exit_code != 0
-    assert (target / "kinby.toml").read_text(encoding="utf-8") == "id = \"keep-me\"\n"
+    assert (target / "kinby.toml").read_text(encoding="utf-8") == 'id = "keep-me"\n'
     assert (target / "marker.txt").read_text(encoding="utf-8") == "untouched\n"
     assert not (target / "SYSTEM.md").exists()
     assert captured.err

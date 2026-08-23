@@ -46,7 +46,7 @@ def load_tool_file(path: Path) -> list[BaseTool]:
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
-    spec.loader.exec_module(mod)           # raises -> keep previous version
+    spec.loader.exec_module(mod)  # raises -> keep previous version
     return [v for v in vars(mod).values() if isinstance(v, BaseTool)]
 ```
 
@@ -74,7 +74,7 @@ For kinby: a `kinby.tools` group where each value is `pkg.module:tool_or_list`. 
 
 ```python
 def call_model(state, runtime):
-    tools = registry.snapshot()                      # immutable list, sorted by name
+    tools = registry.snapshot()  # immutable list, sorted by name
     return {"messages": [llm.bind_tools(tools).invoke(state["messages"])]}
 ```
 
