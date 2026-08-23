@@ -9,20 +9,31 @@ from kinby.instance.layout import MANIFEST_NAME
 from kinby.instance.manifest import load_instance
 
 
-def discover_instance(directory: Path | None = None) -> Instance:
+def discover_instance(
+    directory: Path | None = None, *, model_override: str | None = None
+) -> Instance:
     if directory is not None:
-        return load_instance(directory)
+        return load_instance(directory, model_override=model_override)
     environment_directory = os.environ.get("KINBY_INSTANCE")
     if environment_directory:
         return load_instance(
             Path(environment_directory),
             matching_rule="KINBY_INSTANCE",
+            model_override=model_override,
         )
     current_directory = Path.cwd()
     for candidate in (current_directory, *current_directory.parents):
         if (candidate / MANIFEST_NAME).is_file():
-            return load_instance(candidate, matching_rule="walk-up")
+            return load_instance(
+                candidate,
+                matching_rule="walk-up",
+                model_override=model_override,
+            )
     home_default = Path.home() / ".kinby" / "default"
     if (home_default / MANIFEST_NAME).is_file():
-        return load_instance(home_default, matching_rule="home default")
+        return load_instance(
+            home_default,
+            matching_rule="home default",
+            model_override=model_override,
+        )
     raise InstanceNotFoundError("No kinby instance found. Run `kinby init <directory>` first.")

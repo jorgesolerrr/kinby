@@ -4,7 +4,7 @@ from kinby.instance.dataclasses import Conventions, Instance, Manifest, Memory, 
 from kinby.instance.discovery import discover_instance
 from kinby.instance.errors import InstanceExistsError, InstanceNotFoundError, ManifestError
 from kinby.instance.init import init_instance
-from kinby.instance.manifest import load_instance
+from kinby.instance.manifest import load_instance, reload_manifest
 
 __all__ = [
     "Conventions",
@@ -19,4 +19,5 @@ __all__ = [
     "discover_instance",
     "init_instance",
     "load_instance",
+    "reload_manifest",
 ]

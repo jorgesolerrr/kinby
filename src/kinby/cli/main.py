@@ -83,6 +83,24 @@ def main(argv: list[str] | None = None) -> int:
         dest="instance_directory",
         help="instance directory to inspect",
     )
+    run_parser = subparsers.add_parser(
+        "run",
+        help="run an instance",
+    )
+    run_parser.add_argument(
+        "directory",
+        nargs="?",
+        help="instance directory to run",
+    )
+    run_parser.add_argument(
+        "--instance",
+        dest="instance_directory",
+        help="instance directory to run",
+    )
+    run_parser.add_argument(
+        "--model",
+        help="override [models].main for this session",
+    )
     args = parser.parse_args(argv)
     if args.version:
         print(f"kinby {version('kinby')}")
@@ -95,15 +113,20 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"Created instance at {path}")
         return 0
-    if args.command == "instance" and args.instance_command == "show":
+    show_instance = args.command == "instance" and args.instance_command == "show"
+    if show_instance or args.command == "run":
         try:
             explicit_directory = args.instance_directory or args.directory
             directory = Path(explicit_directory) if explicit_directory else None
-            instance = discover_instance(directory)
+            model_override = args.model if args.command == "run" else None
+            instance = discover_instance(directory, model_override=model_override)
         except (InstanceNotFoundError, ManifestError) as exc:
             print(exc, file=sys.stderr)
             return 1
         _print_instance(instance)
+        if args.command == "run":
+            print("The agent loop is not yet available.")
+            return 1
         return 0
     parser.print_help()
     return 0

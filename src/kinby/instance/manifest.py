@@ -140,7 +140,12 @@ def _parse_conventions(workspace_path: Path, values: Mapping[str, Any]) -> Conve
     )
 
 
-def _parse_manifest(instance_path: Path, values: Mapping[str, Any]) -> Manifest:
+def _parse_manifest(
+    instance_path: Path,
+    values: Mapping[str, Any],
+    *,
+    model_override: str | None = None,
+) -> Manifest:
     _reject_unknown(
         values,
         {"id", "persona_name", "state_dir", "models", "workspace", "memory"},
@@ -153,7 +158,11 @@ def _parse_manifest(instance_path: Path, values: Mapping[str, Any]) -> Manifest:
         raise ManifestError("models.main: required")
     model_values = _table(values["models"], "models")
     _reject_unknown(model_values, {"main", "recap", "embed"}, "models")
-    main = _model(_required_string(model_values, "main", "models"), "models.main")
+    configured_main = _model(
+        _required_string(model_values, "main", "models"),
+        "models.main",
+    )
+    main = _model(model_override, "models.main") if model_override is not None else configured_main
     recap_value = _optional_string(model_values, "recap", "models") or main
     recap = _model(recap_value, "models.recap")
     embed_value = _optional_string(model_values, "embed", "models")
@@ -184,7 +193,10 @@ def _parse_manifest(instance_path: Path, values: Mapping[str, Any]) -> Manifest:
 
 
 def load_instance(
-    directory: Path, *, matching_rule: MatchingRule = "explicit directory"
+    directory: Path,
+    *,
+    matching_rule: MatchingRule = "explicit directory",
+    model_override: str | None = None,
 ) -> Instance:
     instance_path = Path(directory).resolve()
     load_dotenv(instance_path / ENV_NAME, override=False)
@@ -196,8 +208,21 @@ def load_instance(
         raise ManifestError(f"{MANIFEST_NAME}: not found in {instance_path}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise ManifestError(f"{MANIFEST_NAME}: {exc}") from exc
+    manifest = _parse_manifest(
+        instance_path,
+        values,
+        model_override=model_override,
+    )
     return Instance(
         path=instance_path,
-        manifest=_parse_manifest(instance_path, values),
+        manifest=manifest,
         matching_rule=matching_rule,
     )
+
+
+def reload_manifest(instance: Instance, *, model_override: str | None = None) -> Manifest:
+    return load_instance(
+        instance.path,
+        matching_rule=instance.matching_rule,
+        model_override=model_override,
+    ).manifest
