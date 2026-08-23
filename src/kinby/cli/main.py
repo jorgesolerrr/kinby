@@ -7,7 +7,30 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
-from kinby.instance.init import InstanceExistsError, init_instance
+from kinby.instance import (
+    Instance,
+    InstanceExistsError,
+    ManifestError,
+    init_instance,
+    load_instance,
+)
+
+
+def _print_instance(instance: Instance) -> None:
+    manifest = instance.manifest
+    print(f"id: {manifest.id}")
+    if manifest.persona_name is not None:
+        print(f"persona name: {manifest.persona_name}")
+    print(f"path: {instance.path}")
+    print("models:")
+    print(f"  main: {manifest.models.main}")
+    print(f"  recap: {manifest.models.recap}")
+    print(f"  embed: {manifest.models.embed or 'not configured'}")
+    workspace_status = "present" if manifest.workspace.path.exists() else "missing"
+    print(f"workspace: {manifest.workspace.path} ({workspace_status})")
+    if manifest.workspace.source is not None:
+        print(f"  source: {manifest.workspace.source}")
+    print(f"state dir: {manifest.state_dir}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,6 +50,16 @@ def main(argv: list[str] | None = None) -> int:
         "--model",
         help="value for [models].main (a placeholder is used when omitted)",
     )
+    instance_parser = subparsers.add_parser(
+        "instance",
+        help="inspect an instance",
+    )
+    instance_subparsers = instance_parser.add_subparsers(dest="instance_command")
+    show_parser = instance_subparsers.add_parser(
+        "show",
+        help="show the resolved settings for an explicit instance",
+    )
+    show_parser.add_argument("directory", help="instance directory to inspect")
     args = parser.parse_args(argv)
     if args.version:
         print(f"kinby {version('kinby')}")
@@ -38,6 +71,14 @@ def main(argv: list[str] | None = None) -> int:
             print(exc, file=sys.stderr)
             return 1
         print(f"Created instance at {path}")
+        return 0
+    if args.command == "instance" and args.instance_command == "show":
+        try:
+            instance = load_instance(Path(args.directory))
+        except ManifestError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        _print_instance(instance)
         return 0
     parser.print_help()
     return 0

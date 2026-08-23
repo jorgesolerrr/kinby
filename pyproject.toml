@@ -5,7 +5,10 @@ description = "An open-source, self-hosted personal AI teammate"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
-dependencies = []
+dependencies = [
+    "python-dotenv>=1.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
 
 [project.scripts]
 kinby = "kinby.cli:main"
