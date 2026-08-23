@@ -48,6 +48,10 @@ A user-initiated, explicitly scoped ingestion of historical content (a folder, a
 
 One kinby deployment: a directory (and, when deployed, a container) that owns its behavior configuration, memory and transcripts. One instance serves one user with one persona. Every instance has the same shape; a repo-scoped coding agent is an instance whose workspace is that repo, not a different kind of instance.
 
+### Manifest
+
+The portable description of an instance's identity and configuration. It contains no secrets or runtime state.
+
 ### Workspace
 
 The directory holding the user's *own* work that an instance acts on — a repository, a notes folder. Lives under the instance (cloned there in a container, linked there on a local install) and is never written to by kinby on its own behalf: the instance's behavior stays in the instance, though it may *read* the workspace's own agent conventions as an additional behavior source.

@@ -6,24 +6,24 @@ import re
 import unicodedata
 from pathlib import Path
 
-MANIFEST_NAME = "kinby.toml"
-SYSTEM_NAME = "SYSTEM.md"
-PERMISSIONS_NAME = "permissions.toml"
-TOOLS_DIR = "tools"
-SKILLS_DIR = "skills"
-ROUTINES_DIR = "routines"
-MEMORY_DIR = "memory"
-PROFILE_NAME = "profile.md"
-WORKSPACE_DIR = "workspace"
-STATE_DIR = ".state"
-GITIGNORE_NAME = ".gitignore"
+from kinby.instance.errors import InstanceExistsError
+from kinby.instance.layout import (
+    ENV_NAME,
+    GITIGNORE_NAME,
+    MANIFEST_NAME,
+    MEMORY_DIR,
+    PERMISSIONS_NAME,
+    PROFILE_NAME,
+    ROUTINES_DIR,
+    SKILLS_DIR,
+    STATE_DIR,
+    SYSTEM_NAME,
+    TOOLS_DIR,
+    WORKSPACE_DIR,
+)
 
 PLACEHOLDER_MODEL = "provider:model"
 README_NAME = "README.md"
-
-
-class InstanceExistsError(Exception):
-    """Raised when init would overwrite an existing instance."""
 
 
 def _slugify(name: str) -> str:
@@ -93,7 +93,11 @@ def init_instance(directory: Path, model: str | None = None) -> Path:
         encoding="utf-8",
     )
     (directory / GITIGNORE_NAME).write_text(
-        (f"# Runtime state and local secrets stay off git.\n{STATE_DIR}/\n.env\n"),
+        (
+            "# Runtime state and local secrets stay off git.\n"
+            f"{STATE_DIR}/\n"
+            f"{ENV_NAME}\n"
+        ),
         encoding="utf-8",
     )
     _write_readme(
