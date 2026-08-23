@@ -48,6 +48,10 @@ A user-initiated, explicitly scoped ingestion of historical content (a folder, a
 
 One kinby deployment: a directory (and, when deployed, a container) that owns its behavior configuration, memory and transcripts. One instance serves one user with one persona. Every instance has the same shape; a repo-scoped coding agent is an instance whose workspace is that repo, not a different kind of instance.
 
+### Instance discovery
+
+The ordered lookup that selects an existing **instance** when a command does not name one directly. The matching rule is part of the result so kinby can tell the user why it selected that instance.
+
 ### Manifest
 
 The portable description of an instance's identity and configuration. It contains no secrets or runtime state.

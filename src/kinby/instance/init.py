@@ -93,11 +93,7 @@ def init_instance(directory: Path, model: str | None = None) -> Path:
         encoding="utf-8",
     )
     (directory / GITIGNORE_NAME).write_text(
-        (
-            "# Runtime state and local secrets stay off git.\n"
-            f"{STATE_DIR}/\n"
-            f"{ENV_NAME}\n"
-        ),
+        (f"# Runtime state and local secrets stay off git.\n{STATE_DIR}/\n{ENV_NAME}\n"),
         encoding="utf-8",
     )
     _write_readme(

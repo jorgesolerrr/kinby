@@ -10,9 +10,10 @@ from pathlib import Path
 from kinby.instance import (
     Instance,
     InstanceExistsError,
+    InstanceNotFoundError,
     ManifestError,
+    discover_instance,
     init_instance,
-    load_instance,
 )
 
 
@@ -22,6 +23,7 @@ def _print_instance(instance: Instance) -> None:
     if manifest.persona_name is not None:
         print(f"persona name: {manifest.persona_name}")
     print(f"path: {instance.path}")
+    print(f"matching rule: {instance.matching_rule}")
     print("models:")
     print(f"  main: {manifest.models.main}")
     print(f"  recap: {manifest.models.recap}")
@@ -57,9 +59,18 @@ def main(argv: list[str] | None = None) -> int:
     instance_subparsers = instance_parser.add_subparsers(dest="instance_command")
     show_parser = instance_subparsers.add_parser(
         "show",
-        help="show the resolved settings for an explicit instance",
+        help="show the resolved instance settings",
     )
-    show_parser.add_argument("directory", help="instance directory to inspect")
+    show_parser.add_argument(
+        "directory",
+        nargs="?",
+        help="instance directory to inspect",
+    )
+    show_parser.add_argument(
+        "--instance",
+        dest="instance_directory",
+        help="instance directory to inspect",
+    )
     args = parser.parse_args(argv)
     if args.version:
         print(f"kinby {version('kinby')}")
@@ -74,8 +85,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "instance" and args.instance_command == "show":
         try:
-            instance = load_instance(Path(args.directory))
-        except ManifestError as exc:
+            explicit_directory = args.instance_directory or args.directory
+            directory = Path(explicit_directory) if explicit_directory else None
+            instance = discover_instance(directory)
+        except (InstanceNotFoundError, ManifestError) as exc:
             print(exc, file=sys.stderr)
             return 1
         _print_instance(instance)

@@ -5,5 +5,9 @@ class InstanceExistsError(Exception):
     """Raised when init would overwrite an existing instance."""
 
 
+class InstanceNotFoundError(Exception):
+    pass
+
+
 class ManifestError(ValueError):
     """Raised when an instance manifest cannot be loaded or validated."""
