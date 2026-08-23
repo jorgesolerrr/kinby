@@ -16,6 +16,7 @@ else:  # pragma: no cover - exercised by the Python 3.10 test run
     import tomli as tomllib
 
 from kinby.instance.dataclasses import (
+    Conventions,
     Instance,
     Manifest,
     MatchingRule,
@@ -27,6 +28,8 @@ from kinby.instance.errors import ManifestError
 from kinby.instance.layout import ENV_NAME, MANIFEST_NAME, STATE_DIR, WORKSPACE_DIR
 
 _MODEL_PATTERN = re.compile(r"^[^:\s]+:[^:\s]+$")
+_DEFAULT_CONVENTION_INSTRUCTIONS = ("AGENTS.md",)
+_DEFAULT_CONVENTION_SKILLS = (".agents/skills",)
 
 
 def _reject_unknown(values: Mapping[str, Any], allowed: set[str], prefix: str = "") -> None:
@@ -71,6 +74,72 @@ def _resolved_path(instance_path: Path, configured_path: str) -> Path:
     return (instance_path / path).resolve()
 
 
+def _optional_bool(values: Mapping[str, Any], key: str, prefix: str) -> bool:
+    if key not in values:
+        return False
+    value = values[key]
+    if not isinstance(value, bool):
+        raise ManifestError(f"{prefix}.{key}: must be a boolean")
+    return value
+
+
+def _string_list(
+    values: Mapping[str, Any], key: str, prefix: str, default: tuple[str, ...]
+) -> tuple[str, ...]:
+    if key not in values:
+        return default
+    value = values[key]
+    if not isinstance(value, list):
+        raise ManifestError(f"{prefix}.{key}: must be a list")
+    entries: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item:
+            raise ManifestError(f"{prefix}.{key}: must be a list of non-empty strings")
+        entries.append(item)
+    return tuple(entries)
+
+
+def _existing_workspace_paths(
+    workspace_path: Path, entries: tuple[str, ...], *, directory: bool
+) -> tuple[Path, ...]:
+    found: list[Path] = []
+    for entry in entries:
+        resolved = _resolved_path(workspace_path, entry)
+        exists = resolved.is_dir() if directory else resolved.is_file()
+        if exists:
+            found.append(resolved)
+    return tuple(found)
+
+
+def _parse_conventions(workspace_path: Path, values: Mapping[str, Any]) -> Conventions:
+    convention_raw = values.get("conventions")
+    if convention_raw is None:
+        return Conventions(instructions=(), skills=())
+    convention_values = _table(convention_raw, "workspace.conventions")
+    _reject_unknown(
+        convention_values, {"enabled", "instructions", "skills"}, "workspace.conventions"
+    )
+    enabled = _optional_bool(convention_values, "enabled", "workspace.conventions")
+    instructions = _string_list(
+        convention_values,
+        "instructions",
+        "workspace.conventions",
+        _DEFAULT_CONVENTION_INSTRUCTIONS,
+    )
+    skills = _string_list(
+        convention_values,
+        "skills",
+        "workspace.conventions",
+        _DEFAULT_CONVENTION_SKILLS,
+    )
+    if not enabled:
+        return Conventions(instructions=(), skills=())
+    return Conventions(
+        instructions=_existing_workspace_paths(workspace_path, instructions, directory=False),
+        skills=_existing_workspace_paths(workspace_path, skills, directory=True),
+    )
+
+
 def _parse_manifest(instance_path: Path, values: Mapping[str, Any]) -> Manifest:
     _reject_unknown(
         values,
@@ -91,9 +160,11 @@ def _parse_manifest(instance_path: Path, values: Mapping[str, Any]) -> Manifest:
     embed = _model(embed_value, "models.embed") if embed_value is not None else None
 
     workspace_values = _table(values.get("workspace", {}), "workspace")
-    _reject_unknown(workspace_values, {"path", "source"}, "workspace")
+    _reject_unknown(workspace_values, {"path", "source", "conventions"}, "workspace")
     workspace_path_value = _optional_string(workspace_values, "path", "workspace") or WORKSPACE_DIR
     source = _optional_string(workspace_values, "source", "workspace")
+    workspace_path = _resolved_path(instance_path, workspace_path_value)
+    conventions = _parse_conventions(workspace_path, workspace_values)
 
     memory_values = _table(values.get("memory", {}), "memory")
     _reject_unknown(memory_values, set(), "memory")
@@ -104,8 +175,9 @@ def _parse_manifest(instance_path: Path, values: Mapping[str, Any]) -> Manifest:
         state_dir=_resolved_path(instance_path, state_dir_value),
         models=Models(main=main, recap=recap, embed=embed),
         workspace=Workspace(
-            path=_resolved_path(instance_path, workspace_path_value),
+            path=workspace_path,
             source=source,
+            conventions=conventions,
         ),
         memory=Memory(),
     )

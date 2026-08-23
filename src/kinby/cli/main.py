@@ -32,6 +32,18 @@ def _print_instance(instance: Instance) -> None:
     print(f"workspace: {manifest.workspace.path} ({workspace_status})")
     if manifest.workspace.source is not None:
         print(f"  source: {manifest.workspace.source}")
+    instructions = manifest.workspace.conventions.instructions
+    skills = manifest.workspace.conventions.skills
+    if instructions or skills:
+        print("conventions:")
+        if instructions:
+            print("  instructions:")
+            for path in instructions:
+                print(f"    {path}")
+        if skills:
+            print("  skills:")
+            for path in skills:
+                print(f"    {path}")
     print(f"state dir: {manifest.state_dir}")
 
 
