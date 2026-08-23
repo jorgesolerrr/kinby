@@ -1,8 +1,29 @@
 import os
+from pathlib import Path
 
 import pytest
 
 from kinby.cli import main
+
+
+def _write_instance(instance: Path, instance_id: str) -> None:
+    instance.mkdir(parents=True, exist_ok=True)
+    (instance / "kinby.toml").write_text(
+        f'id = "{instance_id}"\n\n[models]\nmain = "openai:gpt-5"\n',
+        encoding="utf-8",
+    )
+
+
+def _control_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+    home = tmp_path / "home"
+    cwd = tmp_path / "cwd"
+    home.mkdir()
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("KINBY_INSTANCE", raising=False)
+    return home, cwd
 
 
 def test_instance_show_reports_the_resolved_manifest(tmp_path, capsys):
@@ -35,6 +56,7 @@ source = "https://example.com/alice/project.git"
     assert "id: alice" in captured.out
     assert "persona name: Ada" in captured.out
     assert f"path: {instance.resolve()}" in captured.out
+    assert "resolved by: explicit directory" in captured.out
     assert "main: openai:gpt-5" in captured.out
     assert "recap: openai:gpt-5" in captured.out
     assert "embed: openai:text-embedding-3-small" in captured.out
@@ -68,9 +90,7 @@ def test_instance_show_names_missing_models_main(tmp_path, capsys):
         ('main = "openai:gpt-5"\nembed = "text-embedding-3-small"', "models.embed"),
     ],
 )
-def test_instance_show_names_a_malformed_model(
-    tmp_path, capsys, model_setting, offending_key
-):
+def test_instance_show_names_a_malformed_model(tmp_path, capsys, model_setting, offending_key):
     instance = tmp_path / "alice"
     instance.mkdir()
     (instance / "kinby.toml").write_text(
@@ -99,17 +119,11 @@ def test_instance_show_names_a_malformed_model(
             "models.timeout",
         ),
         (
-            (
-                'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n'
-                '[workspace]\nbranch = "main"\n'
-            ),
+            ('id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n[workspace]\nbranch = "main"\n'),
             "workspace.branch",
         ),
         (
-            (
-                'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n'
-                "[memory]\nenabled = true\n"
-            ),
+            ('id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n[memory]\nenabled = true\n'),
             "memory.enabled",
         ),
     ],
@@ -192,3 +206,139 @@ def test_instance_show_loads_dotenv_without_overriding_the_environment(
     assert exit_code == 0
     assert os.environ["KINBY_TEST_FROM_DOTENV"] == "loaded"
     assert os.environ["KINBY_TEST_FROM_OPERATOR"] == "operator"
+
+
+def test_instance_show_uses_kinby_instance(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _control_discovery(monkeypatch, tmp_path)
+    instance = tmp_path / "from-env"
+    _write_instance(instance, "from-env")
+    monkeypatch.setenv("KINBY_INSTANCE", str(instance))
+
+    exit_code = main(["instance", "show"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "id: from-env" in captured.out
+    assert "resolved by: KINBY_INSTANCE" in captured.out
+    assert captured.err == ""
+
+
+def test_instance_show_walks_up_from_the_workspace(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _control_discovery(monkeypatch, tmp_path)
+    instance = tmp_path / "walked-up"
+    _write_instance(instance, "walked-up")
+    nested_directory = instance / "workspace" / "sub" / "dir"
+    nested_directory.mkdir(parents=True)
+    monkeypatch.chdir(nested_directory)
+
+    exit_code = main(["instance", "show"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "id: walked-up" in captured.out
+    assert "resolved by: walk-up" in captured.out
+    assert captured.err == ""
+
+
+def test_instance_show_uses_the_home_default(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, _ = _control_discovery(monkeypatch, tmp_path)
+    instance = home / ".kinby" / "default"
+    _write_instance(instance, "home-default")
+
+    exit_code = main(["instance", "show"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "id: home-default" in captured.out
+    assert "resolved by: home default" in captured.out
+    assert captured.err == ""
+
+
+def test_instance_show_suggests_init_when_no_instance_exists(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, _ = _control_discovery(monkeypatch, tmp_path)
+
+    exit_code = main(["instance", "show"])
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert captured.out == ""
+    assert "kinby init" in captured.err
+    assert not (home / ".kinby").exists()
+
+
+def test_instance_option_beats_other_discovery_rules(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, cwd = _control_discovery(monkeypatch, tmp_path)
+    explicit_instance = tmp_path / "explicit"
+    environment_instance = tmp_path / "environment"
+    _write_instance(explicit_instance, "explicit")
+    _write_instance(environment_instance, "environment")
+    _write_instance(cwd, "walk-up")
+    _write_instance(home / ".kinby" / "default", "home-default")
+    monkeypatch.setenv("KINBY_INSTANCE", str(environment_instance))
+
+    exit_code = main(["instance", "show", "--instance", str(explicit_instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "id: explicit" in captured.out
+    assert "resolved by: explicit directory" in captured.out
+    assert captured.err == ""
+
+
+def test_kinby_instance_beats_walk_up_and_home_default(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, cwd = _control_discovery(monkeypatch, tmp_path)
+    environment_instance = tmp_path / "environment"
+    _write_instance(environment_instance, "environment")
+    _write_instance(cwd, "walk-up")
+    _write_instance(home / ".kinby" / "default", "home-default")
+    monkeypatch.setenv("KINBY_INSTANCE", str(environment_instance))
+
+    exit_code = main(["instance", "show"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "id: environment" in captured.out
+    assert "resolved by: KINBY_INSTANCE" in captured.out
+    assert captured.err == ""
+
+
+def test_walk_up_beats_the_home_default(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, cwd = _control_discovery(monkeypatch, tmp_path)
+    _write_instance(cwd, "walk-up")
+    _write_instance(home / ".kinby" / "default", "home-default")
+
+    exit_code = main(["instance", "show"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "id: walk-up" in captured.out
+    assert "resolved by: walk-up" in captured.out
+    assert captured.err == ""

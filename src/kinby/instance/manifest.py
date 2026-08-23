@@ -22,9 +22,7 @@ from kinby.instance.layout import ENV_NAME, MANIFEST_NAME, STATE_DIR, WORKSPACE_
 _MODEL_PATTERN = re.compile(r"^[^:\s]+:[^:\s]+$")
 
 
-def _reject_unknown(
-    values: Mapping[str, Any], allowed: set[str], prefix: str = ""
-) -> None:
+def _reject_unknown(values: Mapping[str, Any], allowed: set[str], prefix: str = "") -> None:
     for key in values:
         if key not in allowed:
             qualified_key = f"{prefix}.{key}" if prefix else key
@@ -47,9 +45,7 @@ def _required_string(values: Mapping[str, Any], key: str, prefix: str = "") -> s
     return value
 
 
-def _optional_string(
-    values: Mapping[str, Any], key: str, prefix: str = ""
-) -> str | None:
+def _optional_string(values: Mapping[str, Any], key: str, prefix: str = "") -> str | None:
     if key not in values:
         return None
     return _required_string(values, key, prefix)
@@ -89,9 +85,7 @@ def _parse_manifest(instance_path: Path, values: Mapping[str, Any]) -> Manifest:
 
     workspace_values = _table(values.get("workspace", {}), "workspace")
     _reject_unknown(workspace_values, {"path", "source"}, "workspace")
-    workspace_path_value = (
-        _optional_string(workspace_values, "path", "workspace") or WORKSPACE_DIR
-    )
+    workspace_path_value = _optional_string(workspace_values, "path", "workspace") or WORKSPACE_DIR
     source = _optional_string(workspace_values, "source", "workspace")
 
     memory_values = _table(values.get("memory", {}), "memory")
@@ -110,7 +104,7 @@ def _parse_manifest(instance_path: Path, values: Mapping[str, Any]) -> Manifest:
     )
 
 
-def load_instance(directory: Path) -> Instance:
+def load_instance(directory: Path, *, resolved_by: str = "explicit directory") -> Instance:
     """Load an instance from an explicit directory."""
     instance_path = Path(directory).resolve()
     load_dotenv(instance_path / ENV_NAME, override=False)
@@ -122,4 +116,8 @@ def load_instance(directory: Path) -> Instance:
         raise ManifestError(f"{MANIFEST_NAME}: not found in {instance_path}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise ManifestError(f"{MANIFEST_NAME}: {exc}") from exc
-    return Instance(path=instance_path, manifest=_parse_manifest(instance_path, values))
+    return Instance(
+        path=instance_path,
+        manifest=_parse_manifest(instance_path, values),
+        resolved_by=resolved_by,
+    )

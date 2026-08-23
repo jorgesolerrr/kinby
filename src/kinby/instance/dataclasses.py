@@ -42,7 +42,8 @@ class Manifest:
 
 @dataclass(frozen=True)
 class Instance:
-    """An explicit instance directory and its validated manifest."""
+    """A resolved instance directory and its validated manifest."""
 
     path: Path
     manifest: Manifest
+    resolved_by: str = "explicit directory"

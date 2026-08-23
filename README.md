@@ -17,7 +17,7 @@ The package scaffold is in place. Clone the repo, run `uv sync`, then `uv run ki
 
 - [`CONTEXT.md`](CONTEXT.md) — the project's ubiquitous language.
 
-Instance init, discovery, and the agent loop are later tickets.
+Instance init, manifest parsing, and discovery are in place. The agent loop comes later.
 
 ## License
 
