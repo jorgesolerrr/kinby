@@ -13,11 +13,11 @@
 
 ## Status
 
-**Blueprint phase.** This repo currently holds the design effort, not an implementation:
+The package scaffold is in place. Clone the repo, run `uv sync`, then `uv run kinby --version`.
 
 - [`CONTEXT.md`](CONTEXT.md) — the project's ubiquitous language.
 
-The v0.1 build starts once the blueprint is complete.
+Instance init, discovery, and the agent loop are later tickets.
 
 ## License
 
