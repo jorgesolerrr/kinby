@@ -12,6 +12,8 @@ for task in turns:
         step["messages"][-1].pretty_print()
         if step.get("files_read"):
             print("files_read:", step["files_read"])
+        if step.get("last_token_usage"):
+            print("tokens:", step["last_token_usage"], "cumulative:", step.get("token_usage"))
 
 print("\n--- state history (thread Jorge) ---")
 for snap in kinby.get_state_history(thread):
@@ -22,6 +24,6 @@ for snap in kinby.get_state_history(thread):
         f"next={snap.next} "
         f"checkpoint_id={cfg.get('checkpoint_id')} "
         f"messages={len(snap.values.get('messages', []))} "
-        f"files_read={snap.values.get('files_read')}"
-    )
-#print(kinby.get_graph().draw_ascii())
+        f"files_read={snap.values.get('files_read')} "
+        f"tokens={snap.values.get('token_usage')}"
+)

@@ -43,3 +43,19 @@ The path content travels into the knowledge graph: the user drops or uploads an 
 ### Backfill
 
 A user-initiated, explicitly scoped ingestion of historical content (a folder, a date range, a label) — as opposed to the default incremental ingestion of new items as they arrive.
+
+### Instance
+
+One kinby deployment: a directory (and, when deployed, a container) that owns its behavior configuration, memory and transcripts. One instance serves one user with one persona. Every instance has the same shape; a repo-scoped coding agent is an instance whose workspace is that repo, not a different kind of instance.
+
+### Workspace
+
+The directory holding the user's *own* work that an instance acts on — a repository, a notes folder. Lives under the instance (cloned there in a container, linked there on a local install) and is never written to by kinby on its own behalf: the instance's behavior stays in the instance, though it may *read* the workspace's own agent conventions as an additional behavior source.
+
+### Thread
+
+One conversation with its own durable history. Survives across sessions; can be resumed later. What memory distills from and what evals replay.
+
+### Session
+
+One run of the agent loop against a thread, from start to exit (a process, a REPL open–close). Ephemeral; the unit a server wraps.
