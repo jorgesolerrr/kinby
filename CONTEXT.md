@@ -58,7 +58,11 @@ The portable description of an instance's identity and configuration. It contain
 
 ### Workspace
 
-The directory holding the user's *own* work that an instance acts on — a repository, a notes folder. Lives under the instance (cloned there in a container, linked there on a local install) and is never written to by kinby on its own behalf: the instance's behavior stays in the instance, though it may *read* the workspace's own agent conventions as an additional behavior source.
+The directory holding the user's *own* work that an instance acts on — a repository, a notes folder. Lives under the instance (cloned there in a container, linked there on a local install) and is never written to by kinby on its own behalf: the instance's behavior stays in the instance, though it may *read* the workspace's **conventions** as an additional behavior source.
+
+### Conventions
+
+The workspace's own instruction files and skill directories an **instance** may read as extra behavior sources. Named explicitly in the **manifest**. The instance never loads tools from the workspace.
 
 ### Thread
 

@@ -24,11 +24,20 @@ class Models:
 
 
 @dataclass(frozen=True)
+class Conventions:
+    """Workspace instruction files and skill directories that exist."""
+
+    instructions: tuple[Path, ...]
+    skills: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
 class Workspace:
     """The workspace configured for one instance."""
 
     path: Path
     source: str | None
+    conventions: Conventions
 
 
 @dataclass(frozen=True)

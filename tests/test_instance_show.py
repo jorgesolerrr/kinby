@@ -126,6 +126,13 @@ def test_instance_show_names_a_malformed_model(tmp_path, capsys, model_setting, 
             ('id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n[memory]\nenabled = true\n'),
             "memory.enabled",
         ),
+        (
+            (
+                'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n'
+                "[workspace.conventions]\ntools = true\n"
+            ),
+            "workspace.conventions.tools",
+        ),
     ],
 )
 def test_instance_show_names_unknown_keys(tmp_path, capsys, manifest, offending_key):
@@ -342,3 +349,188 @@ def test_walk_up_beats_the_home_default(
     assert "id: walk-up" in captured.out
     assert "matching rule: walk-up" in captured.out
     assert captured.err == ""
+
+
+def _write_conventions_instance(instance: Path, manifest_body: str) -> None:
+    instance.mkdir(parents=True, exist_ok=True)
+    (instance / "kinby.toml").write_text(
+        f'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n{manifest_body}',
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    "manifest_body",
+    [
+        "",
+        "\n[workspace.conventions]\nenabled = false\n",
+    ],
+)
+def test_instance_show_lists_no_conventions_when_disabled(tmp_path, capsys, manifest_body):
+    instance = tmp_path / "alice"
+    workspace = instance / "workspace"
+    skills = workspace / ".agents" / "skills"
+    skills.mkdir(parents=True)
+    agents = workspace / "AGENTS.md"
+    agents.write_text("# project\n", encoding="utf-8")
+    _write_conventions_instance(instance, manifest_body)
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "conventions:" not in captured.out
+    assert str(agents.resolve()) not in captured.out
+    assert str(skills.resolve()) not in captured.out
+
+
+def test_instance_show_lists_default_conventions_when_enabled(tmp_path, capsys):
+    instance = tmp_path / "alice"
+    workspace = instance / "workspace"
+    skills = workspace / ".agents" / "skills"
+    skills.mkdir(parents=True)
+    agents = workspace / "AGENTS.md"
+    agents.write_text("# project\n", encoding="utf-8")
+    _write_conventions_instance(
+        instance,
+        "\n[workspace.conventions]\nenabled = true\n",
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert str(agents.resolve()) in captured.out
+    assert str(skills.resolve()) in captured.out
+    assert captured.err == ""
+
+
+def test_instance_show_lists_custom_conventions_in_declared_order(tmp_path, capsys):
+    instance = tmp_path / "alice"
+    workspace = instance / "workspace"
+    claude_skills = workspace / ".claude" / "skills"
+    agent_skills = workspace / ".agents" / "skills"
+    claude_skills.mkdir(parents=True)
+    agent_skills.mkdir(parents=True)
+    claude = workspace / "CLAUDE.md"
+    agents = workspace / "AGENTS.md"
+    claude.write_text("# claude\n", encoding="utf-8")
+    agents.write_text("# agents\n", encoding="utf-8")
+    _write_conventions_instance(
+        instance,
+        """
+[workspace.conventions]
+enabled = true
+instructions = ["CLAUDE.md", "AGENTS.md"]
+skills = [".claude/skills", ".agents/skills"]
+""",
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.index(str(claude.resolve())) < captured.out.index(str(agents.resolve()))
+    assert captured.out.index(str(claude_skills.resolve())) < captured.out.index(
+        str(agent_skills.resolve())
+    )
+
+
+def test_instance_show_omits_missing_convention_entries(tmp_path, capsys):
+    instance = tmp_path / "alice"
+    workspace = instance / "workspace"
+    skills = workspace / ".agents" / "skills"
+    skills.mkdir(parents=True)
+    agents = workspace / "AGENTS.md"
+    agents.write_text("# project\n", encoding="utf-8")
+    missing_file = workspace / "MISSING.md"
+    missing_skills = workspace / ".missing" / "skills"
+    _write_conventions_instance(
+        instance,
+        """
+[workspace.conventions]
+enabled = true
+instructions = ["AGENTS.md", "MISSING.md"]
+skills = [".agents/skills", ".missing/skills"]
+""",
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert str(agents.resolve()) in captured.out
+    assert str(skills.resolve()) in captured.out
+    assert str(missing_file.resolve()) not in captured.out
+    assert str(missing_skills.resolve()) not in captured.out
+    assert "MISSING.md" not in captured.out
+    assert ".missing/skills" not in captured.out
+
+
+@pytest.mark.parametrize(
+    ("manifest_body", "offending_key"),
+    [
+        (
+            "\n[workspace.conventions]\nenabled = true\ninstructions = true\n",
+            "workspace.conventions.instructions",
+        ),
+        (
+            "\n[workspace.conventions]\nenabled = false\nskills = true\n",
+            "workspace.conventions.skills",
+        ),
+        (
+            '\n[workspace.conventions]\ninstructions = [""]\n',
+            "workspace.conventions.instructions",
+        ),
+        (
+            "\n[workspace.conventions]\nskills = [1]\n",
+            "workspace.conventions.skills",
+        ),
+    ],
+)
+def test_instance_show_rejects_convention_lists_that_are_not_lists(
+    tmp_path, capsys, manifest_body, offending_key
+):
+    instance = tmp_path / "alice"
+    _write_conventions_instance(instance, manifest_body)
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert captured.out == ""
+    assert offending_key in captured.err
+
+
+def test_instance_show_rejects_a_non_boolean_conventions_enabled(tmp_path, capsys):
+    instance = tmp_path / "alice"
+    _write_conventions_instance(
+        instance,
+        '\n[workspace.conventions]\nenabled = "yes"\n',
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert captured.out == ""
+    assert "workspace.conventions.enabled" in captured.err
+
+
+def test_instance_show_does_not_list_workspace_tools(tmp_path, capsys):
+    instance = tmp_path / "alice"
+    workspace = instance / "workspace"
+    workspace_tools = workspace / "tools"
+    workspace_tools.mkdir(parents=True)
+    (workspace / "AGENTS.md").write_text("# project\n", encoding="utf-8")
+    _write_conventions_instance(
+        instance,
+        "\n[workspace.conventions]\nenabled = true\n",
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert str(workspace_tools.resolve()) not in captured.out
+    assert "tools:" not in captured.out
