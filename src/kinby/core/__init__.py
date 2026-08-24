@@ -1,1 +1,5 @@
-"""Session runtime: the agent loop and the types a session and a future server share."""
+"""Expose runtime composition without exposing individual handlers."""
+
+from kinby.core.dispatcher import Dispatcher, build_dispatcher
+
+__all__ = ["Dispatcher", "build_dispatcher"]

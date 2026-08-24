@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from importlib.metadata import version
 from pathlib import Path
 
+from kinby.cli.client import ContractClient
+from kinby.contracts import (
+    ErrorEnvelope,
+    Scope,
+    ThreadCreateResult,
+    ThreadListResult,
+)
+from kinby.core import build_dispatcher
 from kinby.instance import (
     Instance,
     InstanceExistsError,
@@ -15,6 +24,19 @@ from kinby.instance import (
     discover_instance,
     init_instance,
 )
+
+
+def _add_instance_selector(parser: argparse.ArgumentParser, help_text: str) -> None:
+    parser.add_argument(
+        "directory",
+        nargs="?",
+        help=help_text,
+    )
+    parser.add_argument(
+        "--instance",
+        dest="instance_directory",
+        help=help_text,
+    )
 
 
 def _print_instance(instance: Instance) -> None:
@@ -73,34 +95,32 @@ def main(argv: list[str] | None = None) -> int:
         "show",
         help="show the resolved instance settings",
     )
-    show_parser.add_argument(
-        "directory",
-        nargs="?",
-        help="instance directory to inspect",
-    )
-    show_parser.add_argument(
-        "--instance",
-        dest="instance_directory",
-        help="instance directory to inspect",
-    )
+    _add_instance_selector(show_parser, "instance directory to inspect")
     run_parser = subparsers.add_parser(
         "run",
         help="run an instance",
     )
-    run_parser.add_argument(
-        "directory",
-        nargs="?",
-        help="instance directory to run",
-    )
-    run_parser.add_argument(
-        "--instance",
-        dest="instance_directory",
-        help="instance directory to run",
-    )
+    _add_instance_selector(run_parser, "instance directory to run")
     run_parser.add_argument(
         "--model",
         help="override [models].main for this session",
     )
+    thread_parser = subparsers.add_parser(
+        "thread",
+        help="create and list threads",
+    )
+    thread_subparsers = thread_parser.add_subparsers(dest="thread_command")
+    thread_create_parser = thread_subparsers.add_parser(
+        "create",
+        help="create a thread",
+    )
+    _add_instance_selector(thread_create_parser, "instance that owns the thread")
+    thread_create_parser.add_argument("--title", help="optional thread title")
+    thread_list_parser = thread_subparsers.add_parser(
+        "list",
+        help="list threads",
+    )
+    _add_instance_selector(thread_list_parser, "instance whose threads to list")
     args = parser.parse_args(argv)
     if args.version:
         print(f"kinby {version('kinby')}")
@@ -114,7 +134,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Created instance at {path}")
         return 0
     show_instance = args.command == "instance" and args.instance_command == "show"
-    if show_instance or args.command == "run":
+    thread_command = args.command == "thread" and args.thread_command in {"create", "list"}
+    if show_instance or args.command == "run" or thread_command:
         try:
             explicit_directory = args.instance_directory or args.directory
             directory = Path(explicit_directory) if explicit_directory else None
@@ -122,6 +143,25 @@ def main(argv: list[str] | None = None) -> int:
             instance = discover_instance(directory, model_override=model_override)
         except (InstanceNotFoundError, ManifestError) as exc:
             print(exc, file=sys.stderr)
+            return 1
+        if thread_command:
+            dispatcher = build_dispatcher(instance.manifest.state_dir)
+            client = ContractClient(dispatcher.dispatch, set(Scope))
+            method = f"thread.{args.thread_command}"
+            payload = {"title": args.title} if args.thread_command == "create" else {}
+            result = asyncio.run(client.call(method, payload))
+            if isinstance(result, ErrorEnvelope):
+                print(f"{result.code.value}: {result.message}", file=sys.stderr)
+                return 1
+            if isinstance(result, ThreadCreateResult):
+                print(f"id: {result.id}")
+                print(f"created at: {result.created_at.isoformat()}")
+                return 0
+            if isinstance(result, ThreadListResult):
+                for thread in result.threads:
+                    print(f"{thread.id}\t{thread.created_at.isoformat()}\t{thread.title or ''}")
+                return 0
+            print("INTERNAL: The method returned an unexpected result.", file=sys.stderr)
             return 1
         _print_instance(instance)
         if args.command == "run":
