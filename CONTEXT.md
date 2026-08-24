@@ -70,4 +70,20 @@ One conversation with its own durable history. Survives across sessions; can be 
 
 ### Session
 
-One run of the agent loop against a thread, from start to exit (a process, a REPL open–close). Ephemeral; the unit a server wraps.
+One run of the agent loop against a thread, from start to exit (a process, a REPL open–close). Ephemeral; the unit a server wraps. A session contains one or more **turns**.
+
+### Turn
+
+One user-to-agent cycle within a thread: from a user message until the agent yields control back. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases.
+
+### Contract
+
+The typed set of commands and subscriptions every client uses to drive a session. The CLI is its client today; a server can use the same boundary later. Clients import contracts, never core.
+
+### Event
+
+One sequence-numbered record emitted while a turn runs. The event stream is what clients subscribe to and what the **transcript store** persists; replaying it reproduces a thread.
+
+### Scope
+
+A named permission a **contract** command requires of its caller. Holding a connection is not permission to call everything.
