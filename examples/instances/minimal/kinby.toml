@@ -1,0 +1,5 @@
+# The smallest kinby instance has an identity and one model.
+id = "minimal"
+
+[models]
+main = "openai:gpt-5"

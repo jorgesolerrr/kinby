@@ -1,0 +1,14 @@
+# A coding agent can read explicitly named conventions from its workspace.
+id = "coding-agent"
+persona_name = "Patch"
+
+[models]
+main = "anthropic:claude-sonnet-4-6"
+
+[workspace]
+path = "workspace"
+
+[workspace.conventions]
+enabled = true
+instructions = ["AGENTS.md"]
+skills = [".agents/skills"]
