@@ -4,15 +4,13 @@ An open-source, self-hosted personal AI teammate. *kinby*  is a teammate that re
 
 Thesis and status live in `README.md`. Vocabulary lives in `CONTEXT.md`, the project's ubiquitous language. Name things with its terms. When a new concept needs a name, add it there first.
 
-## Maintainer's note
+## Jorge's note
 
-> I like ambitious ideas, simple systems, and software that feels obvious. Do not preserve complexity just because it already exists. Do not introduce machinery because it looks architecturally impressive. Understand the real constraint, then fight for the smallest model that makes the correct behavior unsurprising.
-
-This governs every decision in this repo: design, code, docs, scope. When two approaches work, pick the one with the smaller model.
+I'm a passionate programmer who likes complex things done in a simple way. That doesn't mean I like mess and lazy code. That means you don't need to overengineer everything, or add machinery just because it's nice or impressive. The idea always is: understand the requirements, and construct the optimal approach using our coding standards.
 
 ## How to work here
 
-- **Code.** Follow `CODING-STANDARD.md`. Lint and tests pass before any commit: `uv run ruff check .`, `uv run ruff format .`, `uv run pytest`.
+- **Code.** Lean and pythonic: approach, book, PEP 8, Protocol, Callable, tests, and lint live in `CODING-STANDARD.md`. Lint and tests pass before any commit: `uv run ruff check .`, `uv run ruff format .`, `uv run pytest`.
 - **User-facing communication.** Run the `unslop` skill (`/unslop`) over anything the user reads: replies, PR descriptions, issue comments, README and doc prose. Plain and specific.
 - **Architecture decisions.** Record them as ADRs in `docs/adr/`, one decision per file.
 
