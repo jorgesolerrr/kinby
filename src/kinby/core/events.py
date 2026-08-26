@@ -6,17 +6,18 @@ import asyncio
 from collections.abc import AsyncGenerator, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 from uuid import UUID
+
+from pydantic import JsonValue
 
 from kinby.contracts import Event, EventType
 
-EVENTS_NAME = "events.jsonl"
+_EVENTS_NAME = "events.jsonl"
 
 
 class EventLog:
     def __init__(self, state_dir: Path) -> None:
-        self._path = state_dir / EVENTS_NAME
+        self._path = state_dir / _EVENTS_NAME
         self._lock = asyncio.Lock()
         self._subscribers: dict[UUID, set[asyncio.Queue[Event]]] = {}
 
@@ -25,7 +26,7 @@ class EventLog:
         thread_id: UUID,
         turn_id: UUID,
         event_type: EventType,
-        payload: Mapping[str, Any],
+        payload: Mapping[str, JsonValue],
     ) -> Event:
         async with self._lock:
             event = Event(
@@ -58,7 +59,9 @@ class EventLog:
             for event in replay:
                 yield event
             while True:
-                yield await subscriber.get()
+                event = await subscriber.get()
+                if event.sequence > after_sequence:
+                    yield event
         finally:
             subscribers = self._subscribers[thread_id]
             subscribers.remove(subscriber)

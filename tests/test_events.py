@@ -118,3 +118,26 @@ def test_subscriber_receives_replay_gap_then_live_events_once(tmp_path: Path) ->
         ] == [2, 3, 4]
 
     asyncio.run(scenario())
+
+
+def test_subscriber_does_not_receive_live_events_before_its_cursor(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        subscription = event_log.subscribe(thread_id, after_sequence=2)
+        waiting = asyncio.ensure_future(anext(subscription))
+        await asyncio.sleep(0)
+
+        await event_log.append(thread_id, turn_id, EventType.TURN_STARTED, {})
+        await event_log.append(thread_id, turn_id, EventType.MESSAGE_DELTA, {})
+
+        assert waiting.done() is False
+
+        third = await event_log.append(thread_id, turn_id, EventType.TURN_COMPLETED, {})
+        received = await asyncio.wait_for(waiting, timeout=1)
+        await subscription.aclose()
+
+        assert received == third
+
+    asyncio.run(scenario())

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class ContractModel(BaseModel):
@@ -54,7 +54,7 @@ class Event(ContractModel):
     thread_id: UUID
     turn_id: UUID
     type: EventType
-    payload: dict[str, Any]
+    payload: dict[str, JsonValue]
     timestamp: datetime
 
 
