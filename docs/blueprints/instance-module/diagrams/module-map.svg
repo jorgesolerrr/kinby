@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1200 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="module-map-title module-map-desc">
+      <title id="module-map-title">Instance module map</title>
+      <desc id="module-map-desc">Dependency graph of the instance module: cli/main.py calls discovery.py and init.py, discovery.py calls manifest.py, and all three plus manifest.py share the leaf modules layout.py, dataclasses.py, and errors.py, with tomllib and python-dotenv as manifest.py's only external dependencies.</desc>
+      <defs>
+        <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap');</style>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/>
+        </marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/>
+        </marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/>
+        </marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- Rank labels -->
+      <text x="40" y="108" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">RANK 0</text>
+      <text x="40" y="228" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">RANK 1</text>
+      <text x="40" y="348" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">RANK 2</text>
+      <text x="40" y="468" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">RANK 3</text>
+
+      <!-- Connectors drawn before boxes -->
+      <!-- main -> discovery (straight) -->
+      <line x1="600" y1="136" x2="600" y2="200" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- main -> init -->
+      <path d="M 520,116 H 408 Q 400,116 400,124 V 200" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- main -> leaf modules (errors, Instance) -->
+      <path d="M 520,100 H 272 Q 264,100 264,108 V 440" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- init -> leaf modules (straight) -->
+      <line x1="360" y1="256" x2="360" y2="440" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- discovery -> manifest (straight) -->
+      <line x1="600" y1="256" x2="600" y2="320" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- discovery -> leaf modules -->
+      <path d="M 560,256 V 288 Q 560,296 552,296 H 392 Q 384,296 384,304 V 440" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- manifest -> leaf modules (enters from the right edge) -->
+      <path d="M 520,348 H 432 Q 424,348 424,356 V 460 Q 424,468 416,468 H 400" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- manifest -> tomllib (straight) -->
+      <line x1="600" y1="376" x2="600" y2="440" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- manifest -> python-dotenv -->
+      <path d="M 680,348 H 832 Q 840,348 840,356 V 440" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- Connector labels (masked, 6-10px off the stroke) -->
+      <rect x="608" y="160" width="72" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="644" y="169" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DISCOVER</text>
+      <rect x="424" y="124" width="64" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="456" y="133" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">INIT</text>
+      <rect x="344" y="80" width="72" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="380" y="89" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">ERRORS</text>
+      <rect x="296" y="336" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="324" y="345" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">NAMES</text>
+      <rect x="428" y="276" width="88" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="472" y="285" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">MANIFEST_NAME</text>
+      <rect x="608" y="280" width="96" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="656" y="289" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">LOAD_INSTANCE</text>
+      <rect x="440" y="328" width="64" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="472" y="337" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SHAPES</text>
+      <rect x="608" y="400" width="40" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="628" y="409" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">LOAD</text>
+      <rect x="716" y="328" width="80" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="756" y="337" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">LOAD_DOTENV</text>
+
+      <!-- cli/main.py (rank 0) -->
+      <rect x="520" y="80" width="160" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="520" y="80" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="528" y="86" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="542" y="95" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CLI</text>
+      <rect x="644" y="88" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="658" y="97" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">0 IN</text>
+      <text x="600" y="114" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">cli/main.py</text>
+      <text x="600" y="128" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">init · instance show · run</text>
+
+      <!-- instance/init.py (rank 1) -->
+      <rect x="320" y="200" width="160" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="320" y="200" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="328" y="206" width="32" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="344" y="215" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">INST</text>
+      <rect x="444" y="208" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="458" y="217" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">1 IN</text>
+      <text x="400" y="234" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">instance/init.py</text>
+      <text x="400" y="248" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">init_instance</text>
+
+      <!-- instance/discovery.py (rank 1) -->
+      <rect x="520" y="200" width="160" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="520" y="200" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="528" y="206" width="32" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="544" y="215" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">INST</text>
+      <rect x="644" y="208" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="658" y="217" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">1 IN</text>
+      <text x="600" y="234" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">instance/discovery.py</text>
+      <text x="600" y="248" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">discover_instance</text>
+
+      <!-- instance/manifest.py (rank 2) -->
+      <rect x="520" y="320" width="160" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="520" y="320" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="528" y="326" width="32" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="544" y="335" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">INST</text>
+      <rect x="644" y="328" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="658" y="337" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">1 IN</text>
+      <text x="600" y="354" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">instance/manifest.py</text>
+      <text x="600" y="368" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">load · reload_manifest</text>
+
+      <!-- leaf modules (rank 3) -->
+      <rect x="240" y="440" width="160" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="240" y="440" width="160" height="56" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <rect x="248" y="446" width="32" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="264" y="455" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">LEAF</text>
+      <rect x="364" y="448" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="378" y="457" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">4 IN</text>
+      <text x="320" y="474" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">instance leaves</text>
+      <text x="320" y="488" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">layout · dataclasses · errors</text>
+
+      <!-- tomllib (rank 3, external) -->
+      <rect x="520" y="440" width="160" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="520" y="440" width="160" height="56" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <rect x="528" y="446" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+      <text x="542" y="455" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+      <rect x="644" y="448" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+      <text x="658" y="457" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">1 IN</text>
+      <text x="600" y="474" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">tomllib</text>
+      <text x="600" y="488" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">stdlib · tomli on 3.10</text>
+
+      <!-- python-dotenv (rank 3, external) -->
+      <rect x="760" y="440" width="160" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="760" y="440" width="160" height="56" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <rect x="768" y="446" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+      <text x="782" y="455" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+      <rect x="884" y="448" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+      <text x="898" y="457" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">1 IN</text>
+      <text x="840" y="474" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">python-dotenv</text>
+      <text x="840" y="488" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">&gt;=1.0 · PyPI</text>
+
+      <!-- Legend -->
+      <line x1="40" y1="528" x2="1160" y2="528" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="40" y="544" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+
+      <rect x="40" y="560" width="24" height="16" rx="3" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="72" y="571" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">kinby module</text>
+
+      <rect x="200" y="560" width="24" height="16" rx="3" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="232" y="571" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Leaf modules, nothing below them</text>
+
+      <rect x="440" y="560" width="24" height="16" rx="3" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <text x="472" y="571" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">External package</text>
+
+      <line x1="640" y1="568" x2="668" y2="568" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <text x="676" y="571" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Imports, labelled with what it takes</text>
+
+      <rect x="880" y="562" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="894" y="571" fill="#2d3142" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">N IN</text>
+      <text x="916" y="571" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Fan-in: modules that import it</text>
+    </svg>
