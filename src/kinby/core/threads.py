@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from kinby.contracts import ThreadCreateResult, ThreadListResult, ThreadSummary
 
@@ -32,3 +32,6 @@ class ThreadStore:
         with self._path.open(encoding="utf-8") as records:
             threads = [ThreadSummary.model_validate_json(line) for line in records]
         return ThreadListResult(threads=threads)
+
+    def exists(self, thread_id: UUID) -> bool:
+        return any(thread.id == thread_id for thread in self.list().threads)

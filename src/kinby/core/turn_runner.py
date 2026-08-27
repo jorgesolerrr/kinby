@@ -1,0 +1,95 @@
+"""Run a model turn with LangGraph working state beneath the event stream."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator, Callable, Sequence
+from dataclasses import dataclass
+from typing import Annotated, Protocol, cast
+
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import AIMessageChunk, AnyMessage, BaseMessage, HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import START, StateGraph, add_messages
+from langgraph.runtime import Runtime
+from pydantic import BaseModel, Field
+
+from kinby.contracts import EventType
+from kinby.core.errors import ModelNoResponse
+from kinby.core.turns import Emit, TurnOutcome, TurnRequest
+
+
+class ChatModel(Protocol):
+    def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]: ...
+
+
+ModelFactory = Callable[[str], ChatModel]
+
+
+class ModelState(BaseModel):
+    messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass(frozen=True)
+class ModelContext:
+    message: str
+    emit: Emit
+
+
+def _init_model(model: str) -> ChatModel:
+    return cast(ChatModel, init_chat_model(model))
+
+
+class LangGraphRunner:
+    def __init__(
+        self,
+        model: str,
+        *,
+        model_factory: ModelFactory = _init_model,
+    ) -> None:
+        self._model_name = model
+        self._model_factory = model_factory
+        self._model: ChatModel | None = None
+        self._checkpointer = InMemorySaver()
+        graph_builder = StateGraph(ModelState, context_schema=ModelContext)
+        graph_builder.add_node("model", self._call_model)
+        graph_builder.add_edge(START, "model")
+        self._graph = graph_builder.compile(checkpointer=self._checkpointer)
+
+    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+        result = ModelState.model_validate(
+            await self._graph.ainvoke(
+                ModelState(),
+                {"configurable": {"thread_id": str(turn.thread_id)}},
+                context=ModelContext(message=turn.message, emit=emit),
+            )
+        )
+        return TurnOutcome(
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+        )
+
+    async def _call_model(
+        self,
+        state: ModelState,
+        runtime: Runtime[ModelContext],
+    ) -> ModelState:
+        user_message = HumanMessage(content=runtime.context.message)
+        response: AIMessageChunk | None = None
+        model = self._model
+        if model is None:
+            model = self._model_factory(self._model_name)
+            self._model = model
+        async for chunk in model.astream([*state.messages, user_message]):
+            response = chunk if response is None else response + chunk
+            if chunk.text:
+                await runtime.context.emit(EventType.MESSAGE_DELTA, {"text": chunk.text})
+        if response is None:
+            raise ModelNoResponse("The model returned no response.")
+        usage = response.usage_metadata
+        return ModelState(
+            messages=[user_message, response],
+            input_tokens=usage["input_tokens"] if usage is not None else 0,
+            output_tokens=usage["output_tokens"] if usage is not None else 0,
+        )

@@ -63,6 +63,17 @@ class ThreadSubscribeCommand(ContractModel):
     after_sequence: Annotated[int, Field(ge=0)] = 0
 
 
+class ThreadTurnStartCommand(ContractModel):
+    thread_id: UUID
+    message: str
+
+
+class AcceptedResult(ContractModel):
+    thread_id: UUID
+    turn_id: UUID
+    sequence: int
+
+
 class ThreadCreateCommand(ContractModel):
     title: str | None = None
 
