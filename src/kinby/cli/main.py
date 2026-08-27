@@ -146,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if thread_command:
             dispatcher = build_dispatcher(instance.manifest.state_dir)
-            client = ContractClient(dispatcher.dispatch, set(Scope))
+            client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
             method = f"thread.{args.thread_command}"
             payload = {"title": args.title} if args.thread_command == "create" else {}
             result = asyncio.run(client.call(method, payload))
