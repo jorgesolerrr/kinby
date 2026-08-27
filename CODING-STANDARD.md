@@ -34,6 +34,16 @@ The maintainer's note in `AGENTS.md` is the standard. Everything below puts it i
 - pytest, in `tests/`, run with `uv run pytest`. Every behavior change lands with a test that fails without it.
 - Test through public entry points, the CLI or the package API, not private internals. Tests that survive a refactor are the point.
 
+## Type checking
+
+ty checks the whole project with the Python lower bound from `requires-python`. Run it before every commit:
+
+```sh
+uv run ty check
+```
+
+Fix the code or its annotations when ty reports an error. Put deliberate rule-level changes in `pyproject.toml` and explain why in review.
+
 ## Lint and format
 
 Ruff is both linter and formatter. Before any commit:

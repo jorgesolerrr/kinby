@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class ContractModel(BaseModel):
@@ -35,6 +36,31 @@ class ErrorEnvelope(ContractModel):
     code: ErrorCode
     message: str
     retryable: bool
+
+
+class EventType(str, Enum):
+    TURN_STARTED = "turn.started"
+    MESSAGE_DELTA = "message.delta"
+    TOOL_CALL = "tool.call"
+    TOOL_RESULT = "tool.result"
+    APPROVAL_REQUESTED = "approval.requested"
+    TURN_COMPLETED = "turn.completed"
+    TURN_FAILED = "turn.failed"
+    TURN_INTERRUPTED = "turn.interrupted"
+
+
+class Event(ContractModel):
+    sequence: int
+    thread_id: UUID
+    turn_id: UUID
+    type: EventType
+    payload: dict[str, JsonValue]
+    timestamp: datetime
+
+
+class ThreadSubscribeCommand(ContractModel):
+    thread_id: UUID
+    after_sequence: Annotated[int, Field(ge=0)] = 0
 
 
 class ThreadCreateCommand(ContractModel):

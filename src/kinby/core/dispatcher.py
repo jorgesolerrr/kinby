@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Collection, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping
+from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Generic, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -15,23 +16,28 @@ from kinby.contracts import (
     Scope,
     ThreadCreateCommand,
     ThreadListCommand,
+    ThreadSubscribeCommand,
 )
+from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 
 Handler = Callable[[BaseModel], Awaitable[BaseModel]]
+SubscriptionHandler = Callable[[BaseModel], AsyncGenerator[BaseModel, None]]
 Command = TypeVar("Command", bound=BaseModel)
+RouteHandler = TypeVar("RouteHandler")
 
 
 @dataclass(frozen=True)
-class Route:
+class Route(Generic[RouteHandler]):
     scope: Scope
     command: type[BaseModel]
-    handler: Handler
+    handler: RouteHandler
 
 
 class Dispatcher:
     def __init__(self) -> None:
-        self._routes: dict[str, Route] = {}
+        self._routes: dict[str, Route[Handler]] = {}
+        self._subscription_routes: dict[str, Route[SubscriptionHandler]] = {}
 
     def register(
         self,
@@ -42,13 +48,27 @@ class Dispatcher:
     ) -> None:
         self._routes[method] = Route(scope, command, cast(Handler, handler))
 
-    async def dispatch(
+    def register_subscription(
         self,
         method: str,
-        payload: Mapping[str, Any],
+        scope: Scope,
+        command: type[Command],
+        handler: Callable[[Command], AsyncGenerator[BaseModel, None]],
+    ) -> None:
+        self._subscription_routes[method] = Route(
+            scope,
+            command,
+            cast(SubscriptionHandler, handler),
+        )
+
+    @staticmethod
+    def _validate_call(
+        routes: Mapping[str, Route[RouteHandler]],
+        method: str,
+        payload: Mapping[str, object],
         scopes: Collection[Scope],
-    ) -> BaseModel:
-        route = self._routes.get(method)
+    ) -> tuple[Route[RouteHandler], BaseModel] | ErrorEnvelope:
+        route = routes.get(method)
         if route is None:
             return ErrorEnvelope(
                 code=ErrorCode.NOT_FOUND,
@@ -69,6 +89,18 @@ class Dispatcher:
                 message=f'Invalid payload for "{method}": {exc}',
                 retryable=False,
             )
+        return route, command
+
+    async def dispatch(
+        self,
+        method: str,
+        payload: Mapping[str, object],
+        scopes: Collection[Scope],
+    ) -> BaseModel:
+        call = self._validate_call(self._routes, method, payload, scopes)
+        if isinstance(call, ErrorEnvelope):
+            return call
+        route, command = call
         try:
             return await route.handler(command)
         except Exception:
@@ -78,9 +110,36 @@ class Dispatcher:
                 retryable=False,
             )
 
+    async def subscribe(
+        self,
+        method: str,
+        payload: Mapping[str, object],
+        scopes: Collection[Scope],
+    ) -> AsyncGenerator[BaseModel, None]:
+        call = self._validate_call(self._subscription_routes, method, payload, scopes)
+        if isinstance(call, ErrorEnvelope):
+            yield call
+            return
+        route, command = call
+        try:
+            async with aclosing(route.handler(command)) as subscription:
+                async for event in subscription:
+                    yield event
+        except Exception:
+            yield ErrorEnvelope(
+                code=ErrorCode.INTERNAL,
+                message="The subscription failed unexpectedly.",
+                retryable=False,
+            )
 
-def build_dispatcher(state_dir: Path) -> Dispatcher:
+
+def build_dispatcher(
+    state_dir: Path,
+    *,
+    event_log: EventLog | None = None,
+) -> Dispatcher:
     store = ThreadStore(state_dir)
+    event_log = event_log or EventLog(state_dir)
     dispatcher = Dispatcher()
 
     async def create_thread(command: ThreadCreateCommand) -> BaseModel:
@@ -88,6 +147,11 @@ def build_dispatcher(state_dir: Path) -> Dispatcher:
 
     async def list_threads(command: ThreadListCommand) -> BaseModel:
         return store.list()
+
+    def subscribe_to_thread(
+        command: ThreadSubscribeCommand,
+    ) -> AsyncGenerator[BaseModel, None]:
+        return event_log.subscribe(command.thread_id, command.after_sequence)
 
     dispatcher.register(
         "thread.create",
@@ -100,5 +164,11 @@ def build_dispatcher(state_dir: Path) -> Dispatcher:
         Scope.THREAD_READ,
         ThreadListCommand,
         list_threads,
+    )
+    dispatcher.register_subscription(
+        "thread.subscribe",
+        Scope.THREAD_READ,
+        ThreadSubscribeCommand,
+        subscribe_to_thread,
     )
     return dispatcher

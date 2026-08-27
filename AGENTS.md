@@ -10,7 +10,7 @@ I'm a passionate programmer who likes complex things done in a simple way. That 
 
 ## How to work here
 
-- **Code.** Lean and pythonic: approach, book, PEP 8, Protocol, Callable, tests, and lint live in `CODING-STANDARD.md`. Lint and tests pass before any commit: `uv run ruff check .`, `uv run ruff format .`, `uv run pytest`.
+- **Code.** Lean and pythonic: approach, book, PEP 8, Protocol, Callable, tests, type checking, and lint live in `CODING-STANDARD.md`. Checks pass before any commit: `uv run ruff check .`, `uv run ruff format .`, `uv run ty check`, `uv run pytest`.
 - **User-facing communication.** Run the `unslop` skill (`/unslop`) over anything the user reads: replies, PR descriptions, issue comments, README and doc prose. Plain and specific.
 - **Architecture decisions.** Record them as ADRs in `docs/adr/`, one decision per file.
 
