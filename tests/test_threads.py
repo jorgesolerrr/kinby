@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
+    THREAD_SUBSCRIBE,
     ErrorCode,
     ErrorEnvelope,
     Event,
@@ -13,7 +14,9 @@ from kinby.contracts import (
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListResult,
+    ThreadSubscribeCommand,
 )
+from kinby.contracts.methods import Method, Subscription
 from kinby.core.dispatcher import Dispatcher, build_dispatcher
 from kinby.core.events import EventLog
 
@@ -56,9 +59,7 @@ def test_dispatcher_returns_typed_errors_before_running_a_handler() -> None:
 
     dispatcher = Dispatcher()
     dispatcher.register(
-        "thread.create",
-        Scope.THREAD_OPERATE,
-        ThreadCreateCommand,
+        Method("thread.create", Scope.THREAD_OPERATE, ThreadCreateCommand, ThreadCreateResult),
         handler,
     )
 
@@ -87,9 +88,7 @@ def test_dispatcher_translates_an_unexpected_handler_failure() -> None:
 
     dispatcher = Dispatcher()
     dispatcher.register(
-        "thread.create",
-        Scope.THREAD_OPERATE,
-        ThreadCreateCommand,
+        Method("thread.create", Scope.THREAD_OPERATE, ThreadCreateCommand, ThreadCreateResult),
         handler,
     )
 
@@ -188,9 +187,9 @@ def test_subscription_translates_an_unexpected_handler_failure() -> None:
 
         dispatcher = Dispatcher()
         dispatcher.register_subscription(
-            "thread.subscribe",
-            Scope.THREAD_READ,
-            ThreadCreateCommand,
+            Subscription(
+                "thread.subscribe", Scope.THREAD_READ, ThreadCreateCommand, ThreadCreateCommand
+            ),
             handler,
         )
         subscription = dispatcher.subscribe(
@@ -226,9 +225,9 @@ def test_closing_subscription_releases_its_handler() -> None:
 
         dispatcher = Dispatcher()
         dispatcher.register_subscription(
-            "thread.subscribe",
-            Scope.THREAD_READ,
-            ThreadCreateCommand,
+            Subscription(
+                "thread.subscribe", Scope.THREAD_READ, ThreadCreateCommand, ThreadCreateCommand
+            ),
             handler,
         )
         subscription = dispatcher.subscribe(
@@ -263,8 +262,7 @@ def test_contract_client_subscription_replays_then_stays_live(tmp_path: Path) ->
             {Scope.THREAD_READ},
         )
         subscription = client.subscribe(
-            "thread.subscribe",
-            {"thread_id": thread_id},
+            THREAD_SUBSCRIBE, ThreadSubscribeCommand(thread_id=thread_id)
         )
 
         received_replay = await anext(subscription)

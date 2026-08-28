@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -63,7 +63,7 @@ def test_langgraph_runner_streams_one_model_turn() -> None:
                 turn_id=uuid4(),
                 type=event_type,
                 payload=dict(payload),
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
             )
 
         runner = LangGraphRunner("openai:gpt-5", model_factory=model_factory)
@@ -100,7 +100,7 @@ def test_failed_model_call_does_not_enter_checkpointed_history() -> None:
                 turn_id=uuid4(),
                 type=event_type,
                 payload=dict(payload),
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
             )
 
         with pytest.raises(RuntimeError, match="provider unavailable"):
@@ -134,7 +134,7 @@ def test_langgraph_checkpointer_keeps_thread_messages_between_turns() -> None:
                 turn_id=uuid4(),
                 type=event_type,
                 payload=dict(payload),
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
             )
 
         for message in ("First", "Second"):

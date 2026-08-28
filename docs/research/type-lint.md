@@ -1,6 +1,6 @@
 # Research: enforcing the Types rules with lint
 
-Date: 2026-08-28. Question: which of the [Types](../../CODING-STANDARD.md#types) rules can a tool enforce, so an agent cannot land a `-> BaseModel` or a stray `Any` without a red check?
+Date: 2026-08-28. Status: steps 1 to 5 landed together (PR after #38); the allow list shrank to two files because the dispatcher no longer names `BaseModel`. Question: which of the [Types](../../CODING-STANDARD.md#types) rules can a tool enforce, so an agent cannot land a `-> BaseModel` or a stray `Any` without a red check?
 
 ## What ruff already offers
 
@@ -25,7 +25,6 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "RUF", "ANN", "FBT", "TID"
 
 [tool.ruff.lint.per-file-ignores]
 "src/kinby/contracts/models.py" = ["TID251"]   # defines ContractModel
-"src/kinby/core/dispatcher.py" = ["TID251"]    # routes any command
 "src/kinby/instance/manifest.py" = ["TID251"]  # reads TOML
 "tests/**" = ["ANN", "FBT", "TID251"]
 ```
@@ -50,7 +49,8 @@ Rules like "no `Mapping[str, Any]` past the parsing function" and "no `-> BaseMo
 
 ```python
 BANNED_ANNOTATIONS = {"BaseModel", "Any"}
-ALLOWED = {"kinby/contracts/models.py", "kinby/core/dispatcher.py", "kinby/instance/manifest.py"}
+ALLOWED = {"contracts/models.py", "core/dispatcher.py", "instance/manifest.py"}
+
 
 def test_signatures_name_the_domain() -> None:
     offenders = [

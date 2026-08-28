@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Protocol, cast
 
 from langchain.chat_models import init_chat_model
@@ -11,7 +11,6 @@ from langchain_core.messages import AIMessageChunk, AnyMessage, BaseMessage, Hum
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import START, StateGraph, add_messages
 from langgraph.runtime import Runtime
-from pydantic import BaseModel, Field
 
 from kinby.contracts import EventType
 from kinby.core.errors import ModelNoResponse
@@ -25,8 +24,9 @@ class ChatModel(Protocol):
 ModelFactory = Callable[[str], ChatModel]
 
 
-class ModelState(BaseModel):
-    messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
+@dataclass
+class ModelState:
+    messages: Annotated[list[AnyMessage], add_messages] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -48,9 +48,7 @@ class LangGraphRunner:
         *,
         model_factory: ModelFactory = _init_model,
     ) -> None:
-        self._model_name = model
-        self._model_factory = model_factory
-        self._model: ChatModel | None = None
+        self._model = model_factory(model)
         self._checkpointer = InMemorySaver()
         graph_builder = StateGraph(ModelState, context_schema=ModelContext)
         graph_builder.add_node("model", self._call_model)
@@ -58,8 +56,8 @@ class LangGraphRunner:
         self._graph = graph_builder.compile(checkpointer=self._checkpointer)
 
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
-        result = ModelState.model_validate(
-            await self._graph.ainvoke(
+        result = ModelState(
+            **await self._graph.ainvoke(
                 ModelState(),
                 {"configurable": {"thread_id": str(turn.thread_id)}},
                 context=ModelContext(message=turn.message, emit=emit),
@@ -77,11 +75,7 @@ class LangGraphRunner:
     ) -> ModelState:
         user_message = HumanMessage(content=runtime.context.message)
         response: AIMessageChunk | None = None
-        model = self._model
-        if model is None:
-            model = self._model_factory(self._model_name)
-            self._model = model
-        async for chunk in model.astream([*state.messages, user_message]):
+        async for chunk in self._model.astream([*state.messages, user_message]):
             response = chunk if response is None else response + chunk
             if chunk.text:
                 await runtime.context.emit(EventType.MESSAGE_DELTA, {"text": chunk.text})

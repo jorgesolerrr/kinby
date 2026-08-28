@@ -15,7 +15,7 @@ from kinby.contracts import (
     Scope,
     ThreadCreateResult,
 )
-from kinby.core.dispatcher import build_dispatcher
+from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.turns import Emit, TurnOutcome, TurnRequest
 
@@ -67,8 +67,7 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            model="openai:gpt-5",
-            runner=ScriptedRunner(),
+            turns=TurnConfig("openai:gpt-5", ScriptedRunner()),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -123,7 +122,7 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
 def test_start_rejects_a_second_turn_while_the_first_is_running(tmp_path: Path) -> None:
     async def scenario() -> None:
         runner = WaitingRunner()
-        dispatcher = build_dispatcher(tmp_path, model="openai:gpt-5", runner=runner)
+        dispatcher = build_dispatcher(tmp_path, turns=TurnConfig("openai:gpt-5", runner))
         created = await dispatcher.dispatch(
             "thread.create",
             {},
@@ -171,8 +170,7 @@ def test_start_rejects_a_concurrent_turn_before_recording_acceptance(tmp_path: P
         dispatcher = build_dispatcher(
             tmp_path,
             event_log=event_log,
-            model="openai:gpt-5",
-            runner=runner,
+            turns=TurnConfig("openai:gpt-5", runner),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -208,8 +206,7 @@ def test_failed_model_turn_ends_with_the_error_code(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            model="openai:gpt-5",
-            runner=FailingRunner(),
+            turns=TurnConfig("openai:gpt-5", FailingRunner()),
         )
         created = await dispatcher.dispatch(
             "thread.create",

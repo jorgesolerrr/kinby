@@ -1,6 +1,6 @@
 # Types: before and after
 
-Worked cases for the [Types](../CODING-STANDARD.md#types) rules, taken from kinby as it stood on 2026-08-28. Each case is a signature that hides something, and the signature that says it. Line numbers are from that date and will drift; the shapes will not.
+Worked cases for the [Types](../CODING-STANDARD.md#types) rules, taken from kinby as it stood on 2026-08-28. Each case is a signature that hid something, and the signature that says it. The first, fourth, and sixth landed in the same PR as this doc; the others are open.
 
 ## Generic types leaking upward
 
@@ -11,9 +11,11 @@ Before:
 ```python
 async def call(self, method: str, payload: Mapping[str, object]) -> BaseModel: ...
 
+
 # every caller, cli/main.py
 created = await client.call("thread.create", {"title": title})
-if isinstance(created, ErrorEnvelope): ...
+if isinstance(created, ErrorEnvelope):
+    ...
 if not isinstance(created, ThreadCreateResult):
     print(UNEXPECTED_RESULT_ERROR, file=sys.stderr)
 ```
@@ -23,31 +25,41 @@ Three callers repeat the `isinstance` ladder, and each ends in an "unexpected re
 After:
 
 ```python
-class Route[Command: ContractModel, Result: ContractModel]:
+# contracts/methods.py
+class Method[Command: ContractModel, Result: ContractModel]:
+    name: str
     scope: Scope
     command: type[Command]
-    handler: Callable[[Command], Awaitable[Result]]
+    result: type[Result]
 
+
+THREAD_CREATE = Method(
+    "thread.create", Scope.THREAD_OPERATE, ThreadCreateCommand, ThreadCreateResult
+)
+
+
+# cli/client.py
 async def call[Command: ContractModel, Result: ContractModel](
-    self, route: Route[Command, Result], command: Command
+    self, method: Method[Command, Result], command: Command
 ) -> Result | ErrorEnvelope: ...
 
+
 created = await client.call(THREAD_CREATE, ThreadCreateCommand(title=title))
-match created:
-    case ErrorEnvelope() as error: ...
-    case ThreadCreateResult(thread_id=thread_id): ...
+if isinstance(created, ErrorEnvelope):
+    ...
+print(created.id)  # ThreadCreateResult, no second check
 ```
 
-The pair of generics ties the command to its result, the `cast(Handler, handler)` in `register` disappears, and the handlers inside `build_dispatcher` get their real return types back (`-> ThreadCreateResult`, not `-> BaseModel`). The "unexpected result" branch has nowhere to live.
+A `Method` value ties a wire name to its command and result, so `register` takes typed handlers (`-> ThreadCreateResult`, not `-> BaseModel`) and `call` returns what the method promises. The wire underneath still moves `ContractModel`; the client checks the result against `method.result` once, and that is the only place an "unexpected result" can appear. The f-string method name in the CLI went with it: a `Method` constant is the closed set, so the separate `StrEnum` in the next case is no longer needed here.
 
 ## Primitive where a closed set exists
 
-`method: str` across the dispatcher and the client. `cli/main.py` builds one with an f-string; a typo is a runtime `NOT_FOUND`.
+The same shape as `method: str` above, in miniature. Whenever a `str` parameter only ever receives a handful of literals, the set is the type.
 
 Before:
 
 ```python
-def register(self, method: str, scope: Scope, command: type[Command], ...) -> None: ...
+def register(self, method: str, ...) -> None: ...
 await client.call(f"thread.{args.command}", payload)
 ```
 
@@ -76,6 +88,7 @@ class Event(ContractModel):
     type: EventType
     payload: dict[str, JsonValue]
 
+
 # cli/repl.py
 if event.type is EventType.MESSAGE_DELTA:
     print(event.payload["text"], end="")
@@ -87,22 +100,29 @@ After:
 class MessageDelta(ContractModel):
     text: str
 
+
 class TurnCompleted(ContractModel):
     input_tokens: int
     output_tokens: int
+
 
 class TurnFailed(ContractModel):
     code: ErrorCode
     message: str
 
+
 Payload = MessageDelta | TurnCompleted | TurnFailed | ...
+
 
 class Event(ContractModel):
     payload: Payload = Field(discriminator="kind")
 
+
 match event.payload:
-    case MessageDelta(text=text): print(text, end="")
-    case TurnFailed(message=message): ...
+    case MessageDelta(text=text):
+        print(text, end="")
+    case TurnFailed(message=message):
+        ...
 ```
 
 A union of small models is a sum type. `match` on it is exhaustive, the type checker knows which fields exist in each arm, and a new event kind is a new class, not a new string key to remember.
@@ -115,7 +135,8 @@ Before:
 
 ```python
 def build_dispatcher(
-    state_dir: Path, *,
+    state_dir: Path,
+    *,
     event_log: EventLog | None = None,
     model: str | None = None,
     runner: TurnRunner | None = None,
@@ -133,14 +154,16 @@ class TurnConfig:
     model: str
     runner: TurnRunner
 
+
 def build_dispatcher(
-    state_dir: Path, *,
+    state_dir: Path,
+    *,
     event_log: EventLog | None = None,
     turns: TurnConfig | None = None,
 ) -> Dispatcher: ...
 ```
 
-The one optional left means exactly one thing: turns are on or off. "Runner without a model" cannot be written, so the `ValueError` and its test go away.
+The one optional left means exactly one thing: turns are on or off. "Runner without a model" cannot be written, so the `ValueError` goes away. `turn_config(model)` builds the default pair for the CLI.
 
 ## `Any` past the boundary
 
@@ -159,10 +182,12 @@ After:
 ```python
 class RawManifest(BaseModel):
     """Shape of manifest.toml, validated once at load."""
+
     model_config = ConfigDict(extra="forbid")
     id: str
     model: str = PLACEHOLDER_MODEL
     conventions: RawConventions = RawConventions()
+
 
 def load_manifest(path: Path) -> Manifest:
     raw = RawManifest.model_validate(tomllib.loads(path.read_text()))
@@ -179,7 +204,7 @@ Honest, keep it:
 
 ```python
 class ThreadSummary(ContractModel):
-    title: str | None   # a thread can have no title; the CLI prints "(untitled)"
+    title: str | None  # a thread can have no title; the CLI prints "(untitled)"
 ```
 
 Sentinel, replace it:
@@ -194,6 +219,6 @@ class LangGraphRunner:
             self._model = self._factory(self._model_name)
 ```
 
-`None` here means "lazy init pending", a fact about the object's lifecycle, and every method re-checks it. Build the model in `__init__` (or take a `ChatModel` and let the caller decide when), and the field becomes `self._model: ChatModel`.
+`None` here means "lazy init pending", a fact about the object's lifecycle, and every method re-checks it. Build the model in `__init__` and the field becomes `self._model: ChatModel`. Side effect worth knowing: a provider that fails to initialise now fails when `kinby run` starts, not on the first message.
 
 Same test for parameters: `init_instance(directory, model: str | None = None)` uses `None` as a stand-in for `PLACEHOLDER_MODEL`. The default can be the placeholder itself.

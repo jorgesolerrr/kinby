@@ -6,8 +6,17 @@ from contextlib import aclosing
 from typing import TextIO
 from uuid import UUID
 
-from kinby.cli.client import UNEXPECTED_RESULT_ERROR, ContractClient, format_error
-from kinby.contracts import AcceptedResult, ErrorCode, ErrorEnvelope, Event, EventType
+from kinby.cli.client import ContractClient, format_error
+from kinby.contracts import (
+    THREAD_SUBSCRIBE,
+    THREAD_TURN_START,
+    ErrorCode,
+    ErrorEnvelope,
+    Event,
+    EventType,
+    ThreadSubscribeCommand,
+    ThreadTurnStartCommand,
+)
 
 _TERMINAL_EVENTS = {
     EventType.TURN_COMPLETED,
@@ -23,10 +32,7 @@ async def run_repl(
     stdout: TextIO,
     stderr: TextIO,
 ) -> int:
-    subscription = client.subscribe(
-        "thread.subscribe",
-        {"thread_id": thread_id, "after_sequence": 0},
-    )
+    subscription = client.subscribe(THREAD_SUBSCRIBE, ThreadSubscribeCommand(thread_id=thread_id))
     async with aclosing(subscription):
         while True:
             stdout.write("> ")
@@ -39,24 +45,20 @@ async def run_repl(
                 continue
 
             accepted = await client.call(
-                "thread.turn.start",
-                {"thread_id": thread_id, "message": message},
+                THREAD_TURN_START,
+                ThreadTurnStartCommand(thread_id=thread_id, message=message),
             )
             if isinstance(accepted, ErrorEnvelope):
                 stderr.write(f"{format_error(accepted)}\n")
                 stderr.flush()
                 continue
-            if not isinstance(accepted, AcceptedResult):
-                stderr.write(f"{UNEXPECTED_RESULT_ERROR}\n")
-                stderr.flush()
-                return 1
 
             async for result in subscription:
                 if isinstance(result, ErrorEnvelope):
                     stderr.write(f"{format_error(result)}\n")
                     stderr.flush()
                     return 1
-                if not isinstance(result, Event) or result.turn_id != accepted.turn_id:
+                if result.turn_id != accepted.turn_id:
                     continue
                 _render_event(result, stdout, stderr)
                 if result.type in _TERMINAL_EVENTS:

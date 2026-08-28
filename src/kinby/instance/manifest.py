@@ -34,7 +34,7 @@ def _reject_unknown(values: Mapping[str, Any], allowed: set[str], prefix: str = 
             raise ManifestError(f"{qualified_key}: unknown key")
 
 
-def _table(value: Any, key: str) -> Mapping[str, Any]:
+def _table(value: object, key: str) -> Mapping[str, Any]:
     if not isinstance(value, dict):
         raise ManifestError(f"{key}: must be a table")
     return value
