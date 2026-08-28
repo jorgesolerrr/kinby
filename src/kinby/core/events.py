@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from pydantic import JsonValue
-
-from kinby.contracts import Event, EventType
+from kinby.contracts import Event, Payload
 
 _EVENTS_NAME = "events.jsonl"
 
@@ -25,16 +23,14 @@ class EventLog:
         self,
         thread_id: UUID,
         turn_id: UUID,
-        event_type: EventType,
-        payload: Mapping[str, JsonValue],
+        payload: Payload,
     ) -> Event:
         async with self._lock:
             event = Event(
                 sequence=len(self._stored_events(thread_id)) + 1,
                 thread_id=thread_id,
                 turn_id=turn_id,
-                type=event_type,
-                payload=dict(payload),
+                payload=payload,
                 timestamp=datetime.now(UTC),
             )
             self._path.parent.mkdir(parents=True, exist_ok=True)

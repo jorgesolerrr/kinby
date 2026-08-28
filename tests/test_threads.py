@@ -5,17 +5,23 @@ from uuid import uuid4
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
+    THREAD_SUBSCRIBE,
     ErrorCode,
     ErrorEnvelope,
     Event,
-    EventType,
     Scope,
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListResult,
+    ThreadSubscribeCommand,
+    TurnCompleted,
+    TurnStarted,
 )
+from kinby.contracts.methods import Method, Subscription
 from kinby.core.dispatcher import Dispatcher, build_dispatcher
 from kinby.core.events import EventLog
+
+STARTED = TurnStarted(message="Hello", model="openai:gpt-5")
 
 
 def test_create_and_list_thread_after_dispatcher_restart(tmp_path: Path) -> None:
@@ -56,9 +62,7 @@ def test_dispatcher_returns_typed_errors_before_running_a_handler() -> None:
 
     dispatcher = Dispatcher()
     dispatcher.register(
-        "thread.create",
-        Scope.THREAD_OPERATE,
-        ThreadCreateCommand,
+        Method("thread.create", Scope.THREAD_OPERATE, ThreadCreateCommand, ThreadCreateResult),
         handler,
     )
 
@@ -87,9 +91,7 @@ def test_dispatcher_translates_an_unexpected_handler_failure() -> None:
 
     dispatcher = Dispatcher()
     dispatcher.register(
-        "thread.create",
-        Scope.THREAD_OPERATE,
-        ThreadCreateCommand,
+        Method("thread.create", Scope.THREAD_OPERATE, ThreadCreateCommand, ThreadCreateResult),
         handler,
     )
 
@@ -117,8 +119,8 @@ def test_thread_subscribe_replays_a_finished_thread_through_dispatcher(
         turn_id = uuid4()
         event_log = EventLog(tmp_path)
         stored = [
-            await event_log.append(thread_id, turn_id, EventType.TURN_STARTED, {}),
-            await event_log.append(thread_id, turn_id, EventType.TURN_COMPLETED, {}),
+            await event_log.append(thread_id, turn_id, STARTED),
+            await event_log.append(thread_id, turn_id, TurnCompleted()),
         ]
         dispatcher = build_dispatcher(tmp_path)
 
@@ -188,9 +190,9 @@ def test_subscription_translates_an_unexpected_handler_failure() -> None:
 
         dispatcher = Dispatcher()
         dispatcher.register_subscription(
-            "thread.subscribe",
-            Scope.THREAD_READ,
-            ThreadCreateCommand,
+            Subscription(
+                "thread.subscribe", Scope.THREAD_READ, ThreadCreateCommand, ThreadCreateCommand
+            ),
             handler,
         )
         subscription = dispatcher.subscribe(
@@ -226,9 +228,9 @@ def test_closing_subscription_releases_its_handler() -> None:
 
         dispatcher = Dispatcher()
         dispatcher.register_subscription(
-            "thread.subscribe",
-            Scope.THREAD_READ,
-            ThreadCreateCommand,
+            Subscription(
+                "thread.subscribe", Scope.THREAD_READ, ThreadCreateCommand, ThreadCreateCommand
+            ),
             handler,
         )
         subscription = dispatcher.subscribe(
@@ -253,8 +255,7 @@ def test_contract_client_subscription_replays_then_stays_live(tmp_path: Path) ->
         replayed = await event_log.append(
             thread_id,
             turn_id,
-            EventType.TURN_STARTED,
-            {},
+            STARTED,
         )
         dispatcher = build_dispatcher(tmp_path, event_log=event_log)
         client = ContractClient(
@@ -263,8 +264,7 @@ def test_contract_client_subscription_replays_then_stays_live(tmp_path: Path) ->
             {Scope.THREAD_READ},
         )
         subscription = client.subscribe(
-            "thread.subscribe",
-            {"thread_id": thread_id},
+            THREAD_SUBSCRIBE, ThreadSubscribeCommand(thread_id=thread_id)
         )
 
         received_replay = await anext(subscription)
@@ -273,8 +273,7 @@ def test_contract_client_subscription_replays_then_stays_live(tmp_path: Path) ->
         live = await event_log.append(
             thread_id,
             turn_id,
-            EventType.TURN_COMPLETED,
-            {},
+            TurnCompleted(),
         )
         received_live = await asyncio.wait_for(waiting_for_live, timeout=1)
         await subscription.aclose()

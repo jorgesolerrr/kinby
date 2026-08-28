@@ -2,8 +2,10 @@ import asyncio
 from pathlib import Path
 from uuid import uuid4
 
-from kinby.contracts import EventType
+from kinby.contracts import MessageDelta, TurnCompleted, TurnStarted
 from kinby.core.events import EventLog
+
+STARTED = TurnStarted(message="Hello", model="openai:gpt-5")
 
 
 def test_finished_thread_replays_every_stored_event_in_order(tmp_path: Path) -> None:
@@ -15,20 +17,17 @@ def test_finished_thread_replays_every_stored_event_in_order(tmp_path: Path) -> 
             await event_log.append(
                 thread_id,
                 turn_id,
-                EventType.TURN_STARTED,
-                {"message": "Book the trip"},
+                TurnStarted(message="Book the trip", model="openai:gpt-5"),
             ),
             await event_log.append(
                 thread_id,
                 turn_id,
-                EventType.MESSAGE_DELTA,
-                {"text": "Done"},
+                MessageDelta(text="Done"),
             ),
             await event_log.append(
                 thread_id,
                 turn_id,
-                EventType.TURN_COMPLETED,
-                {},
+                TurnCompleted(),
             ),
         ]
 
@@ -50,21 +49,18 @@ def test_sequence_stays_gap_free_after_event_log_restart(tmp_path: Path) -> None
         first = await EventLog(tmp_path).append(
             thread_id,
             turn_id,
-            EventType.TURN_STARTED,
-            {},
+            STARTED,
         )
         other_thread = await EventLog(tmp_path).append(
             other_thread_id,
             turn_id,
-            EventType.TURN_STARTED,
-            {},
+            STARTED,
         )
 
         second = await EventLog(tmp_path).append(
             thread_id,
             turn_id,
-            EventType.TURN_COMPLETED,
-            {},
+            TurnCompleted(),
         )
 
         assert (first.sequence, second.sequence) == (1, 2)
@@ -78,12 +74,11 @@ def test_subscriber_receives_replay_gap_then_live_events_once(tmp_path: Path) ->
         thread_id = uuid4()
         turn_id = uuid4()
         event_log = EventLog(tmp_path)
-        await event_log.append(thread_id, turn_id, EventType.TURN_STARTED, {})
+        await event_log.append(thread_id, turn_id, STARTED)
         replay_gap = await event_log.append(
             thread_id,
             turn_id,
-            EventType.MESSAGE_DELTA,
-            {"text": "halfway"},
+            MessageDelta(text="halfway"),
         )
         subscription = event_log.subscribe(thread_id, after_sequence=1)
 
@@ -91,8 +86,7 @@ def test_subscriber_receives_replay_gap_then_live_events_once(tmp_path: Path) ->
         during_handoff = await event_log.append(
             thread_id,
             turn_id,
-            EventType.MESSAGE_DELTA,
-            {"text": "done"},
+            MessageDelta(text="done"),
         )
         received_during_handoff = await asyncio.wait_for(anext(subscription), timeout=1)
         waiting_for_live = asyncio.ensure_future(anext(subscription))
@@ -100,8 +94,7 @@ def test_subscriber_receives_replay_gap_then_live_events_once(tmp_path: Path) ->
         live = await event_log.append(
             thread_id,
             turn_id,
-            EventType.TURN_COMPLETED,
-            {},
+            TurnCompleted(),
         )
         received_live = await asyncio.wait_for(waiting_for_live, timeout=1)
         await subscription.aclose()
@@ -129,12 +122,12 @@ def test_subscriber_does_not_receive_live_events_before_its_cursor(tmp_path: Pat
         waiting = asyncio.ensure_future(anext(subscription))
         await asyncio.sleep(0)
 
-        await event_log.append(thread_id, turn_id, EventType.TURN_STARTED, {})
-        await event_log.append(thread_id, turn_id, EventType.MESSAGE_DELTA, {})
+        await event_log.append(thread_id, turn_id, STARTED)
+        await event_log.append(thread_id, turn_id, MessageDelta(text=""))
 
         assert waiting.done() is False
 
-        third = await event_log.append(thread_id, turn_id, EventType.TURN_COMPLETED, {})
+        third = await event_log.append(thread_id, turn_id, TurnCompleted())
         received = await asyncio.wait_for(waiting, timeout=1)
         await subscription.aclose()
 

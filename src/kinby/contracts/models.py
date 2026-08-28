@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ContractModel(BaseModel):
@@ -49,13 +49,45 @@ class EventType(StrEnum):
     TURN_INTERRUPTED = "turn.interrupted"
 
 
+class TurnStarted(ContractModel):
+    type: Literal[EventType.TURN_STARTED] = EventType.TURN_STARTED
+    message: str
+    model: str
+
+
+class MessageDelta(ContractModel):
+    type: Literal[EventType.MESSAGE_DELTA] = EventType.MESSAGE_DELTA
+    text: str
+
+
+class TurnCompleted(ContractModel):
+    type: Literal[EventType.TURN_COMPLETED] = EventType.TURN_COMPLETED
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class TurnFailed(ContractModel):
+    type: Literal[EventType.TURN_FAILED] = EventType.TURN_FAILED
+    code: ErrorCode
+    message: str
+
+
+Payload = Annotated[
+    TurnStarted | MessageDelta | TurnCompleted | TurnFailed,
+    Field(discriminator="type"),
+]
+
+
 class Event(ContractModel):
     sequence: int
     thread_id: UUID
     turn_id: UUID
-    type: EventType
-    payload: dict[str, JsonValue]
+    payload: Payload
     timestamp: datetime
+
+    @property
+    def type(self) -> EventType:
+        return self.payload.type
 
 
 class ThreadSubscribeCommand(ContractModel):

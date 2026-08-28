@@ -8,22 +8,26 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
-from kinby.cli.client import UNEXPECTED_RESULT_ERROR, ContractClient, format_error
+from kinby.cli.client import ContractClient, format_error
 from kinby.cli.repl import run_repl
 from kinby.contracts import (
+    THREAD_CREATE,
+    THREAD_LIST,
     ErrorEnvelope,
     Scope,
-    ThreadCreateResult,
-    ThreadListResult,
+    ThreadCreateCommand,
+    ThreadListCommand,
 )
-from kinby.core import build_dispatcher
+from kinby.core import build_dispatcher, turn_config
 from kinby.instance import (
+    PLACEHOLDER_MODEL,
     Instance,
     InstanceExistsError,
     InstanceNotFoundError,
     ManifestError,
     discover_instance,
     init_instance,
+    load_instance,
 )
 
 
@@ -73,15 +77,12 @@ def _print_instance(instance: Instance) -> None:
 async def _run_instance(instance: Instance) -> int:
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
-        model=instance.manifest.models.main,
+        turns=turn_config(instance.manifest.models.main),
     )
     client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
-    created = await client.call("thread.create", {"title": None})
+    created = await client.call(THREAD_CREATE, ThreadCreateCommand())
     if isinstance(created, ErrorEnvelope):
         print(format_error(created), file=sys.stderr)
-        return 1
-    if not isinstance(created, ThreadCreateResult):
-        print(UNEXPECTED_RESULT_ERROR, file=sys.stderr)
         return 1
     return await run_repl(
         client,
@@ -90,6 +91,26 @@ async def _run_instance(instance: Instance) -> int:
         stdout=sys.stdout,
         stderr=sys.stderr,
     )
+
+
+async def _create_thread(client: ContractClient, title: str | None) -> int:
+    created = await client.call(THREAD_CREATE, ThreadCreateCommand(title=title))
+    if isinstance(created, ErrorEnvelope):
+        print(format_error(created), file=sys.stderr)
+        return 1
+    print(f"id: {created.id}")
+    print(f"created at: {created.created_at.isoformat()}")
+    return 0
+
+
+async def _list_threads(client: ContractClient) -> int:
+    listed = await client.call(THREAD_LIST, ThreadListCommand())
+    if isinstance(listed, ErrorEnvelope):
+        print(format_error(listed), file=sys.stderr)
+        return 1
+    for thread in listed.threads:
+        print(f"{thread.id}\t{thread.created_at.isoformat()}\t{thread.title or ''}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -107,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     init_parser.add_argument("directory", help="instance directory to create")
     init_parser.add_argument(
         "--model",
+        default=PLACEHOLDER_MODEL,
         help="value for [models].main (a placeholder is used when omitted)",
     )
     instance_parser = subparsers.add_parser(
@@ -161,31 +183,21 @@ def main(argv: list[str] | None = None) -> int:
     if show_instance or args.command == "run" or thread_command:
         try:
             explicit_directory = args.instance_directory or args.directory
-            directory = Path(explicit_directory) if explicit_directory else None
             model_override = args.model if args.command == "run" else None
-            instance = discover_instance(directory, model_override=model_override)
+            instance = (
+                load_instance(Path(explicit_directory), model_override=model_override)
+                if explicit_directory
+                else discover_instance(model_override=model_override)
+            )
         except (InstanceNotFoundError, ManifestError) as exc:
             print(exc, file=sys.stderr)
             return 1
         if thread_command:
             dispatcher = build_dispatcher(instance.manifest.state_dir)
             client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
-            method = f"thread.{args.thread_command}"
-            payload = {"title": args.title} if args.thread_command == "create" else {}
-            result = asyncio.run(client.call(method, payload))
-            if isinstance(result, ErrorEnvelope):
-                print(format_error(result), file=sys.stderr)
-                return 1
-            if isinstance(result, ThreadCreateResult):
-                print(f"id: {result.id}")
-                print(f"created at: {result.created_at.isoformat()}")
-                return 0
-            if isinstance(result, ThreadListResult):
-                for thread in result.threads:
-                    print(f"{thread.id}\t{thread.created_at.isoformat()}\t{thread.title or ''}")
-                return 0
-            print(UNEXPECTED_RESULT_ERROR, file=sys.stderr)
-            return 1
+            if args.thread_command == "create":
+                return asyncio.run(_create_thread(client, args.title))
+            return asyncio.run(_list_threads(client))
         _print_instance(instance)
         if args.command == "run":
             return asyncio.run(_run_instance(instance))

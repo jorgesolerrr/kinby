@@ -6,18 +6,27 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Map
 from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar, cast
+from typing import cast
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from kinby.contracts import (
+    THREAD_CREATE,
+    THREAD_LIST,
+    THREAD_SUBSCRIBE,
+    THREAD_TURN_START,
+    ContractModel,
     ErrorCode,
     ErrorEnvelope,
+    Event,
+    Method,
     Scope,
+    Subscription,
     ThreadCreateCommand,
+    ThreadCreateResult,
     ThreadListCommand,
+    ThreadListResult,
     ThreadSubscribeCommand,
-    ThreadTurnStartCommand,
 )
 from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
@@ -25,16 +34,21 @@ from kinby.core.threads import ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnRunner, Turns
 
-Handler = Callable[[BaseModel], Awaitable[BaseModel]]
-SubscriptionHandler = Callable[[BaseModel], AsyncGenerator[BaseModel]]
-Command = TypeVar("Command", bound=BaseModel)
+Handler = Callable[[ContractModel], Awaitable[ContractModel]]
+SubscriptionHandler = Callable[[ContractModel], AsyncGenerator[ContractModel]]
 
 
 @dataclass(frozen=True)
 class Route[RouteHandler]:
     scope: Scope
-    command: type[BaseModel]
+    command: type[ContractModel]
     handler: RouteHandler
+
+
+@dataclass(frozen=True)
+class TurnConfig:
+    model: str
+    runner: TurnRunner
 
 
 class Dispatcher:
@@ -42,25 +56,21 @@ class Dispatcher:
         self._routes: dict[str, Route[Handler]] = {}
         self._subscription_routes: dict[str, Route[SubscriptionHandler]] = {}
 
-    def register(
+    def register[Command: ContractModel, Result: ContractModel](
         self,
-        method: str,
-        scope: Scope,
-        command: type[Command],
-        handler: Callable[[Command], Awaitable[BaseModel]],
+        method: Method[Command, Result],
+        handler: Callable[[Command], Awaitable[Result]],
     ) -> None:
-        self._routes[method] = Route(scope, command, cast(Handler, handler))
+        self._routes[method.name] = Route(method.scope, method.command, cast(Handler, handler))
 
-    def register_subscription(
+    def register_subscription[Command: ContractModel, Item: ContractModel](
         self,
-        method: str,
-        scope: Scope,
-        command: type[Command],
-        handler: Callable[[Command], AsyncGenerator[BaseModel]],
+        subscription: Subscription[Command, Item],
+        handler: Callable[[Command], AsyncGenerator[Item]],
     ) -> None:
-        self._subscription_routes[method] = Route(
-            scope,
-            command,
+        self._subscription_routes[subscription.name] = Route(
+            subscription.scope,
+            subscription.command,
             cast(SubscriptionHandler, handler),
         )
 
@@ -70,7 +80,7 @@ class Dispatcher:
         method: str,
         payload: Mapping[str, object],
         scopes: Collection[Scope],
-    ) -> tuple[Route[RouteHandler], BaseModel] | ErrorEnvelope:
+    ) -> tuple[Route[RouteHandler], ContractModel] | ErrorEnvelope:
         route = routes.get(method)
         if route is None:
             return ErrorEnvelope(
@@ -99,7 +109,7 @@ class Dispatcher:
         method: str,
         payload: Mapping[str, object],
         scopes: Collection[Scope],
-    ) -> BaseModel:
+    ) -> ContractModel:
         call = self._validate_call(self._routes, method, payload, scopes)
         if isinstance(call, ErrorEnvelope):
             return call
@@ -124,7 +134,7 @@ class Dispatcher:
         method: str,
         payload: Mapping[str, object],
         scopes: Collection[Scope],
-    ) -> AsyncGenerator[BaseModel]:
+    ) -> AsyncGenerator[ContractModel]:
         call = self._validate_call(self._subscription_routes, method, payload, scopes)
         if isinstance(call, ErrorEnvelope):
             yield call
@@ -146,52 +156,32 @@ def build_dispatcher(
     state_dir: Path,
     *,
     event_log: EventLog | None = None,
-    model: str | None = None,
-    runner: TurnRunner | None = None,
+    turns: TurnConfig | None = None,
 ) -> Dispatcher:
     store = ThreadStore(state_dir)
     event_log = event_log or EventLog(state_dir)
     dispatcher = Dispatcher()
 
-    async def create_thread(command: ThreadCreateCommand) -> BaseModel:
+    async def create_thread(command: ThreadCreateCommand) -> ThreadCreateResult:
         return store.create(command.title)
 
-    async def list_threads(command: ThreadListCommand) -> BaseModel:
+    async def list_threads(command: ThreadListCommand) -> ThreadListResult:
         return store.list()
 
-    def subscribe_to_thread(
-        command: ThreadSubscribeCommand,
-    ) -> AsyncGenerator[BaseModel]:
+    def subscribe_to_thread(command: ThreadSubscribeCommand) -> AsyncGenerator[Event]:
         return event_log.subscribe(command.thread_id, command.after_sequence)
 
-    dispatcher.register(
-        "thread.create",
-        Scope.THREAD_OPERATE,
-        ThreadCreateCommand,
-        create_thread,
-    )
-    dispatcher.register(
-        "thread.list",
-        Scope.THREAD_READ,
-        ThreadListCommand,
-        list_threads,
-    )
-    dispatcher.register_subscription(
-        "thread.subscribe",
-        Scope.THREAD_READ,
-        ThreadSubscribeCommand,
-        subscribe_to_thread,
-    )
-    if runner is None and model is not None:
-        runner = LangGraphRunner(model)
-    if runner is not None:
-        if model is None:
-            raise ValueError("model is required when a turn runner is configured")
-        turns = Turns(store, event_log, runner, model)
+    dispatcher.register(THREAD_CREATE, create_thread)
+    dispatcher.register(THREAD_LIST, list_threads)
+    dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
+    if turns is not None:
         dispatcher.register(
-            "thread.turn.start",
-            Scope.THREAD_OPERATE,
-            ThreadTurnStartCommand,
-            turns.start,
+            THREAD_TURN_START,
+            Turns(store, event_log, turns.runner, turns.model).start,
         )
     return dispatcher
+
+
+def turn_config(model: str) -> TurnConfig:
+    """Turns backed by the default LangGraph runner for `model`."""
+    return TurnConfig(model, LangGraphRunner(model))

@@ -1,10 +1,7 @@
 import asyncio
-from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 from uuid import UUID
-
-from pydantic import JsonValue
 
 from kinby.contracts import (
     AcceptedResult,
@@ -12,10 +9,15 @@ from kinby.contracts import (
     ErrorEnvelope,
     Event,
     EventType,
+    MessageDelta,
+    Payload,
     Scope,
     ThreadCreateResult,
+    TurnCompleted,
+    TurnFailed,
+    TurnStarted,
 )
-from kinby.core.dispatcher import build_dispatcher
+from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.turns import Emit, TurnOutcome, TurnRequest
 
@@ -23,8 +25,8 @@ from kinby.core.turns import Emit, TurnOutcome, TurnRequest
 class ScriptedRunner:
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
         assert turn.message == "Hello"
-        await emit(EventType.MESSAGE_DELTA, {"text": "Hi"})
-        await emit(EventType.MESSAGE_DELTA, {"text": " there"})
+        await emit(MessageDelta(text="Hi"))
+        await emit(MessageDelta(text=" there"))
         return TurnOutcome(input_tokens=4, output_tokens=2)
 
 
@@ -54,21 +56,19 @@ class PausingEventLog(EventLog):
         self,
         thread_id: UUID,
         turn_id: UUID,
-        event_type: EventType,
-        payload: Mapping[str, JsonValue],
+        payload: Payload,
     ) -> Event:
-        if event_type is EventType.TURN_STARTED:
+        if isinstance(payload, TurnStarted):
             self.turns_started += 1
             await self.release.wait()
-        return await super().append(thread_id, turn_id, event_type, payload)
+        return await super().append(thread_id, turn_id, payload)
 
 
 def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            model="openai:gpt-5",
-            runner=ScriptedRunner(),
+            turns=TurnConfig("openai:gpt-5", ScriptedRunner()),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -102,10 +102,10 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
             EventType.TURN_COMPLETED,
         ]
         assert [event.sequence for event in typed_events] == [1, 2, 3, 4]
-        assert typed_events[0].payload == {"message": "Hello", "model": "openai:gpt-5"}
-        assert typed_events[1].payload == {"text": "Hi"}
-        assert typed_events[2].payload == {"text": " there"}
-        assert typed_events[3].payload == {"input_tokens": 4, "output_tokens": 2}
+        assert typed_events[0].payload == TurnStarted(message="Hello", model="openai:gpt-5")
+        assert typed_events[1].payload == MessageDelta(text="Hi")
+        assert typed_events[2].payload == MessageDelta(text=" there")
+        assert typed_events[3].payload == TurnCompleted(input_tokens=4, output_tokens=2)
 
         replay = build_dispatcher(tmp_path).subscribe(
             "thread.subscribe",
@@ -123,7 +123,7 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
 def test_start_rejects_a_second_turn_while_the_first_is_running(tmp_path: Path) -> None:
     async def scenario() -> None:
         runner = WaitingRunner()
-        dispatcher = build_dispatcher(tmp_path, model="openai:gpt-5", runner=runner)
+        dispatcher = build_dispatcher(tmp_path, turns=TurnConfig("openai:gpt-5", runner))
         created = await dispatcher.dispatch(
             "thread.create",
             {},
@@ -171,8 +171,7 @@ def test_start_rejects_a_concurrent_turn_before_recording_acceptance(tmp_path: P
         dispatcher = build_dispatcher(
             tmp_path,
             event_log=event_log,
-            model="openai:gpt-5",
-            runner=runner,
+            turns=TurnConfig("openai:gpt-5", runner),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -208,8 +207,7 @@ def test_failed_model_turn_ends_with_the_error_code(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            model="openai:gpt-5",
-            runner=FailingRunner(),
+            turns=TurnConfig("openai:gpt-5", FailingRunner()),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -236,9 +234,9 @@ def test_failed_model_turn_ends_with_the_error_code(tmp_path: Path) -> None:
         assert started.type is EventType.TURN_STARTED
         assert isinstance(failed, Event)
         assert failed.type is EventType.TURN_FAILED
-        assert failed.payload == {
-            "code": ErrorCode.INTERNAL.value,
-            "message": "The model turn failed unexpectedly.",
-        }
+        assert failed.payload == TurnFailed(
+            code=ErrorCode.INTERNAL,
+            message="The model turn failed unexpectedly.",
+        )
 
     asyncio.run(scenario())

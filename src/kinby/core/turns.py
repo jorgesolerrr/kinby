@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
 from typing import Protocol
 from uuid import UUID, uuid4
 
-from pydantic import JsonValue
-
-from kinby.contracts import AcceptedResult, ErrorCode, Event, EventType, ThreadTurnStartCommand
+from kinby.contracts import (
+    AcceptedResult,
+    ErrorCode,
+    Event,
+    Payload,
+    ThreadTurnStartCommand,
+    TurnCompleted,
+    TurnFailed,
+    TurnStarted,
+)
 from kinby.core.errors import CoreError, ThreadBusy, ThreadNotFound
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
@@ -33,7 +40,7 @@ class TurnOutcome:
     output_tokens: int = 0
 
 
-Emit = Callable[[EventType, Mapping[str, JsonValue]], Awaitable[Event]]
+Emit = Callable[[Payload], Awaitable[Event]]
 
 
 class TurnRunner(Protocol):
@@ -74,8 +81,7 @@ class Turns:
             started = await self._log.append(
                 turn.thread_id,
                 turn.turn_id,
-                EventType.TURN_STARTED,
-                {"message": turn.message, "model": self._model},
+                TurnStarted(message=turn.message, model=self._model),
             )
         finally:
             self._starting.remove(command.thread_id)
@@ -89,11 +95,8 @@ class Turns:
         )
 
     async def _run(self, turn: TurnRequest) -> None:
-        async def emit(
-            event_type: EventType,
-            payload: Mapping[str, JsonValue],
-        ) -> Event:
-            return await self._log.append(turn.thread_id, turn.turn_id, event_type, payload)
+        async def emit(payload: Payload) -> Event:
+            return await self._log.append(turn.thread_id, turn.turn_id, payload)
 
         try:
             outcome = await self._runner.run(turn, emit)
@@ -106,18 +109,14 @@ class Turns:
             message = "The model turn failed unexpectedly."
         else:
             await emit(
-                EventType.TURN_COMPLETED,
-                {
-                    "input_tokens": outcome.input_tokens,
-                    "output_tokens": outcome.output_tokens,
-                },
+                TurnCompleted(
+                    input_tokens=outcome.input_tokens,
+                    output_tokens=outcome.output_tokens,
+                )
             )
             return
 
-        await emit(
-            EventType.TURN_FAILED,
-            {"code": code.value, "message": message},
-        )
+        await emit(TurnFailed(code=code, message=message))
 
     def _forget_task(self, thread_id: UUID, task: asyncio.Task[None]) -> None:
         if self._tasks.get(thread_id) is task:
