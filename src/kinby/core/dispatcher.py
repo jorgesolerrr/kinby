@@ -11,6 +11,7 @@ from typing import cast
 from pydantic import ValidationError
 
 from kinby.contracts import (
+    THREAD_APPROVAL_RESPOND,
     THREAD_CREATE,
     THREAD_LIST,
     THREAD_SUBSCRIBE,
@@ -179,6 +180,7 @@ def build_dispatcher(
         turn_service = Turns(store, event_log, turns.runner, turns.model)
         dispatcher.register(THREAD_TURN_START, turn_service.start)
         dispatcher.register(THREAD_TURN_INTERRUPT, turn_service.interrupt)
+        dispatcher.register(THREAD_APPROVAL_RESPOND, turn_service.respond)
     return dispatcher
 
 

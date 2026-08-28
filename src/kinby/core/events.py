@@ -27,7 +27,7 @@ class EventLog:
     ) -> Event:
         async with self._lock:
             event = Event(
-                sequence=len(self._stored_events(thread_id)) + 1,
+                sequence=len(self.stored(thread_id)) + 1,
                 thread_id=thread_id,
                 turn_id=turn_id,
                 payload=payload,
@@ -47,9 +47,7 @@ class EventLog:
     ) -> AsyncGenerator[Event]:
         subscriber: asyncio.Queue[Event] = asyncio.Queue()
         async with self._lock:
-            replay = [
-                event for event in self._stored_events(thread_id) if event.sequence > after_sequence
-            ]
+            replay = [event for event in self.stored(thread_id) if event.sequence > after_sequence]
             self._subscribers.setdefault(thread_id, set()).add(subscriber)
         try:
             for event in replay:
@@ -64,7 +62,7 @@ class EventLog:
             if not subscribers:
                 del self._subscribers[thread_id]
 
-    def _stored_events(self, thread_id: UUID) -> list[Event]:
+    def stored(self, thread_id: UUID) -> list[Event]:
         if not self._path.exists():
             return []
         with self._path.open(encoding="utf-8") as records:

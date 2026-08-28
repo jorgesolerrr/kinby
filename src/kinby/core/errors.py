@@ -29,3 +29,13 @@ class ModelNoResponse(CoreError):
 
 class TurnInterruptedError(asyncio.CancelledError):
     """Stop work that tries to emit after its turn was interrupted."""
+
+
+class ApprovalNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
+class InvalidParkedTurn(CoreError):
+    """A persisted parked turn cannot be reconstructed."""
+
+    code = ErrorCode.INTERNAL

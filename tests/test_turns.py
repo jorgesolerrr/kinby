@@ -6,6 +6,7 @@ from uuid import UUID
 
 from kinby.contracts import (
     AcceptedResult,
+    ApprovalRequested,
     ErrorCode,
     ErrorEnvelope,
     Event,
@@ -19,9 +20,12 @@ from kinby.contracts import (
     TurnInterrupted,
     TurnStarted,
 )
-from kinby.core.dispatcher import TurnConfig, build_dispatcher
+from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
-from kinby.core.turns import Emit, TurnOutcome, TurnRequest
+from kinby.core.turns import Emit, ParkedTurn, TurnOutcome, TurnRequest
+from tests.helpers import does_not_park
+
+_APPROVAL_ID = UUID("11111111-1111-1111-1111-111111111111")
 
 
 class ScriptedRunner:
@@ -30,6 +34,8 @@ class ScriptedRunner:
         await emit(MessageDelta(text="Hi"))
         await emit(MessageDelta(text=" there"))
         return TurnOutcome(input_tokens=4, output_tokens=2)
+
+    resume = does_not_park
 
 
 class WaitingRunner:
@@ -42,10 +48,25 @@ class WaitingRunner:
         await self.release.wait()
         return TurnOutcome()
 
+    resume = does_not_park
+
 
 class FailingRunner:
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
         raise RuntimeError("provider unavailable")
+
+    resume = does_not_park
+
+
+class ParkingRunner:
+    async def run(self, turn: TurnRequest, emit: Emit) -> ParkedTurn:
+        await emit(ApprovalRequested(approval_id=_APPROVAL_ID, request="May I continue?"))
+        return ParkedTurn()
+
+    async def resume(self, turn: TurnRequest, answer: str, emit: Emit) -> TurnOutcome:
+        assert answer == "yes"
+        await emit(MessageDelta(text="Approved"))
+        return TurnOutcome(input_tokens=3, output_tokens=1)
 
 
 class CancellationSuppressingRunner:
@@ -59,6 +80,8 @@ class CancellationSuppressingRunner:
             await asyncio.Event().wait()
         await emit(MessageDelta(text="After interrupt"))
         return TurnOutcome()
+
+    resume = does_not_park
 
 
 class PausingEventLog(EventLog):
@@ -383,6 +406,236 @@ def test_failed_model_turn_ends_with_the_error_code(tmp_path: Path) -> None:
         assert failed.payload == TurnFailed(
             code=ErrorCode.INTERNAL,
             message="The model turn failed unexpectedly.",
+        )
+
+    asyncio.run(scenario())
+
+
+async def _park_turn(
+    tmp_path: Path,
+) -> tuple[Dispatcher, ThreadCreateResult, AcceptedResult, Event]:
+    dispatcher = build_dispatcher(
+        tmp_path,
+        turns=TurnConfig("openai:gpt-5", ParkingRunner()),
+    )
+    created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+    assert isinstance(created, ThreadCreateResult)
+    accepted = await dispatcher.dispatch(
+        "thread.turn.start",
+        {"thread_id": created.id, "message": "Hello"},
+        {Scope.THREAD_OPERATE},
+    )
+    assert isinstance(accepted, AcceptedResult)
+    subscription = dispatcher.subscribe(
+        "thread.subscribe",
+        {"thread_id": created.id},
+        {Scope.THREAD_READ},
+    )
+    await asyncio.wait_for(anext(subscription), timeout=1)
+    requested = await asyncio.wait_for(anext(subscription), timeout=1)
+    await subscription.aclose()
+    assert isinstance(requested, Event)
+    assert requested.type is EventType.APPROVAL_REQUESTED
+    return dispatcher, created, accepted, requested
+
+
+def test_parked_approval_resumes_after_dispatcher_restart(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        _, created, accepted, requested = await _park_turn(tmp_path)
+        assert requested.payload == ApprovalRequested(
+            approval_id=_APPROVAL_ID,
+            request="May I continue?",
+        )
+
+        restarted = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig("openai:gpt-5", ParkingRunner()),
+        )
+        resumed = await restarted.dispatch(
+            "thread.approval.respond",
+            {
+                "thread_id": created.id,
+                "approval_id": _APPROVAL_ID,
+                "answer": "yes",
+            },
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(resumed, AcceptedResult)
+        assert resumed.thread_id == created.id
+        assert resumed.turn_id == accepted.turn_id
+
+        live = restarted.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id, "after_sequence": requested.sequence},
+            {Scope.THREAD_READ},
+        )
+        delta = await asyncio.wait_for(anext(live), timeout=1)
+        completed = await asyncio.wait_for(anext(live), timeout=1)
+        await live.aclose()
+
+        assert isinstance(delta, Event)
+        assert delta.type is EventType.MESSAGE_DELTA
+        assert delta.payload == MessageDelta(text="Approved")
+        assert isinstance(completed, Event)
+        assert completed.type is EventType.TURN_COMPLETED
+        assert completed.payload == TurnCompleted(input_tokens=3, output_tokens=1)
+
+    asyncio.run(scenario())
+
+
+def test_parked_approval_resumes_on_the_same_dispatcher(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher, created, accepted, requested = await _park_turn(tmp_path)
+        resumed = await dispatcher.dispatch(
+            "thread.approval.respond",
+            {
+                "thread_id": created.id,
+                "approval_id": _APPROVAL_ID,
+                "answer": "yes",
+            },
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(resumed, AcceptedResult)
+        assert resumed.turn_id == accepted.turn_id
+
+        live = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id, "after_sequence": requested.sequence},
+            {Scope.THREAD_READ},
+        )
+        delta = await asyncio.wait_for(anext(live), timeout=1)
+        completed = await asyncio.wait_for(anext(live), timeout=1)
+        await live.aclose()
+
+        assert isinstance(delta, Event)
+        assert delta.type is EventType.MESSAGE_DELTA
+        assert isinstance(completed, Event)
+        assert completed.type is EventType.TURN_COMPLETED
+
+        stale = await dispatcher.dispatch(
+            "thread.approval.respond",
+            {
+                "thread_id": created.id,
+                "approval_id": _APPROVAL_ID,
+                "answer": "yes",
+            },
+            {Scope.THREAD_OPERATE},
+        )
+        assert stale == ErrorEnvelope(
+            code=ErrorCode.NO_ACTIVE_TURN,
+            message=f'Thread "{created.id}" has no active turn.',
+            retryable=False,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_unknown_approval_id_returns_not_found(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher, created, _, requested = await _park_turn(tmp_path)
+        assert requested.type is EventType.APPROVAL_REQUESTED
+
+        missing = await dispatcher.dispatch(
+            "thread.approval.respond",
+            {
+                "thread_id": created.id,
+                "approval_id": "22222222-2222-2222-2222-222222222222",
+                "answer": "yes",
+            },
+            {Scope.THREAD_OPERATE},
+        )
+        assert missing == ErrorEnvelope(
+            code=ErrorCode.NOT_FOUND,
+            message='Approval "22222222-2222-2222-2222-222222222222" was not found.',
+            retryable=False,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_start_rejects_a_new_turn_while_parked_after_restart(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        _, created, _, requested = await _park_turn(tmp_path)
+        assert requested.type is EventType.APPROVAL_REQUESTED
+
+        restarted = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig("openai:gpt-5", ParkingRunner()),
+        )
+        second = await restarted.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Second"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert second == ErrorEnvelope(
+            code=ErrorCode.THREAD_BUSY,
+            message=f'Thread "{created.id}" already has a running turn.',
+            retryable=True,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_interrupt_ends_a_parked_turn_after_restart(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        _, created, accepted, requested = await _park_turn(tmp_path)
+        restarted = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig("openai:gpt-5", ParkingRunner()),
+        )
+
+        interrupted = await restarted.dispatch(
+            "thread.turn.interrupt",
+            {"thread_id": created.id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert interrupted == AcceptedResult(
+            thread_id=created.id,
+            turn_id=accepted.turn_id,
+            sequence=requested.sequence + 1,
+        )
+        subscription = restarted.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id, "after_sequence": requested.sequence},
+            {Scope.THREAD_READ},
+        )
+        event = await asyncio.wait_for(anext(subscription), timeout=1)
+        await subscription.aclose()
+        assert isinstance(event, Event)
+        assert event.payload == TurnInterrupted()
+
+    asyncio.run(scenario())
+
+
+def test_unknown_approval_id_with_no_active_turn_returns_not_found(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig("openai:gpt-5", ParkingRunner()),
+        )
+        created = await dispatcher.dispatch(
+            "thread.create",
+            {},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(created, ThreadCreateResult)
+
+        missing = await dispatcher.dispatch(
+            "thread.approval.respond",
+            {
+                "thread_id": created.id,
+                "approval_id": "11111111-1111-1111-1111-111111111111",
+                "answer": "yes",
+            },
+            {Scope.THREAD_OPERATE},
+        )
+        assert missing == ErrorEnvelope(
+            code=ErrorCode.NOT_FOUND,
+            message='Approval "11111111-1111-1111-1111-111111111111" was not found.',
+            retryable=False,
         )
 
     asyncio.run(scenario())
