@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
 
 
 class ContractModel(BaseModel):
@@ -43,6 +43,7 @@ class EventType(StrEnum):
     MESSAGE_DELTA = "message.delta"
     TOOL_CALL = "tool.call"
     TOOL_RESULT = "tool.result"
+    WARNING = "warning"
     APPROVAL_REQUESTED = "approval.requested"
     TURN_COMPLETED = "turn.completed"
     TURN_FAILED = "turn.failed"
@@ -58,6 +59,27 @@ class TurnStarted(ContractModel):
 class MessageDelta(ContractModel):
     type: Literal[EventType.MESSAGE_DELTA] = EventType.MESSAGE_DELTA
     text: str
+
+
+class ToolCall(ContractModel):
+    type: Literal[EventType.TOOL_CALL] = EventType.TOOL_CALL
+    call_id: str
+    name: str
+    arguments: dict[str, JsonValue]
+
+
+class ToolResult(ContractModel):
+    type: Literal[EventType.TOOL_RESULT] = EventType.TOOL_RESULT
+    call_id: str
+    name: str
+    output: str
+    error: bool
+
+
+class Warning(ContractModel):
+    type: Literal[EventType.WARNING] = EventType.WARNING
+    source: str
+    message: str
 
 
 class ApprovalRequested(ContractModel):
@@ -90,7 +112,15 @@ class TurnInterrupted(ContractModel):
 
 
 Payload = Annotated[
-    TurnStarted | MessageDelta | ApprovalRequested | TurnCompleted | TurnFailed | TurnInterrupted,
+    TurnStarted
+    | MessageDelta
+    | ToolCall
+    | ToolResult
+    | Warning
+    | ApprovalRequested
+    | TurnCompleted
+    | TurnFailed
+    | TurnInterrupted,
     Field(discriminator="type"),
 ]
 

@@ -16,6 +16,7 @@ from langgraph.runtime import Runtime
 from kinby.contracts import ApprovalRequested, MessageDelta
 from kinby.core.errors import ModelNoResponse
 from kinby.core.turns import Emit, ParkedTurn, TurnOutcome, TurnRequest, TurnResult
+from kinby.instance import Instance, reload_manifest
 
 ApprovalHook = Callable[[TurnRequest], Awaitable[str]]
 
@@ -38,6 +39,7 @@ class ModelState:
 class ModelContext:
     message: str
     emit: Emit
+    model: ChatModel
 
 
 def _init_model(model: str) -> ChatModel:
@@ -47,18 +49,27 @@ def _init_model(model: str) -> ChatModel:
 class LangGraphRunner:
     def __init__(
         self,
-        model: str,
+        instance: Instance,
         *,
         model_factory: ModelFactory = _init_model,
+        model_override: str | None = None,
         approval_hook: ApprovalHook | None = None,
     ) -> None:
-        self._model = model_factory(model)
+        self._instance = instance
+        self._model_factory = model_factory
+        self._model_override = model_override
         self._approval_hook = approval_hook
         self._checkpointer = InMemorySaver()
         graph_builder = StateGraph(ModelState, context_schema=ModelContext)
         graph_builder.add_node("model", self._call_model)
         graph_builder.add_edge(START, "model")
         self._graph = graph_builder.compile(checkpointer=self._checkpointer)
+
+    def model_for_turn(self) -> str:
+        return reload_manifest(
+            self._instance,
+            model_override=self._model_override,
+        ).models.main
 
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult:
         if self._approval_hook is not None:
@@ -76,7 +87,11 @@ class LangGraphRunner:
             **await self._graph.ainvoke(
                 ModelState(),
                 {"configurable": {"thread_id": str(turn.thread_id)}},
-                context=ModelContext(message=turn.message, emit=emit),
+                context=ModelContext(
+                    message=turn.message,
+                    emit=emit,
+                    model=self._model_factory(turn.model),
+                ),
             )
         )
         return TurnOutcome(
@@ -91,7 +106,7 @@ class LangGraphRunner:
     ) -> ModelState:
         user_message = HumanMessage(content=runtime.context.message)
         response: AIMessageChunk | None = None
-        async for chunk in self._model.astream([*state.messages, user_message]):
+        async for chunk in runtime.context.model.astream([*state.messages, user_message]):
             response = chunk if response is None else response + chunk
             if chunk.text:
                 await runtime.context.emit(MessageDelta(text=chunk.text))

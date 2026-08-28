@@ -39,6 +39,7 @@ from kinby.core.threads import ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnRunner, Turns
 from kinby.core.usage import UsageRange, usage_totals
+from kinby.instance import Instance
 
 Handler = Callable[[ContractModel], Awaitable[ContractModel]]
 SubscriptionHandler = Callable[[ContractModel], AsyncGenerator[ContractModel]]
@@ -53,7 +54,7 @@ class Route[RouteHandler]:
 
 @dataclass(frozen=True)
 class TurnConfig:
-    model: str
+    model_for_turn: Callable[[], str]
     runner: TurnRunner
 
 
@@ -188,13 +189,18 @@ def build_dispatcher(
     dispatcher.register(USAGE_GET, get_usage)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
     if turns is not None:
-        turn_service = Turns(store, event_log, turns.runner, turns.model)
+        turn_service = Turns(store, event_log, turns.runner, turns.model_for_turn)
         dispatcher.register(THREAD_TURN_START, turn_service.start)
         dispatcher.register(THREAD_TURN_INTERRUPT, turn_service.interrupt)
         dispatcher.register(THREAD_APPROVAL_RESPOND, turn_service.respond)
     return dispatcher
 
 
-def turn_config(model: str) -> TurnConfig:
-    """Turns backed by the default LangGraph runner for `model`."""
-    return TurnConfig(model, LangGraphRunner(model))
+def turn_config(
+    instance: Instance,
+    *,
+    model_override: str | None = None,
+) -> TurnConfig:
+    """Build model turns from an instance, reloading its model at each turn."""
+    runner = LangGraphRunner(instance, model_override=model_override)
+    return TurnConfig(runner.model_for_turn, runner)

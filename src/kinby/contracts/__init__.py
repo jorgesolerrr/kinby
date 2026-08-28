@@ -33,6 +33,8 @@ from kinby.contracts.models import (
     ThreadTurnStartCommand,
     ThreadUsage,
     TokenTotals,
+    ToolCall,
+    ToolResult,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
@@ -40,6 +42,7 @@ from kinby.contracts.models import (
     TurnUsage,
     UsageGetCommand,
     UsageGetResult,
+    Warning,
 )
 
 __all__ = [
@@ -73,6 +76,8 @@ __all__ = [
     "ThreadTurnStartCommand",
     "ThreadUsage",
     "TokenTotals",
+    "ToolCall",
+    "ToolResult",
     "TurnCompleted",
     "TurnFailed",
     "TurnInterrupted",
@@ -80,4 +85,5 @@ __all__ = [
     "TurnUsage",
     "UsageGetCommand",
     "UsageGetResult",
+    "Warning",
 ]

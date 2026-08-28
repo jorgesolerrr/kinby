@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import signal
 from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing
@@ -23,9 +24,12 @@ from kinby.contracts import (
     ThreadSubscribeCommand,
     ThreadTurnInterruptCommand,
     ThreadTurnStartCommand,
+    ToolCall,
+    ToolResult,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
+    Warning,
 )
 
 _TERMINAL_EVENTS = {
@@ -155,6 +159,16 @@ def _render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
         case MessageDelta(text=text):
             stdout.write(text)
             stdout.flush()
+        case ToolCall(name=name, arguments=arguments):
+            stdout.write(f"[tool.call] {name} {json.dumps(arguments, sort_keys=True)}\n")
+            stdout.flush()
+        case ToolResult(name=name, output=output, error=error):
+            status = "error" if error else "ok"
+            stdout.write(f"[tool.result] {name} ({status}): {output}\n")
+            stdout.flush()
+        case Warning(source=source, message=message):
+            stderr.write(f"[warning] {source}: {message}\n")
+            stderr.flush()
         case TurnCompleted():
             stdout.write("\n")
             stdout.flush()

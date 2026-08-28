@@ -115,10 +115,10 @@ async def _show_usage(client: ContractClient, command: UsageGetCommand) -> int:
     return 0
 
 
-async def _run_instance(instance: Instance) -> int:
+async def _run_instance(instance: Instance, *, model_override: str | None = None) -> int:
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
-        turns=turn_config(instance.manifest.models.main),
+        turns=turn_config(instance, model_override=model_override),
     )
     client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
     created = await client.call(THREAD_CREATE, ThreadCreateCommand())
@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
             case "run":
                 instance = _load_selected_instance(args, model_override=args.model)
                 _print_instance(instance)
-                return asyncio.run(_run_instance(instance))
+                return asyncio.run(_run_instance(instance, model_override=args.model))
             case "thread" if args.thread_command in {"create", "list"}:
                 client = _contract_client(_load_selected_instance(args))
                 if args.thread_command == "create":
