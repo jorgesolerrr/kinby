@@ -80,6 +80,11 @@ One user-to-agent cycle within a thread: from a user message until the agent yie
 
 A user's request to stop the active turn before it completes.
 
+### Token usage
+
+The input and output tokens attributed to a turn, with totals rolled up for its thread.
+A usage range includes completed turns whose event timestamp falls on or between its optional bounds.
+
 ### Turn runner
 
 The part of the runtime that produces the agent's response and the turn's events.

@@ -8,15 +8,20 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from kinby.cli.client import ContractClient, format_error
 from kinby.cli.repl import run_repl
 from kinby.contracts import (
     THREAD_CREATE,
     THREAD_LIST,
+    USAGE_GET,
     ErrorEnvelope,
     Scope,
     ThreadCreateCommand,
     ThreadListCommand,
+    TokenTotals,
+    UsageGetCommand,
 )
 from kinby.core import build_dispatcher, turn_config
 from kinby.instance import (
@@ -72,6 +77,42 @@ def _print_instance(instance: Instance) -> None:
             for path in skills:
                 print(f"    {path}")
     print(f"state dir: {manifest.state_dir}")
+
+
+def _token_totals(usage: TokenTotals) -> str:
+    return f"input={usage.input_tokens} output={usage.output_tokens} total={usage.total}"
+
+
+def _usage_command(args: argparse.Namespace) -> UsageGetCommand:
+    return UsageGetCommand.model_validate({"since": args.since, "until": args.until})
+
+
+def _load_selected_instance(
+    args: argparse.Namespace,
+    *,
+    model_override: str | None = None,
+) -> Instance:
+    explicit_directory = args.instance_directory or args.directory
+    if explicit_directory:
+        return load_instance(Path(explicit_directory), model_override=model_override)
+    return discover_instance(model_override=model_override)
+
+
+def _contract_client(instance: Instance) -> ContractClient:
+    dispatcher = build_dispatcher(instance.manifest.state_dir)
+    return ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+
+
+async def _show_usage(client: ContractClient, command: UsageGetCommand) -> int:
+    result = await client.call(USAGE_GET, command)
+    if isinstance(result, ErrorEnvelope):
+        print(format_error(result), file=sys.stderr)
+        return 1
+    for thread in result.threads:
+        print(f"thread {thread.thread_id}: {_token_totals(thread)}")
+        for turn in thread.turns:
+            print(f"  turn {turn.turn_id}: {_token_totals(turn)}")
+    return 0
 
 
 async def _run_instance(instance: Instance) -> int:
@@ -166,6 +207,19 @@ def main(argv: list[str] | None = None) -> int:
         help="list threads",
     )
     _add_instance_selector(thread_list_parser, "instance whose threads to list")
+    usage_parser = subparsers.add_parser(
+        "usage",
+        help="show token totals",
+    )
+    _add_instance_selector(usage_parser, "instance whose usage to show")
+    usage_parser.add_argument(
+        "--since",
+        help="include events at or after this ISO 8601 time with a timezone",
+    )
+    usage_parser.add_argument(
+        "--until",
+        help="include events at or before this ISO 8601 time with a timezone",
+    )
     args = parser.parse_args(argv)
     if args.version:
         print(f"kinby {version('kinby')}")
@@ -178,29 +232,34 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"Created instance at {path}")
         return 0
-    show_instance = args.command == "instance" and args.instance_command == "show"
-    thread_command = args.command == "thread" and args.thread_command in {"create", "list"}
-    if show_instance or args.command == "run" or thread_command:
-        try:
-            explicit_directory = args.instance_directory or args.directory
-            model_override = args.model if args.command == "run" else None
-            instance = (
-                load_instance(Path(explicit_directory), model_override=model_override)
-                if explicit_directory
-                else discover_instance(model_override=model_override)
-            )
-        except (InstanceNotFoundError, ManifestError) as exc:
-            print(exc, file=sys.stderr)
-            return 1
-        if thread_command:
-            dispatcher = build_dispatcher(instance.manifest.state_dir)
-            client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
-            if args.thread_command == "create":
-                return asyncio.run(_create_thread(client, args.title))
-            return asyncio.run(_list_threads(client))
-        _print_instance(instance)
-        if args.command == "run":
-            return asyncio.run(_run_instance(instance))
-        return 0
+    try:
+        match args.command:
+            case "instance" if args.instance_command == "show":
+                _print_instance(_load_selected_instance(args))
+                return 0
+            case "run":
+                instance = _load_selected_instance(args, model_override=args.model)
+                _print_instance(instance)
+                return asyncio.run(_run_instance(instance))
+            case "thread" if args.thread_command in {"create", "list"}:
+                client = _contract_client(_load_selected_instance(args))
+                if args.thread_command == "create":
+                    return asyncio.run(_create_thread(client, args.title))
+                return asyncio.run(_list_threads(client))
+            case "usage":
+                try:
+                    command = _usage_command(args)
+                except ValidationError:
+                    print(
+                        "--since and --until must be ISO 8601 times with a timezone, "
+                        "for example 2026-08-28T12:00:00Z",
+                        file=sys.stderr,
+                    )
+                    return 1
+                client = _contract_client(_load_selected_instance(args))
+                return asyncio.run(_show_usage(client, command))
+    except (InstanceNotFoundError, ManifestError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
     parser.print_help()
     return 0

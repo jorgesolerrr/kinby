@@ -17,6 +17,7 @@ from kinby.contracts import (
     THREAD_SUBSCRIBE,
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_START,
+    USAGE_GET,
     ContractModel,
     ErrorCode,
     ErrorEnvelope,
@@ -29,12 +30,15 @@ from kinby.contracts import (
     ThreadListCommand,
     ThreadListResult,
     ThreadSubscribeCommand,
+    UsageGetCommand,
+    UsageGetResult,
 )
 from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnRunner, Turns
+from kinby.core.usage import UsageRange, usage_totals
 
 Handler = Callable[[ContractModel], Awaitable[ContractModel]]
 SubscriptionHandler = Callable[[ContractModel], AsyncGenerator[ContractModel]]
@@ -170,11 +174,18 @@ def build_dispatcher(
     async def list_threads(command: ThreadListCommand) -> ThreadListResult:
         return store.list()
 
+    async def get_usage(command: UsageGetCommand) -> UsageGetResult:
+        return usage_totals(
+            event_log.all_events(),
+            UsageRange(command.since, command.until),
+        )
+
     def subscribe_to_thread(command: ThreadSubscribeCommand) -> AsyncGenerator[Event]:
         return event_log.subscribe(command.thread_id, command.after_sequence)
 
     dispatcher.register(THREAD_CREATE, create_thread)
     dispatcher.register(THREAD_LIST, list_threads)
+    dispatcher.register(USAGE_GET, get_usage)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
     if turns is not None:
         turn_service = Turns(store, event_log, turns.runner, turns.model)

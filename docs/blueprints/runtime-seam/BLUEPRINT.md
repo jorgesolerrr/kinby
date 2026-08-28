@@ -94,17 +94,17 @@ Every drawn module imports `kinby.contracts`; those eight edges are omitted from
 
 Existing at `6e18454` unless marked.
 
-- `contracts.models` — `ContractModel` (Pydantic, `extra="forbid"`), `Scope`, `ErrorCode`, `ErrorEnvelope`, `ThreadCreateCommand`, `ThreadCreateResult`, `ThreadListCommand`, `ThreadListResult`, `ThreadSummary`. #31 adds `Event`, `EventType`, `ThreadSubscribeCommand`. `new`: `ThreadTurnStartCommand`, `ThreadTurnInterruptCommand`, `ThreadApprovalRespondCommand`, `AcceptedResult`, `UsageGetCommand`, `UsageGetResult`, `ThreadUsage`, `TurnUsage`. Shapes under **Data shapes**.
+- **`contracts.models`.** `ContractModel` uses Pydantic with `extra="forbid"`. The module also defines `Scope`, `ErrorCode`, `ErrorEnvelope`, `ThreadCreateCommand`, `ThreadCreateResult`, `ThreadListCommand`, `ThreadListResult`, and `ThreadSummary`. #31 adds `Event`, `EventType`, and `ThreadSubscribeCommand`. `new`: `ThreadTurnStartCommand`, `ThreadTurnInterruptCommand`, `ThreadApprovalRespondCommand`, `AcceptedResult`, `UsageGetCommand`, `UsageGetResult`, `TokenTotals`, `ThreadUsage`, and `TurnUsage`. Shapes are under **Data shapes**.
 - `core.dispatcher.Dispatcher.register(method, scope, command, handler)` — adds a unary route. `register_subscription(...)` (#31) adds the stream route.
 - `core.dispatcher.Dispatcher.dispatch(method, payload, scopes) -> BaseModel` — the unary path every client call crosses. Returns the result model or an `ErrorEnvelope`. `new`: catches `core.errors.CoreError` and maps `exc.code` and `exc.retryable` into the envelope before the generic `INTERNAL` fallback.
 - `core.dispatcher.Dispatcher.subscribe(method, payload, scopes) -> AsyncGenerator[BaseModel, None]` (#31) — the one stream path. Same admission as `dispatch`; yields `Event`s, or one `ErrorEnvelope` and stops.
 - `core.dispatcher.build_dispatcher(state_dir, *, event_log=None) -> Dispatcher` — wires `ThreadStore`, `EventLog`, `Turns`, and the seven routes. `new`: takes `runner: TurnRunner | None`; `None` builds `core.loop.LangGraphRunner` from the instance's models. Called by `cli/main.py` only.
 - `core.threads.ThreadStore(state_dir).create(title) -> ThreadCreateResult`, `.list() -> ThreadListResult` — thread identity in `threads.jsonl`. `new`: `.exists(thread_id) -> bool` so `Turns` and the subscribe handler can answer `NOT_FOUND`.
-- `core.events.EventLog(state_dir)` (#31) — `append(thread_id, turn_id, event_type, payload) -> Event` assigns the next per-thread sequence under a lock, writes the line, fans out to live subscribers. `subscribe(thread_id, after_sequence=0) -> AsyncGenerator[Event, None]` replays then stays live. `new`: `stored(thread_id) -> list[Event]` (public read for `Turns` and `usage`), `threads() -> list[UUID]`.
+- **`core.events.EventLog(state_dir)`.** #31 adds this class. `append(thread_id, turn_id, event_type, payload) -> Event` assigns the next per-thread sequence under a lock, writes the line, and sends the event to live subscribers. `subscribe(thread_id, after_sequence=0) -> AsyncGenerator[Event, None]` replays events and then stays live. `new`: `stored(thread_id) -> list[Event]` for one thread and `all_events() -> Iterator[Event]` for usage totals.
 - `core.turns.TurnRunner` `new` — `Protocol`: `async run(turn: TurnRequest, emit: Emit) -> TurnOutcome` and `async resume(turn: TurnRequest, answer: str, emit: Emit) -> TurnOutcome`. `Emit = Callable[[EventType, Mapping[str, Any]], Awaitable[Event]]`.
 - `core.turns.Turns(store, log, runner)` `new` — `start(command) -> AcceptedResult`, `interrupt(command) -> AcceptedResult`, `respond(command) -> AcceptedResult`. Holds the running task per thread; derives "live" from the thread's last event so it is right after a restart (D17). Raises `ThreadNotFound`, `ThreadBusy`, `NoActiveTurn`, `ApprovalNotFound`.
 - `core.loop.LangGraphRunner(model, checkpointer)` `new` — implements `TurnRunner` with a single-node LangGraph graph that calls the chat model and emits `message.delta` per chunk; parks with `interrupt()` when a step asks for approval (test-only asking hook until #7); returns `TurnOutcome` with usage or `parked=True`.
-- `core.usage.usage_totals(events, since, until) -> UsageGetResult` `new` — pure fold over `turn.completed` payloads.
+- **`core.usage.usage_totals(events, usage_range) -> UsageGetResult` `new`.** Folds `turn.completed` payloads inside an inclusive `UsageRange`.
 - `core.errors.CoreError(Exception)` `new` — `code: ErrorCode`, `retryable: bool`; subclasses `ThreadNotFound`, `ThreadBusy` (retryable), `NoActiveTurn`, `ApprovalNotFound`.
 - `cli.client.ContractClient(dispatch, subscribe, scopes)` — `call(method, payload) -> BaseModel`; `subscribe(method, payload) -> AsyncGenerator` (#31).
 - `cli.repl.run_repl(client, thread_id, *, stdin, stdout, stderr) -> int` `new` — the prompt loop and the event renderer; one subscription per session.
@@ -201,20 +201,24 @@ class AcceptedResult(ContractModel):  # shared receipt for start, interrupt, res
 
 
 class UsageGetCommand(ContractModel):
-    since: datetime | None = None
-    until: datetime | None = None
+    since: AwareDatetime | None = None
+    until: AwareDatetime | None = None
 
 
-class TurnUsage(ContractModel):
+class TokenTotals(ContractModel):
+    input_tokens: int
+    output_tokens: int
+
+    @property
+    def total(self) -> int: ...
+
+
+class TurnUsage(TokenTotals):
     turn_id: UUID
-    input_tokens: int
-    output_tokens: int
 
 
-class ThreadUsage(ContractModel):
+class ThreadUsage(TokenTotals):
     thread_id: UUID
-    input_tokens: int
-    output_tokens: int
     turns: list[TurnUsage]
 
 
@@ -308,15 +312,15 @@ Stamped at `6e18454`. Regenerate the existence check with `git ls-files src test
 |---|---|---|---|
 | `pyproject.toml` | modify | Add `langgraph`, `langchain`, and the checkpointer package (Q1, Q2) | turn stream |
 | `uv.lock` | modify | Lockfile for the above | — |
-| `src/kinby/contracts/models.py` | modify | `Event`, `EventType`, `ThreadSubscribeCommand` (#31); `ThreadTurnStartCommand`, `ThreadTurnInterruptCommand`, `ThreadApprovalRespondCommand`, `AcceptedResult`, `UsageGetCommand`, `UsageGetResult`, `ThreadUsage`, `TurnUsage` | all |
+| `src/kinby/contracts/models.py` | modify | `Event`, `EventType`, `ThreadSubscribeCommand` (#31); `ThreadTurnStartCommand`, `ThreadTurnInterruptCommand`, `ThreadApprovalRespondCommand`, `AcceptedResult`, `UsageGetCommand`, `UsageGetResult`, `TokenTotals`, `ThreadUsage`, `TurnUsage` | all |
 | `src/kinby/contracts/__init__.py` | modify | Re-export the new models | all |
 | `src/kinby/core/dispatcher.py` | modify | `subscribe` and `register_subscription` (#31); `CoreError` mapping; `build_dispatcher(state_dir, *, event_log=None, runner=None)` registers the seven routes | turn start, replay |
-| `src/kinby/core/events.py` | create (#31) | `EventLog`: `append`, `subscribe`, `stored`, `threads` | turn stream, replay |
+| `src/kinby/core/events.py` | create (#31) | `EventLog`: `append`, `subscribe`, `stored`, `all_events` | turn stream, replay |
 | `src/kinby/core/threads.py` | modify | `ThreadStore.exists(thread_id)` | turn start |
 | `src/kinby/core/errors.py` | create | `CoreError` and its four subclasses | turn start, turn lifecycle |
 | `src/kinby/core/turns.py` | create | `TurnRequest`, `TurnOutcome`, `Emit`, `TurnRunner`, `Turns` with the task wrapper that appends terminal events | turn start, turn stream, turn lifecycle |
 | `src/kinby/core/loop.py` | create | `LangGraphRunner`: model from `models.main`, streaming deltas, `interrupt()` for approvals, checkpointer beneath | turn stream, turn lifecycle |
-| `src/kinby/core/usage.py` | create | `usage_totals(events, since, until)` | — |
+| `src/kinby/core/usage.py` | create | `UsageRange`; `usage_totals(events, usage_range)` | — |
 | `src/kinby/core/__init__.py` | modify | Export `TurnRunner` alongside `Dispatcher` and `build_dispatcher` | — |
 | `src/kinby/cli/client.py` | modify (#31) | `ContractClient.subscribe` | turn start, replay |
 | `src/kinby/cli/repl.py` | create | `run_repl`: prompt loop, session subscription, renderer, Ctrl+C handling | turn start, turn stream |

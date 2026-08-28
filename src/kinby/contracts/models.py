@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 
 class ContractModel(BaseModel):
@@ -66,10 +66,17 @@ class ApprovalRequested(ContractModel):
     request: str
 
 
-class TurnCompleted(ContractModel):
+class TokenTotals(ContractModel):
+    input_tokens: int
+    output_tokens: int
+
+    @property
+    def total(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+class TurnCompleted(TokenTotals):
     type: Literal[EventType.TURN_COMPLETED] = EventType.TURN_COMPLETED
-    input_tokens: int = 0
-    output_tokens: int = 0
 
 
 class TurnFailed(ContractModel):
@@ -147,3 +154,21 @@ class ThreadSummary(ContractModel):
 
 class ThreadListResult(ContractModel):
     threads: list[ThreadSummary]
+
+
+class UsageGetCommand(ContractModel):
+    since: AwareDatetime | None = None
+    until: AwareDatetime | None = None
+
+
+class TurnUsage(TokenTotals):
+    turn_id: UUID
+
+
+class ThreadUsage(TokenTotals):
+    thread_id: UUID
+    turns: list[TurnUsage]
+
+
+class UsageGetResult(ContractModel):
+    threads: list[ThreadUsage]

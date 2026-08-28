@@ -7,6 +7,7 @@ from kinby.contracts.methods import (
     THREAD_SUBSCRIBE,
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_START,
+    USAGE_GET,
     Method,
     Subscription,
 )
@@ -30,10 +31,15 @@ from kinby.contracts.models import (
     ThreadSummary,
     ThreadTurnInterruptCommand,
     ThreadTurnStartCommand,
+    ThreadUsage,
+    TokenTotals,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
     TurnStarted,
+    TurnUsage,
+    UsageGetCommand,
+    UsageGetResult,
 )
 
 __all__ = [
@@ -43,6 +49,7 @@ __all__ = [
     "THREAD_SUBSCRIBE",
     "THREAD_TURN_INTERRUPT",
     "THREAD_TURN_START",
+    "USAGE_GET",
     "AcceptedResult",
     "ApprovalRequested",
     "ContractModel",
@@ -64,8 +71,13 @@ __all__ = [
     "ThreadSummary",
     "ThreadTurnInterruptCommand",
     "ThreadTurnStartCommand",
+    "ThreadUsage",
+    "TokenTotals",
     "TurnCompleted",
     "TurnFailed",
     "TurnInterrupted",
     "TurnStarted",
+    "TurnUsage",
+    "UsageGetCommand",
+    "UsageGetResult",
 ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -63,11 +63,11 @@ class EventLog:
                 del self._subscribers[thread_id]
 
     def stored(self, thread_id: UUID) -> list[Event]:
+        return [event for event in self.all_events() if event.thread_id == thread_id]
+
+    def all_events(self) -> Iterator[Event]:
         if not self._path.exists():
-            return []
+            return
         with self._path.open(encoding="utf-8") as records:
-            return [
-                event
-                for line in records
-                if (event := Event.model_validate_json(line)).thread_id == thread_id
-            ]
+            for line in records:
+                yield Event.model_validate_json(line)

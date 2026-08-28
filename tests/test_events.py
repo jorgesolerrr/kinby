@@ -27,7 +27,7 @@ def test_finished_thread_replays_every_stored_event_in_order(tmp_path: Path) -> 
             await event_log.append(
                 thread_id,
                 turn_id,
-                TurnCompleted(),
+                TurnCompleted(input_tokens=0, output_tokens=0),
             ),
         ]
 
@@ -60,7 +60,7 @@ def test_sequence_stays_gap_free_after_event_log_restart(tmp_path: Path) -> None
         second = await EventLog(tmp_path).append(
             thread_id,
             turn_id,
-            TurnCompleted(),
+            TurnCompleted(input_tokens=0, output_tokens=0),
         )
 
         assert (first.sequence, second.sequence) == (1, 2)
@@ -94,7 +94,7 @@ def test_subscriber_receives_replay_gap_then_live_events_once(tmp_path: Path) ->
         live = await event_log.append(
             thread_id,
             turn_id,
-            TurnCompleted(),
+            TurnCompleted(input_tokens=0, output_tokens=0),
         )
         received_live = await asyncio.wait_for(waiting_for_live, timeout=1)
         await subscription.aclose()
@@ -127,7 +127,11 @@ def test_subscriber_does_not_receive_live_events_before_its_cursor(tmp_path: Pat
 
         assert waiting.done() is False
 
-        third = await event_log.append(thread_id, turn_id, TurnCompleted())
+        third = await event_log.append(
+            thread_id,
+            turn_id,
+            TurnCompleted(input_tokens=0, output_tokens=0),
+        )
         received = await asyncio.wait_for(waiting, timeout=1)
         await subscription.aclose()
 
