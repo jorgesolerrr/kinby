@@ -14,6 +14,7 @@ from kinby.contracts.models import (
     ThreadListCommand,
     ThreadListResult,
     ThreadSubscribeCommand,
+    ThreadTurnInterruptCommand,
     ThreadTurnStartCommand,
 )
 
@@ -44,6 +45,12 @@ THREAD_CREATE = Method(
 THREAD_LIST = Method("thread.list", Scope.THREAD_READ, ThreadListCommand, ThreadListResult)
 THREAD_TURN_START = Method(
     "thread.turn.start", Scope.THREAD_OPERATE, ThreadTurnStartCommand, AcceptedResult
+)
+THREAD_TURN_INTERRUPT = Method(
+    "thread.turn.interrupt",
+    Scope.THREAD_OPERATE,
+    ThreadTurnInterruptCommand,
+    AcceptedResult,
 )
 THREAD_SUBSCRIBE = Subscription(
     "thread.subscribe", Scope.THREAD_READ, ThreadSubscribeCommand, Event

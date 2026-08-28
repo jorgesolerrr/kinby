@@ -72,8 +72,12 @@ class TurnFailed(ContractModel):
     message: str
 
 
+class TurnInterrupted(ContractModel):
+    type: Literal[EventType.TURN_INTERRUPTED] = EventType.TURN_INTERRUPTED
+
+
 Payload = Annotated[
-    TurnStarted | MessageDelta | TurnCompleted | TurnFailed,
+    TurnStarted | MessageDelta | TurnCompleted | TurnFailed | TurnInterrupted,
     Field(discriminator="type"),
 ]
 
@@ -98,6 +102,10 @@ class ThreadSubscribeCommand(ContractModel):
 class ThreadTurnStartCommand(ContractModel):
     thread_id: UUID
     message: str
+
+
+class ThreadTurnInterruptCommand(ContractModel):
+    thread_id: UUID
 
 
 class AcceptedResult(ContractModel):
