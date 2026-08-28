@@ -8,7 +8,7 @@ The maintainer's note in `AGENTS.md` is the standard. Everything below puts it i
 
 - **Constraint first.** Before writing code, name the real constraint the change serves: the behavior a user needs, or the invariant the system must hold. If you can't state it in a sentence, you're not ready to code.
 - **Smallest model.** A reader guessing how the code works should guess right. Fewer concepts, fewer states, fewer places a behavior could come from.
-- **Book.** Code reads like a book. Variable, type, and function names carry what a reader needs. A comment earns its place only for a *why* the names cannot.
+- **Book.** Code reads like a book. Names and signatures carry what a reader needs; [Types](#types) says how a signature does that. A comment earns its place only for a *why* the names cannot.
 - **Obvious over clever.** A boring five-line function beats an elegant abstraction that needs explaining.
 - **Delete freely.** The fact that complexity already exists does not justify it. When a change touches convoluted code, simplifying it is part of the change, not scope creep.
 - **No speculative machinery.** Build for the ticket in front of you. An abstraction earns its place with a second real caller, not an imagined one. No plugin systems, base classes, or config knobs for futures that may never arrive.
@@ -21,7 +21,7 @@ The maintainer's note in `AGENTS.md` is the standard. Everything below puts it i
 
 - **PEP 8.** Follow [PEP 8](https://peps.python.org/pep-0008/) for Python style. This file and `pyproject.toml` win on conflict; ruff enforces the mechanical subset.
 - **Pythonic, modern.** Target Python 3.14+ (see `pyproject.toml`). Use `X | None`, `match` where it clarifies, and dataclasses for structured data.
-- Type-hint every function signature and every public value. Inside bodies, annotate only where inference fails. Name the type; `Any` only when a real type would lie or block the design.
+- Type-hint every function signature and every public value. Inside bodies, annotate only where inference fails.
 - **Functions first.** Stateless behavior is a function. A class earns its place by holding state.
 - `pathlib.Path` for paths, f-strings for formatting.
 - Raise specific exceptions, fail early and loudly. Catch an exception only where you can act on it.
@@ -45,6 +45,19 @@ Once an interface is earned, pick the kind by its shape:
 - **Callable.** One method, and that method will hold its signature for a while. Implementations are plain functions, so adding or removing one never touches the layer above. Describe the signature with `Callable`, or a callback `Protocol` when the parameters need names.
 - **Protocol.** Duck typing for more than one method. No inheritance; an object satisfies it by having the methods. Use it when the same behavior is expected from more than one object.
 - **ABC.** Inheritance. Use it when the base carries state, a class-level parameter, or shared implementation the subclasses actually reuse. A base every subclass overrides in full is a Protocol wearing inheritance.
+
+## Types
+
+A signature is the first sentence of the documentation. A reader should know what a function takes, what it gives back, and what can go wrong before opening the body. Types carry that meaning when they name the domain and lose it when they name the representation.
+
+- **Name the domain.** `UserName`, not `str`. A frozen dataclass or model, not `dict[str, Any]`. `NewType` for identifiers, `StrEnum` for closed sets, a dataclass for structured data. A primitive in a signature is a rule the reader has to go and find.
+- **Parse at the boundary, once.** Raw input (a file, the wire, a CLI argument) becomes a domain type where it enters the program, and only the domain type travels from there. `Any` and untyped mappings belong to the one function that does the parsing; downstream, the type is the proof the check already happened.
+- **Absence and failure live in the type.** `X | None` when absence is a product state, like a thread without a title. A default value when a sensible one exists. A separate type when `None` would mean "not built yet" or "take the other path". Return `Result | Error` rather than a base type the caller has to `isinstance` its way through.
+- **Generic types stay at generic layers.** Code that routes any model may say `BaseModel`; code that asked for one specific model names it. A generic type leaking upward is a signature that forgot what it knew.
+- **One type per state.** When the valid operations on a value change with its state, each state is its own type and the transition is a method returning the next one. Illegal combinations then fail at construction instead of deep in a call.
+- **Follow the types.** A precise signature leaves few implementations possible. When a body is hard to write, the signature is usually the thing to fix.
+
+Before adding or changing any signature in kinby, read `docs/types-before-after.md`: the mistakes this codebase already made, one per rule, with the signature that fixed each. Lint enforces the mechanical part (`TID251`, `ANN`, `FBT`, and the signature test in `tests/`); the doc covers what lint cannot see.
 
 ## Tests
 
