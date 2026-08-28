@@ -1,6 +1,7 @@
 """Give clients one import boundary that does not expose runtime internals."""
 
 from kinby.contracts.methods import (
+    THREAD_APPROVAL_RESPOND,
     THREAD_CREATE,
     THREAD_LIST,
     THREAD_SUBSCRIBE,
@@ -11,6 +12,7 @@ from kinby.contracts.methods import (
 )
 from kinby.contracts.models import (
     AcceptedResult,
+    ApprovalRequested,
     ContractModel,
     ErrorCode,
     ErrorEnvelope,
@@ -19,6 +21,7 @@ from kinby.contracts.models import (
     MessageDelta,
     Payload,
     Scope,
+    ThreadApprovalRespondCommand,
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListCommand,
@@ -34,12 +37,14 @@ from kinby.contracts.models import (
 )
 
 __all__ = [
+    "THREAD_APPROVAL_RESPOND",
     "THREAD_CREATE",
     "THREAD_LIST",
     "THREAD_SUBSCRIBE",
     "THREAD_TURN_INTERRUPT",
     "THREAD_TURN_START",
     "AcceptedResult",
+    "ApprovalRequested",
     "ContractModel",
     "ErrorCode",
     "ErrorEnvelope",
@@ -50,6 +55,7 @@ __all__ = [
     "Payload",
     "Scope",
     "Subscription",
+    "ThreadApprovalRespondCommand",
     "ThreadCreateCommand",
     "ThreadCreateResult",
     "ThreadListCommand",

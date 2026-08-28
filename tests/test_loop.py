@@ -1,14 +1,14 @@
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage
 
-from kinby.contracts import Event, MessageDelta, Payload
+from kinby.contracts import ApprovalRequested, Event, MessageDelta, Payload
 from kinby.core import LangGraphRunner
-from kinby.core.turns import TurnRequest
+from kinby.core.turns import ParkedTurn, TurnOutcome, TurnRequest
 
 
 class StreamingChatModel:
@@ -74,6 +74,7 @@ def test_langgraph_runner_streams_one_model_turn() -> None:
             emit,
         )
 
+        assert isinstance(outcome, TurnOutcome)
         assert requested_models == ["openai:gpt-5"]
         assert events == [MessageDelta(text="Hi"), MessageDelta(text=" there")]
         assert outcome.input_tokens == 4
@@ -144,5 +145,50 @@ def test_langgraph_checkpointer_keeps_thread_messages_between_turns() -> None:
             ["First"],
             ["First", "First reply", "Second"],
         ]
+
+    asyncio.run(scenario())
+
+
+def test_approval_hook_parks_until_resume() -> None:
+    async def scenario() -> None:
+        events: list[Payload] = []
+        model = StreamingChatModel()
+        asked: list[str] = []
+
+        async def asking_hook(turn: TurnRequest) -> str:
+            asked.append(turn.message)
+            return "May I continue?"
+
+        async def emit(payload: Payload) -> Event:
+            events.append(payload)
+            return Event(
+                sequence=len(events),
+                thread_id=turn.thread_id,
+                turn_id=turn.turn_id,
+                payload=payload,
+                timestamp=datetime.now(UTC),
+            )
+
+        turn = TurnRequest(thread_id=uuid4(), turn_id=uuid4(), message="Hello")
+        runner = LangGraphRunner(
+            "openai:gpt-5",
+            model_factory=lambda _: model,
+            approval_hook=asking_hook,
+        )
+        parked = await runner.run(turn, emit)
+
+        assert asked == ["Hello"]
+        assert parked == ParkedTurn()
+        assert len(events) == 1
+        assert isinstance(events[0], ApprovalRequested)
+        assert events[0].request == "May I continue?"
+        assert isinstance(events[0].approval_id, UUID)
+
+        resumed = await runner.resume(turn, "yes", emit)
+
+        assert asked == ["Hello"]
+        assert resumed.input_tokens == 4
+        assert resumed.output_tokens == 2
+        assert events[1:] == [MessageDelta(text="Hi"), MessageDelta(text=" there")]
 
     asyncio.run(scenario())

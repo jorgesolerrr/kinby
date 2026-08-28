@@ -84,6 +84,10 @@ A user's request to stop the active turn before it completes.
 
 The part of the runtime that produces the agent's response and the turn's events.
 
+### Approval
+
+A user decision a live turn waits on before it continues. Requested as an event; answered through the contract. A parked turn stays live until the user answers or the turn is interrupted.
+
 ### Contract
 
 The typed set of commands and subscriptions every client uses to drive a session. The CLI is its client today; a server can use the same boundary later. Clients import contracts, never core.

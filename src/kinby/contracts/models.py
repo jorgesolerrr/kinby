@@ -60,6 +60,12 @@ class MessageDelta(ContractModel):
     text: str
 
 
+class ApprovalRequested(ContractModel):
+    type: Literal[EventType.APPROVAL_REQUESTED] = EventType.APPROVAL_REQUESTED
+    approval_id: UUID
+    request: str
+
+
 class TurnCompleted(ContractModel):
     type: Literal[EventType.TURN_COMPLETED] = EventType.TURN_COMPLETED
     input_tokens: int = 0
@@ -77,7 +83,7 @@ class TurnInterrupted(ContractModel):
 
 
 Payload = Annotated[
-    TurnStarted | MessageDelta | TurnCompleted | TurnFailed | TurnInterrupted,
+    TurnStarted | MessageDelta | ApprovalRequested | TurnCompleted | TurnFailed | TurnInterrupted,
     Field(discriminator="type"),
 ]
 
@@ -106,6 +112,12 @@ class ThreadTurnStartCommand(ContractModel):
 
 class ThreadTurnInterruptCommand(ContractModel):
     thread_id: UUID
+
+
+class ThreadApprovalRespondCommand(ContractModel):
+    thread_id: UUID
+    approval_id: UUID
+    answer: str
 
 
 class AcceptedResult(ContractModel):

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Annotated, Protocol, cast
+from uuid import uuid4
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessageChunk, AnyMessage, BaseMessage, HumanMessage
@@ -12,9 +13,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import START, StateGraph, add_messages
 from langgraph.runtime import Runtime
 
-from kinby.contracts import MessageDelta
+from kinby.contracts import ApprovalRequested, MessageDelta
 from kinby.core.errors import ModelNoResponse
-from kinby.core.turns import Emit, TurnOutcome, TurnRequest
+from kinby.core.turns import Emit, ParkedTurn, TurnOutcome, TurnRequest, TurnResult
+
+ApprovalHook = Callable[[TurnRequest], Awaitable[str]]
 
 
 class ChatModel(Protocol):
@@ -47,15 +50,28 @@ class LangGraphRunner:
         model: str,
         *,
         model_factory: ModelFactory = _init_model,
+        approval_hook: ApprovalHook | None = None,
     ) -> None:
         self._model = model_factory(model)
+        self._approval_hook = approval_hook
         self._checkpointer = InMemorySaver()
         graph_builder = StateGraph(ModelState, context_schema=ModelContext)
         graph_builder.add_node("model", self._call_model)
         graph_builder.add_edge(START, "model")
         self._graph = graph_builder.compile(checkpointer=self._checkpointer)
 
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult:
+        if self._approval_hook is not None:
+            request = await self._approval_hook(turn)
+            await emit(ApprovalRequested(approval_id=uuid4(), request=request))
+            return ParkedTurn()
+        return await self._invoke(turn, emit)
+
+    async def resume(self, turn: TurnRequest, answer: str, emit: Emit) -> TurnOutcome:
+        # Gate semantics belong to #7. Ticket #34's placeholder answer only resumes.
+        return await self._invoke(turn, emit)
+
+    async def _invoke(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
         result = ModelState(
             **await self._graph.ainvoke(
                 ModelState(),

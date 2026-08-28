@@ -14,6 +14,7 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.turns import Emit, TurnOutcome, TurnRequest
+from tests.helpers import does_not_park
 
 
 class ReplRunner:
@@ -21,6 +22,8 @@ class ReplRunner:
         await emit(MessageDelta(text="Hi"))
         await emit(MessageDelta(text=" there"))
         return TurnOutcome()
+
+    resume = does_not_park
 
 
 class InterruptibleReplRunner:
@@ -35,6 +38,8 @@ class InterruptibleReplRunner:
             await asyncio.Event().wait()
         await emit(MessageDelta(text="Done"))
         return TurnOutcome()
+
+    resume = does_not_park
 
 
 def test_repl_streams_a_full_turn_through_the_dispatcher(tmp_path: Path) -> None:

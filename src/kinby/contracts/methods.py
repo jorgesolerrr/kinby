@@ -9,6 +9,7 @@ from kinby.contracts.models import (
     ContractModel,
     Event,
     Scope,
+    ThreadApprovalRespondCommand,
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListCommand,
@@ -50,6 +51,12 @@ THREAD_TURN_INTERRUPT = Method(
     "thread.turn.interrupt",
     Scope.THREAD_OPERATE,
     ThreadTurnInterruptCommand,
+    AcceptedResult,
+)
+THREAD_APPROVAL_RESPOND = Method(
+    "thread.approval.respond",
+    Scope.THREAD_OPERATE,
+    ThreadApprovalRespondCommand,
     AcceptedResult,
 )
 THREAD_SUBSCRIBE = Subscription(
