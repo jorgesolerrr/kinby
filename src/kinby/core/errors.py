@@ -1,4 +1,6 @@
-"""Errors whose codes are part of the contract."""
+"""Errors raised by the core package."""
+
+import asyncio
 
 from kinby.contracts import ErrorCode
 
@@ -23,3 +25,7 @@ class NoActiveTurn(CoreError):
 
 class ModelNoResponse(CoreError):
     pass
+
+
+class TurnInterruptedError(asyncio.CancelledError):
+    """Stop work that tries to emit after its turn was interrupted."""

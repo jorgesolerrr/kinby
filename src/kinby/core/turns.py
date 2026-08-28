@@ -22,7 +22,13 @@ from kinby.contracts import (
     TurnInterrupted,
     TurnStarted,
 )
-from kinby.core.errors import CoreError, NoActiveTurn, ThreadBusy, ThreadNotFound
+from kinby.core.errors import (
+    CoreError,
+    NoActiveTurn,
+    ThreadBusy,
+    ThreadNotFound,
+    TurnInterruptedError,
+)
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 
@@ -129,7 +135,7 @@ class Turns:
         async def emit(payload: Payload) -> Event:
             running = self._running.get(turn.thread_id)
             if running is None or running.request.turn_id != turn.turn_id or running.interrupted:
-                raise asyncio.CancelledError
+                raise TurnInterruptedError
             return await self._log.append(turn.thread_id, turn.turn_id, payload)
 
         try:
