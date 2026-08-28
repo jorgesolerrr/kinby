@@ -181,7 +181,7 @@ New contract models in `src/kinby/contracts/models.py`, in the style of the exis
 class ThreadTurnStartCommand(ContractModel):
     thread_id: UUID
     message: str
-    model: str | None = None          # per-turn override of models.main
+    model: str | None = None  # per-turn override of models.main
 
 
 class ThreadTurnInterruptCommand(ContractModel):
@@ -191,13 +191,13 @@ class ThreadTurnInterruptCommand(ContractModel):
 class ThreadApprovalRespondCommand(ContractModel):
     thread_id: UUID
     approval_id: UUID
-    answer: str                        # placeholder until #7 (D12)
+    answer: str  # placeholder until #7 (D12)
 
 
-class AcceptedResult(ContractModel):   # shared receipt for start, interrupt, respond (D3)
+class AcceptedResult(ContractModel):  # shared receipt for start, interrupt, respond (D3)
     thread_id: UUID
     turn_id: UUID
-    sequence: int                      # sequence of the event recorded at accept
+    sequence: int  # sequence of the event recorded at accept
 
 
 class UsageGetCommand(ContractModel):
@@ -237,7 +237,7 @@ class EventType(str, Enum):
 
 
 class Event(ContractModel):
-    sequence: int                      # monotonic, gap-free per thread (D2)
+    sequence: int  # monotonic, gap-free per thread (D2)
     thread_id: UUID
     turn_id: UUID
     type: EventType
@@ -285,7 +285,7 @@ class TurnRequest:
 @dataclass(frozen=True)
 class TurnOutcome:
     usage: TurnUsage | None = None
-    parked: bool = False               # approval.requested was emitted; resume later
+    parked: bool = False  # approval.requested was emitted; resume later
 
 
 Emit = Callable[[EventType, Mapping[str, Any]], Awaitable[Event]]

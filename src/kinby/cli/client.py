@@ -6,7 +6,14 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Map
 
 from pydantic import BaseModel
 
-from kinby.contracts import Scope
+from kinby.contracts import ErrorEnvelope, Scope
+
+UNEXPECTED_RESULT_ERROR = "INTERNAL: The method returned an unexpected result."
+
+
+def format_error(error: ErrorEnvelope) -> str:
+    return f"{error.code.value}: {error.message}"
+
 
 Dispatch = Callable[
     [str, Mapping[str, object], Collection[Scope]],

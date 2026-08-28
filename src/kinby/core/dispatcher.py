@@ -17,9 +17,13 @@ from kinby.contracts import (
     ThreadCreateCommand,
     ThreadListCommand,
     ThreadSubscribeCommand,
+    ThreadTurnStartCommand,
 )
+from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
+from kinby.core.turn_runner import LangGraphRunner
+from kinby.core.turns import TurnRunner, Turns
 
 Handler = Callable[[BaseModel], Awaitable[BaseModel]]
 SubscriptionHandler = Callable[[BaseModel], AsyncGenerator[BaseModel, None]]
@@ -103,6 +107,12 @@ class Dispatcher:
         route, command = call
         try:
             return await route.handler(command)
+        except CoreError as exc:
+            return ErrorEnvelope(
+                code=exc.code,
+                message=str(exc),
+                retryable=exc.retryable,
+            )
         except Exception:
             return ErrorEnvelope(
                 code=ErrorCode.INTERNAL,
@@ -137,6 +147,8 @@ def build_dispatcher(
     state_dir: Path,
     *,
     event_log: EventLog | None = None,
+    model: str | None = None,
+    runner: TurnRunner | None = None,
 ) -> Dispatcher:
     store = ThreadStore(state_dir)
     event_log = event_log or EventLog(state_dir)
@@ -171,4 +183,16 @@ def build_dispatcher(
         ThreadSubscribeCommand,
         subscribe_to_thread,
     )
+    if runner is None and model is not None:
+        runner = LangGraphRunner(model)
+    if runner is not None:
+        if model is None:
+            raise ValueError("model is required when a turn runner is configured")
+        turns = Turns(store, event_log, runner, model)
+        dispatcher.register(
+            "thread.turn.start",
+            Scope.THREAD_OPERATE,
+            ThreadTurnStartCommand,
+            turns.start,
+        )
     return dispatcher

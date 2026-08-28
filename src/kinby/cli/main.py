@@ -8,7 +8,8 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
-from kinby.cli.client import ContractClient
+from kinby.cli.client import UNEXPECTED_RESULT_ERROR, ContractClient, format_error
+from kinby.cli.repl import run_repl
 from kinby.contracts import (
     ErrorEnvelope,
     Scope,
@@ -67,6 +68,28 @@ def _print_instance(instance: Instance) -> None:
             for path in skills:
                 print(f"    {path}")
     print(f"state dir: {manifest.state_dir}")
+
+
+async def _run_instance(instance: Instance) -> int:
+    dispatcher = build_dispatcher(
+        instance.manifest.state_dir,
+        model=instance.manifest.models.main,
+    )
+    client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+    created = await client.call("thread.create", {"title": None})
+    if isinstance(created, ErrorEnvelope):
+        print(format_error(created), file=sys.stderr)
+        return 1
+    if not isinstance(created, ThreadCreateResult):
+        print(UNEXPECTED_RESULT_ERROR, file=sys.stderr)
+        return 1
+    return await run_repl(
+        client,
+        created.id,
+        stdin=sys.stdin,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -151,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = {"title": args.title} if args.thread_command == "create" else {}
             result = asyncio.run(client.call(method, payload))
             if isinstance(result, ErrorEnvelope):
-                print(f"{result.code.value}: {result.message}", file=sys.stderr)
+                print(format_error(result), file=sys.stderr)
                 return 1
             if isinstance(result, ThreadCreateResult):
                 print(f"id: {result.id}")
@@ -161,12 +184,11 @@ def main(argv: list[str] | None = None) -> int:
                 for thread in result.threads:
                     print(f"{thread.id}\t{thread.created_at.isoformat()}\t{thread.title or ''}")
                 return 0
-            print("INTERNAL: The method returned an unexpected result.", file=sys.stderr)
+            print(UNEXPECTED_RESULT_ERROR, file=sys.stderr)
             return 1
         _print_instance(instance)
         if args.command == "run":
-            print("The agent loop is not yet available.")
-            return 1
+            return asyncio.run(_run_instance(instance))
         return 0
     parser.print_help()
     return 0
