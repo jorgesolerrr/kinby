@@ -17,6 +17,8 @@ from kinby.contracts.models import (
     ThreadSubscribeCommand,
     ThreadTurnInterruptCommand,
     ThreadTurnStartCommand,
+    UsageGetCommand,
+    UsageGetResult,
 )
 
 
@@ -59,6 +61,7 @@ THREAD_APPROVAL_RESPOND = Method(
     ThreadApprovalRespondCommand,
     AcceptedResult,
 )
+USAGE_GET = Method("usage.get", Scope.INSTANCE_READ, UsageGetCommand, UsageGetResult)
 THREAD_SUBSCRIBE = Subscription(
     "thread.subscribe", Scope.THREAD_READ, ThreadSubscribeCommand, Event
 )

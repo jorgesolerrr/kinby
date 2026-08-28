@@ -120,7 +120,11 @@ def test_thread_subscribe_replays_a_finished_thread_through_dispatcher(
         event_log = EventLog(tmp_path)
         stored = [
             await event_log.append(thread_id, turn_id, STARTED),
-            await event_log.append(thread_id, turn_id, TurnCompleted()),
+            await event_log.append(
+                thread_id,
+                turn_id,
+                TurnCompleted(input_tokens=0, output_tokens=0),
+            ),
         ]
         dispatcher = build_dispatcher(tmp_path)
 
@@ -273,7 +277,7 @@ def test_contract_client_subscription_replays_then_stays_live(tmp_path: Path) ->
         live = await event_log.append(
             thread_id,
             turn_id,
-            TurnCompleted(),
+            TurnCompleted(input_tokens=0, output_tokens=0),
         )
         received_live = await asyncio.wait_for(waiting_for_live, timeout=1)
         await subscription.aclose()
