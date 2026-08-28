@@ -1,6 +1,6 @@
 # Types: before and after
 
-Worked cases for the [Types](../CODING-STANDARD.md#types) rules, taken from kinby as it stood on 2026-08-28. Each case is a signature that hid something, and the signature that says it. The first, fourth, and sixth landed in the same PR as this doc; the others are open.
+Worked cases for the [Types](../CODING-STANDARD.md#types) rules, taken from kinby as it stood on 2026-08-28. Each case is a signature that hid something, and the signature that says it. All six landed in the same PR as this doc.
 
 ## Generic types leaking upward
 
@@ -115,7 +115,7 @@ Payload = MessageDelta | TurnCompleted | TurnFailed | ...
 
 
 class Event(ContractModel):
-    payload: Payload = Field(discriminator="kind")
+    payload: Payload  # Annotated union, Field(discriminator="type")
 
 
 match event.payload:

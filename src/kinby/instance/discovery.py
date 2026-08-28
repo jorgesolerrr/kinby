@@ -1,3 +1,5 @@
+"""Find the instance to run when the caller did not name one."""
+
 from __future__ import annotations
 
 import os
@@ -9,11 +11,8 @@ from kinby.instance.layout import MANIFEST_NAME
 from kinby.instance.manifest import load_instance
 
 
-def discover_instance(
-    directory: Path | None = None, *, model_override: str | None = None
-) -> Instance:
-    if directory is not None:
-        return load_instance(directory, model_override=model_override)
+def discover_instance(*, model_override: str | None = None) -> Instance:
+    """Search KINBY_INSTANCE, then the directories above cwd, then the home default."""
     environment_directory = os.environ.get("KINBY_INSTANCE")
     if environment_directory:
         return load_instance(

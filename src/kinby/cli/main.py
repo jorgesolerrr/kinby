@@ -20,12 +20,14 @@ from kinby.contracts import (
 )
 from kinby.core import build_dispatcher, turn_config
 from kinby.instance import (
+    PLACEHOLDER_MODEL,
     Instance,
     InstanceExistsError,
     InstanceNotFoundError,
     ManifestError,
     discover_instance,
     init_instance,
+    load_instance,
 )
 
 
@@ -126,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     init_parser.add_argument("directory", help="instance directory to create")
     init_parser.add_argument(
         "--model",
+        default=PLACEHOLDER_MODEL,
         help="value for [models].main (a placeholder is used when omitted)",
     )
     instance_parser = subparsers.add_parser(
@@ -180,9 +183,12 @@ def main(argv: list[str] | None = None) -> int:
     if show_instance or args.command == "run" or thread_command:
         try:
             explicit_directory = args.instance_directory or args.directory
-            directory = Path(explicit_directory) if explicit_directory else None
             model_override = args.model if args.command == "run" else None
-            instance = discover_instance(directory, model_override=model_override)
+            instance = (
+                load_instance(Path(explicit_directory), model_override=model_override)
+                if explicit_directory
+                else discover_instance(model_override=model_override)
+            )
         except (InstanceNotFoundError, ManifestError) as exc:
             print(exc, file=sys.stderr)
             return 1

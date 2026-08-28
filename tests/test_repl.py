@@ -6,7 +6,7 @@ from kinby.cli.client import ContractClient
 from kinby.cli.repl import run_repl
 from kinby.contracts import (
     THREAD_CREATE,
-    EventType,
+    MessageDelta,
     Scope,
     ThreadCreateCommand,
     ThreadCreateResult,
@@ -17,8 +17,8 @@ from kinby.core.turns import Emit, TurnOutcome, TurnRequest
 
 class ReplRunner:
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
-        await emit(EventType.MESSAGE_DELTA, {"text": "Hi"})
-        await emit(EventType.MESSAGE_DELTA, {"text": " there"})
+        await emit(MessageDelta(text="Hi"))
+        await emit(MessageDelta(text=" there"))
         return TurnOutcome()
 
 

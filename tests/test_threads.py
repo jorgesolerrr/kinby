@@ -9,16 +9,19 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Event,
-    EventType,
     Scope,
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListResult,
     ThreadSubscribeCommand,
+    TurnCompleted,
+    TurnStarted,
 )
 from kinby.contracts.methods import Method, Subscription
 from kinby.core.dispatcher import Dispatcher, build_dispatcher
 from kinby.core.events import EventLog
+
+STARTED = TurnStarted(message="Hello", model="openai:gpt-5")
 
 
 def test_create_and_list_thread_after_dispatcher_restart(tmp_path: Path) -> None:
@@ -116,8 +119,8 @@ def test_thread_subscribe_replays_a_finished_thread_through_dispatcher(
         turn_id = uuid4()
         event_log = EventLog(tmp_path)
         stored = [
-            await event_log.append(thread_id, turn_id, EventType.TURN_STARTED, {}),
-            await event_log.append(thread_id, turn_id, EventType.TURN_COMPLETED, {}),
+            await event_log.append(thread_id, turn_id, STARTED),
+            await event_log.append(thread_id, turn_id, TurnCompleted()),
         ]
         dispatcher = build_dispatcher(tmp_path)
 
@@ -252,8 +255,7 @@ def test_contract_client_subscription_replays_then_stays_live(tmp_path: Path) ->
         replayed = await event_log.append(
             thread_id,
             turn_id,
-            EventType.TURN_STARTED,
-            {},
+            STARTED,
         )
         dispatcher = build_dispatcher(tmp_path, event_log=event_log)
         client = ContractClient(
@@ -271,8 +273,7 @@ def test_contract_client_subscription_replays_then_stays_live(tmp_path: Path) ->
         live = await event_log.append(
             thread_id,
             turn_id,
-            EventType.TURN_COMPLETED,
-            {},
+            TurnCompleted(),
         )
         received_live = await asyncio.wait_for(waiting_for_live, timeout=1)
         await subscription.aclose()

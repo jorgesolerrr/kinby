@@ -15,6 +15,8 @@ from kinby.contracts.models import (
     ErrorEnvelope,
     Event,
     EventType,
+    MessageDelta,
+    Payload,
     Scope,
     ThreadCreateCommand,
     ThreadCreateResult,
@@ -23,6 +25,9 @@ from kinby.contracts.models import (
     ThreadSubscribeCommand,
     ThreadSummary,
     ThreadTurnStartCommand,
+    TurnCompleted,
+    TurnFailed,
+    TurnStarted,
 )
 
 __all__ = [
@@ -36,7 +41,9 @@ __all__ = [
     "ErrorEnvelope",
     "Event",
     "EventType",
+    "MessageDelta",
     "Method",
+    "Payload",
     "Scope",
     "Subscription",
     "ThreadCreateCommand",
@@ -46,4 +53,7 @@ __all__ = [
     "ThreadSubscribeCommand",
     "ThreadSummary",
     "ThreadTurnStartCommand",
+    "TurnCompleted",
+    "TurnFailed",
+    "TurnStarted",
 ]

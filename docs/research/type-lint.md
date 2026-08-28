@@ -1,6 +1,6 @@
 # Research: enforcing the Types rules with lint
 
-Date: 2026-08-28. Status: steps 1 to 5 landed together (PR after #38); the allow list shrank to two files because the dispatcher no longer names `BaseModel`. Question: which of the [Types](../../CODING-STANDARD.md#types) rules can a tool enforce, so an agent cannot land a `-> BaseModel` or a stray `Any` without a red check?
+Date: 2026-08-28. Status: steps 1 to 5 landed together (PR after #38); the signature test's allow list is down to `contracts/models.py` and `core/dispatcher.py`; `instance/manifest.py` only subclasses `BaseModel` for its schema, so it stays on the `TID251` list alone. Question: which of the [Types](../../CODING-STANDARD.md#types) rules can a tool enforce, so an agent cannot land a `-> BaseModel` or a stray `Any` without a red check?
 
 ## What ruff already offers
 

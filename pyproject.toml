@@ -39,7 +39,7 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "RUF", "ANN", "FBT", "TID"
 
 [tool.ruff.lint.per-file-ignores]
 "src/kinby/contracts/models.py" = ["TID251"] # defines ContractModel
-"src/kinby/instance/manifest.py" = ["TID251"] # reads TOML
+"src/kinby/instance/manifest.py" = ["TID251"] # declares the manifest schema
 "tests/**" = ["ANN", "FBT", "TID251"]
 
 [tool.ty.rules]

@@ -1,13 +1,12 @@
 import asyncio
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage
-from pydantic import JsonValue
 
-from kinby.contracts import Event, EventType
+from kinby.contracts import Event, MessageDelta, Payload
 from kinby.core import LangGraphRunner
 from kinby.core.turns import TurnRequest
 
@@ -48,21 +47,20 @@ class RecoveringChatModel:
 
 def test_langgraph_runner_streams_one_model_turn() -> None:
     async def scenario() -> None:
-        events: list[tuple[EventType, dict[str, object]]] = []
+        events: list[Payload] = []
         requested_models: list[str] = []
 
         def model_factory(model: str) -> StreamingChatModel:
             requested_models.append(model)
             return StreamingChatModel()
 
-        async def emit(event_type: EventType, payload: Mapping[str, JsonValue]) -> Event:
-            events.append((event_type, dict(payload)))
+        async def emit(payload: Payload) -> Event:
+            events.append(payload)
             return Event(
                 sequence=len(events),
                 thread_id=uuid4(),
                 turn_id=uuid4(),
-                type=event_type,
-                payload=dict(payload),
+                payload=payload,
                 timestamp=datetime.now(UTC),
             )
 
@@ -77,10 +75,7 @@ def test_langgraph_runner_streams_one_model_turn() -> None:
         )
 
         assert requested_models == ["openai:gpt-5"]
-        assert events == [
-            (EventType.MESSAGE_DELTA, {"text": "Hi"}),
-            (EventType.MESSAGE_DELTA, {"text": " there"}),
-        ]
+        assert events == [MessageDelta(text="Hi"), MessageDelta(text=" there")]
         assert outcome.input_tokens == 4
         assert outcome.output_tokens == 2
 
@@ -93,13 +88,12 @@ def test_failed_model_call_does_not_enter_checkpointed_history() -> None:
         runner = LangGraphRunner("openai:gpt-5", model_factory=lambda _: model)
         thread_id = uuid4()
 
-        async def emit(event_type: EventType, payload: Mapping[str, JsonValue]) -> Event:
+        async def emit(payload: Payload) -> Event:
             return Event(
                 sequence=1,
                 thread_id=thread_id,
                 turn_id=uuid4(),
-                type=event_type,
-                payload=dict(payload),
+                payload=payload,
                 timestamp=datetime.now(UTC),
             )
 
@@ -125,15 +119,14 @@ def test_langgraph_checkpointer_keeps_thread_messages_between_turns() -> None:
         thread_id = uuid4()
         emitted = 0
 
-        async def emit(event_type: EventType, payload: Mapping[str, JsonValue]) -> Event:
+        async def emit(payload: Payload) -> Event:
             nonlocal emitted
             emitted += 1
             return Event(
                 sequence=emitted,
                 thread_id=thread_id,
                 turn_id=uuid4(),
-                type=event_type,
-                payload=dict(payload),
+                payload=payload,
                 timestamp=datetime.now(UTC),
             )
 

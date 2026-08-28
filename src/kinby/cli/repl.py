@@ -10,12 +10,14 @@ from kinby.cli.client import ContractClient, format_error
 from kinby.contracts import (
     THREAD_SUBSCRIBE,
     THREAD_TURN_START,
-    ErrorCode,
     ErrorEnvelope,
     Event,
     EventType,
+    MessageDelta,
     ThreadSubscribeCommand,
     ThreadTurnStartCommand,
+    TurnCompleted,
+    TurnFailed,
 )
 
 _TERMINAL_EVENTS = {
@@ -70,16 +72,13 @@ async def run_repl(
 
 
 def _render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
-    if event.type is EventType.MESSAGE_DELTA:
-        text = event.payload.get("text")
-        if isinstance(text, str):
+    match event.payload:
+        case MessageDelta(text=text):
             stdout.write(text)
             stdout.flush()
-    elif event.type is EventType.TURN_COMPLETED:
-        stdout.write("\n")
-        stdout.flush()
-    elif event.type is EventType.TURN_FAILED:
-        code = event.payload.get("code", ErrorCode.INTERNAL.value)
-        message = event.payload.get("message", "The model turn failed.")
-        stderr.write(f"{code}: {message}\n")
-        stderr.flush()
+        case TurnCompleted():
+            stdout.write("\n")
+            stdout.flush()
+        case TurnFailed(code=code, message=message):
+            stderr.write(f"{code.value}: {message}\n")
+            stderr.flush()

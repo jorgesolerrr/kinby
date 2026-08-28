@@ -46,7 +46,7 @@ def _write_readme(directory: Path, explanation: str) -> None:
     )
 
 
-def init_instance(directory: Path, model: str | None = None) -> Path:
+def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
     """Write a readable starter instance at *directory*."""
     directory = Path(directory)
     manifest = directory / MANIFEST_NAME
@@ -55,7 +55,6 @@ def init_instance(directory: Path, model: str | None = None) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
 
     instance_id = _slugify(directory.name)
-    main_model = model if model is not None else PLACEHOLDER_MODEL
 
     (directory / MANIFEST_NAME).write_text(
         (
@@ -66,7 +65,7 @@ def init_instance(directory: Path, model: str | None = None) -> Path:
             f"id = {_toml_string(instance_id)}\n"
             "\n"
             "[models]\n"
-            f"main = {_toml_string(main_model)}\n"
+            f"main = {_toml_string(model)}\n"
         ),
         encoding="utf-8",
     )

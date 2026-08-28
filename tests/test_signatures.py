@@ -11,7 +11,6 @@ GENERIC_NAMES = {"BaseModel", "Any"}
 ALLOWED = {
     "contracts/models.py",
     "core/dispatcher.py",
-    "instance/manifest.py",
 }
 
 

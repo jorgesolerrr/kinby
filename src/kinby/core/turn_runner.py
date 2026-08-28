@@ -12,7 +12,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import START, StateGraph, add_messages
 from langgraph.runtime import Runtime
 
-from kinby.contracts import EventType
+from kinby.contracts import MessageDelta
 from kinby.core.errors import ModelNoResponse
 from kinby.core.turns import Emit, TurnOutcome, TurnRequest
 
@@ -78,7 +78,7 @@ class LangGraphRunner:
         async for chunk in self._model.astream([*state.messages, user_message]):
             response = chunk if response is None else response + chunk
             if chunk.text:
-                await runtime.context.emit(EventType.MESSAGE_DELTA, {"text": chunk.text})
+                await runtime.context.emit(MessageDelta(text=chunk.text))
         if response is None:
             raise ModelNoResponse("The model returned no response.")
         usage = response.usage_metadata
