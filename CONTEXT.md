@@ -104,3 +104,19 @@ One sequence-numbered record emitted while a turn runs. The event stream is what
 ### Scope
 
 A named permission a **contract** command requires of its caller. Holding a connection is not permission to call everything.
+
+### Plugin
+
+Anything an **instance** loads beyond the core: a **tool** or a **skill**, from the instance directory or from an installed package. The workspace never supplies plugins.
+
+### Tool
+
+A native Python capability the model can call during a **turn**. Every tool declares whether it writes (changes files, state, or the outside world); the **gate** reads that flag. Tools present at the start of a turn are the tools for that turn.
+
+### Skill
+
+A markdown instruction set the model reads on demand. Skills are listed to the model by name and description; the body is fetched only when the model asks for it.
+
+### Behavior prompt
+
+The instance's own instructions to the model (`SYSTEM.md`). One of the sources assembled into the system prompt, alongside the **profile**, workspace **conventions**, the skill list, and the harness-owned environment block.
