@@ -17,5 +17,9 @@ class ThreadBusy(CoreError):
     retryable = True
 
 
+class NoActiveTurn(CoreError):
+    code = ErrorCode.NO_ACTIVE_TURN
+
+
 class ModelNoResponse(CoreError):
     pass

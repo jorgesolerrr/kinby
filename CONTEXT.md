@@ -76,6 +76,10 @@ One run of the agent loop against a thread, from start to exit (a process, a REP
 
 One user-to-agent cycle within a thread: from a user message until the agent yields control back. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases.
 
+### Turn interruption
+
+A user's request to stop the active turn before it completes.
+
 ### Turn runner
 
 The part of the runtime that produces the agent's response and the turn's events.

@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import suppress
 from pathlib import Path
 from typing import cast
 from uuid import UUID
@@ -15,6 +16,7 @@ from kinby.contracts import (
     ThreadCreateResult,
     TurnCompleted,
     TurnFailed,
+    TurnInterrupted,
     TurnStarted,
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
@@ -44,6 +46,19 @@ class WaitingRunner:
 class FailingRunner:
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
         raise RuntimeError("provider unavailable")
+
+
+class CancellationSuppressingRunner:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+        await emit(MessageDelta(text="Before interrupt"))
+        self.started.set()
+        with suppress(asyncio.CancelledError):
+            await asyncio.Event().wait()
+        await emit(MessageDelta(text="After interrupt"))
+        return TurnOutcome()
 
 
 class PausingEventLog(EventLog):
@@ -160,6 +175,137 @@ def test_start_rejects_a_second_turn_while_the_first_is_running(tmp_path: Path) 
         await subscription.aclose()
         assert isinstance(completed, Event)
         assert completed.type is EventType.TURN_COMPLETED
+
+    asyncio.run(scenario())
+
+
+def test_interrupt_ends_the_running_turn_and_allows_another(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runner = WaitingRunner()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig("openai:gpt-5", runner),
+        )
+        created = await dispatcher.dispatch(
+            "thread.create",
+            {},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(created, ThreadCreateResult)
+
+        first = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "First"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(first, AcceptedResult)
+        await asyncio.wait_for(runner.started.wait(), timeout=1)
+
+        interrupted = await dispatcher.dispatch(
+            "thread.turn.interrupt",
+            {"thread_id": created.id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert interrupted == AcceptedResult(
+            thread_id=created.id,
+            turn_id=first.turn_id,
+            sequence=2,
+        )
+        subscription = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id},
+            {Scope.THREAD_READ},
+        )
+        events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(2)]
+        await subscription.aclose()
+        assert [event.type for event in cast(list[Event], events)] == [
+            EventType.TURN_STARTED,
+            EventType.TURN_INTERRUPTED,
+        ]
+        assert cast(list[Event], events)[1].payload == TurnInterrupted()
+
+        second = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Second"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(second, AcceptedResult)
+        runner.release.set()
+
+    asyncio.run(scenario())
+
+
+def test_interrupt_rejects_a_thread_with_no_active_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig("openai:gpt-5", ScriptedRunner()),
+        )
+        created = await dispatcher.dispatch(
+            "thread.create",
+            {},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(created, ThreadCreateResult)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.interrupt",
+            {"thread_id": created.id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert result == ErrorEnvelope(
+            code=ErrorCode.NO_ACTIVE_TURN,
+            message=f'Thread "{created.id}" has no active turn.',
+            retryable=False,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_interrupt_ends_the_turn_when_the_runner_suppresses_cancellation(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        runner = CancellationSuppressingRunner()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig("openai:gpt-5", runner),
+        )
+        created = await dispatcher.dispatch(
+            "thread.create",
+            {},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(created, ThreadCreateResult)
+        await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        await asyncio.wait_for(runner.started.wait(), timeout=1)
+
+        interrupted = await dispatcher.dispatch(
+            "thread.turn.interrupt",
+            {"thread_id": created.id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(interrupted, AcceptedResult)
+        subscription = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id},
+            {Scope.THREAD_READ},
+        )
+        events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(3)]
+        await subscription.aclose()
+        assert [event.type for event in cast(list[Event], events)] == [
+            EventType.TURN_STARTED,
+            EventType.MESSAGE_DELTA,
+            EventType.TURN_INTERRUPTED,
+        ]
+        assert cast(list[Event], events)[-1].payload == TurnInterrupted()
 
     asyncio.run(scenario())
 

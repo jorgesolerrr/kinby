@@ -14,6 +14,7 @@ from kinby.contracts import (
     THREAD_CREATE,
     THREAD_LIST,
     THREAD_SUBSCRIBE,
+    THREAD_TURN_INTERRUPT,
     THREAD_TURN_START,
     ContractModel,
     ErrorCode,
@@ -175,10 +176,9 @@ def build_dispatcher(
     dispatcher.register(THREAD_LIST, list_threads)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
     if turns is not None:
-        dispatcher.register(
-            THREAD_TURN_START,
-            Turns(store, event_log, turns.runner, turns.model).start,
-        )
+        turn_service = Turns(store, event_log, turns.runner, turns.model)
+        dispatcher.register(THREAD_TURN_START, turn_service.start)
+        dispatcher.register(THREAD_TURN_INTERRUPT, turn_service.interrupt)
     return dispatcher
 
 
