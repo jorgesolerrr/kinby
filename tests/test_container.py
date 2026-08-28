@@ -29,7 +29,7 @@ def _docker_is_available() -> bool:
         return False
     try:
         result = _docker("info", "--format", "{{.ServerVersion}}", check=False, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError, subprocess.TimeoutExpired:
         return False
     return result.returncode == 0
 

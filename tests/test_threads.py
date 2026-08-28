@@ -181,7 +181,7 @@ def test_subscription_translates_an_unexpected_handler_failure() -> None:
     async def scenario() -> None:
         async def handler(
             command: ThreadCreateCommand,
-        ) -> AsyncGenerator[ThreadCreateCommand, None]:
+        ) -> AsyncGenerator[ThreadCreateCommand]:
             if command.title is None:
                 raise RuntimeError("event log unavailable")
             yield command
@@ -217,7 +217,7 @@ def test_closing_subscription_releases_its_handler() -> None:
 
         async def handler(
             command: ThreadCreateCommand,
-        ) -> AsyncGenerator[ThreadCreateCommand, None]:
+        ) -> AsyncGenerator[ThreadCreateCommand]:
             nonlocal handler_closed
             try:
                 yield command

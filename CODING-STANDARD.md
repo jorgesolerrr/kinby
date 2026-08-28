@@ -20,7 +20,7 @@ The maintainer's note in `AGENTS.md` is the standard. Everything below puts it i
 ## Python
 
 - **PEP 8.** Follow [PEP 8](https://peps.python.org/pep-0008/) for Python style. This file and `pyproject.toml` win on conflict; ruff enforces the mechanical subset.
-- **Pythonic, modern.** Target Python 3.10+ (see `pyproject.toml`). Use `X | None`, `match` where it clarifies, dataclasses for structured data.
+- **Pythonic, modern.** Target Python 3.14+ (see `pyproject.toml`). Use `X | None`, `match` where it clarifies, and dataclasses for structured data.
 - Type-hint every function signature and every public value. Inside bodies, annotate only where inference fails. Name the type; `Any` only when a real type would lie or block the design.
 - **Functions first.** Stateless behavior is a function; describe the shape with `Callable` when a parameter or return needs a signature. A class earns its place by holding state.
 - **Protocol.** Shape an interface with `typing.Protocol`. ABC only when you need shared implementation or runtime registration.
@@ -59,7 +59,7 @@ Rule selection lives in `pyproject.toml` under `[tool.ruff]`. The families and w
 |---|---|
 | `E`, `W`, `F` | pycodestyle and pyflakes baseline: dead names, undefined variables, style errors |
 | `I` | deterministic import order |
-| `UP` | pyupgrade, keeps syntax at 3.10+ with no legacy idioms |
+| `UP` | pyupgrade, keeps syntax at 3.14+ with no legacy idioms |
 | `B` | bugbear, catches real bug patterns like mutable defaults and silent exceptions |
 | `SIM` | flags code a smaller construct replaces |
 | `C4` | comprehension misuse |

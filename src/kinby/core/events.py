@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -35,7 +35,7 @@ class EventLog:
                 turn_id=turn_id,
                 type=event_type,
                 payload=dict(payload),
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
             )
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8") as records:
@@ -48,7 +48,7 @@ class EventLog:
         self,
         thread_id: UUID,
         after_sequence: int = 0,
-    ) -> AsyncGenerator[Event, None]:
+    ) -> AsyncGenerator[Event]:
         subscriber: asyncio.Queue[Event] = asyncio.Queue()
         async with self._lock:
             replay = [

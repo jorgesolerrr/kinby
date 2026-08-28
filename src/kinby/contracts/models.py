@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated
 from uuid import UUID
 
@@ -16,14 +16,14 @@ class ContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class Scope(str, Enum):
+class Scope(StrEnum):
     THREAD_READ = "thread:read"
     THREAD_OPERATE = "thread:operate"
     INSTANCE_READ = "instance:read"
     INSTANCE_ADMIN = "instance:admin"
 
 
-class ErrorCode(str, Enum):
+class ErrorCode(StrEnum):
     NOT_FOUND = "NOT_FOUND"
     THREAD_BUSY = "THREAD_BUSY"
     NO_ACTIVE_TURN = "NO_ACTIVE_TURN"
@@ -38,7 +38,7 @@ class ErrorEnvelope(ContractModel):
     retryable: bool
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     TURN_STARTED = "turn.started"
     MESSAGE_DELTA = "message.delta"
     TOOL_CALL = "tool.call"

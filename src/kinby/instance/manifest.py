@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 import re
-import sys
+import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - exercised by the Python 3.10 test run
-    import tomli as tomllib
 
 from kinby.instance.dataclasses import (
     Conventions,

@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Map
 from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Generic, TypeVar, cast
+from typing import TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -26,13 +26,12 @@ from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnRunner, Turns
 
 Handler = Callable[[BaseModel], Awaitable[BaseModel]]
-SubscriptionHandler = Callable[[BaseModel], AsyncGenerator[BaseModel, None]]
+SubscriptionHandler = Callable[[BaseModel], AsyncGenerator[BaseModel]]
 Command = TypeVar("Command", bound=BaseModel)
-RouteHandler = TypeVar("RouteHandler")
 
 
 @dataclass(frozen=True)
-class Route(Generic[RouteHandler]):
+class Route[RouteHandler]:
     scope: Scope
     command: type[BaseModel]
     handler: RouteHandler
@@ -57,7 +56,7 @@ class Dispatcher:
         method: str,
         scope: Scope,
         command: type[Command],
-        handler: Callable[[Command], AsyncGenerator[BaseModel, None]],
+        handler: Callable[[Command], AsyncGenerator[BaseModel]],
     ) -> None:
         self._subscription_routes[method] = Route(
             scope,
@@ -66,7 +65,7 @@ class Dispatcher:
         )
 
     @staticmethod
-    def _validate_call(
+    def _validate_call[RouteHandler](
         routes: Mapping[str, Route[RouteHandler]],
         method: str,
         payload: Mapping[str, object],
@@ -125,7 +124,7 @@ class Dispatcher:
         method: str,
         payload: Mapping[str, object],
         scopes: Collection[Scope],
-    ) -> AsyncGenerator[BaseModel, None]:
+    ) -> AsyncGenerator[BaseModel]:
         call = self._validate_call(self._subscription_routes, method, payload, scopes)
         if isinstance(call, ErrorEnvelope):
             yield call
@@ -162,7 +161,7 @@ def build_dispatcher(
 
     def subscribe_to_thread(
         command: ThreadSubscribeCommand,
-    ) -> AsyncGenerator[BaseModel, None]:
+    ) -> AsyncGenerator[BaseModel]:
         return event_log.subscribe(command.thread_id, command.after_sequence)
 
     dispatcher.register(

@@ -21,7 +21,7 @@ Dispatch = Callable[
 ]
 Subscribe = Callable[
     [str, Mapping[str, object], Collection[Scope]],
-    AsyncGenerator[BaseModel, None],
+    AsyncGenerator[BaseModel],
 ]
 
 
@@ -43,5 +43,5 @@ class ContractClient:
         self,
         method: str,
         payload: Mapping[str, object],
-    ) -> AsyncGenerator[BaseModel, None]:
+    ) -> AsyncGenerator[BaseModel]:
         return self._subscribe(method, payload, self._scopes)

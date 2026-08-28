@@ -25,7 +25,7 @@ Before this feature, a self-hoster had nothing to install and nothing to point k
 |---|---|---|---|---|
 | D1 | Shape of an instance | One self-contained directory: `kinby.toml`, behavior files, `memory/`, `workspace/` under it, gitignored `.state/` for runtime data; `state_dir` is a manifest override | A `.kinby/` directory inside the user's repo; runtime state outside the instance by default | A `.kinby/` per repo fragments memory and drops databases into the user's repo. State outside the instance breaks "tar the directory and you have moved the instance" and needs a second container mount. (#4, ADR 0001) |
 | D2 | Starting point | A fresh `src/kinby` scaffold; `agent/` and `main.py` deleted in the same change | Growing the learning-project code into the product | The learning project was a spike, not a seed. One package to read. (#4, #14) |
-| D3 | Manifest format and secrets | TOML parsed by the standard library (`tomllib`, `tomli` on 3.10); secrets come only from the environment, with `<instance>/.env` loaded for local use | Secrets as manifest keys | A manifest with no secrets is committable, and TOML is inspectable without executing anything. A container and a laptop get secrets the same way. (#13) |
+| D3 | Manifest format and secrets | TOML parsed by the standard library (`tomllib`); secrets come only from the environment, with `<instance>/.env` loaded for local use | Secrets as manifest keys | A manifest with no secrets is committable, and TOML is inspectable without executing anything. A container and a laptop get secrets the same way. (#13) |
 | D4 | Minimal instance versus what `init` writes | Minimal is `kinby.toml` with `[models].main`; `init` writes every default out as a real file with an explanatory comment | `init` writes only the minimal file | The user learns what is editable by looking at files, not docs. Minimal is a validity rule, not a template. (#4, #15) |
 | D5 | Instance identity | `id` in the manifest, written by `init` as a slug of the directory name; the path is location, not identity | The path as identity | Moving the directory must not rename the instance. (#4) |
 | D6 | Model settings | `[models].main` required in `provider:model` form; `recap` defaults to `main`; `embed` optional; the manifest is re-read at every turn boundary through `reload_manifest`; `kinby run --model` overrides `main` for one session without touching the file | Restarting to switch models; the agent rewriting its own manifest | Switching models never means restarting. Agent self-modification is fog until something needs it. (#4, #19) |
@@ -200,7 +200,7 @@ The starter tree `init_instance` writes (D4):
 
 `kinby instance show` output, in order: `id`, `persona name` (when set), `path`, `matching rule`, `models:` with `main`, `recap`, `embed` (`not configured` when absent), `workspace: <path> (present|missing)`, `source` (when set), `conventions:` with `instructions:` and `skills:` (only when at least one exists), `state dir`.
 
-Container contract (D10), from `Dockerfile` and `docs/container.md`: `python:3.12-slim`, `pip install .`, `ENV KINBY_INSTANCE=/instance`, `VOLUME ["/instance"]`, `ENTRYPOINT ["kinby"]`, `CMD ["run"]`. The entrypoint does not clone a workspace yet.
+Container contract (D10), from `Dockerfile` and `docs/container.md`: `python:3.14-slim`, `pip install .`, `ENV KINBY_INSTANCE=/instance`, `VOLUME ["/instance"]`, `ENTRYPOINT ["kinby"]`, `CMD ["run"]`. The entrypoint does not clone a workspace yet.
 
 ## File map *(reference)*
 
@@ -208,7 +208,7 @@ Stamped at `6e18454`. Actions describe what the build did relative to the tree b
 
 | Path | Action | What changes | Flow |
 |---|---|---|---|
-| `pyproject.toml` | create | Package `kinby`, src layout, script `kinby = "kinby.cli:main"`, deps `python-dotenv`, `tomli` (3.10), dev `pytest`, `ruff` | — |
+| `pyproject.toml` | create | Package `kinby`, src layout, script `kinby = "kinby.cli:main"`, dependency `python-dotenv`, dev dependencies `pytest`, `ruff` | — |
 | `uv.lock` | create | Lockfile | — |
 | `agent/`, `main.py` | delete | The learning project (D2) | — |
 | `src/kinby/__init__.py` | create | Package docstring | — |
