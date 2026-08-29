@@ -124,7 +124,7 @@ class LangGraphRunner:
                 {"configurable": {"thread_id": str(turn.thread_id)}},
                 context=ModelContext(
                     emit=emit,
-                    model=self._model_factory(turn.model),
+                    model=bound_model,
                     system_message=SystemMessage(content=render_system_prompt(sections)),
                     tools=tools,
                     tool_context=ToolContext(
@@ -156,9 +156,8 @@ class LangGraphRunner:
         )
         response: AIMessageChunk | None = None
         async for chunk in runtime.context.model.astream(
-            [runtime.context.system_message, *state.messages, user_message]
+            [runtime.context.system_message, *messages]
         ):
-        async for chunk in runtime.context.model.astream(messages):
             response = chunk if response is None else response + chunk
             if chunk.text:
                 await runtime.context.emit(MessageDelta(text=chunk.text))

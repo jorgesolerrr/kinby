@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from uuid import UUID
 
-from langchain_core.messages import AIMessageChunk, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from kinby.contracts import (
@@ -79,7 +79,7 @@ async def _session(instance: Instance, model: ScriptedModel) -> tuple[Dispatcher
     runner = LangGraphRunner(instance, model_factory=lambda _: model)
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
-        turns=TurnConfig(runner.model_for_turn, runner),
+        turns=TurnConfig(runner.prepare_for_turn, runner),
     )
     created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
     assert isinstance(created, ThreadCreateResult)
@@ -633,6 +633,10 @@ def second() -> str:
             events[-1].sequence,
         )
         assert isinstance(recovered[-1].payload, TurnCompleted)
-        assert [message.content for message in model.messages[-1]] == ["Continue"]
+        assert [
+            message.content
+            for message in model.messages[-1]
+            if not isinstance(message, SystemMessage)
+        ] == ["Continue"]
 
     asyncio.run(scenario())

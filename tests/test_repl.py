@@ -155,3 +155,40 @@ def test_repl_renders_tool_and_warning_events(tmp_path: Path) -> None:
         assert stderr.getvalue() == "[warning] tools/weather.py: Using cached tool set.\n"
 
     asyncio.run(scenario())
+
+
+def test_repl_starts_another_turn_on_an_existing_thread(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_model_name, ReplRunner()),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        first_out = StringIO()
+        second_out = StringIO()
+        stderr = StringIO()
+
+        first = await run_repl(
+            client,
+            created.id,
+            stdin=StringIO("Hello\n"),
+            stdout=first_out,
+            stderr=stderr,
+        )
+        second = await run_repl(
+            client,
+            created.id,
+            stdin=StringIO("Again\n"),
+            stdout=second_out,
+            stderr=stderr,
+        )
+
+        assert first == 0
+        assert second == 0
+        assert first_out.getvalue() == "> Hi there\n> "
+        assert second_out.getvalue() == "> Hi there\n> "
+        assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())

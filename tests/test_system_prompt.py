@@ -2,8 +2,10 @@ import asyncio
 from collections.abc import AsyncIterator, Sequence
 from datetime import date
 from pathlib import Path
+from typing import Self
 
 from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage
+from langchain_core.tools import StructuredTool
 
 from kinby.contracts import AcceptedResult, Event, Scope, ThreadCreateResult
 from kinby.core import LangGraphRunner, TurnConfig, assemble_system_prompt, build_dispatcher
@@ -14,6 +16,9 @@ from kinby.instance import load_instance
 class ScriptedModel:
     def __init__(self) -> None:
         self.calls: list[tuple[BaseMessage, ...]] = []
+
+    def bind_tools(self, tools: Sequence[StructuredTool]) -> Self:
+        return self
 
     async def astream(
         self,

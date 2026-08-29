@@ -7,6 +7,7 @@ import asyncio
 import sys
 from importlib.metadata import version
 from pathlib import Path
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -16,6 +17,7 @@ from kinby.contracts import (
     THREAD_CREATE,
     THREAD_LIST,
     USAGE_GET,
+    ErrorCode,
     ErrorEnvelope,
     Scope,
     ThreadCreateCommand,
@@ -115,23 +117,49 @@ async def _show_usage(client: ContractClient, command: UsageGetCommand) -> int:
     return 0
 
 
-async def _run_instance(instance: Instance, *, model_override: str | None = None) -> int:
+async def _run_instance(
+    instance: Instance,
+    *,
+    model_override: str | None = None,
+    thread_id: UUID | None = None,
+) -> int:
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
         turns=turn_config(instance, model_override=model_override),
     )
     client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
-    created = await client.call(THREAD_CREATE, ThreadCreateCommand())
-    if isinstance(created, ErrorEnvelope):
-        print(format_error(created), file=sys.stderr)
+    opened = await _thread_for_session(client, thread_id)
+    if isinstance(opened, ErrorEnvelope):
+        print(format_error(opened), file=sys.stderr)
         return 1
     return await run_repl(
         client,
-        created.id,
+        opened,
         stdin=sys.stdin,
         stdout=sys.stdout,
         stderr=sys.stderr,
     )
+
+
+async def _thread_for_session(
+    client: ContractClient,
+    thread_id: UUID | None,
+) -> UUID | ErrorEnvelope:
+    if thread_id is None:
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        if isinstance(created, ErrorEnvelope):
+            return created
+        return created.id
+    listed = await client.call(THREAD_LIST, ThreadListCommand())
+    if isinstance(listed, ErrorEnvelope):
+        return listed
+    if thread_id not in {thread.id for thread in listed.threads}:
+        return ErrorEnvelope(
+            code=ErrorCode.NOT_FOUND,
+            message=f'Thread "{thread_id}" was not found.',
+            retryable=False,
+        )
+    return thread_id
 
 
 async def _create_thread(client: ContractClient, title: str | None) -> int:
@@ -191,6 +219,10 @@ def main(argv: list[str] | None = None) -> int:
         "--model",
         help="override [models].main for this session",
     )
+    run_parser.add_argument(
+        "--thread",
+        help="resume this thread instead of creating one",
+    )
     thread_parser = subparsers.add_parser(
         "thread",
         help="create and list threads",
@@ -240,7 +272,21 @@ def main(argv: list[str] | None = None) -> int:
             case "run":
                 instance = _load_selected_instance(args, model_override=args.model)
                 _print_instance(instance)
-                return asyncio.run(_run_instance(instance, model_override=args.model))
+                try:
+                    thread_id = UUID(args.thread) if args.thread else None
+                except ValueError:
+                    print(
+                        "--thread must be a thread id from kinby thread list",
+                        file=sys.stderr,
+                    )
+                    return 1
+                return asyncio.run(
+                    _run_instance(
+                        instance,
+                        model_override=args.model,
+                        thread_id=thread_id,
+                    )
+                )
             case "thread" if args.thread_command in {"create", "list"}:
                 client = _contract_client(_load_selected_instance(args))
                 if args.thread_command == "create":
