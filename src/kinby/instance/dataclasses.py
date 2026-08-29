@@ -46,6 +46,13 @@ class Memory:
 
 
 @dataclass(frozen=True)
+class Tools:
+    """Whether the manifest enables kinby's default tools."""
+
+    defaults: bool = True
+
+
+@dataclass(frozen=True)
 class Manifest:
     """Validated settings from ``kinby.toml``."""
 
@@ -55,6 +62,7 @@ class Manifest:
     models: Models
     workspace: Workspace
     memory: Memory
+    tools: Tools
 
 
 @dataclass(frozen=True)

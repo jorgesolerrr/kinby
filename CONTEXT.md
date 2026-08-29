@@ -113,6 +113,14 @@ Anything an **instance** loads beyond the core: a **tool** or a **skill**, from 
 
 A native Python capability the model can call during a **turn**. Every tool declares whether it writes (changes files, state, or the outside world); the **gate** reads that flag. Tools present at the start of a turn are the tools for that turn.
 
+### Tool package
+
+An installed **plugin** that supplies one or more tools to an **instance**.
+
+### Default tools
+
+The **tool package** kinby supplies to every instance unless its **manifest** disables it: read, write, edit, grep, glob and bash.
+
 ### Tool registry
 
 The instance-owned collection of tools available to turns. It keeps the last valid set when a tool file cannot load.

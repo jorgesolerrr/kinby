@@ -17,6 +17,7 @@ from kinby.instance.dataclasses import (
     MatchingRule,
     Memory,
     Models,
+    Tools,
     Workspace,
 )
 from kinby.instance.errors import ManifestError
@@ -63,6 +64,10 @@ class RawMemory(_Section):
     pass
 
 
+class RawTools(_Section):
+    defaults: bool = True
+
+
 class RawManifest(_Section):
     """The shape of ``kinby.toml``, validated once at load."""
 
@@ -72,6 +77,7 @@ class RawManifest(_Section):
     models: RawModels
     workspace: RawWorkspace = RawWorkspace()
     memory: RawMemory = RawMemory()
+    tools: RawTools = RawTools()
 
 
 def _manifest_error(exc: ValidationError) -> ManifestError:
@@ -126,6 +132,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
             conventions=_conventions(workspace_path, raw.workspace.conventions),
         ),
         memory=Memory(),
+        tools=Tools(defaults=raw.tools.defaults),
     )
 
 

@@ -29,3 +29,9 @@ def test_example_instances_load_through_instance_show(
     assert f"id: {expected_id}" in captured.out
     assert ("conventions:" in captured.out) is lists_conventions
     assert captured.err == ""
+
+
+def test_coding_agent_example_has_an_instance_tool() -> None:
+    tool_path = EXAMPLE_INSTANCES / "coding-agent" / "tools" / "workspace_name.py"
+
+    assert tool_path.is_file()
