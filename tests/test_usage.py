@@ -23,7 +23,7 @@ from kinby.contracts import (
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.turns import Emit, TurnOutcome, TurnRequest
 from kinby.instance import init_instance, load_instance
-from tests.helpers import does_not_park
+from tests.helpers import does_not_park, fixed_model_name
 
 
 class UsageRunner:
@@ -112,7 +112,7 @@ def test_usage_get_matches_two_recorded_turns_on_two_threads(tmp_path: Path) -> 
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", UsageRunner()),
+            turns=TurnConfig(fixed_model_name, UsageRunner()),
         )
         first = await _record_turn(dispatcher, "First")
         second = await _record_turn(dispatcher, "Second")
@@ -137,7 +137,7 @@ def test_usage_get_sums_completed_turns_per_thread(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", UsageRunner()),
+            turns=TurnConfig(fixed_model_name, UsageRunner()),
         )
         first = await _record_turn(dispatcher, "First")
         next_turn = await _record_turn(dispatcher, "Next", first.thread_id)
@@ -183,7 +183,7 @@ def test_cli_shows_token_totals_per_thread_and_turn(
         loaded = load_instance(instance)
         dispatcher = build_dispatcher(
             loaded.manifest.state_dir,
-            turns=TurnConfig("openai:gpt-5", UsageRunner()),
+            turns=TurnConfig(fixed_model_name, UsageRunner()),
         )
         return await _record_turn(dispatcher, "First")
 
@@ -222,7 +222,7 @@ def test_usage_get_limits_totals_to_the_requested_event_range(tmp_path: Path) ->
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", UsageRunner()),
+            turns=TurnConfig(fixed_model_name, UsageRunner()),
         )
         earlier = await _record_turn(dispatcher, "Earlier")
         await asyncio.sleep(0.001)

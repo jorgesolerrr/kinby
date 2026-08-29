@@ -1,14 +1,37 @@
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage
 
-from kinby.contracts import ApprovalRequested, Event, MessageDelta, Payload
-from kinby.core import LangGraphRunner
+from kinby.contracts import (
+    AcceptedResult,
+    ApprovalRequested,
+    Event,
+    MessageDelta,
+    Payload,
+    Scope,
+    ThreadCreateResult,
+    TurnStarted,
+)
+from kinby.core import LangGraphRunner, TurnConfig, build_dispatcher, turn_config
 from kinby.core.turns import ParkedTurn, TurnOutcome, TurnRequest
+from kinby.instance import Instance, load_instance
+
+_MODEL = "openai:gpt-5"
+
+
+def _load_test_instance(tmp_path: Path) -> Instance:
+    instance_path = tmp_path / "instance"
+    instance_path.mkdir()
+    (instance_path / "kinby.toml").write_text(
+        f'id = "test"\n\n[models]\nmain = "{_MODEL}"\n',
+        encoding="utf-8",
+    )
+    return load_instance(instance_path)
 
 
 class StreamingChatModel:
@@ -45,7 +68,101 @@ class RecoveringChatModel:
         yield AIMessageChunk(content="Recovered")
 
 
-def test_langgraph_runner_streams_one_model_turn() -> None:
+class CompletingChatModel:
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        yield AIMessageChunk(content="Done")
+
+
+def test_runner_reloads_the_instance_model_between_turns(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance_path = tmp_path / "alice"
+        instance_path.mkdir()
+        manifest_path = instance_path / "kinby.toml"
+        manifest_path.write_text(
+            'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n',
+            encoding="utf-8",
+        )
+        instance = load_instance(instance_path)
+        requested_models: list[str] = []
+
+        def init_model(model: str) -> CompletingChatModel:
+            requested_models.append(model)
+            return CompletingChatModel()
+
+        runner = LangGraphRunner(instance, model_factory=init_model)
+        dispatcher = build_dispatcher(
+            instance.manifest.state_dir,
+            turns=TurnConfig(runner.model_for_turn, runner),
+        )
+        created = await dispatcher.dispatch(
+            "thread.create",
+            {},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(created, ThreadCreateResult)
+
+        started_payloads: list[TurnStarted] = []
+        after_sequence = 0
+        for message, model in (
+            ("First", "openai:gpt-5"),
+            ("Second", "anthropic:claude-sonnet-4-6"),
+        ):
+            manifest_path.write_text(
+                f'id = "alice"\n\n[models]\nmain = "{model}"\n',
+                encoding="utf-8",
+            )
+            accepted = await dispatcher.dispatch(
+                "thread.turn.start",
+                {"thread_id": created.id, "message": message},
+                {Scope.THREAD_OPERATE},
+            )
+            assert isinstance(accepted, AcceptedResult)
+            subscription = dispatcher.subscribe(
+                "thread.subscribe",
+                {"thread_id": created.id, "after_sequence": after_sequence},
+                {Scope.THREAD_READ},
+            )
+            events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(3)]
+            await subscription.aclose()
+            started = events[0]
+            assert isinstance(started, Event)
+            assert isinstance(started.payload, TurnStarted)
+            started_payloads.append(started.payload)
+            last = events[-1]
+            assert isinstance(last, Event)
+            after_sequence = last.sequence
+
+        assert [started.model for started in started_payloads] == [
+            "openai:gpt-5",
+            "anthropic:claude-sonnet-4-6",
+        ]
+        assert requested_models == [
+            "openai:gpt-5",
+            "anthropic:claude-sonnet-4-6",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_turn_config_reapplies_the_session_model_override(tmp_path: Path) -> None:
+    instance = _load_test_instance(tmp_path)
+    configured = turn_config(
+        instance,
+        model_override="anthropic:claude-sonnet-4-6",
+    )
+    manifest_path = instance.path / "kinby.toml"
+
+    manifest_path.write_text(
+        'id = "test"\n\n[models]\nmain = "google:gemini-2.5-pro"\n',
+        encoding="utf-8",
+    )
+
+    assert configured.model_for_turn() == "anthropic:claude-sonnet-4-6"
+
+
+def test_langgraph_runner_streams_one_model_turn(tmp_path: Path) -> None:
     async def scenario() -> None:
         events: list[Payload] = []
         requested_models: list[str] = []
@@ -64,12 +181,13 @@ def test_langgraph_runner_streams_one_model_turn() -> None:
                 timestamp=datetime.now(UTC),
             )
 
-        runner = LangGraphRunner("openai:gpt-5", model_factory=model_factory)
+        runner = LangGraphRunner(_load_test_instance(tmp_path), model_factory=model_factory)
         outcome = await runner.run(
             TurnRequest(
                 thread_id=uuid4(),
                 turn_id=uuid4(),
                 message="Hello",
+                model=_MODEL,
             ),
             emit,
         )
@@ -83,10 +201,10 @@ def test_langgraph_runner_streams_one_model_turn() -> None:
     asyncio.run(scenario())
 
 
-def test_failed_model_call_does_not_enter_checkpointed_history() -> None:
+def test_failed_model_call_does_not_enter_checkpointed_history(tmp_path: Path) -> None:
     async def scenario() -> None:
         model = RecoveringChatModel()
-        runner = LangGraphRunner("openai:gpt-5", model_factory=lambda _: model)
+        runner = LangGraphRunner(_load_test_instance(tmp_path), model_factory=lambda _: model)
         thread_id = uuid4()
 
         async def emit(payload: Payload) -> Event:
@@ -100,11 +218,21 @@ def test_failed_model_call_does_not_enter_checkpointed_history() -> None:
 
         with pytest.raises(RuntimeError, match="provider unavailable"):
             await runner.run(
-                TurnRequest(thread_id=thread_id, turn_id=uuid4(), message="Failed"),
+                TurnRequest(
+                    thread_id=thread_id,
+                    turn_id=uuid4(),
+                    message="Failed",
+                    model=_MODEL,
+                ),
                 emit,
             )
         await runner.run(
-            TurnRequest(thread_id=thread_id, turn_id=uuid4(), message="Retry"),
+            TurnRequest(
+                thread_id=thread_id,
+                turn_id=uuid4(),
+                message="Retry",
+                model=_MODEL,
+            ),
             emit,
         )
 
@@ -113,10 +241,10 @@ def test_failed_model_call_does_not_enter_checkpointed_history() -> None:
     asyncio.run(scenario())
 
 
-def test_langgraph_checkpointer_keeps_thread_messages_between_turns() -> None:
+def test_langgraph_checkpointer_keeps_thread_messages_between_turns(tmp_path: Path) -> None:
     async def scenario() -> None:
         model = RememberingChatModel()
-        runner = LangGraphRunner("openai:gpt-5", model_factory=lambda _: model)
+        runner = LangGraphRunner(_load_test_instance(tmp_path), model_factory=lambda _: model)
         thread_id = uuid4()
         emitted = 0
 
@@ -137,6 +265,7 @@ def test_langgraph_checkpointer_keeps_thread_messages_between_turns() -> None:
                     thread_id=thread_id,
                     turn_id=uuid4(),
                     message=message,
+                    model=_MODEL,
                 ),
                 emit,
             )
@@ -149,7 +278,7 @@ def test_langgraph_checkpointer_keeps_thread_messages_between_turns() -> None:
     asyncio.run(scenario())
 
 
-def test_approval_hook_parks_until_resume() -> None:
+def test_approval_hook_parks_until_resume(tmp_path: Path) -> None:
     async def scenario() -> None:
         events: list[Payload] = []
         model = StreamingChatModel()
@@ -169,9 +298,14 @@ def test_approval_hook_parks_until_resume() -> None:
                 timestamp=datetime.now(UTC),
             )
 
-        turn = TurnRequest(thread_id=uuid4(), turn_id=uuid4(), message="Hello")
+        turn = TurnRequest(
+            thread_id=uuid4(),
+            turn_id=uuid4(),
+            message="Hello",
+            model=_MODEL,
+        )
         runner = LangGraphRunner(
-            "openai:gpt-5",
+            _load_test_instance(tmp_path),
             model_factory=lambda _: model,
             approval_hook=asking_hook,
         )

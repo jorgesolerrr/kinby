@@ -11,10 +11,13 @@ from kinby.contracts import (
     Scope,
     ThreadCreateCommand,
     ThreadCreateResult,
+    ToolCall,
+    ToolResult,
+    Warning,
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.turns import Emit, TurnOutcome, TurnRequest
-from tests.helpers import does_not_park
+from tests.helpers import does_not_park, fixed_model_name
 
 
 class ReplRunner:
@@ -42,11 +45,34 @@ class InterruptibleReplRunner:
     resume = does_not_park
 
 
+class ToolEventRunner:
+    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+        await emit(
+            ToolCall(
+                call_id="call-1",
+                name="weather",
+                arguments={"city": "Quito"},
+            )
+        )
+        await emit(
+            ToolResult(
+                call_id="call-1",
+                name="weather",
+                output="18 C",
+                error=False,
+            )
+        )
+        await emit(Warning(source="tools/weather.py", message="Using cached tool set."))
+        return TurnOutcome()
+
+    resume = does_not_park
+
+
 def test_repl_streams_a_full_turn_through_the_dispatcher(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", ReplRunner()),
+            turns=TurnConfig(fixed_model_name, ReplRunner()),
         )
         client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
         created = await client.call(THREAD_CREATE, ThreadCreateCommand())
@@ -74,7 +100,7 @@ def test_repl_interrupts_a_running_turn_on_ctrl_c(tmp_path: Path) -> None:
         runner = InterruptibleReplRunner()
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", runner),
+            turns=TurnConfig(fixed_model_name, runner),
         )
         client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
         created = await client.call(THREAD_CREATE, ThreadCreateCommand())
@@ -98,5 +124,34 @@ def test_repl_interrupts_a_running_turn_on_ctrl_c(tmp_path: Path) -> None:
         assert exit_code == 0
         assert stdout.getvalue() == "> (interrupted)\n> Done\n> "
         assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())
+
+
+def test_repl_renders_tool_and_warning_events(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_model_name, ToolEventRunner()),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            stdin=StringIO("Hello\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert stdout.getvalue() == (
+            '> [tool.call] weather {"city": "Quito"}\n[tool.result] weather (ok): 18 C\n\n> '
+        )
+        assert stderr.getvalue() == "[warning] tools/weather.py: Using cached tool set.\n"
 
     asyncio.run(scenario())

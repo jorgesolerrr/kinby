@@ -2,10 +2,45 @@ import asyncio
 from pathlib import Path
 from uuid import uuid4
 
-from kinby.contracts import MessageDelta, TurnCompleted, TurnStarted
+from kinby.contracts import (
+    MessageDelta,
+    ToolCall,
+    ToolResult,
+    TurnCompleted,
+    TurnStarted,
+    Warning,
+)
 from kinby.core.events import EventLog
 
 STARTED = TurnStarted(message="Hello", model="openai:gpt-5")
+
+
+def test_tool_and_warning_events_round_trip_through_the_event_log(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        payloads = [
+            ToolCall(
+                call_id="call-1",
+                name="weather",
+                arguments={"city": "Quito", "days": 3},
+            ),
+            ToolResult(
+                call_id="call-1",
+                name="weather",
+                output="18 C",
+                error=False,
+            ),
+            Warning(source="tools/weather.py", message="Using cached tool set."),
+        ]
+
+        stored = [await event_log.append(thread_id, turn_id, payload) for payload in payloads]
+
+        assert EventLog(tmp_path).stored(thread_id) == stored
+        assert [event.payload for event in stored] == payloads
+
+    asyncio.run(scenario())
 
 
 def test_finished_thread_replays_every_stored_event_in_order(tmp_path: Path) -> None:

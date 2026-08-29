@@ -44,6 +44,7 @@ class TurnRequest:
     thread_id: UUID
     turn_id: UUID
     message: str
+    model: str
 
 
 @dataclass(frozen=True)
@@ -85,12 +86,12 @@ class Turns:
         store: ThreadStore,
         log: EventLog,
         runner: TurnRunner,
-        model: str,
+        model_for_turn: Callable[[], str],
     ) -> None:
         self._store = store
         self._log = log
         self._runner = runner
-        self._model = model
+        self._model_for_turn = model_for_turn
         self._running: dict[UUID, RunningTurn] = {}
         self._starting: set[UUID] = set()
 
@@ -103,16 +104,17 @@ class Turns:
             raise _thread_busy(command.thread_id)
 
         self._starting.add(command.thread_id)
-        turn = TurnRequest(
-            thread_id=command.thread_id,
-            turn_id=uuid4(),
-            message=command.message,
-        )
         try:
+            turn = TurnRequest(
+                thread_id=command.thread_id,
+                turn_id=uuid4(),
+                message=command.message,
+                model=self._model_for_turn(),
+            )
             started = await self._log.append(
                 turn.thread_id,
                 turn.turn_id,
-                TurnStarted(message=turn.message, model=self._model),
+                TurnStarted(message=turn.message, model=turn.model),
             )
         finally:
             self._starting.remove(command.thread_id)
@@ -260,6 +262,7 @@ def _restore_parked_turn(
         thread_id=pending.event.thread_id,
         turn_id=pending.event.turn_id,
         message=started.message,
+        model=started.model,
     )
 
 

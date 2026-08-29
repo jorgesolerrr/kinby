@@ -23,7 +23,7 @@ from kinby.contracts import (
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.turns import Emit, ParkedTurn, TurnOutcome, TurnRequest
-from tests.helpers import does_not_park
+from tests.helpers import does_not_park, fixed_model_name
 
 _APPROVAL_ID = UUID("11111111-1111-1111-1111-111111111111")
 
@@ -106,7 +106,7 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", ScriptedRunner()),
+            turns=TurnConfig(fixed_model_name, ScriptedRunner()),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -161,7 +161,7 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
 def test_start_rejects_a_second_turn_while_the_first_is_running(tmp_path: Path) -> None:
     async def scenario() -> None:
         runner = WaitingRunner()
-        dispatcher = build_dispatcher(tmp_path, turns=TurnConfig("openai:gpt-5", runner))
+        dispatcher = build_dispatcher(tmp_path, turns=TurnConfig(fixed_model_name, runner))
         created = await dispatcher.dispatch(
             "thread.create",
             {},
@@ -207,7 +207,7 @@ def test_interrupt_ends_the_running_turn_and_allows_another(tmp_path: Path) -> N
         runner = WaitingRunner()
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", runner),
+            turns=TurnConfig(fixed_model_name, runner),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -263,7 +263,7 @@ def test_interrupt_rejects_a_thread_with_no_active_turn(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", ScriptedRunner()),
+            turns=TurnConfig(fixed_model_name, ScriptedRunner()),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -294,7 +294,7 @@ def test_interrupt_ends_the_turn_when_the_runner_suppresses_cancellation(
         runner = CancellationSuppressingRunner()
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", runner),
+            turns=TurnConfig(fixed_model_name, runner),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -340,7 +340,7 @@ def test_start_rejects_a_concurrent_turn_before_recording_acceptance(tmp_path: P
         dispatcher = build_dispatcher(
             tmp_path,
             event_log=event_log,
-            turns=TurnConfig("openai:gpt-5", runner),
+            turns=TurnConfig(fixed_model_name, runner),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -376,7 +376,7 @@ def test_failed_model_turn_ends_with_the_error_code(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", FailingRunner()),
+            turns=TurnConfig(fixed_model_name, FailingRunner()),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -416,7 +416,7 @@ async def _park_turn(
 ) -> tuple[Dispatcher, ThreadCreateResult, AcceptedResult, Event]:
     dispatcher = build_dispatcher(
         tmp_path,
-        turns=TurnConfig("openai:gpt-5", ParkingRunner()),
+        turns=TurnConfig(fixed_model_name, ParkingRunner()),
     )
     created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
     assert isinstance(created, ThreadCreateResult)
@@ -449,7 +449,7 @@ def test_parked_approval_resumes_after_dispatcher_restart(tmp_path: Path) -> Non
 
         restarted = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", ParkingRunner()),
+            turns=TurnConfig(fixed_model_name, ParkingRunner()),
         )
         resumed = await restarted.dispatch(
             "thread.approval.respond",
@@ -560,7 +560,7 @@ def test_start_rejects_a_new_turn_while_parked_after_restart(tmp_path: Path) -> 
 
         restarted = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", ParkingRunner()),
+            turns=TurnConfig(fixed_model_name, ParkingRunner()),
         )
         second = await restarted.dispatch(
             "thread.turn.start",
@@ -581,7 +581,7 @@ def test_interrupt_ends_a_parked_turn_after_restart(tmp_path: Path) -> None:
         _, created, accepted, requested = await _park_turn(tmp_path)
         restarted = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", ParkingRunner()),
+            turns=TurnConfig(fixed_model_name, ParkingRunner()),
         )
 
         interrupted = await restarted.dispatch(
@@ -614,7 +614,7 @@ def test_unknown_approval_id_with_no_active_turn_returns_not_found(
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig("openai:gpt-5", ParkingRunner()),
+            turns=TurnConfig(fixed_model_name, ParkingRunner()),
         )
         created = await dispatcher.dispatch(
             "thread.create",
