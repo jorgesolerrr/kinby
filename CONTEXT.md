@@ -113,6 +113,14 @@ Anything an **instance** loads beyond the core: a **tool** or a **skill**, from 
 
 A native Python capability the model can call during a **turn**. Every tool declares whether it writes (changes files, state, or the outside world); the **gate** reads that flag. Tools present at the start of a turn are the tools for that turn.
 
+### Tool registry
+
+The instance-owned collection of tools available to turns. It keeps the last valid set when a tool file cannot load.
+
+### Tool snapshot
+
+The fixed, name-sorted set of tools for one **turn**. The model and tool calls use the same snapshot for the whole turn.
+
 ### Skill
 
 A markdown instruction set the model reads on demand. Skills are listed to the model by name and description; the body is fetched only when the model asks for it.

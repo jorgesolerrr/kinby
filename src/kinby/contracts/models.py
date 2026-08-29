@@ -78,7 +78,7 @@ class ToolResult(ContractModel):
 
 class Warning(ContractModel):
     type: Literal[EventType.WARNING] = EventType.WARNING
-    source: str
+    sources: tuple[str, ...]
     message: str
 
 

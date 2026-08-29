@@ -2,10 +2,12 @@ import asyncio
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Self
 from uuid import UUID, uuid4
 
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage
+from langchain_core.tools import StructuredTool
 
 from kinby.contracts import (
     AcceptedResult,
@@ -34,7 +36,13 @@ def _load_test_instance(tmp_path: Path) -> Instance:
     return load_instance(instance_path)
 
 
-class StreamingChatModel:
+class NoToolsModel:
+    def bind_tools(self, tools: Sequence[StructuredTool]) -> Self:
+        assert not tools
+        return self
+
+
+class StreamingChatModel(NoToolsModel):
     async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
         assert messages[-1].content == "Hello"
         yield AIMessageChunk(
@@ -47,7 +55,7 @@ class StreamingChatModel:
         )
 
 
-class RememberingChatModel:
+class RememberingChatModel(NoToolsModel):
     def __init__(self) -> None:
         self.histories: list[list[object]] = []
 
@@ -59,7 +67,7 @@ class RememberingChatModel:
         yield AIMessageChunk(content=reply)
 
 
-class RecoveringChatModel:
+class RecoveringChatModel(NoToolsModel):
     def __init__(self) -> None:
         self.histories: list[list[object]] = []
 
@@ -72,7 +80,7 @@ class RecoveringChatModel:
         yield AIMessageChunk(content="Recovered")
 
 
-class CompletingChatModel:
+class CompletingChatModel(NoToolsModel):
     async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
         yield AIMessageChunk(content="Done")
 

@@ -166,8 +166,8 @@ def _render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
             status = "error" if error else "ok"
             stdout.write(f"[tool.result] {name} ({status}): {output}\n")
             stdout.flush()
-        case Warning(source=source, message=message):
-            stderr.write(f"[warning] {source}: {message}\n")
+        case Warning(sources=sources, message=message):
+            stderr.write(f"[warning] {', '.join(sources)}: {message}\n")
             stderr.flush()
         case TurnCompleted():
             stdout.write("\n")
