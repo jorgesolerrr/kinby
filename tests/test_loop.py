@@ -6,7 +6,7 @@ from typing import Self
 from uuid import UUID, uuid4
 
 import pytest
-from langchain_core.messages import AIMessageChunk, BaseMessage
+from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 
 from kinby.contracts import (
@@ -60,7 +60,9 @@ class RememberingChatModel(NoToolsModel):
         self.histories: list[list[object]] = []
 
     async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
-        self.histories.append([message.content for message in messages])
+        self.histories.append(
+            [message.content for message in messages if not isinstance(message, SystemMessage)]
+        )
         reply = "First reply" if len(self.histories) == 1 else "Second reply"
         yield AIMessageChunk(content=reply)
 
@@ -70,7 +72,9 @@ class RecoveringChatModel(NoToolsModel):
         self.histories: list[list[object]] = []
 
     async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
-        self.histories.append([message.content for message in messages])
+        self.histories.append(
+            [message.content for message in messages if not isinstance(message, SystemMessage)]
+        )
         if len(self.histories) == 1:
             raise RuntimeError("provider unavailable")
         yield AIMessageChunk(content="Recovered")
@@ -102,7 +106,7 @@ def test_runner_reloads_the_instance_model_between_turns(
         runner = LangGraphRunner(instance, model_factory=init_model)
         dispatcher = build_dispatcher(
             instance.manifest.state_dir,
-            turns=TurnConfig(runner.model_for_turn, runner),
+            turns=TurnConfig(runner.prepare_for_turn, runner),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -167,7 +171,7 @@ def test_turn_config_reapplies_the_session_model_override(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    assert configured.model_for_turn() == "anthropic:claude-sonnet-4-6"
+    assert configured.prepare_for_turn() == "anthropic:claude-sonnet-4-6"
 
 
 def test_langgraph_runner_streams_one_model_turn(tmp_path: Path) -> None:

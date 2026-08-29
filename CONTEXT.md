@@ -128,3 +128,23 @@ A markdown instruction set the model reads on demand. Skills are listed to the m
 ### Behavior prompt
 
 The instance's own instructions to the model (`SYSTEM.md`). One of the sources assembled into the system prompt, alongside the **profile**, workspace **conventions**, the skill list, and the harness-owned environment block.
+
+### System prompt
+
+The single system message assembled for each **turn** from an ordered set of **prompt sections**.
+
+### Prompt section
+
+One named, attributable part of the **system prompt**. Missing file-backed sections are omitted.
+
+### Preamble
+
+The constant, harness-owned **prompt section** that introduces the teammate and the kinby software.
+
+### Skills catalogue
+
+The **prompt section** that lists each available **skill** by name and description. The model reads a skill's body on demand.
+
+### Environment block
+
+The last **prompt section**, containing the instance id, optional **persona name**, **workspace** path, main model, and date.
