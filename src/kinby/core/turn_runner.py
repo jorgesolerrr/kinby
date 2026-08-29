@@ -56,11 +56,11 @@ class ModelState:
 
 @dataclass(frozen=True)
 class ModelContext:
-    turn: TurnRequest
     emit: Emit
     model: ChatModel
     tools: ToolSnapshot
     tool_context: ToolContext
+    user_message: HumanMessage
 
 
 def _init_model(model: str) -> ChatModel:
@@ -83,11 +83,9 @@ class LangGraphRunner:
         self._tools = ToolRegistry(instance.path)
         self._checkpointer = InMemorySaver()
         graph_builder = StateGraph(ModelState, context_schema=ModelContext)
-        graph_builder.add_node("start_model", self._call_start_model)
         graph_builder.add_node("model", self._call_model)
         graph_builder.add_node("tools", self._call_tools)
-        graph_builder.add_edge(START, "start_model")
-        graph_builder.add_conditional_edges("start_model", _after_model)
+        graph_builder.add_edge(START, "model")
         graph_builder.add_conditional_edges("model", _after_model)
         graph_builder.add_edge("tools", "model")
         self._graph = graph_builder.compile(checkpointer=self._checkpointer)
@@ -113,19 +111,22 @@ class LangGraphRunner:
         tools, warnings = self._tools.refresh()
         for warning in warnings:
             await emit(warning)
+        model = self._model_factory(turn.model)
+        runnables = [tool.runnable for tool in tools.tools]
+        bound_model = model.bind_tools(runnables) if runnables else model
         result = ModelState(
             **await self._graph.ainvoke(
                 ModelState(),
                 {"configurable": {"thread_id": str(turn.thread_id)}},
                 context=ModelContext(
-                    turn=turn,
                     emit=emit,
-                    model=self._model_factory(turn.model),
+                    model=bound_model,
                     tools=tools,
                     tool_context=ToolContext(
                         instance=self._instance,
                         thread_id=turn.thread_id,
                     ),
+                    user_message=HumanMessage(content=turn.message),
                 ),
                 # ADR 0011 keeps interrupted tool calls out of checkpoint history.
                 durability="exit",
@@ -136,45 +137,31 @@ class LangGraphRunner:
             output_tokens=result.output_tokens,
         )
 
-    async def _call_start_model(
-        self,
-        state: ModelState,
-        runtime: Runtime[ModelContext],
-    ) -> ModelState:
-        user_message = HumanMessage(content=runtime.context.turn.message)
-        return await self._stream_model(
-            state,
-            runtime,
-            [*state.messages, user_message],
-            [user_message],
-        )
-
     async def _call_model(
         self,
         state: ModelState,
         runtime: Runtime[ModelContext],
     ) -> ModelState:
-        return await self._stream_model(state, runtime, state.messages, [])
-
-    async def _stream_model(
-        self,
-        state: ModelState,
-        runtime: Runtime[ModelContext],
-        messages: Sequence[BaseMessage],
-        new_messages: list[AnyMessage],
-    ) -> ModelState:
-        tools = [tool.runnable for tool in runtime.context.tools.tools]
-        bound_model = runtime.context.model.bind_tools(tools) if tools else runtime.context.model
+        # Keep the user message atomic with the call so failures cannot checkpoint it.
+        following_tool_call = bool(state.messages) and isinstance(state.messages[-1], ToolMessage)
+        messages = (
+            state.messages
+            if following_tool_call
+            else [*state.messages, runtime.context.user_message]
+        )
         response: AIMessageChunk | None = None
-        async for chunk in bound_model.astream(messages):
+        async for chunk in runtime.context.model.astream(messages):
             response = chunk if response is None else response + chunk
             if chunk.text:
                 await runtime.context.emit(MessageDelta(text=chunk.text))
         if response is None:
             raise ModelNoResponse("The model returned no response.")
         usage = response.usage_metadata
+        returned_messages: list[AnyMessage] = [response]
+        if not following_tool_call:
+            returned_messages.insert(0, runtime.context.user_message)
         return ModelState(
-            messages=[*new_messages, response],
+            messages=returned_messages,
             input_tokens=state.input_tokens + (usage["input_tokens"] if usage is not None else 0),
             output_tokens=state.output_tokens
             + (usage["output_tokens"] if usage is not None else 0),

@@ -84,6 +84,7 @@ def _mark_context_parameter(function: ToolFunction) -> str | None:
     if not parameters:
         return None
     name = parameters[0]
+    # LangChain excludes InjectedToolArg parameters from the model-facing schema.
     function.__annotations__[name] = Annotated[ToolContext, InjectedToolArg]
     return name
 

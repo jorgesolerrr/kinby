@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 from uuid import uuid4
@@ -19,9 +19,13 @@ FileSignature = tuple[tuple[Path, int], ...]
 @dataclass(frozen=True)
 class ToolSnapshot:
     tools: tuple[Tool, ...] = ()
+    _by_name: dict[str, Tool] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_by_name", {tool.name: tool for tool in self.tools})
 
     def get(self, name: str) -> Tool | None:
-        return next((tool for tool in self.tools if tool.name == name), None)
+        return self._by_name.get(name)
 
 
 @dataclass(frozen=True)
@@ -43,7 +47,12 @@ class ToolRegistry:
         except OSError as exc:
             return (
                 self._snapshot,
-                (Warning(source=str(self._tools_path), message=exception_message(exc)),),
+                (
+                    Warning(
+                        sources=(str(self._tools_path),),
+                        message=exception_message(exc),
+                    ),
+                ),
             )
         if signature == self._signature:
             return self._snapshot, ()
@@ -59,18 +68,16 @@ class ToolRegistry:
                 candidate[path] = _FileTools(modified_ns, _load_file(path))
             except Exception as exc:
                 # Tool files are user code. Report every broken file and keep the last valid set.
-                warnings.append(Warning(source=str(path), message=exception_message(exc)))
+                warnings.append(Warning(sources=(str(path),), message=exception_message(exc)))
+        self._files = candidate
         if warnings:
-            self._files = candidate
             return self._snapshot, tuple(warnings)
 
         tools = tuple(tool for file_tools in candidate.values() for tool in file_tools.tools)
         duplicate = _duplicate_warning(tools)
         if duplicate is not None:
-            self._files = candidate
             return self._snapshot, (duplicate,)
 
-        self._files = candidate
         self._signature = signature
         self._snapshot = ToolSnapshot(tuple(sorted(tools, key=lambda tool: tool.name)))
         return self._snapshot, ()
@@ -89,6 +96,7 @@ def _load_file(path: Path) -> tuple[Tool, ...]:
     module_name = f"_kinby_tool_{uuid4().hex}"
     module = ModuleType(module_name)
     module.__file__ = str(path)
+    # Decorators and annotation resolvers need the defining module during execution.
     sys.modules[module_name] = module
     try:
         code = compile(path.read_bytes(), str(path), "exec", dont_inherit=True)
@@ -107,9 +115,8 @@ def _duplicate_warning(tools: tuple[Tool, ...]) -> Warning | None:
     for current in tools:
         previous = found.get(current.name)
         if previous is not None:
-            sources = f"{previous.source}, {current.source}"
             return Warning(
-                source=sources,
+                sources=(str(previous.source), str(current.source)),
                 message=f'Tool "{current.name}" is exported by both sources.',
             )
         found[current.name] = current

@@ -145,6 +145,7 @@ def greet(name: str) -> str:
 
         events = await _start_turn(instance, model)
 
+        assert len(model.bound_tools) == 1
         assert [tool.name for tool in model.bound_tools[0]] == ["greet"]
         bound = model.bound_tools[0][0]
         assert bound.description == "Greet someone by name."
@@ -239,8 +240,8 @@ def version() -> str:
         ]
         assert results == ["one", "two"]
         assert [tool.name for tool in model.bound_tools[0]] == ["version"]
-        assert [tool.name for tool in model.bound_tools[2]] == ["version"]
-        assert len(model.bound_tools) == 4
+        assert [tool.name for tool in model.bound_tools[1]] == ["version"]
+        assert len(model.bound_tools) == 2
         assert not any(isinstance(event.payload, ToolCall) for event in third)
 
     asyncio.run(scenario())
@@ -305,11 +306,15 @@ def fresh() -> str:
         again, _ = await _turn_events(dispatcher, thread_id, "Third", sequence)
 
         warnings = [event.payload for event in events if isinstance(event.payload, Warning)]
-        assert [warning.source for warning in warnings] == [str(path) for path in sorted(broken)]
+        assert [warning.sources for warning in warnings] == [
+            (str(path),) for path in sorted(broken)
+        ]
         assert all("SyntaxError" in warning.message for warning in warnings)
-        assert [tool.name for tool in model.bound_tools[2]] == ["stable"]
+        assert [tool.name for tool in model.bound_tools[1]] == ["stable"]
         repeated = [event.payload for event in again if isinstance(event.payload, Warning)]
-        assert [warning.source for warning in repeated] == [str(path) for path in sorted(broken)]
+        assert [warning.sources for warning in repeated] == [
+            (str(path),) for path in sorted(broken)
+        ]
         assert fresh_source.with_suffix(".count").read_text(encoding="utf-8") == "1"
         assert any(
             isinstance(event.payload, ToolResult)
@@ -378,8 +383,7 @@ def shared() -> str:
         await _turn_events(dispatcher, thread_id, "Duplicate remains", sequence)
 
         warning = next(event.payload for event in events if isinstance(event.payload, Warning))
-        assert str(first_source) in warning.source
-        assert str(second_source) in warning.source
+        assert warning.sources == (str(first_source), str(second_source))
         assert warning.message == 'Tool "shared" is exported by both sources.'
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert result.output == "first"
