@@ -32,7 +32,7 @@ def test_tool_and_warning_events_round_trip_through_the_event_log(tmp_path: Path
                 output="18 C",
                 error=False,
             ),
-            Warning(source="tools/weather.py", message="Using cached tool set."),
+            Warning(sources=("tools/weather.py",), message="Using cached tool set."),
         ]
 
         stored = [await event_log.append(thread_id, turn_id, payload) for payload in payloads]

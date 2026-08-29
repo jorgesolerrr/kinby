@@ -62,7 +62,7 @@ class ToolEventRunner:
                 error=False,
             )
         )
-        await emit(Warning(source="tools/weather.py", message="Using cached tool set."))
+        await emit(Warning(sources=("tools/weather.py",), message="Using cached tool set."))
         return TurnOutcome()
 
     resume = does_not_park
