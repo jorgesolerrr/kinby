@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage
@@ -11,7 +11,6 @@ from langchain_core.tools import StructuredTool
 
 from kinby.contracts import (
     AcceptedResult,
-    ApprovalRequested,
     Event,
     MessageDelta,
     Payload,
@@ -20,7 +19,7 @@ from kinby.contracts import (
     TurnStarted,
 )
 from kinby.core import LangGraphRunner, TurnConfig, build_dispatcher, turn_config
-from kinby.core.turns import ParkedTurn, TurnOutcome, TurnRequest
+from kinby.core.turns import TurnOutcome, TurnRequest
 from kinby.instance import Instance, load_instance
 
 _MODEL = "openai:gpt-5"
@@ -253,7 +252,7 @@ def test_failed_model_call_does_not_enter_checkpointed_history(tmp_path: Path) -
     asyncio.run(scenario())
 
 
-def test_langgraph_checkpointer_keeps_thread_messages_between_turns(tmp_path: Path) -> None:
+def test_runner_keeps_thread_messages_between_turns(tmp_path: Path) -> None:
     async def scenario() -> None:
         model = RememberingChatModel()
         runner = LangGraphRunner(_load_test_instance(tmp_path), model_factory=lambda _: model)
@@ -286,55 +285,5 @@ def test_langgraph_checkpointer_keeps_thread_messages_between_turns(tmp_path: Pa
             ["First"],
             ["First", "First reply", "Second"],
         ]
-
-    asyncio.run(scenario())
-
-
-def test_approval_hook_parks_until_resume(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        events: list[Payload] = []
-        model = StreamingChatModel()
-        asked: list[str] = []
-
-        async def asking_hook(turn: TurnRequest) -> str:
-            asked.append(turn.message)
-            return "May I continue?"
-
-        async def emit(payload: Payload) -> Event:
-            events.append(payload)
-            return Event(
-                sequence=len(events),
-                thread_id=turn.thread_id,
-                turn_id=turn.turn_id,
-                payload=payload,
-                timestamp=datetime.now(UTC),
-            )
-
-        turn = TurnRequest(
-            thread_id=uuid4(),
-            turn_id=uuid4(),
-            message="Hello",
-            model=_MODEL,
-        )
-        runner = LangGraphRunner(
-            _load_test_instance(tmp_path),
-            model_factory=lambda _: model,
-            approval_hook=asking_hook,
-        )
-        parked = await runner.run(turn, emit)
-
-        assert asked == ["Hello"]
-        assert parked == ParkedTurn()
-        assert len(events) == 1
-        assert isinstance(events[0], ApprovalRequested)
-        assert events[0].request == "May I continue?"
-        assert isinstance(events[0].approval_id, UUID)
-
-        resumed = await runner.resume(turn, "yes", emit)
-
-        assert asked == ["Hello"]
-        assert resumed.input_tokens == 4
-        assert resumed.output_tokens == 2
-        assert events[1:] == [MessageDelta(text="Hi"), MessageDelta(text=" there")]
 
     asyncio.run(scenario())

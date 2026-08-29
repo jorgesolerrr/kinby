@@ -14,6 +14,9 @@ from langchain_core.tools import StructuredTool
 
 from kinby.contracts import (
     AcceptedResult,
+    ApprovalRequested,
+    ErrorCode,
+    ErrorEnvelope,
     Event,
     Scope,
     ThreadCreateResult,
@@ -103,9 +106,15 @@ async def _start_turn(
     instance: Instance,
     model: ScriptedModel,
     message: str = "Use the tool",
+    approval_answers: Sequence[str] = (),
 ) -> list[Event]:
     dispatcher, thread_id = await _session(instance, model)
-    events, _ = await _turn_events(dispatcher, thread_id, message)
+    events, _ = await _turn_events(
+        dispatcher,
+        thread_id,
+        message,
+        approval_answers=approval_answers,
+    )
     return events
 
 
@@ -125,6 +134,7 @@ async def _turn_events(
     thread_id: UUID,
     message: str,
     after_sequence: int = 0,
+    approval_answers: Sequence[str] = (),
 ) -> tuple[list[Event], int]:
     accepted = await dispatcher.dispatch(
         "thread.turn.start",
@@ -138,10 +148,26 @@ async def _turn_events(
         {Scope.THREAD_READ},
     )
     events: list[Event] = []
+    answers = iter(approval_answers)
     while True:
         event = await asyncio.wait_for(anext(subscription), timeout=1)
         assert isinstance(event, Event)
         events.append(event)
+        if isinstance(event.payload, ApprovalRequested):
+            try:
+                answer = next(answers)
+            except StopIteration as exc:
+                raise AssertionError("The turn requested an unexpected approval.") from exc
+            responded = await dispatcher.dispatch(
+                "thread.approval.respond",
+                {
+                    "thread_id": thread_id,
+                    "approval_id": event.payload.approval_id,
+                    "answer": answer,
+                },
+                {Scope.THREAD_OPERATE},
+            )
+            assert isinstance(responded, AcceptedResult)
         if isinstance(event.payload, TurnCompleted):
             await subscription.aclose()
             return events, event.sequence
@@ -565,7 +591,7 @@ def test_default_bash_uses_the_workspace_timeout_and_output_cap(
             ]
         )
 
-        events = await _start_turn(instance, model)
+        events = await _start_turn(instance, model, approval_answers=("yes",))
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert calls == [(("bash", "-c", "status"), instance.manifest.workspace.path)]
@@ -605,7 +631,7 @@ def test_default_bash_reports_a_nonzero_exit_code(tmp_path: Path, monkeypatch) -
             ]
         )
 
-        events = await _start_turn(instance, model)
+        events = await _start_turn(instance, model, approval_answers=("yes",))
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert result == ToolResult(
@@ -650,7 +676,7 @@ def test_default_bash_kills_a_timed_out_process_and_returns_partial_output(
             ]
         )
 
-        events = await _start_turn(instance, model)
+        events = await _start_turn(instance, model, approval_answers=("yes",))
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert process.killed
@@ -701,7 +727,11 @@ def test_default_write_and_edit_change_workspace_files(tmp_path: Path) -> None:
             ]
         )
 
-        events = await _start_turn(instance, model)
+        events = await _start_turn(
+            instance,
+            model,
+            approval_answers=("yes", "yes"),
+        )
 
         results = [event.payload for event in events if isinstance(event.payload, ToolResult)]
         assert [(result.name, result.output, result.error) for result in results] == [
@@ -762,6 +792,292 @@ def greet(name: str) -> str:
                 error=False,
             ),
         ]
+
+    asyncio.run(scenario())
+
+
+async def _park_write_tool(
+    tmp_path: Path,
+) -> tuple[Instance, Dispatcher, UUID, Event, ScriptedModel]:
+    instance = _instance(tmp_path)
+    (instance.path / "tools" / "write_note.py").write_text(
+        """from kinby.plugins import ToolContext, tool
+
+@tool(write=True)
+def write_note(note: str, context: ToolContext) -> str:
+    \"\"\"Write a note to the workspace.\"\"\"
+    (context.workspace / "note.txt").write_text(note, encoding="utf-8")
+    return note
+""",
+        encoding="utf-8",
+    )
+    model = ScriptedModel(
+        [
+            AIMessageChunk(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_note",
+                        "args": {"note": "remember me"},
+                        "id": "write-1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessageChunk(content="Done"),
+        ]
+    )
+    dispatcher, thread_id = await _session(instance, model)
+
+    accepted = await dispatcher.dispatch(
+        "thread.turn.start",
+        {"thread_id": thread_id, "message": "Remember this"},
+        {Scope.THREAD_OPERATE},
+    )
+    assert isinstance(accepted, AcceptedResult)
+    subscription = dispatcher.subscribe(
+        "thread.subscribe",
+        {"thread_id": thread_id},
+        {Scope.THREAD_READ},
+    )
+    started = await asyncio.wait_for(anext(subscription), timeout=1)
+    requested = await asyncio.wait_for(anext(subscription), timeout=1)
+    await subscription.aclose()
+    assert isinstance(started, Event)
+    assert isinstance(requested, Event)
+    return instance, dispatcher, thread_id, requested, model
+
+
+async def _answer_write_tool(
+    dispatcher: Dispatcher,
+    thread_id: UUID,
+    requested: Event,
+    answer: str,
+) -> list[Event]:
+    assert isinstance(requested.payload, ApprovalRequested)
+    accepted = await dispatcher.dispatch(
+        "thread.approval.respond",
+        {
+            "thread_id": thread_id,
+            "approval_id": requested.payload.approval_id,
+            "answer": answer,
+        },
+        {Scope.THREAD_OPERATE},
+    )
+    assert isinstance(accepted, AcceptedResult)
+    subscription = dispatcher.subscribe(
+        "thread.subscribe",
+        {"thread_id": thread_id, "after_sequence": requested.sequence},
+        {Scope.THREAD_READ},
+    )
+    events: list[Event] = []
+    while not events or not isinstance(events[-1].payload, TurnCompleted):
+        event = await asyncio.wait_for(anext(subscription), timeout=1)
+        assert isinstance(event, Event)
+        events.append(event)
+    await subscription.aclose()
+    return events
+
+
+def test_write_tool_parks_before_running(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance, _, _, requested, _ = await _park_write_tool(tmp_path)
+
+        assert isinstance(requested.payload, ApprovalRequested)
+        assert requested.payload == ApprovalRequested(
+            approval_id=requested.payload.approval_id,
+            request='write_note: {"note": "remember me"}',
+        )
+        assert not (instance.manifest.workspace.path / "note.txt").exists()
+
+    asyncio.run(scenario())
+
+
+def test_yes_runs_the_parked_write_tool_and_completes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance, dispatcher, thread_id, requested, _ = await _park_write_tool(tmp_path)
+        events = await _answer_write_tool(dispatcher, thread_id, requested, "yes")
+
+        assert [
+            event.payload for event in events if isinstance(event.payload, ToolCall | ToolResult)
+        ] == [
+            ToolCall(call_id="write-1", name="write_note", arguments={"note": "remember me"}),
+            ToolResult(
+                call_id="write-1",
+                name="write_note",
+                output="remember me",
+                error=False,
+            ),
+        ]
+        assert (instance.manifest.workspace.path / "note.txt").read_text(
+            encoding="utf-8"
+        ) == "remember me"
+        assert isinstance(events[-1].payload, TurnCompleted)
+
+    asyncio.run(scenario())
+
+
+def test_resume_does_not_repeat_tools_before_approval(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        (instance.path / "tools" / "count.py").write_text(
+            """from kinby.plugins import tool
+
+calls = 0
+
+@tool(write=False)
+def count() -> str:
+    \"\"\"Return the number of calls.\"\"\"
+    global calls
+    calls += 1
+    return str(calls)
+""",
+            encoding="utf-8",
+        )
+        (instance.path / "tools" / "write_note.py").write_text(
+            """from kinby.plugins import ToolContext, tool
+
+@tool(write=True)
+def write_note(note: str, context: ToolContext) -> str:
+    \"\"\"Write a note to the workspace.\"\"\"
+    (context.workspace / "note.txt").write_text(note, encoding="utf-8")
+    return note
+""",
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "count",
+                            "args": {},
+                            "id": "count-1",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "write_note",
+                            "args": {"note": "remember me"},
+                            "id": "write-1",
+                            "type": "tool_call",
+                        },
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+        dispatcher, thread_id = await _session(instance, model)
+
+        accepted = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Count and remember"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(accepted, AcceptedResult)
+        subscription = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": thread_id},
+            {Scope.THREAD_READ},
+        )
+        requested: Event | None = None
+        events: list[Event] = []
+        while requested is None:
+            event = await asyncio.wait_for(anext(subscription), timeout=1)
+            assert isinstance(event, Event)
+            events.append(event)
+            if isinstance(event.payload, ApprovalRequested):
+                requested = event
+        await subscription.aclose()
+
+        events.extend(await _answer_write_tool(dispatcher, thread_id, requested, "yes"))
+
+        assert [
+            event.payload
+            for event in events
+            if isinstance(event.payload, ToolCall | ToolResult)
+            and event.payload.call_id == "count-1"
+        ] == [
+            ToolCall(call_id="count-1", name="count", arguments={}),
+            ToolResult(call_id="count-1", name="count", output="1", error=False),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_any_other_answer_denies_the_write_tool_and_completes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance, dispatcher, thread_id, requested, _ = await _park_write_tool(tmp_path)
+        events = await _answer_write_tool(
+            dispatcher,
+            thread_id,
+            requested,
+            "not this time",
+        )
+
+        assert not any(isinstance(event.payload, ToolCall) for event in events)
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert result == ToolResult(
+            call_id="write-1",
+            name="write_note",
+            output='Tool "write_note" was denied by the user.',
+            error=True,
+        )
+        assert not (instance.manifest.workspace.path / "note.txt").exists()
+
+    asyncio.run(scenario())
+
+
+def test_interrupting_approval_keeps_the_next_turn_history_valid(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        _, dispatcher, thread_id, requested, model = await _park_write_tool(tmp_path)
+        interrupted = await dispatcher.dispatch(
+            "thread.turn.interrupt",
+            {"thread_id": thread_id},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(interrupted, AcceptedResult)
+
+        events, _ = await _turn_events(
+            dispatcher,
+            thread_id,
+            "Start again",
+            requested.sequence,
+        )
+
+        assert isinstance(events[-1].payload, TurnCompleted)
+        assert not any(getattr(message, "tool_calls", ()) for message in model.messages[-1])
+
+    asyncio.run(scenario())
+
+
+def test_write_tool_approval_cannot_resume_after_restart(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance, _, thread_id, requested, _ = await _park_write_tool(tmp_path)
+        assert isinstance(requested.payload, ApprovalRequested)
+        restarted_runner = LangGraphRunner(
+            instance,
+            model_factory=lambda _: ScriptedModel([AIMessageChunk(content="Should not run")]),
+        )
+        restarted = build_dispatcher(
+            instance.manifest.state_dir,
+            turns=TurnConfig(restarted_runner.prepare_for_turn, restarted_runner),
+        )
+
+        response = await restarted.dispatch(
+            "thread.approval.respond",
+            {
+                "thread_id": thread_id,
+                "approval_id": requested.payload.approval_id,
+                "answer": "yes",
+            },
+            {Scope.THREAD_OPERATE},
+        )
+        assert response == ErrorEnvelope(
+            code=ErrorCode.PARKED_TURN_UNAVAILABLE,
+            message="The parked turn cannot resume after a runtime restart.",
+            retryable=False,
+        )
 
     asyncio.run(scenario())
 

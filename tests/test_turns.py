@@ -22,8 +22,8 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
-from kinby.core.turns import Emit, ParkedTurn, TurnOutcome, TurnRequest
-from tests.helpers import does_not_park, fixed_model_name
+from kinby.core.turns import ApprovalDecision, Emit, ParkedTurn, TurnOutcome, TurnRequest
+from tests.helpers import cannot_resume, discard_turn, does_not_park, fixed_model_name
 
 _APPROVAL_ID = UUID("11111111-1111-1111-1111-111111111111")
 
@@ -36,6 +36,8 @@ class ScriptedRunner:
         return TurnOutcome(input_tokens=4, output_tokens=2)
 
     resume = does_not_park
+    can_resume = cannot_resume
+    discard = discard_turn
 
 
 class WaitingRunner:
@@ -49,6 +51,8 @@ class WaitingRunner:
         return TurnOutcome()
 
     resume = does_not_park
+    can_resume = cannot_resume
+    discard = discard_turn
 
 
 class FailingRunner:
@@ -56,15 +60,28 @@ class FailingRunner:
         raise RuntimeError("provider unavailable")
 
     resume = does_not_park
+    can_resume = cannot_resume
+    discard = discard_turn
 
 
 class ParkingRunner:
+    def can_resume(self, turn: TurnRequest) -> bool:
+        return True
+
+    async def discard(self, turn: TurnRequest) -> None:
+        pass
+
     async def run(self, turn: TurnRequest, emit: Emit) -> ParkedTurn:
         await emit(ApprovalRequested(approval_id=_APPROVAL_ID, request="May I continue?"))
         return ParkedTurn()
 
-    async def resume(self, turn: TurnRequest, answer: str, emit: Emit) -> TurnOutcome:
-        assert answer == "yes"
+    async def resume(
+        self,
+        turn: TurnRequest,
+        decision: ApprovalDecision,
+        emit: Emit,
+    ) -> TurnOutcome:
+        assert decision is ApprovalDecision.APPROVE
         await emit(MessageDelta(text="Approved"))
         return TurnOutcome(input_tokens=3, output_tokens=1)
 
@@ -82,6 +99,8 @@ class CancellationSuppressingRunner:
         return TurnOutcome()
 
     resume = does_not_park
+    can_resume = cannot_resume
+    discard = discard_turn
 
 
 class PausingEventLog(EventLog):

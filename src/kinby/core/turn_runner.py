@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+import json
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Annotated, Protocol, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import (
@@ -18,10 +19,12 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph, add_messages
 from langgraph.runtime import Runtime
+from langgraph.types import Command, Interrupt, interrupt
 from pydantic import JsonValue, TypeAdapter
 
 from kinby.contracts import (
@@ -30,15 +33,25 @@ from kinby.contracts import (
     ToolCall,
     ToolResult,
 )
-from kinby.core.errors import ModelNoResponse
+from kinby.core.errors import (
+    InvalidApprovalRequest,
+    ModelNoResponse,
+    ThreadBusy,
+)
 from kinby.core.prompt import assemble_system_prompt, render_system_prompt
-from kinby.core.turns import Emit, ParkedTurn, TurnOutcome, TurnRequest, TurnResult
+from kinby.core.turns import (
+    ApprovalDecision,
+    Emit,
+    ParkedTurn,
+    TurnOutcome,
+    TurnRequest,
+    TurnResult,
+)
 from kinby.instance import Instance, reload_manifest
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
 from kinby.plugins.tools import ToolContext
 
-ApprovalHook = Callable[[TurnRequest], Awaitable[str]]
 _TOOL_ARGUMENTS = TypeAdapter(dict[str, JsonValue])
 
 
@@ -57,6 +70,10 @@ class ModelState:
     output_tokens: int = 0
 
 
+_MODEL_STATE = TypeAdapter(ModelState)
+_INTERRUPTS = TypeAdapter(tuple[Interrupt, ...])
+
+
 @dataclass(frozen=True)
 class ModelContext:
     emit: Emit
@@ -65,6 +82,12 @@ class ModelContext:
     tools: ToolSnapshot
     tool_context: ToolContext
     user_message: HumanMessage
+
+
+@dataclass(frozen=True)
+class ToolCallDecision:
+    call: ToolCall
+    decision: ApprovalDecision
 
 
 def _init_model(model: str) -> ChatModel:
@@ -78,16 +101,16 @@ class LangGraphRunner:
         *,
         model_factory: ModelFactory = _init_model,
         model_override: str | None = None,
-        approval_hook: ApprovalHook | None = None,
     ) -> None:
         self._instance = instance
         self._model_factory = model_factory
         self._model_override = model_override
-        self._approval_hook = approval_hook
         self._tools = ToolRegistry(
             instance.path,
             defaults=instance.manifest.tools.defaults,
         )
+        self._completed: dict[UUID, RunnableConfig] = {}
+        self._parked: dict[UUID, UUID] = {}
         self._checkpointer = InMemorySaver()
         graph_builder = StateGraph(ModelState, context_schema=ModelContext)
         graph_builder.add_node("model", self._call_model)
@@ -103,17 +126,36 @@ class LangGraphRunner:
         return manifest.models.main
 
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult:
-        if self._approval_hook is not None:
-            request = await self._approval_hook(turn)
-            await emit(ApprovalRequested(approval_id=uuid4(), request=request))
-            return ParkedTurn()
-        return await self._invoke(turn, emit)
+        if turn.thread_id in self._parked:
+            raise ThreadBusy(f'Thread "{turn.thread_id}" already has a parked turn.')
+        config = self._completed.get(turn.thread_id)
+        if config is None:
+            await self._checkpointer.adelete_thread(str(turn.thread_id))
+            config = _graph_config(turn)
+        return await self._invoke(turn, emit, ModelState(), config)
 
-    async def resume(self, turn: TurnRequest, answer: str, emit: Emit) -> TurnOutcome:
-        # Gate semantics belong to #7. Ticket #34's placeholder answer only resumes.
-        return await self._invoke(turn, emit)
+    def can_resume(self, turn: TurnRequest) -> bool:
+        return self._parked.get(turn.thread_id) == turn.turn_id
 
-    async def _invoke(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def discard(self, turn: TurnRequest) -> None:
+        if self.can_resume(turn):
+            del self._parked[turn.thread_id]
+
+    async def resume(
+        self,
+        turn: TurnRequest,
+        decision: ApprovalDecision,
+        emit: Emit,
+    ) -> TurnResult:
+        return await self._invoke(turn, emit, Command(resume=decision), _graph_config(turn))
+
+    async def _invoke(
+        self,
+        turn: TurnRequest,
+        emit: Emit,
+        graph_input: ModelState | Command,
+        config: RunnableConfig,
+    ) -> TurnResult:
         sections = assemble_system_prompt(self._instance, date.today())
         tools, warnings = self._tools.refresh()
         for warning in warnings:
@@ -121,25 +163,34 @@ class LangGraphRunner:
         model = self._model_factory(turn.model)
         runnables = [tool.runnable for tool in tools.tools]
         bound_model = model.bind_tools(runnables) if runnables else model
-        result = ModelState(
-            **await self._graph.ainvoke(
-                ModelState(),
-                {"configurable": {"thread_id": str(turn.thread_id)}},
-                context=ModelContext(
-                    emit=emit,
-                    model=bound_model,
-                    system_message=SystemMessage(content=render_system_prompt(sections)),
-                    tools=tools,
-                    tool_context=ToolContext(
-                        instance=self._instance,
-                        thread_id=turn.thread_id,
-                    ),
-                    user_message=HumanMessage(content=turn.message),
+        graph_result = await self._graph.ainvoke(
+            graph_input,
+            config,
+            context=ModelContext(
+                emit=emit,
+                model=bound_model,
+                system_message=SystemMessage(content=render_system_prompt(sections)),
+                tools=tools,
+                tool_context=ToolContext(
+                    instance=self._instance,
+                    thread_id=turn.thread_id,
                 ),
-                # ADR 0011 keeps interrupted tool calls out of checkpoint history.
-                durability="exit",
-            )
+                user_message=HumanMessage(content=turn.message),
+            ),
+            # ADR 0011 keeps interrupted tool calls out of completed history.
+            durability="exit",
         )
+        interrupts = _INTERRUPTS.validate_python(graph_result.get("__interrupt__", ()))
+        if interrupts:
+            approval = interrupts[0].value
+            if not isinstance(approval, ApprovalRequested):
+                raise InvalidApprovalRequest("The graph returned an invalid approval request.")
+            self._parked[turn.thread_id] = turn.turn_id
+            await emit(approval)
+            return ParkedTurn()
+        result = _MODEL_STATE.validate_python(graph_result)
+        completed = await self._graph.aget_state(_graph_config(turn))
+        self._completed[turn.thread_id] = completed.config
         return TurnOutcome(
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
@@ -185,16 +236,51 @@ class LangGraphRunner:
         response = state.messages[-1]
         if not isinstance(response, AIMessage):
             raise ModelNoResponse("The model returned an invalid tool call response.")
-        messages: list[AnyMessage] = []
+        calls: list[ToolCallDecision] = []
         for model_call in response.tool_calls:
             name = model_call["name"]
             call_id = model_call["id"] or str(uuid4())
             arguments = _TOOL_ARGUMENTS.validate_python(model_call["args"])
-            await runtime.context.emit(ToolCall(call_id=call_id, name=name, arguments=arguments))
+            call = ToolCall(call_id=call_id, name=name, arguments=arguments)
+            selected = runtime.context.tools.get(name)
+            if selected is None or not selected.write:
+                decision = ApprovalDecision.APPROVE
+            else:
+                decision = ApprovalDecision(
+                    interrupt(
+                        ApprovalRequested(
+                            approval_id=uuid4(),
+                            request=f"{name}: {json.dumps(arguments, sort_keys=True)}",
+                        )
+                    )
+                )
+            calls.append(ToolCallDecision(call, decision))
+
+        messages: list[AnyMessage] = []
+        for call_decision in calls:
+            call = call_decision.call
+            if call_decision.decision is ApprovalDecision.DENY:
+                result = ToolResult(
+                    call_id=call.call_id,
+                    name=call.name,
+                    output=f'Tool "{call.name}" was denied by the user.',
+                    error=True,
+                )
+                await runtime.context.emit(result)
+                messages.append(
+                    ToolMessage(
+                        content=result.output,
+                        name=result.name,
+                        tool_call_id=result.call_id,
+                        status="error",
+                    )
+                )
+                continue
+            await runtime.context.emit(call)
             result = await self._run_tool(
-                call_id,
-                name,
-                arguments,
+                call.call_id,
+                call.name,
+                call.arguments,
                 runtime,
             )
             await runtime.context.emit(result)
@@ -245,3 +331,7 @@ def _after_model(state: ModelState) -> str:
     if isinstance(response, AIMessage) and response.tool_calls:
         return "tools"
     return END
+
+
+def _graph_config(turn: TurnRequest) -> RunnableConfig:
+    return {"configurable": {"thread_id": str(turn.thread_id)}}
