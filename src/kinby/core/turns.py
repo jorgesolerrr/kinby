@@ -86,12 +86,12 @@ class Turns:
         store: ThreadStore,
         log: EventLog,
         runner: TurnRunner,
-        model_for_turn: Callable[[], str],
+        prepare_for_turn: Callable[[], str],
     ) -> None:
         self._store = store
         self._log = log
         self._runner = runner
-        self._model_for_turn = model_for_turn
+        self._prepare_for_turn = prepare_for_turn
         self._running: dict[UUID, RunningTurn] = {}
         self._starting: set[UUID] = set()
 
@@ -109,7 +109,7 @@ class Turns:
                 thread_id=command.thread_id,
                 turn_id=uuid4(),
                 message=command.message,
-                model=self._model_for_turn(),
+                model=self._prepare_for_turn(),
             )
             started = await self._log.append(
                 turn.thread_id,

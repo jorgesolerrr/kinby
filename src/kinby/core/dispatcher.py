@@ -54,7 +54,7 @@ class Route[RouteHandler]:
 
 @dataclass(frozen=True)
 class TurnConfig:
-    model_for_turn: Callable[[], str]
+    prepare_for_turn: Callable[[], str]
     runner: TurnRunner
 
 
@@ -189,7 +189,7 @@ def build_dispatcher(
     dispatcher.register(USAGE_GET, get_usage)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
     if turns is not None:
-        turn_service = Turns(store, event_log, turns.runner, turns.model_for_turn)
+        turn_service = Turns(store, event_log, turns.runner, turns.prepare_for_turn)
         dispatcher.register(THREAD_TURN_START, turn_service.start)
         dispatcher.register(THREAD_TURN_INTERRUPT, turn_service.interrupt)
         dispatcher.register(THREAD_APPROVAL_RESPOND, turn_service.respond)
@@ -203,4 +203,4 @@ def turn_config(
 ) -> TurnConfig:
     """Build model turns from an instance, reloading its model at each turn."""
     runner = LangGraphRunner(instance, model_override=model_override)
-    return TurnConfig(runner.model_for_turn, runner)
+    return TurnConfig(runner.prepare_for_turn, runner)

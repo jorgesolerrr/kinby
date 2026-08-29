@@ -151,7 +151,7 @@ After:
 ```python
 @dataclass(frozen=True)
 class TurnConfig:
-    model_for_turn: Callable[[], str]
+    prepare_for_turn: Callable[[], str]
     runner: TurnRunner
 
 
@@ -163,7 +163,7 @@ def build_dispatcher(
 ) -> Dispatcher: ...
 ```
 
-The one optional left means exactly one thing: turns are on or off. "Runner without a model source" cannot be written, so the `ValueError` goes away. `turn_config(instance, model_override=...)` builds the pair for the CLI. The callable reloads the instance manifest before each turn, while the runner uses the selected model recorded in that turn's request.
+The one optional left means exactly one thing: turns are on or off. "Runner without a model source" cannot be written, so the `ValueError` goes away. `turn_config(instance, model_override=...)` builds the pair for the CLI. `prepare_for_turn` reloads the instance manifest and returns its selected model. The runner uses that manifest and the selected model recorded in the turn request.
 
 ## `Any` past the boundary
 
