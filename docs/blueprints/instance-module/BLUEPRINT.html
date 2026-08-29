@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blueprint: Instance module</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f5f5f5;
+      --ink: #2d3142;
+      --muted: #4f5d75;
+      --soft: #7a8399;
+      --rule: rgba(45, 49, 66, 0.16);
+      --accent: #eb6c36;
+      --accent-tint: rgba(235, 108, 54, 0.08);
+      --link: #2e5aa8;
+      --new: #2e7d32;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', Georgia, serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #2d3142;
+        --ink: #f5f5f5;
+        --muted: #bfc0c0;
+        --soft: #8e98ac;
+        --rule: rgba(245, 245, 245, 0.16);
+        --accent: #f08a59;
+        --accent-tint: rgba(240, 138, 89, 0.10);
+        --link: #6a95d8;
+        --new: #66bb6a;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 3rem 2rem 4rem;
+      font-family: var(--font-sans);
+      font-size: 15px;
+      line-height: 1.55;
+      background: var(--paper);
+      color: var(--ink);
+    }
+    main { max-width: 960px; margin: 0 auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 0.5rem;
+    }
+    h1 { font-family: var(--font-serif); font-weight: 400; font-size: 2.25rem; line-height: 1.1; margin: 0 0 0.5rem; }
+    h2 { font-family: var(--font-serif); font-weight: 400; font-size: 1.6rem; margin: 3rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+    h3 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+    .mode { font-family: var(--font-mono); font-size: 0.7rem; color: var(--soft); margin-left: 0.5rem; letter-spacing: 0.08em; }
+    .stamp { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+    code, pre { font-family: var(--font-mono); font-size: 0.85em; }
+    code { background: rgba(127, 127, 127, 0.12); padding: 0.05em 0.3em; border-radius: 3px; }
+    pre { padding: 0.75rem 1rem; border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+    th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--rule); }
+    th { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+    figure { margin: 1.5rem 0; }
+    figure svg { display: block; width: 100%; height: auto; }
+    figcaption { font-family: var(--font-serif); font-style: italic; font-size: 0.95rem; color: var(--muted); margin-top: 0.5rem; }
+    .overflow { overflow-x: auto; }
+    ol, ul { padding-left: 1.4rem; }
+    li { margin: 0.25rem 0; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1.25rem; }
+    dt { font-family: var(--font-mono); font-size: 0.85rem; }
+    dd { margin: 0; }
+    footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--rule); font-family: var(--font-mono); font-size: 0.75rem; color: var(--soft); }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Blueprint · built</p>
+  <h1>Instance module: init, manifest, discovery</h1>
+  <p class="stamp">Stamped at <code>6aa4a52</code>: paths and symbols are true at this commit. Source: grilling on #4, spec #13, slice tickets #14–#20. The code is the second source of truth.</p>
+
+  <h2 id="at-a-glance">At a glance <span class="mode">explanation</span></h2>
+  <p>You run <code>kinby init &lt;dir&gt;</code> and get a directory you can read end to end. Then <code>kinby instance show</code> and <code>kinby run</code> find that directory the way git finds a repo and print what kinby sees. The solution is one package, <code>kinby.instance</code>, that owns three things: the canonical file names of an instance (<code>layout.py</code>), the parse and validation of <code>kinby.toml</code> into frozen dataclasses (<code>manifest.py</code>), and the three-rule lookup that turns "where am I" into "which instance" (<code>discovery.py</code>). The decision that shapes everything else is D1: an instance is one directory, the workspace lives under it, and runtime state lives in its <code>.state/</code>. Tarring the directory moves the instance, and one container image serves every instance.</p>
+
+  <h2 id="problem">Problem <span class="mode">explanation</span></h2>
+  <p>Before this feature, a self-hoster had nothing to install and nothing to point kinby at. The repository held a learning project (<code>agent/</code>, <code>main.py</code>, a package named <code>agent</code>). There was no notion of an instance on disk, and no command created or located one. Every later piece (the loop, the gate, memory, evals) needs a place to plug into, and that place did not exist.</p>
+
+  <h2 id="solution">Solution <span class="mode">explanation</span></h2>
+  <p><code>pip install kinby</code> gives you a <code>kinby</code> command. <code>kinby init &lt;dir&gt;</code> writes a starter instance where every extension point is a real file with a comment saying what it is for. It refuses to touch a directory that already holds <code>kinby.toml</code>. <code>kinby.toml</code> has one required setting, <code>[models].main</code>, and never holds a secret. <code>kinby instance show</code> prints the resolved instance: id, path, which discovery rule matched, models, workspace, conventions, state dir. <code>kinby run</code> prints the same summary, applies <code>--model</code> for the session without editing the file, and opens the REPL. A bad manifest fails with a message that names the key. A generic Docker image mounts any instance at <code>/instance</code>.</p>
+
+  <h2 id="decision-log">Decision log <span class="mode">explanation</span></h2>
+  <p>One row per decision the grilling settled. Later sections cite them as <code>D1</code>. D13 was settled in code after the grilling and is recorded because the figures depend on it.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>#</th><th>Decision</th><th>Chosen</th><th>Rejected</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>Shape of an instance</td><td>One self-contained directory: <code>kinby.toml</code>, behavior files, <code>memory/</code>, <code>workspace/</code> under it, gitignored <code>.state/</code> for runtime data. <code>state_dir</code> is a manifest override.</td><td>A <code>.kinby/</code> directory inside the user's repo. Runtime state outside the instance by default.</td><td>A <code>.kinby/</code> per repo fragments memory and drops databases into the user's repo. State outside the instance breaks "tar the directory and you have moved the instance" and needs a second container mount. (#4, ADR 0001)</td></tr>
+      <tr><td>D2</td><td>Starting point</td><td>A fresh <code>src/kinby</code> scaffold. <code>agent/</code> and <code>main.py</code> deleted in the same change.</td><td>Growing the learning-project code into the product.</td><td>The learning project was a spike, not a seed. One package to read. (#4, #14)</td></tr>
+      <tr><td>D3</td><td>Manifest format and secrets</td><td>TOML parsed by the standard library (<code>tomllib</code>). Secrets come only from the environment, with <code>&lt;instance&gt;/.env</code> loaded for local use.</td><td>Secrets as manifest keys.</td><td>A manifest with no secrets is committable, and TOML is inspectable without executing anything. A container and a laptop get secrets the same way. (#13)</td></tr>
+      <tr><td>D4</td><td>Minimal instance versus what <code>init</code> writes</td><td>Minimal is <code>kinby.toml</code> with <code>[models].main</code>. <code>init</code> writes every default out as a real file with an explanatory comment.</td><td><code>init</code> writes only the minimal file.</td><td>The user learns what is editable by looking at files, not docs. Minimal is a validity rule, not a template. (#4, #15)</td></tr>
+      <tr><td>D5</td><td>Instance identity</td><td><code>id</code> in the manifest, written by <code>init</code> as a slug of the directory name. The path is location, not identity.</td><td>The path as identity.</td><td>Moving the directory must not rename the instance. (#4)</td></tr>
+      <tr><td>D6</td><td>Model settings</td><td><code>[models].main</code> required in <code>provider:model</code> form. <code>recap</code> defaults to <code>main</code>. <code>embed</code> optional. The manifest is re-read at every turn boundary through <code>reload_manifest</code>. <code>kinby run --model</code> overrides <code>main</code> for one session without touching the file.</td><td>Restarting to switch models. The agent rewriting its own manifest.</td><td>Switching models never means restarting. Agent self-modification is fog until something needs it. (#4, #19)</td></tr>
+      <tr><td>D7</td><td>Discovery</td><td>Fixed precedence: explicit directory or <code>--instance</code>, then <code>KINBY_INSTANCE</code>, then walk up from cwd for <code>kinby.toml</code>, then <code>~/.kinby/default/</code>. A directory is an instance only when it holds <code>kinby.toml</code>. Nothing is auto-created. The matching rule is part of the result.</td><td>Auto-creating an instance when none resolves. A workspace-to-instance registry.</td><td>Silent creation puts instances in the wrong place. Walk-up already finds the instance from inside <code>workspace/</code>. A symlinked workspace uses <code>KINBY_INSTANCE</code>. (#4, #17, ADR 0002)</td></tr>
+      <tr><td>D8</td><td>Workspace conventions</td><td>Off by default. Explicit lists <code>instructions = ["AGENTS.md"]</code> and <code>skills = [".agents/skills"]</code> resolved against the workspace. Only entries that exist are reported, in declared order. The instance never loads tools from the workspace. Instance behavior wins on conflict.</td><td>Vendor-aware auto-detection of convention files. Loading workspace tools.</td><td>Explicit lists let the user add <code>CLAUDE.md</code> without kinby knowing every vendor. Cloning an untrusted repo must not hand the agent new executable capabilities. (#4, #18)</td></tr>
+      <tr><td>D9</td><td>Unknown and malformed manifest keys</td><td>Unknown keys are errors. Every <code>ManifestError</code> names the offending key (<code>models.main: Field required</code>, <code>workspace.conventions.enabled: Input should be a valid boolean</code>).</td><td>Ignoring unknown keys.</td><td>A typo in a key must fail loudly, and the user fixes the file instead of guessing. (#13, #16)</td></tr>
+      <tr><td>D10</td><td>Container contract</td><td>One generic image. The instance is a single volume at <code>/instance</code>. <code>KINBY_INSTANCE=/instance</code> is baked in. Secrets by environment. The entrypoint, not the instance module, owns clone-on-first-boot.</td><td>A per-instance image. Git cloning inside <code>kinby.instance</code>.</td><td>One image serves every instance. The instance module stays free of a git dependency and only resolves and reports the workspace. (#4, #20, ADR 0003)</td></tr>
+      <tr><td>D11</td><td>Module boundaries and test seam</td><td><code>kinby.instance</code> imports no CLI and no LangGraph code. Tests drive <code>kinby.cli.main</code> in-process and assert only on exit code, stdout, stderr, and files.</td><td>Unit tests that import discovery or manifest internals.</td><td>The instance module is the seam a server wraps next. Tests at the CLI survive any refactor of the internals. (#13, #16)</td></tr>
+      <tr><td>D12</td><td><code>kinby run</code> before the loop exists</td><td>Registered at #19: resolves, validates, applies <code>--model</code>, prints the <code>show</code> summary, then exits 1 with a loop-unavailable message. Superseded at <code>7efcce5</code> (#38): <code>run</code> now opens the REPL and exits 0.</td><td>Adding <code>run</code> together with the loop.</td><td>Registering the command fixed the CLI contract the runtime seam later filled. (#13, #19)</td></tr>
+      <tr><td>D13</td><td>Manifest schema declaration</td><td>Pydantic models <code>RawManifest</code>, <code>RawModels</code>, <code>RawWorkspace</code>, <code>RawConventions</code>, <code>RawMemory</code> with <code>extra="forbid"</code> and <code>strict=True</code>, converted to the frozen dataclasses by <code>_manifest</code>. <code>manifest.py</code> is the one file allowed to subclass <code>BaseModel</code> directly.</td><td>Hand-written per-key validators (the first build).</td><td>One declaration carries required keys, types, defaults, and the unknown-key rule. The error location from pydantic is the dotted key D9 asks for. (settled in code at #39)</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="birds-eye">Bird's-eye flow <span class="mode">reference</span></h2>
+  <p>The CLI either writes a starter instance or resolves one, loads it from disk, validates it, and prints it. Boxes are the functions other modules call. Arrows carry what crosses.</p>
+  <figure>
+    <svg viewBox="0 0 960 304" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-birdseye-title fig-birdseye-desc">
+      <title id="fig-birdseye-title">Instance module from the CLI to a printed Instance</title>
+      <desc id="fig-birdseye-desc">kinby.cli.main calls init_instance to write a starter tree, or discover_instance and load_instance to resolve one; load_instance reads kinby.toml and .env, RawManifest validates the table, _manifest builds the Manifest, and the Instance flows back to _print_instance.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="var(--muted)" stroke-width="1.2"/></marker>
+        <marker id="diamond-filled" markerWidth="12" markerHeight="8" refX="0" refY="4" orient="auto"><polygon points="0 4, 6 0, 12 4, 6 8" fill="var(--ink)"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- arrows -->
+      <line x1="200" y1="100" x2="280" y2="100" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="204" y="80" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="89" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D7 no directory</text>
+
+      <path d="M120,72 V40 Q120,32 128,32 H592 Q600,32 600,40 V72" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="260" y="12" width="200" height="12" rx="2" fill="var(--paper)"/>
+      <text x="360" y="21" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">explicit directory: load_instance(path)</text>
+
+      <line x1="440" y1="100" x2="520" y2="100" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="444" y="80" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="89" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">MatchingRule</text>
+
+      <line x1="680" y1="100" x2="760" y2="100" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="684" y="80" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="89" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TOML table</text>
+
+      <line x1="600" y1="128" x2="600" y2="176" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="608" y="144" width="104" height="12" rx="2" fill="var(--paper)"/>
+      <text x="612" y="153" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D3 .env, kinby.toml</text>
+
+      <line x1="840" y1="128" x2="840" y2="176" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="848" y="144" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="852" y="153" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">RawManifest</text>
+
+      <line x1="120" y1="128" x2="120" y2="176" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="128" y="144" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="132" y="153" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">init_instance(dir, model)</text>
+
+      <path d="M840,232 V264 Q840,272 832,272 H368 Q360,272 360,264 V232" fill="none" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="560" y="280" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="600" y="289" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Instance</text>
+
+      <!-- nodes -->
+      <rect x="40" y="72" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="72" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="98" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.cli.main</text>
+      <text x="120" y="114" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/main.py</text>
+
+      <rect x="280" y="72" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="72" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="98" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">discover_instance</text>
+      <text x="360" y="114" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">instance/discovery.py</text>
+
+      <rect x="520" y="72" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="72" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="600" y="98" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">load_instance</text>
+      <text x="600" y="114" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">instance/manifest.py</text>
+
+      <rect x="760" y="72" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="72" width="160" height="56" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <text x="840" y="98" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RawManifest</text>
+      <text x="840" y="114" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D9 D13 model_validate</text>
+
+      <rect x="40" y="176" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="176" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="202" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">init_instance</text>
+      <text x="120" y="218" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D4 instance/init.py</text>
+
+      <rect x="280" y="176" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="176" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="202" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_print_instance</text>
+      <text x="360" y="218" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">stdout</text>
+
+      <rect x="520" y="176" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="176" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="520" y="176" width="160" height="8" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="600" y="206" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">instance directory</text>
+      <text x="600" y="222" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D1 kinby.toml, .env</text>
+
+      <rect x="760" y="176" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="176" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="840" y="202" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_manifest</text>
+      <text x="840" y="218" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D6 D8 instance/manifest.py</text>
+    </svg>
+    <figcaption>Figure: data flow of the instance module from <code>kinby.cli.main</code> to the printed <code>Instance</code>.</figcaption>
+  </figure>
+  <ol>
+    <li><code>main</code> parses <code>argv</code>. For <code>init</code> it calls <code>init_instance(Path(dir), model=…)</code>, which writes the starter tree and returns the resolved path (D4). It raises <code>InstanceExistsError</code> when <code>kinby.toml</code> is already there.</li>
+    <li>For every other command, <code>_load_selected_instance</code> reads the explicit directory (<code>--instance</code> beats the positional argument). When one is given, it calls <code>load_instance(path, model_override=…)</code> directly. The override is set only for <code>run --model</code>.</li>
+    <li>When no directory is given, <code>main</code> calls <code>discover_instance(model_override=…)</code>. The three remaining rules run in order (D7), and the first hit names its <code>MatchingRule</code>.</li>
+    <li><code>discover_instance</code> calls <code>load_instance(path, matching_rule=…, model_override=…)</code>.</li>
+    <li><code>load_instance</code> reads the instance directory: it loads <code>.env</code> into the environment without overriding existing variables (D3), then parses <code>kinby.toml</code> with <code>tomllib</code>.</li>
+    <li><code>RawManifest.model_validate</code> checks the table: required keys, types, unknown keys (D9, D13). This is the focal step: every user-facing manifest error except the override's own form check originates here.</li>
+    <li><code>_manifest</code> turns the validated <code>RawManifest</code> into a <code>Manifest</code>: it applies the session override to <code>models.main</code>, defaults <code>recap</code>, resolves paths, and keeps only the conventions that exist (D6, D8).</li>
+    <li><code>load_instance</code> returns an <code>Instance</code> to <code>main</code>, and <code>_print_instance</code> renders it. For <code>run</code>, <code>main</code> then opens the REPL.</li>
+  </ol>
+
+  <h2 id="module-map">Module map <span class="mode">reference</span></h2>
+  <p>The modules the feature created, the two callers that depend on them today, and their external dependencies. The three leaf modules are drawn as one node because every consumer imports at least two of them.</p>
+  <figure>
+    <svg viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-modules-title fig-modules-desc">
+      <title id="fig-modules-title">Modules the instance module touches</title>
+      <desc id="fig-modules-desc">kinby.cli.main depends on init, discovery, and manifest; kinby.core.turn_runner depends on manifest; discovery depends on manifest; all three depend on the leaf modules layout, dataclasses, and errors; manifest alone depends on tomllib, pydantic, and python-dotenv.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- arrows -->
+      <path d="M240,96 V120 Q240,128 232,128 H128 Q120,128 120,136 V160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M280,96 V120 Q280,128 288,128 H352 Q360,128 360,136 V160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="292" y="140" width="24" height="12" rx="2" fill="var(--paper)"/>
+      <text x="304" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D7</text>
+      <path d="M320,96 V104 Q320,112 328,112 H472 Q480,112 480,120 V280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="400" y="244" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="468" y="253" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="end">load_instance</text>
+      <line x1="520" y1="96" x2="520" y2="280" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="528" y="180" width="104" height="12" rx="2" fill="var(--paper)"/>
+      <text x="532" y="189" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D6 reload_manifest</text>
+      <path d="M376,216 V300 Q376,308 384,308 H440" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="384" y="256" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="388" y="265" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">load_instance</text>
+      <path d="M120,216 V360 Q120,368 128,368 H168 Q176,368 176,376 V400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M344,216 V360 Q344,368 336,368 H216 Q208,368 208,376 V400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M472,336 V376 Q472,384 464,384 H248 Q240,384 240,392 V400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="520" y1="336" x2="520" y2="400" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M552,336 V360 Q552,368 560,368 H672 Q680,368 680,376 V400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M584,336 V344 Q584,352 592,352 H832 Q840,352 840,360 V400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- rank 0 -->
+      <rect x="200" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="200" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="208" y="48" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="224" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="312" y="48" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="332" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">0 in</text>
+      <text x="280" y="74" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.cli.main</text>
+      <text x="280" y="88" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/main.py</text>
+
+      <rect x="440" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="552" y="48" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="572" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">0 in</text>
+      <text x="520" y="74" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.core.turn_runner</text>
+      <text x="520" y="88" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turn_runner.py</text>
+
+      <!-- rank 1 -->
+      <rect x="40" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="48" y="168" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="152" y="168" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="172" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="120" y="194" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.instance.init</text>
+      <text x="120" y="208" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/instance/init.py</text>
+
+      <rect x="280" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="288" y="168" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="304" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="392" y="168" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="412" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="360" y="194" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.instance.discovery</text>
+      <text x="360" y="208" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/instance/discovery.py</text>
+
+      <!-- rank 2 -->
+      <rect x="440" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="448" y="288" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="464" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="552" y="288" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="572" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">3 in</text>
+      <text x="520" y="314" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.instance.manifest</text>
+      <text x="520" y="328" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/instance/manifest.py</text>
+
+      <!-- rank 3 -->
+      <rect x="120" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="120" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="128" y="408" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="144" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="232" y="408" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="252" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">3 in</text>
+      <text x="200" y="434" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">layout · dataclasses · errors</text>
+      <text x="200" y="448" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/instance/</text>
+
+      <rect x="460" y="400" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="460" y="400" width="120" height="56" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="520" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">tomllib</text>
+      <text x="520" y="444" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D3 stdlib</text>
+
+      <rect x="620" y="400" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="620" y="400" width="120" height="56" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="680" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">pydantic</text>
+      <text x="680" y="444" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D13 pyproject.toml</text>
+
+      <rect x="780" y="400" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="780" y="400" width="120" height="56" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="840" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">python-dotenv</text>
+      <text x="840" y="444" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D3 pyproject.toml</text>
+
+      <!-- legend -->
+      <line x1="40" y1="480" x2="920" y2="480" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="496" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="505" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">created by this feature</text>
+      <rect x="200" y="496" width="24" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="212" y="505" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">n in</text>
+      <text x="232" y="505" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">modules that import it</text>
+      <rect x="360" y="496" width="24" height="12" rx="2" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="392" y="505" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">external dependency</text>
+    </svg>
+    <figcaption>Figure: dependency graph of the modules the instance module touches, with the ones the feature created marked.</figcaption>
+  </figure>
+  <h3>Interfaces</h3>
+  <p>Everything below is re-exported from <code>kinby.instance</code>. Clients import the package, never the submodules.</p>
+  <dl>
+    <dt><code>init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path</code></dt>
+    <dd>Writes the starter tree at <code>directory</code>, creating it when absent, and returns the resolved path. Raises <code>InstanceExistsError</code> when <code>kinby.toml</code> already exists. Called by <code>main</code> for <code>kinby init</code>.</dd>
+    <dt><code>discover_instance(*, model_override: str | None = None) -> Instance</code></dt>
+    <dd>Runs the <code>KINBY_INSTANCE</code>, walk-up, and home-default rules (D7) and loads the first hit. Raises <code>InstanceNotFoundError</code> when none matches, <code>ManifestError</code> when the hit does not load. Called by <code>_load_selected_instance</code> when no directory is given.</dd>
+    <dt><code>load_instance(directory: Path, *, matching_rule: MatchingRule = "explicit directory", model_override: str | None = None) -> Instance</code></dt>
+    <dd>Loads <code>.env</code>, parses and validates <code>kinby.toml</code>, and tags the result with <code>matching_rule</code>. Called by <code>_load_selected_instance</code> for an explicit directory, by <code>discover_instance</code>, and by tests that need an <code>Instance</code>.</dd>
+    <dt><code>reload_manifest(instance: Instance, *, model_override: str | None = None) -> Manifest</code></dt>
+    <dd>Re-reads the manifest of an already resolved instance, keeping its <code>matching_rule</code> and reapplying the session override (D6). Called by <code>LangGraphRunner.prepare_for_turn</code> at every turn boundary.</dd>
+    <dt><code>Instance</code>, <code>Manifest</code>, <code>Models</code>, <code>Workspace</code>, <code>Conventions</code>, <code>Memory</code></dt>
+    <dd>Frozen dataclasses. See Data shapes.</dd>
+    <dt><code>InstanceExistsError</code>, <code>InstanceNotFoundError</code>, <code>ManifestError</code></dt>
+    <dd>The three exceptions <code>main</code> translates into a stderr line and exit 1.</dd>
+    <dt><code>PLACEHOLDER_MODEL</code></dt>
+    <dd><code>"provider:model"</code>, the value <code>init</code> writes when <code>--model</code> is omitted.</dd>
+    <dt><code>kinby.instance.layout</code></dt>
+    <dd>String constants for every name in an instance directory (<code>MANIFEST_NAME</code>, <code>STATE_DIR</code>, <code>WORKSPACE_DIR</code>, …). Not re-exported. The only module allowed to spell a path.</dd>
+  </dl>
+
+  <h2 id="ground-level">Ground-level flows <span class="mode">reference</span></h2>
+  <p>Two flows: <code>init</code> writes an instance, and <code>show</code> and <code>run</code> resolve one. Participants are the functions from the module map.</p>
+
+  <h3 id="flow-init">Flow: init</h3>
+  <figure>
+    <svg viewBox="0 0 960 456" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-init-title fig-init-desc">
+      <title id="fig-init-title">kinby init</title>
+      <desc id="fig-init-desc">main calls init_instance, which checks the instance directory for kinby.toml; when it exists init_instance raises InstanceExistsError and main exits 1, otherwise it writes the starter tree and returns the resolved Path that main prints with exit 0.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- lifelines -->
+      <line x1="120" y1="64" x2="120" y2="440" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="320" y1="64" x2="320" y2="440" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="520" y1="64" x2="520" y2="440" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <!-- frame -->
+      <rect x="108" y="184" width="424" height="240" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="108" y="184" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="128" y="196" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="160" y="196" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[kinby.toml exists]</text>
+      <line x1="108" y1="280" x2="532" y2="280" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="160" y="296" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[else]</text>
+
+      <!-- activation bars -->
+      <rect x="116" y="88" width="8" height="336" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="316" y="96" width="8" height="272" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="516" y="128" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="516" y="312" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <!-- messages -->
+      <line x1="124" y1="96" x2="316" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="140" y="76" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">init_instance(Path(dir), model)</text>
+
+      <line x1="324" y1="128" x2="516" y2="128" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="360" y="108" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">manifest.is_file()</text>
+
+      <line x1="516" y1="160" x2="324" y2="160" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="400" y="140" width="40" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">bool</text>
+
+      <line x1="316" y1="216" x2="128" y2="216" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4"/>
+      <line x1="116" y1="212" x2="124" y2="220" stroke="var(--muted)" stroke-width="1.2"/>
+      <line x1="116" y1="220" x2="124" y2="212" stroke="var(--muted)" stroke-width="1.2"/>
+      <rect x="140" y="196" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="205" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">raise InstanceExistsError(path)</text>
+
+      <path d="M124,248 H152 V264 H124" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="160" y="248" width="104" height="12" rx="2" fill="var(--paper)"/>
+      <text x="164" y="257" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">stderr, return 1</text>
+
+      <line x1="324" y1="312" x2="516" y2="312" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="332" y="292" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="301" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D4 mkdir; write kinby.toml … .gitignore</text>
+
+      <line x1="324" y1="344" x2="516" y2="344" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="348" y="324" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="333" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">mkdir workspace/, .state/</text>
+
+      <line x1="316" y1="376" x2="124" y2="376" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-accent)"/>
+      <rect x="160" y="356" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="365" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Path (directory.resolve())</text>
+
+      <path d="M124,400 H152 V416 H124" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="160" y="400" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="164" y="409" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">stdout "Created instance at", return 0</text>
+
+      <!-- participants -->
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.cli.main</text>
+      <text x="120" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">main(argv)</text>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="320" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">init_instance</text>
+      <text x="320" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">instance/init.py</text>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="520" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">instance directory</text>
+      <text x="520" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;dir&gt;/ on disk</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for <code>kinby init</code>, with the refusal branch and the write branch.</figcaption>
+  </figure>
+  <ol>
+    <li><code>main(["init", dir, "--model", m])</code>: input <code>argv</code>, output the call <code>init_instance(Path(dir), model=m)</code>. Without <code>--model</code>, <code>argparse</code> passes <code>PLACEHOLDER_MODEL</code>.</li>
+    <li><code>init_instance</code> checks <code>&lt;dir&gt;/kinby.toml</code>: input the path, output a <code>bool</code> from <code>Path.is_file</code>.</li>
+    <li>When the manifest exists, <code>init_instance</code> raises <code>InstanceExistsError("instance already exists: &lt;path&gt;")</code> before creating anything. <code>main</code> prints it to stderr and returns 1.</li>
+    <li>Otherwise <code>init_instance</code> creates the directory and writes, in order, <code>kinby.toml</code> (with <code>id = _slugify(dir.name)</code> and <code>main = m</code>), <code>SYSTEM.md</code>, <code>permissions.toml</code>, <code>memory/profile.md</code>, <code>.gitignore</code>, <code>tools/README.md</code>, <code>skills/README.md</code>, <code>routines/README.md</code>, then creates empty <code>workspace/</code> and <code>.state/</code>. Every written file starts with a comment (D4).</li>
+    <li><code>init_instance</code> returns <code>directory.resolve()</code>. <code>main</code> prints <code>Created instance at &lt;path&gt;</code> and returns 0. The model placeholder is not validated here.</li>
+  </ol>
+
+  <h3 id="flow-show">Flow: show and run</h3>
+  <figure>
+    <svg viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-show-title fig-show-desc">
+      <title id="fig-show-title">kinby instance show and kinby run</title>
+      <desc id="fig-show-desc">main calls load_instance directly for an explicit directory or discover_instance otherwise; load_instance loads .env and kinby.toml, hands the table to RawManifest.model_validate, builds the Manifest with _manifest, and returns the Instance that main prints.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- lifelines -->
+      <line x1="120" y1="64" x2="120" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="320" y1="64" x2="320" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="520" y1="64" x2="520" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="720" y1="64" x2="720" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <!-- frame -->
+      <rect x="108" y="80" width="424" height="168" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="108" y="80" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="128" y="92" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="160" y="92" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[--instance or positional directory]</text>
+      <line x1="108" y1="136" x2="532" y2="136" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="160" y="152" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[else]</text>
+
+      <!-- activation bars -->
+      <rect x="116" y="104" width="8" height="384" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="316" y="168" width="8" height="72" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="516" y="112" width="8" height="328" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="336" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <!-- messages -->
+      <line x1="124" y1="112" x2="516" y2="112" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="216" y="116" width="208" height="12" rx="2" fill="var(--paper)"/>
+      <text x="320" y="125" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">load_instance(Path(dir), model_override)</text>
+
+      <line x1="124" y1="168" x2="316" y2="168" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="136" y="172" width="168" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="181" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D7 discover_instance(model_override)</text>
+
+      <path d="M324,192 H352 V208 H324" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="360" y="194" width="168" height="12" rx="2" fill="var(--paper)"/>
+      <text x="364" y="203" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">KINBY_INSTANCE, walk-up, home default</text>
+
+      <line x1="324" y1="232" x2="516" y2="232" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="332" y="212" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="221" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">load_instance(path, matching_rule, …)</text>
+
+      <path d="M524,272 H552 V288 H524" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="560" y="272" width="168" height="12" rx="2" fill="var(--paper)"/>
+      <text x="564" y="281" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D3 load_dotenv(.env, override=False)</text>
+
+      <path d="M524,304 H552 V320 H524" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="560" y="304" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="564" y="313" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">tomllib.load(kinby.toml)</text>
+
+      <line x1="524" y1="336" x2="716" y2="336" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="560" y="316" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="325" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D13 model_validate(table)</text>
+
+      <line x1="716" y1="368" x2="524" y2="368" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="532" y="372" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="381" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">RawManifest, or D9 ManifestError(key)</text>
+
+      <path d="M524,400 H552 V416 H524" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="560" y="400" width="184" height="12" rx="2" fill="var(--paper)"/>
+      <text x="564" y="409" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D6 D8 _manifest(path, raw, model_override)</text>
+
+      <line x1="516" y1="440" x2="124" y2="440" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-accent)"/>
+      <rect x="216" y="444" width="208" height="12" rx="2" fill="var(--paper)"/>
+      <text x="320" y="453" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Instance (through discover_instance when used)</text>
+
+      <path d="M124,472 H152 V488 H124" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="160" y="472" width="152" height="12" rx="2" fill="var(--paper)"/>
+      <text x="164" y="481" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">_print_instance(instance) to stdout</text>
+
+      <!-- participants -->
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.cli.main</text>
+      <text x="120" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">_load_selected_instance</text>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="320" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">discover_instance</text>
+      <text x="320" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">instance/discovery.py</text>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="520" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">load_instance</text>
+      <text x="520" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">instance/manifest.py</text>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="720" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RawManifest</text>
+      <text x="720" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">instance/manifest.py</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for <code>kinby instance show</code> and <code>kinby run</code>, from selecting the instance to printing it.</figcaption>
+  </figure>
+  <ol>
+    <li><code>_load_selected_instance</code> reads <code>args.instance_directory or args.directory</code>. <code>model_override</code> is <code>--model</code> for <code>run</code>, else <code>None</code>. Output: a call to <code>load_instance</code> or to <code>discover_instance</code>.</li>
+    <li>With an explicit directory, <code>load_instance(Path(dir), model_override=…)</code> runs with the default <code>matching_rule</code>, <code>"explicit directory"</code>.</li>
+    <li>Without one, <code>discover_instance</code> tries the rules in order (D7): <code>KINBY_INSTANCE</code>; <code>cwd</code> and each of its parents, testing <code>candidate / "kinby.toml"</code>; <code>~/.kinby/default</code>. Output: a path plus a <code>MatchingRule</code> literal. When nothing matches, it raises <code>InstanceNotFoundError("No kinby instance found. Run `kinby init &lt;directory&gt;` first.")</code>.</li>
+    <li><code>discover_instance</code> calls <code>load_instance(path, matching_rule=rule, model_override=…)</code>.</li>
+    <li><code>load_instance</code> calls <code>load_dotenv(&lt;instance&gt;/.env, override=False)</code> (D3). Output: environment variables added, existing ones kept.</li>
+    <li><code>load_instance</code> opens <code>&lt;instance&gt;/kinby.toml</code> in binary mode and calls <code>tomllib.load</code>. A missing file becomes <code>ManifestError("kinby.toml: not found in &lt;path&gt;")</code>. A parse error becomes <code>ManifestError("kinby.toml: &lt;decoder message&gt;")</code>. Output: a TOML table.</li>
+    <li><code>RawManifest.model_validate(table)</code> checks required keys, types, and unknown keys at every level (D13). A <code>ValidationError</code> becomes <code>ManifestError("&lt;dotted key&gt;: &lt;message&gt;")</code> through <code>_manifest_error</code>, which reports the first error (D9). Output: a <code>RawManifest</code>.</li>
+    <li><code>_manifest(instance_path, raw, model_override)</code> validates the override's <code>provider:model</code> form, replaces <code>main</code> with it, defaults <code>recap</code> to the value after the override, resolves <code>state_dir</code> and <code>workspace.path</code> against the instance, and keeps only the convention entries that exist (D6, D8). Output: a <code>Manifest</code>.</li>
+    <li><code>load_instance</code> returns <code>Instance(path, manifest, matching_rule)</code>, through <code>discover_instance</code> when that was the caller.</li>
+    <li><code>main</code> calls <code>_print_instance(instance)</code>, which writes the summary to stdout. For <code>show</code> it returns 0. For <code>run</code> it then builds the dispatcher and opens the REPL. Any <code>InstanceNotFoundError</code> or <code>ManifestError</code> from steps 3 to 8 is printed to stderr and <code>main</code> returns 1.</li>
+  </ol>
+
+  <h2 id="data-shapes">Data shapes <span class="mode">reference</span></h2>
+  <p>The loaded shapes are frozen dataclasses in <code>src/kinby/instance/dataclasses.py</code>. The raw shapes are pydantic models in <code>src/kinby/instance/manifest.py</code>, drawn as one box.</p>
+  <figure>
+    <svg viewBox="0 0 960 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-shapes-title fig-shapes-desc">
+      <title id="fig-shapes-title">Types the instance module adds</title>
+      <desc id="fig-shapes-desc">Instance owns a Manifest and a MatchingRule; Manifest owns Models, Workspace, and Memory; Workspace owns Conventions; RawManifest is the validated TOML shape that _manifest converts into a Manifest.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- relations -->
+      <line x1="240" y1="104" x2="320" y2="104" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)"/>
+      <rect x="296" y="84" width="16" height="12" rx="2" fill="var(--paper)"/>
+      <text x="304" y="93" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1</text>
+      <line x1="520" y1="88" x2="600" y2="88" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)"/>
+      <rect x="576" y="68" width="16" height="12" rx="2" fill="var(--paper)"/>
+      <text x="584" y="77" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1</text>
+      <line x1="420" y1="176" x2="420" y2="232" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)"/>
+      <rect x="428" y="212" width="16" height="12" rx="2" fill="var(--paper)"/>
+      <text x="436" y="221" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1</text>
+      <path d="M320,152 H288 Q280,152 280,160 V248 Q280,256 272,256 H240" fill="none" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)"/>
+      <rect x="248" y="236" width="16" height="12" rx="2" fill="var(--paper)"/>
+      <text x="256" y="245" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1</text>
+      <line x1="520" y1="268" x2="600" y2="268" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)"/>
+      <rect x="576" y="248" width="16" height="12" rx="2" fill="var(--paper)"/>
+      <text x="584" y="257" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1</text>
+      <path d="M240,376 H288 Q296,376 296,368 V136 Q296,128 304,128 H320" fill="none" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+      <rect x="184" y="296" width="104" height="12" rx="2" fill="var(--paper)"/>
+      <text x="288" y="305" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="end">D13 _manifest(raw)</text>
+
+      <!-- Instance -->
+      <rect x="40" y="40" width="200" height="96" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="40" width="200" height="96" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <line x1="40" y1="72" x2="240" y2="72" stroke="var(--rule)" stroke-width="1"/>
+      <text x="140" y="60" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Instance</text>
+      <text x="52" y="88" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">path: Path</text>
+      <text x="52" y="104" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">manifest: Manifest</text>
+      <text x="52" y="120" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">matching_rule: MatchingRule</text>
+
+      <!-- Manifest -->
+      <rect x="320" y="40" width="200" height="136" rx="6" fill="var(--paper)"/>
+      <rect x="320" y="40" width="200" height="136" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="320" y1="72" x2="520" y2="72" stroke="var(--rule)" stroke-width="1"/>
+      <text x="420" y="60" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Manifest</text>
+      <text x="332" y="88" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">id: str</text>
+      <text x="332" y="104" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">state_dir: Path</text>
+      <text x="332" y="120" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">models: Models</text>
+      <text x="332" y="136" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">workspace: Workspace</text>
+      <text x="332" y="152" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">memory: Memory</text>
+      <text x="332" y="168" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">... persona_name: str | None</text>
+
+      <!-- Models -->
+      <rect x="600" y="40" width="200" height="88" rx="6" fill="var(--paper)"/>
+      <rect x="600" y="40" width="200" height="88" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="600" y1="72" x2="800" y2="72" stroke="var(--rule)" stroke-width="1"/>
+      <text x="700" y="60" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Models</text>
+      <text x="612" y="88" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">main: str  (D6 override applied)</text>
+      <text x="612" y="104" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">recap: str  (defaults to main)</text>
+      <text x="612" y="120" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">embed: str | None</text>
+
+      <!-- Memory -->
+      <rect x="40" y="232" width="200" height="48" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="232" width="200" height="48" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="140" y="252" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Memory</text>
+      <text x="140" y="268" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">reserved, no fields</text>
+
+      <!-- Workspace -->
+      <rect x="320" y="232" width="200" height="88" rx="6" fill="var(--paper)"/>
+      <rect x="320" y="232" width="200" height="88" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="320" y1="264" x2="520" y2="264" stroke="var(--rule)" stroke-width="1"/>
+      <text x="420" y="252" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Workspace</text>
+      <text x="332" y="280" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">path: Path</text>
+      <text x="332" y="296" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">source: str | None</text>
+      <text x="332" y="312" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">conventions: Conventions</text>
+
+      <!-- Conventions -->
+      <rect x="600" y="232" width="200" height="72" rx="6" fill="var(--paper)"/>
+      <rect x="600" y="232" width="200" height="72" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="600" y1="264" x2="800" y2="264" stroke="var(--rule)" stroke-width="1"/>
+      <text x="700" y="252" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Conventions</text>
+      <text x="612" y="280" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">instructions: tuple[Path, ...]  (D8)</text>
+      <text x="612" y="296" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">skills: tuple[Path, ...]</text>
+
+      <!-- RawManifest -->
+      <rect x="40" y="344" width="200" height="144" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="344" width="200" height="144" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="40" y1="384" x2="240" y2="384" stroke="var(--rule)" stroke-width="1"/>
+      <text x="140" y="356" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;&lt;pydantic, extra=forbid, strict&gt;&gt;</text>
+      <text x="140" y="372" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RawManifest</text>
+      <text x="52" y="400" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">id: NonEmpty</text>
+      <text x="52" y="416" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">state_dir: NonEmpty = ".state"</text>
+      <text x="52" y="432" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">models: RawModels</text>
+      <text x="52" y="448" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">workspace: RawWorkspace</text>
+      <text x="52" y="464" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">memory: RawMemory</text>
+      <text x="52" y="480" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">... persona_name; RawConventions</text>
+    </svg>
+    <figcaption>Figure: types the instance module adds and how they own each other. <code>RawModels</code>, <code>RawWorkspace</code>, <code>RawConventions</code>, and <code>RawMemory</code> are collapsed into <code>RawManifest</code>.</figcaption>
+  </figure>
+  <p><code>MatchingRule</code> is <code>Literal["explicit directory", "KINBY_INSTANCE", "walk-up", "home default"]</code>.</p>
+  <p><code>kinby.toml</code>, every key. Unknown keys at any level are errors (D9).</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Key</th><th>Type</th><th>Required</th><th>Default</th><th>Rule</th></tr></thead>
+    <tbody>
+      <tr><td><code>id</code></td><td>string</td><td>yes</td><td>—</td><td>non-empty</td></tr>
+      <tr><td><code>persona_name</code></td><td>string</td><td>no</td><td><code>None</code></td><td>non-empty when present</td></tr>
+      <tr><td><code>state_dir</code></td><td>path</td><td>no</td><td><code>.state</code></td><td>relative paths resolve against the instance</td></tr>
+      <tr><td><code>[models].main</code></td><td>string</td><td>yes</td><td>—</td><td><code>provider:model</code>, no whitespace, exactly one colon</td></tr>
+      <tr><td><code>[models].recap</code></td><td>string</td><td>no</td><td><code>main</code> after override</td><td>same form</td></tr>
+      <tr><td><code>[models].embed</code></td><td>string</td><td>no</td><td><code>None</code></td><td>same form</td></tr>
+      <tr><td><code>[workspace].path</code></td><td>path</td><td>no</td><td><code>workspace</code></td><td>relative paths resolve against the instance; absolute pass through</td></tr>
+      <tr><td><code>[workspace].source</code></td><td>string</td><td>no</td><td><code>None</code></td><td>not validated as a URL</td></tr>
+      <tr><td><code>[workspace.conventions].enabled</code></td><td>bool</td><td>no</td><td><code>false</code></td><td>must be a boolean</td></tr>
+      <tr><td><code>[workspace.conventions].instructions</code></td><td>list of string</td><td>no</td><td><code>["AGENTS.md"]</code></td><td>non-empty strings; resolved against the workspace; only existing files kept</td></tr>
+      <tr><td><code>[workspace.conventions].skills</code></td><td>list of string</td><td>no</td><td><code>[".agents/skills"]</code></td><td>non-empty strings; resolved against the workspace; only existing directories kept</td></tr>
+      <tr><td><code>[memory]</code></td><td>table</td><td>no</td><td><code>{}</code></td><td>accepted empty; no keys allowed yet</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The starter tree <code>init_instance</code> writes (D4):</p>
+<pre><code>&lt;dir&gt;/
+  kinby.toml          # id = "&lt;slug&gt;", [models] main = "&lt;--model or provider:model&gt;"
+  SYSTEM.md           # behavior prompt
+  permissions.toml    # comment only; the gate is not built
+  memory/profile.md   # comment only
+  tools/README.md     # "kinby does not load tools from the workspace"
+  skills/README.md
+  routines/README.md
+  workspace/          # empty
+  .state/             # empty
+  .gitignore          # .state/ and .env</code></pre>
+  <p><code>_slugify</code> NFKD-normalizes the directory name, strips combining marks, lowercases, replaces every run of characters outside <code>[a-z0-9]</code> with <code>-</code>, trims dashes, and falls back to <code>instance</code> when nothing is left. <code>My Agent</code> becomes <code>my-agent</code>.</p>
+  <p><code>kinby instance show</code> output, in order: <code>id</code>, <code>persona name</code> (when set), <code>path</code>, <code>matching rule</code>, <code>models:</code> with <code>main</code>, <code>recap</code>, <code>embed</code> (<code>not configured</code> when absent), <code>workspace: &lt;path&gt; (present|missing)</code>, <code>source</code> (when set), <code>conventions:</code> with <code>instructions:</code> and <code>skills:</code> (only when at least one exists), <code>state dir</code>.</p>
+  <p>Container contract (D10), from <code>Dockerfile</code> and <code>docs/container.md</code>: <code>python:3.14-slim</code>, <code>pip install .</code>, <code>ENV KINBY_INSTANCE=/instance</code>, <code>VOLUME ["/instance"]</code>, <code>ENTRYPOINT ["kinby"]</code>, <code>CMD ["run"]</code>. The entrypoint does not clone a workspace yet.</p>
+
+  <h2 id="file-map">File map <span class="mode">reference</span></h2>
+  <p>Actions describe what the build did relative to the tree before #14. Every <code>create</code> path exists at <code>6aa4a52</code> except the deleted ones. Regenerate the existence check with <code>git ls-files src/kinby/instance src/kinby/cli tests examples Dockerfile docs/container.md docs/adr pyproject.toml</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Path</th><th>Action</th><th>What changes</th><th>Flow</th></tr></thead>
+    <tbody>
+      <tr><td><code>pyproject.toml</code></td><td>create</td><td>Package <code>kinby</code>, src layout, script <code>kinby = "kinby.cli:main"</code>, dependencies <code>python-dotenv</code> and <code>pydantic</code>, the <code>BaseModel</code> ban with its <code>manifest.py</code> exception (D13)</td><td>—</td></tr>
+      <tr><td><code>uv.lock</code></td><td>create</td><td>Lockfile</td><td>—</td></tr>
+      <tr><td><code>agent/</code>, <code>main.py</code></td><td>delete</td><td>The learning project (D2)</td><td>—</td></tr>
+      <tr><td><code>src/kinby/__init__.py</code></td><td>create</td><td>Package docstring</td><td>—</td></tr>
+      <tr><td><code>src/kinby/core/__init__.py</code>, <code>src/kinby/memory/__init__.py</code>, <code>src/kinby/plugins/__init__.py</code></td><td>create</td><td>Docstring stating each package's responsibility</td><td>—</td></tr>
+      <tr><td><code>src/kinby/cli/__init__.py</code></td><td>create</td><td>Re-exports <code>main</code></td><td>—</td></tr>
+      <tr><td><code>src/kinby/cli/main.py</code></td><td>create</td><td><code>argparse</code> tree for <code>--version</code>, <code>init</code>, <code>instance show</code>, <code>run</code>; <code>_add_instance_selector</code>; <code>_load_selected_instance</code>; <code>_print_instance</code>; error-to-exit-code translation. <code>thread</code> and <code>usage</code> were added later.</td><td>init, show and run</td></tr>
+      <tr><td><code>src/kinby/instance/__init__.py</code></td><td>create</td><td>Public surface: four functions, six dataclasses, three errors, <code>PLACEHOLDER_MODEL</code></td><td>—</td></tr>
+      <tr><td><code>src/kinby/instance/layout.py</code></td><td>create</td><td>Canonical names: <code>MANIFEST_NAME</code> … <code>GITIGNORE_NAME</code></td><td>init, show and run</td></tr>
+      <tr><td><code>src/kinby/instance/dataclasses.py</code></td><td>create</td><td><code>MatchingRule</code>, <code>Models</code>, <code>Conventions</code>, <code>Workspace</code>, <code>Memory</code>, <code>Manifest</code>, <code>Instance</code></td><td>show and run</td></tr>
+      <tr><td><code>src/kinby/instance/errors.py</code></td><td>create</td><td><code>InstanceExistsError</code>, <code>InstanceNotFoundError</code>, <code>ManifestError(ValueError)</code></td><td>init, show and run</td></tr>
+      <tr><td><code>src/kinby/instance/init.py</code></td><td>create</td><td><code>init_instance</code>, <code>_slugify</code>, <code>PLACEHOLDER_MODEL</code></td><td>init</td></tr>
+      <tr><td><code>src/kinby/instance/manifest.py</code></td><td>create</td><td><code>load_instance</code>, <code>reload_manifest</code>, <code>RawManifest</code> and its sections, <code>_manifest</code>, <code>_manifest_error</code>, <code>_conventions</code></td><td>show and run</td></tr>
+      <tr><td><code>src/kinby/instance/discovery.py</code></td><td>create</td><td><code>discover_instance</code> with the three lookup rules</td><td>show and run</td></tr>
+      <tr><td><code>tests/test_cli.py</code></td><td>create</td><td><code>--version</code> prints the package version (the pattern every later test follows)</td><td>—</td></tr>
+      <tr><td><code>tests/test_init.py</code></td><td>create</td><td>Tree, refusal, slug, <code>--model</code>, placeholder not validated</td><td>init</td></tr>
+      <tr><td><code>tests/test_instance_show.py</code></td><td>create</td><td>Manifest reporting, key errors, paths, <code>.env</code>, each discovery rule and their precedence, conventions</td><td>show and run</td></tr>
+      <tr><td><code>tests/test_run.py</code></td><td>create</td><td><code>--model</code> override shown with the file untouched; <code>reload_manifest</code> reads edits and reapplies the override</td><td>show and run</td></tr>
+      <tr><td><code>tests/test_examples.py</code></td><td>create</td><td>Both examples load through <code>instance show</code></td><td>show and run</td></tr>
+      <tr><td><code>tests/test_container.py</code></td><td>create</td><td>Image config and a mounted <code>instance show</code> (skipped without Docker)</td><td>show and run</td></tr>
+      <tr><td><code>examples/instances/minimal/kinby.toml</code></td><td>create</td><td><code>id</code> and <code>[models].main</code> only</td><td>—</td></tr>
+      <tr><td><code>examples/instances/coding-agent/kinby.toml</code></td><td>create</td><td><code>persona_name</code>, <code>[workspace]</code>, conventions enabled</td><td>—</td></tr>
+      <tr><td><code>examples/instances/coding-agent/workspace/AGENTS.md</code>, <code>…/workspace/.agents/skills/README.md</code></td><td>create</td><td>The conventions the example reports</td><td>—</td></tr>
+      <tr><td><code>Dockerfile</code></td><td>create</td><td>Generic image per D10</td><td>—</td></tr>
+      <tr><td><code>docs/container.md</code></td><td>create</td><td>The container contract and the clone-on-first-boot boundary</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0001-instance-is-a-directory-workspace-lives-under-it.md</code></td><td>create</td><td>D1</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0002-instance-discovery-uses-fixed-precedence.md</code></td><td>create</td><td>D7</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0003-container-entrypoint-owns-workspace-cloning.md</code></td><td>create</td><td>D10</td><td>—</td></tr>
+      <tr><td><code>CONTEXT.md</code></td><td>modify</td><td>Terms <em>instance</em>, <em>instance discovery</em>, <em>manifest</em>, <em>workspace</em>, <em>conventions</em></td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="testing">Testing <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Seams</dt><dd>One. <code>kinby.cli.main([...])</code> invoked in-process with <code>tmp_path</code>, <code>capsys</code>, and <code>monkeypatch</code> for cwd, <code>HOME</code>, <code>USERPROFILE</code>, <code>KINBY_INSTANCE</code>, and stdin (D11). No test imports <code>discovery</code> or <code>manifest</code> internals. <code>reload_manifest</code> is tested through the public <code>kinby.instance</code> surface in <code>tests/test_run.py</code> because its caller sits inside a model turn.</dd>
+    <dt>A good test here</dt><dd>Write a <code>kinby.toml</code> into a temp directory, call <code>main</code>, then assert on the exit code, on lines of stdout, on stderr, and on files on disk. A test that survives renaming every private helper in <code>manifest.py</code> is at the right altitude.</dd>
+    <dt>Prior art</dt><dd>None before this feature. This feature set the pattern. <code>tests/test_thread_cli.py</code> follows it.</dd>
+  </dl>
+  <h3>Cases</h3>
+  <ol>
+    <li><code>init</code> writes the documented tree and every file starts with a comment, flow init, protects D4.</li>
+    <li><code>init</code> on a directory with <code>kinby.toml</code> exits non-zero, writes to stderr, and changes nothing, flow init, protects D4.</li>
+    <li><code>init</code> writes <code>id</code> as the slug of the directory name, flow init, protects D5.</li>
+    <li><code>init --model</code> lands in the manifest; without it the placeholder is written and not validated, flow init, protects D4.</li>
+    <li><code>instance show &lt;dir&gt;</code> reports id, persona name, path, <code>explicit directory</code>, models with <code>recap</code> defaulted, workspace <code>present</code> with <code>source</code>, and a relative <code>state_dir</code> resolved against the instance, flow show and run, protects D1 and D6.</li>
+    <li>Missing <code>models.main</code>, a malformed model string (<code>main</code>, <code>recap</code>, <code>embed</code>), and an unknown key at each level fail naming the key, flow show and run, protects D9.</li>
+    <li>A missing default workspace is reported as <code>missing</code>; absolute <code>state_dir</code> and <code>workspace.path</code> pass through, flow show and run, protects D1.</li>
+    <li><code>&lt;instance&gt;/.env</code> is loaded and never overrides an existing environment variable, flow show and run, protects D3.</li>
+    <li>Each discovery rule alone: <code>KINBY_INSTANCE</code>, walk-up from <code>workspace/sub/dir</code>, home default, flow show and run, protects D7.</li>
+    <li>Precedence: <code>--instance</code> beats <code>KINBY_INSTANCE</code>; <code>KINBY_INSTANCE</code> beats walk-up and home default; walk-up beats home default, flow show and run, protects D7.</li>
+    <li>No instance: exit non-zero, stderr names <code>kinby init</code>, <code>~/.kinby</code> is not created, flow show and run, protects D7.</li>
+    <li>Conventions: nothing listed when disabled or absent; defaults listed when enabled; custom lists in declared order; missing entries omitted; non-list and non-boolean values fail naming the key; a <code>tools/</code> directory in the workspace is never listed, flow show and run, protects D8.</li>
+    <li><code>run --model</code> shows the override, leaves the file byte-identical, opens the REPL on an empty stdin, and exits 0, flow show and run, protects D6 and D12.</li>
+    <li><code>reload_manifest</code> reads an edited manifest and reapplies the override to <code>main</code> and <code>recap</code>, flow show and run, protects D6.</li>
+    <li>Both <code>examples/instances/*</code> load through <code>instance show</code>; only <code>coding-agent</code> lists conventions, flow show and run, protects D4 and D8.</li>
+    <li>The built image has <code>KINBY_INSTANCE=/instance</code>, volume <code>/instance</code>, entrypoint <code>kinby</code>, command <code>run</code>, and <code>instance show</code> on a mounted example reports <code>matching rule: KINBY_INSTANCE</code>, flow show and run, protects D10.</li>
+  </ol>
+
+  <h2 id="out-of-scope">Out of scope <span class="mode">reference</span></h2>
+  <ul>
+    <li>The agent loop, context manager, gate, and usage channel: <code>docs/blueprints/runtime-seam/</code> and #7.</li>
+    <li>Tool and skill loading, hot-plugging, the default tool package: <code>docs/blueprints/plugins/</code> and #6.</li>
+    <li>Memory feeds and the contents of <code>.state/</code> beyond the directory existing: the memory facade (#8). <code>[memory]</code> stays an empty table until then.</li>
+    <li>The routines file format (#11) and <code>mcp.json</code> handling.</li>
+    <li>Git cloning of the workspace inside kinby (ADR 0003), several workspaces per instance, a workspace-to-instance registry.</li>
+    <li>The agent rewriting its own manifest.</li>
+    <li>Consuming conventions: this feature only resolves and reports them. The loop reads them later, with instance behavior first and instance skills shadowing same-named workspace skills (D8).</li>
+    <li>Any UI, server, or channel.</li>
+  </ul>
+
+  <h2 id="open-questions">Open questions <span class="mode">reference</span></h2>
+  <p>The spec left these open and the code does not settle them. The agent building on this module stops and asks before acting on any of them. The earlier question "who calls <code>reload_manifest</code>" is settled: <code>LangGraphRunner.prepare_for_turn</code> in <code>src/kinby/core/turn_runner.py</code>.</p>
+  <ol>
+    <li>When <code>embed</code> becomes required. The manifest accepts <code>embed</code> as optional and nothing checks it. Options: the memory spec (#8) validates it when a feed that needs it is enabled; <code>show</code> warns when a feed is enabled without it. Default: leave it to #8, as the spec says.</li>
+    <li>Shape of <code>[memory]</code>. Reserved and rejected when non-empty today. Options: feed toggles per #4; a table per feed. Default: decide in #8; this module only keeps rejecting unknown keys.</li>
+  </ol>
+
+  <h2 id="glossary">Glossary <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Instance</dt><dd>One kinby deployment: a directory that owns its behavior configuration, memory, and transcripts. Here, any directory holding <code>kinby.toml</code>.</dd>
+    <dt>Instance discovery</dt><dd>The ordered lookup that selects an existing instance when a command does not name one. The matching rule is part of the result.</dd>
+    <dt>Manifest</dt><dd><code>kinby.toml</code>, the portable description of an instance's identity and configuration. No secrets, no runtime state.</dd>
+    <dt>Workspace</dt><dd>The directory holding the user's own work that an instance acts on. Lives under the instance and is never written to by kinby on its own behalf.</dd>
+    <dt>Conventions</dt><dd>The workspace's instruction files and skill directories an instance may read as extra behavior sources. Named explicitly in the manifest.</dd>
+    <dt>Persona name</dt><dd>The per-instance display name, <code>persona_name</code> in the manifest. Distinct from <em>kinby</em>, the project.</dd>
+    <dt>Session</dt><dd>One run of the agent loop against a thread. The unit <code>--model</code> overrides for.</dd>
+    <dt>Turn</dt><dd>One user-to-agent cycle. The boundary at which the manifest is re-read.</dd>
+  </dl>
+
+  <footer>Blueprint for the instance module · stamped at 6aa4a52 · 2026-08-29</footer>
+</main>
+</body>
+</html>

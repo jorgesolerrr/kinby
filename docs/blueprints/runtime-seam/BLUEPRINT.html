@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blueprint: Runtime seam</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f5f5f5;
+      --ink: #2d3142;
+      --muted: #4f5d75;
+      --soft: #7a8399;
+      --rule: rgba(45, 49, 66, 0.16);
+      --accent: #eb6c36;
+      --accent-tint: rgba(235, 108, 54, 0.08);
+      --link: #2e5aa8;
+      --new: #2e7d32;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', Georgia, serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #2d3142;
+        --ink: #f5f5f5;
+        --muted: #bfc0c0;
+        --soft: #8e98ac;
+        --rule: rgba(245, 245, 245, 0.16);
+        --accent: #f08a59;
+        --accent-tint: rgba(240, 138, 89, 0.10);
+        --link: #6a95d8;
+        --new: #66bb6a;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 3rem 2rem 4rem;
+      font-family: var(--font-sans);
+      font-size: 15px;
+      line-height: 1.55;
+      background: var(--paper);
+      color: var(--ink);
+    }
+    main { max-width: 960px; margin: 0 auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 0.5rem;
+    }
+    h1 { font-family: var(--font-serif); font-weight: 400; font-size: 2.25rem; line-height: 1.1; margin: 0 0 0.5rem; }
+    h2 { font-family: var(--font-serif); font-weight: 400; font-size: 1.6rem; margin: 3rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+    h3 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+    .mode { font-family: var(--font-mono); font-size: 0.7rem; color: var(--soft); margin-left: 0.5rem; letter-spacing: 0.08em; }
+    .stamp { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+    code, pre { font-family: var(--font-mono); font-size: 0.85em; }
+    code { background: rgba(127, 127, 127, 0.12); padding: 0.05em 0.3em; border-radius: 3px; }
+    pre { padding: 0.75rem 1rem; border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+    th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--rule); }
+    th { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+    figure { margin: 1.5rem 0; }
+    figure svg { display: block; width: 100%; height: auto; }
+    figcaption { font-family: var(--font-serif); font-style: italic; font-size: 0.95rem; color: var(--muted); margin-top: 0.5rem; }
+    .overflow { overflow-x: auto; }
+    ol, ul { padding-left: 1.4rem; }
+    li { margin: 0.25rem 0; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1.25rem; }
+    dt { font-family: var(--font-mono); font-size: 0.85rem; }
+    dd { margin: 0; }
+    footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--rule); font-family: var(--font-mono); font-size: 0.75rem; color: var(--soft); }
+  </style>
+</head>
+<body>
+<body>
+<main>
+  <p class="eyebrow">Blueprint · built</p>
+  <h1>Runtime seam: contracts, dispatcher, event stream</h1>
+  <p class="stamp">Stamped at <code>6aa4a52</code>: paths and symbols are true at this commit. Source: grilling on #5, build spec #28, slice tickets #30–#35, then #38–#54 which built on the seam. The code is the second source of truth. Known defect at this commit: <code>src/kinby/core/turn_runner.py:158-160</code> holds a leftover <code>async for</code> header from the #54 merge, so the file does not parse. The figures describe the intended code with those three lines removed.</p>
+
+  <h2 id="at-a-glance">At a glance <span class="mode">explanation</span></h2>
+  <p>You chat with your instance from <code>kinby run</code>, and every command the REPL sends crosses one typed boundary: pydantic models in <code>kinby.contracts</code>, a name-routed <code>Dispatcher</code> that checks scope and validates before a handler runs, and an append-only event log that is the transcript. Commands return an <code>AcceptedResult</code> at once. All output arrives on <code>thread.subscribe</code>, which replays stored events past a sequence number and then stays live. The decision that shapes everything else is D2: events carry a gap-free per-thread sequence, so reconnect, replay, restart, and a future server are the same code path.</p>
+
+  <h2 id="problem">Problem <span class="mode">explanation</span></h2>
+  <p>Before this feature <code>kinby run</code> resolved the instance and stopped with "The agent loop is not yet available." You could not chat. A second client is coming (a server that fronts the same core), and a session object with hand-matched methods would force a second API design. Without a sequence-numbered record, a client that drops mid-turn cannot recover what it missed, a parked approval dies with the process, and evals cannot replay a thread.</p>
+
+  <h2 id="solution">Solution <span class="mode">explanation</span></h2>
+  <p><code>kinby run</code> opens a thread and a prompt. Each line you type becomes <code>thread.turn.start</code>. The receipt comes back immediately and the model's reply streams onto your terminal from the subscription, tool calls and results as one line each. Ctrl+C during a reply sends <code>thread.turn.interrupt</code>, prints <code>(interrupted)</code>, and gives the prompt back. A second subscriber, or a restarted process, replays the thread event for event. A turn parked on an approval survives a restart and resumes when <code>thread.approval.respond</code> arrives. <code>kinby usage</code> prints token totals folded from the same events. Every one of these calls goes through the dispatcher, so putting a socket in front of it later changes nothing behind it.</p>
+
+  <h2 id="decision-log">Decision log <span class="mode">explanation</span></h2>
+  <p>One row per decision the grilling settled, D1 to D18. D19 to D23 were settled in code while the slices landed and are recorded because the figures depend on them. Where the build changed a decision, the row says so and names the ADR.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>#</th><th>Decision</th><th>Chosen</th><th>Rejected</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>Shape of the client–core seam</td><td>Typed contract in <code>kinby.contracts</code> plus a name-routed <code>Dispatcher</code>. Clients hold a <code>ContractClient</code>.</td><td>A plain session object. Typed events only.</td><td>A session object needs a second, hand-matched API for the server. With a contract, the server effort is "put a socket in front of the dispatcher". (#5, ADR 0004)</td></tr>
+      <tr><td>D2</td><td>Client-facing record of a turn</td><td>Sequence-numbered event stream. The event log is the transcript store. The LangGraph checkpointer sits beneath it as loop working state.</td><td>A plain async generator.</td><td>One integer per event makes reconnect, resume, and eval replay the same code path. (#5)</td></tr>
+      <tr><td>D3</td><td>Unary versus stream</td><td>Every command returns <code>AcceptedResult</code>. <code>thread.subscribe</code> is the only stream. Interrupt is a plain unary call.</td><td>Commands that stream their own output.</td><td>Output on one channel keeps an interrupt from tangling with an in-flight response. (#5)</td></tr>
+      <tr><td>D4</td><td>v1 method set</td><td>Seven methods: <code>thread.create</code>, <code>thread.list</code>, <code>thread.turn.start</code>, <code>thread.turn.interrupt</code>, <code>thread.approval.respond</code>, <code>thread.subscribe</code>, <code>usage.get</code>.</td><td><code>instance.*</code> config, memory queries, delete or archive.</td><td>The CLI reads <code>kinby.toml</code> directly. The agent reaches memory through tools. Add delete when something needs it. (#5)</td></tr>
+      <tr><td>D5</td><td>Authorization</td><td>Per-method scopes from day one: <code>thread:read</code>, <code>thread:operate</code>, <code>instance:read</code>, <code>instance:admin</code>. The in-process CLI holds all four. The check runs before validation and before the handler.</td><td>Add scopes with the server effort.</td><td>Cheap now, painful to retrofit. (#5)</td></tr>
+      <tr><td>D6</td><td>Error shape</td><td>Core raises <code>CoreError</code> subclasses. The dispatcher translates every failure into one <code>ErrorEnvelope</code> (<code>code</code>, <code>message</code>, <code>retryable</code>) and returns it as the call's value.</td><td>Transliterating TS result types. Per-method error types.</td><td>Idiomatic Python inside, one envelope at the boundary. (#5, #30)</td></tr>
+      <tr><td>D7</td><td>Concurrency model</td><td>Async-native library. <code>kinby.cli.main</code> owns the only <code>asyncio.run</code> calls.</td><td>A sync facade.</td><td>No second API surface to keep in step. (#5)</td></tr>
+      <tr><td>D8</td><td>Contract versioning</td><td>None in v1.</td><td>A version field on every model.</td><td>Belongs to the server effort. (#5)</td></tr>
+      <tr><td>D9</td><td>Import direction</td><td><code>kinby.contracts</code> imports nothing from <code>kinby.core</code>. Clients import contracts, never core handlers.</td><td>Clients calling handlers directly.</td><td>The boundary only holds if it is the only way in. (#28, ADR 0004)</td></tr>
+      <tr><td>D10</td><td>Busy thread</td><td><code>turn.start</code> on a thread whose turn is live, starting, or parked fails with <code>THREAD_BUSY</code>, <code>retryable=true</code>.</td><td>Queueing turns. Abandoning a parked turn.</td><td>One turn at a time is the model the checkpointer and token attribution assume. The old open question "busy while parked" closed as <code>THREAD_BUSY</code>. (#28, #34)</td></tr>
+      <tr><td>D11</td><td>Where events live</td><td>Append-only <code>events.jsonl</code> in the instance's <code>state_dir</code>, one file for all threads. One process owns appends and delivery for an instance.</td><td>Runtime state outside the instance. A database.</td><td>ADR 0001: tar the directory and you have moved the instance. JSONL keeps appends inspectable with no dependency. (ADR 0005, ADR 0006)</td></tr>
+      <tr><td>D12</td><td>Open touchpoints</td><td>The approval answer is a placeholder (<code>approval_id</code> plus free-form <code>answer</code>) until #7. Memory events wait for #8. <code>usage.get</code> returns raw token totals until #12.</td><td>Guessing those shapes now.</td><td>Each belongs to a ticket still open on the map. (#28)</td></tr>
+      <tr><td>D13</td><td>Runtime dependencies</td><td><code>pydantic</code>, <code>langgraph</code>, and <code>langchain[anthropic,openai]</code>. The checkpointer is <code>InMemorySaver</code>, in process memory only.</td><td>Hand-rolled validation. A hand-written loop. A persistent checkpointer now. Optional provider extras.</td><td>The same models define and validate the boundary. LangChain resolves <code>provider:model</code> with the integrations the examples use. The old open questions on checkpointer backend and provider packages closed here. (ADR 0007)</td></tr>
+      <tr><td>D14</td><td>Delivery</td><td>Six tickets in dependency order: #30 create and list, #31 event log and replay, #32 model turn, #33 interrupt, #34 approval plumbing, #35 usage.</td><td>One big PR.</td><td>Each ticket landed with its own tests and a green <code>pytest</code>. (#28)</td></tr>
+      <tr><td>D15</td><td>What a model turn is</td><td>Registered at #32: the model from <code>models.main</code>, no tools. Superseded at <code>0fc0afb</code> and <code>6aa4a52</code>: a model-and-tools LangGraph graph, tools from the instance <code>tools/</code> directory rescanned at every turn boundary, and a system prompt assembled from fixed-order sections.</td><td>Tools in the first turn. A file watcher. A reload command.</td><td>The turn-boundary rescan shares the rhythm of the manifest re-read and matches the provider prompt cache. (#32, ADR 0010, ADR 0011 system prompt)</td></tr>
+      <tr><td>D16</td><td>Interrupt from the REPL</td><td>Ctrl+C during a turn sends <code>thread.turn.interrupt</code>. <code>Turns.interrupt</code> appends <code>turn.interrupted</code> and frees the thread before it returns. The cancelled runner cannot append anything after.</td><td>Killing the process. Deriving <code>turn.interrupted</code> from <code>CancelledError</code> in the task wrapper.</td><td>A runner that suppresses cancellation during cleanup would hang the command or emit <code>turn.completed</code>. The command owns the event. (#33, ADR 0008)</td></tr>
+      <tr><td>D17</td><td>Parked approvals</td><td>A turn parked on <code>approval.requested</code> survives a restart. <code>Turns.respond</code> rebuilds the <code>TurnRequest</code> from the stored <code>turn.started</code> and <code>approval.requested</code> events and calls <code>runner.resume</code>. "Live" is a function of the thread's last stored event.</td><td>In-memory pending state. Restoring from a persistent checkpointer.</td><td>The placeholder hook parks before the graph runs, so there is no graph state to restore. #7 chooses a persistent checkpointer when approvals move inside the graph. (#34, ADR 0009)</td></tr>
+      <tr><td>D18</td><td>Usage source</td><td><code>usage_totals</code> folds <code>turn.completed</code> payloads inside an inclusive <code>UsageRange</code>, per thread and per turn. <code>kinby usage</code> prints them.</td><td>A separate usage ledger.</td><td>One store, one meaning. (#35)</td></tr>
+      <tr><td>D19</td><td>Typed payloads</td><td><code>Event.payload</code> is <code>Payload</code>, a discriminated union of nine models keyed on <code>type</code>. <code>Event.type</code> is a property of the payload.</td><td><code>type: EventType</code> plus <code>payload: dict[str, Any]</code> (the first build).</td><td>The REPL and the usage fold branch on shape, not on string keys. <code>typing.Any</code> and bare <code>BaseModel</code> are banned outside <code>contracts/models.py</code> and <code>dispatcher.py</code> by lint and <code>tests/test_signatures.py</code>. (#39)</td></tr>
+      <tr><td>D20</td><td>Method constants</td><td><code>contracts.methods</code> declares each route once as <code>Method[Command, Result]</code> or <code>Subscription[Command, Item]</code>. <code>Dispatcher.register</code> and <code>ContractClient.call</code> take the constant, so the client parses the generic result into the promised type once.</td><td>String method names at every call site.</td><td>A route's name, scope, and shapes live in one place, and a mismatch is a type error. (#39)</td></tr>
+      <tr><td>D21</td><td>Turn-less dispatcher</td><td><code>build_dispatcher(state_dir, *, event_log=None, turns=None)</code> registers the three turn methods only when a <code>TurnConfig</code> is given. <code>kinby thread</code> and <code>kinby usage</code> build it without one.</td><td>Always constructing the model runner.</td><td>Listing threads must not import a chat model or load tools. (#38)</td></tr>
+      <tr><td>D22</td><td>Model resolution at the turn boundary</td><td><code>TurnConfig.prepare_for_turn</code> is a callable returning the model name. <code>LangGraphRunner.prepare_for_turn</code> calls <code>reload_manifest</code> with the session override and returns <code>models.main</code>. <code>ThreadTurnStartCommand</code> carries no <code>model</code> field.</td><td>A per-turn <code>model</code> on the command (the first build).</td><td>The lifecycle event and the model call share one name resolved once per turn, and the override stays a session concern. (#44)</td></tr>
+      <tr><td>D23</td><td>Warnings are events</td><td>A tool file that fails to load produces a <code>warning</code> event with its sources, and the previous tool snapshot stays in force.</td><td>Logging to stderr from core. Failing the turn.</td><td>A client learns about a broken plugin on the same channel as everything else. (#44, #54, ADR 0010)</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="birds-eye">Bird's-eye flow <span class="mode">reference</span></h2>
+  <p>A line typed at the REPL crosses the contract, becomes a turn, lands as sequence-numbered events in the instance event log, and returns to the REPL through the one subscription. Boxes are the modules other modules call. Arrows carry what crosses.</p>
+  <figure>
+    <svg viewBox="0 0 960 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-birdseye-title fig-birdseye-desc">
+      <title id="fig-birdseye-title">Runtime seam from run_repl to the event stream</title>
+      <desc id="fig-birdseye-desc">run_repl sends thread.turn.start through ContractClient to Dispatcher, which admits it and calls Turns.start; Turns appends turn.started to EventLog and spawns LangGraphRunner, which streams the chat model and emits events into EventLog; EventLog writes events.jsonl and pushes every event to the thread.subscribe stream run_repl renders.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="var(--muted)" stroke-width="1.2"/></marker>
+        <marker id="diamond-filled" markerWidth="12" markerHeight="8" refX="0" refY="4" orient="auto"><polygon points="0 4, 6 0, 12 4, 6 8" fill="var(--ink)"/></marker>
+        <marker id="triangle-hollow" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto"><polygon points="0 0, 10 5, 0 10" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- arrows -->
+      <line x1="200" y1="100" x2="280" y2="100" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="196" y="80" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="89" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">thread.turn.start</text>
+
+      <line x1="440" y1="100" x2="520" y2="100" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="432" y="80" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="89" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">dispatch(name, payload)</text>
+
+      <line x1="680" y1="100" x2="760" y2="100" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="672" y="80" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="89" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D5 D6 admitted command</text>
+
+      <line x1="840" y1="128" x2="840" y2="176" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="848" y="144" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="852" y="153" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">create_task(run)</text>
+
+      <path d="M784,128 V152 Q784,160 776,160 H648 Q640,160 640,168 V176" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="664" y="140" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="712" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">append(TurnStarted)</text>
+
+      <line x1="760" y1="204" x2="680" y2="204" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="684" y="184" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="193" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">emit(Payload)</text>
+
+      <line x1="840" y1="232" x2="840" y2="280" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="848" y="248" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="852" y="257" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">astream(messages)</text>
+
+      <line x1="600" y1="232" x2="600" y2="280" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="608" y="248" width="104" height="12" rx="2" fill="var(--paper)"/>
+      <text x="612" y="257" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D11 one line per Event</text>
+
+      <path d="M520,192 H128 Q120,192 120,184 V128" fill="none" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="240" y="172" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="320" y="181" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D2 D3 thread.subscribe: Event stream</text>
+
+      <!-- nodes -->
+      <rect x="40" y="72" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="72" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="98" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">run_repl</text>
+      <text x="120" y="114" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/repl.py</text>
+
+      <rect x="280" y="72" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="72" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="98" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ContractClient</text>
+      <text x="360" y="114" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D1 D20 cli/client.py</text>
+
+      <rect x="520" y="72" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="72" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="600" y="98" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Dispatcher</text>
+      <text x="600" y="114" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/dispatcher.py</text>
+
+      <rect x="760" y="72" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="72" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="840" y="98" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns</text>
+      <text x="840" y="114" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D10 D16 D17 core/turns.py</text>
+
+      <rect x="520" y="176" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="176" width="160" height="56" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <text x="600" y="202" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <text x="600" y="218" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D2 core/events.py</text>
+
+      <rect x="760" y="176" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="176" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="840" y="202" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">LangGraphRunner</text>
+      <text x="840" y="218" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D15 core/turn_runner.py</text>
+
+      <rect x="520" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="280" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="520" y="280" width="160" height="8" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="600" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">events.jsonl</text>
+      <text x="600" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;state_dir&gt;/events.jsonl</text>
+
+      <rect x="760" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="280" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="840" y="306" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">chat model</text>
+      <text x="840" y="322" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">D13 init_chat_model(models.main)</text>
+    </svg>
+    <figcaption>Figure: data flow of the runtime seam from a line typed at <code>run_repl</code> to the events it renders.</figcaption>
+  </figure>
+  <ol>
+    <li><code>run_repl</code> reads a line and calls <code>client.call(THREAD_TURN_START, ThreadTurnStartCommand(thread_id, message))</code>. The session subscription, opened once at start, is already consuming events in the same coroutine's <code>_render_turn</code> loop.</li>
+    <li><code>ContractClient.call</code> dumps the command and calls <code>Dispatcher.dispatch("thread.turn.start", payload, scopes)</code> with the CLI's four scopes. It parses the generic result into <code>AcceptedResult</code> or <code>ErrorEnvelope</code> (D20).</li>
+    <li><code>Dispatcher.dispatch</code> finds the route, checks <code>thread:operate</code> is among the scopes, validates the payload into <code>ThreadTurnStartCommand</code>, and calls <code>Turns.start</code>. Any failure on this path comes back as an <code>ErrorEnvelope</code> (D5, D6).</li>
+    <li><code>Turns.start</code> checks the thread exists and is not busy (D10), resolves the model through <code>prepare_for_turn</code> (D22), appends <code>TurnStarted</code>, and returns <code>AcceptedResult</code> with that event's sequence (D3).</li>
+    <li>In the same call, <code>Turns.start</code> spawns an asyncio task that runs <code>LangGraphRunner.run(turn, emit)</code> inside the terminal-event wrapper <code>Turns._finish</code>.</li>
+    <li><code>LangGraphRunner.run</code> assembles the system prompt, refreshes the tool snapshot, emits any <code>Warning</code>, and streams the chat model. Every chunk becomes <code>emit(MessageDelta)</code>, every tool call <code>emit(ToolCall)</code> and <code>emit(ToolResult)</code> (D15, D23).</li>
+    <li><code>EventLog.append</code> assigns the next sequence for the thread under its lock, writes one line to <code>events.jsonl</code> (D11), and puts the <code>Event</code> on every live subscriber queue.</li>
+    <li>The <code>thread.subscribe</code> generator yields the event and <code>run_repl</code> renders it: deltas inline, tool lines, warnings to stderr, and a terminal event as the cue to prompt again. When the runner returns, <code>Turns._finish</code> appends <code>TurnCompleted</code> with the token counts.</li>
+  </ol>
+
+  <h2 id="module-map">Module map <span class="mode">reference</span></h2>
+  <p>The modules the seam created, the CLI that calls them, and the two later modules the runner pulls in. Every drawn module imports <code>kinby.contracts</code>; those edges are not drawn. <code>core.errors</code> is a leaf every core module raises from and is not drawn either.</p>
+  <figure>
+    <svg viewBox="0 0 960 576" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-modules-title fig-modules-desc">
+      <title id="fig-modules-title">Modules the runtime seam touches</title>
+      <desc id="fig-modules-desc">kinby.cli.main builds the dispatcher and the contract client and opens the REPL; the REPL calls the client, the client calls the dispatcher; the dispatcher wires threads, events, turns, usage and the LangGraph turn runner; turns uses threads and events; the runner uses turns for its types and the prompt and plugin registry modules for each turn.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- arrows -->
+      <line x1="200" y1="84" x2="280" y2="84" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="208" y="64" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="73" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">run_repl</text>
+      <line x1="440" y1="84" x2="520" y2="84" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="440" y="64" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="73" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">call, subscribe</text>
+      <path d="M120,56 V32 Q120,24 128,24 H592 Q600,24 600,32 V56" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="256" y="4" width="208" height="12" rx="2" fill="var(--paper)"/>
+      <text x="360" y="13" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ContractClient(dispatch, subscribe, set(Scope))</text>
+      <path d="M160,112 V196 Q160,204 168,204 H520" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="248" y="184" width="184" height="12" rx="2" fill="var(--paper)"/>
+      <text x="340" y="193" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D21 build_dispatcher, turn_config</text>
+      <line x1="600" y1="112" x2="600" y2="176" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="608" y="136" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="612" y="145" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">dispatch, subscribe</text>
+      <line x1="620" y1="232" x2="620" y2="296" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="628" y="260" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="632" y="269" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">LangGraphRunner</text>
+      <path d="M664,232 V244 Q664,252 672,252 H832 Q840,252 840,260 V296" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="728" y="232" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="768" y="241" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">usage_totals</text>
+      <path d="M560,232 V264 Q560,272 552,272 H488 Q480,272 480,280 V424 Q480,432 488,432 H520" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="344" y="364" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="468" y="373" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="end">Turns(store, log, runner, …)</text>
+      <path d="M540,232 V248 Q540,256 532,256 H368 Q360,256 360,264 V416" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="408" y="236" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="448" y="245" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">EventLog</text>
+      <path d="M520,220 H128 Q120,220 120,228 V416" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="128" y="312" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="132" y="321" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">ThreadStore</text>
+      <line x1="600" y1="352" x2="600" y2="416" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="504" y="380" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="588" y="389" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="end">TurnRequest, Emit</text>
+      <path d="M672,352 V380 Q672,388 680,388 H832 Q840,388 840,396 V416" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="664" y="364" width="200" height="12" rx="2" fill="var(--paper)"/>
+      <text x="764" y="373" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">assemble_system_prompt, ToolRegistry.refresh</text>
+      <line x1="520" y1="456" x2="440" y2="456" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="436" y="464" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="473" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">append, stored</text>
+      <path d="M560,472 V496 Q560,504 552,504 H128 Q120,504 120,496 V472" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="296" y="488" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="340" y="497" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ThreadStore.exists</text>
+
+      <!-- rank 0 -->
+      <rect x="40" y="56" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="56" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="152" y="64" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="172" y="73" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">0 in</text>
+      <text x="120" y="90" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.cli.main</text>
+      <text x="120" y="104" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/main.py</text>
+
+      <rect x="280" y="56" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="56" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="288" y="64" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="304" y="73" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="392" y="64" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="412" y="73" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="360" y="90" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.cli.repl</text>
+      <text x="360" y="104" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/repl.py</text>
+
+      <rect x="520" y="56" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="56" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="528" y="64" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="544" y="73" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="632" y="64" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="652" y="73" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="600" y="90" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.cli.client</text>
+      <text x="600" y="104" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/client.py</text>
+
+      <!-- rank 1 -->
+      <rect x="520" y="176" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="176" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="528" y="184" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="544" y="193" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="632" y="184" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="652" y="193" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="600" y="210" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.core.dispatcher</text>
+      <text x="600" y="224" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/dispatcher.py</text>
+
+      <!-- rank 2 -->
+      <rect x="520" y="296" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="296" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="528" y="304" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="544" y="313" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="632" y="304" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="652" y="313" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="600" y="330" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.core.turn_runner</text>
+      <text x="600" y="344" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turn_runner.py</text>
+
+      <rect x="760" y="296" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="296" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="768" y="304" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="784" y="313" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="872" y="304" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="892" y="313" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="840" y="330" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.core.usage</text>
+      <text x="840" y="344" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/usage.py</text>
+
+      <!-- rank 3 -->
+      <rect x="40" y="416" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="416" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="48" y="424" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="433" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="152" y="424" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="172" y="433" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="120" y="450" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.core.threads</text>
+      <text x="120" y="464" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/threads.py</text>
+
+      <rect x="280" y="416" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="416" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="288" y="424" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="304" y="433" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="392" y="424" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="412" y="433" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="360" y="450" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.core.events</text>
+      <text x="360" y="464" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/events.py</text>
+
+      <rect x="520" y="416" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="416" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="528" y="424" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="544" y="433" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="632" y="424" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="652" y="433" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="600" y="450" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.core.turns</text>
+      <text x="600" y="464" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turns.py</text>
+
+      <rect x="760" y="416" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="416" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="872" y="424" width="40" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="892" y="433" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="840" y="450" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.prompt · plugins.registry</text>
+      <text x="840" y="464" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">#46, #54: later features</text>
+
+      <!-- legend -->
+      <line x1="40" y1="536" x2="920" y2="536" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="552" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="561" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">created by this feature</text>
+      <rect x="200" y="552" width="24" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="212" y="561" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">n in</text>
+      <text x="232" y="561" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">modules that import it</text>
+    </svg>
+    <figcaption>Figure: dependency graph of the modules the runtime seam touches, with the ones the feature created marked. <code>core.prompt</code> and <code>plugins.registry</code> are one node because the runner is their only caller.</figcaption>
+  </figure>
+  <h3>Interfaces</h3>
+  <p>What other modules call, as it stands at <code>6aa4a52</code>.</p>
+  <dl>
+    <dt><code>contracts.methods</code></dt>
+    <dd>Seven route constants: <code>THREAD_CREATE</code>, <code>THREAD_LIST</code>, <code>THREAD_TURN_START</code>, <code>THREAD_TURN_INTERRUPT</code>, <code>THREAD_APPROVAL_RESPOND</code>, <code>USAGE_GET</code> as <code>Method[Command, Result]</code>, and <code>THREAD_SUBSCRIBE</code> as <code>Subscription[ThreadSubscribeCommand, Event]</code>. Each carries its wire name, scope, and shapes (D20). See the method table under Data shapes.</dd>
+    <dt><code>Dispatcher.register(method, handler)</code>, <code>Dispatcher.register_subscription(subscription, handler)</code></dt>
+    <dd>Add a unary or a stream route. The handler's parameter type is the route's command type. Called by <code>build_dispatcher</code>.</dd>
+    <dt><code>Dispatcher.dispatch(method: str, payload: Mapping[str, object], scopes: Collection[Scope]) -> ContractModel</code></dt>
+    <dd>The unary path every client call crosses. Returns the result model or an <code>ErrorEnvelope</code> (D6). Called by <code>ContractClient.call</code>.</dd>
+    <dt><code>Dispatcher.subscribe(method, payload, scopes) -> AsyncGenerator[ContractModel]</code></dt>
+    <dd>The one stream path. Same admission as <code>dispatch</code>. Yields <code>Event</code>s, or one <code>ErrorEnvelope</code> and stops. Closes the handler generator with <code>aclosing</code>.</dd>
+    <dt><code>build_dispatcher(state_dir: Path, *, event_log: EventLog | None = None, turns: TurnConfig | None = None) -> Dispatcher</code></dt>
+    <dd>Wires <code>ThreadStore</code>, <code>EventLog</code>, the four thread-and-usage routes, and, when <code>turns</code> is given, <code>Turns</code> with the three turn routes (D21). Called by <code>kinby.cli.main</code> and every contract-level test.</dd>
+    <dt><code>turn_config(instance: Instance, *, model_override: str | None = None) -> TurnConfig</code></dt>
+    <dd>Builds a <code>LangGraphRunner</code> and pairs it with its own <code>prepare_for_turn</code> (D22). Called by <code>main</code> for <code>kinby run</code>.</dd>
+    <dt><code>ThreadStore(state_dir)</code>: <code>create(title) -> ThreadCreateResult</code>, <code>list() -> ThreadListResult</code>, <code>exists(thread_id) -> bool</code></dt>
+    <dd>Thread identity in <code>threads.jsonl</code>. Synchronous.</dd>
+    <dt><code>EventLog(state_dir)</code>: <code>append(thread_id, turn_id, payload: Payload) -> Event</code></dt>
+    <dd>Assigns the next per-thread sequence under the log's lock, writes one line to <code>events.jsonl</code>, and puts the event on every live subscriber queue for the thread. Called by <code>Turns</code> and, through <code>Emit</code>, by the runner.</dd>
+    <dt><code>EventLog.subscribe(thread_id, after_sequence=0) -> AsyncGenerator[Event]</code></dt>
+    <dd>Replays stored events with <code>sequence > after_sequence</code>, then yields live ones. Snapshot and queue registration happen under one lock, so the handoff is exact (ADR 0006).</dd>
+    <dt><code>EventLog.stored(thread_id) -> list[Event]</code>, <code>EventLog.all_events() -> Iterator[Event]</code></dt>
+    <dd>Read paths. <code>Turns</code> uses <code>stored</code> to decide whether a thread is live. <code>usage_totals</code> reads <code>all_events</code>.</dd>
+    <dt><code>Turns(store, log, runner: TurnRunner, prepare_for_turn: Callable[[], str])</code>: <code>start</code>, <code>interrupt</code>, <code>respond</code></dt>
+    <dd>Each takes its command and returns <code>AcceptedResult</code>. Raises <code>ThreadNotFound</code>, <code>ThreadBusy</code>, <code>NoActiveTurn</code>, <code>ApprovalNotFound</code>, <code>InvalidParkedTurn</code>. Holds the running task per thread. Owns the terminal events (D16, D17).</dd>
+    <dt><code>TurnRunner</code> (Protocol): <code>run(turn: TurnRequest, emit: Emit) -> TurnResult</code>, <code>resume(turn, answer: str, emit) -> TurnResult</code></dt>
+    <dd>The seam a scripted runner fills in tests. <code>Emit = Callable[[Payload], Awaitable[Event]]</code>.</dd>
+    <dt><code>LangGraphRunner(instance, *, model_factory=_init_model, model_override=None, approval_hook=None)</code>: <code>prepare_for_turn() -> str</code>, <code>run</code>, <code>resume</code></dt>
+    <dd>The production runner. <code>prepare_for_turn</code> re-reads the manifest and returns <code>models.main</code>. <code>run</code> assembles the prompt, refreshes tools, and drives the graph with <code>durability="exit"</code> (ADR 0011). <code>approval_hook</code> is the #34 placeholder that parks before the graph runs.</dd>
+    <dt><code>usage_totals(events: Iterable[Event], usage_range: UsageRange) -> UsageGetResult</code></dt>
+    <dd>Folds <code>TurnCompleted</code> payloads inside the inclusive range, per thread in first-seen order (D18).</dd>
+    <dt><code>ContractClient(dispatch, subscribe, scopes)</code>: <code>call(method, command) -> Result | ErrorEnvelope</code>, <code>subscribe(subscription, command) -> AsyncGenerator[Item | ErrorEnvelope]</code></dt>
+    <dd>Parses the wire's generic result into the type the route promises, once. Anything else becomes <code>UNEXPECTED_RESULT</code>.</dd>
+    <dt><code>run_repl(client, thread_id, *, stdin, stdout, stderr) -> int</code></dt>
+    <dd>The prompt loop and the event renderer. One subscription per session. Ctrl+C during a turn becomes <code>thread.turn.interrupt</code> through <code>_InterruptOnSigint</code>.</dd>
+    <dt><code>kinby.cli.main(argv) -> int</code></dt>
+    <dd>Subcommands <code>run</code>, <code>thread create</code>, <code>thread list</code>, <code>usage</code>. Owns the four <code>asyncio.run</code> calls (D7).</dd>
+  </dl>
+
+  <h2 id="ground-level">Ground-level flows <span class="mode">reference</span></h2>
+  <p>Four flows: the REPL starts a turn, the turn streams, a subscriber replays, and one turn's lifecycle. Participants are the functions from the module map.</p>
+
+  <h3 id="flow-turn-start">Flow: turn start</h3>
+  <figure>
+    <svg viewBox="0 0 960 576" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-start-title fig-start-desc">
+      <title id="fig-start-title">thread.turn.start from the REPL</title>
+      <desc id="fig-start-desc">run_repl opens the session subscription through ContractClient and Dispatcher to EventLog, then sends thread.turn.start; Dispatcher admits it and calls Turns.start, which reads the stored events to refuse a busy thread, resolves the model, appends turn.started, spawns the runner task, and returns AcceptedResult before any output.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- lifelines -->
+      <line x1="120" y1="64" x2="120" y2="552" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="300" y1="64" x2="300" y2="552" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="480" y1="64" x2="480" y2="552" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="660" y1="64" x2="660" y2="552" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="840" y1="64" x2="840" y2="552" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <!-- activation bars -->
+      <rect x="116" y="88" width="8" height="448" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="296" y="96" width="8" height="40" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="296" y="208" width="8" height="328" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="476" y="128" width="8" height="40" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="476" y="240" width="8" height="264" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="656" y="304" width="8" height="168" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="836" y="160" width="8" height="16" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="836" y="400" width="8" height="40" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <!-- messages -->
+      <line x1="124" y1="96" x2="296" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="106" y="76" width="208" height="12" rx="2" fill="var(--paper)"/>
+      <text x="210" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">subscribe(THREAD_SUBSCRIBE, {thread_id, after_sequence=0})</text>
+
+      <line x1="304" y1="128" x2="476" y2="128" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="310" y="108" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="390" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">subscribe(name, payload, scopes)</text>
+
+      <line x1="484" y1="160" x2="836" y2="160" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="600" y="140" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="660" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">subscribe(thread_id, 0)</text>
+
+      <line x1="124" y1="208" x2="296" y2="208" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="90" y="188" width="240" height="12" rx="2" fill="var(--paper)"/>
+      <text x="210" y="197" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">call(THREAD_TURN_START, ThreadTurnStartCommand(thread_id, message))</text>
+
+      <line x1="304" y1="240" x2="476" y2="240" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="302" y="220" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="390" y="229" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">dispatch("thread.turn.start", payload, scopes)</text>
+
+      <path d="M484,264 H512 V280 H484" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="520" y="266" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="524" y="275" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D5 D6 thread:operate, then model_validate</text>
+
+      <line x1="484" y1="304" x2="656" y2="304" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="530" y="284" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="570" y="293" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">start(command)</text>
+
+      <line x1="664" y1="336" x2="836" y2="336" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="654" y="316" width="192" height="12" rx="2" fill="var(--paper)"/>
+      <text x="750" y="325" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D10 stored(thread_id): parked or running is busy</text>
+
+      <path d="M664,360 H692 V376 H664" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="700" y="362" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="704" y="371" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D22 prepare_for_turn() → models.main</text>
+
+      <line x1="664" y1="400" x2="836" y2="400" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="638" y="380" width="224" height="12" rx="2" fill="var(--paper)"/>
+      <text x="750" y="389" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">append(thread_id, turn_id, TurnStarted(message, model))</text>
+
+      <line x1="836" y1="432" x2="664" y2="432" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="702" y="412" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="750" y="421" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Event(sequence=n)</text>
+
+      <line x1="656" y1="464" x2="484" y2="464" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-accent)"/>
+      <rect x="458" y="444" width="224" height="12" rx="2" fill="var(--paper)"/>
+      <text x="570" y="453" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D3 create_task(_finish(turn)); AcceptedResult(…, n)</text>
+
+      <line x1="476" y1="496" x2="304" y2="496" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="350" y="476" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="390" y="485" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult</text>
+
+      <line x1="296" y1="528" x2="124" y2="528" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="130" y="508" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="210" y="517" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult | ErrorEnvelope</text>
+
+      <!-- participants -->
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">run_repl</text>
+      <text x="120" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">cli/repl.py</text>
+      <rect x="220" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="220" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="300" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ContractClient</text>
+      <text x="300" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">cli/client.py</text>
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="480" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Dispatcher</text>
+      <text x="480" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/dispatcher.py</text>
+      <rect x="580" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="580" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="660" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns</text>
+      <text x="660" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turns.py</text>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="840" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <text x="840" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/events.py</text>
+    </svg>
+    <figcaption>Figure: sequence of calls when the REPL subscribes to a thread and starts a turn, with the receipt returning before any output.</figcaption>
+  </figure>
+  <ol>
+    <li><code>run_repl</code> opens the session subscription: input <code>ThreadSubscribeCommand(thread_id, after_sequence=0)</code>, output an async generator of <code>Event | ErrorEnvelope</code>. It stays open inside <code>aclosing</code> for the whole session.</li>
+    <li><code>ContractClient.subscribe</code> dumps the command and calls <code>Dispatcher.subscribe("thread.subscribe", payload, scopes)</code>.</li>
+    <li><code>Dispatcher.subscribe</code> admits the call (<code>thread:read</code>, <code>ThreadSubscribeCommand</code>) and calls <code>EventLog.subscribe(thread_id, 0)</code>. An unknown thread yields an empty live stream (open question 1).</li>
+    <li>You type a line. <code>run_repl</code> calls <code>client.call(THREAD_TURN_START, ThreadTurnStartCommand(thread_id, message))</code>: output <code>AcceptedResult | ErrorEnvelope</code>.</li>
+    <li><code>ContractClient.call</code> calls <code>Dispatcher.dispatch("thread.turn.start", payload, scopes)</code>.</li>
+    <li><code>Dispatcher.dispatch</code> checks the route exists, then <code>thread:operate</code>, then validates into <code>ThreadTurnStartCommand</code>. Each failure returns its <code>ErrorEnvelope</code> without calling the handler (D5, D6).</li>
+    <li><code>Dispatcher.dispatch</code> calls <code>Turns.start(command)</code>.</li>
+    <li><code>Turns.start</code> checks <code>ThreadStore.exists</code> (else <code>ThreadNotFound</code>), then reads <code>EventLog.stored(thread_id)</code>. A last event of <code>approval.requested</code>, a live task, or a concurrent start in <code>_starting</code> raises <code>ThreadBusy</code> (D10).</li>
+    <li><code>Turns.start</code> calls <code>prepare_for_turn()</code>, which re-reads the manifest and returns the model name (D22). Output: a <code>TurnRequest(thread_id, uuid4(), message, model)</code>.</li>
+    <li><code>Turns.start</code> calls <code>EventLog.append(thread_id, turn_id, TurnStarted(message, model))</code>: output the <code>Event</code> whose <code>sequence</code> is the sequence at accept.</li>
+    <li><code>Turns.start</code> creates an asyncio task that runs <code>_finish(turn)</code>, the wrapper around <code>runner.run</code> that appends the terminal event (see Flow: turn stream). No reply is awaited. It returns <code>AcceptedResult(thread_id, turn_id, sequence)</code> (D3).</li>
+    <li><code>Dispatcher.dispatch</code> returns the result. <code>ContractClient.call</code> narrows it to <code>AcceptedResult | ErrorEnvelope</code>. <code>run_repl</code> prints an envelope to stderr and otherwise waits for events.</li>
+  </ol>
+
+  <h3 id="flow-turn-stream">Flow: turn stream</h3>
+  <figure>
+    <svg viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-stream-title fig-stream-desc">
+      <title id="fig-stream-title">Events during a running turn</title>
+      <desc id="fig-stream-desc">LangGraphRunner assembles the prompt and tools, streams the chat model, and emits one MessageDelta per chunk through the Turns._finish guard into EventLog, which pushes each Event to the subscription run_repl renders; when the runner returns a TurnOutcome, Turns._finish appends TurnCompleted and the REPL prompts again.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- lifelines -->
+      <line x1="120" y1="64" x2="120" y2="496" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="300" y1="64" x2="300" y2="496" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="480" y1="64" x2="480" y2="496" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="660" y1="64" x2="660" y2="496" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="840" y1="64" x2="840" y2="496" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <!-- frame -->
+      <rect x="108" y="152" width="744" height="144" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="108" y="152" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="128" y="164" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">LOOP</text>
+      <text x="160" y="164" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[each AIMessageChunk]</text>
+
+      <!-- activation bars -->
+      <rect x="116" y="88" width="8" height="288" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="296" y="128" width="8" height="56" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="476" y="208" width="8" height="48" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="476" y="360" width="8" height="48" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="656" y="240" width="8" height="48" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="656" y="392" width="8" height="48" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="836" y="272" width="8" height="24" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="836" y="424" width="8" height="48" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <!-- messages -->
+      <path d="M124,96 H152 V112 H124" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="160" y="98" width="216" height="12" rx="2" fill="var(--paper)"/>
+      <text x="164" y="107" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D15 D23 assemble_system_prompt; refresh() → Warning*</text>
+
+      <line x1="124" y1="128" x2="296" y2="128" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="122" y="108" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="210" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">astream([system, *messages, user])</text>
+
+      <line x1="296" y1="176" x2="124" y2="176" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="166" y="180" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="210" y="189" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AIMessageChunk</text>
+
+      <line x1="124" y1="208" x2="476" y2="208" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="230" y="188" width="140" height="12" rx="2" fill="var(--paper)"/>
+      <text x="300" y="197" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">emit(MessageDelta(text))</text>
+
+      <line x1="484" y1="240" x2="656" y2="240" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="462" y="220" width="216" height="12" rx="2" fill="var(--paper)"/>
+      <text x="570" y="229" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D16 not interrupted: append(thread_id, turn_id, payload)</text>
+
+      <line x1="664" y1="272" x2="836" y2="272" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="662" y="252" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="750" y="261" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D2 queue → yield Event(sequence=n+1)</text>
+
+      <path d="M124,320 H152 V336 H124" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="160" y="322" width="240" height="12" rx="2" fill="var(--paper)"/>
+      <text x="164" y="331" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">_call_tools: emit(ToolCall), emit(ToolResult), back to model</text>
+
+      <line x1="124" y1="360" x2="476" y2="360" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="206" y="340" width="188" height="12" rx="2" fill="var(--paper)"/>
+      <text x="300" y="349" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TurnOutcome(input_tokens, output_tokens)</text>
+
+      <line x1="484" y1="392" x2="656" y2="392" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="490" y="372" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="570" y="381" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">append(TurnCompleted(tokens))</text>
+
+      <line x1="664" y1="424" x2="836" y2="424" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="690" y="404" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="750" y="413" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Event(TurnCompleted)</text>
+
+      <path d="M844,456 H872 V472 H844" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="712" y="476" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="868" y="485" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="end">write "\n"; prompt "> " again</text>
+
+      <!-- participants -->
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">LangGraphRunner</text>
+      <text x="120" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">run, _call_model</text>
+      <rect x="220" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="220" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="300" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">chat model</text>
+      <text x="300" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">ChatModel.astream</text>
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="480" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns._finish</text>
+      <text x="480" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">emit guard, terminal event</text>
+      <rect x="580" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="580" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="660" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <text x="660" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">append, subscribe</text>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="840" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">run_repl</text>
+      <text x="840" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">_render_turn</text>
+    </svg>
+    <figcaption>Figure: sequence of events during a running turn, from the first model chunk to the prompt returning.</figcaption>
+  </figure>
+  <ol>
+    <li><code>LangGraphRunner.run</code> calls <code>assemble_system_prompt(instance, today)</code> and <code>ToolRegistry.refresh()</code>. Every <code>Warning</code> the refresh returns is emitted as an event before the model is called (D15, D23).</li>
+    <li>The graph's <code>model</code> node calls <code>ChatModel.astream</code> with the system message, the checkpointed messages, and the user message. The user message is added to the state together with the reply, so a failed call cannot checkpoint it (ADR 0011).</li>
+    <li>For each chunk with text, <code>_call_model</code> calls <code>emit(MessageDelta(text))</code>. <code>emit</code> is the guarded closure <code>Turns._finish</code> built: input a <code>Payload</code>, output the appended <code>Event</code>.</li>
+    <li>The guard raises <code>TurnInterruptedError</code> when the turn is no longer the running one or was interrupted (D16). Otherwise it calls <code>EventLog.append(thread_id, turn_id, payload)</code>.</li>
+    <li><code>EventLog.append</code> puts the <code>Event</code> on every live subscriber queue for the thread. The session subscription yields it, and <code>_render_turn</code> writes <code>text</code> without a newline.</li>
+    <li>When the reply carries tool calls, the <code>tools</code> node emits <code>ToolCall</code> and <code>ToolResult</code> per call and the graph returns to <code>model</code>. The REPL prints <code>[tool.call] name {…}</code> and <code>[tool.result] name (ok|error): output</code>.</li>
+    <li><code>run</code> returns <code>TurnOutcome(input_tokens, output_tokens)</code> accumulated from <code>usage_metadata</code> to <code>Turns._finish</code>.</li>
+    <li><code>Turns._finish</code> appends <code>TurnCompleted(input_tokens, output_tokens)</code>. A <code>CoreError</code> from the runner becomes <code>TurnFailed(code, message)</code>. Any other exception becomes <code>TurnFailed(INTERNAL, "The model turn failed unexpectedly.")</code>. A <code>ParkedTurn</code> appends nothing: <code>approval.requested</code> was already emitted (see Flow: turn lifecycle).</li>
+    <li>The subscription yields the terminal event. <code>_render_turn</code> returns and <code>run_repl</code> shows the prompt.</li>
+  </ol>
+
+  <h3 id="flow-replay">Flow: replay</h3>
+  <figure>
+    <svg viewBox="0 0 960 544" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-replay-title fig-replay-desc">
+      <title id="fig-replay-title">thread.subscribe with a cursor</title>
+      <desc id="fig-replay-desc">A ContractClient subscribes after sequence k; Dispatcher admits the call and asks EventLog, which under its lock reads events.jsonl for the thread, registers a live queue, yields the stored events in sequence order through Dispatcher to the client, then yields each live event as it lands.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- lifelines -->
+      <line x1="120" y1="64" x2="120" y2="520" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="320" y1="64" x2="320" y2="520" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="520" y1="64" x2="520" y2="520" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="720" y1="64" x2="720" y2="520" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <!-- frame -->
+      <rect x="108" y="376" width="424" height="112" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="108" y="376" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="128" y="388" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">LOOP</text>
+      <text x="160" y="388" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[live, until the client closes]</text>
+
+      <!-- activation bars -->
+      <rect x="116" y="88" width="8" height="424" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="316" y="96" width="8" height="416" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="516" y="160" width="8" height="352" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="224" width="8" height="40" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <!-- messages -->
+      <line x1="124" y1="96" x2="316" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="112" y="76" width="216" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">subscribe("thread.subscribe", {thread_id, after_sequence: k})</text>
+
+      <path d="M324,120 H352 V136 H324" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="360" y="122" width="184" height="12" rx="2" fill="var(--paper)"/>
+      <text x="364" y="131" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D5 thread:read; ThreadSubscribeCommand</text>
+
+      <line x1="324" y1="160" x2="516" y2="160" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="364" y="140" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">subscribe(thread_id, k)</text>
+
+      <path d="M524,184 H552 V200 H524" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="560" y="186" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="564" y="195" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">ADR 0006 acquire _lock</text>
+
+      <line x1="524" y1="224" x2="716" y2="224" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="522" y="204" width="196" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="213" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D11 read lines: thread_id match, sequence &gt; k</text>
+
+      <line x1="716" y1="256" x2="524" y2="256" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="556" y="236" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="245" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">list[Event], file order</text>
+
+      <path d="M524,280 H552 V296 H524" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="560" y="282" width="184" height="12" rx="2" fill="var(--paper)"/>
+      <text x="564" y="291" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">register asyncio.Queue; release _lock</text>
+
+      <line x1="516" y1="320" x2="324" y2="320" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-open)"/>
+      <rect x="352" y="300" width="136" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="309" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">yield each stored Event</text>
+
+      <line x1="316" y1="352" x2="124" y2="352" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-accent)"/>
+      <rect x="150" y="332" width="140" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="341" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D2 Event k+1, k+2, … in order</text>
+
+      <path d="M524,408 H552 V424 H524" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="560" y="410" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="564" y="419" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">await queue.get()</text>
+
+      <line x1="516" y1="448" x2="324" y2="448" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-open)"/>
+      <rect x="340" y="428" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="437" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">yield live Event if sequence &gt; k</text>
+
+      <line x1="316" y1="472" x2="124" y2="472" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="180" y="476" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="485" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Event</text>
+
+      <!-- participants -->
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ContractClient</text>
+      <text x="120" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">a second client, or a restart</text>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="320" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Dispatcher</text>
+      <text x="320" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">subscribe</text>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="520" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <text x="520" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">subscribe</text>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="720" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">events.jsonl</text>
+      <text x="720" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;state_dir&gt;/events.jsonl</text>
+    </svg>
+    <figcaption>Figure: sequence for a subscriber that joins after sequence <code>k</code>, replaying stored events and then staying live.</figcaption>
+  </figure>
+  <ol>
+    <li>A <code>ContractClient</code> calls <code>subscribe(THREAD_SUBSCRIBE, ThreadSubscribeCommand(thread_id, after_sequence=k))</code>. <code>k</code> is <code>0</code> for a full replay, or the last sequence a dropped client saw.</li>
+    <li><code>Dispatcher.subscribe</code> checks <code>thread:read</code> and validates the command. On failure it yields one <code>ErrorEnvelope</code> and returns.</li>
+    <li>The route handler calls <code>EventLog.subscribe(thread_id, k)</code>.</li>
+    <li>Under the log's lock, <code>EventLog</code> reads <code>events.jsonl</code>, keeps the lines whose <code>thread_id</code> matches and whose <code>sequence > k</code>, and registers an <code>asyncio.Queue</code> for live events. Snapshot and registration under one lock make the handoff exact: no event is missed and none is delivered twice (ADR 0006).</li>
+    <li>The stored events come back as a list in file order, which is sequence order.</li>
+    <li>The generator yields each stored <code>Event</code>. <code>Dispatcher.subscribe</code> passes each through, and <code>ContractClient.subscribe</code> narrows it to <code>Event | ErrorEnvelope</code>.</li>
+    <li>The generator awaits the queue. Each event appended after the snapshot is yielded as it lands, still filtered by <code>sequence > k</code>.</li>
+    <li>When the client closes the generator, <code>aclosing</code> runs the <code>finally</code> that removes the queue.</li>
+  </ol>
+
+  <h3 id="flow-turn-lifecycle">Flow: turn lifecycle</h3>
+  <figure>
+    <svg viewBox="0 0 960 368" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-lifecycle-title fig-lifecycle-desc">
+      <title id="fig-lifecycle-title">States of one turn</title>
+      <desc id="fig-lifecycle-desc">A turn enters Running on turn.start, ends as Completed when the runner returns, Failed when it raises, or Interrupted on turn.interrupt; a runner that parks moves it to WaitingApproval, which approval.respond returns to Running and turn.interrupt ends; every terminal state frees the thread for the next turn.start.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- transitions -->
+      <line x1="56" y1="120" x2="120" y2="120" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="60" y="100" width="56" height="12" rx="2" fill="var(--paper)"/>
+      <text x="88" y="109" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">turn.start</text>
+
+      <path d="M220,100 V48 Q220,40 228,40 H600" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="300" y="20" width="220" height="12" rx="2" fill="var(--paper)"/>
+      <text x="410" y="29" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">runner returns TurnOutcome / turn.completed</text>
+
+      <line x1="240" y1="120" x2="600" y2="120" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="320" y="100" width="200" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="109" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">runner raises / turn.failed(code, message)</text>
+
+      <path d="M220,140 V172 Q220,180 228,180 H552 Q560,180 560,188 V260 Q560,268 568,268 H600" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="270" y="160" width="240" height="12" rx="2" fill="var(--paper)"/>
+      <text x="390" y="169" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D16 turn.interrupt / task.cancel(), turn.interrupted</text>
+
+      <line x1="160" y1="140" x2="160" y2="260" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="20" y="196" width="132" height="12" rx="2" fill="var(--paper)"/>
+      <text x="148" y="205" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="end">D17 approval.requested, ParkedTurn</text>
+
+      <line x1="200" y1="260" x2="200" y2="140" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="208" y="196" width="196" height="12" rx="2" fill="var(--paper)"/>
+      <text x="212" y="205" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">approval.respond / resume(turn, answer, emit)</text>
+
+      <line x1="240" y1="292" x2="600" y2="292" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="310" y="300" width="220" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="309" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">turn.interrupt [no task] / turn.interrupted</text>
+
+      <path d="M720,40 H832 Q840,40 840,48 V108" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="720" y1="120" x2="828" y2="120" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M720,280 H832 Q840,280 840,272 V132" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="856" y="114" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="860" y="123" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D10 thread is free</text>
+
+      <!-- start and end -->
+      <circle cx="48" cy="120" r="6" fill="var(--ink)"/>
+      <circle cx="840" cy="120" r="8" fill="none" stroke="var(--ink)" stroke-width="1"/>
+      <circle cx="840" cy="120" r="5" fill="var(--ink)"/>
+
+      <!-- states -->
+      <rect x="120" y="100" width="120" height="40" rx="8" fill="var(--paper)"/>
+      <rect x="120" y="100" width="120" height="40" rx="8" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="180" y="124" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Running</text>
+
+      <rect x="120" y="260" width="120" height="40" rx="8" fill="var(--paper)"/>
+      <rect x="120" y="260" width="120" height="40" rx="8" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <text x="180" y="284" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">WaitingApproval</text>
+
+      <rect x="600" y="20" width="120" height="40" rx="8" fill="var(--paper)"/>
+      <rect x="600" y="20" width="120" height="40" rx="8" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="660" y="44" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Completed</text>
+
+      <rect x="600" y="100" width="120" height="40" rx="8" fill="var(--paper)"/>
+      <rect x="600" y="100" width="120" height="40" rx="8" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="660" y="124" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Failed</text>
+
+      <rect x="600" y="260" width="120" height="40" rx="8" fill="var(--paper)"/>
+      <rect x="600" y="260" width="120" height="40" rx="8" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="660" y="284" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Interrupted</text>
+
+      <text x="40" y="344" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">Running, WaitingApproval: turn.start → THREAD_BUSY (retryable). No live turn: turn.interrupt, approval.respond → NO_ACTIVE_TURN. Unknown approval_id → NOT_FOUND.</text>
+    </svg>
+    <figcaption>Figure: state machine of one turn, from <code>turn.start</code> to the terminal event that frees the thread. State names are the blueprint's; the code derives them from the thread's last event and its task table.</figcaption>
+  </figure>
+  <ol>
+    <li><code>turn.start</code> → Running: <code>Turns.start</code> appends <code>turn.started</code> and spawns the task. The thread is busy while its id is in <code>_starting</code>, while its task is not done, or while its last event is <code>approval.requested</code> (D10).</li>
+    <li>Running → Completed: the runner returns <code>TurnOutcome</code>. <code>Turns._finish</code> appends <code>turn.completed</code> with the token counts.</li>
+    <li>Running → Failed: the runner raises. <code>Turns._finish</code> appends <code>turn.failed</code> with the <code>CoreError</code> code, or <code>INTERNAL</code> for anything else.</li>
+    <li>Running → Interrupted: <code>Turns.interrupt</code> marks the running entry interrupted, cancels the task, appends <code>turn.interrupted</code> itself, and drops the entry. A runner still cleaning up cannot emit: the guard raises <code>TurnInterruptedError</code> (D16, ADR 0008).</li>
+    <li>Running → WaitingApproval: the runner emits <code>approval.requested</code> and returns <code>ParkedTurn</code>. Today the <code>approval_hook</code> does this before the graph runs. No task stays alive. The thread's last event is non-terminal, which is the whole definition of parked, so a restart sees the same state (D17).</li>
+    <li>WaitingApproval → Running: <code>Turns.respond</code> matches <code>approval_id</code> against the last event (else <code>ApprovalNotFound</code>), rebuilds the <code>TurnRequest</code> from the stored <code>turn.started</code> (else <code>InvalidParkedTurn</code>), spawns a task around <code>runner.resume(turn, answer, emit)</code>, and returns <code>AcceptedResult</code> with the <code>approval.requested</code> sequence. It appends no event.</li>
+    <li>WaitingApproval → Interrupted: <code>Turns.interrupt</code> with no task alive finds the pending approval and appends <code>turn.interrupted</code> directly.</li>
+    <li>Any terminal state frees the thread: the next <code>turn.start</code> is accepted.</li>
+  </ol>
+
+  <h2 id="data-shapes">Data shapes <span class="mode">reference</span></h2>
+  <p>Contract models are pydantic <code>ContractModel</code>s with <code>extra="forbid"</code> in <code>src/kinby/contracts/models.py</code>. Core-side shapes are frozen dataclasses and a Protocol in <code>src/kinby/core/turns.py</code> and <code>core/dispatcher.py</code>. The nine payload variants are collapsed into one box and listed in the table below.</p>
+  <figure>
+    <svg viewBox="0 0 960 496" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-shapes-title fig-shapes-desc">
+      <title id="fig-shapes-title">Types the runtime seam adds</title>
+      <desc id="fig-shapes-desc">Event owns one Payload from the discriminated union; AcceptedResult and ErrorEnvelope are the two unary results; TurnConfig owns a TurnRunner, whose run and resume take a TurnRequest and an Emit that turns a Payload into an Event, and return a TurnResult.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- relations -->
+      <line x1="240" y1="104" x2="320" y2="104" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)"/>
+      <rect x="296" y="84" width="16" height="12" rx="2" fill="var(--paper)"/>
+      <text x="304" y="93" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1</text>
+      <line x1="240" y1="272" x2="320" y2="272" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)"/>
+      <rect x="296" y="252" width="16" height="12" rx="2" fill="var(--paper)"/>
+      <text x="304" y="261" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1</text>
+      <line x1="520" y1="272" x2="600" y2="272" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+      <rect x="524" y="252" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="560" y="261" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">run(turn, emit)</text>
+      <line x1="420" y1="240" x2="420" y2="192" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+      <rect x="428" y="208" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="432" y="217" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">Emit: (Payload) → Event</text>
+      <line x1="420" y1="328" x2="420" y2="376" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+      <rect x="428" y="344" width="48" height="12" rx="2" fill="var(--paper)"/>
+      <text x="432" y="353" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">returns</text>
+
+      <!-- Event -->
+      <rect x="40" y="40" width="200" height="144" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="40" width="200" height="144" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <line x1="40" y1="72" x2="240" y2="72" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="40" y1="160" x2="240" y2="160" stroke="var(--rule)" stroke-width="1"/>
+      <text x="140" y="60" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Event</text>
+      <text x="52" y="88" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">sequence: int  (D2 gap-free per thread)</text>
+      <text x="52" y="104" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">thread_id: UUID</text>
+      <text x="52" y="120" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">turn_id: UUID</text>
+      <text x="52" y="136" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">payload: Payload</text>
+      <text x="52" y="152" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">timestamp: datetime</text>
+      <text x="52" y="176" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">type -> EventType  (payload.type)</text>
+
+      <!-- Payload -->
+      <rect x="320" y="40" width="200" height="152" rx="6" fill="var(--paper)"/>
+      <rect x="320" y="40" width="200" height="152" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="320" y1="88" x2="520" y2="88" stroke="var(--rule)" stroke-width="1"/>
+      <text x="420" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;&lt;union, discriminator="type"&gt;&gt;</text>
+      <text x="420" y="76" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Payload</text>
+      <text x="332" y="104" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">TurnStarted: message, model</text>
+      <text x="332" y="120" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">MessageDelta: text</text>
+      <text x="332" y="136" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">ToolCall, ToolResult: call_id, name, …</text>
+      <text x="332" y="152" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">ApprovalRequested: approval_id, request</text>
+      <text x="332" y="168" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">TurnCompleted: input_tokens, output_tokens</text>
+      <text x="332" y="184" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">... Warning, TurnFailed, TurnInterrupted</text>
+
+      <!-- AcceptedResult -->
+      <rect x="600" y="40" width="200" height="88" rx="6" fill="var(--paper)"/>
+      <rect x="600" y="40" width="200" height="88" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="600" y1="72" x2="800" y2="72" stroke="var(--rule)" stroke-width="1"/>
+      <text x="700" y="60" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">AcceptedResult</text>
+      <text x="612" y="88" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">thread_id: UUID</text>
+      <text x="612" y="104" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">turn_id: UUID</text>
+      <text x="612" y="120" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">sequence: int  (D3 event at accept)</text>
+
+      <!-- TurnConfig -->
+      <rect x="40" y="240" width="200" height="72" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="240" width="200" height="72" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="40" y1="272" x2="240" y2="272" stroke="var(--rule)" stroke-width="1"/>
+      <text x="140" y="260" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnConfig</text>
+      <text x="52" y="288" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">prepare_for_turn: Callable[[], str]  (D22)</text>
+      <text x="52" y="304" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">runner: TurnRunner</text>
+
+      <!-- TurnRunner -->
+      <rect x="320" y="240" width="200" height="88" rx="6" fill="var(--paper)"/>
+      <rect x="320" y="240" width="200" height="88" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="320" y1="288" x2="520" y2="288" stroke="var(--rule)" stroke-width="1"/>
+      <text x="420" y="256" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;&lt;Protocol&gt;&gt;</text>
+      <text x="420" y="276" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnRunner</text>
+      <text x="332" y="304" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">run(turn, emit) -> TurnResult</text>
+      <text x="332" y="320" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">resume(turn, answer, emit) -> TurnResult</text>
+
+      <!-- TurnRequest -->
+      <rect x="600" y="240" width="200" height="104" rx="6" fill="var(--paper)"/>
+      <rect x="600" y="240" width="200" height="104" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="600" y1="272" x2="800" y2="272" stroke="var(--rule)" stroke-width="1"/>
+      <text x="700" y="260" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnRequest</text>
+      <text x="612" y="288" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">thread_id: UUID</text>
+      <text x="612" y="304" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">turn_id: UUID</text>
+      <text x="612" y="320" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">message: str</text>
+      <text x="612" y="336" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">model: str  (resolved, D22)</text>
+
+      <!-- ErrorEnvelope -->
+      <rect x="40" y="376" width="200" height="88" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="376" width="200" height="88" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="40" y1="408" x2="240" y2="408" stroke="var(--rule)" stroke-width="1"/>
+      <text x="140" y="396" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ErrorEnvelope</text>
+      <text x="52" y="424" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">code: ErrorCode  (D6)</text>
+      <text x="52" y="440" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">message: str</text>
+      <text x="52" y="456" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">retryable: bool  (only THREAD_BUSY)</text>
+
+      <!-- TurnResult -->
+      <rect x="320" y="376" width="200" height="88" rx="6" fill="var(--paper)"/>
+      <rect x="320" y="376" width="200" height="88" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="320" y1="408" x2="520" y2="408" stroke="var(--rule)" stroke-width="1"/>
+      <text x="420" y="396" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnResult</text>
+      <text x="332" y="424" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">TurnOutcome: input_tokens, output_tokens</text>
+      <text x="332" y="440" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">ParkedTurn: no fields  (D17)</text>
+      <text x="332" y="456" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">TurnResult = TurnOutcome | ParkedTurn</text>
+    </svg>
+    <figcaption>Figure: types the runtime seam adds and how they relate. <code>ThreadTurnStartCommand</code>, <code>ThreadTurnInterruptCommand</code>, <code>ThreadApprovalRespondCommand</code>, <code>ThreadSubscribeCommand</code>, and the usage models are in the method table.</figcaption>
+  </figure>
+  <p>Method table, from <code>src/kinby/contracts/methods.py</code> (D4, D5, D20):</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Constant</th><th>Method</th><th>Scope</th><th>Command</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td><code>THREAD_CREATE</code></td><td><code>thread.create</code></td><td><code>thread:operate</code></td><td><code>ThreadCreateCommand(title)</code></td><td><code>ThreadCreateResult(id, created_at)</code></td></tr>
+      <tr><td><code>THREAD_LIST</code></td><td><code>thread.list</code></td><td><code>thread:read</code></td><td><code>ThreadListCommand()</code></td><td><code>ThreadListResult(threads: list[ThreadSummary])</code></td></tr>
+      <tr><td><code>THREAD_TURN_START</code></td><td><code>thread.turn.start</code></td><td><code>thread:operate</code></td><td><code>ThreadTurnStartCommand(thread_id, message)</code></td><td><code>AcceptedResult</code></td></tr>
+      <tr><td><code>THREAD_TURN_INTERRUPT</code></td><td><code>thread.turn.interrupt</code></td><td><code>thread:operate</code></td><td><code>ThreadTurnInterruptCommand(thread_id)</code></td><td><code>AcceptedResult</code></td></tr>
+      <tr><td><code>THREAD_APPROVAL_RESPOND</code></td><td><code>thread.approval.respond</code></td><td><code>thread:operate</code></td><td><code>ThreadApprovalRespondCommand(thread_id, approval_id, answer)</code></td><td><code>AcceptedResult</code></td></tr>
+      <tr><td><code>THREAD_SUBSCRIBE</code></td><td><code>thread.subscribe</code></td><td><code>thread:read</code></td><td><code>ThreadSubscribeCommand(thread_id, after_sequence >= 0)</code></td><td>stream of <code>Event</code></td></tr>
+      <tr><td><code>USAGE_GET</code></td><td><code>usage.get</code></td><td><code>instance:read</code></td><td><code>UsageGetCommand(since, until)</code>, timezone-aware</td><td><code>UsageGetResult(threads: list[ThreadUsage])</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Payloads by event type (D19). Terminal types are <code>turn.completed</code>, <code>turn.failed</code>, <code>turn.interrupted</code>. <code>TurnCompleted</code>, <code>TurnUsage</code>, and <code>ThreadUsage</code> extend <code>TokenTotals(input_tokens, output_tokens)</code> with its <code>total</code> property.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Type</th><th>Model</th><th>Fields</th><th>Producer</th></tr></thead>
+    <tbody>
+      <tr><td><code>turn.started</code></td><td><code>TurnStarted</code></td><td><code>message: str</code>, <code>model: str</code> (resolved name)</td><td><code>Turns.start</code></td></tr>
+      <tr><td><code>message.delta</code></td><td><code>MessageDelta</code></td><td><code>text: str</code></td><td><code>LangGraphRunner._call_model</code></td></tr>
+      <tr><td><code>tool.call</code></td><td><code>ToolCall</code></td><td><code>call_id: str</code>, <code>name: str</code>, <code>arguments: dict[str, JsonValue]</code></td><td><code>LangGraphRunner._call_tools</code></td></tr>
+      <tr><td><code>tool.result</code></td><td><code>ToolResult</code></td><td><code>call_id</code>, <code>name</code>, <code>output: str</code>, <code>error: bool</code></td><td><code>LangGraphRunner._call_tools</code></td></tr>
+      <tr><td><code>warning</code></td><td><code>Warning</code></td><td><code>sources: tuple[str, ...]</code>, <code>message: str</code></td><td><code>LangGraphRunner._invoke</code> from <code>ToolRegistry.refresh</code></td></tr>
+      <tr><td><code>approval.requested</code></td><td><code>ApprovalRequested</code></td><td><code>approval_id: UUID</code>, <code>request: str</code></td><td><code>LangGraphRunner.run</code> via <code>approval_hook</code> (D12)</td></tr>
+      <tr><td><code>turn.completed</code></td><td><code>TurnCompleted</code></td><td><code>input_tokens: int</code>, <code>output_tokens: int</code></td><td><code>Turns._finish</code></td></tr>
+      <tr><td><code>turn.failed</code></td><td><code>TurnFailed</code></td><td><code>code: ErrorCode</code>, <code>message: str</code></td><td><code>Turns._finish</code></td></tr>
+      <tr><td><code>turn.interrupted</code></td><td><code>TurnInterrupted</code></td><td>—</td><td><code>Turns.interrupt</code> (D16)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Error mapping in <code>Dispatcher._validate_call</code> and <code>dispatch</code>, in order (D6): unknown method → <code>NOT_FOUND</code>; missing scope → <code>PERMISSION_DENIED</code>; <code>pydantic.ValidationError</code> → <code>INVALID_ARGUMENT</code>; <code>CoreError</code> → its <code>code</code> and <code>retryable</code>; any other exception → <code>INTERNAL</code>, <code>"The method failed unexpectedly."</code>. <code>subscribe</code> yields the same envelopes, with <code>"The subscription failed unexpectedly."</code> for the last case. <code>CoreError</code> subclasses: <code>ThreadNotFound</code> (<code>NOT_FOUND</code>), <code>ThreadBusy</code> (<code>THREAD_BUSY</code>, retryable), <code>NoActiveTurn</code>, <code>ApprovalNotFound</code> (<code>NOT_FOUND</code>), <code>ModelNoResponse</code> and <code>InvalidParkedTurn</code> (<code>INTERNAL</code>).</p>
+  <p>On disk under <code>manifest.state_dir</code> (<code>.state/</code> by default, ADR 0001): <code>threads.jsonl</code>, one <code>ThreadSummary</code> per line, and <code>events.jsonl</code>, one <code>Event</code> per line. Nothing else. The checkpointer is in memory (D13).</p>
+  <p>REPL rendering in <code>_render_event</code>, each write flushed: <code>MessageDelta</code> writes <code>text</code> with no newline; <code>ToolCall</code> writes <code>[tool.call] name {arguments}</code>; <code>ToolResult</code> writes <code>[tool.result] name (ok|error): output</code>; <code>Warning</code> writes <code>[warning] sources: message</code> to stderr; <code>TurnCompleted</code> writes a newline; <code>TurnFailed</code> writes <code>code: message</code> to stderr; <code>TurnInterrupted</code> writes <code>(interrupted)</code>. <code>TurnStarted</code> and <code>ApprovalRequested</code> are not rendered. Events from another <code>turn_id</code> are skipped. Every terminal event re-shows the prompt. EOF at the prompt returns 0.</p>
+
+  <h2 id="file-map">File map <span class="mode">reference</span></h2>
+  <p>Actions describe what #30–#44 did relative to the tree before #30. Every path exists at <code>6aa4a52</code>. Regenerate the existence check with <code>git ls-files src/kinby/contracts src/kinby/core src/kinby/cli tests docs/adr pyproject.toml CONTEXT.md</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Path</th><th>Action</th><th>What changes</th><th>Flow</th></tr></thead>
+    <tbody>
+      <tr><td><code>pyproject.toml</code></td><td>modify</td><td>Add <code>langgraph</code> and <code>langchain[anthropic,openai]</code> (D13); ban <code>typing.Any</code> and bare <code>BaseModel</code> with the two file exceptions (D19)</td><td>turn stream</td></tr>
+      <tr><td><code>uv.lock</code></td><td>modify</td><td>Lockfile for the above</td><td>—</td></tr>
+      <tr><td><code>src/kinby/contracts/__init__.py</code></td><td>create</td><td>Re-exports the seven route constants and every model</td><td>all</td></tr>
+      <tr><td><code>src/kinby/contracts/methods.py</code></td><td>create</td><td><code>Method</code>, <code>Subscription</code>, the seven constants (D20)</td><td>all</td></tr>
+      <tr><td><code>src/kinby/contracts/models.py</code></td><td>create</td><td><code>ContractModel</code>, <code>Scope</code>, <code>ErrorCode</code>, <code>ErrorEnvelope</code>, <code>EventType</code>, the nine payloads, <code>Payload</code>, <code>Event</code>, the commands and results, <code>TokenTotals</code>, <code>TurnUsage</code>, <code>ThreadUsage</code></td><td>all</td></tr>
+      <tr><td><code>src/kinby/core/__init__.py</code></td><td>modify</td><td>Exports <code>Dispatcher</code>, <code>build_dispatcher</code>, <code>turn_config</code>, <code>TurnConfig</code>, <code>TurnRunner</code>, <code>LangGraphRunner</code></td><td>—</td></tr>
+      <tr><td><code>src/kinby/core/dispatcher.py</code></td><td>create</td><td><code>Dispatcher</code> with <code>register</code>, <code>register_subscription</code>, <code>dispatch</code>, <code>subscribe</code>, <code>_validate_call</code>; <code>Route</code>, <code>TurnConfig</code>, <code>build_dispatcher</code>, <code>turn_config</code></td><td>turn start, replay</td></tr>
+      <tr><td><code>src/kinby/core/errors.py</code></td><td>create</td><td><code>CoreError</code> and its subclasses; <code>TurnInterruptedError(asyncio.CancelledError)</code></td><td>turn lifecycle</td></tr>
+      <tr><td><code>src/kinby/core/events.py</code></td><td>create</td><td><code>EventLog</code>: <code>append</code>, <code>subscribe</code>, <code>stored</code>, <code>all_events</code></td><td>turn stream, replay</td></tr>
+      <tr><td><code>src/kinby/core/threads.py</code></td><td>create</td><td><code>ThreadStore</code>: <code>create</code>, <code>list</code>, <code>exists</code>; <code>THREADS_NAME</code></td><td>turn start</td></tr>
+      <tr><td><code>src/kinby/core/turns.py</code></td><td>create</td><td><code>TurnRequest</code>, <code>TurnOutcome</code>, <code>ParkedTurn</code>, <code>TurnResult</code>, <code>Emit</code>, <code>TurnRunner</code>, <code>PendingApproval</code>, <code>RunningTurn</code>, <code>Turns</code> with <code>_finish</code></td><td>turn start, turn stream, turn lifecycle</td></tr>
+      <tr><td><code>src/kinby/core/turn_runner.py</code></td><td>create</td><td><code>LangGraphRunner</code>, <code>ChatModel</code>, <code>ModelState</code>, <code>ModelContext</code>, <code>_init_model</code>; the graph with <code>model</code> and <code>tools</code> nodes. Lines 158–160 are the merge leftover named in the stamp.</td><td>turn stream, turn lifecycle</td></tr>
+      <tr><td><code>src/kinby/core/usage.py</code></td><td>create</td><td><code>UsageRange</code>, <code>usage_totals</code></td><td>—</td></tr>
+      <tr><td><code>src/kinby/cli/client.py</code></td><td>create</td><td><code>ContractClient</code>, <code>format_error</code>, <code>UNEXPECTED_RESULT</code></td><td>turn start, replay</td></tr>
+      <tr><td><code>src/kinby/cli/repl.py</code></td><td>create</td><td><code>run_repl</code>, <code>_render_turn</code>, <code>_render_event</code>, <code>_InterruptOnSigint</code></td><td>turn start, turn stream</td></tr>
+      <tr><td><code>src/kinby/cli/main.py</code></td><td>modify</td><td><code>run</code> builds the dispatcher with <code>turn_config</code>, creates a thread, and calls <code>asyncio.run(_run_instance(...))</code>; <code>thread create</code>, <code>thread list</code>, <code>usage</code>; the placeholder message is gone</td><td>all</td></tr>
+      <tr><td><code>tests/helpers.py</code></td><td>create</td><td><code>fixed_model_name</code>, <code>does_not_park</code> for scripted runners</td><td>—</td></tr>
+      <tr><td><code>tests/test_threads.py</code></td><td>create</td><td>Create and list across restarts, typed errors before the handler, scope before payload, subscription errors and closing</td><td>turn start, replay</td></tr>
+      <tr><td><code>tests/test_events.py</code></td><td>create</td><td>Ordered replay, gap-free sequences across an <code>EventLog</code> restart, replay-to-live handoff exactly once, cursor filtering</td><td>replay</td></tr>
+      <tr><td><code>tests/test_turns.py</code></td><td>create</td><td>Stream and replay through the dispatcher with scripted runners; busy, interrupt, failure, concurrent start, parked approval across a rebuilt dispatcher</td><td>turn start, turn stream, turn lifecycle</td></tr>
+      <tr><td><code>tests/test_loop.py</code></td><td>create</td><td><code>LangGraphRunner</code> with fake chat models: streaming, model reload, exit-only checkpoints, approval hook</td><td>turn stream</td></tr>
+      <tr><td><code>tests/test_repl.py</code></td><td>create</td><td><code>run_repl</code> with <code>StringIO</code>: render, prompt after terminal, Ctrl+C interrupt, tool and warning lines</td><td>turn stream</td></tr>
+      <tr><td><code>tests/test_usage.py</code></td><td>create</td><td>Totals per thread and per turn, scope before payload, CLI output, naive timestamp rejected, range filter</td><td>—</td></tr>
+      <tr><td><code>tests/test_signatures.py</code></td><td>create</td><td>AST check for the <code>BaseModel</code> and <code>Any</code> ban (D19)</td><td>—</td></tr>
+      <tr><td><code>tests/test_thread_cli.py</code></td><td>create</td><td><code>thread create</code> then <code>thread list</code> across two <code>main()</code> runs</td><td>—</td></tr>
+      <tr><td><code>tests/test_run.py</code></td><td>modify</td><td><code>run</code> opens the REPL on empty stdin and exits 0 with the override shown</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0004-clients-call-core-through-the-contract-dispatcher.md</code></td><td>create</td><td>D1, D5, D7, D9</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0005-event-log-persists-as-jsonl.md</code>, <code>0006-one-process-owns-event-log-delivery.md</code></td><td>create</td><td>D11</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0007-model-turns-use-langgraph-and-langchain.md</code></td><td>create</td><td>D13</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0008-interrupt-commands-own-interrupted-events.md</code></td><td>create</td><td>D16</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0009-placeholder-approvals-resume-from-the-event-log.md</code></td><td>create</td><td>D17</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0011-model-turns-checkpoint-only-after-graph-exit.md</code></td><td>create</td><td><code>durability="exit"</code>; shares its number with the system prompt ADR</td><td>—</td></tr>
+      <tr><td><code>CONTEXT.md</code></td><td>modify</td><td>Terms <em>turn interruption</em>, <em>token usage</em>, <em>turn runner</em>, <em>approval</em>, <em>contract</em>, <em>event</em>, <em>scope</em></td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="testing">Testing <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Seams</dt><dd>Two, plus one unit seam. First, <code>build_dispatcher(tmp_path, turns=TurnConfig(fixed_model_name, ScriptedRunner()))</code>: the boundary every client crosses (D1), so a test here proves the contract, the scopes, the envelope, the busy guard, and the event log together with no model in the loop. The scripted runner emits a fixed list of payloads and can raise, park, wait on an <code>asyncio.Event</code>, or suppress cancellation. Second, <code>run_repl(client, thread_id, stdin=StringIO(...), stdout=StringIO(), stderr=StringIO())</code> over that same dispatcher, which proves rendering and prompt discipline without a pty. <code>LangGraphRunner</code> is tested on its own with a fake <code>ChatModel</code> that yields <code>AIMessageChunk</code>s. The provider call is not tested.</dd>
+    <dt>A good test here</dt><dd>Drive one or two contract calls, then assert on the events read back through <code>thread.subscribe(after_sequence=0)</code> and on the returned models. Never assert on task internals, queue sizes, or file layout. A test that survives replacing <code>events.jsonl</code> with SQLite is at the right altitude.</dd>
+    <dt>Prior art</dt><dd><code>tests/test_instance_show.py</code> set the CLI pattern (<code>main([...])</code> with <code>capsys</code>). <code>tests/test_threads.py</code> set the dispatcher pattern. Every test is synchronous and drives async code with <code>asyncio.run</code>. There is no <code>conftest.py</code>.</dd>
+  </dl>
+  <h3>Cases</h3>
+  <ol>
+    <li>A turn started through <code>thread.turn.start</code> streams <code>turn.started</code>, its deltas, and <code>turn.completed</code> in that order, and a rebuilt dispatcher replays them event for event, flow turn stream and replay, protects D2 and D3.</li>
+    <li>Sequences stay gap-free after an <code>EventLog</code> restart, and a subscriber joining after sequence <code>k</code> receives <code>k+1</code> onward once, then live events, flow replay, protects D2 and D11.</li>
+    <li><code>thread.turn.start</code> while a turn is live, or while a second start is being recorded, returns <code>THREAD_BUSY</code> with <code>retryable=true</code>; after the terminal event a new turn is accepted, flow turn lifecycle, protects D10.</li>
+    <li><code>thread.turn.interrupt</code> during a live turn ends the stream with <code>turn.interrupted</code> even when the runner suppresses cancellation; with no live turn it returns <code>NO_ACTIVE_TURN</code>, flow turn lifecycle, protects D16.</li>
+    <li>A runner that raises ends the stream with <code>turn.failed</code> carrying the <code>CoreError</code> code, flow turn stream, protects D6.</li>
+    <li>A runner that parks emits <code>approval.requested</code>; a rebuilt dispatcher on the same <code>state_dir</code> refuses a new start, accepts <code>thread.approval.respond</code>, and streams to <code>turn.completed</code>; an unknown <code>approval_id</code> returns <code>NOT_FOUND</code>; an interrupt while parked appends <code>turn.interrupted</code>, flow turn lifecycle, protects D17.</li>
+    <li>A caller without the route's scope is refused before the payload is validated, for <code>thread.subscribe</code> and <code>usage.get</code>; an unknown method returns <code>NOT_FOUND</code>; a handler that raises returns <code>INTERNAL</code>, flow turn start, protects D5 and D6.</li>
+    <li><code>usage.get</code> after two turns on two threads reports totals per thread and per turn equal to the recorded <code>turn.completed</code> payloads, filtered by an inclusive range; <code>kinby usage</code> rejects a naive timestamp, protects D18.</li>
+    <li><code>run_repl</code> renders deltas inline, prints the prompt only after the terminal event, prints <code>[tool.call]</code>, <code>[tool.result]</code>, and <code>[warning]</code> lines, and turns <code>SIGINT</code> into <code>thread.turn.interrupt</code>, flow turn stream, protects D16 and D23.</li>
+    <li><code>LangGraphRunner</code> re-reads the model between turns, applies the session override, keeps a failed call out of checkpoint history, and parks then resumes through the approval hook, flow turn stream, protects D13, D17, and D22.</li>
+    <li><code>main(["run", dir])</code> with empty stdin prints the instance summary, creates a thread, and exits 0, protects D7 and D21.</li>
+  </ol>
+
+  <h2 id="out-of-scope">Out of scope <span class="mode">reference</span></h2>
+  <ul>
+    <li>Tool declaration, the tool registry, and the system prompt sections: built by #44, #46, and #54 on top of this seam and documented by <code>docs/blueprints/plugins/</code>. This blueprint names them only where the runner calls them.</li>
+    <li>The permission gate and the real approval shape: #7. <code>approval_hook</code> and the free-form <code>answer</code> are placeholders (D12).</li>
+    <li>Memory reads and writes and their events: #8 and #9.</li>
+    <li>Usage by provider and model, pricing, observability output: #12.</li>
+    <li>Resuming an existing thread from <code>kinby run</code>. It always opens a new thread. <code>thread list</code> shows the ids for when resume lands.</li>
+    <li>Contract versioning: the server effort (D8).</li>
+    <li>A persistent checkpointer, compaction, and checkpoint bracketing beyond <code>durability="exit"</code>.</li>
+    <li>Two processes appending to one instance (ADR 0006).</li>
+  </ul>
+
+  <h2 id="open-questions">Open questions <span class="mode">reference</span></h2>
+  <p>Points the code does not settle. The agent building on this seam stops and asks before acting on any of them. Of the seven questions in the first draft, the checkpointer backend, provider packages, busy-while-parked, and approval lookup are closed in D13, D10, and D17.</p>
+  <ol>
+    <li><code>thread.subscribe</code> on an unknown thread. The handler yields an empty live stream. Options: keep; return <code>NOT_FOUND</code> through <code>ThreadStore.exists</code> before the handler runs. Default: <code>NOT_FOUND</code>, for symmetry with <code>turn.start</code>.</li>
+    <li>Sequence assignment cost. <code>EventLog.append</code> computes the next sequence as <code>len(stored(thread_id)) + 1</code>, re-reading the whole file under the lock on every append. Options: an in-memory <code>{thread_id: last_sequence}</code> warmed at startup; one file per thread; SQLite. Default: the cache, kept behind the same <code>append</code> signature.</li>
+    <li>Ctrl+C at the prompt. <code>_InterruptOnSigint</code> is active only during a turn. At the prompt, <code>SIGINT</code> raises <code>KeyboardInterrupt</code> out of <code>asyncio.run</code>. Options: exit 0; ignore; require a second Ctrl+C. Default: exit 0, matching EOF.</li>
+    <li>Answering an approval from the REPL. <code>_render_event</code> has no arm for <code>ApprovalRequested</code>, so a parked turn shows nothing and <code>run_repl</code> keeps waiting for a terminal event. Options: print <code>request</code>, read one line, send <code>thread.approval.respond</code>; leave until #7 fixes the shape. Default: leave until #7, since the placeholder hook has no producer outside tests.</li>
+    <li>A process that dies mid-turn. The last stored event is <code>turn.started</code> or a delta with no terminal event. On restart <code>Turns.start</code> sees no pending approval and no task, so the thread is free, but the transcript never closes that turn. Options: append <code>turn.failed(INTERNAL)</code> for every open turn at <code>build_dispatcher</code>; leave. Default: leave, and revisit when evals replay threads.</li>
+    <li>Several pending approvals per turn. <code>Turns.respond</code> matches <code>approval_id</code> against the thread's last event only. Options: keep; store pending approvals in the checkpointer state and query it. Default: keep; revisit with #7.</li>
+  </ol>
+
+  <h2 id="glossary">Glossary <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Thread</dt><dd>One conversation with its own durable history. Survives across sessions. What memory distills from and what evals replay.</dd>
+    <dt>Session</dt><dd>One run of the agent loop against a thread, from <code>kinby run</code> to exit. The unit a server wraps.</dd>
+    <dt>Turn</dt><dd>One user-to-agent cycle within a thread, from a user message until the agent yields control. The unit of token attribution and checkpoint bracketing.</dd>
+    <dt>Turn interruption</dt><dd>A user's request to stop the active turn before it completes.</dd>
+    <dt>Turn runner</dt><dd>The part of the runtime that produces the agent's response and the turn's events. <code>TurnRunner</code> in code, <code>LangGraphRunner</code> in production.</dd>
+    <dt>Approval</dt><dd>A user decision a live turn waits on before it continues. Requested as an event, answered through the contract. A parked turn stays live until answered or interrupted.</dd>
+    <dt>Contract</dt><dd>The typed set of commands and subscriptions every client uses to drive a session. Clients import contracts, never core.</dd>
+    <dt>Event</dt><dd>One sequence-numbered record emitted while a turn runs. What clients subscribe to and what the transcript store persists.</dd>
+    <dt>Scope</dt><dd>A named permission a contract command requires of its caller.</dd>
+    <dt>Token usage</dt><dd>The input and output tokens attributed to a turn, rolled up per thread. A usage range includes completed turns whose timestamp falls on or between its bounds.</dd>
+    <dt>Transcript store</dt><dd>The canonical record of every conversation. Here, the event log.</dd>
+    <dt>Tool snapshot</dt><dd>The fixed, name-sorted set of tools for one turn.</dd>
+  </dl>
+
+  <footer>Blueprint for the runtime seam · stamped at 6aa4a52 · 2026-08-29</footer>
+</main>
+</body>
+</html>
