@@ -102,6 +102,29 @@ def _instance(tmp_path: Path, *, defaults: bool = True) -> Instance:
     return load_instance(instance_path)
 
 
+def _write_skill(
+    root: Path,
+    *,
+    directory: str,
+    name: str,
+    description: str,
+    body: str,
+) -> Path:
+    skill_path = root / directory / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
+    skill_path.write_text(
+        f"""---
+name: {name}
+description: {description}
+---
+
+{body}
+""",
+        encoding="utf-8",
+    )
+    return skill_path
+
+
 async def _start_turn(
     instance: Instance,
     model: ScriptedModel,
@@ -186,6 +209,7 @@ def test_fresh_instance_binds_the_default_tools(tmp_path: Path) -> None:
             "glob",
             "grep",
             "read",
+            "skill",
             "write",
         ]
 
@@ -244,8 +268,8 @@ def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypa
 
         assert groups == ["kinby.tools"]
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
-            ["packaged"],
-            ["packaged"],
+            ["packaged", "skill"],
+            ["packaged", "skill"],
         ]
 
     asyncio.run(scenario())
@@ -315,8 +339,8 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
         )
         assert warnings_again == warnings
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
-            ["available"],
-            ["available"],
+            ["available", "skill"],
+            ["available", "skill"],
         ]
 
     asyncio.run(scenario())
@@ -351,7 +375,7 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
 
         await _start_turn(instance, model)
 
-        assert [tool.name for tool in model.bound_tools[0]] == ["packaged"]
+        assert [tool.name for tool in model.bound_tools[0]] == ["packaged", "skill"]
 
     asyncio.run(scenario())
 
@@ -372,7 +396,7 @@ def test_manifest_can_disable_default_tools(tmp_path: Path) -> None:
         await _start_turn(instance, model)
 
         assert asdict(instance.manifest)["tools"] == {"defaults": False}
-        assert model.bound_tools == []
+        assert [[tool.name for tool in turn] for turn in model.bound_tools] == [["skill"]]
 
     asyncio.run(scenario())
 
@@ -394,6 +418,7 @@ def test_broken_instance_tool_keeps_default_tools_on_the_first_turn(tmp_path: Pa
             "glob",
             "grep",
             "read",
+            "skill",
             "write",
         ]
 
@@ -776,8 +801,8 @@ def greet(name: str) -> str:
         events = await _start_turn(instance, model)
 
         assert len(model.bound_tools) == 1
-        assert [tool.name for tool in model.bound_tools[0]] == ["greet"]
-        bound = model.bound_tools[0][0]
+        assert [tool.name for tool in model.bound_tools[0]] == ["greet", "skill"]
+        bound = next(tool for tool in model.bound_tools[0] if tool.name == "greet")
         assert bound.description == "Greet someone by name."
         assert bound.args == {"name": {"title": "Name", "type": "string"}}
         activity = [
@@ -1100,7 +1125,433 @@ def {tool_name}() -> str:
 
         await _start_turn(instance, model)
 
-        assert [tool.name for tool in model.bound_tools[0]] == ["alpha", "zulu"]
+        assert [tool.name for tool in model.bound_tools[0]] == ["alpha", "skill", "zulu"]
+
+    asyncio.run(scenario())
+
+
+def test_instance_skill_is_catalogued_and_skill_tool_is_bound(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=False)
+        _write_skill(
+            instance.path / "skills",
+            directory="planning",
+            name="planning",
+            description="Plan work before changing files.",
+            body="These are the detailed planning instructions.",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "skill",
+                            "args": {"name": "planning"},
+                            "id": "skill-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        system_message = next(
+            message for message in model.messages[0] if isinstance(message, SystemMessage)
+        )
+        assert (
+            "# Skills\n"
+            "Use the `skill` tool to read a skill's full instructions.\n"
+            "- planning: Plan work before changing files."
+        ) in system_message.text
+        assert "These are the detailed planning instructions." not in system_message.text
+        assert [tool.name for tool in model.bound_tools[0]] == ["skill"]
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert result == ToolResult(
+            call_id="skill-1",
+            name="skill",
+            output="These are the detailed planning instructions.",
+            error=False,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_skills_follow_source_order_and_instance_skill_shadows_workspace(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        original = _instance(tmp_path)
+        instance_path = original.path
+        workspace_path = instance_path / "workspace"
+        (instance_path / "memory").mkdir()
+        (instance_path / "memory" / "profile.md").write_text(
+            "USER PROFILE",
+            encoding="utf-8",
+        )
+        (workspace_path / "AGENTS.md").write_text("WORKSPACE RULES", encoding="utf-8")
+        (instance_path / "kinby.toml").write_text(
+            f'id = "test"\n\n[models]\nmain = "{_MODEL}"\n\n'
+            "[workspace.conventions]\n"
+            "enabled = true\n"
+            'instructions = ["AGENTS.md"]\n'
+            'skills = [".agents/skills", "team-skills"]\n',
+            encoding="utf-8",
+        )
+        _write_skill(
+            instance_path / "skills",
+            directory="a-first",
+            name="instance-first",
+            description="First instance skill.",
+            body="First body.",
+        )
+        _write_skill(
+            instance_path / "skills",
+            directory="b-shared",
+            name="shared",
+            description="Instance copy.",
+            body="Instance shared body.",
+        )
+        _write_skill(
+            workspace_path / ".agents" / "skills",
+            directory="a-shared",
+            name="shared",
+            description="Hidden workspace copy.",
+            body="Workspace shared body.",
+        )
+        _write_skill(
+            workspace_path / ".agents" / "skills",
+            directory="b-first",
+            name="workspace-first",
+            description="First workspace directory.",
+            body="First workspace body.",
+        )
+        _write_skill(
+            workspace_path / "team-skills",
+            directory="only",
+            name="workspace-second",
+            description="Second workspace directory.",
+            body="Second workspace body.",
+        )
+        instance = load_instance(instance_path)
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "skill",
+                            "args": {"name": "shared"},
+                            "id": "shared-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        system_message = next(
+            message for message in model.messages[0] if isinstance(message, SystemMessage)
+        )
+        ordered_text = (
+            "WORKSPACE RULES",
+            "- instance-first: First instance skill.",
+            "- shared: Instance copy.",
+            "- workspace-first: First workspace directory.",
+            "- workspace-second: Second workspace directory.",
+            "USER PROFILE",
+        )
+        positions = [system_message.text.index(text) for text in ordered_text]
+        assert positions == sorted(positions)
+        assert "Hidden workspace copy." not in system_message.text
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert result.output == "Instance shared body."
+
+    asyncio.run(scenario())
+
+
+def test_unknown_skill_returns_a_tool_error(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "skill",
+                            "args": {"name": "missing"},
+                            "id": "missing-skill",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Recovered"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert result == ToolResult(
+            call_id="missing-skill",
+            name="skill",
+            output='SkillNotFoundError: Skill "missing" is not available in this turn.',
+            error=True,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_adding_a_skill_between_turns_updates_the_second_catalogue(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        model = ScriptedModel(
+            [
+                AIMessageChunk(content="First done"),
+                AIMessageChunk(content="Second done"),
+            ]
+        )
+        dispatcher, thread_id = await _session(instance, model)
+
+        _, sequence = await _turn_events(dispatcher, thread_id, "First")
+        _write_skill(
+            instance.path / "skills",
+            directory="fresh",
+            name="fresh",
+            description="Added after the first turn.",
+            body="Fresh instructions.",
+        )
+        await _turn_events(dispatcher, thread_id, "Second", sequence)
+
+        system_prompts = [
+            next(message.text for message in call if isinstance(message, SystemMessage))
+            for call in model.messages
+        ]
+        assert "- fresh: Added after the first turn." not in system_prompts[0]
+        assert "- fresh: Added after the first turn." in system_prompts[1]
+
+    asyncio.run(scenario())
+
+
+def test_invalid_skill_frontmatter_warns_and_skips_the_files(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        skills_path = instance.path / "skills"
+        without_frontmatter = skills_path / "plain" / "SKILL.md"
+        without_frontmatter.parent.mkdir(parents=True)
+        without_frontmatter.write_text("Plain instructions.", encoding="utf-8")
+        without_name = skills_path / "unnamed" / "SKILL.md"
+        without_name.parent.mkdir(parents=True)
+        without_name.write_text(
+            """---
+description: Missing its name.
+---
+
+Unnamed instructions.
+""",
+            encoding="utf-8",
+        )
+        without_description = skills_path / "undescribed" / "SKILL.md"
+        without_description.parent.mkdir(parents=True)
+        without_description.write_text(
+            """---
+name: undescribed
+---
+
+Instructions without a description.
+""",
+            encoding="utf-8",
+        )
+        model = ScriptedModel([AIMessageChunk(content="Done")])
+
+        events = await _start_turn(instance, model)
+
+        warnings = [event.payload for event in events if isinstance(event.payload, Warning)]
+        assert warnings == [
+            Warning(
+                sources=(str(without_frontmatter),),
+                message="Skill frontmatter is missing.",
+            ),
+            Warning(
+                sources=(str(without_description),),
+                message='Skill frontmatter must contain "description".',
+            ),
+            Warning(
+                sources=(str(without_name),),
+                message='Skill frontmatter must contain "name".',
+            ),
+        ]
+        system_message = next(
+            message for message in model.messages[0] if isinstance(message, SystemMessage)
+        )
+        assert "- undescribed" not in system_message.text
+
+    asyncio.run(scenario())
+
+
+def test_same_tier_duplicate_skill_names_warn_with_both_sources(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        original = _instance(tmp_path)
+        instance_path = original.path
+        workspace_path = instance_path / "workspace"
+        (instance_path / "kinby.toml").write_text(
+            f'id = "test"\n\n[models]\nmain = "{_MODEL}"\n\n'
+            "[workspace.conventions]\n"
+            "enabled = true\n"
+            'skills = [".agents/skills", "team-skills"]\n',
+            encoding="utf-8",
+        )
+        instance_first = _write_skill(
+            instance_path / "skills",
+            directory="a-first",
+            name="instance-shared",
+            description="First instance skill.",
+            body="First body.",
+        )
+        instance_second = _write_skill(
+            instance_path / "skills",
+            directory="b-second",
+            name="instance-shared",
+            description="Second instance skill.",
+            body="Second body.",
+        )
+        workspace_first = _write_skill(
+            workspace_path / ".agents" / "skills",
+            directory="first",
+            name="workspace-shared",
+            description="First workspace skill.",
+            body="First body.",
+        )
+        workspace_second = _write_skill(
+            workspace_path / "team-skills",
+            directory="second",
+            name="workspace-shared",
+            description="Second workspace skill.",
+            body="Second body.",
+        )
+        instance = load_instance(instance_path)
+        model = ScriptedModel([AIMessageChunk(content="Done")])
+
+        events = await _start_turn(instance, model)
+
+        warnings = [event.payload for event in events if isinstance(event.payload, Warning)]
+        assert warnings == [
+            Warning(
+                sources=(str(instance_first), str(instance_second)),
+                message='Skill "instance-shared" is declared by both sources.',
+            ),
+            Warning(
+                sources=(str(workspace_first), str(workspace_second)),
+                message='Skill "workspace-shared" is declared by both sources.',
+            ),
+        ]
+        system_message = next(
+            message for message in model.messages[0] if isinstance(message, SystemMessage)
+        )
+        assert "- instance-shared: First instance skill." in system_message.text
+        assert "Second instance skill." not in system_message.text
+        assert "- workspace-shared: First workspace skill." in system_message.text
+        assert "Second workspace skill." not in system_message.text
+
+    asyncio.run(scenario())
+
+
+def test_skill_body_is_fixed_for_the_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        skill_path = _write_skill(
+            instance.path / "skills",
+            directory="stable",
+            name="stable",
+            description="Keep one turn consistent.",
+            body="Original instructions.",
+        )
+
+        class EditingModel(ScriptedModel):
+            async def astream(
+                self,
+                messages: Sequence[BaseMessage],
+            ) -> AsyncIterator[AIMessageChunk]:
+                if not self.messages:
+                    skill_path.write_text("Changed after prompt assembly.", encoding="utf-8")
+                async for chunk in super().astream(messages):
+                    yield chunk
+
+        model = EditingModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "skill",
+                            "args": {"name": "stable"},
+                            "id": "stable-skill",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert result.output == "Original instructions."
+        assert not result.error
+
+    asyncio.run(scenario())
+
+
+def test_core_skill_tool_warns_and_replaces_a_namesake_plugin(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        plugin_path = instance.path / "tools" / "skill.py"
+        plugin_path.write_text(
+            '''from kinby.plugins import tool
+
+@tool(write=False)
+def skill(name: str) -> str:
+    """Return a plugin result."""
+    return "plugin"
+''',
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "skill",
+                            "args": {"name": "missing"},
+                            "id": "core-skill",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        warning = next(event.payload for event in events if isinstance(event.payload, Warning))
+        assert warning.sources[0] == str(plugin_path)
+        assert Path(warning.sources[1]).name == "skills.py"
+        assert warning.message == 'Plugin tool "skill" was replaced by the core tool.'
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert result.output == (
+            'SkillNotFoundError: Skill "missing" is not available in this turn.'
+        )
+        assert result.error
 
     asyncio.run(scenario())
 
@@ -1155,9 +1606,9 @@ def version() -> str:
             if isinstance(event.payload, ToolResult)
         ]
         assert results == ["one", "two"]
-        assert [tool.name for tool in model.bound_tools[0]] == ["version"]
-        assert [tool.name for tool in model.bound_tools[1]] == ["version"]
-        assert len(model.bound_tools) == 2
+        assert [tool.name for tool in model.bound_tools[0]] == ["skill", "version"]
+        assert [tool.name for tool in model.bound_tools[1]] == ["skill", "version"]
+        assert [tool.name for tool in model.bound_tools[2]] == ["skill"]
         assert not any(isinstance(event.payload, ToolCall) for event in third)
 
     asyncio.run(scenario())
@@ -1226,7 +1677,7 @@ def fresh() -> str:
             (str(path),) for path in sorted(broken)
         ]
         assert all("SyntaxError" in warning.message for warning in warnings)
-        assert [tool.name for tool in model.bound_tools[1]] == ["stable"]
+        assert [tool.name for tool in model.bound_tools[1]] == ["skill", "stable"]
         repeated = [event.payload for event in again if isinstance(event.payload, Warning)]
         assert [warning.sources for warning in repeated] == [
             (str(path),) for path in sorted(broken)
@@ -1385,7 +1836,8 @@ def where(label: str, context: ToolContext) -> str:
 
         events, _ = await _turn_events(dispatcher, thread_id, "Where are you?")
 
-        assert model.bound_tools[0][0].args == {"label": {"title": "Label", "type": "string"}}
+        where = next(tool for tool in model.bound_tools[0] if tool.name == "where")
+        assert where.args == {"label": {"title": "Label", "type": "string"}}
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert result == ToolResult(
             call_id="where-1",

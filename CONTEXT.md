@@ -137,6 +137,10 @@ The fixed, name-sorted set of tools for one **turn**. The model and tool calls u
 
 A markdown instruction set the model reads on demand. Skills are listed to the model by name and description; the body is fetched only when the model asks for it.
 
+### Skill tool
+
+The core, read-only **tool** that returns an available **skill** body by name. It is present on every **turn**.
+
 ### Behavior prompt
 
 The instance's own instructions to the model (`SYSTEM.md`). One of the sources assembled into the system prompt, alongside the **profile**, workspace **conventions**, the skill list, and the harness-owned environment block.

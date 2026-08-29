@@ -10,6 +10,7 @@ from pathlib import Path
 
 from kinby.instance import Instance
 from kinby.instance.layout import MEMORY_DIR, PROFILE_NAME, SYSTEM_NAME
+from kinby.plugins.skills import Skill
 
 KINBY_PREAMBLE = "You are a personal AI teammate running on kinby."
 
@@ -72,7 +73,11 @@ def _environment(instance: Instance, today: date) -> PromptSection:
     )
 
 
-def assemble_system_prompt(instance: Instance, today: date) -> tuple[PromptSection, ...]:
+def assemble_system_prompt(
+    instance: Instance,
+    skills: Sequence[Skill],
+    today: date,
+) -> tuple[PromptSection, ...]:
     """Return the existing prompt sections in their fixed cache-friendly order."""
     sections = [
         PromptSection(
@@ -88,6 +93,18 @@ def assemble_system_prompt(instance: Instance, today: date) -> tuple[PromptSecti
         section
         for path in instance.manifest.workspace.conventions.instructions
         if (section := _file_section(PromptSectionName.CONVENTIONS, path)) is not None
+    )
+    catalogue = [
+        "# Skills",
+        "Use the `skill` tool to read a skill's full instructions.",
+    ]
+    catalogue.extend(f"- {skill.name}: {skill.description}" for skill in skills)
+    sections.append(
+        PromptSection(
+            name=PromptSectionName.SKILLS,
+            source=PromptSectionSource.RUNTIME,
+            text="\n".join(catalogue),
+        )
     )
     profile = _file_section(
         PromptSectionName.PROFILE,
