@@ -39,6 +39,13 @@ class ErrorEnvelope(ContractModel):
     retryable: bool
 
 
+class PermissionMode(StrEnum):
+    READ_ONLY = "read-only"
+    ASK = "ask"
+    AUTO = "auto"
+    FULL_ACCESS = "full-access"
+
+
 class EventType(StrEnum):
     TURN_STARTED = "turn.started"
     MESSAGE_DELTA = "message.delta"
@@ -86,7 +93,9 @@ class Warning(ContractModel):
 class ApprovalRequested(ContractModel):
     type: Literal[EventType.APPROVAL_REQUESTED] = EventType.APPROVAL_REQUESTED
     approval_id: UUID
-    request: str
+    name: str
+    arguments: dict[str, JsonValue]
+    rule: str
 
 
 class TokenTotals(ContractModel):

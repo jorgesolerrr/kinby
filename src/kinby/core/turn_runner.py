@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -30,6 +29,7 @@ from pydantic import JsonValue, TypeAdapter
 from kinby.contracts import (
     ApprovalRequested,
     MessageDelta,
+    PermissionMode,
     ToolCall,
     ToolResult,
 )
@@ -38,6 +38,7 @@ from kinby.core.errors import (
     ModelNoResponse,
     ThreadBusy,
 )
+from kinby.core.gate import GateAction, evaluate
 from kinby.core.prompt import assemble_system_prompt, render_system_prompt
 from kinby.core.turns import (
     ApprovalDecision,
@@ -48,6 +49,7 @@ from kinby.core.turns import (
     TurnResult,
 )
 from kinby.instance import Instance, reload_manifest
+from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
 from kinby.plugins.skills import load_skills, skill_tool
@@ -80,15 +82,17 @@ class ModelContext:
     emit: Emit
     model: ChatModel
     system_message: SystemMessage
+    gate_policy: GatePolicy
+    permission_mode: PermissionMode
     tools: ToolSnapshot
     tool_context: ToolContext
     user_message: HumanMessage
 
 
 @dataclass(frozen=True)
-class ToolCallDecision:
+class ToolCallResolution:
     call: ToolCall
-    decision: ApprovalDecision
+    denied_by: str | None = None
 
 
 def _init_model(model: str) -> ChatModel:
@@ -102,10 +106,12 @@ class LangGraphRunner:
         *,
         model_factory: ModelFactory = _init_model,
         model_override: str | None = None,
+        gate_policy: GatePolicy = SHIPPED_POLICY,
     ) -> None:
         self._instance = instance
         self._model_factory = model_factory
         self._model_override = model_override
+        self._gate_policy = gate_policy
         self._tools = ToolRegistry(
             instance.path,
             defaults=instance.manifest.tools.defaults,
@@ -173,6 +179,8 @@ class LangGraphRunner:
                 emit=emit,
                 model=bound_model,
                 system_message=SystemMessage(content=render_system_prompt(sections)),
+                gate_policy=self._gate_policy,
+                permission_mode=self._gate_policy.mode,
                 tools=tools,
                 tool_context=ToolContext(
                     instance=self._instance,
@@ -239,34 +247,46 @@ class LangGraphRunner:
         response = state.messages[-1]
         if not isinstance(response, AIMessage):
             raise ModelNoResponse("The model returned an invalid tool call response.")
-        calls: list[ToolCallDecision] = []
+        calls: list[ToolCallResolution] = []
         for model_call in response.tool_calls:
             name = model_call["name"]
             call_id = model_call["id"] or str(uuid4())
             arguments = _TOOL_ARGUMENTS.validate_python(model_call["args"])
             call = ToolCall(call_id=call_id, name=name, arguments=arguments)
             selected = runtime.context.tools.get(name)
-            if selected is None or not selected.write:
-                decision = ApprovalDecision.APPROVE
-            else:
-                decision = ApprovalDecision(
+            gate_decision = evaluate(
+                runtime.context.gate_policy,
+                runtime.context.permission_mode,
+                call,
+                selected,
+                runtime.context.tool_context.workspace,
+            )
+            denied_by: str | None = None
+            if gate_decision.action is GateAction.ASK:
+                approval_decision = ApprovalDecision(
                     interrupt(
                         ApprovalRequested(
                             approval_id=uuid4(),
-                            request=f"{name}: {json.dumps(arguments, sort_keys=True)}",
+                            name=name,
+                            arguments=arguments,
+                            rule=gate_decision.rule,
                         )
                     )
                 )
-            calls.append(ToolCallDecision(call, decision))
+                if approval_decision is ApprovalDecision.DENY:
+                    denied_by = "the user"
+            elif gate_decision.action is GateAction.DENY:
+                denied_by = f'policy rule "{gate_decision.rule}"'
+            calls.append(ToolCallResolution(call, denied_by))
 
         messages: list[AnyMessage] = []
-        for call_decision in calls:
-            call = call_decision.call
-            if call_decision.decision is ApprovalDecision.DENY:
+        for resolution in calls:
+            call = resolution.call
+            if resolution.denied_by is not None:
                 result = ToolResult(
                     call_id=call.call_id,
                     name=call.name,
-                    output=f'Tool "{call.name}" was denied by the user.',
+                    output=f'Tool "{call.name}" was denied by {resolution.denied_by}.',
                     error=True,
                 )
                 await runtime.context.emit(result)
