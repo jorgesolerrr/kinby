@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from types import ModuleType
 from uuid import uuid4
@@ -35,11 +37,12 @@ class _FileTools:
 
 
 class ToolRegistry:
-    def __init__(self, instance_path: Path) -> None:
+    def __init__(self, instance_path: Path, *, defaults: bool = True) -> None:
         self._tools_path = instance_path / TOOLS_DIR
+        self._packaged, self._package_warnings = _load_entry_points(defaults=defaults)
         self._signature: FileSignature | None = None
         self._files: dict[Path, _FileTools] = {}
-        self._snapshot = ToolSnapshot()
+        self._snapshot = ToolSnapshot(tuple(sorted(self._packaged, key=lambda tool: tool.name)))
 
     def refresh(self) -> tuple[ToolSnapshot, tuple[Warning, ...]]:
         try:
@@ -52,10 +55,11 @@ class ToolRegistry:
                         sources=(str(self._tools_path),),
                         message=exception_message(exc),
                     ),
+                    *self._package_warnings,
                 ),
             )
         if signature == self._signature:
-            return self._snapshot, ()
+            return self._snapshot, self._package_warnings
 
         candidate: dict[Path, _FileTools] = {}
         warnings: list[Warning] = []
@@ -71,16 +75,22 @@ class ToolRegistry:
                 warnings.append(Warning(sources=(str(path),), message=exception_message(exc)))
         self._files = candidate
         if warnings:
-            return self._snapshot, tuple(warnings)
+            return self._snapshot, (*warnings, *self._package_warnings)
 
-        tools = tuple(tool for file_tools in candidate.values() for tool in file_tools.tools)
-        duplicate = _duplicate_warning(tools)
+        instance_tools = tuple(
+            tool for file_tools in candidate.values() for tool in file_tools.tools
+        )
+        duplicate = _duplicate_warning(instance_tools)
         if duplicate is not None:
-            return self._snapshot, (duplicate,)
+            return self._snapshot, (duplicate, *self._package_warnings)
 
+        instance_names = {tool.name for tool in instance_tools}
+        tools = instance_tools + tuple(
+            tool for tool in self._packaged if tool.name not in instance_names
+        )
         self._signature = signature
         self._snapshot = ToolSnapshot(tuple(sorted(tools, key=lambda tool: tool.name)))
-        return self._snapshot, ()
+        return self._snapshot, self._package_warnings
 
 
 def _directory_signature(tools_path: Path) -> FileSignature:
@@ -110,14 +120,61 @@ def _module_tools(module: ModuleType) -> tuple[Tool, ...]:
     return tuple(value for value in vars(module).values() if isinstance(value, Tool))
 
 
+def _load_entry_points(*, defaults: bool) -> tuple[tuple[Tool, ...], tuple[Warning, ...]]:
+    tools: list[Tool] = []
+    warnings: list[Warning] = []
+    for entry_point in entry_points(group="kinby.tools"):
+        if not defaults and entry_point.name == "defaults":
+            distribution = entry_point.dist
+            if distribution is not None and distribution.name == "kinby":
+                continue
+        try:
+            tools.extend(_entry_point_tools(entry_point))
+        except Exception as exc:
+            warnings.append(Warning(sources=(entry_point.value,), message=exception_message(exc)))
+    packaged, duplicates = _deduplicate_packaged_tools(tuple(tools))
+    return packaged, (*warnings, *duplicates)
+
+
+def _entry_point_tools(entry_point: EntryPoint) -> tuple[Tool, ...]:
+    loaded = entry_point.load()
+    if not isinstance(loaded, Sequence):
+        raise TypeError(f'Entry point "{entry_point.value}" does not export tools.')
+    tools = tuple(item for item in loaded if isinstance(item, Tool))
+    if len(tools) != len(loaded):
+        raise TypeError(f'Entry point "{entry_point.value}" does not export tools.')
+    return tools
+
+
 def _duplicate_warning(tools: tuple[Tool, ...]) -> Warning | None:
     found: dict[str, Tool] = {}
     for current in tools:
         previous = found.get(current.name)
         if previous is not None:
-            return Warning(
-                sources=(str(previous.source), str(current.source)),
-                message=f'Tool "{current.name}" is exported by both sources.',
-            )
+            return _duplicate_warning_for(previous, current)
         found[current.name] = current
     return None
+
+
+def _deduplicate_packaged_tools(
+    tools: tuple[Tool, ...],
+) -> tuple[tuple[Tool, ...], tuple[Warning, ...]]:
+    found: dict[str, Tool] = {}
+    duplicate_names: set[str] = set()
+    warnings: list[Warning] = []
+    for current in tools:
+        previous = found.get(current.name)
+        if previous is None:
+            found[current.name] = current
+            continue
+        duplicate_names.add(current.name)
+        warnings.append(_duplicate_warning_for(previous, current))
+    unique = tuple(tool for name, tool in found.items() if name not in duplicate_names)
+    return unique, tuple(warnings)
+
+
+def _duplicate_warning_for(first: Tool, second: Tool) -> Warning:
+    return Warning(
+        sources=(str(first.source), str(second.source)),
+        message=f'Tool "{second.name}" is exported by both sources.',
+    )

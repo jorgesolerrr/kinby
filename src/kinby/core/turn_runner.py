@@ -84,7 +84,10 @@ class LangGraphRunner:
         self._model_factory = model_factory
         self._model_override = model_override
         self._approval_hook = approval_hook
-        self._tools = ToolRegistry(instance.path)
+        self._tools = ToolRegistry(
+            instance.path,
+            defaults=instance.manifest.tools.defaults,
+        )
         self._checkpointer = InMemorySaver()
         graph_builder = StateGraph(ModelState, context_schema=ModelContext)
         graph_builder.add_node("model", self._call_model)

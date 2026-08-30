@@ -1,6 +1,12 @@
 import asyncio
+import subprocess
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import asdict, replace
+from importlib import import_module
+from importlib.metadata import entry_points as installed_entry_points
+from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
 from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage, ToolMessage
@@ -39,6 +45,33 @@ class ScriptedModel:
         yield next(self._responses)
 
 
+class _BashProcess:
+    def __init__(
+        self,
+        *,
+        stdout: bytes = b"",
+        stderr: bytes = b"",
+        return_code: int = 0,
+        times_out: bool = False,
+    ) -> None:
+        self.stdout = BytesIO(stdout)
+        self.stderr = BytesIO(stderr)
+        self.return_code = return_code
+        self.times_out = times_out
+        self.killed = False
+        self.wait_timeouts: list[float | None] = []
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.wait_timeouts.append(timeout)
+        if self.times_out and not self.killed:
+            assert timeout is not None
+            raise subprocess.TimeoutExpired(("bash", "-c"), timeout)
+        return self.return_code
+
+    def kill(self) -> None:
+        self.killed = True
+
+
 def test_tool_decorator_attaches_the_declaration_record() -> None:
     @tool(write=True)
     def remember(note: str) -> str:
@@ -53,13 +86,14 @@ def test_tool_decorator_attaches_the_declaration_record() -> None:
     assert remember.runnable.args == {"note": {"title": "Note", "type": "string"}}
 
 
-def _instance(tmp_path: Path) -> Instance:
+def _instance(tmp_path: Path, *, defaults: bool = True) -> Instance:
     instance_path = tmp_path / "instance"
     instance_path.mkdir()
     (instance_path / "tools").mkdir()
     (instance_path / "workspace").mkdir()
+    tools = "" if defaults else "\n[tools]\ndefaults = false\n"
     (instance_path / "kinby.toml").write_text(
-        f'id = "test"\n\n[models]\nmain = "{_MODEL}"\n',
+        f'id = "test"\n\n[models]\nmain = "{_MODEL}"\n{tools}',
         encoding="utf-8",
     )
     return load_instance(instance_path)
@@ -113,9 +147,575 @@ async def _turn_events(
             return events, event.sequence
 
 
+def test_fresh_instance_binds_the_default_tools(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=True)
+        model = ScriptedModel([AIMessageChunk(content="Done")])
+
+        await _start_turn(instance, model)
+
+        assert [tool.name for tool in model.bound_tools[0]] == [
+            "bash",
+            "edit",
+            "glob",
+            "grep",
+            "read",
+            "write",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_default_entry_point_declares_tool_write_flags() -> None:
+    default_entry_point = next(
+        entry_point
+        for entry_point in installed_entry_points(group="kinby.tools")
+        if entry_point.name == "defaults"
+    )
+
+    tools = default_entry_point.load()
+
+    assert default_entry_point.dist is not None
+    assert default_entry_point.dist.name == "kinby"
+    assert [(tool.name, tool.write) for tool in tools] == [
+        ("read", False),
+        ("write", True),
+        ("edit", True),
+        ("grep", False),
+        ("glob", False),
+        ("bash", True),
+    ]
+
+
+def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypatch) -> None:
+    @tool(write=False)
+    def packaged() -> str:
+        """Return a packaged result."""
+        return "packaged"
+
+    groups: list[str] = []
+
+    def installed(*, group: str) -> tuple[SimpleNamespace, ...]:
+        groups.append(group)
+        return (
+            SimpleNamespace(
+                name="package",
+                value="example.tools:TOOLS",
+                load=lambda: (packaged,),
+            ),
+        )
+
+    registry = import_module("kinby.plugins.registry")
+    monkeypatch.setattr(registry, "entry_points", installed)
+
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=False)
+        model = ScriptedModel([AIMessageChunk(content="First"), AIMessageChunk(content="Second")])
+        dispatcher, thread_id = await _session(instance, model)
+
+        _, sequence = await _turn_events(dispatcher, thread_id, "First")
+        await _turn_events(dispatcher, thread_id, "Second", sequence)
+
+        assert groups == ["kinby.tools"]
+        assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
+            ["packaged"],
+            ["packaged"],
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_two_entry_points_exporting_one_name_emit_a_warning(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    @tool(write=False)
+    def shared() -> str:
+        """Return the first result."""
+        return "first"
+
+    first = replace(shared, source=tmp_path / "first.py")
+
+    @tool(write=False)
+    def shared() -> str:
+        """Return the second result."""
+        return "second"
+
+    second = replace(shared, source=tmp_path / "second.py")
+
+    @tool(write=False)
+    def shared() -> str:
+        """Return the third result."""
+        return "third"
+
+    third = replace(shared, source=tmp_path / "third.py")
+
+    @tool(write=False)
+    def available() -> str:
+        """Return an unambiguous packaged result."""
+        return "available"
+
+    def installed(*, group: str) -> tuple[SimpleNamespace, ...]:
+        assert group == "kinby.tools"
+        return (
+            SimpleNamespace(
+                name="first",
+                value="first:TOOLS",
+                load=lambda: (first, available),
+            ),
+            SimpleNamespace(name="second", value="second:TOOLS", load=lambda: (second,)),
+            SimpleNamespace(name="third", value="third:TOOLS", load=lambda: (third,)),
+        )
+
+    registry = import_module("kinby.plugins.registry")
+    monkeypatch.setattr(registry, "entry_points", installed)
+
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=False)
+        model = ScriptedModel([AIMessageChunk(content="First"), AIMessageChunk(content="Second")])
+        dispatcher, thread_id = await _session(instance, model)
+
+        events, sequence = await _turn_events(dispatcher, thread_id, "First")
+        repeated, _ = await _turn_events(dispatcher, thread_id, "Second", sequence)
+
+        warnings = [event.payload for event in events if isinstance(event.payload, Warning)]
+        warnings_again = [event.payload for event in repeated if isinstance(event.payload, Warning)]
+        assert [warning.sources for warning in warnings] == [
+            (str(first.source), str(second.source)),
+            (str(first.source), str(third.source)),
+        ]
+        assert all(
+            warning.message == 'Tool "shared" is exported by both sources.' for warning in warnings
+        )
+        assert warnings_again == warnings
+        assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
+            ["available"],
+            ["available"],
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    @tool(write=False)
+    def packaged() -> str:
+        """Return a third-party result."""
+        return "third-party"
+
+    def installed(*, group: str) -> tuple[SimpleNamespace, ...]:
+        assert group == "kinby.tools"
+        return (
+            SimpleNamespace(
+                name="defaults",
+                value="third_party.tools:TOOLS",
+                dist=SimpleNamespace(name="third-party"),
+                load=lambda: (packaged,),
+            ),
+        )
+
+    registry = import_module("kinby.plugins.registry")
+    monkeypatch.setattr(registry, "entry_points", installed)
+
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=False)
+        model = ScriptedModel([AIMessageChunk(content="Done")])
+
+        await _start_turn(instance, model)
+
+        assert [tool.name for tool in model.bound_tools[0]] == ["packaged"]
+
+    asyncio.run(scenario())
+
+
+def test_manifest_can_disable_default_tools(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance_path = tmp_path / "instance"
+        instance_path.mkdir()
+        (instance_path / "tools").mkdir()
+        (instance_path / "workspace").mkdir()
+        (instance_path / "kinby.toml").write_text(
+            f'id = "test"\n\n[models]\nmain = "{_MODEL}"\n\n[tools]\ndefaults = false\n',
+            encoding="utf-8",
+        )
+        instance = load_instance(instance_path)
+        model = ScriptedModel([AIMessageChunk(content="Done")])
+
+        await _start_turn(instance, model)
+
+        assert asdict(instance.manifest)["tools"] == {"defaults": False}
+        assert model.bound_tools == []
+
+    asyncio.run(scenario())
+
+
+def test_broken_instance_tool_keeps_default_tools_on_the_first_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=True)
+        broken = instance.path / "tools" / "broken.py"
+        broken.write_text("def broken(:\n", encoding="utf-8")
+        model = ScriptedModel([AIMessageChunk(content="Done")])
+
+        events = await _start_turn(instance, model)
+
+        warning = next(event.payload for event in events if isinstance(event.payload, Warning))
+        assert warning.sources == (str(broken),)
+        assert [tool.name for tool in model.bound_tools[0]] == [
+            "bash",
+            "edit",
+            "glob",
+            "grep",
+            "read",
+            "write",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_instance_bash_shadows_the_packaged_bash(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=True)
+        (instance.path / "tools" / "bash.py").write_text(
+            """from kinby.plugins import tool
+
+@tool(write=False)
+def bash(command: str) -> str:
+    \"\"\"Return the instance command.\"\"\"
+    return f\"instance: {command}\"
+""",
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "bash",
+                            "args": {"command": "status"},
+                            "id": "bash-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        assert [tool.name for tool in model.bound_tools[0]].count("bash") == 1
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert result.output == "instance: status"
+        assert not result.error
+
+    asyncio.run(scenario())
+
+
+def test_default_read_resolves_paths_from_the_workspace(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=True)
+        notes = instance.manifest.workspace.path / "notes"
+        notes.mkdir()
+        (notes / "today.txt").write_text("Ship the default tools.\n", encoding="utf-8")
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "read",
+                            "args": {"path": "notes/today.txt"},
+                            "id": "read-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert result == ToolResult(
+            call_id="read-1",
+            name="read",
+            output="Ship the default tools.\n",
+            error=False,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_default_read_rejects_a_path_outside_the_workspace(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=True)
+        (instance.path / "secret.txt").write_text("private\n", encoding="utf-8")
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "read",
+                            "args": {"path": "../secret.txt"},
+                            "id": "read-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert result == ToolResult(
+            call_id="read-1",
+            name="read",
+            output='ValueError: Path "../secret.txt" is outside the workspace.',
+            error=True,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_default_grep_and_glob_resolve_paths_from_the_workspace(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=True)
+        docs = instance.manifest.workspace.path / "docs"
+        docs.mkdir()
+        (docs / "first.txt").write_text("needle\nother\n", encoding="utf-8")
+        (docs / "second.txt").write_text("nothing\nneedle again\n", encoding="utf-8")
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "grep",
+                            "args": {"pattern": "needle", "path": "docs"},
+                            "id": "grep-1",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "glob",
+                            "args": {"pattern": "docs/*.txt"},
+                            "id": "glob-1",
+                            "type": "tool_call",
+                        },
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        results = [event.payload for event in events if isinstance(event.payload, ToolResult)]
+        assert [(result.name, result.output, result.error) for result in results] == [
+            (
+                "grep",
+                "docs/first.txt:1:needle\ndocs/second.txt:2:needle again",
+                False,
+            ),
+            ("glob", "docs/first.txt\ndocs/second.txt", False),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_default_bash_uses_the_workspace_timeout_and_output_cap(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=True)
+        calls: list[tuple[tuple[str, ...], Path]] = []
+        process = _BashProcess(stdout=b"x" * 40_000)
+
+        def popen(
+            command: Sequence[str],
+            **options: object,
+        ) -> _BashProcess:
+            calls.append((tuple(command), Path(str(options["cwd"]))))
+            assert options["stdout"] is subprocess.PIPE
+            assert options["stderr"] is subprocess.PIPE
+            return process
+
+        monkeypatch.setattr("kinby.plugins.defaults.shell.subprocess.Popen", popen)
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "bash",
+                            "args": {"command": "status"},
+                            "id": "bash-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert calls == [(("bash", "-c", "status"), instance.manifest.workspace.path)]
+        assert process.wait_timeouts == [120.0]
+        assert result.output == "x" * 30_000
+        assert not result.error
+
+    asyncio.run(scenario())
+
+
+def test_default_bash_reports_a_nonzero_exit_code(tmp_path: Path, monkeypatch) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=True)
+        process = _BashProcess(stderr=b"bad command", return_code=2)
+
+        def popen(
+            command: Sequence[str],
+            **options: object,
+        ) -> _BashProcess:
+            return process
+
+        monkeypatch.setattr("kinby.plugins.defaults.shell.subprocess.Popen", popen)
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "bash",
+                            "args": {"command": "missing"},
+                            "id": "bash-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert result == ToolResult(
+            call_id="bash-1",
+            name="bash",
+            output="Exit code: 2\nstderr:\nbad command",
+            error=False,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_default_bash_kills_a_timed_out_process_and_returns_partial_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=True)
+        process = _BashProcess(stdout=b"partial output", times_out=True)
+
+        def popen(
+            command: Sequence[str],
+            **options: object,
+        ) -> _BashProcess:
+            return process
+
+        monkeypatch.setattr("kinby.plugins.defaults.shell.subprocess.Popen", popen)
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "bash",
+                            "args": {"command": "slow"},
+                            "id": "bash-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert process.killed
+        assert process.wait_timeouts == [120.0, None]
+        assert result == ToolResult(
+            call_id="bash-1",
+            name="bash",
+            output="TimeoutError: Bash timed out after 120 seconds.\npartial output",
+            error=True,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_default_write_and_edit_change_workspace_files(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=True)
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "write",
+                            "args": {"path": "notes/today.txt", "content": "draft"},
+                            "id": "write-1",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "edit",
+                            "args": {
+                                "path": "notes/today.txt",
+                                "old": "draft",
+                                "new": "done",
+                            },
+                            "id": "edit-1",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "read",
+                            "args": {"path": "notes/today.txt"},
+                            "id": "read-1",
+                            "type": "tool_call",
+                        },
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        results = [event.payload for event in events if isinstance(event.payload, ToolResult)]
+        assert [(result.name, result.output, result.error) for result in results] == [
+            ("write", "Wrote notes/today.txt.", False),
+            ("edit", "Edited notes/today.txt.", False),
+            ("read", "done", False),
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_tool_file_is_bound_and_called_on_the_next_turn(tmp_path: Path) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         (instance.path / "tools" / "greet.py").write_text(
             """from kinby.plugins import tool
 
@@ -168,7 +768,7 @@ def greet(name: str) -> str:
 
 def test_turn_binds_tools_sorted_by_name(tmp_path: Path) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         for file_name, tool_name in (("zulu.py", "zulu"), ("alpha.py", "alpha")):
             (instance.path / "tools" / file_name).write_text(
                 f"""from kinby.plugins import tool
@@ -191,7 +791,7 @@ def {tool_name}() -> str:
 
 def test_editing_and_deleting_a_tool_file_changes_the_next_turn(tmp_path: Path) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         tool_path = instance.path / "tools" / "version.py"
         tool_path.write_text(
             """from kinby.plugins import tool
@@ -251,7 +851,7 @@ def test_syntax_errors_warn_for_each_file_and_keep_the_previous_tool_set(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         (instance.path / "tools" / "stable.py").write_text(
             """from kinby.plugins import tool
 
@@ -330,7 +930,7 @@ def test_duplicate_tool_name_warns_with_both_sources_and_keeps_the_previous_set(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         first_source = instance.path / "tools" / "first.py"
         first_source.write_text(
             """from kinby.plugins import tool
@@ -397,7 +997,7 @@ def test_tool_loop_usage_accumulates_within_a_turn_and_resets_next_turn(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         model = ScriptedModel(
             [
                 AIMessageChunk(
@@ -436,7 +1036,7 @@ def test_tool_loop_usage_accumulates_within_a_turn_and_resets_next_turn(
 
 def test_tool_context_is_injected_and_hidden_from_the_model_schema(tmp_path: Path) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         (instance.path / "tools" / "where.py").write_text(
             """from __future__ import annotations
 
@@ -485,7 +1085,7 @@ def test_unknown_tool_returns_an_error_to_the_model_and_the_turn_completes(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         model = ScriptedModel(
             [
                 AIMessageChunk(
@@ -519,7 +1119,7 @@ def test_raised_tool_exception_is_an_error_result_and_the_turn_completes(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         (instance.path / "tools" / "fail.py").write_text(
             """from kinby.plugins import tool
 
@@ -556,7 +1156,7 @@ def fail() -> str:
 
 def test_interrupt_during_a_tool_loop_stops_before_the_next_call(tmp_path: Path) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         (instance.path / "tools" / "loop.py").write_text(
             """import time
 

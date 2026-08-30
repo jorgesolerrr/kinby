@@ -30,7 +30,7 @@ def _load_test_instance(tmp_path: Path) -> Instance:
     instance_path = tmp_path / "instance"
     instance_path.mkdir()
     (instance_path / "kinby.toml").write_text(
-        f'id = "test"\n\n[models]\nmain = "{_MODEL}"\n',
+        f'id = "test"\n\n[models]\nmain = "{_MODEL}"\n\n[tools]\ndefaults = false\n',
         encoding="utf-8",
     )
     return load_instance(instance_path)
@@ -93,7 +93,7 @@ def test_runner_reloads_the_instance_model_between_turns(
         instance_path.mkdir()
         manifest_path = instance_path / "kinby.toml"
         manifest_path.write_text(
-            'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n',
+            'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n[tools]\ndefaults = false\n',
             encoding="utf-8",
         )
         instance = load_instance(instance_path)
