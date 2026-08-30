@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from datetime import date
 from importlib.metadata import version
 from pathlib import Path
 from uuid import UUID
@@ -25,7 +26,7 @@ from kinby.contracts import (
     TokenTotals,
     UsageGetCommand,
 )
-from kinby.core import build_dispatcher, turn_config
+from kinby.core import assemble_system_prompt, build_dispatcher, turn_config
 from kinby.instance import (
     PLACEHOLDER_MODEL,
     Instance,
@@ -36,6 +37,8 @@ from kinby.instance import (
     init_instance,
     load_instance,
 )
+from kinby.plugins.registry import ToolRegistry
+from kinby.plugins.skills import load_skills, skill_tool
 
 
 def _add_instance_selector(parser: argparse.ArgumentParser, help_text: str) -> None:
@@ -79,6 +82,28 @@ def _print_instance(instance: Instance) -> None:
             for path in skills:
                 print(f"    {path}")
     print(f"state dir: {manifest.state_dir}")
+
+
+def _print_turn_inputs(instance: Instance) -> None:
+    skills, skill_warnings = load_skills(instance)
+    sections = assemble_system_prompt(instance, skills, date.today())
+    registry = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults)
+    discovered_tools, tool_warnings = registry.refresh()
+    tools, core_tool_warnings = discovered_tools.with_core(skill_tool(skills))
+
+    print("tools:")
+    for tool in tools.tools:
+        access = "write" if tool.write else "read"
+        print(f"  {tool.name} ({access}): {tool.source}")
+    print("skills:")
+    for skill in skills:
+        print(f"  {skill.name}: {skill.source}")
+    print("prompt sections:")
+    for section in sections:
+        print(f"  {section.name}: {section.source} ({len(section.text)} characters)")
+    print("warnings:")
+    for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
+        print(f"  {', '.join(warning.sources)}: {warning.message}")
 
 
 def _token_totals(usage: TokenTotals) -> str:
@@ -267,7 +292,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         match args.command:
             case "instance" if args.instance_command == "show":
-                _print_instance(_load_selected_instance(args))
+                instance = _load_selected_instance(args)
+                _print_instance(instance)
+                _print_turn_inputs(instance)
                 return 0
             case "run":
                 instance = _load_selected_instance(args, model_override=args.model)

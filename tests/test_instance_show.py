@@ -522,6 +522,18 @@ def test_instance_show_does_not_list_workspace_tools(tmp_path, capsys):
     workspace = instance / "workspace"
     workspace_tools = workspace / "tools"
     workspace_tools.mkdir(parents=True)
+    workspace_tool = workspace_tools / "workspace_only.py"
+    workspace_tool.write_text(
+        """\
+from kinby.plugins import tool
+
+@tool(write=False)
+def workspace_only() -> str:
+    \"\"\"Return a workspace-only result.\"\"\"
+    return "workspace"
+""",
+        encoding="utf-8",
+    )
     (workspace / "AGENTS.md").write_text("# project\n", encoding="utf-8")
     _write_conventions_instance(
         instance,
@@ -533,4 +545,157 @@ def test_instance_show_does_not_list_workspace_tools(tmp_path, capsys):
     captured = capsys.readouterr()
     assert exit_code == 0
     assert str(workspace_tools.resolve()) not in captured.out
-    assert "tools:" not in captured.out
+    assert "workspace_only" not in captured.out
+
+
+def test_instance_show_lists_turn_inputs_and_load_warnings(tmp_path, capsys):
+    instance = tmp_path / "alice"
+    workspace = instance / "workspace"
+    instance_tools = instance / "tools"
+    instance_skill = instance / "skills" / "planning" / "SKILL.md"
+    workspace_skill = workspace / ".agents" / "skills" / "review" / "SKILL.md"
+    instance_tools.mkdir(parents=True)
+    instance_skill.parent.mkdir(parents=True)
+    workspace_skill.parent.mkdir(parents=True)
+    (instance / "kinby.toml").write_text(
+        """\
+id = "alice"
+
+[models]
+main = "openai:gpt-5"
+
+[workspace.conventions]
+enabled = true
+""",
+        encoding="utf-8",
+    )
+    conventions = workspace / "AGENTS.md"
+    conventions.write_text("# Project rules\n", encoding="utf-8")
+    instance_skill.write_text(
+        """\
+---
+name: planning
+description: Plan the work.
+---
+Plan before editing.
+""",
+        encoding="utf-8",
+    )
+    workspace_skill.write_text(
+        """\
+---
+name: review
+description: Review the result.
+---
+Check the finished work.
+        """,
+        encoding="utf-8",
+    )
+    (instance_tools / "remember.py").write_text(
+        """\
+from kinby.plugins import tool
+
+@tool(write=True)
+def remember(note: str) -> str:
+    \"\"\"Remember one note.\"\"\"
+    return note
+""",
+        encoding="utf-8",
+    )
+    broken_tool = instance_tools / "broken.py"
+    broken_tool.write_text("def broken(:\n", encoding="utf-8")
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    existing_output = (
+        "id: alice\n"
+        f"path: {instance.resolve()}\n"
+        "matching rule: explicit directory\n"
+        "models:\n"
+        "  main: openai:gpt-5\n"
+        "  recap: openai:gpt-5\n"
+        "  embed: not configured\n"
+        f"workspace: {workspace.resolve()} (present)\n"
+        "conventions:\n"
+        "  instructions:\n"
+        f"    {conventions.resolve()}\n"
+        "  skills:\n"
+        f"    {workspace_skill.parents[1].resolve()}\n"
+        f"state dir: {(instance / '.state').resolve()}\n"
+    )
+    assert exit_code == 0
+    assert captured.out.startswith(existing_output)
+    assert "tools:\n" in captured.out
+    assert "  read (read): " in captured.out
+    assert "  write (write): " in captured.out
+    assert "  skill (read): " in captured.out
+    assert "skills:\n" in captured.out
+    assert f"  planning: {instance_skill}\n" in captured.out
+    assert f"  review: {workspace_skill}\n" in captured.out
+    assert "prompt sections:\n" in captured.out
+    assert "  preamble: kinby (48 characters)\n" in captured.out
+    assert f"  workspace conventions: {conventions.resolve()} (15 characters)\n" in captured.out
+    assert "  skills catalogue: runtime (" in captured.out
+    assert "  environment: runtime (" in captured.out
+    assert "warnings:\n" in captured.out
+    assert f"  {broken_tool}: SyntaxError:" in captured.out
+    assert captured.err == ""
+
+
+def test_instance_show_omits_packaged_tools_when_defaults_are_disabled(tmp_path, capsys):
+    instance = tmp_path / "alice"
+    instance.mkdir()
+    (instance / "kinby.toml").write_text(
+        """\
+id = "alice"
+
+[models]
+main = "openai:gpt-5"
+
+[tools]
+defaults = false
+""",
+        encoding="utf-8",
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    tools_output = captured.out.split("tools:\n", 1)[1].split("skills:\n", 1)[0]
+    assert exit_code == 0
+    assert "  skill (read): " in tools_output
+    assert "  bash (write): " not in tools_output
+    assert "  read (read): " not in tools_output
+    assert "  write (write): " not in tools_output
+    assert captured.err == ""
+
+
+def test_instance_show_lists_a_shadowed_tool_once_from_the_instance(tmp_path, capsys):
+    instance = tmp_path / "alice"
+    instance_tool = instance / "tools" / "bash.py"
+    instance_tool.parent.mkdir(parents=True)
+    (instance / "kinby.toml").write_text(
+        'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n',
+        encoding="utf-8",
+    )
+    instance_tool.write_text(
+        """\
+from kinby.plugins import tool
+
+@tool(write=False)
+def bash(command: str) -> str:
+    \"\"\"Return the command.\"\"\"
+    return command
+""",
+        encoding="utf-8",
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    tools_output = captured.out.split("tools:\n", 1)[1].split("skills:\n", 1)[0]
+    assert exit_code == 0
+    assert tools_output.count("  bash (") == 1
+    assert f"  bash (read): {instance_tool}\n" in tools_output
+    assert captured.err == ""
