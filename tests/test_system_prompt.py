@@ -98,6 +98,7 @@ def test_model_receives_prompt_sections_in_order_with_environment_last(
             "INSTANCE BEHAVIOR",
             "FIRST WORKSPACE RULES",
             "SECOND WORKSPACE RULES",
+            "# Skills",
             "USER PROFILE",
             "# Environment",
         )
@@ -178,7 +179,7 @@ def test_prompt_files_and_manifest_are_reloaded_between_turns(tmp_path: Path) ->
     asyncio.run(scenario())
 
 
-def test_missing_optional_files_leave_only_preamble_and_environment(
+def test_missing_optional_files_leave_core_sections(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -203,6 +204,8 @@ def test_missing_optional_files_leave_only_preamble_and_environment(
         )
         assert system_message.text == (
             "You are a personal AI teammate running on kinby.\n\n"
+            "# Skills\n"
+            "Use the `skill` tool to read a skill's full instructions.\n\n"
             "# Environment\n"
             "instance id: bare\n"
             f"workspace path: {instance.manifest.workspace.path}\n"
@@ -216,7 +219,7 @@ def test_missing_optional_files_leave_only_preamble_and_environment(
 def test_prompt_sections_name_their_sources(tmp_path: Path) -> None:
     instance = load_instance(_instance_with_prompt_files(tmp_path))
 
-    sections = assemble_system_prompt(instance, date(2026, 8, 28))
+    sections = assemble_system_prompt(instance, (), date(2026, 8, 28))
 
     assert [(section.name, str(section.source)) for section in sections] == [
         ("preamble", "kinby"),
@@ -229,6 +232,7 @@ def test_prompt_sections_name_their_sources(tmp_path: Path) -> None:
             "workspace conventions",
             str(instance.manifest.workspace.path / "TEAM.md"),
         ),
+        ("skills catalogue", "runtime"),
         ("profile", str(instance.path / "memory" / "profile.md")),
         ("environment", "runtime"),
     ]

@@ -24,10 +24,26 @@ class ToolSnapshot:
     _by_name: dict[str, Tool] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_by_name", {tool.name: tool for tool in self.tools})
+        tools = tuple(sorted(self.tools, key=lambda tool: tool.name))
+        object.__setattr__(self, "tools", tools)
+        object.__setattr__(self, "_by_name", {tool.name: tool for tool in tools})
 
     def get(self, name: str) -> Tool | None:
         return self._by_name.get(name)
+
+    def with_core(self, core: Tool) -> tuple[ToolSnapshot, tuple[Warning, ...]]:
+        """Add a core tool, replacing and warning about a namesake plugin."""
+        plugin = self.get(core.name)
+        warnings: tuple[Warning, ...] = ()
+        if plugin is not None:
+            warnings = (
+                Warning(
+                    sources=(str(plugin.source), str(core.source)),
+                    message=f'Plugin tool "{plugin.name}" was replaced by the core tool.',
+                ),
+            )
+        tools = (*[tool for tool in self.tools if tool.name != core.name], core)
+        return ToolSnapshot(tools), warnings
 
 
 @dataclass(frozen=True)
@@ -89,7 +105,7 @@ class ToolRegistry:
             tool for tool in self._packaged if tool.name not in instance_names
         )
         self._signature = signature
-        self._snapshot = ToolSnapshot(tuple(sorted(tools, key=lambda tool: tool.name)))
+        self._snapshot = ToolSnapshot(tools)
         return self._snapshot, self._package_warnings
 
 

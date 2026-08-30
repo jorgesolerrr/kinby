@@ -50,6 +50,7 @@ from kinby.core.turns import (
 from kinby.instance import Instance, reload_manifest
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
+from kinby.plugins.skills import load_skills, skill_tool
 from kinby.plugins.tools import ToolContext
 
 _TOOL_ARGUMENTS = TypeAdapter(dict[str, JsonValue])
@@ -156,9 +157,11 @@ class LangGraphRunner:
         graph_input: ModelState | Command,
         config: RunnableConfig,
     ) -> TurnResult:
-        sections = assemble_system_prompt(self._instance, date.today())
-        tools, warnings = self._tools.refresh()
-        for warning in warnings:
+        skills, skill_warnings = load_skills(self._instance)
+        sections = assemble_system_prompt(self._instance, skills, date.today())
+        discovered_tools, tool_warnings = self._tools.refresh()
+        tools, core_tool_warnings = discovered_tools.with_core(skill_tool(skills))
+        for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
             await emit(warning)
         model = self._model_factory(turn.model)
         runnables = [tool.runnable for tool in tools.tools]

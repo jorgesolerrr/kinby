@@ -35,13 +35,13 @@ def _load_test_instance(tmp_path: Path) -> Instance:
     return load_instance(instance_path)
 
 
-class NoToolsModel:
+class CoreSkillModel:
     def bind_tools(self, tools: Sequence[StructuredTool]) -> Self:
-        assert not tools
+        assert [tool.name for tool in tools] == ["skill"]
         return self
 
 
-class StreamingChatModel(NoToolsModel):
+class StreamingChatModel(CoreSkillModel):
     async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
         assert messages[-1].content == "Hello"
         yield AIMessageChunk(
@@ -54,7 +54,7 @@ class StreamingChatModel(NoToolsModel):
         )
 
 
-class RememberingChatModel(NoToolsModel):
+class RememberingChatModel(CoreSkillModel):
     def __init__(self) -> None:
         self.histories: list[list[object]] = []
 
@@ -66,7 +66,7 @@ class RememberingChatModel(NoToolsModel):
         yield AIMessageChunk(content=reply)
 
 
-class RecoveringChatModel(NoToolsModel):
+class RecoveringChatModel(CoreSkillModel):
     def __init__(self) -> None:
         self.histories: list[list[object]] = []
 
@@ -79,7 +79,7 @@ class RecoveringChatModel(NoToolsModel):
         yield AIMessageChunk(content="Recovered")
 
 
-class CompletingChatModel(NoToolsModel):
+class CompletingChatModel(CoreSkillModel):
     async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
         yield AIMessageChunk(content="Done")
 
