@@ -59,15 +59,12 @@ def grep(pattern: str, path: str, context: ToolContext) -> str:
 def glob(pattern: str, context: ToolContext) -> str:
     """List workspace paths matching a glob pattern."""
     return "\n".join(
-        _relative_path(
-            context.workspace,
-            _workspace_path(context.workspace, str(path)),
-        )
+        _relative_path(context.workspace, _workspace_path(context.workspace, path))
         for path in sorted(context.workspace.glob(pattern))
     )
 
 
-def _workspace_path(workspace: Path, path: str) -> Path:
+def _workspace_path(workspace: Path, path: str | Path) -> Path:
     root = workspace.resolve()
     target = (root / path).resolve()
     try:

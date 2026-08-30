@@ -19,13 +19,15 @@ def bash(command: str, context: ToolContext) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    assert process.stdout is not None
-    assert process.stderr is not None
+    stdout_pipe = process.stdout
+    stderr_pipe = process.stderr
+    if stdout_pipe is None or stderr_pipe is None:
+        raise RuntimeError("Bash pipes were not opened.")
     stdout = bytearray()
     stderr = bytearray()
     readers = (
-        Thread(target=_read_output, args=(process.stdout, stdout)),
-        Thread(target=_read_output, args=(process.stderr, stderr)),
+        Thread(target=_read_output, args=(stdout_pipe, stdout)),
+        Thread(target=_read_output, args=(stderr_pipe, stderr)),
     )
     for reader in readers:
         reader.start()
@@ -36,15 +38,15 @@ def bash(command: str, context: ToolContext) -> str:
         process.wait()
         for reader in readers:
             reader.join()
-        output = _render_output(stdout, stderr)
+        output = _capped(_render_output(stdout, stderr))
         detail = f"\n{output}" if output else ""
         raise TimeoutError(f"Bash timed out after {_TIMEOUT_SECONDS} seconds.{detail}") from None
     for reader in readers:
         reader.join()
     output = _render_output(stdout, stderr)
     if return_code:
-        return f"Exit code: {return_code}\n{output}"[:_OUTPUT_CAP]
-    return output
+        output = f"Exit code: {return_code}\n{output}"
+    return _capped(output)
 
 
 def _read_output(stream: BinaryIO, output: bytearray) -> None:
@@ -60,4 +62,8 @@ def _render_output(stdout: bytearray, stderr: bytearray) -> str:
         sections.append(stdout.decode(errors="replace"))
     if stderr:
         sections.append(f"stderr:\n{stderr.decode(errors='replace')}")
-    return "\n".join(sections)[:_OUTPUT_CAP]
+    return "\n".join(sections)
+
+
+def _capped(text: str) -> str:
+    return text[:_OUTPUT_CAP]

@@ -86,7 +86,7 @@ def test_tool_decorator_attaches_the_declaration_record() -> None:
     assert remember.runnable.args == {"note": {"title": "Note", "type": "string"}}
 
 
-def _instance(tmp_path: Path, *, defaults: bool = False) -> Instance:
+def _instance(tmp_path: Path, *, defaults: bool = True) -> Instance:
     instance_path = tmp_path / "instance"
     instance_path.mkdir()
     (instance_path / "tools").mkdir()
@@ -209,7 +209,7 @@ def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypa
     monkeypatch.setattr(registry, "entry_points", installed)
 
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         model = ScriptedModel([AIMessageChunk(content="First"), AIMessageChunk(content="Second")])
         dispatcher, thread_id = await _session(instance, model)
 
@@ -271,7 +271,7 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
     monkeypatch.setattr(registry, "entry_points", installed)
 
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         model = ScriptedModel([AIMessageChunk(content="First"), AIMessageChunk(content="Second")])
         dispatcher, thread_id = await _session(instance, model)
 
@@ -320,7 +320,7 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
     monkeypatch.setattr(registry, "entry_points", installed)
 
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         model = ScriptedModel([AIMessageChunk(content="Done")])
 
         await _start_turn(instance, model)
@@ -715,7 +715,7 @@ def test_default_write_and_edit_change_workspace_files(tmp_path: Path) -> None:
 
 def test_tool_file_is_bound_and_called_on_the_next_turn(tmp_path: Path) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         (instance.path / "tools" / "greet.py").write_text(
             """from kinby.plugins import tool
 
@@ -768,7 +768,7 @@ def greet(name: str) -> str:
 
 def test_turn_binds_tools_sorted_by_name(tmp_path: Path) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         for file_name, tool_name in (("zulu.py", "zulu"), ("alpha.py", "alpha")):
             (instance.path / "tools" / file_name).write_text(
                 f"""from kinby.plugins import tool
@@ -791,7 +791,7 @@ def {tool_name}() -> str:
 
 def test_editing_and_deleting_a_tool_file_changes_the_next_turn(tmp_path: Path) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         tool_path = instance.path / "tools" / "version.py"
         tool_path.write_text(
             """from kinby.plugins import tool
@@ -851,7 +851,7 @@ def test_syntax_errors_warn_for_each_file_and_keep_the_previous_tool_set(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         (instance.path / "tools" / "stable.py").write_text(
             """from kinby.plugins import tool
 
@@ -930,7 +930,7 @@ def test_duplicate_tool_name_warns_with_both_sources_and_keeps_the_previous_set(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         first_source = instance.path / "tools" / "first.py"
         first_source.write_text(
             """from kinby.plugins import tool
@@ -997,7 +997,7 @@ def test_tool_loop_usage_accumulates_within_a_turn_and_resets_next_turn(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         model = ScriptedModel(
             [
                 AIMessageChunk(
@@ -1036,7 +1036,7 @@ def test_tool_loop_usage_accumulates_within_a_turn_and_resets_next_turn(
 
 def test_tool_context_is_injected_and_hidden_from_the_model_schema(tmp_path: Path) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         (instance.path / "tools" / "where.py").write_text(
             """from __future__ import annotations
 
@@ -1085,7 +1085,7 @@ def test_unknown_tool_returns_an_error_to_the_model_and_the_turn_completes(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         model = ScriptedModel(
             [
                 AIMessageChunk(
@@ -1119,7 +1119,7 @@ def test_raised_tool_exception_is_an_error_result_and_the_turn_completes(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         (instance.path / "tools" / "fail.py").write_text(
             """from kinby.plugins import tool
 
@@ -1156,7 +1156,7 @@ def fail() -> str:
 
 def test_interrupt_during_a_tool_loop_stops_before_the_next_call(tmp_path: Path) -> None:
     async def scenario() -> None:
-        instance = _instance(tmp_path)
+        instance = _instance(tmp_path, defaults=False)
         (instance.path / "tools" / "loop.py").write_text(
             """import time
 

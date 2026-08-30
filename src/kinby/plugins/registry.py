@@ -138,8 +138,6 @@ def _load_entry_points(*, defaults: bool) -> tuple[tuple[Tool, ...], tuple[Warni
 
 def _entry_point_tools(entry_point: EntryPoint) -> tuple[Tool, ...]:
     loaded = entry_point.load()
-    if isinstance(loaded, Tool):
-        return (loaded,)
     if not isinstance(loaded, Sequence):
         raise TypeError(f'Entry point "{entry_point.value}" does not export tools.')
     tools = tuple(item for item in loaded if isinstance(item, Tool))
