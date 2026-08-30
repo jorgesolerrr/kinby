@@ -23,7 +23,7 @@ from kinby.contracts import (
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.turns import Emit, TurnOutcome, TurnRequest
 from kinby.instance import init_instance, load_instance
-from tests.helpers import does_not_park, fixed_model_name
+from tests.helpers import cannot_resume, discard_turn, does_not_park, fixed_model_name
 
 
 class UsageRunner:
@@ -41,6 +41,8 @@ class UsageRunner:
         )
 
     resume = does_not_park
+    can_resume = cannot_resume
+    discard = discard_turn
 
 
 @dataclass(frozen=True)

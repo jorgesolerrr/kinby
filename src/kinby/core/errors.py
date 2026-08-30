@@ -27,6 +27,10 @@ class ModelNoResponse(CoreError):
     pass
 
 
+class InvalidApprovalRequest(CoreError):
+    """The turn runner produced an approval request with the wrong type."""
+
+
 class TurnInterruptedError(asyncio.CancelledError):
     """Stop work that tries to emit after its turn was interrupted."""
 
@@ -36,6 +40,6 @@ class ApprovalNotFound(CoreError):
 
 
 class InvalidParkedTurn(CoreError):
-    """A persisted parked turn cannot be reconstructed."""
+    """The live runner state for a parked turn is unavailable."""
 
-    code = ErrorCode.INTERNAL
+    code = ErrorCode.PARKED_TURN_UNAVAILABLE

@@ -2,11 +2,14 @@ import asyncio
 import signal
 from io import StringIO
 from pathlib import Path
+from queue import Queue
+from uuid import UUID
 
 from kinby.cli.client import ContractClient
 from kinby.cli.repl import run_repl
 from kinby.contracts import (
     THREAD_CREATE,
+    ApprovalRequested,
     MessageDelta,
     Scope,
     ThreadCreateCommand,
@@ -16,8 +19,8 @@ from kinby.contracts import (
     Warning,
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
-from kinby.core.turns import Emit, TurnOutcome, TurnRequest
-from tests.helpers import does_not_park, fixed_model_name
+from kinby.core.turns import ApprovalDecision, Emit, ParkedTurn, TurnOutcome, TurnRequest
+from tests.helpers import cannot_resume, discard_turn, does_not_park, fixed_model_name
 
 
 class ReplRunner:
@@ -27,6 +30,8 @@ class ReplRunner:
         return TurnOutcome()
 
     resume = does_not_park
+    can_resume = cannot_resume
+    discard = discard_turn
 
 
 class InterruptibleReplRunner:
@@ -43,6 +48,8 @@ class InterruptibleReplRunner:
         return TurnOutcome()
 
     resume = does_not_park
+    can_resume = cannot_resume
+    discard = discard_turn
 
 
 class ToolEventRunner:
@@ -66,6 +73,69 @@ class ToolEventRunner:
         return TurnOutcome()
 
     resume = does_not_park
+    can_resume = cannot_resume
+    discard = discard_turn
+
+
+class ApprovalReplRunner:
+    def __init__(self) -> None:
+        self.decisions: list[ApprovalDecision] = []
+        self.parked = asyncio.Event()
+
+    def can_resume(self, turn: TurnRequest) -> bool:
+        return True
+
+    async def discard(self, turn: TurnRequest) -> None:
+        pass
+
+    async def run(self, turn: TurnRequest, emit: Emit) -> ParkedTurn:
+        await emit(
+            ApprovalRequested(
+                approval_id=UUID("11111111-1111-1111-1111-111111111111"),
+                request='write_note: {"note": "remember me"}',
+            )
+        )
+        self.parked.set()
+        return ParkedTurn()
+
+    async def resume(
+        self,
+        turn: TurnRequest,
+        decision: ApprovalDecision,
+        emit: Emit,
+    ) -> TurnOutcome:
+        self.decisions.append(decision)
+        await emit(
+            ToolCall(
+                call_id="write-1",
+                name="write_note",
+                arguments={"note": "remember me"},
+            )
+        )
+        await emit(
+            ToolResult(
+                call_id="write-1",
+                name="write_note",
+                output="remember me",
+                error=False,
+            )
+        )
+        await emit(MessageDelta(text="Done"))
+        return TurnOutcome()
+
+
+class BlockingInput(StringIO):
+    def __init__(self, *lines: str) -> None:
+        super().__init__()
+        self._lines: Queue[str] = Queue()
+        for line in lines:
+            self._lines.put(line)
+
+    def readline(self, size: int = -1, /) -> str:
+        return self._lines.get()
+
+    def send(self, line: str) -> None:
+        self._lines.put(line)
 
 
 def test_repl_streams_a_full_turn_through_the_dispatcher(tmp_path: Path) -> None:
@@ -153,6 +223,84 @@ def test_repl_renders_tool_and_warning_events(tmp_path: Path) -> None:
             '> [tool.call] weather {"city": "Quito"}\n[tool.result] weather (ok): 18 C\n\n> '
         )
         assert stderr.getvalue() == "[warning] tools/weather.py: Using cached tool set.\n"
+
+    asyncio.run(scenario())
+
+
+def test_repl_answers_a_parked_approval(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runner = ApprovalReplRunner()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_model_name, runner),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await asyncio.wait_for(
+            run_repl(
+                client,
+                created.id,
+                stdin=StringIO("Remember this\nyes\n"),
+                stdout=stdout,
+                stderr=stderr,
+            ),
+            timeout=1,
+        )
+
+        assert exit_code == 0
+        assert runner.decisions == [ApprovalDecision.APPROVE]
+        assert stdout.getvalue() == (
+            '> Approve write_note: {"note": "remember me"}? [yes/no] '
+            '[tool.call] write_note {"note": "remember me"}\n'
+            "[tool.result] write_note (ok): remember me\nDone\n> "
+        )
+        assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())
+
+
+def test_repl_interrupts_while_waiting_for_approval(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runner = ApprovalReplRunner()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_model_name, runner),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdin = BlockingInput("Remember this\n")
+        stdout = StringIO()
+        stderr = StringIO()
+        repl = asyncio.create_task(
+            run_repl(
+                client,
+                created.id,
+                stdin=stdin,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        )
+        await asyncio.wait_for(runner.parked.wait(), timeout=1)
+
+        signal.raise_signal(signal.SIGINT)
+        for _ in range(10):
+            if "(interrupted)" in stdout.getvalue():
+                break
+            await asyncio.sleep(0)
+        stdin.send("")
+        exit_code = await asyncio.wait_for(repl, timeout=1)
+
+        assert exit_code == 0
+        assert runner.decisions == []
+        assert stdout.getvalue() == (
+            '> Approve write_note: {"note": "remember me"}? [yes/no] (interrupted)\n> '
+        )
+        assert stderr.getvalue() == ""
 
     asyncio.run(scenario())
 

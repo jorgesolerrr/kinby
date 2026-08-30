@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from functools import partial
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -58,6 +59,11 @@ class ParkedTurn:
     pass
 
 
+class ApprovalDecision(StrEnum):
+    APPROVE = "approve"
+    DENY = "deny"
+
+
 @dataclass(frozen=True)
 class PendingApproval:
     event: Event
@@ -69,8 +75,15 @@ Emit = Callable[[Payload], Awaitable[Event]]
 
 
 class TurnRunner(Protocol):
+    def can_resume(self, turn: TurnRequest) -> bool: ...
+    async def discard(self, turn: TurnRequest) -> None: ...
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult: ...
-    async def resume(self, turn: TurnRequest, answer: str, emit: Emit) -> TurnResult: ...
+    async def resume(
+        self,
+        turn: TurnRequest,
+        decision: ApprovalDecision,
+        emit: Emit,
+    ) -> TurnResult: ...
 
 
 @dataclass
@@ -137,6 +150,8 @@ class Turns:
             if pending is None:
                 raise _no_active_turn(command.thread_id)
             turn_id = pending.event.turn_id
+            turn = _restore_parked_turn(self._log.stored(command.thread_id), pending)
+            await self._runner.discard(turn)
 
         interrupted = await self._log.append(
             command.thread_id,
@@ -168,7 +183,10 @@ class Turns:
         if running is not None and not running.task.done():
             raise _thread_busy(command.thread_id)
         turn = _restore_parked_turn(events, pending)
-        self._spawn(turn, self._resume(turn, command.answer))
+        if not self._runner.can_resume(turn):
+            raise InvalidParkedTurn("The parked turn cannot resume after a runtime restart.")
+        decision = ApprovalDecision.APPROVE if command.answer == "yes" else ApprovalDecision.DENY
+        self._spawn(turn, self._resume(turn, decision))
         # respond appends no event, so approval.requested is the resume cursor.
         return AcceptedResult(
             thread_id=turn.thread_id,
@@ -188,8 +206,8 @@ class Turns:
     async def _run(self, turn: TurnRequest) -> None:
         await self._finish(turn, lambda emit: self._runner.run(turn, emit))
 
-    async def _resume(self, turn: TurnRequest, answer: str) -> None:
-        await self._finish(turn, lambda emit: self._runner.resume(turn, answer, emit))
+    async def _resume(self, turn: TurnRequest, decision: ApprovalDecision) -> None:
+        await self._finish(turn, lambda emit: self._runner.resume(turn, decision, emit))
 
     async def _finish(
         self,
@@ -205,15 +223,18 @@ class Turns:
         try:
             outcome = await run(emit)
         except CoreError as exc:
+            await self._runner.discard(turn)
             code = exc.code
             message = str(exc)
         except Exception:
+            await self._runner.discard(turn)
             logger.exception("The model turn failed.")
             code = ErrorCode.INTERNAL
             message = "The model turn failed unexpectedly."
         else:
             if isinstance(outcome, ParkedTurn):
                 return
+            await self._runner.discard(turn)
             await emit(
                 TurnCompleted(
                     input_tokens=outcome.input_tokens,
