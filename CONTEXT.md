@@ -97,6 +97,22 @@ A user decision a live turn waits on before it continues. Requested as an event;
 
 The normalized answer to an **approval**: approve or deny. The answer `yes` approves; every other answer denies.
 
+### Gate
+
+The check every **tool** call passes through before it runs. It reads the tool's write flag and the instance's permission policy, and answers allow, ask (raise an **approval**), or deny. The policy is the instance's ceiling; a **thread** may narrow it, never widen it.
+
+### Sandbox
+
+The isolation boundary around an **instance**. When deployed, the container is the hard wall: the worst a runaway command can destroy is the container itself. Everywhere, the **gate** is the soft wall. A new instance means a new sandbox.
+
+### Permission mode
+
+A named preset of **gate** rules a **thread** runs under: read-only, ask, auto, or full-access. The instance sets the default for new threads and the ceiling; a thread may pin any mode up to the ceiling, never above it.
+
+### Denylist
+
+The instance's list of command patterns the **gate** refuses or escalates regardless of **permission mode**. A tripwire, not a wall: it catches obvious disasters, while the **sandbox** provides the actual isolation.
+
 ### Contract
 
 The typed set of commands and subscriptions every client uses to drive a session. The CLI is its client today; a server can use the same boundary later. Clients import contracts, never core.

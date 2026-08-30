@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blueprint: Permission gate</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f5f5f5;
+      --ink: #2d3142;
+      --muted: #4f5d75;
+      --soft: #7a8399;
+      --rule: rgba(45, 49, 66, 0.16);
+      --accent: #eb6c36;
+      --accent-tint: rgba(235, 108, 54, 0.08);
+      --link: #2e5aa8;
+      --new: #2e7d32;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', Georgia, serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #2d3142;
+        --ink: #f5f5f5;
+        --muted: #bfc0c0;
+        --soft: #8e98ac;
+        --rule: rgba(245, 245, 245, 0.16);
+        --accent: #f08a59;
+        --accent-tint: rgba(240, 138, 89, 0.10);
+        --link: #6a95d8;
+        --new: #66bb6a;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 3rem 2rem 4rem;
+      font-family: var(--font-sans);
+      font-size: 15px;
+      line-height: 1.55;
+      background: var(--paper);
+      color: var(--ink);
+    }
+    main { max-width: 960px; margin: 0 auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 0.5rem;
+    }
+    h1 { font-family: var(--font-serif); font-weight: 400; font-size: 2.25rem; line-height: 1.1; margin: 0 0 0.5rem; }
+    h2 { font-family: var(--font-serif); font-weight: 400; font-size: 1.6rem; margin: 3rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+    h3 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+    .mode { font-family: var(--font-mono); font-size: 0.7rem; color: var(--soft); margin-left: 0.5rem; letter-spacing: 0.08em; }
+    .stamp { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+    code, pre { font-family: var(--font-mono); font-size: 0.85em; }
+    code { background: rgba(127, 127, 127, 0.12); padding: 0.05em 0.3em; border-radius: 3px; }
+    pre { padding: 0.75rem 1rem; border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+    th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--rule); }
+    th { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+    figure { margin: 1.5rem 0; }
+    figure svg { display: block; width: 100%; height: auto; }
+    figcaption { font-family: var(--font-serif); font-style: italic; font-size: 0.95rem; color: var(--muted); margin-top: 0.5rem; }
+    .overflow { overflow-x: auto; }
+    ol, ul { padding-left: 1.4rem; }
+    li { margin: 0.25rem 0; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1.25rem; }
+    dt { font-family: var(--font-mono); font-size: 0.85rem; }
+    dd { margin: 0; }
+    footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--rule); font-family: var(--font-mono); font-size: 0.75rem; color: var(--soft); }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Blueprint</p>
+  <h1>Permission gate</h1>
+  <p class="stamp">Stamped at <code>dd10b9e</code>: paths and symbols are true at this commit. Spec: issue #62. Design: wayfinder ticket #7, ADR 0014.</p>
+
+  <h2 id="at-a-glance">At a glance <span class="mode">explanation</span></h2>
+  <p>You get a gate that decides allow, ask, or deny for every tool call, driven by <code>permissions.toml</code> instead of the hardcoded write-flag check. Four permission modes are presets over per-tool rules, a thread pins its mode through the new <code>thread.mode.set</code> contract method, and a regex denylist catches known disasters even in <code>full-access</code>. The constraining decision is D2: modes are presets over per-tool rules, so the tool author's <code>write</code> flag stays a one-bit declaration and policy belongs entirely to the user.</p>
+
+  <h2 id="problem">Problem <span class="mode">explanation</span></h2>
+  <p>Today the runtime asks you to approve every write tool call and nothing else. You cannot tell kinby that edits in a trusted thread are fine while bash still asks. You cannot lock a thread to read-only over an untrusted workspace. Nothing stops <code>rm -rf</code> on the instance home or a force-push, even though <code>permissions.toml</code> sits in every instance directory. The file is scaffolded and unread. A turn parked on an approval also dies with the process, because the graph checkpointer is in memory.</p>
+
+  <h2 id="solution">Solution <span class="mode">explanation</span></h2>
+  <p>You write policy once in <code>permissions.toml</code>: a default mode, a ceiling, per-tool overrides, and bash pattern lists. Each thread runs under one of four modes. <code>read-only</code> lets the agent look, <code>ask</code> checks everything that writes, <code>auto</code> approves edits inside the workspace while bash still asks, and <code>full-access</code> frees everything except the denylist. You raise or lower a thread's mode from the REPL, never above the ceiling. When you deny a call, the agent hears "no" as a tool result and keeps working. When you restart, a parked turn is still there waiting for your answer.</p>
+
+  <h2 id="decision-log">Decision log <span class="mode">explanation</span></h2>
+  <p>One row per decision settled in the grilling on wayfinder ticket #7. Later sections cite <code>Dn</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>#</th><th>Decision</th><th>Chosen</th><th>Rejected</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>Where does policy live?</td><td>Layered: <code>permissions.toml</code> sets the default mode and the ceiling, a thread pins its own mode at or below the ceiling</td><td>Instance-only file, thread-only mode</td><td>The instance is the unit of trust, but "run loose in this one thread" is a real need. The ceiling keeps the file the final word.</td></tr>
+      <tr><td>D2</td><td>Granularity of the gate</td><td>Per-tool allow, ask, or deny rules with modes as named presets</td><td>A category axis on the <code>write</code> flag, T3-style fixed modes</td><td>Fixed modes cannot classify plugin tools their vocabulary never heard of. The <code>write</code> flag stays the author's honest one-bit declaration.</td></tr>
+      <tr><td>D3</td><td>What is the sandbox in v1?</td><td>Container as the hard wall when deployed, gate path rules as the soft wall everywhere</td><td>OS-level sandboxing on local installs, gate-only isolation</td><td>Path rules are cheap because the file tools take path arguments. Bash cannot be statically bounded, so it asks instead.</td></tr>
+      <tr><td>D4</td><td>What does deny do mid-turn?</td><td>The call returns an error tool result and the turn continues</td><td>End the turn</td><td>A teammate told "not that way" keeps working. Interruption already exists for stopping.</td></tr>
+      <tr><td>D5</td><td>Per-turn git-ref checkpoints</td><td>Split to ticket #60. The gate assumes no revert exists</td><td>Designing revert inside this feature</td><td>Revert may later justify loosening a default, never the reverse. This keeps the gate buildable now.</td></tr>
+      <tr><td>D6</td><td>Escalation as a tool parameter</td><td>Dropped for v1</td><td>A per-call escalation channel</td><td>Park-and-respond already covers "this call needs a human". Nothing needs a second channel yet.</td></tr>
+      <tr><td>D7</td><td>Persistent graph state</td><td>LangGraph SQLite checkpointer in <code>.state/</code></td><td>Event-log-only replay, in-memory only</td><td>Replay would re-execute model calls, which is expensive and non-deterministic. <code>.state/</code> exists for gitignored runtime state. Pays the debt ADR 0009 assigned to ticket #7.</td></tr>
+      <tr><td>D8</td><td>Bash relative to file tools</td><td>Bash asks in every mode below <code>full-access</code></td><td>Bash inheriting the file tools' tier</td><td>Bash can do everything the path-bounded file tools can, so it never gets a looser tier than the tools it can impersonate.</td></tr>
+      <tr><td>D9</td><td>Denylist semantics</td><td>Two regex tiers, <code>deny</code> and <code>ask</code>. <code>deny</code> holds even in <code>full-access</code>. kinby ships defaults</td><td>A single tier, an empty default list</td><td>Deny outranks ask when both match. An empty default makes every self-hoster rediscover the same disasters.</td></tr>
+      <tr><td>D10</td><td>Mode names</td><td><code>read-only</code>, <code>ask</code>, <code>auto</code>, <code>full-access</code></td><td>T3's mode vocabulary as the whole model</td><td><code>auto</code> is the auto-accept-edits level, reached through per-tool rules rather than a fourth flag axis.</td></tr>
+      <tr><td>D11</td><td>The thread override</td><td><code>thread.mode.set</code> joins the contract as the eighth method with its own scope</td><td>Deferring it past v1</td><td>The REPL needs it the first time you say "stop asking about edits". Adding it later touches the same dispatcher seam twice.</td></tr>
+      <tr><td>D12</td><td><code>permissions.toml</code> shape</td><td>Top-level <code>mode</code> and <code>ceiling</code>, a <code>[tools]</code> override table, <code>[bash]</code> with <code>deny</code> and <code>ask</code> lists, merged over shipped defaults</td><td>Mode-only config</td><td>The per-tool table is how plugin tools get absorbed. An absent file means the shipped defaults.</td></tr>
+      <tr><td>D13</td><td>Shipped ceiling</td><td><code>ceiling = "full-access"</code></td><td><code>ceiling = "auto"</code></td><td>The single self-hoster owns the machine. Editing a file to say "yes, really" is friction without a threat model. Exposed instances lower it.</td></tr>
+      <tr><td>D14</td><td>Write bounds in <code>auto</code></td><td>Write tools are bounded to the workspace. Out-of-bounds writes ask in <code>ask</code> and <code>auto</code>, and are allowed in <code>full-access</code></td><td>Letting file tools write the instance directory</td><td>The workspace is the agent's field of work. Instance self-modification is its own gated verb, graduated to ticket #61.</td></tr>
+      <tr><td>D15</td><td>Denylist pattern language</td><td>Regex</td><td>Glob or substring, structured command parsing</td><td>The list is a tripwire (D9), so parsing rigor buys little, and substrings cannot express the shipped defaults.</td></tr>
+      <tr><td>D16</td><td>Instance and sandbox alignment</td><td>Instance = directory = container, one shape. A new instance is a new sandbox</td><td>Treating local and container instances as different kinds</td><td>The container-on-a-server is the deployment target and the local folder is the development form of the same directory (ADR 0001, ADR 0003).</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="birds-eye">Bird's-eye flow <span class="mode">reference</span></h2>
+  <p>The whole feature end to end. The event log and the subscription stream are unchanged and collapsed out of the figure.</p>
+  <figure>
+    <svg viewBox="0 0 960 392" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-birdseye-title fig-birdseye-desc">
+      <title id="fig-birdseye-title">Permission gate from the REPL to the gate decision</title>
+      <desc id="fig-birdseye-desc">Contract commands flow from the REPL through the dispatcher and turns into the turn runner, which asks the new gate to evaluate each tool call against the policy loaded from permissions.toml, and persists parked graph state in SQLite.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="var(--muted)" stroke-width="1.2"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- arrows -->
+      <line x1="200" y1="76" x2="280" y2="76" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="212" y="56" width="56" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="65" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D11 commands</text>
+
+      <line x1="440" y1="76" x2="520" y2="76" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="444" y="56" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="65" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">scoped command</text>
+
+      <line x1="680" y1="76" x2="760" y2="76" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="688" y="56" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="65" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TurnRequest</text>
+
+      <line x1="840" y1="104" x2="840" y2="152" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="848" y="118" width="92" height="12" rx="2" fill="var(--paper)"/>
+      <text x="852" y="127" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D2 evaluate(ToolCall)</text>
+
+      <line x1="200" y1="180" x2="280" y2="180" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="224" y="160" width="32" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="169" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TOML</text>
+
+      <line x1="440" y1="180" x2="760" y2="180" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="560" y="160" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="600" y="169" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D12 GatePolicy</text>
+
+      <path d="M 920,96 H 928 Q 936,96 936,104 V 276 Q 936,284 928,284 H 920" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="812" y="222" width="76" height="12" rx="2" fill="var(--paper)"/>
+      <text x="850" y="231" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D7 graph state</text>
+
+      <!-- nodes -->
+      <rect x="40" y="48" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="48" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="74" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.cli.repl</text>
+      <text x="120" y="90" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/repl.py</text>
+
+      <rect x="280" y="48" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="48" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="74" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.dispatcher</text>
+      <text x="360" y="90" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/dispatcher.py</text>
+
+      <rect x="520" y="48" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="48" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="600" y="74" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turns</text>
+      <text x="600" y="90" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turns.py</text>
+
+      <rect x="760" y="48" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="48" width="160" height="56" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <text x="840" y="74" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turn_runner</text>
+      <text x="840" y="90" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turn_runner.py</text>
+
+      <rect x="40" y="152" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="152" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="40" y="152" width="160" height="8" rx="6" fill="var(--ink)" fill-opacity="0.05"/>
+      <text x="120" y="180" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">permissions.toml</text>
+      <text x="120" y="196" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">instance directory</text>
+
+      <rect x="280" y="152" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="152" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="360" y="178" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">instance.permissions</text>
+      <text x="360" y="194" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/instance/permissions.py</text>
+
+      <rect x="760" y="152" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="152" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="840" y="178" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.gate</text>
+      <text x="840" y="194" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/gate.py</text>
+
+      <rect x="760" y="256" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="256" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="760" y="256" width="160" height="8" rx="6" fill="var(--ink)" fill-opacity="0.05"/>
+      <text x="840" y="282" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">SqliteSaver</text>
+      <text x="840" y="298" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">.state/ checkpoints (D7)</text>
+
+      <!-- legend -->
+      <line x1="40" y1="344" x2="920" y2="344" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="360" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="370" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">new module</text>
+      <line x1="200" y1="366" x2="224" y2="366" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="232" y="370" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">crosses the contract boundary</text>
+    </svg>
+    <figcaption>Figure: data flow of the permission gate from the REPL to the gate decision, with policy loaded from the instance file.</figcaption>
+  </figure>
+  <ol>
+    <li>The REPL sends contract commands to <code>core.dispatcher</code>: <code>thread.turn.start</code>, <code>thread.approval.respond</code>, and the new <code>thread.mode.set</code> (D11).</li>
+    <li><code>core.dispatcher</code> checks the method's scope and routes the command to <code>core.turns</code>.</li>
+    <li><code>core.turns</code> resolves the thread's permission mode and hands <code>run(TurnRequest)</code> to <code>core.turn_runner</code>.</li>
+    <li><code>instance.permissions</code> reads <code>permissions.toml</code> at the turn boundary and merges it over kinby's shipped defaults (D12).</li>
+    <li><code>instance.permissions</code> hands the merged <code>GatePolicy</code> to <code>core.gate</code>.</li>
+    <li><code>core.turn_runner</code> calls <code>evaluate</code> on <code>core.gate</code> for every tool call and acts on the returned <code>GateDecision</code> (D2).</li>
+    <li><code>core.turn_runner</code> persists parked graph state in the SQLite checkpointer under <code>.state/</code>, so an answer can arrive after a restart (D7).</li>
+  </ol>
+
+  <h2 id="module-map">Module map <span class="mode">reference</span></h2>
+  <p>Modules the feature touches and their dependencies after the change. <code>kinby.contracts</code> is imported by every module above it; only the dispatcher edge is drawn.</p>
+  <figure>
+    <svg viewBox="0 0 960 536" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-modules-title fig-modules-desc">
+      <title id="fig-modules-title">Modules the permission gate touches</title>
+      <desc id="fig-modules-desc">The CLI depends on the dispatcher, which depends on turns and the contracts. Turns drives the turn runner, which uses the new gate module, the new permissions loader, and the plugin registry.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- arrows -->
+      <line x1="120" y1="96" x2="120" y2="160" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="120" y1="216" x2="120" y2="280" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="200" y1="308" x2="280" y2="308" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="212" y="288" width="56" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TurnRequest</text>
+
+      <path d="M 40,188 H 24 Q 16,188 16,196 V 420 Q 16,428 24,428 H 40" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <line x1="360" y1="336" x2="360" y2="400" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="368" y="356" width="52" height="12" rx="2" fill="var(--paper)"/>
+      <text x="372" y="365" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D2 evaluate</text>
+
+      <path d="M 400,336 V 368 Q 400,376 408,376 H 592 Q 600,376 600,384 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="452" y="356" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="500" y="365" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D12 load_permissions</text>
+
+      <path d="M 440,308 H 832 Q 840,308 840,316 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="600" y="288" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="632" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolSnapshot</text>
+
+      <line x1="520" y1="428" x2="440" y2="428" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="452" y="440" width="56" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="449" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">GatePolicy</text>
+
+      <!-- nodes -->
+      <rect x="40" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="66" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.cli</text>
+      <text x="120" y="82" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli</text>
+      <rect x="164" y="48" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="178" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">0 in</text>
+
+      <rect x="40" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="186" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.dispatcher</text>
+      <text x="120" y="202" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/dispatcher.py</text>
+      <rect x="164" y="168" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="178" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+
+      <rect x="40" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="306" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turns</text>
+      <text x="120" y="322" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turns.py</text>
+      <rect x="164" y="288" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="178" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+
+      <rect x="280" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="306" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turn_runner</text>
+      <text x="360" y="322" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turn_runner.py</text>
+      <rect x="404" y="288" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="418" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+
+      <rect x="40" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="426" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.contracts</text>
+      <text x="120" y="442" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/contracts</text>
+      <rect x="164" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="178" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">5 in</text>
+
+      <rect x="280" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="360" y="426" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.gate</text>
+      <text x="360" y="442" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/gate.py</text>
+      <rect x="404" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="418" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+
+      <rect x="520" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="600" y="426" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">instance.permissions</text>
+      <text x="600" y="442" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/instance/permissions.py</text>
+      <rect x="644" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="658" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+
+      <rect x="760" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="840" y="426" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">plugins.registry</text>
+      <text x="840" y="442" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/plugins/registry.py</text>
+      <rect x="884" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="898" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+
+      <!-- legend -->
+      <line x1="40" y1="488" x2="920" y2="488" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="504" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="514" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">new module</text>
+      <rect x="200" y="504" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="214" y="513" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">n in</text>
+      <text x="236" y="514" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">modules that depend on it</text>
+    </svg>
+    <figcaption>Figure: dependency graph of the modules the permission gate touches, new ones marked.</figcaption>
+  </figure>
+  <h3>Interfaces</h3>
+  <p>The functions and types other modules call.</p>
+  <dl>
+    <dt><code>gate.evaluate(policy: GatePolicy, mode: PermissionMode, call: ToolCall, tool: Tool | None, workspace: Path) -> GateDecision</code></dt>
+    <dd>The pure gate decision. <code>LangGraphRunner._call_tools</code> calls it once per tool call (D2).</dd>
+    <dt><code>permissions.load_permissions(instance: Instance) -> GatePolicy</code></dt>
+    <dd>Reads <code>permissions.toml</code> and merges it over the shipped defaults. The runner calls it at the turn boundary, next to <code>reload_manifest</code> (D12).</dd>
+    <dt><code>Turns.set_mode(command: ThreadModeSetCommand) -> AcceptedResult</code></dt>
+    <dd>Validates the requested mode against the ceiling and appends a <code>ModePinned</code> event. The dispatcher routes <code>thread.mode.set</code> here (D11).</dd>
+    <dt><code>THREAD_MODE_SET: Method</code></dt>
+    <dd>The eighth contract method, in <code>kinby.contracts.methods</code>, guarded by <code>Scope.THREAD_ADMIN</code>.</dd>
+  </dl>
+
+  <h2 id="ground-level">Ground-level flows <span class="mode">reference</span></h2>
+  <p>One subsection per flow named in the bird's-eye figure.</p>
+
+  <h3 id="flow-gated-call">Flow: gated tool call</h3>
+  <figure>
+    <svg viewBox="0 0 960 496" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-gated-call-title fig-gated-call-desc">
+      <title id="fig-gated-call-title">Gated tool call with an ask decision</title>
+      <desc id="fig-gated-call-desc">The tool-calling node asks the gate to evaluate a call, gets ask, interrupts the graph, emits the approval event, and after thread.approval.respond either runs the tool or emits a denied tool result.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- lifelines -->
+      <line x1="104" y1="64" x2="104" y2="472" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="288" y1="64" x2="288" y2="472" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="472" y1="64" x2="472" y2="472" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="656" y1="64" x2="656" y2="472" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="840" y1="64" x2="840" y2="472" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <!-- activation bars -->
+      <rect x="100" y="88" width="8" height="360" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="284" y="96" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="468" y="320" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="836" y="248" width="8" height="16" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <!-- messages -->
+      <line x1="108" y1="96" x2="284" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="112" y="76" width="168" height="12" rx="2" fill="var(--paper)"/>
+      <text x="196" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D2 evaluate(policy, mode, ToolCall)</text>
+
+      <line x1="284" y1="128" x2="108" y2="128" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="140" y="108" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="196" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">GateDecision(ask, rule)</text>
+
+      <path d="M 108,160 H 140 Q 148,160 148,168 V 176 Q 148,184 140,184 H 108" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="156" y="164" width="140" height="12" rx="2" fill="var(--paper)"/>
+      <text x="160" y="173" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">interrupt(ApprovalRequested)</text>
+
+      <line x1="108" y1="216" x2="652" y2="216" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-open)"/>
+      <rect x="284" y="196" width="192" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="205" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ApprovalRequested(name, arguments, rule)</text>
+
+      <rect x="332" y="228" width="280" height="12" rx="2" fill="var(--paper)"/>
+      <text x="472" y="237" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">turn parked, graph state persisted in SqliteSaver (D7)</text>
+
+      <line x1="836" y1="256" x2="108" y2="256" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="408" y="264" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="472" y="273" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">resume(ApprovalDecision)</text>
+
+      <!-- ALT fragment -->
+      <rect x="92" y="288" width="576" height="160" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="92" y="288" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="112" y="300" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="140" y="300" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[APPROVE]</text>
+
+      <line x1="108" y1="320" x2="468" y2="320" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="212" y="300" width="152" height="12" rx="2" fill="var(--paper)"/>
+      <text x="288" y="309" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ainvoke(arguments, ToolContext)</text>
+
+      <line x1="468" y1="352" x2="108" y2="352" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="252" y="332" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="288" y="341" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">output: str</text>
+
+      <line x1="92" y1="376" x2="668" y2="376" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="104" y="392" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[DENY]</text>
+
+      <line x1="108" y1="424" x2="652" y2="424" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-open)"/>
+      <rect x="288" y="404" width="184" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="413" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D4 ToolResult(error=true, denied)</text>
+
+      <!-- participant boxes -->
+      <rect x="24" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="24" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="104" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_call_tools</text>
+      <text x="104" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">LangGraphRunner</text>
+
+      <rect x="208" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="208" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="288" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">gate.evaluate</text>
+      <text x="288" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.gate</text>
+
+      <rect x="392" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="392" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="472" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Tool.ainvoke</text>
+      <text x="472" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">plugins.tools</text>
+
+      <rect x="576" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="576" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="656" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">emit</text>
+      <text x="656" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">event stream</text>
+
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="840" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns.respond</text>
+      <text x="840" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.turns</text>
+    </svg>
+    <figcaption>Figure: sequence of a tool call that the gate answers with ask, then the approval decision resolves it.</figcaption>
+  </figure>
+  <ol>
+    <li><code>_call_tools</code> calls <code>gate.evaluate</code> per tool call: input <code>GatePolicy</code>, <code>PermissionMode</code>, <code>ToolCall</code>, output <code>GateDecision</code>.</li>
+    <li>On <code>allow</code> the runner skips straight to step 6. On <code>deny</code> it skips to step 7. On <code>ask</code> it continues.</li>
+    <li><code>_call_tools</code> interrupts the graph with <code>ApprovalRequested</code>, as the placeholder already does.</li>
+    <li>The runner emits <code>ApprovalRequested</code> carrying <code>name</code>, <code>arguments</code>, and the triggering <code>rule</code>. The turn parks. The SQLite checkpointer holds the graph state across restarts (D7).</li>
+    <li><code>Turns.respond</code> resumes the graph with the <code>ApprovalDecision</code> from <code>thread.approval.respond</code>.</li>
+    <li>On approve, <code>Tool.ainvoke</code> runs with the call's <code>arguments</code> and the <code>ToolContext</code>, and the runner emits the <code>ToolResult</code>.</li>
+    <li>On deny, the runner emits <code>ToolResult(error=true)</code> and the turn continues to the next model step (D4).</li>
+  </ol>
+
+  <h3 id="flow-mode-set">Flow: thread.mode.set</h3>
+  <figure>
+    <svg viewBox="0 0 960 496" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-mode-set-title fig-mode-set-desc">
+      <title id="fig-mode-set-title">Pinning a thread's permission mode</title>
+      <desc id="fig-mode-set-desc">The REPL sends thread.mode.set, the dispatcher checks the scope, Turns.set_mode loads the policy, compares the requested mode with the ceiling, and either appends a ModePinned event or returns a permission-denied error.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- lifelines -->
+      <line x1="104" y1="64" x2="104" y2="472" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="288" y1="64" x2="288" y2="472" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="472" y1="64" x2="472" y2="472" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="656" y1="64" x2="656" y2="472" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="840" y1="64" x2="840" y2="472" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <!-- activation bars -->
+      <rect x="284" y="96" width="8" height="352" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="468" y="160" width="8" height="248" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="652" y="192" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <!-- messages -->
+      <line x1="108" y1="96" x2="284" y2="96" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="104" y="76" width="184" height="12" rx="2" fill="var(--paper)"/>
+      <text x="196" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">thread.mode.set(ThreadModeSetCommand)</text>
+
+      <path d="M 292,128 H 324 Q 332,128 332,136 V 144 Q 332,152 324,152 H 292" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="340" y="132" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="344" y="141" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D11 requires Scope.THREAD_ADMIN</text>
+
+      <line x1="292" y1="176" x2="468" y2="176" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="328" y="156" width="104" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="165" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">set_mode(command)</text>
+
+      <line x1="476" y1="200" x2="652" y2="200" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="496" y="180" width="136" height="12" rx="2" fill="var(--paper)"/>
+      <text x="564" y="189" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">load_permissions(instance)</text>
+
+      <line x1="652" y1="232" x2="476" y2="232" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="512" y="212" width="104" height="12" rx="2" fill="var(--paper)"/>
+      <text x="564" y="221" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">GatePolicy(ceiling)</text>
+
+      <!-- ALT fragment -->
+      <rect x="276" y="264" width="576" height="184" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="276" y="264" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="296" y="276" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="324" y="276" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[mode at or below ceiling]</text>
+
+      <line x1="476" y1="304" x2="836" y2="304" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="596" y="284" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="656" y="293" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">append ModePinned(mode)</text>
+
+      <line x1="476" y1="336" x2="292" y2="336" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="340" y="316" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="325" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult</text>
+
+      <line x1="276" y1="360" x2="852" y2="360" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="288" y="376" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[mode above ceiling]</text>
+
+      <line x1="476" y1="416" x2="292" y2="416" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="288" y="396" width="184" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="405" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D1 ErrorEnvelope(PERMISSION_DENIED)</text>
+
+      <!-- participant boxes -->
+      <rect x="24" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="24" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="104" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.cli.repl</text>
+      <text x="104" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">contract client</text>
+
+      <rect x="208" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="208" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="288" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Dispatcher</text>
+      <text x="288" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.dispatcher</text>
+
+      <rect x="392" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="392" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="472" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns.set_mode</text>
+      <text x="472" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.turns</text>
+
+      <rect x="576" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="576" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="656" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">load_permissions</text>
+      <text x="656" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">instance.permissions</text>
+
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="840" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <text x="840" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.events</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for thread.mode.set, with the ceiling check deciding between an event and an error.</figcaption>
+  </figure>
+  <ol>
+    <li>The REPL sends <code>thread.mode.set</code>: input <code>ThreadModeSetCommand</code> with <code>thread_id</code> and <code>mode</code>.</li>
+    <li>The dispatcher requires <code>Scope.THREAD_ADMIN</code>, the method's own scope, so a narrow client can never loosen anything (D11).</li>
+    <li><code>Turns.set_mode</code> calls <code>load_permissions</code>: output <code>GatePolicy</code>, which carries the <code>ceiling</code>.</li>
+    <li>When the requested mode sits at or below the ceiling, <code>Turns.set_mode</code> appends a <code>ModePinned</code> event, so replay reproduces the mode and resuming the thread resumes its trust level. The result is <code>AcceptedResult</code>.</li>
+    <li>When the requested mode exceeds the ceiling, the reply is <code>ErrorEnvelope</code> with code <code>PERMISSION_DENIED</code> (D1).</li>
+    <li>An unpinned thread follows the instance default. <code>Turns.start</code> resolves the latest <code>ModePinned</code> event when it builds the <code>TurnRequest</code>.</li>
+  </ol>
+
+  <h2 id="data-shapes">Data shapes <span class="mode">reference</span></h2>
+  <p>Types the feature adds or changes. <code>ApprovalRequested</code> exists in <code>kinby.contracts.models</code> and gains three fields. <code>EventType</code> gains <code>MODE_PINNED</code> and <code>Scope</code> gains <code>THREAD_ADMIN</code>.</p>
+  <figure>
+    <svg viewBox="0 0 960 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-shapes-title fig-shapes-desc">
+      <title id="fig-shapes-title">Types the permission gate adds or changes</title>
+      <desc id="fig-shapes-desc">GatePolicy holds the mode, the ceiling, per-tool actions, and bash pattern lists. GateDecision pairs an action with the rule that fired. The command and the event both carry a PermissionMode.</desc>
+      <defs>
+        <marker id="uses" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- relations -->
+      <line x1="140" y1="108" x2="140" y2="200" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#uses)"/>
+      <path d="M 388,108 V 152 Q 388,160 380,160 H 184 Q 176,160 176,168 V 200" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#uses)"/>
+      <line x1="288" y1="232" x2="240" y2="232" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#uses)"/>
+      <rect x="244" y="240" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="280" y="249" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">mode, ceiling</text>
+      <line x1="488" y1="240" x2="536" y2="240" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#uses)"/>
+      <rect x="476" y="252" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="512" y="261" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">tools values</text>
+      <path d="M 884,108 V 152 Q 884,160 876,160 H 644 Q 636,160 636,168 V 200" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#uses)"/>
+
+      <!-- row 1 -->
+      <rect x="40" y="40" width="200" height="68" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="40" width="200" height="68" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="40" y1="68" x2="240" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="140" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ThreadModeSetCommand</text>
+      <text x="52" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">thread_id: UUID</text>
+      <text x="52" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">mode: PermissionMode</text>
+
+      <rect x="288" y="40" width="200" height="68" rx="6" fill="var(--paper)"/>
+      <rect x="288" y="40" width="200" height="68" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="288" y1="68" x2="488" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="388" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ModePinned</text>
+      <text x="300" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">type: "mode.pinned"</text>
+      <text x="300" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">mode: PermissionMode</text>
+
+      <rect x="536" y="40" width="200" height="100" rx="6" fill="var(--paper)"/>
+      <rect x="536" y="40" width="200" height="100" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="536" y1="68" x2="736" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="636" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ApprovalRequested</text>
+      <text x="548" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: str</text>
+      <text x="548" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">arguments: dict[str, JsonValue]</text>
+      <text x="548" y="116" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">rule: str</text>
+      <text x="548" y="132" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">...</text>
+
+      <rect x="784" y="40" width="160" height="68" rx="6" fill="var(--paper)"/>
+      <rect x="784" y="40" width="160" height="68" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="784" y1="68" x2="944" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="864" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">GateDecision</text>
+      <text x="796" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">action: GateAction</text>
+      <text x="796" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">rule: str</text>
+
+      <!-- row 2 -->
+      <rect x="40" y="200" width="200" height="112" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="200" width="200" height="112" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="140" y="216" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;&lt;enum&gt;&gt;</text>
+      <text x="140" y="232" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">PermissionMode</text>
+      <line x1="40" y1="240" x2="240" y2="240" stroke="var(--rule)" stroke-width="1"/>
+      <text x="52" y="256" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">READ_ONLY</text>
+      <text x="52" y="272" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">ASK</text>
+      <text x="52" y="288" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">AUTO</text>
+      <text x="52" y="304" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">FULL_ACCESS</text>
+
+      <rect x="288" y="200" width="200" height="116" rx="6" fill="var(--paper)"/>
+      <rect x="288" y="200" width="200" height="116" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <line x1="288" y1="228" x2="488" y2="228" stroke="var(--rule)" stroke-width="1"/>
+      <text x="388" y="218" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">GatePolicy</text>
+      <text x="300" y="244" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">mode: PermissionMode</text>
+      <text x="300" y="260" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">ceiling: PermissionMode</text>
+      <text x="300" y="276" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">tools: dict[str, GateAction]</text>
+      <text x="300" y="292" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">bash_deny: tuple[str, ...]</text>
+      <text x="300" y="308" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">bash_ask: tuple[str, ...]</text>
+
+      <rect x="536" y="200" width="200" height="96" rx="6" fill="var(--paper)"/>
+      <rect x="536" y="200" width="200" height="96" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="636" y="216" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;&lt;enum&gt;&gt;</text>
+      <text x="636" y="232" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">GateAction</text>
+      <line x1="536" y1="240" x2="736" y2="240" stroke="var(--rule)" stroke-width="1"/>
+      <text x="548" y="256" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">ALLOW</text>
+      <text x="548" y="272" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">ASK</text>
+      <text x="548" y="288" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">DENY</text>
+
+      <!-- legend -->
+      <line x1="40" y1="352" x2="920" y2="352" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="368" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="378" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">new type</text>
+      <rect x="200" y="368" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="232" y="378" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">changed type, changed fields shown</text>
+    </svg>
+    <figcaption>Figure: types the permission gate adds or changes and how they relate.</figcaption>
+  </figure>
+  <p>The wire enum for <code>PermissionMode</code> uses the mode names from D10 as values: <code>read-only</code>, <code>ask</code>, <code>auto</code>, <code>full-access</code>. The preset tables live in <code>core.gate</code> as data, one <code>GatePolicy</code> fragment per mode, and <code>load_permissions</code> lays the file's <code>[tools]</code> and <code>[bash]</code> entries over them (D12).</p>
+
+  <h2 id="file-map">File map <span class="mode">reference</span></h2>
+  <p>Every file the agent touches. Stamped at <code>dd10b9e</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Path</th><th>Action</th><th>What changes</th><th>Flow</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/kinby/core/gate.py</code></td><td>new</td><td><code>evaluate</code>, <code>GateDecision</code>, <code>GateAction</code>, the four mode presets, the path-bound check (D2, D8, D14)</td><td>gated tool call</td></tr>
+      <tr><td><code>src/kinby/instance/permissions.py</code></td><td>new</td><td><code>GatePolicy</code>, <code>PermissionMode</code>, <code>load_permissions</code> merging the file over shipped defaults, shipped denylist (D9, D12)</td><td>both</td></tr>
+      <tr><td><code>src/kinby/core/turn_runner.py</code></td><td>modify</td><td><code>_call_tools</code> consults <code>gate.evaluate</code>; <code>InMemorySaver</code> becomes the SQLite checkpointer under <code>manifest.state_dir</code> (D7); richer <code>ApprovalRequested</code> payload</td><td>gated tool call</td></tr>
+      <tr><td><code>src/kinby/core/turns.py</code></td><td>modify</td><td><code>Turns.set_mode</code>; mode resolution from the latest <code>ModePinned</code> event when starting a turn</td><td>thread.mode.set</td></tr>
+      <tr><td><code>src/kinby/core/dispatcher.py</code></td><td>modify</td><td>Route for <code>THREAD_MODE_SET</code></td><td>thread.mode.set</td></tr>
+      <tr><td><code>src/kinby/contracts/models.py</code></td><td>modify</td><td><code>ThreadModeSetCommand</code>, <code>ModePinned</code>, <code>PermissionMode</code> wire enum, <code>EventType.MODE_PINNED</code>, <code>Scope.THREAD_ADMIN</code>, <code>ApprovalRequested</code> fields</td><td>both</td></tr>
+      <tr><td><code>src/kinby/contracts/methods.py</code></td><td>modify</td><td><code>THREAD_MODE_SET</code> method definition (D11)</td><td>thread.mode.set</td></tr>
+      <tr><td><code>src/kinby/contracts/__init__.py</code></td><td>modify</td><td>Exports for the new models and method</td><td>both</td></tr>
+      <tr><td><code>src/kinby/instance/init.py</code></td><td>modify</td><td><code>permissions.toml</code> template gains commented defaults instead of the "not implemented" note</td><td>both</td></tr>
+      <tr><td><code>src/kinby/cli/repl.py</code></td><td>modify</td><td>A REPL command that sends <code>thread.mode.set</code></td><td>thread.mode.set</td></tr>
+      <tr><td><code>tests/test_gate.py</code></td><td>new</td><td>Gate behavior through the runner seam with a scripted model factory</td><td>gated tool call</td></tr>
+      <tr><td><code>tests/test_turns.py</code></td><td>modify</td><td><code>thread.mode.set</code> cases through the dispatcher seam</td><td>thread.mode.set</td></tr>
+      <tr><td><code>pyproject.toml</code></td><td>modify</td><td>The SQLite checkpointer dependency (open question 4)</td><td>gated tool call</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="testing">Testing <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Seams</dt><dd>Two existing seams, none added. The contract dispatcher (<code>build_dispatcher</code> with fake runners) for <code>thread.mode.set</code>, scopes, and the ceiling. The turn runner (real graph, scripted <code>model_factory</code>) for gate decisions inside a turn. The gate's pure evaluation is exercised only through its callers (seam decision from the spec, resting on D2).</dd>
+    <dt>A good test here</dt><dd>Drives contract results and emitted events only. It never inspects <code>GatePolicy</code> internals, checkpointer rows, or graph state.</dd>
+    <dt>Prior art</dt><dd><code>tests/test_turns.py</code> for dispatcher-seam tests with scripted runners. <code>tests/test_run.py</code> for runner-seam tests that stream a fake model through the real graph.</dd>
+  </dl>
+  <h3>Cases</h3>
+  <ol>
+    <li>A read-only tool runs without an approval in every mode, flow gated tool call, protects D2.</li>
+    <li>In <code>ask</code>, a write tool call emits <code>ApprovalRequested</code> and parks the turn, flow gated tool call, protects D10.</li>
+    <li>In <code>auto</code>, an edit inside the workspace runs without asking while bash still asks, flow gated tool call, protects D8 and D10.</li>
+    <li>In <code>auto</code>, a write outside the workspace asks, flow gated tool call, protects D14.</li>
+    <li>In <code>full-access</code>, a bash command matching a <code>deny</code> pattern returns an error tool result naming the rule, flow gated tool call, protects D9.</li>
+    <li>A bash command matching an <code>ask</code> pattern asks in every mode above <code>read-only</code>, flow gated tool call, protects D9.</li>
+    <li>A <code>[tools]</code> override changes one tool's tier without touching the preset, flow gated tool call, protects D2 and D12.</li>
+    <li>A denied call returns <code>ToolResult(error=true)</code> and the turn continues to completion, flow gated tool call, protects D4.</li>
+    <li>A parked turn resumes after a fresh runner starts over the same instance directory, flow gated tool call, protects D7.</li>
+    <li><code>thread.mode.set</code> without <code>Scope.THREAD_ADMIN</code> returns <code>PERMISSION_DENIED</code>, flow thread.mode.set, protects D11.</li>
+    <li><code>thread.mode.set</code> above the ceiling returns <code>PERMISSION_DENIED</code>, flow thread.mode.set, protects D1 and D13.</li>
+    <li>A pinned mode survives thread resumption through event replay, flow thread.mode.set, protects D1.</li>
+  </ol>
+
+  <h2 id="out-of-scope">Out of scope <span class="mode">reference</span></h2>
+  <ul>
+    <li>Per-turn checkpoints as hidden git refs: ticket #60 (D5).</li>
+    <li>The agent modifying its own instance, tools or model: ticket #61 (D14).</li>
+    <li>Escalation as a tool parameter (D6).</li>
+    <li>OS-level sandboxing on local installs, container and pod provisioning (D3, ADR 0003).</li>
+    <li>MCP tool sources (out of v1 per wayfinder ticket #6) and memory facade writes (ticket #8).</li>
+    <li>A generated JSON Schema for <code>permissions.toml</code>: it follows whenever the <code>kinby.toml</code> schema treatment decided in ticket #6 lands. Neither exists at <code>dd10b9e</code>.</li>
+  </ul>
+
+  <h2 id="open-questions">Open questions <span class="mode">reference</span></h2>
+  <p>Unsettled points. The agent building this stops and asks before acting on any of them.</p>
+  <ol>
+    <li>The exact shipped denylist regexes. The categories are fixed by D9: instance-home deletion, git history rewrites, force pushes. Options: a minimal three-pattern list, a broader curated list. Default: minimal, one commented pattern per disaster.</li>
+    <li>How <code>read-only</code> is enforced: bind write tools and let the gate deny them, or exclude them from the model's bound tools for the turn. Options: gate-deny, unbind. Default: gate-deny, which keeps the tool snapshot semantics of ADR 0010 intact and teaches the model the boundary.</li>
+    <li>How the gate learns a call's target paths for D14. Options: a fixed argument-name convention for the default tools, a path-parameter declaration on <code>@tool</code>. Default: a <code>paths</code> declaration on <code>@tool</code> naming the path-typed parameters, shipped filled-in for the default tools; a write tool without one asks in <code>auto</code>.</li>
+    <li>The SQLite checkpointer packaging: the saver class, its dependency, and the file name under <code>.state/</code>. Default: LangGraph's async SQLite checkpointer as a new dependency, one database file per instance.</li>
+  </ol>
+
+  <h2 id="glossary">Glossary <span class="mode">reference</span></h2>
+  <dl>
+    <dt>gate</dt><dd>The check every tool call passes through before it runs: allow, ask, or deny.</dd>
+    <dt>sandbox</dt><dd>The isolation boundary around an instance: the container as the hard wall when deployed, the gate as the soft wall everywhere.</dd>
+    <dt>permission mode</dt><dd>A named preset of gate rules a thread runs under: read-only, ask, auto, or full-access.</dd>
+    <dt>denylist</dt><dd>Command patterns the gate refuses or escalates regardless of mode. A tripwire, not a wall.</dd>
+    <dt>approval</dt><dd>A user decision a live turn waits on. Requested as an event, answered through the contract.</dd>
+    <dt>tool</dt><dd>A native Python capability the model calls during a turn. Its <code>write</code> flag is the author's declaration the gate reads.</dd>
+    <dt>thread</dt><dd>One conversation with durable history. The unit a mode is pinned to.</dd>
+    <dt>turn</dt><dd>One user-to-agent cycle. Tools and policy are fixed at its start.</dd>
+    <dt>workspace</dt><dd>The directory holding the user's own work. The write bound in <code>auto</code>.</dd>
+    <dt>instance</dt><dd>One kinby deployment: a directory, and a container when deployed. The unit of trust and of sandboxing.</dd>
+  </dl>
+
+  <footer>Blueprint for the permission gate · stamped at dd10b9e · 2026-08-30</footer>
+</main>
+</body>
+</html>
