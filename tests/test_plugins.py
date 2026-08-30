@@ -1396,6 +1396,35 @@ Instructions without a description.
     asyncio.run(scenario())
 
 
+def test_unreadable_skill_file_warns_and_skips_the_file(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        skills_path = instance.path / "skills"
+        unreadable = skills_path / "binary" / "SKILL.md"
+        unreadable.parent.mkdir(parents=True)
+        unreadable.write_bytes(b"\xff\xfe not utf-8")
+        _write_skill(
+            skills_path,
+            directory="readable",
+            name="readable",
+            description="Still loads.",
+            body="Readable body.",
+        )
+        model = ScriptedModel([AIMessageChunk(content="Done")])
+
+        events = await _start_turn(instance, model)
+
+        warning = next(event.payload for event in events if isinstance(event.payload, Warning))
+        assert warning.sources == (str(unreadable),)
+        assert "decode" in warning.message
+        system_message = next(
+            message for message in model.messages[0] if isinstance(message, SystemMessage)
+        )
+        assert "- readable: Still loads." in system_message.text
+
+    asyncio.run(scenario())
+
+
 def test_same_tier_duplicate_skill_names_warn_with_both_sources(tmp_path: Path) -> None:
     async def scenario() -> None:
         original = _instance(tmp_path)

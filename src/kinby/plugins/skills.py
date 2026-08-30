@@ -57,7 +57,7 @@ def _load_skill_roots(
         for path in sorted(root.glob(f"*/{SKILL_FILE}"), key=lambda item: item.parent.name):
             try:
                 candidate = _load_skill(path)
-            except SkillFrontmatterError as exc:
+            except (SkillFrontmatterError, OSError, UnicodeDecodeError) as exc:
                 warnings.append(Warning(sources=(str(path),), message=str(exc)))
                 continue
             existing = loaded.get(candidate.name)
