@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 from dotenv import load_dotenv
-from pydantic import AfterValidator, BaseModel, ConfigDict, StringConstraints, ValidationError
+from pydantic import BaseModel, ConfigDict, StringConstraints, TypeAdapter, ValidationError
 
 from kinby.instance.dataclasses import (
     Conventions,
@@ -23,17 +23,22 @@ from kinby.instance.dataclasses import (
 from kinby.instance.errors import ManifestError
 from kinby.instance.layout import ENV_NAME, MANIFEST_NAME, STATE_DIR, WORKSPACE_DIR
 
-_MODEL_PATTERN = re.compile(r"^[^:\s]+:[^:\s]+$")
+# Unlike $, this absolute-end assertion rejects a trailing newline in Python and JSON Schema.
+_MODEL_PATTERN = re.compile(r"^[^:\s]+:[^:\s]+(?![\s\S])")
+_MODEL_ERROR = "must use provider:model form"
+NonEmpty = Annotated[str, StringConstraints(min_length=1)]
+ModelName = Annotated[
+    str,
+    StringConstraints(min_length=1, pattern=_MODEL_PATTERN),
+]
+_MODEL_NAME_ADAPTER = TypeAdapter(ModelName)
 
 
 def _provider_model(value: str) -> str:
-    if not _MODEL_PATTERN.fullmatch(value):
-        raise ValueError("must use provider:model form")
-    return value
-
-
-NonEmpty = Annotated[str, StringConstraints(min_length=1)]
-ModelName = Annotated[NonEmpty, AfterValidator(_provider_model)]
+    try:
+        return _MODEL_NAME_ADAPTER.validate_python(value)
+    except ValidationError as exc:
+        raise ValueError(_MODEL_ERROR) from exc
 
 
 class _Section(BaseModel):
@@ -83,7 +88,11 @@ class RawManifest(_Section):
 def _manifest_error(exc: ValidationError) -> ManifestError:
     first = exc.errors()[0]
     key = ".".join(str(part) for part in first["loc"])
-    message = first["msg"].removeprefix("Value error, ")
+    ctx = first.get("ctx") or {}
+    if ctx.get("pattern") == _MODEL_PATTERN.pattern:
+        message = _MODEL_ERROR
+    else:
+        message = first["msg"].removeprefix("Value error, ")
     return ManifestError(f"{key}: {message}")
 
 

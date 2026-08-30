@@ -86,6 +86,7 @@ def test_instance_show_names_missing_models_main(tmp_path, capsys):
     ("model_setting", "offending_key"),
     [
         ('main = "gpt-5"', "models.main"),
+        ('main = "openai:gpt-5\\n"', "models.main"),
         ('main = "openai:gpt-5"\nrecap = "gpt-5"', "models.recap"),
         ('main = "openai:gpt-5"\nembed = "text-embedding-3-small"', "models.embed"),
     ],

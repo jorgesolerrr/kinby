@@ -1,0 +1,202 @@
+{
+  "$defs": {
+    "RawConventions": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "instructions": {
+          "default": [
+            "AGENTS.md"
+          ],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Instructions",
+          "type": "array"
+        },
+        "skills": {
+          "default": [
+            ".agents/skills"
+          ],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "array"
+        }
+      },
+      "title": "RawConventions",
+      "type": "object"
+    },
+    "RawMemory": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "RawMemory",
+      "type": "object"
+    },
+    "RawModels": {
+      "additionalProperties": false,
+      "properties": {
+        "embed": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^[^:\\s]+:[^:\\s]+(?![\\s\\S])",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Embed"
+        },
+        "main": {
+          "minLength": 1,
+          "pattern": "^[^:\\s]+:[^:\\s]+(?![\\s\\S])",
+          "title": "Main",
+          "type": "string"
+        },
+        "recap": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^[^:\\s]+:[^:\\s]+(?![\\s\\S])",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recap"
+        }
+      },
+      "required": [
+        "main"
+      ],
+      "title": "RawModels",
+      "type": "object"
+    },
+    "RawTools": {
+      "additionalProperties": false,
+      "properties": {
+        "defaults": {
+          "default": true,
+          "title": "Defaults",
+          "type": "boolean"
+        }
+      },
+      "title": "RawTools",
+      "type": "object"
+    },
+    "RawWorkspace": {
+      "additionalProperties": false,
+      "properties": {
+        "conventions": {
+          "$ref": "#/$defs/RawConventions",
+          "default": {
+            "enabled": false,
+            "instructions": [
+              "AGENTS.md"
+            ],
+            "skills": [
+              ".agents/skills"
+            ]
+          }
+        },
+        "path": {
+          "default": "workspace",
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        }
+      },
+      "title": "RawWorkspace",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The shape of ``kinby.toml``, validated once at load.",
+  "properties": {
+    "id": {
+      "minLength": 1,
+      "title": "Id",
+      "type": "string"
+    },
+    "memory": {
+      "$ref": "#/$defs/RawMemory",
+      "default": {}
+    },
+    "models": {
+      "$ref": "#/$defs/RawModels"
+    },
+    "persona_name": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Persona Name"
+    },
+    "state_dir": {
+      "default": ".state",
+      "minLength": 1,
+      "title": "State Dir",
+      "type": "string"
+    },
+    "tools": {
+      "$ref": "#/$defs/RawTools",
+      "default": {
+        "defaults": true
+      }
+    },
+    "workspace": {
+      "$ref": "#/$defs/RawWorkspace",
+      "default": {
+        "conventions": {
+          "enabled": false,
+          "instructions": [
+            "AGENTS.md"
+          ],
+          "skills": [
+            ".agents/skills"
+          ]
+        },
+        "path": "workspace",
+        "source": null
+      }
+    }
+  },
+  "required": [
+    "id",
+    "models"
+  ],
+  "title": "RawManifest",
+  "type": "object"
+}
