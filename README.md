@@ -19,6 +19,17 @@ The package scaffold is in place. Clone the repo, run `uv sync`, then `uv run ki
 
 Instance init, manifest parsing, and discovery are in place. The agent loop comes later.
 
+## Validate `kinby.toml` in an editor
+
+Add this Taplo schema directive as the first line of `kinby.toml`:
+
+```toml
+#:schema https://raw.githubusercontent.com/jorgesolerrr/kinby/main/docs/schema/kinby.schema.json
+```
+
+The schema comes from the manifest model. After the model changes, regenerate the checked-in
+schema with `uv run python -m kinby.instance.schema`.
+
 ## License
 
 [Apache-2.0](LICENSE)
