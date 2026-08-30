@@ -209,7 +209,10 @@ async def _answer_approval(
     approval = event.payload
     if not isinstance(approval, ApprovalRequested):
         return False
-    repl_io.stdout.write(f"Approve {approval.request}? [yes/no] ")
+    arguments = json.dumps(approval.arguments, sort_keys=True)
+    repl_io.stdout.write(
+        f'Approve {approval.name} {arguments} under rule "{approval.rule}"? [yes/no] '
+    )
     repl_io.stdout.flush()
     answer = asyncio.create_task(repl_io.stdin.readline())
     interruption = asyncio.create_task(interrupted.wait())

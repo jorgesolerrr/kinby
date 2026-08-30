@@ -92,7 +92,9 @@ class ApprovalReplRunner:
         await emit(
             ApprovalRequested(
                 approval_id=UUID("11111111-1111-1111-1111-111111111111"),
-                request='write_note: {"note": "remember me"}',
+                name="write_note",
+                arguments={"note": "remember me"},
+                rule="mode.ask.write",
             )
         )
         self.parked.set()
@@ -254,7 +256,8 @@ def test_repl_answers_a_parked_approval(tmp_path: Path) -> None:
         assert exit_code == 0
         assert runner.decisions == [ApprovalDecision.APPROVE]
         assert stdout.getvalue() == (
-            '> Approve write_note: {"note": "remember me"}? [yes/no] '
+            '> Approve write_note {"note": "remember me"} under rule "mode.ask.write"? '
+            "[yes/no] "
             '[tool.call] write_note {"note": "remember me"}\n'
             "[tool.result] write_note (ok): remember me\nDone\n> "
         )
@@ -298,7 +301,8 @@ def test_repl_interrupts_while_waiting_for_approval(tmp_path: Path) -> None:
         assert exit_code == 0
         assert runner.decisions == []
         assert stdout.getvalue() == (
-            '> Approve write_note: {"note": "remember me"}? [yes/no] (interrupted)\n> '
+            '> Approve write_note {"note": "remember me"} under rule "mode.ask.write"? '
+            "[yes/no] (interrupted)\n> "
         )
         assert stderr.getvalue() == ""
 

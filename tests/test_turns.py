@@ -72,7 +72,14 @@ class ParkingRunner:
         pass
 
     async def run(self, turn: TurnRequest, emit: Emit) -> ParkedTurn:
-        await emit(ApprovalRequested(approval_id=_APPROVAL_ID, request="May I continue?"))
+        await emit(
+            ApprovalRequested(
+                approval_id=_APPROVAL_ID,
+                name="continue_turn",
+                arguments={},
+                rule="scripted",
+            )
+        )
         return ParkedTurn()
 
     async def resume(
@@ -463,7 +470,9 @@ def test_parked_approval_resumes_after_dispatcher_restart(tmp_path: Path) -> Non
         _, created, accepted, requested = await _park_turn(tmp_path)
         assert requested.payload == ApprovalRequested(
             approval_id=_APPROVAL_ID,
-            request="May I continue?",
+            name="continue_turn",
+            arguments={},
+            rule="scripted",
         )
 
         restarted = build_dispatcher(

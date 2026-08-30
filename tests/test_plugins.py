@@ -911,7 +911,9 @@ def test_write_tool_parks_before_running(tmp_path: Path) -> None:
         assert isinstance(requested.payload, ApprovalRequested)
         assert requested.payload == ApprovalRequested(
             approval_id=requested.payload.approval_id,
-            request='write_note: {"note": "remember me"}',
+            name="write_note",
+            arguments={"note": "remember me"},
+            rule="mode.ask.write",
         )
         assert not (instance.manifest.workspace.path / "note.txt").exists()
 
