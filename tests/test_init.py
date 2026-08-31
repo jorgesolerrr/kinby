@@ -50,6 +50,18 @@ def test_init_writes_the_commented_permissions_template(tmp_path):
         "# Override any core or plugin tool without changing the mode.\n"
         '# bash = "deny"\n'
         '# edit = "allow"\n'
+        "\n"
+        "[bash]\n"
+        "deny = [\n"
+        "    # Delete the instance home.\n"
+        "    '''(?:^|[;&|]\\s*)rm\\s+-rf\\s+(?:/instance|\\$\\{?KINBY_INSTANCE"
+        "\\}?)(?:/|\\s|$)''',\n"
+        "    # Rewrite Git history.\n"
+        "    '''\\bgit\\s+(?:reset\\s+--hard|rebase|filter-branch)\\b''',\n"
+        "    # Force-push Git history.\n"
+        "    '''\\bgit\\s+push\\b[^\\n]*(?:--force(?:-with-lease)?|-f(?:\\s|$))''',\n"
+        "]\n"
+        "ask = []\n"
     )
 
 

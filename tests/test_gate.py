@@ -13,13 +13,14 @@ from kinby.contracts import (
     Event,
     MessageDelta,
     Payload,
+    PermissionMode,
     ToolCall,
     ToolResult,
 )
 from kinby.core import LangGraphRunner
 from kinby.core.turns import ParkedTurn, TurnOutcome, TurnRequest, TurnResult
 from kinby.instance import Instance, load_instance
-from kinby.instance.permissions import PermissionsError
+from kinby.instance.permissions import BashPolicy, GatePolicy, PermissionsError
 
 _MODEL = "openai:gpt-5"
 
@@ -338,6 +339,237 @@ def bash(command: str, context: ToolContext) -> str:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("command", "rule"),
+    [
+        ("rm -rf /instance", "bash.deny[0]"),
+        ("git reset --hard HEAD~1", "bash.deny[1]"),
+        ("git push --force origin main", "bash.deny[2]"),
+    ],
+)
+def test_shipped_bash_rule_denies_disasters_in_full_access_and_turn_continues(
+    tmp_path: Path,
+    command: str,
+    rule: str,
+) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        marker = instance.manifest.workspace.path / "ran.txt"
+        (instance.path / "tools" / "bash.py").write_text(
+            """from kinby.plugins import ToolContext, tool
+
+@tool(write=True)
+def bash(command: str, context: ToolContext) -> str:
+    \"\"\"Run one test command.\"\"\"
+    (context.workspace / \"ran.txt\").write_text(command, encoding=\"utf-8\")
+    return command
+""",
+            encoding="utf-8",
+        )
+        (instance.path / "permissions.toml").write_text(
+            'mode = "full-access"\nceiling = "full-access"\n',
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "bash",
+                            "args": {"command": command},
+                            "id": "bash-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="I will not run it."),
+            ]
+        )
+
+        result, payloads = await _run(instance, model)
+
+        assert isinstance(result, TurnOutcome)
+        assert not marker.exists()
+        assert next(
+            payload for payload in payloads if isinstance(payload, ToolResult)
+        ) == ToolResult(
+            call_id="bash-1",
+            name="bash",
+            output=f'Tool "bash" was denied by policy rule "{rule}".',
+            error=True,
+        )
+        assert MessageDelta(text="I will not run it.") in payloads
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [PermissionMode.ASK, PermissionMode.AUTO, PermissionMode.FULL_ACCESS],
+)
+def test_bash_ask_rule_parks_in_every_mode_above_read_only(
+    tmp_path: Path,
+    mode: PermissionMode,
+) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        (instance.path / "tools" / "bash.py").write_text(
+            """from kinby.plugins import tool
+
+@tool(write=True)
+def bash(command: str) -> str:
+    \"\"\"Run one test command.\"\"\"
+    return command
+""",
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "bash",
+                            "args": {"command": "deploy production"},
+                            "id": "bash-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ]
+        )
+        gate_policy = None
+        if mode is PermissionMode.AUTO:
+            gate_policy = GatePolicy(
+                mode=mode,
+                bash=BashPolicy(ask=(r"^deploy production$",)),
+            )
+        else:
+            (instance.path / "permissions.toml").write_text(
+                (f'mode = "{mode.value}"\n\n[bash]\nask = ["^deploy production$"]\n'),
+                encoding="utf-8",
+            )
+        runner = LangGraphRunner(
+            instance,
+            model_factory=lambda _: model,
+            gate_policy=gate_policy,
+        )
+
+        result, payloads = await _run_turn(runner)
+
+        assert isinstance(result, ParkedTurn)
+        approval = next(payload for payload in payloads if isinstance(payload, ApprovalRequested))
+        assert approval == ApprovalRequested(
+            approval_id=approval.approval_id,
+            name="bash",
+            arguments={"command": "deploy production"},
+            rule="bash.ask[0]",
+        )
+
+    asyncio.run(scenario())
+
+
+def test_instance_bash_deny_list_replaces_shipped_defaults(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        marker = instance.manifest.workspace.path / "ran.txt"
+        (instance.path / "tools" / "bash.py").write_text(
+            """from kinby.plugins import ToolContext, tool
+
+@tool(write=True)
+def bash(command: str, context: ToolContext) -> str:
+    \"\"\"Run one test command.\"\"\"
+    (context.workspace / \"ran.txt\").write_text(command, encoding=\"utf-8\")
+    return command
+""",
+            encoding="utf-8",
+        )
+        (instance.path / "permissions.toml").write_text(
+            'mode = "full-access"\n\n[bash]\ndeny = []\n',
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "bash",
+                            "args": {"command": "git push --force origin main"},
+                            "id": "bash-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        result, payloads = await _run(instance, model)
+
+        assert isinstance(result, TurnOutcome)
+        assert marker.read_text(encoding="utf-8") == "git push --force origin main"
+        assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
+
+    asyncio.run(scenario())
+
+
+def test_bash_deny_rule_wins_when_ask_rule_also_matches(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        (instance.path / "tools" / "bash.py").write_text(
+            """from kinby.plugins import tool
+
+@tool(write=True)
+def bash(command: str) -> str:
+    \"\"\"Run one test command.\"\"\"
+    return command
+""",
+            encoding="utf-8",
+        )
+        (instance.path / "permissions.toml").write_text(
+            (
+                'mode = "full-access"\n\n'
+                "[bash]\n"
+                'deny = ["^deploy production$"]\n'
+                'ask = ["^deploy production$"]\n'
+            ),
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "bash",
+                            "args": {"command": "deploy production"},
+                            "id": "bash-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="I will not deploy."),
+            ]
+        )
+
+        result, payloads = await _run(instance, model)
+
+        assert isinstance(result, TurnOutcome)
+        assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
+        assert next(
+            payload for payload in payloads if isinstance(payload, ToolResult)
+        ) == ToolResult(
+            call_id="bash-1",
+            name="bash",
+            output='Tool "bash" was denied by policy rule "bash.deny[0]".',
+            error=True,
+        )
+
+    asyncio.run(scenario())
+
+
 def test_auto_asks_before_bash(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = _instance(tmp_path)
@@ -647,4 +879,22 @@ def test_malformed_permissions_fail_loudly_at_the_turn_boundary(tmp_path: Path) 
     )
 
     with pytest.raises(PermissionsError, match=r"^permissions\.toml:"):
+        runner.prepare_for_turn()
+
+
+def test_malformed_bash_regex_fails_loudly_at_the_turn_boundary(tmp_path: Path) -> None:
+    instance = _instance(tmp_path)
+    (instance.path / "permissions.toml").write_text(
+        '[bash]\nask = ["["]\n',
+        encoding="utf-8",
+    )
+    runner = LangGraphRunner(
+        instance,
+        model_factory=lambda _: ScriptedModel([]),
+    )
+
+    with pytest.raises(
+        PermissionsError,
+        match=r"^permissions\.toml: bash\.ask\.0: invalid regex:",
+    ):
         runner.prepare_for_turn()
