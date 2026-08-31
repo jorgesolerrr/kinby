@@ -34,8 +34,7 @@ from kinby.core.turns import (
     TurnRequest,
 )
 from tests.helpers import (
-    cannot_resume,
-    discard_turn,
+    cannot_restore,
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
@@ -52,8 +51,7 @@ class ScriptedRunner:
         return TurnOutcome(input_tokens=4, output_tokens=2)
 
     resume = does_not_park
-    can_resume = cannot_resume
-    discard = discard_turn
+    restore = cannot_restore
 
 
 class WaitingRunner:
@@ -67,8 +65,7 @@ class WaitingRunner:
         return TurnOutcome()
 
     resume = does_not_park
-    can_resume = cannot_resume
-    discard = discard_turn
+    restore = cannot_restore
 
 
 class ModeRecordingRunner:
@@ -80,8 +77,7 @@ class ModeRecordingRunner:
         return TurnOutcome()
 
     resume = does_not_park
-    can_resume = cannot_resume
-    discard = discard_turn
+    restore = cannot_restore
 
 
 class FailingRunner:
@@ -89,21 +85,25 @@ class FailingRunner:
         raise RuntimeError("provider unavailable")
 
     resume = does_not_park
-    can_resume = cannot_resume
-    discard = discard_turn
+    restore = cannot_restore
 
 
 class ParkingRunner:
-    def __init__(self) -> None:
+    def __init__(self, parked: TurnRequest | None = None) -> None:
+        self.parked = parked
         self.resumed_modes: list[PermissionMode] = []
 
-    def can_resume(self, turn: TurnRequest) -> bool:
-        return True
-
-    async def discard(self, turn: TurnRequest) -> None:
-        pass
+    async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None:
+        if (
+            self.parked is not None
+            and self.parked.thread_id == thread_id
+            and self.parked.turn_id == turn_id
+        ):
+            return self.parked
+        return None
 
     async def run(self, turn: TurnRequest, emit: Emit) -> ParkedTurn:
+        self.parked = turn
         await emit(
             ApprovalRequested(
                 approval_id=_APPROVAL_ID,
@@ -139,8 +139,7 @@ class CancellationSuppressingRunner:
         return TurnOutcome()
 
     resume = does_not_park
-    can_resume = cannot_resume
-    discard = discard_turn
+    restore = cannot_restore
 
 
 class PausingEventLog(EventLog):
@@ -788,7 +787,15 @@ def test_parked_approval_resumes_after_dispatcher_restart(tmp_path: Path) -> Non
             turns=TurnConfig(
                 fixed_turn_preparation,
                 fixed_permission_ceiling,
-                ParkingRunner(),
+                ParkingRunner(
+                    TurnRequest(
+                        thread_id=created.id,
+                        turn_id=accepted.turn_id,
+                        message="Hello",
+                        model=fixed_turn_preparation().model,
+                        permission_mode=PermissionMode.ASK,
+                    )
+                ),
             ),
         )
         resumed = await restarted.dispatch(
@@ -823,9 +830,9 @@ def test_parked_approval_resumes_after_dispatcher_restart(tmp_path: Path) -> Non
     asyncio.run(scenario())
 
 
-def test_legacy_parked_turn_resumes_with_the_instance_default_mode(tmp_path: Path) -> None:
+def test_parked_turn_uses_checkpoint_mode_when_event_lacks_mode(tmp_path: Path) -> None:
     async def scenario() -> None:
-        _, created, _, requested = await _park_turn(tmp_path)
+        _, created, accepted, requested = await _park_turn(tmp_path)
         records_path = tmp_path / "events.jsonl"
         records = [
             json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines()
@@ -835,7 +842,15 @@ def test_legacy_parked_turn_resumes_with_the_instance_default_mode(tmp_path: Pat
             "".join(f"{json.dumps(record)}\n" for record in records),
             encoding="utf-8",
         )
-        runner = ParkingRunner()
+        runner = ParkingRunner(
+            TurnRequest(
+                thread_id=created.id,
+                turn_id=accepted.turn_id,
+                message="Hello",
+                model=fixed_turn_preparation().model,
+                permission_mode=PermissionMode.ASK,
+            )
+        )
         restarted = build_dispatcher(
             tmp_path,
             turns=TurnConfig(
@@ -868,7 +883,7 @@ def test_legacy_parked_turn_resumes_with_the_instance_default_mode(tmp_path: Pat
         await asyncio.wait_for(anext(live), timeout=1)
         await live.aclose()
 
-        assert runner.resumed_modes == [PermissionMode.AUTO]
+        assert runner.resumed_modes == [PermissionMode.ASK]
 
     asyncio.run(scenario())
 
@@ -944,7 +959,15 @@ def test_parked_approval_resumes_with_the_turns_pinned_mode(tmp_path: Path) -> N
         assert isinstance(requested, Event)
         assert requested.type is EventType.APPROVAL_REQUESTED
 
-        runner = ParkingRunner()
+        runner = ParkingRunner(
+            TurnRequest(
+                thread_id=created.id,
+                turn_id=started.turn_id,
+                message="Hello",
+                model=fixed_turn_preparation().model,
+                permission_mode=PermissionMode.READ_ONLY,
+            )
+        )
         restarted = build_dispatcher(
             tmp_path,
             turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),

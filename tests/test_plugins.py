@@ -16,8 +16,6 @@ from langchain_core.tools import StructuredTool
 from kinby.contracts import (
     AcceptedResult,
     ApprovalRequested,
-    ErrorCode,
-    ErrorEnvelope,
     Event,
     Scope,
     ThreadCreateResult,
@@ -30,6 +28,7 @@ from kinby.contracts import (
 from kinby.core import Dispatcher, LangGraphRunner, TurnConfig, build_dispatcher
 from kinby.instance import Instance, load_instance
 from kinby.plugins import Tool, tool
+from tests.helpers import GRAPH_EVENT_TIMEOUT
 
 _MODEL = "openai:gpt-5"
 
@@ -191,7 +190,7 @@ async def _turn_events(
     events: list[Event] = []
     answers = iter(approval_answers)
     while True:
-        event = await asyncio.wait_for(anext(subscription), timeout=1)
+        event = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
         assert isinstance(event, Event)
         events.append(event)
         if isinstance(event.payload, ApprovalRequested):
@@ -883,8 +882,8 @@ def write_note(note: str, context: ToolContext) -> str:
         {"thread_id": thread_id},
         {Scope.THREAD_READ},
     )
-    started = await asyncio.wait_for(anext(subscription), timeout=1)
-    requested = await asyncio.wait_for(anext(subscription), timeout=1)
+    started = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
+    requested = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
     await subscription.aclose()
     assert isinstance(started, Event)
     assert isinstance(requested, Event)
@@ -915,7 +914,7 @@ async def _answer_write_tool(
     )
     events: list[Event] = []
     while not events or not isinstance(events[-1].payload, TurnCompleted):
-        event = await asyncio.wait_for(anext(subscription), timeout=1)
+        event = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
         assert isinstance(event, Event)
         events.append(event)
     await subscription.aclose()
@@ -1028,7 +1027,7 @@ def write_note(note: str, context: ToolContext) -> str:
         requested: Event | None = None
         events: list[Event] = []
         while requested is None:
-            event = await asyncio.wait_for(anext(subscription), timeout=1)
+            event = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
             assert isinstance(event, Event)
             events.append(event)
             if isinstance(event.payload, ApprovalRequested):
@@ -1073,10 +1072,22 @@ def test_any_other_answer_denies_the_write_tool_and_completes(tmp_path: Path) ->
     asyncio.run(scenario())
 
 
-def test_interrupting_approval_keeps_the_next_turn_history_valid(tmp_path: Path) -> None:
+def test_interrupting_approval_after_restart_keeps_the_next_turn_history_valid(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
-        _, dispatcher, thread_id, requested, model = await _park_write_tool(tmp_path)
-        interrupted = await dispatcher.dispatch(
+        instance, _, thread_id, requested, _ = await _park_write_tool(tmp_path)
+        model = ScriptedModel([AIMessageChunk(content="Start over")])
+        restarted_runner = LangGraphRunner(instance, model_factory=lambda _: model)
+        restarted = build_dispatcher(
+            instance.manifest.state_dir,
+            turns=TurnConfig(
+                restarted_runner.prepare_for_turn,
+                restarted_runner.permission_ceiling,
+                restarted_runner,
+            ),
+        )
+        interrupted = await restarted.dispatch(
             "thread.turn.interrupt",
             {"thread_id": thread_id},
             {Scope.THREAD_OPERATE},
@@ -1084,7 +1095,7 @@ def test_interrupting_approval_keeps_the_next_turn_history_valid(tmp_path: Path)
         assert isinstance(interrupted, AcceptedResult)
 
         events, _ = await _turn_events(
-            dispatcher,
+            restarted,
             thread_id,
             "Start again",
             requested.sequence,
@@ -1096,13 +1107,13 @@ def test_interrupting_approval_keeps_the_next_turn_history_valid(tmp_path: Path)
     asyncio.run(scenario())
 
 
-def test_write_tool_approval_cannot_resume_after_restart(tmp_path: Path) -> None:
+def test_write_tool_approval_resumes_after_restart(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance, _, thread_id, requested, _ = await _park_write_tool(tmp_path)
         assert isinstance(requested.payload, ApprovalRequested)
         restarted_runner = LangGraphRunner(
             instance,
-            model_factory=lambda _: ScriptedModel([AIMessageChunk(content="Should not run")]),
+            model_factory=lambda _: ScriptedModel([AIMessageChunk(content="Done")]),
         )
         restarted = build_dispatcher(
             instance.manifest.state_dir,
@@ -1113,20 +1124,12 @@ def test_write_tool_approval_cannot_resume_after_restart(tmp_path: Path) -> None
             ),
         )
 
-        response = await restarted.dispatch(
-            "thread.approval.respond",
-            {
-                "thread_id": thread_id,
-                "approval_id": requested.payload.approval_id,
-                "answer": "yes",
-            },
-            {Scope.THREAD_OPERATE},
-        )
-        assert response == ErrorEnvelope(
-            code=ErrorCode.PARKED_TURN_UNAVAILABLE,
-            message="The parked turn cannot resume after a runtime restart.",
-            retryable=False,
-        )
+        events = await _answer_write_tool(restarted, thread_id, requested, "yes")
+
+        assert (instance.manifest.workspace.path / "note.txt").read_text(
+            encoding="utf-8"
+        ) == "remember me"
+        assert isinstance(events[-1].payload, TurnCompleted)
 
     asyncio.run(scenario())
 
@@ -2027,7 +2030,7 @@ def second() -> str:
         )
         events: list[Event] = []
         while not any(isinstance(event.payload, ToolCall) for event in events):
-            event = await asyncio.wait_for(anext(subscription), timeout=1)
+            event = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
             assert isinstance(event, Event)
             events.append(event)
 
@@ -2038,7 +2041,7 @@ def second() -> str:
         )
         assert isinstance(interrupted, AcceptedResult)
         while not any(isinstance(event.payload, TurnInterrupted) for event in events):
-            event = await asyncio.wait_for(anext(subscription), timeout=1)
+            event = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
             assert isinstance(event, Event)
             events.append(event)
         await subscription.aclose()

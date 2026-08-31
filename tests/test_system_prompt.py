@@ -11,6 +11,7 @@ from kinby.contracts import AcceptedResult, Event, Scope, ThreadCreateResult
 from kinby.core import LangGraphRunner, TurnConfig, assemble_system_prompt, build_dispatcher
 from kinby.core.dispatcher import Dispatcher
 from kinby.instance import load_instance
+from tests.helpers import GRAPH_EVENT_TIMEOUT
 
 
 class ScriptedModel:
@@ -68,7 +69,7 @@ async def _start_turn(dispatcher: Dispatcher, message: str) -> None:
         {Scope.THREAD_READ},
     )
     for _ in range(3):
-        await asyncio.wait_for(anext(subscription), timeout=1)
+        await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
     await subscription.aclose()
 
 
@@ -164,7 +165,10 @@ def test_prompt_files_and_manifest_are_reloaded_between_turns(tmp_path: Path) ->
                 {"thread_id": created.id, "after_sequence": after_sequence},
                 {Scope.THREAD_READ},
             )
-            events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(3)]
+            events = [
+                await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
+                for _ in range(3)
+            ]
             await subscription.aclose()
             last = events[-1]
             assert isinstance(last, Event)

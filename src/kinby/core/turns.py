@@ -87,8 +87,7 @@ Emit = Callable[[Payload], Awaitable[Event]]
 
 
 class TurnRunner(Protocol):
-    def can_resume(self, turn: TurnRequest) -> bool: ...
-    async def discard(self, turn: TurnRequest) -> None: ...
+    async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None: ...
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult: ...
     async def resume(
         self,
@@ -195,13 +194,6 @@ class Turns:
             if pending is None:
                 raise _no_active_turn(command.thread_id)
             turn_id = pending.event.turn_id
-            default_mode = self._prepare_for_turn().default_mode
-            turn = _restore_parked_turn(
-                self._log.stored(command.thread_id),
-                pending,
-                default_mode,
-            )
-            await self._runner.discard(turn)
 
         interrupted = await self._log.append(
             command.thread_id,
@@ -233,7 +225,9 @@ class Turns:
         if running is not None and not running.task.done():
             raise _thread_busy(command.thread_id)
         preparation = self._prepare_for_turn()
-        turn = _restore_parked_turn(events, pending, preparation.default_mode)
+        turn = await self._runner.restore(pending.event.thread_id, pending.event.turn_id)
+        if turn is None:
+            raise InvalidParkedTurn("The parked turn cannot resume after a runtime restart.")
         turn = replace(
             turn,
             permission_mode=_constrain_mode(
@@ -241,8 +235,6 @@ class Turns:
                 preparation.ceiling,
             ),
         )
-        if not self._runner.can_resume(turn):
-            raise InvalidParkedTurn("The parked turn cannot resume after a runtime restart.")
         decision = ApprovalDecision.APPROVE if command.answer == "yes" else ApprovalDecision.DENY
         self._spawn(turn, self._resume(turn, decision))
         # respond appends no event, so approval.requested is the resume cursor.
@@ -281,18 +273,15 @@ class Turns:
         try:
             outcome = await run(emit)
         except CoreError as exc:
-            await self._runner.discard(turn)
             code = exc.code
             message = str(exc)
         except Exception:
-            await self._runner.discard(turn)
             logger.exception("The model turn failed.")
             code = ErrorCode.INTERNAL
             message = "The model turn failed unexpectedly."
         else:
             if isinstance(outcome, ParkedTurn):
                 return
-            await self._runner.discard(turn)
             await emit(
                 TurnCompleted(
                     input_tokens=outcome.input_tokens,
@@ -343,32 +332,6 @@ def _constrain_mode(mode: PermissionMode, ceiling: PermissionMode) -> Permission
 
 def _exceeds_ceiling(mode: PermissionMode, ceiling: PermissionMode) -> bool:
     return _MODE_ORDER.index(mode) > _MODE_ORDER.index(ceiling)
-
-
-def _restore_parked_turn(
-    events: Sequence[Event],
-    pending: PendingApproval,
-    default_mode: PermissionMode,
-) -> TurnRequest:
-    started = next(
-        (
-            event.payload
-            for event in reversed(events)
-            if event.turn_id == pending.event.turn_id and isinstance(event.payload, TurnStarted)
-        ),
-        None,
-    )
-    if started is None:
-        raise InvalidParkedTurn("The parked turn is missing turn.started.")
-    return TurnRequest(
-        thread_id=pending.event.thread_id,
-        turn_id=pending.event.turn_id,
-        message=started.message,
-        model=started.model,
-        permission_mode=(
-            started.permission_mode if started.permission_mode is not None else default_mode
-        ),
-    )
 
 
 def _thread_busy(thread_id: UUID) -> ThreadBusy:
