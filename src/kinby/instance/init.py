@@ -79,7 +79,19 @@ def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
         encoding="utf-8",
     )
     (directory / PERMISSIONS_NAME).write_text(
-        "# What this instance is allowed to do. The permission gate is not implemented yet.\n",
+        (
+            "# Permission policy. Changes apply at the next turn boundary.\n"
+            "# Modes: read-only denies writes, ask requests approval, "
+            "and full-access allows writes.\n"
+            "# auto is reserved for path-bounded writes and is not available yet.\n"
+            'mode = "ask"\n'
+            'ceiling = "full-access"\n'
+            "\n"
+            "[tools]\n"
+            "# Override any core or plugin tool without changing the mode.\n"
+            '# bash = "deny"\n'
+            '# edit = "allow"\n'
+        ),
         encoding="utf-8",
     )
     (directory / MEMORY_DIR).mkdir(exist_ok=True)

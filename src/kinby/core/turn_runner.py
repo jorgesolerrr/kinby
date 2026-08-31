@@ -38,7 +38,7 @@ from kinby.core.errors import (
     ModelNoResponse,
     ThreadBusy,
 )
-from kinby.core.gate import GateAction, evaluate
+from kinby.core.gate import evaluate
 from kinby.core.prompt import assemble_system_prompt, render_system_prompt
 from kinby.core.turns import (
     ApprovalDecision,
@@ -49,7 +49,12 @@ from kinby.core.turns import (
     TurnResult,
 )
 from kinby.instance import Instance, reload_manifest
-from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
+from kinby.instance.permissions import (
+    SHIPPED_POLICY,
+    GateAction,
+    GatePolicy,
+    load_permissions,
+)
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
 from kinby.plugins.skills import load_skills, skill_tool
@@ -106,12 +111,13 @@ class LangGraphRunner:
         *,
         model_factory: ModelFactory = _init_model,
         model_override: str | None = None,
-        gate_policy: GatePolicy = SHIPPED_POLICY,
+        gate_policy: GatePolicy | None = None,
     ) -> None:
         self._instance = instance
         self._model_factory = model_factory
         self._model_override = model_override
-        self._gate_policy = gate_policy
+        self._gate_policy_override = gate_policy
+        self._gate_policy = gate_policy if gate_policy is not None else SHIPPED_POLICY
         self._tools = ToolRegistry(
             instance.path,
             defaults=instance.manifest.tools.defaults,
@@ -130,6 +136,11 @@ class LangGraphRunner:
     def prepare_for_turn(self) -> str:
         manifest = reload_manifest(self._instance, model_override=self._model_override)
         self._instance = replace(self._instance, manifest=manifest)
+        self._gate_policy = (
+            load_permissions(self._instance)
+            if self._gate_policy_override is None
+            else self._gate_policy_override
+        )
         return manifest.models.main
 
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult:
