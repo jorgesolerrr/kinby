@@ -9,6 +9,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Event,
+    PermissionMode,
     Scope,
     ThreadCreateCommand,
     ThreadCreateResult,
@@ -21,7 +22,11 @@ from kinby.contracts.methods import Method, Subscription
 from kinby.core.dispatcher import Dispatcher, build_dispatcher
 from kinby.core.events import EventLog
 
-STARTED = TurnStarted(message="Hello", model="openai:gpt-5")
+STARTED = TurnStarted(
+    message="Hello",
+    model="openai:gpt-5",
+    permission_mode=PermissionMode.ASK,
+)
 
 
 def test_create_and_list_thread_after_dispatcher_restart(tmp_path: Path) -> None:

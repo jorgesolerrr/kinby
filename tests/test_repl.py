@@ -11,6 +11,7 @@ from kinby.contracts import (
     THREAD_CREATE,
     ApprovalRequested,
     MessageDelta,
+    PermissionMode,
     Scope,
     ThreadCreateCommand,
     ThreadCreateResult,
@@ -20,11 +21,21 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.turns import ApprovalDecision, Emit, ParkedTurn, TurnOutcome, TurnRequest
-from tests.helpers import cannot_resume, discard_turn, does_not_park, fixed_model_name
+from tests.helpers import (
+    cannot_resume,
+    discard_turn,
+    does_not_park,
+    fixed_permission_ceiling,
+    fixed_turn_preparation,
+)
 
 
 class ReplRunner:
+    def __init__(self) -> None:
+        self.modes: list[PermissionMode] = []
+
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+        self.modes.append(turn.permission_mode)
         await emit(MessageDelta(text="Hi"))
         await emit(MessageDelta(text=" there"))
         return TurnOutcome()
@@ -144,7 +155,11 @@ def test_repl_streams_a_full_turn_through_the_dispatcher(tmp_path: Path) -> None
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig(fixed_model_name, ReplRunner()),
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ReplRunner(),
+            ),
         )
         client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
         created = await client.call(THREAD_CREATE, ThreadCreateCommand())
@@ -167,12 +182,41 @@ def test_repl_streams_a_full_turn_through_the_dispatcher(tmp_path: Path) -> None
     asyncio.run(scenario())
 
 
+def test_repl_pins_the_mode_before_starting_the_next_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runner = ReplRunner()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            stdin=StringIO("/mode auto\nHello\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert runner.modes == [PermissionMode.AUTO]
+        assert stdout.getvalue() == "> Permission mode set to auto.\n> Hi there\n> "
+        assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())
+
+
 def test_repl_interrupts_a_running_turn_on_ctrl_c(tmp_path: Path) -> None:
     async def scenario() -> None:
         runner = InterruptibleReplRunner()
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig(fixed_model_name, runner),
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
         )
         client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
         created = await client.call(THREAD_CREATE, ThreadCreateCommand())
@@ -204,7 +248,11 @@ def test_repl_renders_tool_and_warning_events(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig(fixed_model_name, ToolEventRunner()),
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ToolEventRunner(),
+            ),
         )
         client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
         created = await client.call(THREAD_CREATE, ThreadCreateCommand())
@@ -234,7 +282,7 @@ def test_repl_answers_a_parked_approval(tmp_path: Path) -> None:
         runner = ApprovalReplRunner()
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig(fixed_model_name, runner),
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
         )
         client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
         created = await client.call(THREAD_CREATE, ThreadCreateCommand())
@@ -271,7 +319,7 @@ def test_repl_interrupts_while_waiting_for_approval(tmp_path: Path) -> None:
         runner = ApprovalReplRunner()
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig(fixed_model_name, runner),
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
         )
         client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
         created = await client.call(THREAD_CREATE, ThreadCreateCommand())
@@ -313,7 +361,11 @@ def test_repl_starts_another_turn_on_an_existing_thread(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(
             tmp_path,
-            turns=TurnConfig(fixed_model_name, ReplRunner()),
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ReplRunner(),
+            ),
         )
         client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
         created = await client.call(THREAD_CREATE, ThreadCreateCommand())

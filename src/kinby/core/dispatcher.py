@@ -14,6 +14,7 @@ from kinby.contracts import (
     THREAD_APPROVAL_RESPOND,
     THREAD_CREATE,
     THREAD_LIST,
+    THREAD_MODE_SET,
     THREAD_SUBSCRIBE,
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_START,
@@ -23,6 +24,7 @@ from kinby.contracts import (
     ErrorEnvelope,
     Event,
     Method,
+    PermissionMode,
     Scope,
     Subscription,
     ThreadCreateCommand,
@@ -37,7 +39,7 @@ from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
-from kinby.core.turns import TurnRunner, Turns
+from kinby.core.turns import TurnPreparation, TurnRunner, Turns
 from kinby.core.usage import UsageRange, usage_totals
 from kinby.instance import Instance
 
@@ -54,7 +56,8 @@ class Route[RouteHandler]:
 
 @dataclass(frozen=True)
 class TurnConfig:
-    prepare_for_turn: Callable[[], str]
+    prepare_for_turn: Callable[[], TurnPreparation]
+    permission_ceiling: Callable[[], PermissionMode]
     runner: TurnRunner
 
 
@@ -189,8 +192,15 @@ def build_dispatcher(
     dispatcher.register(USAGE_GET, get_usage)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
     if turns is not None:
-        turn_service = Turns(store, event_log, turns.runner, turns.prepare_for_turn)
+        turn_service = Turns(
+            store,
+            event_log,
+            turns.runner,
+            turns.prepare_for_turn,
+            turns.permission_ceiling,
+        )
         dispatcher.register(THREAD_TURN_START, turn_service.start)
+        dispatcher.register(THREAD_MODE_SET, turn_service.set_mode)
         dispatcher.register(THREAD_TURN_INTERRUPT, turn_service.interrupt)
         dispatcher.register(THREAD_APPROVAL_RESPOND, turn_service.respond)
     return dispatcher
@@ -203,4 +213,4 @@ def turn_config(
 ) -> TurnConfig:
     """Build model turns from an instance, reloading its model at each turn."""
     runner = LangGraphRunner(instance, model_override=model_override)
-    return TurnConfig(runner.prepare_for_turn, runner)
+    return TurnConfig(runner.prepare_for_turn, runner.permission_ceiling, runner)

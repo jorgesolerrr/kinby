@@ -14,12 +14,13 @@ from kinby.contracts import (
     Event,
     MessageDelta,
     Payload,
+    PermissionMode,
     Scope,
     ThreadCreateResult,
     TurnStarted,
 )
 from kinby.core import LangGraphRunner, TurnConfig, build_dispatcher, turn_config
-from kinby.core.turns import TurnOutcome, TurnRequest
+from kinby.core.turns import TurnOutcome, TurnPreparation, TurnRequest
 from kinby.instance import Instance, load_instance
 
 _MODEL = "openai:gpt-5"
@@ -105,7 +106,11 @@ def test_runner_reloads_the_instance_model_between_turns(
         runner = LangGraphRunner(instance, model_factory=init_model)
         dispatcher = build_dispatcher(
             instance.manifest.state_dir,
-            turns=TurnConfig(runner.prepare_for_turn, runner),
+            turns=TurnConfig(
+                runner.prepare_for_turn,
+                runner.permission_ceiling,
+                runner,
+            ),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -170,7 +175,11 @@ def test_turn_config_reapplies_the_session_model_override(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    assert configured.prepare_for_turn() == "anthropic:claude-sonnet-4-6"
+    assert configured.prepare_for_turn() == TurnPreparation(
+        model="anthropic:claude-sonnet-4-6",
+        default_mode=PermissionMode.ASK,
+        ceiling=PermissionMode.FULL_ACCESS,
+    )
 
 
 def test_langgraph_runner_streams_one_model_turn(tmp_path: Path) -> None:
@@ -199,6 +208,7 @@ def test_langgraph_runner_streams_one_model_turn(tmp_path: Path) -> None:
                 turn_id=uuid4(),
                 message="Hello",
                 model=_MODEL,
+                permission_mode=PermissionMode.ASK,
             ),
             emit,
         )
@@ -234,6 +244,7 @@ def test_failed_model_call_does_not_enter_checkpointed_history(tmp_path: Path) -
                     turn_id=uuid4(),
                     message="Failed",
                     model=_MODEL,
+                    permission_mode=PermissionMode.ASK,
                 ),
                 emit,
             )
@@ -243,6 +254,7 @@ def test_failed_model_call_does_not_enter_checkpointed_history(tmp_path: Path) -
                 turn_id=uuid4(),
                 message="Retry",
                 model=_MODEL,
+                permission_mode=PermissionMode.ASK,
             ),
             emit,
         )
@@ -277,6 +289,7 @@ def test_runner_keeps_thread_messages_between_turns(tmp_path: Path) -> None:
                     turn_id=uuid4(),
                     message=message,
                     model=_MODEL,
+                    permission_mode=PermissionMode.ASK,
                 ),
                 emit,
             )

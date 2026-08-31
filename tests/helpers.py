@@ -1,8 +1,23 @@
-from kinby.core.turns import ApprovalDecision, Emit, TurnOutcome, TurnRequest
+from kinby.contracts import PermissionMode
+from kinby.core.turns import (
+    ApprovalDecision,
+    Emit,
+    TurnOutcome,
+    TurnPreparation,
+    TurnRequest,
+)
 
 
-def fixed_model_name() -> str:
-    return "openai:gpt-5"
+def fixed_turn_preparation() -> TurnPreparation:
+    return TurnPreparation(
+        model="openai:gpt-5",
+        default_mode=PermissionMode.ASK,
+        ceiling=PermissionMode.FULL_ACCESS,
+    )
+
+
+def fixed_permission_ceiling() -> PermissionMode:
+    return PermissionMode.FULL_ACCESS
 
 
 def cannot_resume(self: object, turn: TurnRequest) -> bool:

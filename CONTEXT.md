@@ -119,7 +119,7 @@ The typed set of commands and subscriptions every client uses to drive a session
 
 ### Event
 
-One sequence-numbered record emitted while a turn runs. The event stream is what clients subscribe to and what the **transcript store** persists; replaying it reproduces a thread.
+One sequence-numbered record in a **thread**'s durable history. Events record turn activity and durable thread state. The event stream is what clients subscribe to and what the **transcript store** persists; replaying it reproduces a thread.
 
 ### Scope
 

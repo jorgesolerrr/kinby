@@ -81,7 +81,11 @@ def test_model_receives_prompt_sections_in_order_with_environment_last(
         runner = LangGraphRunner(instance, model_factory=lambda _: model)
         dispatcher = build_dispatcher(
             instance.manifest.state_dir,
-            turns=TurnConfig(runner.prepare_for_turn, runner),
+            turns=TurnConfig(
+                runner.prepare_for_turn,
+                runner.permission_ceiling,
+                runner,
+            ),
         )
 
         await _start_turn(dispatcher, "Hello")
@@ -124,7 +128,11 @@ def test_prompt_files_and_manifest_are_reloaded_between_turns(tmp_path: Path) ->
         runner = LangGraphRunner(instance, model_factory=lambda _: model)
         dispatcher = build_dispatcher(
             instance.manifest.state_dir,
-            turns=TurnConfig(runner.prepare_for_turn, runner),
+            turns=TurnConfig(
+                runner.prepare_for_turn,
+                runner.permission_ceiling,
+                runner,
+            ),
         )
         created = await dispatcher.dispatch(
             "thread.create",
@@ -194,7 +202,11 @@ def test_missing_optional_files_leave_core_sections(
         runner = LangGraphRunner(instance, model_factory=lambda _: model)
         dispatcher = build_dispatcher(
             instance.manifest.state_dir,
-            turns=TurnConfig(runner.prepare_for_turn, runner),
+            turns=TurnConfig(
+                runner.prepare_for_turn,
+                runner.permission_ceiling,
+                runner,
+            ),
         )
 
         await _start_turn(dispatcher, "Hello")

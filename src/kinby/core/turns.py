@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import partial
 from typing import Protocol
@@ -16,8 +16,11 @@ from kinby.contracts import (
     ApprovalRequested,
     ErrorCode,
     Event,
+    ModePinned,
     Payload,
+    PermissionMode,
     ThreadApprovalRespondCommand,
+    ThreadModeSetCommand,
     ThreadTurnInterruptCommand,
     ThreadTurnStartCommand,
     TurnCompleted,
@@ -30,6 +33,7 @@ from kinby.core.errors import (
     CoreError,
     InvalidParkedTurn,
     NoActiveTurn,
+    PermissionDenied,
     ThreadBusy,
     ThreadNotFound,
     TurnInterruptedError,
@@ -46,6 +50,14 @@ class TurnRequest:
     turn_id: UUID
     message: str
     model: str
+    permission_mode: PermissionMode
+
+
+@dataclass(frozen=True)
+class TurnPreparation:
+    model: str
+    default_mode: PermissionMode
+    ceiling: PermissionMode
 
 
 @dataclass(frozen=True)
@@ -99,18 +111,36 @@ class Turns:
         store: ThreadStore,
         log: EventLog,
         runner: TurnRunner,
-        prepare_for_turn: Callable[[], str],
+        prepare_for_turn: Callable[[], TurnPreparation],
+        permission_ceiling: Callable[[], PermissionMode],
     ) -> None:
         self._store = store
         self._log = log
         self._runner = runner
         self._prepare_for_turn = prepare_for_turn
+        self._permission_ceiling = permission_ceiling
         self._running: dict[UUID, RunningTurn] = {}
         self._starting: set[UUID] = set()
 
+    async def set_mode(self, command: ThreadModeSetCommand) -> AcceptedResult:
+        self._require_thread(command.thread_id)
+        ceiling = self._permission_ceiling()
+        if _exceeds_ceiling(command.mode, ceiling):
+            raise PermissionDenied(
+                f'Permission mode "{command.mode.value}" exceeds the instance ceiling '
+                f'"{ceiling.value}".'
+            )
+        event = await self._log.append(command.thread_id, uuid4(), ModePinned(mode=command.mode))
+        return AcceptedResult(
+            thread_id=event.thread_id,
+            turn_id=event.turn_id,
+            sequence=event.sequence,
+        )
+
     async def start(self, command: ThreadTurnStartCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
-        pending = _pending_approval(self._log.stored(command.thread_id))
+        events = self._log.stored(command.thread_id)
+        pending = _pending_approval(events)
         running = self._running.get(command.thread_id)
         active = running is not None and not running.task.done()
         if command.thread_id in self._starting or active or pending is not None:
@@ -118,16 +148,26 @@ class Turns:
 
         self._starting.add(command.thread_id)
         try:
+            preparation = self._prepare_for_turn()
             turn = TurnRequest(
                 thread_id=command.thread_id,
                 turn_id=uuid4(),
                 message=command.message,
-                model=self._prepare_for_turn(),
+                model=preparation.model,
+                permission_mode=_permission_mode(
+                    events,
+                    preparation.default_mode,
+                    preparation.ceiling,
+                ),
             )
             started = await self._log.append(
                 turn.thread_id,
                 turn.turn_id,
-                TurnStarted(message=turn.message, model=turn.model),
+                TurnStarted(
+                    message=turn.message,
+                    model=turn.model,
+                    permission_mode=turn.permission_mode,
+                ),
             )
         finally:
             self._starting.remove(command.thread_id)
@@ -183,6 +223,13 @@ class Turns:
         if running is not None and not running.task.done():
             raise _thread_busy(command.thread_id)
         turn = _restore_parked_turn(events, pending)
+        turn = replace(
+            turn,
+            permission_mode=_constrain_mode(
+                turn.permission_mode,
+                self._permission_ceiling(),
+            ),
+        )
         if not self._runner.can_resume(turn):
             raise InvalidParkedTurn("The parked turn cannot resume after a runtime restart.")
         decision = ApprovalDecision.APPROVE if command.answer == "yes" else ApprovalDecision.DENY
@@ -265,6 +312,28 @@ def _pending_approval(events: Sequence[Event]) -> PendingApproval | None:
     return PendingApproval(events[-1], events[-1].payload)
 
 
+def _permission_mode(
+    events: Sequence[Event],
+    default: PermissionMode,
+    ceiling: PermissionMode,
+) -> PermissionMode:
+    mode = next(
+        (event.payload.mode for event in reversed(events) if isinstance(event.payload, ModePinned)),
+        default,
+    )
+    return _constrain_mode(mode, ceiling)
+
+
+def _constrain_mode(mode: PermissionMode, ceiling: PermissionMode) -> PermissionMode:
+    if _exceeds_ceiling(mode, ceiling):
+        return ceiling
+    return mode
+
+
+def _exceeds_ceiling(mode: PermissionMode, ceiling: PermissionMode) -> bool:
+    return _MODE_ORDER.index(mode) > _MODE_ORDER.index(ceiling)
+
+
 def _restore_parked_turn(
     events: Sequence[Event],
     pending: PendingApproval,
@@ -284,6 +353,7 @@ def _restore_parked_turn(
         turn_id=pending.event.turn_id,
         message=started.message,
         model=started.model,
+        permission_mode=started.permission_mode,
     )
 
 
@@ -293,3 +363,11 @@ def _thread_busy(thread_id: UUID) -> ThreadBusy:
 
 def _no_active_turn(thread_id: UUID) -> NoActiveTurn:
     return NoActiveTurn(f'Thread "{thread_id}" has no active turn.')
+
+
+_MODE_ORDER = (
+    PermissionMode.READ_ONLY,
+    PermissionMode.ASK,
+    PermissionMode.AUTO,
+    PermissionMode.FULL_ACCESS,
+)

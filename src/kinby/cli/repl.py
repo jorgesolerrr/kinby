@@ -16,16 +16,20 @@ from uuid import UUID
 from kinby.cli.client import ContractClient, format_error
 from kinby.contracts import (
     THREAD_APPROVAL_RESPOND,
+    THREAD_MODE_SET,
     THREAD_SUBSCRIBE,
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_START,
     AcceptedResult,
     ApprovalRequested,
+    ErrorCode,
     ErrorEnvelope,
     Event,
     EventType,
     MessageDelta,
+    PermissionMode,
     ThreadApprovalRespondCommand,
+    ThreadModeSetCommand,
     ThreadSubscribeCommand,
     ThreadTurnInterruptCommand,
     ThreadTurnStartCommand,
@@ -144,6 +148,31 @@ async def run_repl(
                 return 0
             message = message.rstrip("\r\n")
             if not message:
+                continue
+            command, _, argument = message.partition(" ")
+            if command == "/mode":
+                try:
+                    mode = PermissionMode(argument)
+                except ValueError:
+                    choices = ", ".join(candidate.value for candidate in PermissionMode)
+                    _render_error(
+                        ErrorEnvelope(
+                            code=ErrorCode.INVALID_ARGUMENT,
+                            message=f"Permission mode must be one of: {choices}.",
+                            retryable=False,
+                        ),
+                        repl_io.stderr,
+                    )
+                    continue
+                result = await client.call(
+                    THREAD_MODE_SET,
+                    ThreadModeSetCommand(thread_id=thread_id, mode=mode),
+                )
+                if isinstance(result, ErrorEnvelope):
+                    _render_error(result, stderr)
+                    continue
+                repl_io.stdout.write(f"Permission mode set to {mode.value}.\n")
+                repl_io.stdout.flush()
                 continue
 
             accepted = await client.call(

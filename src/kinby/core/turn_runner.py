@@ -45,6 +45,7 @@ from kinby.core.turns import (
     Emit,
     ParkedTurn,
     TurnOutcome,
+    TurnPreparation,
     TurnRequest,
     TurnResult,
 )
@@ -134,18 +135,27 @@ class LangGraphRunner:
         graph_builder.add_edge("tools", "model")
         self._graph = graph_builder.compile(checkpointer=self._checkpointer)
 
-    def prepare_for_turn(self) -> str:
+    def prepare_for_turn(self) -> TurnPreparation:
         manifest = reload_manifest(self._instance, model_override=self._model_override)
         self._instance = replace(self._instance, manifest=manifest)
+        self._gate_policy = self._load_gate_policy()
+        return TurnPreparation(
+            model=manifest.models.main,
+            default_mode=self._gate_policy.mode,
+            ceiling=self._gate_policy.ceiling,
+        )
+
+    def permission_ceiling(self) -> PermissionMode:
+        return self._load_gate_policy().ceiling
+
+    def _load_gate_policy(self) -> GatePolicy:
         if self._gate_policy_override is None:
-            self._gate_policy = load_permissions(self._instance)
-        else:
-            validate_bash_regexes(
-                self._gate_policy_override,
-                source="gate policy override",
-            )
-            self._gate_policy = self._gate_policy_override
-        return manifest.models.main
+            return load_permissions(self._instance)
+        validate_bash_regexes(
+            self._gate_policy_override,
+            source="gate policy override",
+        )
+        return self._gate_policy_override
 
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult:
         if turn.thread_id in self._parked:
@@ -195,7 +205,7 @@ class LangGraphRunner:
                 model=bound_model,
                 system_message=SystemMessage(content=render_system_prompt(sections)),
                 gate_policy=self._gate_policy,
-                permission_mode=self._gate_policy.mode,
+                permission_mode=turn.permission_mode,
                 tools=tools,
                 tool_context=ToolContext(
                     instance=self._instance,
