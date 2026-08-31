@@ -25,7 +25,6 @@ _PRESETS = {
         False: GateAction.ALLOW,
         True: GateAction.ASK,
     },
-    # Auto stays behind approval until path bounds can prove a write is in the workspace.
     PermissionMode.AUTO: {
         False: GateAction.ALLOW,
         True: GateAction.ASK,
@@ -49,7 +48,24 @@ def evaluate(
     if override is not None:
         return GateDecision(override, f"tools.{call.name}")
     writes = tool is not None and tool.write
+    if (
+        mode is PermissionMode.AUTO
+        and writes
+        and _paths_are_inside_workspace(tool, call, workspace)
+    ):
+        return GateDecision(GateAction.ALLOW, "mode.auto.workspace")
     return GateDecision(
         _PRESETS[mode][writes],
         f"mode.{mode.value}.{'write' if writes else 'read'}",
     )
+
+
+def _paths_are_inside_workspace(tool: Tool, call: ToolCall, workspace: Path) -> bool:
+    if not tool.paths:
+        return False
+    root = workspace.resolve()
+    for parameter in tool.paths:
+        path = call.arguments.get(parameter)
+        if not isinstance(path, str) or not (root / path).resolve().is_relative_to(root):
+            return False
+    return True

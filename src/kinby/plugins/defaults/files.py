@@ -12,7 +12,7 @@ def read(path: str, context: ToolContext) -> str:
     return _workspace_path(context.workspace, path).read_text(encoding="utf-8")
 
 
-@tool(write=True)
+@tool(write=True, paths=("path",))
 def write(path: str, content: str, context: ToolContext) -> str:
     """Write a UTF-8 text file in the workspace."""
     target = _workspace_path(context.workspace, path)
@@ -21,7 +21,7 @@ def write(path: str, content: str, context: ToolContext) -> str:
     return f"Wrote {_relative_path(context.workspace, target)}."
 
 
-@tool(write=True)
+@tool(write=True, paths=("path",))
 def edit(path: str, old: str, new: str, context: ToolContext) -> str:
     """Replace text in a UTF-8 workspace file."""
     target = _workspace_path(context.workspace, path)

@@ -37,6 +37,7 @@ class Tool:
     write: bool
     source: Path
     runnable: StructuredTool
+    paths: tuple[str, ...] = ()
     context_parameter: str | None = field(default=None, repr=False)
 
     async def ainvoke(
@@ -50,7 +51,7 @@ class Tool:
         return str(await self.runnable.ainvoke(invocation))
 
 
-def tool(*, write: bool) -> Callable[[ToolFunction], Tool]:
+def tool(*, write: bool, paths: tuple[str, ...] = ()) -> Callable[[ToolFunction], Tool]:
     """Build a structured tool from a function signature and docstring."""
 
     def decorate(function: ToolFunction) -> Tool:
@@ -64,6 +65,7 @@ def tool(*, write: bool) -> Callable[[ToolFunction], Tool]:
             write=write,
             source=Path(source_file).resolve(),
             runnable=runnable,
+            paths=paths,
             context_parameter=context_parameter,
         )
 

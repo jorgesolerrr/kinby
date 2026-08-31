@@ -57,8 +57,4 @@ def load_permissions(instance: Instance) -> GatePolicy:
         key = ".".join(str(part) for part in first["loc"])
         message = first["msg"].removeprefix("Value error, ")
         raise PermissionsError(f"{PERMISSIONS_NAME}: {key}: {message}") from exc
-    if policy.mode is PermissionMode.AUTO:
-        raise PermissionsError(
-            f"{PERMISSIONS_NAME}: mode: auto is not supported until path bounds are available"
-        )
     return policy
