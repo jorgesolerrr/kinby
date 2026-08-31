@@ -126,6 +126,30 @@ class ParkingRunner:
         return TurnOutcome(input_tokens=3, output_tokens=1)
 
 
+class PausingRestoreRunner(ParkingRunner):
+    def __init__(self, parked: TurnRequest) -> None:
+        super().__init__(parked)
+        self.restore_started = asyncio.Event()
+        self.release_restore = asyncio.Event()
+        self.restore_calls = 0
+        self.resume_calls = 0
+
+    async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None:
+        self.restore_calls += 1
+        self.restore_started.set()
+        await self.release_restore.wait()
+        return await super().restore(thread_id, turn_id)
+
+    async def resume(
+        self,
+        turn: TurnRequest,
+        decision: ApprovalDecision,
+        emit: Emit,
+    ) -> TurnOutcome:
+        self.resume_calls += 1
+        return await super().resume(turn, decision, emit)
+
+
 class CancellationSuppressingRunner:
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -826,6 +850,117 @@ def test_parked_approval_resumes_after_dispatcher_restart(tmp_path: Path) -> Non
         assert isinstance(completed, Event)
         assert completed.type is EventType.TURN_COMPLETED
         assert completed.payload == TurnCompleted(input_tokens=3, output_tokens=1)
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_approval_responses_resume_once(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        _, created, accepted, requested = await _park_turn(tmp_path)
+        runner = PausingRestoreRunner(
+            TurnRequest(
+                thread_id=created.id,
+                turn_id=accepted.turn_id,
+                message="Hello",
+                model=fixed_turn_preparation().model,
+                permission_mode=PermissionMode.ASK,
+            )
+        )
+        restarted = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
+        )
+        command = {
+            "thread_id": created.id,
+            "approval_id": _APPROVAL_ID,
+            "answer": "yes",
+        }
+        first_response = asyncio.create_task(
+            restarted.dispatch(
+                "thread.approval.respond",
+                command,
+                {Scope.THREAD_OPERATE},
+            )
+        )
+        await asyncio.wait_for(runner.restore_started.wait(), timeout=1)
+
+        second_response = await restarted.dispatch(
+            "thread.approval.respond",
+            command,
+            {Scope.THREAD_OPERATE},
+        )
+        runner.release_restore.set()
+        first_result = await first_response
+
+        assert isinstance(first_result, AcceptedResult)
+        assert second_response == ErrorEnvelope(
+            code=ErrorCode.THREAD_BUSY,
+            message=f'Thread "{created.id}" already has a running turn.',
+            retryable=True,
+        )
+        live = restarted.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id, "after_sequence": requested.sequence},
+            {Scope.THREAD_READ},
+        )
+        await asyncio.wait_for(anext(live), timeout=1)
+        await asyncio.wait_for(anext(live), timeout=1)
+        await live.aclose()
+        assert runner.restore_calls == 1
+        assert runner.resume_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_interrupt_during_approval_restore_prevents_resume(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        _, created, accepted, requested = await _park_turn(tmp_path)
+        runner = PausingRestoreRunner(
+            TurnRequest(
+                thread_id=created.id,
+                turn_id=accepted.turn_id,
+                message="Hello",
+                model=fixed_turn_preparation().model,
+                permission_mode=PermissionMode.ASK,
+            )
+        )
+        restarted = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
+        )
+        response = asyncio.create_task(
+            restarted.dispatch(
+                "thread.approval.respond",
+                {
+                    "thread_id": created.id,
+                    "approval_id": _APPROVAL_ID,
+                    "answer": "yes",
+                },
+                {Scope.THREAD_OPERATE},
+            )
+        )
+        await asyncio.wait_for(runner.restore_started.wait(), timeout=1)
+
+        interrupted = await restarted.dispatch(
+            "thread.turn.interrupt",
+            {"thread_id": created.id},
+            {Scope.THREAD_OPERATE},
+        )
+        runner.release_restore.set()
+        response_result = await response
+
+        assert interrupted == AcceptedResult(
+            thread_id=created.id,
+            turn_id=accepted.turn_id,
+            sequence=requested.sequence + 1,
+        )
+        assert response_result == ErrorEnvelope(
+            code=ErrorCode.NO_ACTIVE_TURN,
+            message=f'Thread "{created.id}" has no active turn.',
+            retryable=False,
+        )
+        assert runner.restore_calls == 1
+        assert runner.resume_calls == 0
 
     asyncio.run(scenario())
 
