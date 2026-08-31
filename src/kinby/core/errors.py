@@ -19,6 +19,10 @@ class ThreadBusy(CoreError):
     retryable = True
 
 
+class PermissionDenied(CoreError):
+    code = ErrorCode.PERMISSION_DENIED
+
+
 class NoActiveTurn(CoreError):
     code = ErrorCode.NO_ACTIVE_TURN
 

@@ -77,7 +77,7 @@ async def _run(
 
 
 async def _run_turn(runner: LangGraphRunner) -> tuple[TurnResult, list[Payload]]:
-    runner.prepare_for_turn()
+    preparation = runner.prepare_for_turn()
     thread_id = uuid4()
     turn_id = uuid4()
     payloads: list[Payload] = []
@@ -97,7 +97,8 @@ async def _run_turn(runner: LangGraphRunner) -> tuple[TurnResult, list[Payload]]
             thread_id=thread_id,
             turn_id=turn_id,
             message="Remember this",
-            model=_MODEL,
+            model=preparation.model,
+            permission_mode=preparation.default_mode,
         ),
         emit,
     )

@@ -159,7 +159,11 @@ async def _session(instance: Instance, model: ScriptedModel) -> tuple[Dispatcher
     runner = LangGraphRunner(instance, model_factory=lambda _: model)
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
-        turns=TurnConfig(runner.prepare_for_turn, runner),
+        turns=TurnConfig(
+            runner.prepare_for_turn,
+            runner.permission_ceiling,
+            runner,
+        ),
     )
     created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
     assert isinstance(created, ThreadCreateResult)
@@ -1102,7 +1106,11 @@ def test_write_tool_approval_cannot_resume_after_restart(tmp_path: Path) -> None
         )
         restarted = build_dispatcher(
             instance.manifest.state_dir,
-            turns=TurnConfig(restarted_runner.prepare_for_turn, restarted_runner),
+            turns=TurnConfig(
+                restarted_runner.prepare_for_turn,
+                restarted_runner.permission_ceiling,
+                restarted_runner,
+            ),
         )
 
         response = await restarted.dispatch(

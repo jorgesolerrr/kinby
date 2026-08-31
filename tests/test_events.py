@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from kinby.contracts import (
     MessageDelta,
+    PermissionMode,
     ToolCall,
     ToolResult,
     TurnCompleted,
@@ -12,7 +13,11 @@ from kinby.contracts import (
 )
 from kinby.core.events import EventLog
 
-STARTED = TurnStarted(message="Hello", model="openai:gpt-5")
+STARTED = TurnStarted(
+    message="Hello",
+    model="openai:gpt-5",
+    permission_mode=PermissionMode.ASK,
+)
 
 
 def test_tool_and_warning_events_round_trip_through_the_event_log(tmp_path: Path) -> None:
@@ -52,7 +57,11 @@ def test_finished_thread_replays_every_stored_event_in_order(tmp_path: Path) -> 
             await event_log.append(
                 thread_id,
                 turn_id,
-                TurnStarted(message="Book the trip", model="openai:gpt-5"),
+                TurnStarted(
+                    message="Book the trip",
+                    model="openai:gpt-5",
+                    permission_mode=PermissionMode.ASK,
+                ),
             ),
             await event_log.append(
                 thread_id,

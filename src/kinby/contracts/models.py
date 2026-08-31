@@ -19,6 +19,7 @@ class ContractModel(BaseModel):
 class Scope(StrEnum):
     THREAD_READ = "thread:read"
     THREAD_OPERATE = "thread:operate"
+    THREAD_ADMIN = "thread:admin"
     INSTANCE_READ = "instance:read"
     INSTANCE_ADMIN = "instance:admin"
 
@@ -47,6 +48,7 @@ class PermissionMode(StrEnum):
 
 
 class EventType(StrEnum):
+    MODE_PINNED = "mode.pinned"
     TURN_STARTED = "turn.started"
     MESSAGE_DELTA = "message.delta"
     TOOL_CALL = "tool.call"
@@ -62,6 +64,12 @@ class TurnStarted(ContractModel):
     type: Literal[EventType.TURN_STARTED] = EventType.TURN_STARTED
     message: str
     model: str
+    permission_mode: PermissionMode | None = None
+
+
+class ModePinned(ContractModel):
+    type: Literal[EventType.MODE_PINNED] = EventType.MODE_PINNED
+    mode: PermissionMode
 
 
 class MessageDelta(ContractModel):
@@ -122,7 +130,8 @@ class TurnInterrupted(ContractModel):
 
 
 Payload = Annotated[
-    TurnStarted
+    ModePinned
+    | TurnStarted
     | MessageDelta
     | ToolCall
     | ToolResult
@@ -155,6 +164,11 @@ class ThreadSubscribeCommand(ContractModel):
 class ThreadTurnStartCommand(ContractModel):
     thread_id: UUID
     message: str
+
+
+class ThreadModeSetCommand(ContractModel):
+    thread_id: UUID
+    mode: PermissionMode
 
 
 class ThreadTurnInterruptCommand(ContractModel):
