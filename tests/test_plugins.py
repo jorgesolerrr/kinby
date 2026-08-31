@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
@@ -76,7 +77,7 @@ class _BashProcess:
 
 
 def test_tool_decorator_attaches_the_declaration_record() -> None:
-    @tool(write=True)
+    @tool(write=True, paths=("note",))
     def remember(note: str) -> str:
         """Remember one note."""
         return note
@@ -84,9 +85,22 @@ def test_tool_decorator_attaches_the_declaration_record() -> None:
     assert isinstance(remember, Tool)
     assert remember.name == "remember"
     assert remember.write
+    assert remember.paths == ("note",)
     assert remember.source == Path(__file__).resolve()
     assert remember.runnable.description == "Remember one note."
     assert remember.runnable.args == {"note": {"title": "Note", "type": "string"}}
+
+
+def test_tool_decorator_rejects_an_unknown_path_parameter() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r'^Tool "remember" declares unknown path parameter "missing"\.$',
+    ):
+
+        @tool(write=True, paths=("missing",))
+        def remember(note: str) -> str:
+            """Remember one note."""
+            return note
 
 
 def _instance(tmp_path: Path, *, defaults: bool = True) -> Instance:
@@ -216,7 +230,7 @@ def test_fresh_instance_binds_the_default_tools(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_default_entry_point_declares_tool_write_flags() -> None:
+def test_default_entry_point_declares_tool_gate_metadata() -> None:
     default_entry_point = next(
         entry_point
         for entry_point in installed_entry_points(group="kinby.tools")
@@ -227,13 +241,13 @@ def test_default_entry_point_declares_tool_write_flags() -> None:
 
     assert default_entry_point.dist is not None
     assert default_entry_point.dist.name == "kinby"
-    assert [(tool.name, tool.write) for tool in tools] == [
-        ("read", False),
-        ("write", True),
-        ("edit", True),
-        ("grep", False),
-        ("glob", False),
-        ("bash", True),
+    assert [(tool.name, tool.write, tool.paths) for tool in tools] == [
+        ("read", False, ()),
+        ("write", True, ("path",)),
+        ("edit", True, ("path",)),
+        ("grep", False, ()),
+        ("glob", False, ()),
+        ("bash", True, ()),
     ]
 
 

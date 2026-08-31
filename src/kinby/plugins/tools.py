@@ -37,6 +37,7 @@ class Tool:
     write: bool
     source: Path
     runnable: StructuredTool
+    paths: tuple[str, ...] = ()
     context_parameter: str | None = field(default=None, repr=False)
 
     async def ainvoke(
@@ -44,18 +45,39 @@ class Tool:
         arguments: Mapping[str, JsonValue],
         context: ToolContext,
     ) -> str:
-        invocation: dict[str, object] = dict(arguments)
+        invocation = self.resolve_paths(arguments, context.workspace)
         if self.context_parameter is not None:
             invocation[self.context_parameter] = context
         return str(await self.runnable.ainvoke(invocation))
 
+    def resolve_paths(
+        self,
+        arguments: Mapping[str, JsonValue],
+        workspace: Path,
+    ) -> dict[str, object]:
+        """Resolve declared path arguments against the workspace."""
+        resolved: dict[str, object] = dict(arguments)
+        for parameter in self.paths:
+            path = arguments.get(parameter)
+            if isinstance(path, str):
+                resolved[parameter] = str((workspace / path).resolve())
+        return resolved
 
-def tool(*, write: bool) -> Callable[[ToolFunction], Tool]:
+
+def tool(*, write: bool, paths: tuple[str, ...] = ()) -> Callable[[ToolFunction], Tool]:
     """Build a structured tool from a function signature and docstring."""
 
     def decorate(function: ToolFunction) -> Tool:
         context_parameter = _mark_context_parameter(function)
         runnable = StructuredTool.from_function(func=function)
+        unknown_path = next(
+            (parameter for parameter in paths if parameter not in runnable.args),
+            None,
+        )
+        if unknown_path is not None:
+            raise ValueError(
+                f'Tool "{runnable.name}" declares unknown path parameter "{unknown_path}".'
+            )
         source_file = inspect.getsourcefile(function)
         if source_file is None:
             raise ValueError(f'Tool "{_function_name(function)}" has no source file.')
@@ -64,6 +86,7 @@ def tool(*, write: bool) -> Callable[[ToolFunction], Tool]:
             write=write,
             source=Path(source_file).resolve(),
             runnable=runnable,
+            paths=paths,
             context_parameter=context_parameter,
         )
 

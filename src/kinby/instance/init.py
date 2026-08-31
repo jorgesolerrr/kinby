@@ -83,7 +83,8 @@ def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
             "# Permission policy. Changes apply at the next turn boundary.\n"
             "# Modes: read-only denies writes, ask requests approval, "
             "and full-access allows writes.\n"
-            "# auto is reserved for path-bounded writes and is not available yet.\n"
+            "# auto allows writes with declared paths inside the workspace. It asks before\n"
+            "# bash, undeclared write tools, and paths outside the workspace.\n"
             'mode = "ask"\n'
             'ceiling = "full-access"\n'
             "\n"
