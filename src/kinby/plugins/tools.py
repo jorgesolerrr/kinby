@@ -45,10 +45,23 @@ class Tool:
         arguments: Mapping[str, JsonValue],
         context: ToolContext,
     ) -> str:
-        invocation: dict[str, object] = dict(arguments)
+        invocation = self.resolve_paths(arguments, context.workspace)
         if self.context_parameter is not None:
             invocation[self.context_parameter] = context
         return str(await self.runnable.ainvoke(invocation))
+
+    def resolve_paths(
+        self,
+        arguments: Mapping[str, JsonValue],
+        workspace: Path,
+    ) -> dict[str, object]:
+        """Resolve declared path arguments against the workspace."""
+        resolved: dict[str, object] = dict(arguments)
+        for parameter in self.paths:
+            path = arguments.get(parameter)
+            if isinstance(path, str):
+                resolved[parameter] = str((workspace / path).resolve())
+        return resolved
 
 
 def tool(*, write: bool, paths: tuple[str, ...] = ()) -> Callable[[ToolFunction], Tool]:

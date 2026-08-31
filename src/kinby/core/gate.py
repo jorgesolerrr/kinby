@@ -64,8 +64,9 @@ def _paths_are_inside_workspace(tool: Tool, call: ToolCall, workspace: Path) -> 
     if not tool.paths:
         return False
     root = workspace.resolve()
+    arguments = tool.resolve_paths(call.arguments, root)
     for parameter in tool.paths:
-        path = call.arguments.get(parameter)
-        if not isinstance(path, str) or not (root / path).resolve().is_relative_to(root):
+        path = arguments.get(parameter)
+        if not isinstance(path, str) or not Path(path).is_relative_to(root):
             return False
     return True

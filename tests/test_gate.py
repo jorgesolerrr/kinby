@@ -458,6 +458,59 @@ def test_auto_allows_an_edit_inside_the_workspace(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_auto_resolves_declared_paths_against_the_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        workspace_target = instance.manifest.workspace.path / "inside.txt"
+        instance_target = instance.path / "inside.txt"
+        (instance.path / "tools" / "store.py").write_text(
+            """from pathlib import Path
+
+from kinby.plugins import tool
+
+@tool(write=True, paths=("path",))
+def store(path: str, content: str) -> str:
+    \"\"\"Store text at one path.\"\"\"
+    Path(path).write_text(content, encoding="utf-8")
+    return content
+""",
+            encoding="utf-8",
+        )
+        (instance.path / "permissions.toml").write_text(
+            'mode = "auto"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(instance.path)
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "store",
+                            "args": {"path": "inside.txt", "content": "inside"},
+                            "id": "store-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        result, payloads = await _run(instance, model)
+
+        assert isinstance(result, TurnOutcome)
+        assert workspace_target.read_text(encoding="utf-8") == "inside"
+        assert not instance_target.exists()
+        assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
+
+    asyncio.run(scenario())
+
+
 def test_auto_asks_before_a_write_outside_the_workspace(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = _instance(tmp_path)
