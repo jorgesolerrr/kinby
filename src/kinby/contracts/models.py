@@ -64,7 +64,7 @@ class TurnStarted(ContractModel):
     type: Literal[EventType.TURN_STARTED] = EventType.TURN_STARTED
     message: str
     model: str
-    permission_mode: PermissionMode
+    permission_mode: PermissionMode | None = None
 
 
 class ModePinned(ContractModel):

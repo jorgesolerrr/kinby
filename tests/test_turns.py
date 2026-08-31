@@ -1,4 +1,5 @@
 import asyncio
+import json
 from contextlib import suppress
 from pathlib import Path
 from typing import cast
@@ -246,6 +247,39 @@ def test_set_mode_rejects_a_mode_above_the_instance_ceiling(tmp_path: Path) -> N
         message='Permission mode "full-access" exceeds the instance ceiling "auto".',
         retryable=False,
     )
+
+
+def test_set_mode_rejects_a_thread_with_a_running_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runner = WaitingRunner()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await asyncio.wait_for(runner.started.wait(), timeout=1)
+
+        pinned = await dispatcher.dispatch(
+            "thread.mode.set",
+            {"thread_id": created.id, "mode": "auto"},
+            {Scope.THREAD_ADMIN},
+        )
+
+        assert pinned == ErrorEnvelope(
+            code=ErrorCode.THREAD_BUSY,
+            message=f'Thread "{created.id}" already has a running turn.',
+            retryable=True,
+        )
+        runner.release.set()
+
+    asyncio.run(scenario())
 
 
 def test_lowered_ceiling_constrains_an_existing_pin(tmp_path: Path) -> None:
@@ -785,6 +819,93 @@ def test_parked_approval_resumes_after_dispatcher_restart(tmp_path: Path) -> Non
         assert isinstance(completed, Event)
         assert completed.type is EventType.TURN_COMPLETED
         assert completed.payload == TurnCompleted(input_tokens=3, output_tokens=1)
+
+    asyncio.run(scenario())
+
+
+def test_legacy_parked_turn_resumes_with_the_instance_default_mode(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        _, created, _, requested = await _park_turn(tmp_path)
+        records_path = tmp_path / "events.jsonl"
+        records = [
+            json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines()
+        ]
+        del records[0]["payload"]["permission_mode"]
+        records_path.write_text(
+            "".join(f"{json.dumps(record)}\n" for record in records),
+            encoding="utf-8",
+        )
+        runner = ParkingRunner()
+        restarted = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                lambda: TurnPreparation(
+                    model="openai:gpt-5",
+                    default_mode=PermissionMode.AUTO,
+                    ceiling=PermissionMode.FULL_ACCESS,
+                ),
+                fixed_permission_ceiling,
+                runner,
+            ),
+        )
+
+        resumed = await restarted.dispatch(
+            "thread.approval.respond",
+            {
+                "thread_id": created.id,
+                "approval_id": _APPROVAL_ID,
+                "answer": "yes",
+            },
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(resumed, AcceptedResult)
+        live = restarted.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id, "after_sequence": requested.sequence},
+            {Scope.THREAD_READ},
+        )
+        await asyncio.wait_for(anext(live), timeout=1)
+        await asyncio.wait_for(anext(live), timeout=1)
+        await live.aclose()
+
+        assert runner.resumed_modes == [PermissionMode.AUTO]
+
+    asyncio.run(scenario())
+
+
+def test_set_mode_rejects_a_thread_with_a_pending_approval(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher, created, _, requested = await _park_turn(tmp_path)
+
+        pinned = await dispatcher.dispatch(
+            "thread.mode.set",
+            {"thread_id": created.id, "mode": "auto"},
+            {Scope.THREAD_ADMIN},
+        )
+
+        assert pinned == ErrorEnvelope(
+            code=ErrorCode.THREAD_BUSY,
+            message=f'Thread "{created.id}" already has a running turn.',
+            retryable=True,
+        )
+        resumed = await dispatcher.dispatch(
+            "thread.approval.respond",
+            {
+                "thread_id": created.id,
+                "approval_id": _APPROVAL_ID,
+                "answer": "yes",
+            },
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(resumed, AcceptedResult)
+        live = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id, "after_sequence": requested.sequence},
+            {Scope.THREAD_READ},
+        )
+        await asyncio.wait_for(anext(live), timeout=1)
+        await asyncio.wait_for(anext(live), timeout=1)
+        await live.aclose()
 
     asyncio.run(scenario())
 

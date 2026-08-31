@@ -124,6 +124,11 @@ class Turns:
 
     async def set_mode(self, command: ThreadModeSetCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
+        events = self._log.stored(command.thread_id)
+        running = self._running.get(command.thread_id)
+        active = running is not None and not running.task.done()
+        if command.thread_id in self._starting or active or _pending_approval(events) is not None:
+            raise _thread_busy(command.thread_id)
         ceiling = self._permission_ceiling()
         if _exceeds_ceiling(command.mode, ceiling):
             raise PermissionDenied(
@@ -190,7 +195,12 @@ class Turns:
             if pending is None:
                 raise _no_active_turn(command.thread_id)
             turn_id = pending.event.turn_id
-            turn = _restore_parked_turn(self._log.stored(command.thread_id), pending)
+            default_mode = self._prepare_for_turn().default_mode
+            turn = _restore_parked_turn(
+                self._log.stored(command.thread_id),
+                pending,
+                default_mode,
+            )
             await self._runner.discard(turn)
 
         interrupted = await self._log.append(
@@ -222,12 +232,13 @@ class Turns:
         running = self._running.get(command.thread_id)
         if running is not None and not running.task.done():
             raise _thread_busy(command.thread_id)
-        turn = _restore_parked_turn(events, pending)
+        preparation = self._prepare_for_turn()
+        turn = _restore_parked_turn(events, pending, preparation.default_mode)
         turn = replace(
             turn,
             permission_mode=_constrain_mode(
                 turn.permission_mode,
-                self._permission_ceiling(),
+                preparation.ceiling,
             ),
         )
         if not self._runner.can_resume(turn):
@@ -337,6 +348,7 @@ def _exceeds_ceiling(mode: PermissionMode, ceiling: PermissionMode) -> bool:
 def _restore_parked_turn(
     events: Sequence[Event],
     pending: PendingApproval,
+    default_mode: PermissionMode,
 ) -> TurnRequest:
     started = next(
         (
@@ -353,7 +365,9 @@ def _restore_parked_turn(
         turn_id=pending.event.turn_id,
         message=started.message,
         model=started.model,
-        permission_mode=started.permission_mode,
+        permission_mode=(
+            started.permission_mode if started.permission_mode is not None else default_mode
+        ),
     )
 
 
