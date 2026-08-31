@@ -32,6 +32,26 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
     assert (target / "routines" / "README.md").read_text(encoding="utf-8").startswith("<!--")
 
 
+def test_init_writes_the_commented_permissions_template(tmp_path):
+    target = tmp_path / "alice"
+
+    exit_code = main(["init", str(target)])
+
+    assert exit_code == 0
+    assert (target / "permissions.toml").read_text(encoding="utf-8") == (
+        "# Permission policy. Changes apply at the next turn boundary.\n"
+        "# Modes: read-only denies writes, ask requests approval, and full-access allows writes.\n"
+        "# auto is reserved for path-bounded writes and is not available yet.\n"
+        'mode = "ask"\n'
+        'ceiling = "full-access"\n'
+        "\n"
+        "[tools]\n"
+        "# Override any core or plugin tool without changing the mode.\n"
+        '# bash = "deny"\n'
+        '# edit = "allow"\n'
+    )
+
+
 def test_init_refuses_an_existing_instance_and_changes_nothing(tmp_path, capsys):
     target = tmp_path / "alice"
     target.mkdir()

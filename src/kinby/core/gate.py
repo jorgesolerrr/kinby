@@ -3,18 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 
 from kinby.contracts import PermissionMode, ToolCall
-from kinby.instance.permissions import GatePolicy
+from kinby.instance.permissions import GateAction, GatePolicy
 from kinby.plugins.tools import Tool
-
-
-class GateAction(StrEnum):
-    ALLOW = "allow"
-    ASK = "ask"
-    DENY = "deny"
 
 
 @dataclass(frozen=True)
@@ -52,7 +45,9 @@ def evaluate(
     workspace: Path,
 ) -> GateDecision:
     """Evaluate one call without running the tool or changing state."""
-    del policy, workspace
+    override = policy.tools.get(call.name)
+    if override is not None:
+        return GateDecision(override, f"tools.{call.name}")
     writes = tool is not None and tool.write
     return GateDecision(
         _PRESETS[mode][writes],

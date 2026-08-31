@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.tools import StructuredTool
 
@@ -12,14 +13,13 @@ from kinby.contracts import (
     Event,
     MessageDelta,
     Payload,
-    PermissionMode,
     ToolCall,
     ToolResult,
 )
 from kinby.core import LangGraphRunner
 from kinby.core.turns import ParkedTurn, TurnOutcome, TurnRequest, TurnResult
 from kinby.instance import Instance, load_instance
-from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
+from kinby.instance.permissions import PermissionsError
 
 _MODEL = "openai:gpt-5"
 
@@ -50,13 +50,16 @@ def _instance(tmp_path: Path) -> Instance:
 async def _run(
     instance: Instance,
     model: ScriptedModel,
-    gate_policy: GatePolicy = SHIPPED_POLICY,
 ) -> tuple[TurnResult, list[Payload]]:
     runner = LangGraphRunner(
         instance,
         model_factory=lambda _: model,
-        gate_policy=gate_policy,
     )
+    return await _run_turn(runner)
+
+
+async def _run_turn(runner: LangGraphRunner) -> tuple[TurnResult, list[Payload]]:
+    runner.prepare_for_turn()
     thread_id = uuid4()
     turn_id = uuid4()
     payloads: list[Payload] = []
@@ -204,9 +207,12 @@ def write_note(note: str, context: ToolContext) -> str:
                 AIMessageChunk(content="I will not write it."),
             ]
         )
-        policy = GatePolicy(mode=PermissionMode.READ_ONLY)
+        (instance.path / "permissions.toml").write_text(
+            'mode = "read-only"\n',
+            encoding="utf-8",
+        )
 
-        result, payloads = await _run(instance, model, policy)
+        result, payloads = await _run(instance, model)
 
         assert isinstance(result, TurnOutcome)
         assert not marker.exists()
@@ -221,3 +227,173 @@ def write_note(note: str, context: ToolContext) -> str:
         assert MessageDelta(text="I will not write it.") in payloads
 
     asyncio.run(scenario())
+
+
+def test_tool_override_allows_one_plugin_write_without_changing_the_preset(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        marker = instance.manifest.workspace.path / "ran.txt"
+        (instance.path / "tools" / "write_note.py").write_text(
+            """from kinby.plugins import ToolContext, tool
+
+@tool(write=True)
+def write_note(note: str, context: ToolContext) -> str:
+    \"\"\"Write one note.\"\"\"
+    (context.workspace / \"ran.txt\").write_text(note, encoding=\"utf-8\")
+    return note
+""",
+            encoding="utf-8",
+        )
+        (instance.path / "permissions.toml").write_text(
+            '[tools]\nwrite_note = "allow"\n',
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "write_note",
+                            "args": {"note": "remember me"},
+                            "id": "write-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        result, payloads = await _run(instance, model)
+
+        assert isinstance(result, TurnOutcome)
+        assert marker.read_text(encoding="utf-8") == "remember me"
+        assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
+
+    asyncio.run(scenario())
+
+
+def test_full_access_allows_bash_with_a_full_access_ceiling(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        marker = instance.manifest.workspace.path / "ran.txt"
+        (instance.path / "tools" / "bash.py").write_text(
+            """from kinby.plugins import ToolContext, tool
+
+@tool(write=True)
+def bash(command: str, context: ToolContext) -> str:
+    \"\"\"Run one test command.\"\"\"
+    (context.workspace / \"ran.txt\").write_text(command, encoding=\"utf-8\")
+    return command
+""",
+            encoding="utf-8",
+        )
+        (instance.path / "permissions.toml").write_text(
+            'mode = "full-access"\nceiling = "full-access"\n',
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "bash",
+                            "args": {"command": "touch ran.txt"},
+                            "id": "bash-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        result, payloads = await _run(instance, model)
+
+        assert isinstance(result, TurnOutcome)
+        assert marker.read_text(encoding="utf-8") == "touch ran.txt"
+        assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
+
+    asyncio.run(scenario())
+
+
+def test_auto_mode_fails_loudly_at_the_turn_boundary(tmp_path: Path) -> None:
+    instance = _instance(tmp_path)
+    (instance.path / "permissions.toml").write_text(
+        'mode = "auto"\n',
+        encoding="utf-8",
+    )
+    runner = LangGraphRunner(
+        instance,
+        model_factory=lambda _: ScriptedModel([]),
+    )
+
+    with pytest.raises(
+        PermissionsError,
+        match=(r"permissions\.toml: mode: auto is not supported until path bounds are available"),
+    ):
+        runner.prepare_for_turn()
+
+
+def test_permissions_are_reloaded_at_each_turn_boundary(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        marker = instance.manifest.workspace.path / "ran.txt"
+        (instance.path / "tools" / "write_note.py").write_text(
+            """from kinby.plugins import ToolContext, tool
+
+@tool(write=True)
+def write_note(note: str, context: ToolContext) -> str:
+    \"\"\"Write one note.\"\"\"
+    (context.workspace / \"ran.txt\").write_text(note, encoding=\"utf-8\")
+    return note
+""",
+            encoding="utf-8",
+        )
+        permissions = instance.path / "permissions.toml"
+        permissions.write_text('mode = "ask"\n', encoding="utf-8")
+        tool_call = {
+            "name": "write_note",
+            "args": {"note": "remember me"},
+            "id": "write-1",
+            "type": "tool_call",
+        }
+        model = ScriptedModel(
+            [
+                AIMessageChunk(content="", tool_calls=[tool_call]),
+                AIMessageChunk(content="", tool_calls=[tool_call]),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+        runner = LangGraphRunner(instance, model_factory=lambda _: model)
+
+        first_result, first_payloads = await _run_turn(runner)
+        permissions.write_text('mode = "full-access"\n', encoding="utf-8")
+        second_result, second_payloads = await _run_turn(runner)
+
+        assert isinstance(first_result, ParkedTurn)
+        assert any(isinstance(payload, ApprovalRequested) for payload in first_payloads)
+        assert isinstance(second_result, TurnOutcome)
+        assert marker.read_text(encoding="utf-8") == "remember me"
+        assert not any(isinstance(payload, ApprovalRequested) for payload in second_payloads)
+
+    asyncio.run(scenario())
+
+
+def test_malformed_permissions_fail_loudly_at_the_turn_boundary(tmp_path: Path) -> None:
+    instance = _instance(tmp_path)
+    (instance.path / "permissions.toml").write_text(
+        'mode = ["ask"\n',
+        encoding="utf-8",
+    )
+    runner = LangGraphRunner(
+        instance,
+        model_factory=lambda _: ScriptedModel([]),
+    )
+
+    with pytest.raises(PermissionsError, match=r"^permissions\.toml:"):
+        runner.prepare_for_turn()
