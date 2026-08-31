@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
@@ -88,6 +89,18 @@ def test_tool_decorator_attaches_the_declaration_record() -> None:
     assert remember.source == Path(__file__).resolve()
     assert remember.runnable.description == "Remember one note."
     assert remember.runnable.args == {"note": {"title": "Note", "type": "string"}}
+
+
+def test_tool_decorator_rejects_an_unknown_path_parameter() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r'^Tool "remember" declares unknown path parameter "missing"\.$',
+    ):
+
+        @tool(write=True, paths=("missing",))
+        def remember(note: str) -> str:
+            """Remember one note."""
+            return note
 
 
 def _instance(tmp_path: Path, *, defaults: bool = True) -> Instance:

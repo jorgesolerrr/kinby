@@ -48,6 +48,22 @@ def _instance(tmp_path: Path, *, defaults: bool = False) -> Instance:
     return load_instance(instance_path)
 
 
+def _write_store_tool(instance: Instance) -> None:
+    (instance.path / "tools" / "store.py").write_text(
+        """from pathlib import Path
+
+from kinby.plugins import tool
+
+@tool(write=True, paths=("path",))
+def store(path: str, content: str) -> str:
+    \"\"\"Store text at one path.\"\"\"
+    Path(path).write_text(content, encoding="utf-8")
+    return content
+""",
+        encoding="utf-8",
+    )
+
+
 async def _run(
     instance: Instance,
     model: ScriptedModel,
@@ -466,19 +482,7 @@ def test_auto_resolves_declared_paths_against_the_workspace(
         instance = _instance(tmp_path)
         workspace_target = instance.manifest.workspace.path / "inside.txt"
         instance_target = instance.path / "inside.txt"
-        (instance.path / "tools" / "store.py").write_text(
-            """from pathlib import Path
-
-from kinby.plugins import tool
-
-@tool(write=True, paths=("path",))
-def store(path: str, content: str) -> str:
-    \"\"\"Store text at one path.\"\"\"
-    Path(path).write_text(content, encoding="utf-8")
-    return content
-""",
-            encoding="utf-8",
-        )
+        _write_store_tool(instance)
         (instance.path / "permissions.toml").write_text(
             'mode = "auto"\n',
             encoding="utf-8",
@@ -515,19 +519,7 @@ def test_auto_asks_before_a_write_outside_the_workspace(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = _instance(tmp_path)
         target = instance.path / "outside.txt"
-        (instance.path / "tools" / "store.py").write_text(
-            """from pathlib import Path
-
-from kinby.plugins import tool
-
-@tool(write=True, paths=("path",))
-def store(path: str, content: str) -> str:
-    \"\"\"Store text at one path.\"\"\"
-    Path(path).write_text(content, encoding="utf-8")
-    return content
-""",
-            encoding="utf-8",
-        )
+        _write_store_tool(instance)
         (instance.path / "permissions.toml").write_text(
             'mode = "auto"\n',
             encoding="utf-8",
@@ -567,19 +559,7 @@ def test_full_access_allows_a_write_outside_the_workspace(tmp_path: Path) -> Non
     async def scenario() -> None:
         instance = _instance(tmp_path)
         target = instance.path / "outside.txt"
-        (instance.path / "tools" / "store.py").write_text(
-            """from pathlib import Path
-
-from kinby.plugins import tool
-
-@tool(write=True, paths=("path",))
-def store(path: str, content: str) -> str:
-    \"\"\"Store text at one path.\"\"\"
-    Path(path).write_text(content, encoding="utf-8")
-    return content
-""",
-            encoding="utf-8",
-        )
+        _write_store_tool(instance)
         (instance.path / "permissions.toml").write_text(
             'mode = "full-access"\n',
             encoding="utf-8",

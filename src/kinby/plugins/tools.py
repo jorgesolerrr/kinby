@@ -70,6 +70,14 @@ def tool(*, write: bool, paths: tuple[str, ...] = ()) -> Callable[[ToolFunction]
     def decorate(function: ToolFunction) -> Tool:
         context_parameter = _mark_context_parameter(function)
         runnable = StructuredTool.from_function(func=function)
+        unknown_path = next(
+            (parameter for parameter in paths if parameter not in runnable.args),
+            None,
+        )
+        if unknown_path is not None:
+            raise ValueError(
+                f'Tool "{runnable.name}" declares unknown path parameter "{unknown_path}".'
+            )
         source_file = inspect.getsourcefile(function)
         if source_file is None:
             raise ValueError(f'Tool "{_function_name(function)}" has no source file.')
