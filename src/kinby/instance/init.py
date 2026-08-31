@@ -21,6 +21,7 @@ from kinby.instance.layout import (
     TOOLS_DIR,
     WORKSPACE_DIR,
 )
+from kinby.instance.permissions import SHIPPED_BASH_DENY
 
 PLACEHOLDER_MODEL = "provider:model"
 README_NAME = "README.md"
@@ -92,6 +93,17 @@ def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
             "# Override any core or plugin tool without changing the mode.\n"
             '# bash = "deny"\n'
             '# edit = "allow"\n'
+            "\n"
+            "[bash]\n"
+            "deny = [\n"
+            "    # Delete the instance home.\n"
+            f"    '''{SHIPPED_BASH_DENY[0]}''',\n"
+            "    # Rewrite Git history.\n"
+            f"    '''{SHIPPED_BASH_DENY[1]}''',\n"
+            "    # Force-push Git history.\n"
+            f"    '''{SHIPPED_BASH_DENY[2]}''',\n"
+            "]\n"
+            "ask = []\n"
         ),
         encoding="utf-8",
     )

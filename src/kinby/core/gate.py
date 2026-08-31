@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +45,17 @@ def evaluate(
     workspace: Path,
 ) -> GateDecision:
     """Evaluate one call without running the tool or changing state."""
+    if (
+        mode is not PermissionMode.READ_ONLY
+        and call.name == "bash"
+        and isinstance(command := call.arguments.get("command"), str)
+    ):
+        for index, pattern in enumerate(policy.bash.deny):
+            if re.search(pattern, command):
+                return GateDecision(GateAction.DENY, f"bash.deny[{index}]")
+        for index, pattern in enumerate(policy.bash.ask):
+            if re.search(pattern, command):
+                return GateDecision(GateAction.ASK, f"bash.ask[{index}]")
     override = policy.tools.get(call.name)
     if override is not None:
         return GateDecision(override, f"tools.{call.name}")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -24,16 +25,47 @@ class GateAction(StrEnum):
     DENY = "deny"
 
 
+SHIPPED_BASH_DENY = (
+    r"(?:^|[;&|\n]\s*)rm\s+-rf\s+(?:/instance|\$\{?KINBY_INSTANCE\}?)(?:/|\s|$)",
+    r"\bgit\s+(?:reset\s+--hard|rebase|filter-branch)\b",
+    r"\bgit\s+push\b[^\n]*(?:--force(?:-with-lease)?|-f(?:\s|$))",
+)
+
+
+@dataclass(frozen=True)
+class BashPolicy:
+    deny: tuple[str, ...] = SHIPPED_BASH_DENY
+    ask: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class GatePolicy:
     mode: PermissionMode = PermissionMode.ASK
     ceiling: PermissionMode = PermissionMode.FULL_ACCESS
     tools: Mapping[str, GateAction] = field(default_factory=dict)
+    bash: BashPolicy = field(default_factory=BashPolicy)
 
 
 SHIPPED_POLICY = GatePolicy()
 _GATE_POLICY = TypeAdapter(GatePolicy)
-_POLICY_KEYS = frozenset({"mode", "ceiling", "tools"})
+_POLICY_KEYS = frozenset({"mode", "ceiling", "tools", "bash"})
+_BASH_KEYS = frozenset({"deny", "ask"})
+
+
+def validate_bash_regexes(
+    policy: GatePolicy,
+    *,
+    source: str = PERMISSIONS_NAME,
+) -> None:
+    """Reject invalid Bash patterns before the gate evaluates them."""
+    for tier, patterns in (("deny", policy.bash.deny), ("ask", policy.bash.ask)):
+        for index, pattern in enumerate(patterns):
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise PermissionsError(
+                    f"{source}: bash.{tier}.{index}: invalid regex: {exc}"
+                ) from exc
 
 
 def load_permissions(instance: Instance) -> GatePolicy:
@@ -50,6 +82,10 @@ def load_permissions(instance: Instance) -> GatePolicy:
     if unknown:
         key = min(unknown)
         raise PermissionsError(f"{PERMISSIONS_NAME}: {key}: Extra inputs are not permitted")
+    bash_values = values.get("bash")
+    if isinstance(bash_values, Mapping) and (unknown := bash_values.keys() - _BASH_KEYS):
+        key = min(unknown)
+        raise PermissionsError(f"{PERMISSIONS_NAME}: bash.{key}: Extra inputs are not permitted")
     try:
         policy = _GATE_POLICY.validate_python(values)
     except ValidationError as exc:
@@ -57,4 +93,5 @@ def load_permissions(instance: Instance) -> GatePolicy:
         key = ".".join(str(part) for part in first["loc"])
         message = first["msg"].removeprefix("Value error, ")
         raise PermissionsError(f"{PERMISSIONS_NAME}: {key}: {message}") from exc
+    validate_bash_regexes(policy)
     return policy
