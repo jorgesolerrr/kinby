@@ -26,7 +26,7 @@ class GateAction(StrEnum):
 
 
 SHIPPED_BASH_DENY = (
-    r"(?:^|[;&|]\s*)rm\s+-rf\s+(?:/instance|\$\{?KINBY_INSTANCE\}?)(?:/|\s|$)",
+    r"(?:^|[;&|\n]\s*)rm\s+-rf\s+(?:/instance|\$\{?KINBY_INSTANCE\}?)(?:/|\s|$)",
     r"\bgit\s+(?:reset\s+--hard|rebase|filter-branch)\b",
     r"\bgit\s+push\b[^\n]*(?:--force(?:-with-lease)?|-f(?:\s|$))",
 )
@@ -52,14 +52,19 @@ _POLICY_KEYS = frozenset({"mode", "ceiling", "tools", "bash"})
 _BASH_KEYS = frozenset({"deny", "ask"})
 
 
-def _validate_bash_regexes(policy: GatePolicy) -> None:
+def validate_bash_regexes(
+    policy: GatePolicy,
+    *,
+    source: str = PERMISSIONS_NAME,
+) -> None:
+    """Reject invalid Bash patterns before the gate evaluates them."""
     for tier, patterns in (("deny", policy.bash.deny), ("ask", policy.bash.ask)):
         for index, pattern in enumerate(patterns):
             try:
                 re.compile(pattern)
             except re.error as exc:
                 raise PermissionsError(
-                    f"{PERMISSIONS_NAME}: bash.{tier}.{index}: invalid regex: {exc}"
+                    f"{source}: bash.{tier}.{index}: invalid regex: {exc}"
                 ) from exc
 
 
@@ -88,5 +93,5 @@ def load_permissions(instance: Instance) -> GatePolicy:
         key = ".".join(str(part) for part in first["loc"])
         message = first["msg"].removeprefix("Value error, ")
         raise PermissionsError(f"{PERMISSIONS_NAME}: {key}: {message}") from exc
-    _validate_bash_regexes(policy)
+    validate_bash_regexes(policy)
     return policy

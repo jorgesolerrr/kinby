@@ -54,6 +54,7 @@ from kinby.instance.permissions import (
     GateAction,
     GatePolicy,
     load_permissions,
+    validate_bash_regexes,
 )
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
@@ -136,11 +137,14 @@ class LangGraphRunner:
     def prepare_for_turn(self) -> str:
         manifest = reload_manifest(self._instance, model_override=self._model_override)
         self._instance = replace(self._instance, manifest=manifest)
-        self._gate_policy = (
-            load_permissions(self._instance)
-            if self._gate_policy_override is None
-            else self._gate_policy_override
-        )
+        if self._gate_policy_override is None:
+            self._gate_policy = load_permissions(self._instance)
+        else:
+            validate_bash_regexes(
+                self._gate_policy_override,
+                source="gate policy override",
+            )
+            self._gate_policy = self._gate_policy_override
         return manifest.models.main
 
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult:

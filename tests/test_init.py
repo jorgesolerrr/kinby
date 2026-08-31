@@ -54,7 +54,7 @@ def test_init_writes_the_commented_permissions_template(tmp_path):
         "[bash]\n"
         "deny = [\n"
         "    # Delete the instance home.\n"
-        "    '''(?:^|[;&|]\\s*)rm\\s+-rf\\s+(?:/instance|\\$\\{?KINBY_INSTANCE"
+        "    '''(?:^|[;&|\\n]\\s*)rm\\s+-rf\\s+(?:/instance|\\$\\{?KINBY_INSTANCE"
         "\\}?)(?:/|\\s|$)''',\n"
         "    # Rewrite Git history.\n"
         "    '''\\bgit\\s+(?:reset\\s+--hard|rebase|filter-branch)\\b''',\n"

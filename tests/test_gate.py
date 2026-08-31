@@ -343,6 +343,7 @@ def bash(command: str, context: ToolContext) -> str:
     ("command", "rule"),
     [
         ("rm -rf /instance", "bash.deny[0]"),
+        ("printf x\nrm -rf /instance", "bash.deny[0]"),
         ("git reset --hard HEAD~1", "bash.deny[1]"),
         ("git push --force origin main", "bash.deny[2]"),
     ],
@@ -896,5 +897,19 @@ def test_malformed_bash_regex_fails_loudly_at_the_turn_boundary(tmp_path: Path) 
     with pytest.raises(
         PermissionsError,
         match=r"^permissions\.toml: bash\.ask\.0: invalid regex:",
+    ):
+        runner.prepare_for_turn()
+
+
+def test_malformed_injected_bash_regex_fails_at_the_turn_boundary(tmp_path: Path) -> None:
+    runner = LangGraphRunner(
+        _instance(tmp_path),
+        model_factory=lambda _: ScriptedModel([]),
+        gate_policy=GatePolicy(bash=BashPolicy(ask=("[",))),
+    )
+
+    with pytest.raises(
+        PermissionsError,
+        match=r"^gate policy override: bash\.ask\.0: invalid regex:",
     ):
         runner.prepare_for_turn()
