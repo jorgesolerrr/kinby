@@ -87,8 +87,7 @@ Emit = Callable[[Payload], Awaitable[Event]]
 
 
 class TurnRunner(Protocol):
-    def can_resume(self, turn: TurnRequest) -> bool: ...
-    async def discard(self, turn: TurnRequest) -> None: ...
+    async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None: ...
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult: ...
     async def resume(
         self,
@@ -103,6 +102,14 @@ class RunningTurn:
     request: TurnRequest
     task: asyncio.Task[None]
     interrupted: bool = False
+
+
+class TurnClaim:
+    pass
+
+
+class InterruptedTurnClaim:
+    pass
 
 
 class Turns:
@@ -120,14 +127,14 @@ class Turns:
         self._prepare_for_turn = prepare_for_turn
         self._permission_ceiling = permission_ceiling
         self._running: dict[UUID, RunningTurn] = {}
-        self._starting: set[UUID] = set()
+        self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim] = {}
 
     async def set_mode(self, command: ThreadModeSetCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
         events = self._log.stored(command.thread_id)
         running = self._running.get(command.thread_id)
         active = running is not None and not running.task.done()
-        if command.thread_id in self._starting or active or _pending_approval(events) is not None:
+        if command.thread_id in self._claims or active or _pending_approval(events) is not None:
             raise _thread_busy(command.thread_id)
         ceiling = self._permission_ceiling()
         if _exceeds_ceiling(command.mode, ceiling):
@@ -148,10 +155,11 @@ class Turns:
         pending = _pending_approval(events)
         running = self._running.get(command.thread_id)
         active = running is not None and not running.task.done()
-        if command.thread_id in self._starting or active or pending is not None:
+        if command.thread_id in self._claims or active or pending is not None:
             raise _thread_busy(command.thread_id)
 
-        self._starting.add(command.thread_id)
+        claim = TurnClaim()
+        self._claims[command.thread_id] = claim
         try:
             preparation = self._prepare_for_turn()
             turn = TurnRequest(
@@ -175,7 +183,7 @@ class Turns:
                 ),
             )
         finally:
-            self._starting.remove(command.thread_id)
+            self._release_claim(command.thread_id, claim)
         self._spawn(turn, self._run(turn))
         return AcceptedResult(
             thread_id=turn.thread_id,
@@ -186,7 +194,10 @@ class Turns:
     async def interrupt(self, command: ThreadTurnInterruptCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
         running = self._running.get(command.thread_id)
+        claim: InterruptedTurnClaim
         if running is not None and not running.task.done() and not running.interrupted:
+            claim = InterruptedTurnClaim()
+            self._claims[command.thread_id] = claim
             running.interrupted = True
             running.task.cancel()
             turn_id = running.request.turn_id
@@ -195,19 +206,19 @@ class Turns:
             if pending is None:
                 raise _no_active_turn(command.thread_id)
             turn_id = pending.event.turn_id
-            default_mode = self._prepare_for_turn().default_mode
-            turn = _restore_parked_turn(
-                self._log.stored(command.thread_id),
-                pending,
-                default_mode,
-            )
-            await self._runner.discard(turn)
+            if isinstance(self._claims.get(command.thread_id), InterruptedTurnClaim):
+                raise _no_active_turn(command.thread_id)
+            claim = InterruptedTurnClaim()
+            self._claims[command.thread_id] = claim
 
-        interrupted = await self._log.append(
-            command.thread_id,
-            turn_id,
-            TurnInterrupted(),
-        )
+        try:
+            interrupted = await self._log.append(
+                command.thread_id,
+                turn_id,
+                TurnInterrupted(),
+            )
+        finally:
+            self._release_claim(command.thread_id, claim)
         if running is not None and self._running.get(command.thread_id) is running:
             del self._running[command.thread_id]
         return AcceptedResult(
@@ -230,21 +241,30 @@ class Turns:
         if pending is None or pending.request.approval_id != command.approval_id:
             raise ApprovalNotFound(f'Approval "{command.approval_id}" was not found.')
         running = self._running.get(command.thread_id)
-        if running is not None and not running.task.done():
+        if command.thread_id in self._claims or (running is not None and not running.task.done()):
             raise _thread_busy(command.thread_id)
-        preparation = self._prepare_for_turn()
-        turn = _restore_parked_turn(events, pending, preparation.default_mode)
-        turn = replace(
-            turn,
-            permission_mode=_constrain_mode(
-                turn.permission_mode,
-                preparation.ceiling,
-            ),
-        )
-        if not self._runner.can_resume(turn):
-            raise InvalidParkedTurn("The parked turn cannot resume after a runtime restart.")
-        decision = ApprovalDecision.APPROVE if command.answer == "yes" else ApprovalDecision.DENY
-        self._spawn(turn, self._resume(turn, decision))
+        claim = TurnClaim()
+        self._claims[command.thread_id] = claim
+        try:
+            preparation = self._prepare_for_turn()
+            turn = await self._runner.restore(pending.event.thread_id, pending.event.turn_id)
+            if self._claims.get(command.thread_id) is not claim:
+                raise _no_active_turn(command.thread_id)
+            if turn is None:
+                raise InvalidParkedTurn("The parked turn cannot resume after a runtime restart.")
+            turn = replace(
+                turn,
+                permission_mode=_constrain_mode(
+                    turn.permission_mode,
+                    preparation.ceiling,
+                ),
+            )
+            decision = (
+                ApprovalDecision.APPROVE if command.answer == "yes" else ApprovalDecision.DENY
+            )
+            self._spawn(turn, self._resume(turn, decision))
+        finally:
+            self._release_claim(command.thread_id, claim)
         # respond appends no event, so approval.requested is the resume cursor.
         return AcceptedResult(
             thread_id=turn.thread_id,
@@ -255,6 +275,14 @@ class Turns:
     def _require_thread(self, thread_id: UUID) -> None:
         if not self._store.exists(thread_id):
             raise ThreadNotFound(f'Thread "{thread_id}" was not found.')
+
+    def _release_claim(
+        self,
+        thread_id: UUID,
+        claim: TurnClaim | InterruptedTurnClaim,
+    ) -> None:
+        if self._claims.get(thread_id) is claim:
+            del self._claims[thread_id]
 
     def _spawn(self, turn: TurnRequest, work: Coroutine[object, object, None]) -> None:
         task = asyncio.create_task(work)
@@ -281,18 +309,15 @@ class Turns:
         try:
             outcome = await run(emit)
         except CoreError as exc:
-            await self._runner.discard(turn)
             code = exc.code
             message = str(exc)
         except Exception:
-            await self._runner.discard(turn)
             logger.exception("The model turn failed.")
             code = ErrorCode.INTERNAL
             message = "The model turn failed unexpectedly."
         else:
             if isinstance(outcome, ParkedTurn):
                 return
-            await self._runner.discard(turn)
             await emit(
                 TurnCompleted(
                     input_tokens=outcome.input_tokens,
@@ -343,32 +368,6 @@ def _constrain_mode(mode: PermissionMode, ceiling: PermissionMode) -> Permission
 
 def _exceeds_ceiling(mode: PermissionMode, ceiling: PermissionMode) -> bool:
     return _MODE_ORDER.index(mode) > _MODE_ORDER.index(ceiling)
-
-
-def _restore_parked_turn(
-    events: Sequence[Event],
-    pending: PendingApproval,
-    default_mode: PermissionMode,
-) -> TurnRequest:
-    started = next(
-        (
-            event.payload
-            for event in reversed(events)
-            if event.turn_id == pending.event.turn_id and isinstance(event.payload, TurnStarted)
-        ),
-        None,
-    )
-    if started is None:
-        raise InvalidParkedTurn("The parked turn is missing turn.started.")
-    return TurnRequest(
-        thread_id=pending.event.thread_id,
-        turn_id=pending.event.turn_id,
-        message=started.message,
-        model=started.model,
-        permission_mode=(
-            started.permission_mode if started.permission_mode is not None else default_mode
-        ),
-    )
 
 
 def _thread_busy(thread_id: UUID) -> ThreadBusy:

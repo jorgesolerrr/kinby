@@ -22,6 +22,7 @@ from kinby.contracts import (
 from kinby.core import LangGraphRunner, TurnConfig, build_dispatcher, turn_config
 from kinby.core.turns import TurnOutcome, TurnPreparation, TurnRequest
 from kinby.instance import Instance, load_instance
+from tests.helpers import GRAPH_EVENT_TIMEOUT
 
 _MODEL = "openai:gpt-5"
 
@@ -140,7 +141,10 @@ def test_runner_reloads_the_instance_model_between_turns(
                 {"thread_id": created.id, "after_sequence": after_sequence},
                 {Scope.THREAD_READ},
             )
-            events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(3)]
+            events = [
+                await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
+                for _ in range(3)
+            ]
             await subscription.aclose()
             started = events[0]
             assert isinstance(started, Event)
@@ -283,6 +287,42 @@ def test_runner_keeps_thread_messages_between_turns(tmp_path: Path) -> None:
             )
 
         for message in ("First", "Second"):
+            await runner.run(
+                TurnRequest(
+                    thread_id=thread_id,
+                    turn_id=uuid4(),
+                    message=message,
+                    model=_MODEL,
+                    permission_mode=PermissionMode.ASK,
+                ),
+                emit,
+            )
+
+        assert model.histories == [
+            ["First"],
+            ["First", "First reply", "Second"],
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_runner_keeps_thread_messages_after_restart(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _load_test_instance(tmp_path)
+        model = RememberingChatModel()
+        thread_id = uuid4()
+
+        async def emit(payload: Payload) -> Event:
+            return Event(
+                sequence=1,
+                thread_id=thread_id,
+                turn_id=uuid4(),
+                payload=payload,
+                timestamp=datetime.now(UTC),
+            )
+
+        for message in ("First", "Second"):
+            runner = LangGraphRunner(instance, model_factory=lambda _: model)
             await runner.run(
                 TurnRequest(
                     thread_id=thread_id,

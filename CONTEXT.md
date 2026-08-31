@@ -89,6 +89,10 @@ A usage range includes completed turns whose event timestamp falls on or between
 
 The part of the runtime that produces the agent's response and the turn's events.
 
+### Graph checkpoint
+
+The turn runner's durable working state for a thread. It lets a parked approval resume after a process restart and carries completed thread state across turns. The **transcript store** remains the canonical conversation record.
+
 ### Approval
 
 A user decision a live turn waits on before it continues. Requested as an event; answered through the contract. A parked turn stays live until the user answers or the turn is interrupted.

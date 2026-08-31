@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from kinby.contracts import PermissionMode
 from kinby.core.turns import (
     ApprovalDecision,
@@ -6,6 +8,8 @@ from kinby.core.turns import (
     TurnPreparation,
     TurnRequest,
 )
+
+GRAPH_EVENT_TIMEOUT: float = 5
 
 
 def fixed_turn_preparation() -> TurnPreparation:
@@ -20,12 +24,12 @@ def fixed_permission_ceiling() -> PermissionMode:
     return PermissionMode.FULL_ACCESS
 
 
-def cannot_resume(self: object, turn: TurnRequest) -> bool:
-    return False
-
-
-async def discard_turn(self: object, turn: TurnRequest) -> None:
-    pass
+async def cannot_restore(
+    self: object,
+    thread_id: UUID,
+    turn_id: UUID,
+) -> TurnRequest | None:
+    return None
 
 
 async def does_not_park(

@@ -22,8 +22,7 @@ from kinby.contracts import (
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.turns import ApprovalDecision, Emit, ParkedTurn, TurnOutcome, TurnRequest
 from tests.helpers import (
-    cannot_resume,
-    discard_turn,
+    cannot_restore,
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
@@ -41,8 +40,7 @@ class ReplRunner:
         return TurnOutcome()
 
     resume = does_not_park
-    can_resume = cannot_resume
-    discard = discard_turn
+    restore = cannot_restore
 
 
 class InterruptibleReplRunner:
@@ -59,8 +57,7 @@ class InterruptibleReplRunner:
         return TurnOutcome()
 
     resume = does_not_park
-    can_resume = cannot_resume
-    discard = discard_turn
+    restore = cannot_restore
 
 
 class ToolEventRunner:
@@ -84,22 +81,26 @@ class ToolEventRunner:
         return TurnOutcome()
 
     resume = does_not_park
-    can_resume = cannot_resume
-    discard = discard_turn
+    restore = cannot_restore
 
 
 class ApprovalReplRunner:
     def __init__(self) -> None:
         self.decisions: list[ApprovalDecision] = []
         self.parked = asyncio.Event()
+        self.parked_turn: TurnRequest | None = None
 
-    def can_resume(self, turn: TurnRequest) -> bool:
-        return True
-
-    async def discard(self, turn: TurnRequest) -> None:
-        pass
+    async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None:
+        if (
+            self.parked_turn is not None
+            and self.parked_turn.thread_id == thread_id
+            and self.parked_turn.turn_id == turn_id
+        ):
+            return self.parked_turn
+        return None
 
     async def run(self, turn: TurnRequest, emit: Emit) -> ParkedTurn:
+        self.parked_turn = turn
         await emit(
             ApprovalRequested(
                 approval_id=UUID("11111111-1111-1111-1111-111111111111"),

@@ -24,8 +24,7 @@ from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.turns import Emit, TurnOutcome, TurnRequest
 from kinby.instance import init_instance, load_instance
 from tests.helpers import (
-    cannot_resume,
-    discard_turn,
+    cannot_restore,
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
@@ -47,8 +46,7 @@ class UsageRunner:
         )
 
     resume = does_not_park
-    can_resume = cannot_resume
-    discard = discard_turn
+    restore = cannot_restore
 
 
 @dataclass(frozen=True)
