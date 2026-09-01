@@ -225,6 +225,8 @@ def test_fresh_instance_binds_the_default_tools(tmp_path: Path) -> None:
             "edit",
             "glob",
             "grep",
+            "memory_open",
+            "memory_search",
             "read",
             "skill",
             "write",
@@ -285,8 +287,8 @@ def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypa
 
         assert groups == ["kinby.tools"]
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
-            ["packaged", "skill"],
-            ["packaged", "skill"],
+            ["memory_open", "memory_search", "packaged", "skill"],
+            ["memory_open", "memory_search", "packaged", "skill"],
         ]
 
     asyncio.run(scenario())
@@ -356,8 +358,8 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
         )
         assert warnings_again == warnings
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
-            ["available", "skill"],
-            ["available", "skill"],
+            ["available", "memory_open", "memory_search", "skill"],
+            ["available", "memory_open", "memory_search", "skill"],
         ]
 
     asyncio.run(scenario())
@@ -392,7 +394,12 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
 
         await _start_turn(instance, model)
 
-        assert [tool.name for tool in model.bound_tools[0]] == ["packaged", "skill"]
+        assert [tool.name for tool in model.bound_tools[0]] == [
+            "memory_open",
+            "memory_search",
+            "packaged",
+            "skill",
+        ]
 
     asyncio.run(scenario())
 
@@ -413,7 +420,9 @@ def test_manifest_can_disable_default_tools(tmp_path: Path) -> None:
         await _start_turn(instance, model)
 
         assert asdict(instance.manifest)["tools"] == {"defaults": False}
-        assert [[tool.name for tool in turn] for turn in model.bound_tools] == [["skill"]]
+        assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
+            ["memory_open", "memory_search", "skill"]
+        ]
 
     asyncio.run(scenario())
 
@@ -434,6 +443,8 @@ def test_broken_instance_tool_keeps_default_tools_on_the_first_turn(tmp_path: Pa
             "edit",
             "glob",
             "grep",
+            "memory_open",
+            "memory_search",
             "read",
             "skill",
             "write",
@@ -818,7 +829,12 @@ def greet(name: str) -> str:
         events = await _start_turn(instance, model)
 
         assert len(model.bound_tools) == 1
-        assert [tool.name for tool in model.bound_tools[0]] == ["greet", "skill"]
+        assert [tool.name for tool in model.bound_tools[0]] == [
+            "greet",
+            "memory_open",
+            "memory_search",
+            "skill",
+        ]
         bound = next(tool for tool in model.bound_tools[0] if tool.name == "greet")
         assert bound.description == "Greet someone by name."
         assert bound.args == {"name": {"title": "Name", "type": "string"}}
@@ -1152,7 +1168,13 @@ def {tool_name}() -> str:
 
         await _start_turn(instance, model)
 
-        assert [tool.name for tool in model.bound_tools[0]] == ["alpha", "skill", "zulu"]
+        assert [tool.name for tool in model.bound_tools[0]] == [
+            "alpha",
+            "memory_open",
+            "memory_search",
+            "skill",
+            "zulu",
+        ]
 
     asyncio.run(scenario())
 
@@ -1195,7 +1217,11 @@ def test_instance_skill_is_catalogued_and_skill_tool_is_bound(tmp_path: Path) ->
             "- planning: Plan work before changing files."
         ) in system_message.text
         assert "These are the detailed planning instructions." not in system_message.text
-        assert [tool.name for tool in model.bound_tools[0]] == ["skill"]
+        assert [tool.name for tool in model.bound_tools[0]] == [
+            "memory_open",
+            "memory_search",
+            "skill",
+        ]
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert result == ToolResult(
             call_id="skill-1",
@@ -1662,9 +1688,23 @@ def version() -> str:
             if isinstance(event.payload, ToolResult)
         ]
         assert results == ["one", "two"]
-        assert [tool.name for tool in model.bound_tools[0]] == ["skill", "version"]
-        assert [tool.name for tool in model.bound_tools[1]] == ["skill", "version"]
-        assert [tool.name for tool in model.bound_tools[2]] == ["skill"]
+        assert [tool.name for tool in model.bound_tools[0]] == [
+            "memory_open",
+            "memory_search",
+            "skill",
+            "version",
+        ]
+        assert [tool.name for tool in model.bound_tools[1]] == [
+            "memory_open",
+            "memory_search",
+            "skill",
+            "version",
+        ]
+        assert [tool.name for tool in model.bound_tools[2]] == [
+            "memory_open",
+            "memory_search",
+            "skill",
+        ]
         assert not any(isinstance(event.payload, ToolCall) for event in third)
 
     asyncio.run(scenario())
@@ -1733,7 +1773,12 @@ def fresh() -> str:
             (str(path),) for path in sorted(broken)
         ]
         assert all("SyntaxError" in warning.message for warning in warnings)
-        assert [tool.name for tool in model.bound_tools[1]] == ["skill", "stable"]
+        assert [tool.name for tool in model.bound_tools[1]] == [
+            "memory_open",
+            "memory_search",
+            "skill",
+            "stable",
+        ]
         repeated = [event.payload for event in again if isinstance(event.payload, Warning)]
         assert [warning.sources for warning in repeated] == [
             (str(path),) for path in sorted(broken)

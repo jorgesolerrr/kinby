@@ -10,6 +10,7 @@ from kinby.instance.errors import InstanceExistsError
 from kinby.instance.layout import (
     ENV_NAME,
     GITIGNORE_NAME,
+    GRAPH_DIR,
     MANIFEST_NAME,
     MEMORY_DIR,
     PERMISSIONS_NAME,
@@ -116,6 +117,7 @@ def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
         ),
         encoding="utf-8",
     )
+    (directory / MEMORY_DIR / GRAPH_DIR).mkdir(exist_ok=True)
     (directory / GITIGNORE_NAME).write_text(
         (f"# Runtime state and local secrets stay off git.\n{STATE_DIR}/\n{ENV_NAME}\n"),
         encoding="utf-8",

@@ -37,8 +37,9 @@ from kinby.instance import (
     init_instance,
     load_instance,
 )
+from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
-from kinby.plugins.skills import load_skills, skill_tool
+from kinby.plugins.skills import load_skills
 
 
 def _add_instance_selector(parser: argparse.ArgumentParser, help_text: str) -> None:
@@ -89,7 +90,7 @@ def _print_turn_inputs(instance: Instance) -> None:
     sections = assemble_system_prompt(instance, skills, date.today())
     registry = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults)
     discovered_tools, tool_warnings = registry.refresh()
-    tools, core_tool_warnings = discovered_tools.with_core(skill_tool(skills))
+    tools, core_tool_warnings = discovered_tools.with_core(*core_tools(instance, skills))
 
     print("tools:")
     for tool in tools.tools:

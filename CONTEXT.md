@@ -30,11 +30,11 @@ The life wiki: entities, episodes, and time-stamped facts about the user's life 
 
 ### Episode
 
-One distilled record in the **knowledge graph** of a task or conversation: what happened, what was decided, and the trace of what the agent did — the tools used and the path taken — so a later turn on the same problem can reuse or improve that path. Distilled from a **thread** at end of task.
+One distilled record in the **knowledge graph** of a task or conversation: what happened, what was decided, and the tools and path the agent used. It comes from a **thread** at the end of a task and lets later work reuse or improve that path.
 
 ### Fact
 
-An atomic, timestamped statement in the **knowledge graph**, recorded the moment it is learned. Whether a fact is current resolves by recency: the latest fact about a subject wins.
+An atomic, timestamped statement in the **knowledge graph**, recorded when it is learned. Recency decides which fact is current: the latest fact about a subject wins.
 
 ### Transcript store
 
@@ -42,19 +42,19 @@ The canonical record of every conversation with the agent. The knowledge graph i
 
 ### Reasoning trace
 
-The record of the agent's reasoning and actions for a task. Its canonical raw form is the **transcript store**'s events; its distilled form lives in the **episode** for that task. The third of the three memories.
+The third memory records the agent's reasoning and actions for a task. The **transcript store** holds its canonical raw form, while an **episode** holds its distilled form in long-term memory.
 
 ### Memory facade
 
-The single surface through which anything recalls, remembers, or forgets. Core code calls it directly; the model reaches it only through **memory tools**. One facade, one implementation, however many **feeds** sit behind it.
+The single interface through which kinby recalls, opens, remembers, and forgets. Core callers and **memory tools** share one implementation and stay independent from the **feeds** behind it.
 
 ### Feed
 
-One retrieval implementation behind the **memory facade**: the **profile** file, the **knowledge graph**, or the RAG index over the **transcript store**. Feeds are built incrementally, each earning its place through evals before the next is started.
+One source of memory behind the **memory facade**, such as the **profile**, the **knowledge graph**, or a RAG index over the **transcript store**. Each feed must pass its evals before kinby adds the next one.
 
 ### Memory tool
 
-A core **tool** that exposes the **memory facade** to the model. Reading memory is a read tool; remembering and forgetting are write tools the **gate** governs like any other.
+A core **tool** that exposes the **memory facade** to the model. Search and open are read tools, while remember and forget are write tools governed by the **gate**.
 
 ### Ingestion pipeline
 

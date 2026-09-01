@@ -57,9 +57,10 @@ from kinby.instance.permissions import (
     load_permissions,
     validate_bash_regexes,
 )
+from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
-from kinby.plugins.skills import load_skills, skill_tool
+from kinby.plugins.skills import load_skills
 from kinby.plugins.tools import ToolContext
 
 _TOOL_ARGUMENTS = TypeAdapter(dict[str, JsonValue])
@@ -200,7 +201,7 @@ class LangGraphRunner:
         skills, skill_warnings = load_skills(self._instance)
         sections = assemble_system_prompt(self._instance, skills, date.today())
         discovered_tools, tool_warnings = self._tools.refresh()
-        tools, core_tool_warnings = discovered_tools.with_core(skill_tool(skills))
+        tools, core_tool_warnings = discovered_tools.with_core(*core_tools(self._instance, skills))
         for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
             await emit(warning)
         model = self._model_factory(turn.model)

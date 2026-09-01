@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import NewType
 
 from kinby.contracts import Warning
-from kinby.frontmatter import FrontmatterError, parse_frontmatter
+from kinby.frontmatter import (
+    FrontmatterError,
+    FrontmatterFieldError,
+    parse_frontmatter,
+    required_string,
+)
 from kinby.instance import Instance
 from kinby.instance.layout import SKILL_FILE, SKILLS_DIR
 from kinby.plugins.tools import Tool, tool
@@ -80,12 +85,11 @@ def _load_skill(path: Path) -> Skill:
         values, body = parse_frontmatter(path.read_text(encoding="utf-8"))
     except FrontmatterError as exc:
         raise SkillFrontmatterError("Skill frontmatter is missing.") from exc
-    name = values.get("name")
-    if not isinstance(name, str) or not name:
-        raise SkillFrontmatterError('Skill frontmatter must contain "name".')
-    description = values.get("description")
-    if not isinstance(description, str) or not description:
-        raise SkillFrontmatterError('Skill frontmatter must contain "description".')
+    try:
+        name = required_string(values, "name")
+        description = required_string(values, "description")
+    except FrontmatterFieldError as exc:
+        raise SkillFrontmatterError(f'Skill frontmatter must contain "{exc.key}".') from exc
     return Skill(
         name=SkillName(name),
         description=SkillDescription(description),

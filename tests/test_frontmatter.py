@@ -1,4 +1,6 @@
-from kinby.frontmatter import parse_frontmatter
+import pytest
+
+from kinby.frontmatter import FrontmatterFieldError, parse_frontmatter, required_string
 
 
 def test_parse_frontmatter_reads_plain_values_and_body() -> None:
@@ -30,3 +32,8 @@ Decision details.
     frontmatter, _ = parse_frontmatter(document)
 
     assert frontmatter["subjects"] == ["eval harness", "Inspect AI"]
+
+
+def test_required_string_rejects_a_non_string_field() -> None:
+    with pytest.raises(FrontmatterFieldError, match='must contain a non-empty "name"'):
+        required_string({"name": ["planning"]}, "name")
