@@ -28,13 +28,33 @@ The human-legible record of the user's preferences, persona settings, and standi
 
 The life wiki: entities, episodes, and time-stamped facts about the user's life — drawn from documents, emails, and other content the user grants the agent, plus facts distilled from conversation. Queried by the agent on demand (never auto-injected); answers "search my life" and "what happened on X day". Retires the earlier term *memory graph*.
 
+### Episode
+
+One distilled record in the **knowledge graph** of a task or conversation: what happened, what was decided, and the trace of what the agent did — the tools used and the path taken — so a later turn on the same problem can reuse or improve that path. Distilled from a **thread** at end of task.
+
+### Fact
+
+An atomic, timestamped statement in the **knowledge graph**, recorded the moment it is learned. Whether a fact is current resolves by recency: the latest fact about a subject wins.
+
 ### Transcript store
 
 The canonical record of every conversation with the agent. The knowledge graph is derived from canonical sources like this one, never the reverse.
 
 ### Reasoning trace
 
-An append-only log of the agent's reasoning steps for a task, linkable to both short- and long-term memory. The third of the three memories.
+The record of the agent's reasoning and actions for a task. Its canonical raw form is the **transcript store**'s events; its distilled form lives in the **episode** for that task. The third of the three memories.
+
+### Memory facade
+
+The single surface through which anything recalls, remembers, or forgets. Core code calls it directly; the model reaches it only through **memory tools**. One facade, one implementation, however many **feeds** sit behind it.
+
+### Feed
+
+One retrieval implementation behind the **memory facade**: the **profile** file, the **knowledge graph**, or the RAG index over the **transcript store**. Feeds are built incrementally, each earning its place through evals before the next is started.
+
+### Memory tool
+
+A core **tool** that exposes the **memory facade** to the model. Reading memory is a read tool; remembering and forgetting are write tools the **gate** governs like any other.
 
 ### Ingestion pipeline
 
@@ -43,6 +63,10 @@ The path content travels into the knowledge graph: the user drops or uploads an 
 ### Backfill
 
 A user-initiated, explicitly scoped ingestion of historical content (a folder, a date range, a label) — as opposed to the default incremental ingestion of new items as they arrive.
+
+### Tombstone
+
+The suppression marker a forget leaves behind. The **knowledge graph** is derived from canonical sources, so deletion alone would let a fact resurrect on re-ingestion; the **ingestion pipeline** never re-derives a tombstoned fact. The **transcript store** itself is never rewritten.
 
 ### Instance
 
