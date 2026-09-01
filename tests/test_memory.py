@@ -2,7 +2,17 @@ from datetime import date
 from pathlib import Path
 from uuid import UUID
 
-from kinby.memory import Episode, Fact, GraphStore, Memory, MemoryHit, NodeId
+import pytest
+
+from kinby.memory import (
+    Episode,
+    Fact,
+    GraphStore,
+    Memory,
+    MemoryHit,
+    MemoryNodeError,
+    NodeId,
+)
 
 _THREAD_ID = UUID("11111111-1111-1111-1111-111111111111")
 
@@ -182,3 +192,69 @@ def test_recall_caps_matching_nodes_at_twenty(tmp_path: Path) -> None:
     assert len(memories) == 20
     assert memories[0].node == NodeId("2026-08-25-memory-note")
     assert memories[-1].node == NodeId("2026-08-06-memory-note")
+
+
+def test_remember_writes_a_fact_that_later_recall_finds(tmp_path: Path) -> None:
+    node = NodeId("2026-09-01-picked-markdown")
+    fact = Fact(
+        node=node,
+        date=date(2026, 9, 1),
+        thread=_THREAD_ID,
+        description="Picked markdown for memory",
+        subjects=("memory backend", "kinby"),
+        body="The memory backend uses markdown until evals justify a database.",
+    )
+    events_path = tmp_path / ".state" / "events.jsonl"
+    events_path.parent.mkdir()
+    events_path.write_bytes(b"canonical transcript\n")
+    memory = _graph_store(tmp_path)
+
+    remembered = memory.remember(fact)
+
+    assert remembered == node
+    assert memory.recall("memory backend") == (
+        MemoryHit(
+            node=node,
+            date=date(2026, 9, 1),
+            description="Picked markdown for memory",
+        ),
+    )
+    assert memory.open(node) == fact
+    assert (tmp_path / "memory" / "graph" / f"{node}.md").read_text(encoding="utf-8") == (
+        "---\n"
+        "date: 2026-09-01\n"
+        f"thread: {_THREAD_ID}\n"
+        "description: Picked markdown for memory\n"
+        "subjects: [memory backend, kinby]\n"
+        "---\n"
+        "The memory backend uses markdown until evals justify a database.\n"
+    )
+    assert events_path.read_bytes() == b"canonical transcript\n"
+
+
+def test_forget_tombstones_a_fact_and_excludes_it_from_recall_and_open(
+    tmp_path: Path,
+) -> None:
+    node = NodeId("2026-09-01-picked-markdown")
+    _write_node(
+        tmp_path,
+        node_id=node,
+        node_date="2026-09-01",
+        description="Picked markdown for memory",
+        subjects="memory backend, kinby",
+        body="The memory backend uses markdown until evals justify a database.",
+    )
+    events_path = tmp_path / ".state" / "events.jsonl"
+    events_path.parent.mkdir()
+    events_path.write_bytes(b"canonical transcript\n")
+    node_path = tmp_path / "memory" / "graph" / f"{node}.md"
+    memory = _graph_store(tmp_path)
+
+    memory.forget(node)
+
+    assert node_path.is_file()
+    assert "tombstone: true\n" in node_path.read_text(encoding="utf-8")
+    assert memory.recall("memory backend") == ()
+    with pytest.raises(MemoryNodeError, match="was forgotten"):
+        memory.open(node)
+    assert events_path.read_bytes() == b"canonical transcript\n"

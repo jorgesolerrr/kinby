@@ -31,7 +31,7 @@ def _docker_is_available() -> bool:
         result = _docker("info", "--format", "{{.ServerVersion}}", check=False, timeout=10)
     except OSError, subprocess.TimeoutExpired:
         return False
-    return result.returncode == 0
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 @pytest.mark.skipif(not _docker_is_available(), reason="Docker daemon is not available")
