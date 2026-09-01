@@ -30,7 +30,7 @@ The life wiki: entities, episodes, and time-stamped facts about the user's life 
 
 ### Episode
 
-One distilled record in the **knowledge graph** of a task or conversation: what happened, what was decided, and the tools and path the agent used. It comes from a **thread** at the end of a task and lets later work reuse or improve that path.
+One distilled record in the **knowledge graph** of a single **turn**: what happened, what was decided, what should have gone differently, and the tools and path the agent used. Written by the **recap** and lets later work reuse or improve that path.
 
 ### Fact
 
@@ -94,11 +94,12 @@ One conversation with its own durable history. Survives across sessions; can be 
 
 ### Session
 
-One run of the agent loop against a thread, from start to exit (a process, a REPL open–close). Ephemeral; the unit a server wraps. A session contains one or more **turns**.
+One run of the agent loop against a thread, from start to exit (a process, a REPL open–close). Ephemeral; the unit a server wraps. A session contains one or more **turns**. Not a model call: a turn makes one or more model calls, and the **recap** makes one more after it.
 
 ### Turn
 
-One user-to-agent cycle within a thread: from a user message until the agent yields control back. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases.
+One user-to-agent cycle within a thread: from a user message until the agent yields control back. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases. A turn is also the unit of work: what the user calls a task is a turn, and each turn earns at most one **episode**.
+_Avoid_: task
 
 ### Turn interruption
 
@@ -112,6 +113,18 @@ A usage range includes completed turns whose event timestamp falls on or between
 ### Turn runner
 
 The part of the runtime that produces the agent's response and the turn's events.
+
+### Recap
+
+The model call the runtime makes after a **turn** ends, and the writing it does: it distills that turn's events into one **episode**, or decides the turn is not worth keeping. It runs outside the turn, never delays the next one, and never writes **facts**.
+
+### Recap policy
+
+The **instance** setting that says whether the **recap** runs after every turn or not at all.
+
+### Recap prompt
+
+The instance's own instructions to the **recap** model: what a retrospective means for this agent. Kinby supplies the frame and a default lens; the instance may replace the lens. A **behavior prompt** for the recap.
 
 ### Graph checkpoint
 
