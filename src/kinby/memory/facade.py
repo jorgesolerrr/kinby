@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
-from typing import NewType, Protocol
-from uuid import UUID
+from typing import Protocol
+from uuid import UUID, uuid7
 
-NodeId = NewType("NodeId", str)
+from kinby.contracts import NodeId
 
 
 @dataclass(frozen=True)
@@ -38,8 +39,9 @@ class Fact(_MemoryNode):
 
 @dataclass(frozen=True)
 class Episode(_MemoryNode):
-    """One opened task record with its tool trace."""
+    """One opened turn record with its tool trace."""
 
+    turn: UUID
     tools: tuple[str, ...]
 
 
@@ -62,3 +64,10 @@ class Memory(Protocol):
     def remember(self, memory: MemoryNode) -> NodeId: ...
 
     def forget(self, node: NodeId) -> None: ...
+
+
+def new_node_id(recorded_on: date, description: str) -> NodeId:
+    """Create a readable, chronologically sortable graph node id."""
+    slug = re.sub(r"[^a-z0-9]+", "-", description.casefold()).strip("-")
+    readable = (slug or "fact")[:64].rstrip("-")
+    return NodeId(f"{recorded_on.isoformat()}-{uuid7().hex}-{readable}")

@@ -15,6 +15,7 @@ from kinby.memory import (
 )
 
 _THREAD_ID = UUID("11111111-1111-1111-1111-111111111111")
+_TURN_ID = UUID("22222222-2222-2222-2222-222222222222")
 
 
 def _write_node(
@@ -26,15 +27,18 @@ def _write_node(
     subjects: str,
     body: str,
     tools: str | None = None,
+    turn: UUID | None = None,
 ) -> None:
     graph_path = instance_path / "memory" / "graph"
     graph_path.mkdir(parents=True, exist_ok=True)
     tools_line = f"tools: [{tools}]\n" if tools is not None else ""
+    turn_line = f"turn: {turn}\n" if turn is not None else ""
     (graph_path / f"{node_id}.md").write_text(
         (
             "---\n"
             f"date: {node_date}\n"
             f"thread: {_THREAD_ID}\n"
+            f"{turn_line}"
             f"description: {description}\n"
             f"subjects: [{subjects}]\n"
             f"{tools_line}"
@@ -117,6 +121,7 @@ def test_episode_is_searchable_and_opens_with_its_trace(tmp_path: Path) -> None:
         description="Fixed the deployment",
         subjects="kinby, deployment",
         tools="grep, bash, edit",
+        turn=_TURN_ID,
         body="Found the stale image tag, rebuilt the image, then restarted the container.",
     )
     memory = _graph_store(tmp_path)
@@ -129,11 +134,28 @@ def test_episode_is_searchable_and_opens_with_its_trace(tmp_path: Path) -> None:
         node=node,
         date=date(2026, 8, 30),
         thread=_THREAD_ID,
+        turn=_TURN_ID,
         description="Fixed the deployment",
         subjects=("kinby", "deployment"),
         tools=("grep", "bash", "edit"),
         body="Found the stale image tag, rebuilt the image, then restarted the container.",
     )
+
+
+def test_episode_frontmatter_requires_a_turn(tmp_path: Path) -> None:
+    node = NodeId("2026-08-30-missing-turn")
+    _write_node(
+        tmp_path,
+        node_id=node,
+        node_date="2026-08-30",
+        description="Missing the episode turn",
+        subjects="kinby, memory",
+        tools="bash",
+        body="Ran the tests.",
+    )
+
+    with pytest.raises(MemoryNodeError, match="invalid frontmatter"):
+        _graph_store(tmp_path).open(node)
 
 
 def test_latest_fact_about_a_subject_wins(tmp_path: Path) -> None:

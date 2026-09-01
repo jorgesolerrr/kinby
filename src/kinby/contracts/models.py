@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, NewType
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
+
+NodeId = NewType("NodeId", str)
 
 
 class ContractModel(BaseModel):
@@ -58,6 +60,7 @@ class EventType(StrEnum):
     TURN_COMPLETED = "turn.completed"
     TURN_FAILED = "turn.failed"
     TURN_INTERRUPTED = "turn.interrupted"
+    MEMORY_RECAPPED = "memory.recapped"
 
 
 class TurnStarted(ContractModel):
@@ -129,6 +132,11 @@ class TurnInterrupted(ContractModel):
     type: Literal[EventType.TURN_INTERRUPTED] = EventType.TURN_INTERRUPTED
 
 
+class MemoryRecapped(TokenTotals):
+    type: Literal[EventType.MEMORY_RECAPPED] = EventType.MEMORY_RECAPPED
+    node: NodeId | None
+
+
 Payload = Annotated[
     ModePinned
     | TurnStarted
@@ -139,7 +147,8 @@ Payload = Annotated[
     | ApprovalRequested
     | TurnCompleted
     | TurnFailed
-    | TurnInterrupted,
+    | TurnInterrupted
+    | MemoryRecapped,
     Field(discriminator="type"),
 ]
 

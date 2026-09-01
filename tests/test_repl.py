@@ -10,6 +10,7 @@ from kinby.cli.repl import run_repl
 from kinby.contracts import (
     THREAD_CREATE,
     ApprovalRequested,
+    MemoryRecapped,
     MessageDelta,
     PermissionMode,
     Scope,
@@ -20,7 +21,9 @@ from kinby.contracts import (
     Warning,
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
+from kinby.core.events import EventLog
 from kinby.core.turns import ApprovalDecision, Emit, ParkedTurn, TurnOutcome, TurnRequest
+from kinby.memory import GraphStore, RecapWriter
 from tests.helpers import (
     cannot_restore,
     does_not_park,
@@ -178,6 +181,57 @@ def test_repl_streams_a_full_turn_through_the_dispatcher(tmp_path: Path) -> None
 
         assert exit_code == 0
         assert stdout.getvalue() == "> Hi there\n> "
+        assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())
+
+
+def test_repl_does_not_print_recap_events(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        state_dir = tmp_path / ".state"
+        event_log = EventLog(state_dir)
+        recap = RecapWriter(event_log, GraphStore(tmp_path))
+        dispatcher = build_dispatcher(
+            state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ReplRunner(),
+                recap,
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdin = BlockingInput("Hello\n")
+        stdout = StringIO()
+        stderr = StringIO()
+        repl = asyncio.create_task(
+            run_repl(
+                client,
+                created.id,
+                stdin=stdin,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        )
+        for _ in range(20):
+            if any(
+                isinstance(event.payload, MemoryRecapped) for event in event_log.stored(created.id)
+            ):
+                break
+            await asyncio.sleep(0)
+        else:
+            raise AssertionError("the first recap did not finish")
+
+        stdin.send("Again\n")
+        stdin.send("")
+        exit_code = await asyncio.wait_for(repl, timeout=1)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        assert exit_code == 0
+        assert stdout.getvalue() == "> Hi there\n> Hi there\n> "
         assert stderr.getvalue() == ""
 
     asyncio.run(scenario())

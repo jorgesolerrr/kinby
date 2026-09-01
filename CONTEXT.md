@@ -94,7 +94,7 @@ One conversation with its own durable history. Survives across sessions; can be 
 
 ### Session
 
-One run of the agent loop against a thread, from start to exit (a process, a REPL open–close). Ephemeral; the unit a server wraps. A session contains one or more **turns**. Not a model call: a turn makes one or more model calls, and the **recap** makes one more after it.
+One run of the agent loop against a thread, from start to exit (a process, a REPL open–close). Ephemeral; the unit a server wraps. A session contains one or more **turns**. Not a model call: a turn makes one or more model calls, and a model-assisted **recap** makes one more after it.
 
 ### Turn
 
@@ -116,11 +116,11 @@ The part of the runtime that produces the agent's response and the turn's events
 
 ### Recap
 
-The model call the runtime makes after a **turn** ends, and the writing it does: it distills that turn's events into one **episode**, or decides the turn is not worth keeping. It runs outside the turn, never delays the next one, and never writes **facts**.
+The retrospective work that runs after a **turn** ends. It records the tool path and may use a model to distill the turn into an **episode**; it never delays the next turn or writes **facts**.
 
 ### Recap policy
 
-The **instance** setting that says whether the **recap** runs after every turn or not at all.
+The **instance** setting that chooses a model-assisted **recap** after every turn or a trace-only recap.
 
 ### Recap prompt
 

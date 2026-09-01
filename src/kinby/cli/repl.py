@@ -26,6 +26,7 @@ from kinby.contracts import (
     ErrorEnvelope,
     Event,
     EventType,
+    MemoryRecapped,
     MessageDelta,
     PermissionMode,
     ThreadApprovalRespondCommand,
@@ -292,3 +293,5 @@ def _render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
         case TurnInterrupted():
             stdout.write("(interrupted)\n")
             stdout.flush()
+        case MemoryRecapped():
+            pass
