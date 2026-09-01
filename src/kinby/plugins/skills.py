@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import NewType
 
 from kinby.contracts import Warning
+from kinby.frontmatter import FrontmatterError, parse_frontmatter
 from kinby.instance import Instance
 from kinby.instance.layout import SKILL_FILE, SKILLS_DIR
 from kinby.plugins.tools import Tool, tool
@@ -75,29 +76,21 @@ def _load_skill_roots(
 
 def _load_skill(path: Path) -> Skill:
     """Read unquoted `key: value` frontmatter and the body from one skill file."""
-    lines = path.read_text(encoding="utf-8").splitlines()
-    if not lines or lines[0] != "---":
-        raise SkillFrontmatterError("Skill frontmatter is missing.")
     try:
-        closing = lines.index("---", 1)
-    except ValueError as exc:
+        values, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    except FrontmatterError as exc:
         raise SkillFrontmatterError("Skill frontmatter is missing.") from exc
-    values: dict[str, str] = {}
-    for line in lines[1:closing]:
-        key, separator, value = line.partition(":")
-        if separator:
-            values[key.strip()] = value.strip()
     name = values.get("name")
-    if not name:
+    if not isinstance(name, str) or not name:
         raise SkillFrontmatterError('Skill frontmatter must contain "name".')
     description = values.get("description")
-    if not description:
+    if not isinstance(description, str) or not description:
         raise SkillFrontmatterError('Skill frontmatter must contain "description".')
     return Skill(
         name=SkillName(name),
         description=SkillDescription(description),
         source=path,
-        body=SkillBody("\n".join(lines[closing + 1 :]).strip("\r\n")),
+        body=SkillBody(body),
     )
 
 
