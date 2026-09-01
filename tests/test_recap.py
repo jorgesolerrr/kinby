@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
 from threading import Event as ThreadEvent
+from threading import get_ident
+from uuid import UUID, uuid4
 
 from kinby.contracts import (
     AcceptedResult,
@@ -8,10 +10,13 @@ from kinby.contracts import (
     Event,
     EventType,
     MemoryRecapped,
+    PermissionMode,
     Scope,
     ThreadCreateResult,
     ToolCall,
     ToolResult,
+    TurnCompleted,
+    TurnStarted,
     Warning,
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
@@ -89,6 +94,58 @@ class BlockingGraphStore(GraphStore):
 class FailingGraphStore(GraphStore):
     def remember(self, memory: MemoryNode) -> NodeId:
         raise RuntimeError("graph write failed")
+
+
+class BackgroundReadEventLog(EventLog):
+    def __init__(self, state_dir: Path) -> None:
+        super().__init__(state_dir)
+        self.event_loop_thread = get_ident()
+        self.require_background_read = False
+        self.background_read_seen = False
+
+    def stored(self, thread_id: UUID) -> list[Event]:
+        if self.require_background_read:
+            if get_ident() == self.event_loop_thread and not self.background_read_seen:
+                raise AssertionError("recap read the transcript on the event-loop thread")
+            self.background_read_seen = True
+        return super().stored(thread_id)
+
+
+def test_schedule_reads_the_transcript_in_the_worker(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        event_log = BackgroundReadEventLog(tmp_path / ".state")
+        recap = RecapWriter(event_log, GraphStore(tmp_path))
+        thread_id = uuid4()
+        turn_id = uuid4()
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnStarted(
+                message="Check the weather",
+                model="test-model",
+                permission_mode=PermissionMode.READ_ONLY,
+            ),
+        )
+        await event_log.append(
+            thread_id,
+            turn_id,
+            ToolCall(call_id="weather-1", name="weather", arguments={"city": "Quito"}),
+        )
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnCompleted(input_tokens=0, output_tokens=0),
+        )
+        event_log.require_background_read = True
+
+        recap.schedule(thread_id, turn_id)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        assert event_log.background_read_seen
+        event_log.require_background_read = False
+        assert isinstance(event_log.stored(thread_id)[-1].payload, MemoryRecapped)
+
+    asyncio.run(scenario())
 
 
 def test_completed_tool_turn_writes_trace_episode_and_marker(tmp_path: Path) -> None:

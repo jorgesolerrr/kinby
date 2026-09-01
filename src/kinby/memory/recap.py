@@ -39,8 +39,6 @@ class RecapWriter:
 
     def schedule(self, thread_id: UUID, turn_id: UUID) -> None:
         """Queue a closed turn without waiting for its recap."""
-        if self._is_recapped(self._turn_events(thread_id, turn_id)):
-            return
         self._queue.put_nowait(_RecapRequest(thread_id, turn_id))
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._work())
@@ -70,7 +68,11 @@ class RecapWriter:
                 self._queue.task_done()
 
     async def _write(self, request: _RecapRequest) -> None:
-        events = self._turn_events(request.thread_id, request.turn_id)
+        events = await asyncio.to_thread(
+            self._turn_events,
+            request.thread_id,
+            request.turn_id,
+        )
         if self._is_recapped(events):
             return
         calls = [event.payload for event in events if isinstance(event.payload, ToolCall)]
