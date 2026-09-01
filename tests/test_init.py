@@ -14,6 +14,8 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
     assert (target / "skills" / "README.md").is_file()
     assert (target / "routines" / "README.md").is_file()
     assert (target / "memory" / "profile.md").is_file()
+    assert (target / "memory" / "graph").is_dir()
+    assert not any((target / "memory" / "graph").iterdir())
     assert (target / "workspace").is_dir()
     assert not any((target / "workspace").iterdir())
     assert (target / ".state").is_dir()

@@ -28,13 +28,37 @@ The human-legible record of the user's preferences, persona settings, and standi
 
 The life wiki: entities, episodes, and time-stamped facts about the user's life — drawn from documents, emails, and other content the user grants the agent, plus facts distilled from conversation. Queried by the agent on demand (never auto-injected); answers "search my life" and "what happened on X day". Retires the earlier term *memory graph*.
 
+### Memory facade
+
+The single interface through which kinby searches, opens, adds, and forgets long-term memory. Callers do not depend on a particular **feed**.
+
+### Feed
+
+One source of memory behind the **memory facade**, such as the profile files, the **knowledge graph**, or a future transcript index.
+
+### Memory tool
+
+A deterministic **tool** through which the agent searches, opens, adds, or forgets memory. The model supplies the query or content.
+
+### Episode
+
+A **knowledge graph** record of one task: what happened, what was decided, and the **reasoning trace** of the tools and path the agent used.
+
+### Fact
+
+An atomic, time-stamped statement in the **knowledge graph**. The newest fact about a subject is current.
+
+### Tombstone
+
+A durable record that a **fact** was forgotten. It prevents later ingestion from restoring the fact while leaving canonical sources unchanged.
+
 ### Transcript store
 
 The canonical record of every conversation with the agent. The knowledge graph is derived from canonical sources like this one, never the reverse.
 
 ### Reasoning trace
 
-An append-only log of the agent's reasoning steps for a task, linkable to both short- and long-term memory. The third of the three memories.
+The record of the steps the agent took on a task. Its raw form lives in the **transcript store**; an **episode** carries its distilled form in long-term memory. The third of the three memories.
 
 ### Ingestion pipeline
 

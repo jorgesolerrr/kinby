@@ -31,19 +31,21 @@ class ToolSnapshot:
     def get(self, name: str) -> Tool | None:
         return self._by_name.get(name)
 
-    def with_core(self, core: Tool) -> tuple[ToolSnapshot, tuple[Warning, ...]]:
-        """Add a core tool, replacing and warning about a namesake plugin."""
-        plugin = self.get(core.name)
-        warnings: tuple[Warning, ...] = ()
-        if plugin is not None:
-            warnings = (
-                Warning(
-                    sources=(str(plugin.source), str(core.source)),
-                    message=f'Plugin tool "{plugin.name}" was replaced by the core tool.',
-                ),
-            )
-        tools = (*[tool for tool in self.tools if tool.name != core.name], core)
-        return ToolSnapshot(tools), warnings
+    def with_core(self, *core_tools: Tool) -> tuple[ToolSnapshot, tuple[Warning, ...]]:
+        """Add core tools, replacing and warning about namesake plugins."""
+        tools = self
+        warnings: list[Warning] = []
+        for core in core_tools:
+            plugin = tools.get(core.name)
+            if plugin is not None:
+                warnings.append(
+                    Warning(
+                        sources=(str(plugin.source), str(core.source)),
+                        message=f'Plugin tool "{plugin.name}" was replaced by the core tool.',
+                    )
+                )
+            tools = ToolSnapshot((*[tool for tool in tools.tools if tool.name != core.name], core))
+        return tools, tuple(warnings)
 
 
 @dataclass(frozen=True)

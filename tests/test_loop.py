@@ -39,7 +39,7 @@ def _load_test_instance(tmp_path: Path) -> Instance:
 
 class CoreSkillModel:
     def bind_tools(self, tools: Sequence[StructuredTool]) -> Self:
-        assert [tool.name for tool in tools] == ["skill"]
+        assert [tool.name for tool in tools] == ["memory_open", "memory_search", "skill"]
         return self
 
 

@@ -4,7 +4,23 @@ type FrontmatterValue = str | list[str]
 
 
 class FrontmatterError(ValueError):
-    """A markdown document has no complete frontmatter block."""
+    """A markdown document has invalid frontmatter."""
+
+
+class FrontmatterFieldError(FrontmatterError):
+    """A required frontmatter field is missing or has the wrong type."""
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+        super().__init__(f'Frontmatter must contain a non-empty "{key}" string.')
+
+
+def required_string(values: dict[str, FrontmatterValue], key: str) -> str:
+    """Read a required, non-empty string from parsed frontmatter."""
+    value = values.get(key)
+    if not isinstance(value, str) or not value:
+        raise FrontmatterFieldError(key)
+    return value
 
 
 def _parse_value(value: str) -> FrontmatterValue:

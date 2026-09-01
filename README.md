@@ -6,7 +6,7 @@
 
 ## Thesis
 
-- **Graph-based memory.** Long-term memory is a knowledge graph (Neo4j-backed), not a pile of chat logs — the agent accumulates a durable, queryable model of your world, with a hybrid file layer for preferences and inspection.
+- **Graph-based memory.** Long-term memory is a knowledge graph, not a pile of chat logs. The first graph feed stores user-readable markdown nodes. kinby adds a database-backed feed only when memory evals justify it, while the profile remains the always-present file feed for preferences and standing instructions.
 - **Routines as a first-class primitive.** Proactive behavior is built from routines — trigger (cron or event) + prompt + destination — with per-routine autonomy settings and an approval-first default. The ambition: an agent that notices your patterns and proposes routines itself.
 - **Web-first interface.** A self-hosted web chat is the primary surface (and the test bed); messaging channels come later.
 - **Self-hosted by design.** Single user, reference deployment is Docker Compose on any always-on box. Your agent, your data, your keys.
