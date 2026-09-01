@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,7 +19,8 @@ from kinby.contracts import (
 from kinby.core import LangGraphRunner
 from kinby.core.turns import ApprovalDecision, ParkedTurn, TurnOutcome, TurnRequest
 from kinby.instance import init_instance, load_instance
-from kinby.memory import Fact, GraphStore
+from kinby.memory import Fact, GraphStore, memory_tools
+from kinby.plugins import ToolContext
 
 _MODEL = "openai:gpt-5"
 _NODE = "2026-08-30-fixed-deployment"
@@ -228,7 +229,7 @@ def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None
         assert len(hits) == 1
         remembered = GraphStore(instance.path).open(hits[0].node)
         assert isinstance(remembered, Fact)
-        assert remembered.date == datetime.now(UTC).date()
+        assert remembered.date == date.today()
         assert remembered.thread == thread_id
         assert remembered.description == "Jorge prefers small modules"
         assert remembered.subjects == ("Jorge", "coding preferences")
@@ -269,6 +270,41 @@ def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None
         assert remembered.node in search.output
         assert MessageDelta(text="You prefer small modules.") in later_payloads
         assert events_path.read_bytes() == b"canonical transcript\n"
+
+    asyncio.run(scenario())
+
+
+def test_same_day_facts_are_recalled_in_creation_order(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _empty_instance(tmp_path)
+        memory = GraphStore(instance.path)
+        remember = next(tool for tool in memory_tools(memory) if tool.name == "remember")
+        context = ToolContext(instance=instance, thread_id=uuid4())
+
+        await remember.ainvoke(
+            {
+                "description": "Picked SQLite for memory",
+                "subjects": ["memory backend"],
+                "body": "The memory backend uses SQLite.",
+            },
+            context,
+        )
+        await remember.ainvoke(
+            {
+                "description": "Picked markdown for memory",
+                "subjects": ["memory backend"],
+                "body": "The memory backend uses markdown.",
+            },
+            context,
+        )
+
+        hits = memory.recall("memory backend")
+
+        assert [hit.description for hit in hits] == [
+            "Picked markdown for memory",
+            "Picked SQLite for memory",
+        ]
+        assert memory.open(hits[0].node).body == "The memory backend uses markdown."
 
     asyncio.run(scenario())
 

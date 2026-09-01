@@ -1,5 +1,7 @@
 """Parse the frontmatter and body from a markdown document."""
 
+import json
+
 type FrontmatterValue = str | list[str]
 
 
@@ -25,9 +27,22 @@ def required_string(values: dict[str, FrontmatterValue], key: str) -> str:
 
 def _parse_value(value: str) -> FrontmatterValue:
     value = value.strip()
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        decoded = None
+    if isinstance(decoded, str):
+        return decoded
+    if isinstance(decoded, list) and all(isinstance(item, str) for item in decoded):
+        return decoded
     if value.startswith("[") and value.endswith("]"):
         return [item.strip() for item in value[1:-1].split(",") if item.strip()]
     return value
+
+
+def render_frontmatter_value(value: str | tuple[str, ...]) -> str:
+    """Render a string or string list without changing the document structure."""
+    return json.dumps(value, ensure_ascii=False)
 
 
 def parse_frontmatter(document: str) -> tuple[dict[str, FrontmatterValue], str]:

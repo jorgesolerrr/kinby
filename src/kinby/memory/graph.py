@@ -13,6 +13,7 @@ from pydantic import Field, TypeAdapter, ValidationError
 from kinby.frontmatter import (
     FrontmatterError,
     parse_frontmatter,
+    render_frontmatter_value,
 )
 from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR
 from kinby.memory.facade import Episode, Fact, MemoryHit, MemoryNode, NodeId
@@ -99,14 +100,18 @@ class GraphStore:
 
 
 def _render_node(memory: MemoryNode) -> str:
-    tools = f"tools: [{', '.join(memory.tools)}]\n" if isinstance(memory, Episode) else ""
+    description = render_frontmatter_value(memory.description)
+    subjects = render_frontmatter_value(memory.subjects)
+    tools = (
+        f"tools: {render_frontmatter_value(memory.tools)}\n" if isinstance(memory, Episode) else ""
+    )
     body = memory.body.rstrip("\r\n")
     return (
         "---\n"
         f"date: {memory.date.isoformat()}\n"
         f"thread: {memory.thread}\n"
-        f"description: {memory.description}\n"
-        f"subjects: [{', '.join(memory.subjects)}]\n"
+        f"description: {description}\n"
+        f"subjects: {subjects}\n"
         f"{tools}"
         "---\n"
         f"{body}\n"

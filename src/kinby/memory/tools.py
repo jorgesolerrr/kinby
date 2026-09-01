@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import date
-from uuid import uuid4
+from uuid import uuid7
 
 from kinby.memory.facade import Episode, Fact, Memory, MemoryNode, NodeId
 from kinby.plugins.tools import Tool, ToolContext, tool
@@ -71,7 +71,7 @@ def memory_tools(memory: Memory) -> tuple[Tool, ...]:
 def _fact_node(learned_on: date, description: str) -> NodeId:
     slug = re.sub(r"[^a-z0-9]+", "-", description.casefold()).strip("-")
     readable = (slug or "fact")[:64].rstrip("-")
-    return NodeId(f"{learned_on.isoformat()}-{readable}-{uuid4().hex[:8]}")
+    return NodeId(f"{learned_on.isoformat()}-{uuid7().hex}-{readable}")
 
 
 def _opened(memory: MemoryNode) -> dict[str, object]:

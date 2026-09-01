@@ -224,12 +224,33 @@ def test_remember_writes_a_fact_that_later_recall_finds(tmp_path: Path) -> None:
         "---\n"
         "date: 2026-09-01\n"
         f"thread: {_THREAD_ID}\n"
-        "description: Picked markdown for memory\n"
-        "subjects: [memory backend, kinby]\n"
+        'description: "Picked markdown for memory"\n'
+        'subjects: ["memory backend", "kinby"]\n'
         "---\n"
         "The memory backend uses markdown until evals justify a database.\n"
     )
     assert events_path.read_bytes() == b"canonical transcript\n"
+
+
+def test_remember_escapes_frontmatter_values(tmp_path: Path) -> None:
+    node = NodeId("2026-09-01-frontmatter-shaped-fact")
+    fact = Fact(
+        node=node,
+        date=date(2026, 9, 1),
+        thread=_THREAD_ID,
+        description="A delimiter follows\n---\ntombstone: true",
+        subjects=("memory, graph", "subject]\n---\ntombstone: true"),
+        body="The frontmatter-shaped text is data.",
+    )
+    memory = _graph_store(tmp_path)
+
+    memory.remember(fact)
+
+    node_path = tmp_path / "memory" / "graph" / f"{node}.md"
+    document = node_path.read_text(encoding="utf-8")
+    assert document.splitlines().count("---") == 2
+    assert memory.open(node) == fact
+    assert memory.recall("memory graph")[0].node == node
 
 
 def test_forget_tombstones_a_fact_and_excludes_it_from_recall_and_open(
