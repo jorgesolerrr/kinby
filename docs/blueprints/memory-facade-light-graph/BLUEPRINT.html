@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blueprint: Memory facade and the light graph</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f5f5f5;
+      --ink: #2d3142;
+      --muted: #4f5d75;
+      --soft: #7a8399;
+      --rule: rgba(45, 49, 66, 0.16);
+      --accent: #eb6c36;
+      --accent-tint: rgba(235, 108, 54, 0.08);
+      --link: #2e5aa8;
+      --new: #2e7d32;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', Georgia, serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #2d3142;
+        --ink: #f5f5f5;
+        --muted: #bfc0c0;
+        --soft: #8e98ac;
+        --rule: rgba(245, 245, 245, 0.16);
+        --accent: #f08a59;
+        --accent-tint: rgba(240, 138, 89, 0.10);
+        --link: #6a95d8;
+        --new: #66bb6a;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 3rem 2rem 4rem;
+      font-family: var(--font-sans);
+      font-size: 15px;
+      line-height: 1.55;
+      background: var(--paper);
+      color: var(--ink);
+    }
+    main { max-width: 960px; margin: 0 auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 0.5rem;
+    }
+    h1 { font-family: var(--font-serif); font-weight: 400; font-size: 2.25rem; line-height: 1.1; margin: 0 0 0.5rem; }
+    h2 { font-family: var(--font-serif); font-weight: 400; font-size: 1.6rem; margin: 3rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+    h3 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+    .mode { font-family: var(--font-mono); font-size: 0.7rem; color: var(--soft); margin-left: 0.5rem; letter-spacing: 0.08em; }
+    .stamp { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+    code, pre { font-family: var(--font-mono); font-size: 0.85em; }
+    code { background: rgba(127, 127, 127, 0.12); padding: 0.05em 0.3em; border-radius: 3px; }
+    pre { padding: 0.75rem 1rem; border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+    th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--rule); }
+    th { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+    figure { margin: 1.5rem 0; }
+    figure svg { display: block; width: 100%; height: auto; }
+    figcaption { font-family: var(--font-serif); font-style: italic; font-size: 0.95rem; color: var(--muted); margin-top: 0.5rem; }
+    .overflow { overflow-x: auto; }
+    ol, ul { padding-left: 1.4rem; }
+    li { margin: 0.25rem 0; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1.25rem; }
+    dt { font-family: var(--font-mono); font-size: 0.85rem; }
+    dd { margin: 0; }
+    footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--rule); font-family: var(--font-mono); font-size: 0.75rem; color: var(--soft); }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Blueprint</p>
+  <h1>Memory facade and the light graph</h1>
+  <p class="stamp">Stamped at <code>e2d0491</code>: paths and symbols are true at this commit.</p>
+
+  <h2 id="at-a-glance">At a glance <span class="mode">explanation</span></h2>
+  <p>The agent gets a memory it can query and the user gets memory files they can read and correct. One facade (recall, open, remember, forget) fronts every feed, and the first real feed is a knowledge graph of markdown nodes under <code>memory/graph/</code>, reached by the model through four gated tools. The decision that most constrains everything else is D1: core code calls the <code>Memory</code> Protocol, the model calls tools that wrap it, and there is exactly one implementation underneath.</p>
+
+  <h2 id="problem">Problem <span class="mode">explanation</span></h2>
+  <p>kinby forgets everything between threads except <code>profile.md</code>. Ask it what you decided about the eval harness last week and it has nothing. Hand it a support problem it already solved once and it starts from zero, re-deriving the same tool path it already walked. The transcript store records every conversation, but nothing reads it back. You carry the memory; the teammate should.</p>
+
+  <h2 id="solution">Solution <span class="mode">explanation</span></h2>
+  <p>Your instance grows a queryable memory. Episodes distill each finished task: what happened, what was decided, and which tools the agent ran, so the next turn on the same problem reuses the path instead of rediscovering it. Facts are atomic timestamped statements written the moment they are learned. You can open any node in an editor, fix it, or delete it, because every node is a markdown file in your instance directory. Forgetting leaves a tombstone, so a forgotten fact stays forgotten even though the transcript it came from is never rewritten.</p>
+
+  <h2 id="decision-log">Decision log <span class="mode">explanation</span></h2>
+  <p>One row per decision settled in the grilling on ticket #8 (Memory facade and the hybrid default). Numbered so later sections can cite <code>D3</code>. ADR 0016 records D1, D5, D6, D7, and D12 as one durable decision.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>#</th><th>Decision</th><th>Chosen</th><th>Rejected</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>What is the facade, physically?</td><td>Internal <code>Memory</code> Protocol in <code>kinby.memory</code>; four core tools wrap it for the model</td><td>Tools-only; internal-API-only</td><td>Core callers (recap writer, evals) and the model share one implementation. Write tools flow through the existing gate with zero new machinery.</td></tr>
+      <tr><td>D2</td><td>Feeds versus memories vocabulary</td><td>Keep both: a feed is one retrieval implementation behind the facade; each memory maps onto feeds</td><td>Dropping either taxonomy</td><td>Users think in memories; the build proceeds feed by feed. The mapping lives in CONTEXT.md.</td></tr>
+      <tr><td>D3</td><td>One recall door or a graph walk?</td><td>Two deterministic tools, <code>memory_search</code> then <code>memory_open</code></td><td>One flat recall tool with a cross-feed ranker</td><td>The walk is the design: the model sees descriptions, then decides to go deep or pull the sibling thread. A merged ranker is machinery v1 does not need.</td></tr>
+      <tr><td>D4</td><td>What does <code>remember</code> mutate?</td><td>Writes a fact node immediately; profile edits stay ordinary file edits</td><td>Queueing candidates for the recap writer; a profile-specific tool</td><td>Immediate writes survive interrupted threads. The profile is directly editable by design, so one edit mechanism is enough.</td></tr>
+      <tr><td>D5</td><td>What does <code>forget</code> do?</td><td>Writes a tombstone the ingestion pipeline respects</td><td>Hard delete</td><td>The graph is derived from the transcript store. A deleted fact would resurrect on re-ingestion; a tombstone keeps it gone.</td></tr>
+      <tr><td>D6</td><td>Where do graph nodes live?</td><td><code>memory/graph/</code>; only recomputable indexes go to <code>.state/</code></td><td>Nodes in <code>.state/</code></td><td>The user correcting their agent's memory is the point. Durable, git-visible, human-legible.</td></tr>
+      <tr><td>D7</td><td>Build order of the feeds</td><td>Files, then light graph, then RAG index</td><td>RAG before the graph</td><td>The files feed is nearly done. The graph is the differentiating bet, and its evals decide whether a vector index is still needed.</td></tr>
+      <tr><td>D8</td><td>Which temporal questions gate the graph?</td><td>Must-pass: day lookup, last-touched, decision currency. Stretch: diff over a period, evolution walk</td><td>Building for the stretch questions now</td><td>The stretch questions need entity links across episodes, which raises node-anatomy stakes v1 does not take.</td></tr>
+      <tr><td>D9</td><td>Node anatomy</td><td>YAML frontmatter (<code>date</code>, <code>thread</code>, <code>description</code>, <code>subjects</code>, <code>tools</code> on episodes) plus markdown body</td><td>A separate <code>title</code> field; a <code>kind</code> field</td><td>Every field earns its place in a temporal question. The description doubles as the title.</td></tr>
+      <tr><td>D10</td><td>One node type or two?</td><td>Episode and fact; latest fact wins per subject</td><td>Episodes only; explicit supersedes edges</td><td>Facts keep <code>remember</code> immediate. Recency answers decision currency with no edge machinery.</td></tr>
+      <tr><td>D11</td><td>What does an episode carry?</td><td>The trace of what the agent did: tools used and the path taken</td><td>Narrative and decisions only</td><td>The next turn on the same problem reuses or improves the path. This gives reasoning traces their feed; the raw trace already sits in the transcript store.</td></tr>
+      <tr><td>D12</td><td><code>memory_search</code> semantics</td><td>Case-insensitive match over descriptions and subjects, date bounds, newest first, capped at 20; empty result means rephrase</td><td>Stemming, fuzzy matching, scoring</td><td>Deterministic tools with model-supplied queries. A failed search is the model's cue to rephrase, and that behavior is testable.</td></tr>
+      <tr><td>D13</td><td>The token-cost metric</td><td>The pair (answer correctness, memory tokens spent) against a transcript-stuffing baseline</td><td>A single blended score</td><td>The pair is directly measurable in Inspect AI. Numeric thresholds belong to eval design (#10).</td></tr>
+      <tr><td>D14</td><td>Does memory touch the contract?</td><td>No new contract methods in v1</td><td>A <code>memory.search</code> wire method</td><td>Nothing in v1 needs it. A later server wraps the same facade; deferring costs nothing.</td></tr>
+      <tr><td>D15</td><td>Where is the feature tested?</td><td>The facade Protocol as the one new seam, plus the existing scripted-model runner seam</td><td>Either seam alone</td><td>The facade seam serves the recap writer and evals later. The runner seam proves the gate and tool wiring without new machinery.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="birds-eye">Bird's-eye flow <span class="mode">reference</span></h2>
+  <p>The whole feature end to end. The top path is the graph feed: the model calls a memory tool, the tool calls the facade, the facade reads and writes node files. The bottom path is the files feed that already exists: the profile renders into the system prompt each turn.</p>
+  <figure>
+    <svg viewBox="0 0 960 448" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-birdseye-title fig-birdseye-desc">
+      <title id="fig-birdseye-title">Memory from the model to the node files</title>
+      <desc id="fig-birdseye-desc">The model's tool calls pass through the turn runner and the gate into the new memory tools, which call the GraphStore facade to read and write markdown nodes; the profile file feeds the system prompt as before.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="var(--muted)" stroke-width="1.2"/></marker>
+        <marker id="triangle-hollow" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto"><polygon points="0 0, 10 5, 0 10" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- zones -->
+      <rect x="260" y="48" width="200" height="344" rx="8" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <text x="272" y="64" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" letter-spacing="0.12em">KINBY.CORE</text>
+      <rect x="520" y="48" width="200" height="248" rx="8" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <text x="532" y="64" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" letter-spacing="0.12em">KINBY.MEMORY</text>
+      <rect x="760" y="168" width="200" height="224" rx="8" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <text x="772" y="184" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" letter-spacing="0.12em">INSTANCE DIR</text>
+      <!-- arrows -->
+      <line x1="200" y1="116" x2="280" y2="116" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="208" y="98" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="107" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolCall</text>
+      <line x1="360" y1="144" x2="360" y2="208" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="368" y="168" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="372" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">evaluate(call)</text>
+      <line x1="440" y1="116" x2="540" y2="116" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="420" y="124" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="133" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D3 memory_search(query)</text>
+      <line x1="620" y1="144" x2="620" y2="208" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="628" y="168" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="632" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D1 facade call</text>
+      <line x1="700" y1="236" x2="780" y2="236" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="700" y="248" width="76" height="12" rx="2" fill="var(--paper)"/>
+      <text x="738" y="257" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">GraphNode .md</text>
+      <line x1="780" y1="348" x2="440" y2="348" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="570" y="330" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="610" y="339" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">profile text</text>
+      <path d="M 280,348 H 128 Q 120,348 120,340 V 144" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="128" y="244" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="132" y="253" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">SystemMessage</text>
+      <!-- nodes -->
+      <rect x="40" y="88" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="88" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <rect x="48" y="96" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="105" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">SYS</text>
+      <text x="120" y="118" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ChatModel</text>
+      <text x="120" y="134" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">provider model</text>
+      <rect x="280" y="88" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="88" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="112" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_call_tools</text>
+      <text x="360" y="128" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turn_runner.py</text>
+      <rect x="280" y="208" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="208" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="232" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">gate.evaluate</text>
+      <text x="360" y="248" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/gate.py</text>
+      <rect x="280" y="320" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="320" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="344" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">assemble_system_prompt</text>
+      <text x="360" y="360" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/prompt.py</text>
+      <rect x="540" y="88" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="540" y="88" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="548" y="96" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="564" y="105" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="620" y="112" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">memory tools</text>
+      <text x="620" y="128" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">memory/tools.py</text>
+      <rect x="540" y="208" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="540" y="208" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="548" y="216" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="564" y="225" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="620" y="232" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">GraphStore</text>
+      <text x="620" y="248" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">memory/graph.py</text>
+      <rect x="780" y="208" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="780" y="208" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="780" y="208" width="160" height="8" rx="6" fill="var(--ink)" fill-opacity="0.05"/>
+      <text x="860" y="236" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">memory/graph/</text>
+      <text x="860" y="252" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">episode and fact .md</text>
+      <rect x="780" y="320" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="780" y="320" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="780" y="320" width="160" height="8" rx="6" fill="var(--ink)" fill-opacity="0.05"/>
+      <text x="860" y="344" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">memory/profile.md</text>
+      <text x="860" y="360" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">files feed</text>
+      <!-- legend -->
+      <line x1="40" y1="408" x2="920" y2="408" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="40" y1="428" x2="64" y2="428" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="431" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">added by this feature</text>
+      <line x1="200" y1="428" x2="224" y2="428" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="232" y="431" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">headline call</text>
+    </svg>
+    <figcaption>Figure: data flow of memory from the model's tool call to the node files, with the files feed below.</figcaption>
+  </figure>
+  <p>One step per arrow, in order.</p>
+  <ol>
+    <li>The model streams a <code>ToolCall</code> for a memory tool into <code>_call_tools</code>.</li>
+    <li><code>_call_tools</code> asks <code>gate.evaluate</code>; reads pass, writes ask or deny by mode (D1).</li>
+    <li><code>_call_tools</code> invokes the memory tool with the model-supplied arguments (D3).</li>
+    <li>The tool calls the one facade implementation, <code>GraphStore</code> (D1).</li>
+    <li><code>GraphStore</code> reads or writes <code>GraphNode</code> markdown files under <code>memory/graph/</code> (D6).</li>
+    <li>Unchanged files feed: <code>assemble_system_prompt</code> reads <code>memory/profile.md</code> each turn.</li>
+    <li>The profile section rides the <code>SystemMessage</code> into the model.</li>
+  </ol>
+
+  <h2 id="module-map">Module map <span class="mode">reference</span></h2>
+  <p>The three new modules sit inside <code>kinby.memory</code>. The turn runner builds a <code>GraphStore</code> per turn and adds the four memory tools to the turn's snapshot. Nothing outside <code>kinby.memory</code> touches node files.</p>
+  <figure>
+    <svg viewBox="0 0 960 472" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-modules-title fig-modules-desc">
+      <title id="fig-modules-title">Modules the memory feature touches</title>
+      <desc id="fig-modules-desc">The turn runner depends on the gate, the prompt, the tool registry, and the new memory tools; the memory tools wrap the new facade, which the new graph store implements over the instance layout.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- arrows -->
+      <path d="M 432,96 V 104 Q 432,112 424,112 H 128 Q 120,112 120,120 V 160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 464,96 V 120 Q 464,128 456,128 H 328 Q 320,128 320,136 V 160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 496,96 V 128 Q 496,136 504,136 H 512 Q 520,136 520,144 V 160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 528,96 V 104 Q 528,112 536,112 H 752 Q 760,112 760,120 V 160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 520,216 V 236 Q 520,244 512,244 H 352 Q 344,244 344,252 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 720,216 V 252 Q 720,260 712,260 H 384 Q 376,260 376,268 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="536" y="248" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="580" y="257" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">@tool(write=...)</text>
+      <path d="M 760,216 V 228 Q 760,236 752,236 H 608 Q 600,236 600,244 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 800,216 V 236 Q 800,244 808,244 H 832 Q 840,244 840,252 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 560,68 H 932 Q 940,68 940,76 V 300 Q 940,308 932,308 H 920" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="664" y="50" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="724" y="59" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">GraphStore(instance)</text>
+      <line x1="760" y1="308" x2="680" y2="308" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#triangle-hollow)"/>
+      <rect x="688" y="290" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="299" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Memory</text>
+      <path d="M 320,216 V 236 Q 320,244 312,244 H 128 Q 120,244 120,252 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 840,336 V 368 Q 840,376 832,376 H 128 Q 120,376 120,368 V 336" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="408" y="358" width="152" height="12" rx="2" fill="var(--paper)"/>
+      <text x="484" y="367" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">MEMORY_DIR, GRAPH_DIR</text>
+      <!-- rank 0 -->
+      <rect x="400" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="520" y="48" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="536" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle">0 in</text>
+      <text x="480" y="64" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turn_runner</text>
+      <text x="480" y="80" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turn_runner.py</text>
+      <!-- rank 1 -->
+      <rect x="40" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="160" y="168" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="176" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle">1 in</text>
+      <text x="120" y="184" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.gate</text>
+      <text x="120" y="200" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/gate.py</text>
+      <rect x="240" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="360" y="168" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="376" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle">1 in</text>
+      <text x="320" y="184" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.prompt</text>
+      <text x="320" y="200" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/prompt.py</text>
+      <rect x="440" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="560" y="168" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="576" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle">1 in</text>
+      <text x="520" y="184" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">plugins.registry</text>
+      <text x="520" y="200" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/plugins/registry.py</text>
+      <rect x="680" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="680" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="800" y="168" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="816" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle">1 in</text>
+      <text x="760" y="184" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">memory.tools</text>
+      <text x="760" y="200" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/memory/tools.py</text>
+      <!-- rank 2 -->
+      <rect x="40" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="160" y="288" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="176" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle">2 in</text>
+      <text x="120" y="304" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">instance.layout</text>
+      <text x="120" y="320" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/instance/layout.py</text>
+      <rect x="280" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="400" y="288" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="416" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle">2 in</text>
+      <text x="360" y="304" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">plugins.tools</text>
+      <text x="360" y="320" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/plugins/tools.py</text>
+      <rect x="520" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="640" y="288" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="656" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle">2 in</text>
+      <text x="600" y="304" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">memory.facade</text>
+      <text x="600" y="320" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/memory/facade.py</text>
+      <rect x="760" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="880" y="288" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="896" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle">2 in</text>
+      <text x="840" y="304" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">memory.graph</text>
+      <text x="840" y="320" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/memory/graph.py</text>
+      <!-- legend -->
+      <line x1="40" y1="416" x2="920" y2="416" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="40" y1="440" x2="64" y2="440" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="443" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">added by this feature</text>
+      <rect x="200" y="432" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="216" y="441" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle">2 in</text>
+      <text x="240" y="443" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">modules depending on this one</text>
+    </svg>
+    <figcaption>Figure: dependency graph of the modules memory touches, new ones marked.</figcaption>
+  </figure>
+  <h3>Interfaces</h3>
+  <p>The functions and types other modules call.</p>
+  <dl>
+    <dt><code>Memory.recall(query, after=None, before=None) -> tuple[MemoryHit, ...]</code></dt>
+    <dd>Deterministic search over node descriptions and subjects (D12). Called by <code>memory_search</code>, later by the recap writer and evals.</dd>
+    <dt><code>Memory.open(node: NodeId) -> str</code></dt>
+    <dd>Returns the node body. Called by <code>memory_open</code>.</dd>
+    <dt><code>Memory.remember(fact: FactDraft) -> NodeId</code></dt>
+    <dd>Writes a fact node immediately (D4). Called by <code>remember</code>.</dd>
+    <dt><code>Memory.forget(node: NodeId) -> None</code></dt>
+    <dd>Tombstones a node (D5). Called by <code>forget</code>.</dd>
+    <dt><code>GraphStore(instance: Instance)</code></dt>
+    <dd>The graph feed: the one <code>Memory</code> implementation in this blueprint. Built by <code>LangGraphRunner</code> per turn.</dd>
+    <dt><code>memory_tools(memory: Memory, thread_id: UUID) -> tuple[Tool, ...]</code></dt>
+    <dd>Builds the four core tools over a facade, the <code>skill_tool</code> pattern. The runner adds each through <code>ToolSnapshot.with_core</code>.</dd>
+  </dl>
+
+  <h2 id="ground-level">Ground-level flows <span class="mode">reference</span></h2>
+  <p>Two flows cover the four tools. Participants are the functions from the module map. The gate check is a self-call on <code>_call_tools</code> because <code>gate.evaluate</code> is a pure function it calls inline.</p>
+
+  <h3 id="flow-recall">Flow: recall walk</h3>
+  <figure>
+    <svg viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-recall-title fig-recall-desc">
+      <title id="fig-recall-title">Recall walk: search then open</title>
+      <desc id="fig-recall-desc">The model calls memory_search, gets hits newest first, then calls memory_open on a chosen node and gets its body back.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <line x1="120" y1="64" x2="120" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="360" y1="64" x2="360" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="600" y1="64" x2="600" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="840" y1="64" x2="840" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <rect x="356" y="88" width="8" height="408" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="596" y="160" width="8" height="112" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="596" y="352" width="8" height="112" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="836" y="192" width="8" height="48" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="836" y="384" width="8" height="48" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <line x1="120" y1="96" x2="352" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="100" y="78" width="280" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="87" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolCall: memory_search(query, after, before)</text>
+      <path d="M 364,120 H 392 V 136 H 368" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="404" y="132" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">gate.evaluate: allow (read tool)</text>
+      <line x1="364" y1="168" x2="592" y2="168" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="392" y="150" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="159" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ainvoke(arguments, ToolContext)</text>
+      <line x1="604" y1="200" x2="832" y2="200" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="632" y="182" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="191" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">recall(query, after, before)</text>
+      <line x1="836" y1="232" x2="608" y2="232" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="608" y="214" width="224" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="223" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">tuple[MemoryHit, ...] newest first, max 20</text>
+      <line x1="596" y1="264" x2="368" y2="264" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="416" y="246" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="255" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolResult: hits</text>
+      <line x1="356" y1="296" x2="124" y2="296" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="176" y="278" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="287" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolMessage: hits</text>
+      <line x1="120" y1="328" x2="352" y2="328" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="140" y="310" width="200" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="319" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolCall: memory_open(node)</text>
+      <line x1="364" y1="360" x2="592" y2="360" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="392" y="342" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="351" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ainvoke(arguments, ToolContext)</text>
+      <line x1="604" y1="392" x2="832" y2="392" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="680" y="374" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="383" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">open(node)</text>
+      <line x1="836" y1="424" x2="608" y2="424" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="616" y="406" width="208" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="415" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">body: str (episode trace or fact)</text>
+      <line x1="596" y1="456" x2="368" y2="456" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="416" y="438" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="447" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolResult: body</text>
+      <line x1="356" y1="488" x2="124" y2="488" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="176" y="470" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="479" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolMessage: body</text>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="120" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ChatModel</text>
+      <rect x="280" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_call_tools</text>
+      <rect x="520" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="600" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">memory tools</text>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="840" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">GraphStore</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for the recall walk, search then open, with the data shape at each hop.</figcaption>
+  </figure>
+  <ol>
+    <li>The model calls <code>memory_search</code>: input <code>query, after, before</code>, all model-supplied (D12).</li>
+    <li><code>gate.evaluate</code> allows: <code>memory_search</code> is a read tool (D1).</li>
+    <li>The tool calls <code>Memory.recall</code>: output <code>tuple[MemoryHit, ...]</code>, newest first, capped at 20.</li>
+    <li>An empty tuple is a valid result: the model rephrases instead of trusting a fuzzy match (D12).</li>
+    <li>The model picks a hit and calls <code>memory_open(node)</code>: output the node body as <code>str</code>.</li>
+    <li>From an episode body the model can follow the <code>thread</code> id to the sibling session (D11).</li>
+  </ol>
+
+  <h3 id="flow-write">Flow: remember and forget</h3>
+  <figure>
+    <svg viewBox="0 0 960 656" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-write-title fig-write-desc">
+      <title id="fig-write-title">Remember and forget through the gate</title>
+      <desc id="fig-write-desc">The model calls remember, the gate asks, and on approval the GraphStore writes a fact node; forget tombstones a node so later searches exclude it.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <line x1="120" y1="64" x2="120" y2="632" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="360" y1="64" x2="360" y2="632" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="600" y1="64" x2="600" y2="632" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="840" y1="64" x2="840" y2="632" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <rect x="356" y="88" width="8" height="528" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="596" y="240" width="8" height="112" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="836" y="272" width="8" height="80" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="596" y="488" width="8" height="112" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="836" y="520" width="8" height="80" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <line x1="120" y1="96" x2="352" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="88" y="78" width="304" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="87" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolCall: remember(description, subjects, body)</text>
+      <path d="M 364,120 H 392 V 136 H 368" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="404" y="132" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">gate.evaluate: ask (write tool)</text>
+      <path d="M 364,160 H 392 V 176 H 368" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="404" y="172" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">interrupt(ApprovalRequested) → ApprovalDecision</text>
+      <rect x="88" y="200" width="832" height="224" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="88" y="200" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="108" y="212" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="100" y="232" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[approved]</text>
+      <line x1="364" y1="248" x2="592" y2="248" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="392" y="230" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="239" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ainvoke(arguments, ToolContext)</text>
+      <line x1="604" y1="280" x2="832" y2="280" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="648" y="262" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="271" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">remember(FactDraft)</text>
+      <path d="M 844,304 H 872 V 320 H 848" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="852" y="336" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="end" transform="rotate(0)">write node .md</text>
+      <line x1="836" y1="344" x2="608" y2="344" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="688" y="352" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="361" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">NodeId</text>
+      <line x1="88" y1="384" x2="920" y2="384" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="100" y="400" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[denied]</text>
+      <line x1="356" y1="416" x2="124" y2="416" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="120" y="398" width="240" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="407" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolMessage: denied by the user (error)</text>
+      <line x1="120" y1="464" x2="352" y2="464" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="152" y="446" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="455" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolCall: forget(node)</text>
+      <line x1="364" y1="496" x2="592" y2="496" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="392" y="478" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="487" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ainvoke(arguments, ToolContext)</text>
+      <line x1="604" y1="528" x2="832" y2="528" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="672" y="510" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="519" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">forget(node)</text>
+      <path d="M 844,552 H 872 V 568 H 848" fill="none" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="852" y="584" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="end">tombstone the node</text>
+      <line x1="836" y1="600" x2="608" y2="600" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="696" y="606" width="48" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="615" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">None</text>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="120" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ChatModel</text>
+      <rect x="280" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_call_tools</text>
+      <rect x="520" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="600" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">memory tools</text>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="840" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">GraphStore</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for remember and forget, with the gate's ask and both approval outcomes.</figcaption>
+  </figure>
+  <ol>
+    <li>The model calls <code>remember</code>: input <code>description, subjects, body</code> (D4, D9).</li>
+    <li><code>gate.evaluate</code> answers ask: <code>remember</code> is a write tool and the mode is ask (D1).</li>
+    <li>The interrupt parks the turn; the user's answer becomes an <code>ApprovalDecision</code>.</li>
+    <li>Approved: the tool calls <code>Memory.remember(fact: FactDraft)</code>, output <code>NodeId</code>; the store writes one markdown file under <code>memory/graph/</code> (D6).</li>
+    <li>Denied: the model gets an error <code>ToolMessage</code> and the turn continues, existing gate behavior.</li>
+    <li>The model calls <code>forget(node)</code>; the store writes a tombstone (D5); later <code>recall</code> and <code>open</code> exclude the node.</li>
+    <li><code>forget</code> passes the same gate ask as <code>remember</code>; the figure omits the repeat.</li>
+  </ol>
+
+  <h2 id="data-shapes">Data shapes <span class="mode">reference</span></h2>
+  <p>All five types are new. <code>GraphNode</code> is the file shape: frontmatter fields drawn here, plus a markdown body. An episode and a fact share the shape; only an episode carries <code>tools</code> (D9, D10).</p>
+  <figure>
+    <svg viewBox="0 0 960 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-shapes-title fig-shapes-desc">
+      <title id="fig-shapes-title">Types memory adds</title>
+      <desc id="fig-shapes-desc">The Memory interface returns MemoryHit and takes FactDraft; GraphStore implements Memory and reads and writes GraphNode files.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <path d="M 180,220 V 110 Q 180,102 188,102 H 360" fill="none" stroke="var(--ink)" stroke-width="1" stroke-dasharray="5 4" marker-end="url(#triangle-hollow)"/>
+      <rect x="200" y="86" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="95" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">implements</text>
+      <line x1="600" y1="88" x2="720" y2="88" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+      <rect x="628" y="70" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="660" y="79" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">returns</text>
+      <path d="M 600,140 H 652 Q 660,140 660,148 V 232 Q 660,240 668,240 H 720" fill="none" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+      <rect x="608" y="126" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="652" y="135" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">remember takes</text>
+      <line x1="280" y1="256" x2="400" y2="256" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+      <rect x="300" y="238" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="340" y="247" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">reads/writes</text>
+      <rect x="360" y="40" width="240" height="124" rx="6" fill="var(--paper)"/>
+      <rect x="360" y="40" width="240" height="124" rx="6" fill="var(--accent-tint)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="480" y="58" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;&lt;interface&gt;&gt;</text>
+      <text x="480" y="74" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Memory</text>
+      <line x1="360" y1="84" x2="600" y2="84" stroke="var(--rule)" stroke-width="1"/>
+      <text x="372" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">recall(query, after?, before?): MemoryHit[]</text>
+      <text x="372" y="116" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">open(node: NodeId): str</text>
+      <text x="372" y="132" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">remember(fact: FactDraft): NodeId</text>
+      <text x="372" y="148" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">forget(node: NodeId): None</text>
+      <rect x="720" y="40" width="200" height="96" rx="6" fill="var(--paper)"/>
+      <rect x="720" y="40" width="200" height="96" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="820" y="60" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">MemoryHit</text>
+      <line x1="720" y1="72" x2="920" y2="72" stroke="var(--rule)" stroke-width="1"/>
+      <text x="732" y="88" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">id: NodeId</text>
+      <text x="732" y="104" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">date: date</text>
+      <text x="732" y="120" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">description: str</text>
+      <rect x="720" y="200" width="200" height="96" rx="6" fill="var(--paper)"/>
+      <rect x="720" y="200" width="200" height="96" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="820" y="220" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">FactDraft</text>
+      <line x1="720" y1="232" x2="920" y2="232" stroke="var(--rule)" stroke-width="1"/>
+      <text x="732" y="248" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">description: str</text>
+      <text x="732" y="264" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">subjects: tuple[str, ...]</text>
+      <text x="732" y="280" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">body: str</text>
+      <rect x="80" y="220" width="200" height="72" rx="6" fill="var(--paper)"/>
+      <rect x="80" y="220" width="200" height="72" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="180" y="240" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">GraphStore</text>
+      <line x1="80" y1="252" x2="280" y2="252" stroke="var(--rule)" stroke-width="1"/>
+      <text x="92" y="268" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">root: Path  (memory/graph/)</text>
+      <rect x="400" y="220" width="240" height="140" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="220" width="240" height="140" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="520" y="240" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">GraphNode</text>
+      <text x="520" y="254" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">episode or fact, one .md file</text>
+      <line x1="400" y1="262" x2="640" y2="262" stroke="var(--rule)" stroke-width="1"/>
+      <text x="412" y="278" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">date: date</text>
+      <text x="412" y="294" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">thread: UUID</text>
+      <text x="412" y="310" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">description: str</text>
+      <text x="412" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">subjects: list[str]</text>
+      <text x="412" y="342" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">tools: list[str]  (episodes only)</text>
+      <line x1="40" y1="400" x2="920" y2="400" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="40" y1="424" x2="64" y2="424" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="427" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">added by this feature</text>
+    </svg>
+    <figcaption>Figure: types memory adds and how they relate; the GraphNode body is markdown below the drawn frontmatter.</figcaption>
+  </figure>
+  <p>The node file on disk, the one snippet a figure cannot hold (D9):</p>
+  <pre><code>---
+date: 2026-08-30
+thread: 018f3c2a-7c1e-4c11-9f3e-2f6f0a6b1c2d
+description: Chose Inspect AI over LangSmith for the eval harness
+subjects: [eval harness, Inspect AI, LangSmith]
+tools: [bash, edit]
+---
+What happened, what was decided, and for an episode
+the action path taken, step by step.</code></pre>
+
+  <h2 id="file-map">File map <span class="mode">reference</span></h2>
+  <p>Every file the agent touches. Stamped at <code>e2d0491</code>; regenerate the existence check with <code>git ls-files src/kinby tests</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Path</th><th>Action</th><th>What changes</th><th>Flow</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/kinby/memory/facade.py</code></td><td>new</td><td><code>Memory</code> Protocol, <code>MemoryHit</code>, <code>FactDraft</code>, <code>NodeId</code></td><td>both</td></tr>
+      <tr><td><code>src/kinby/memory/graph.py</code></td><td>new</td><td><code>GraphStore</code>: parse and write <code>GraphNode</code> files, search, tombstones</td><td>both</td></tr>
+      <tr><td><code>src/kinby/memory/tools.py</code></td><td>new</td><td><code>memory_tools</code>: <code>memory_search</code>, <code>memory_open</code>, <code>remember</code>, <code>forget</code></td><td>both</td></tr>
+      <tr><td><code>src/kinby/memory/__init__.py</code></td><td>modify</td><td>Export the facade, the store, and <code>memory_tools</code></td><td>both</td></tr>
+      <tr><td><code>src/kinby/core/turn_runner.py</code></td><td>modify</td><td>Build a <code>GraphStore</code> per turn; add each memory tool via <code>ToolSnapshot.with_core</code></td><td>both</td></tr>
+      <tr><td><code>src/kinby/instance/layout.py</code></td><td>modify</td><td>Add <code>GRAPH_DIR = "graph"</code></td><td>both</td></tr>
+      <tr><td><code>src/kinby/instance/init.py</code></td><td>modify</td><td>Scaffold <code>memory/graph/</code> in <code>init_instance</code></td><td>both</td></tr>
+      <tr><td><code>tests/test_memory.py</code></td><td>new</td><td>Facade seam: seeded graph, temporal questions, remember and forget round trips</td><td>both</td></tr>
+      <tr><td><code>tests/test_memory_tools.py</code></td><td>new</td><td>Runner seam: scripted model calls the tools; gate ask and deny; tombstone suppression</td><td>both</td></tr>
+      <tr><td><code>CONTEXT.md</code></td><td>modify</td><td>Already updated: memory facade, feed, memory tool, episode, fact, tombstone</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0016-memory-is-one-facade-over-feeds-proven-in-order.md</code></td><td>new</td><td>Already written: records D1, D5, D6, D7, D12</td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="testing">Testing <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Seams</dt><dd>The <code>Memory</code> Protocol, tested directly against a real instance directory in <code>tmp_path</code>: the one new seam, and the same call surface the recap writer and evals use later (D15). The existing runner seam with a scripted model covers tool wiring and the gate.</dd>
+    <dt>A good test here</dt><dd>Asserts what the tools return, what files exist afterward, and what the model could see. Never index structures or private helpers.</dd>
+    <dt>Prior art</dt><dd><code>tests/test_gate.py</code> (scripted model against a real instance), <code>tests/test_system_prompt.py</code> (prompt sections), <code>tests/test_plugins.py</code> (tool registration, reserved core names).</dd>
+  </dl>
+  <h3>Cases</h3>
+  <ol>
+    <li>Day lookup: <code>recall</code> bounded to one day returns that day's nodes, flow recall walk, protects D8.</li>
+    <li>Last touched: <code>recall(subject)</code> returns hits newest first, flow recall walk, protects D8 and D12.</li>
+    <li>Decision currency: two facts on one subject, the newest is the first hit, flow recall walk, protects D10.</li>
+    <li>Literal search: a non-matching query returns an empty tuple, no fuzzy match, flow recall walk, protects D12.</li>
+    <li>Cap: 25 matching nodes yield 20 hits, flow recall walk, protects D12.</li>
+    <li><code>remember</code> writes one markdown file under <code>memory/graph/</code> with the D9 frontmatter, flow remember and forget, protects D4 and D9.</li>
+    <li><code>forget</code> removes the node from <code>recall</code> and <code>open</code>, and the file's tombstone survives, flow remember and forget, protects D5.</li>
+    <li>An episode with a <code>tools</code> field is searchable and opens with its trace body, flow recall walk, protects D11.</li>
+    <li>Runner: <code>memory_search</code> runs without approval in ask mode, flow recall walk, protects D1.</li>
+    <li>Runner: <code>remember</code> asks in ask mode; deny returns an error <code>ToolMessage</code> and the turn continues, flow remember and forget, protects D1.</li>
+    <li>Runner: after <code>forget</code>, a later <code>memory_search</code> in the same turn excludes the node, flow remember and forget, protects D5.</li>
+  </ol>
+
+  <h2 id="out-of-scope">Out of scope <span class="mode">reference</span></h2>
+  <ul>
+    <li>The episode writer: when recap runs and what its policy is. Ticket #9. This blueprint fixes the format it writes and the facade it calls.</li>
+    <li>Eval harness cases and numeric thresholds for the feed gates. Ticket #10. Only the metric definition (D13) is fixed here.</li>
+    <li>The RAG index feed. After the graph proves itself (D7); it may slip past v1.</li>
+    <li>Ingestion of external content (documents, email) and backfill.</li>
+    <li>Contract methods for memory (D14).</li>
+    <li>A vector or graph database. Graph backend graduation stays fog on the map until the memory evals run.</li>
+  </ul>
+
+  <h2 id="open-questions">Open questions <span class="mode">reference</span></h2>
+  <p>Points the grilling did not settle. The agent building this stops and asks before acting on any of them.</p>
+  <ol>
+    <li>Node id and filename scheme. Options: date plus a slug of the description (<code>2026-08-30-eval-harness.md</code>); a UUID filename. Default: date plus slug, because human-legible filenames are the point of D6.</li>
+    <li>Tombstone representation on disk. Options: a <code>tombstone: true</code> frontmatter flag on the node file; a separate tombstone list outside the nodes. Default: the frontmatter flag, so the record of the forgetting is as legible as the memory was.</li>
+    <li>Frontmatter parsing. Options: extend the hand-rolled parser pattern from <code>plugins/skills.py</code> to cover list values; add a YAML dependency. Default: the hand-rolled parser, matching the existing pattern and adding no dependency.</li>
+  </ol>
+
+  <h2 id="glossary">Glossary <span class="mode">reference</span></h2>
+  <dl>
+    <dt>memory facade</dt><dd>The single surface through which anything recalls, remembers, or forgets. Core calls it directly; the model reaches it only through memory tools.</dd>
+    <dt>feed</dt><dd>One retrieval implementation behind the memory facade: the profile file, the knowledge graph, or the RAG index over the transcript store.</dd>
+    <dt>memory tool</dt><dd>A core tool exposing the facade to the model. Reads are read tools; remember and forget are write tools the gate governs.</dd>
+    <dt>episode</dt><dd>One distilled record of a task: what happened, what was decided, and the trace of what the agent did.</dd>
+    <dt>fact</dt><dd>An atomic, timestamped statement recorded the moment it is learned. The latest fact about a subject wins.</dd>
+    <dt>tombstone</dt><dd>The suppression marker a forget leaves. The ingestion pipeline never re-derives a tombstoned fact.</dd>
+    <dt>knowledge graph</dt><dd>The life wiki, queried by the agent on demand, never auto-injected. This blueprint builds its light markdown form.</dd>
+    <dt>transcript store</dt><dd>The canonical record of every conversation. The graph derives from it; it is never rewritten.</dd>
+    <dt>profile</dt><dd>The human-legible record of preferences and standing instructions, always present in context.</dd>
+  </dl>
+
+  <footer>Blueprint for memory facade and the light graph · stamped at e2d0491 · 2026-08-31</footer>
+</main>
+</body>
+</html>

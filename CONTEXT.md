@@ -28,29 +28,13 @@ The human-legible record of the user's preferences, persona settings, and standi
 
 The life wiki: entities, episodes, and time-stamped facts about the user's life — drawn from documents, emails, and other content the user grants the agent, plus facts distilled from conversation. Queried by the agent on demand (never auto-injected); answers "search my life" and "what happened on X day". Retires the earlier term *memory graph*.
 
-### Memory facade
-
-The single interface through which kinby searches, opens, adds, and forgets long-term memory. Callers do not depend on a particular **feed**.
-
-### Feed
-
-One source of memory behind the **memory facade**, such as the profile files, the **knowledge graph**, or a future transcript index.
-
-### Memory tool
-
-A deterministic **tool** through which the agent searches, opens, adds, or forgets memory. The model supplies the query or content.
-
 ### Episode
 
-A **knowledge graph** record of one task: what happened, what was decided, and the **reasoning trace** of the tools and path the agent used.
+One distilled record in the **knowledge graph** of a task or conversation: what happened, what was decided, and the tools and path the agent used. It comes from a **thread** at the end of a task and lets later work reuse or improve that path.
 
 ### Fact
 
-An atomic, time-stamped statement in the **knowledge graph**. The newest fact about a subject is current.
-
-### Tombstone
-
-A durable record that a **fact** was forgotten. It prevents later ingestion from restoring the fact while leaving canonical sources unchanged.
+An atomic, timestamped statement in the **knowledge graph**, recorded when it is learned. Recency decides which fact is current: the latest fact about a subject wins.
 
 ### Transcript store
 
@@ -58,7 +42,19 @@ The canonical record of every conversation with the agent. The knowledge graph i
 
 ### Reasoning trace
 
-The record of the steps the agent took on a task. Its raw form lives in the **transcript store**; an **episode** carries its distilled form in long-term memory. The third of the three memories.
+The third memory records the agent's reasoning and actions for a task. The **transcript store** holds its canonical raw form, while an **episode** holds its distilled form in long-term memory.
+
+### Memory facade
+
+The single interface through which kinby recalls, opens, remembers, and forgets. Core callers and **memory tools** share one implementation and stay independent from the **feeds** behind it.
+
+### Feed
+
+One source of memory behind the **memory facade**, such as the **profile**, the **knowledge graph**, or a RAG index over the **transcript store**. Each feed must pass its evals before kinby adds the next one.
+
+### Memory tool
+
+A core **tool** that exposes the **memory facade** to the model. Search and open are read tools, while remember and forget are write tools governed by the **gate**.
 
 ### Ingestion pipeline
 
@@ -67,6 +63,10 @@ The path content travels into the knowledge graph: the user drops or uploads an 
 ### Backfill
 
 A user-initiated, explicitly scoped ingestion of historical content (a folder, a date range, a label) — as opposed to the default incremental ingestion of new items as they arrive.
+
+### Tombstone
+
+The suppression marker a forget leaves behind. The **knowledge graph** is derived from canonical sources, so deletion alone would let a fact resurrect on re-ingestion; the **ingestion pipeline** never re-derives a tombstoned fact. The **transcript store** itself is never rewritten.
 
 ### Instance
 
