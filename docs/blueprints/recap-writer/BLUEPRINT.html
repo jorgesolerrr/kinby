@@ -80,7 +80,7 @@
 <main>
   <p class="eyebrow">Blueprint</p>
   <h1>Recap writer</h1>
-  <p class="stamp">Stamped at <code>fbab226</code>: paths and symbols are true at this commit. Decided in <a href="https://github.com/jorgesolerrr/kinby/issues/9">ticket #9</a>, specified in <a href="https://github.com/jorgesolerrr/kinby/issues/82">spec #82</a>, recorded in ADR 0017.</p>
+  <p class="stamp">Stamped at <code>fbab226</code>: paths and symbols are true at this commit. Decided in ticket #9 (Recap and memory writer), specified in spec #82, recorded in ADR 0017.</p>
 
   <h2 id="at-a-glance">At a glance <span class="mode">explanation</span></h2>
   <p>After every turn, kinby writes one episode into <code>memory/graph/</code>: what happened, what was decided, what should have gone differently, and the path of tools the agent took. A runtime-owned <code>RecapWriter</code> does this after the turn's closing event, with one structured call to <code>models.recap</code> whose lens comes from the instance's <code>RECAP.md</code>. The decision that shapes everything else is that the recap runs outside the turn and marks itself with a <code>memory.recapped</code> event, so the turn never waits and the event log alone says which turns are covered.</p>
