@@ -38,6 +38,7 @@ from kinby.instance import (
     init_instance,
     load_instance,
 )
+from kinby.instance.recap import load_recap_lens
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
@@ -103,6 +104,11 @@ def _print_turn_inputs(instance: Instance) -> None:
     print("prompt sections:")
     for section in sections:
         print(f"  {section.name}: {section.source} ({len(section.text)} characters)")
+    recap_lens = load_recap_lens(instance.path)
+    if recap_lens.uses_default:
+        print(f"recap prompt: {recap_lens.path} (missing, using kinby default)")
+    else:
+        print(f"recap prompt: {recap_lens.path} ({len(recap_lens.text)} characters)")
     print("warnings:")
     for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
         print(f"  {', '.join(warning.sources)}: {warning.message}")

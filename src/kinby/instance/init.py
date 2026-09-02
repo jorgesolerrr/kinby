@@ -16,6 +16,7 @@ from kinby.instance.layout import (
     MEMORY_DIR,
     PERMISSIONS_NAME,
     PROFILE_NAME,
+    RECAP_NAME,
     ROUTINES_DIR,
     SKILLS_DIR,
     STATE_DIR,
@@ -24,6 +25,7 @@ from kinby.instance.layout import (
     WORKSPACE_DIR,
 )
 from kinby.instance.permissions import SHIPPED_BASH_DENY
+from kinby.instance.recap import DEFAULT_RECAP_LENS
 
 PLACEHOLDER_MODEL = "provider:model"
 README_NAME = "README.md"
@@ -81,6 +83,15 @@ def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
             "Edit it to change how the agent acts. -->\n"
             "\n"
             "You are a personal AI teammate.\n"
+        ),
+        encoding="utf-8",
+    )
+    (directory / RECAP_NAME).write_text(
+        (
+            "<!-- RECAP.md tells the recap model what to examine after each turn. "
+            "Edit it to change the retrospective. -->\n"
+            "\n"
+            f"{DEFAULT_RECAP_LENS}\n"
         ),
         encoding="utf-8",
     )
