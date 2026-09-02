@@ -62,3 +62,25 @@ def test_manifest_schema_accepts_the_tools_table() -> None:
     }
 
     validate(instance=manifest, schema=manifest_schema())
+
+
+@pytest.mark.parametrize("policy", ["every-turn", "off"])
+def test_manifest_schema_accepts_recap_policies(policy: str) -> None:
+    manifest = {
+        "id": "alice",
+        "models": {"main": "openai:gpt-5"},
+        "memory": {"recap": policy},
+    }
+
+    validate(instance=manifest, schema=manifest_schema())
+
+
+def test_manifest_schema_rejects_an_unknown_recap_policy() -> None:
+    manifest = {
+        "id": "alice",
+        "models": {"main": "openai:gpt-5"},
+        "memory": {"recap": "sometimes"},
+    }
+
+    with pytest.raises(ValidationError):
+        validate(instance=manifest, schema=manifest_schema())

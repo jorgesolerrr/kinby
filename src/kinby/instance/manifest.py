@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, StringConstraints, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
 from kinby.instance.dataclasses import (
     Conventions,
@@ -17,6 +17,7 @@ from kinby.instance.dataclasses import (
     MatchingRule,
     Memory,
     Models,
+    RecapPolicy,
     Tools,
     Workspace,
 )
@@ -66,7 +67,7 @@ class RawWorkspace(_Section):
 
 
 class RawMemory(_Section):
-    pass
+    recap: RecapPolicy = Field(default=RecapPolicy.EVERY_TURN, strict=False)
 
 
 class RawTools(_Section):
@@ -140,7 +141,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
             source=raw.workspace.source,
             conventions=_conventions(workspace_path, raw.workspace.conventions),
         ),
-        memory=Memory(),
+        memory=Memory(recap=raw.memory.recap),
         tools=Tools(defaults=raw.tools.defaults),
     )
 

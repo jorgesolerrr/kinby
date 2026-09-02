@@ -23,8 +23,10 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
     gitignore = (target / ".gitignore").read_text(encoding="utf-8")
     assert ".state/" in gitignore
     assert ".env" in gitignore
-    assert 'main = "provider:model"' in (target / "kinby.toml").read_text(encoding="utf-8")
-    assert (target / "kinby.toml").read_text(encoding="utf-8").startswith("#")
+    manifest = (target / "kinby.toml").read_text(encoding="utf-8")
+    assert 'main = "provider:model"' in manifest
+    assert '[memory]\nrecap = "every-turn"' in manifest
+    assert manifest.startswith("#")
     assert (target / "SYSTEM.md").read_text(encoding="utf-8").startswith("<!--")
     assert (target / "permissions.toml").read_text(encoding="utf-8").startswith("#")
     assert (target / "memory" / "profile.md").read_text(encoding="utf-8").startswith("<!--")

@@ -23,6 +23,7 @@ from kinby.contracts import (
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.turns import ApprovalDecision, Emit, ParkedTurn, TurnOutcome, TurnRequest
+from kinby.instance import load_instance
 from kinby.memory import GraphStore, RecapWriter
 from tests.helpers import (
     cannot_restore,
@@ -190,7 +191,11 @@ def test_repl_does_not_print_recap_events(tmp_path: Path) -> None:
     async def scenario() -> None:
         state_dir = tmp_path / ".state"
         event_log = EventLog(state_dir)
-        recap = RecapWriter(event_log, GraphStore(tmp_path))
+        (tmp_path / "kinby.toml").write_text(
+            ('id = "test"\n\n[models]\nmain = "openai:main"\n\n[memory]\nrecap = "off"\n'),
+            encoding="utf-8",
+        )
+        recap = RecapWriter(event_log, GraphStore(tmp_path), load_instance(tmp_path))
         dispatcher = build_dispatcher(
             state_dir,
             event_log=event_log,

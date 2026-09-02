@@ -36,7 +36,12 @@
     },
     "RawMemory": {
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "recap": {
+          "$ref": "#/$defs/RecapPolicy",
+          "default": "every-turn"
+        }
+      },
       "title": "RawMemory",
       "type": "object"
     },
@@ -133,6 +138,15 @@
       },
       "title": "RawWorkspace",
       "type": "object"
+    },
+    "RecapPolicy": {
+      "description": "When kinby writes a model-assisted recap.",
+      "enum": [
+        "every-turn",
+        "off"
+      ],
+      "title": "RecapPolicy",
+      "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -146,7 +160,9 @@
     },
     "memory": {
       "$ref": "#/$defs/RawMemory",
-      "default": {}
+      "default": {
+        "recap": "every-turn"
+      }
     },
     "models": {
       "$ref": "#/$defs/RawModels"
