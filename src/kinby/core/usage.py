@@ -37,30 +37,30 @@ def usage_totals(
     events: Iterable[Event],
     usage_range: UsageRange,
 ) -> UsageGetResult:
-    recorded_events = list(events)
-    recap_by_turn = {
-        (event.thread_id, event.turn_id): event.payload
-        for event in recorded_events
-        if isinstance(event.payload, MemoryRecapped)
-    }
     turns_by_thread: dict[UUID, list[TurnUsage]] = {}
-    for event in recorded_events:
+    selected_turns: dict[tuple[UUID, UUID], TurnUsage] = {}
+    for event in events:
+        if isinstance(event.payload, MemoryRecapped):
+            turn = selected_turns.get((event.thread_id, event.turn_id))
+            if turn is not None:
+                turn.input_tokens += event.payload.input_tokens - turn.recap_input_tokens
+                turn.output_tokens += event.payload.output_tokens - turn.recap_output_tokens
+                turn.recap_input_tokens = event.payload.input_tokens
+                turn.recap_output_tokens = event.payload.output_tokens
+            continue
         if not isinstance(event.payload, TurnCompleted):
             continue
         if not usage_range.includes(event.timestamp):
             continue
-        recap = recap_by_turn.get((event.thread_id, event.turn_id))
-        recap_input_tokens = recap.input_tokens if recap is not None else 0
-        recap_output_tokens = recap.output_tokens if recap is not None else 0
-        turns_by_thread.setdefault(event.thread_id, []).append(
-            TurnUsage(
-                turn_id=event.turn_id,
-                input_tokens=event.payload.input_tokens + recap_input_tokens,
-                output_tokens=event.payload.output_tokens + recap_output_tokens,
-                recap_input_tokens=recap_input_tokens,
-                recap_output_tokens=recap_output_tokens,
-            )
+        turn = TurnUsage(
+            turn_id=event.turn_id,
+            input_tokens=event.payload.input_tokens,
+            output_tokens=event.payload.output_tokens,
+            recap_input_tokens=0,
+            recap_output_tokens=0,
         )
+        turns_by_thread.setdefault(event.thread_id, []).append(turn)
+        selected_turns[(event.thread_id, event.turn_id)] = turn
 
     return UsageGetResult(
         threads=[
