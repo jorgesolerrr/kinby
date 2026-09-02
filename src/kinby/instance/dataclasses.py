@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -40,9 +41,18 @@ class Workspace:
     conventions: Conventions
 
 
+class RecapPolicy(StrEnum):
+    """When kinby writes a model-assisted recap."""
+
+    EVERY_TURN = "every-turn"
+    TRACE_ONLY = "off"
+
+
 @dataclass(frozen=True)
 class Memory:
-    """Reserved memory configuration."""
+    """Memory behavior selected for one instance."""
+
+    recap: RecapPolicy
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@ from kinby.instance.dataclasses import (
     Manifest,
     Memory,
     Models,
+    RecapPolicy,
     Tools,
     Workspace,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "ManifestError",
     "Memory",
     "Models",
+    "RecapPolicy",
     "Tools",
     "Workspace",
     "discover_instance",

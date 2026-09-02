@@ -152,6 +152,22 @@ def test_instance_show_names_unknown_keys(tmp_path, capsys, manifest, offending_
     assert offending_key in captured.err
 
 
+def test_instance_show_rejects_an_unknown_recap_policy(tmp_path, capsys):
+    instance = tmp_path / "alice"
+    instance.mkdir()
+    (instance / "kinby.toml").write_text(
+        ('id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n[memory]\nrecap = "sometimes"\n'),
+        encoding="utf-8",
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert captured.out == ""
+    assert captured.err == "memory.recap: Input should be 'every-turn' or 'off'\n"
+
+
 def test_instance_show_reports_a_missing_default_workspace(tmp_path, capsys):
     instance = tmp_path / "alice"
     instance.mkdir()

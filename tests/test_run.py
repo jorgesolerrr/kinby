@@ -5,7 +5,16 @@ from uuid import uuid4
 import pytest
 
 from kinby.cli import main
-from kinby.instance import init_instance, load_instance, reload_manifest
+from kinby.instance import RecapPolicy, init_instance, load_instance, reload_manifest
+
+
+def test_manifest_defaults_to_an_every_turn_recap_policy(tmp_path: Path) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path)
+
+    instance = load_instance(instance_path)
+
+    assert instance.manifest.memory.recap is RecapPolicy.EVERY_TURN
 
 
 def test_run_opens_a_repl_with_a_session_model_override_without_changing_the_manifest(

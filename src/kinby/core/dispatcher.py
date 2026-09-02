@@ -221,6 +221,8 @@ def turn_config(
     recap = RecapWriter(
         event_log,
         GraphStore(instance.path),
+        instance,
+        model_override=model_override,
     )
     return TurnConfig(runner.prepare_for_turn, runner.permission_ceiling, runner, recap)
 
