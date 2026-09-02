@@ -157,10 +157,13 @@ async def _run_instance(
     thread_id: UUID | None = None,
 ) -> int:
     event_log = EventLog(instance.manifest.state_dir)
+    turns = turn_config(instance, event_log=event_log, model_override=model_override)
+    if turns.recap is not None:
+        await turns.recap.catch_up()
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
         event_log=event_log,
-        turns=turn_config(instance, event_log=event_log, model_override=model_override),
+        turns=turns,
     )
     client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
     opened = await _thread_for_session(client, thread_id)

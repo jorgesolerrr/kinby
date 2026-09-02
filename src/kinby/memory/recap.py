@@ -109,6 +109,21 @@ class RecapWriter:
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._work())
 
+    async def catch_up(self) -> None:
+        """Queue every closed turn that has no recap marker."""
+        events = await asyncio.to_thread(lambda: list(self._event_log.all_events()))
+        closed: list[_RecapRequest] = []
+        covered: set[_RecapRequest] = set()
+        for event in events:
+            request = _RecapRequest(event.thread_id, event.turn_id)
+            if isinstance(event.payload, MemoryRecapped):
+                covered.add(request)
+            elif isinstance(event.payload, TurnCompleted | TurnFailed | TurnInterrupted):
+                closed.append(request)
+        for request in closed:
+            if request not in covered:
+                self.schedule(request.thread_id, request.turn_id)
+
     async def drain(self) -> None:
         """Wait until every queued recap has finished."""
         await self._queue.join()
