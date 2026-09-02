@@ -18,8 +18,10 @@ from kinby.contracts import (
     THREAD_MODE_SET,
     THREAD_SUBSCRIBE,
     THREAD_TURN_INTERRUPT,
+    THREAD_TURN_RATE,
     THREAD_TURN_START,
     USAGE_GET,
+    AcceptedResult,
     ContractModel,
     ErrorCode,
     ErrorEnvelope,
@@ -33,10 +35,14 @@ from kinby.contracts import (
     ThreadListCommand,
     ThreadListResult,
     ThreadSubscribeCommand,
+    ThreadTurnRateCommand,
+    TurnRated,
+    TurnStarted,
     UsageGetCommand,
     UsageGetResult,
+    is_turn_closing,
 )
-from kinby.core.errors import CoreError
+from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
@@ -187,12 +193,36 @@ def build_dispatcher(
             UsageRange(command.since, command.until),
         )
 
+    async def rate_turn(command: ThreadTurnRateCommand) -> AcceptedResult:
+        events = [
+            event
+            for event in event_log.stored(command.thread_id)
+            if event.turn_id == command.turn_id
+        ]
+        if not any(isinstance(event.payload, TurnStarted) for event in events):
+            raise TurnNotFound(
+                f'Turn "{command.turn_id}" was not found on thread "{command.thread_id}".'
+            )
+        if not any(is_turn_closing(event.payload) for event in events):
+            raise TurnOpen(f'Turn "{command.turn_id}" is still open.')
+        event = await event_log.append(
+            command.thread_id,
+            command.turn_id,
+            TurnRated(verdict=command.verdict, reason=command.reason),
+        )
+        return AcceptedResult(
+            thread_id=event.thread_id,
+            turn_id=event.turn_id,
+            sequence=event.sequence,
+        )
+
     def subscribe_to_thread(command: ThreadSubscribeCommand) -> AsyncGenerator[Event]:
         return event_log.subscribe(command.thread_id, command.after_sequence)
 
     dispatcher.register(THREAD_CREATE, create_thread)
     dispatcher.register(THREAD_LIST, list_threads)
     dispatcher.register(USAGE_GET, get_usage)
+    dispatcher.register(THREAD_TURN_RATE, rate_turn)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
     if turns is not None:
         turn_service = Turns(

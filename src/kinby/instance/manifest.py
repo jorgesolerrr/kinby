@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapte
 
 from kinby.instance.dataclasses import (
     Conventions,
+    Feedback,
+    FeedbackPolicy,
     Instance,
     Manifest,
     MatchingRule,
@@ -70,6 +72,10 @@ class RawMemory(_Section):
     recap: RecapPolicy = Field(default=RecapPolicy.EVERY_TURN, strict=False)
 
 
+class RawFeedback(_Section):
+    ask: FeedbackPolicy = Field(default=FeedbackPolicy.EVERY_TURN, strict=False)
+
+
 class RawTools(_Section):
     defaults: bool = True
 
@@ -83,6 +89,7 @@ class RawManifest(_Section):
     models: RawModels
     workspace: RawWorkspace = RawWorkspace()
     memory: RawMemory = RawMemory()
+    feedback: RawFeedback = RawFeedback()
     tools: RawTools = RawTools()
 
 
@@ -142,6 +149,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
             conventions=_conventions(workspace_path, raw.workspace.conventions),
         ),
         memory=Memory(recap=raw.memory.recap),
+        feedback=Feedback(ask=raw.feedback.ask),
         tools=Tools(defaults=raw.tools.defaults),
     )
 

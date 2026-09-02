@@ -2,6 +2,8 @@
 
 from kinby.instance.dataclasses import (
     Conventions,
+    Feedback,
+    FeedbackPolicy,
     Instance,
     Manifest,
     Memory,
@@ -18,6 +20,8 @@ from kinby.instance.manifest import load_instance, reload_manifest
 __all__ = [
     "PLACEHOLDER_MODEL",
     "Conventions",
+    "Feedback",
+    "FeedbackPolicy",
     "Instance",
     "InstanceExistsError",
     "InstanceNotFoundError",

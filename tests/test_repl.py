@@ -18,12 +18,14 @@ from kinby.contracts import (
     ThreadCreateResult,
     ToolCall,
     ToolResult,
+    TurnRated,
+    TurnVerdict,
     Warning,
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.turns import ApprovalDecision, Emit, ParkedTurn, TurnOutcome, TurnRequest
-from kinby.instance import load_instance
+from kinby.instance import FeedbackPolicy, load_instance
 from kinby.memory import GraphStore, RecapWriter
 from tests.helpers import (
     cannot_restore,
@@ -83,6 +85,14 @@ class ToolEventRunner:
         )
         await emit(Warning(sources=("tools/weather.py",), message="Using cached tool set."))
         return TurnOutcome()
+
+    resume = does_not_park
+    restore = cannot_restore
+
+
+class FailingReplRunner:
+    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+        raise RuntimeError("provider unavailable")
 
     resume = does_not_park
     restore = cannot_restore
@@ -156,6 +166,187 @@ class BlockingInput(StringIO):
         self._lines.put(line)
 
 
+def test_repl_rates_a_completed_turn_good_with_a_reason(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ReplRunner(),
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.EVERY_TURN,
+            stdin=StringIO("Hello\ng\nAnswered directly.\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert stdout.getvalue() == (
+            "> Hi there\nRate this turn [g]ood/[b]ad/[enter to skip]: Reason (optional): > "
+        )
+        assert stderr.getvalue() == ""
+        ratings = [
+            event.payload
+            for event in EventLog(tmp_path).stored(created.id)
+            if isinstance(event.payload, TurnRated)
+        ]
+        assert ratings == [TurnRated(verdict=TurnVerdict.GOOD, reason="Answered directly.")]
+
+    asyncio.run(scenario())
+
+
+def test_repl_rates_a_completed_turn_bad_without_a_reason(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ReplRunner(),
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.EVERY_TURN,
+            stdin=StringIO("Hello\nb\n\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert "Rate this turn [g]ood/[b]ad/[enter to skip]: Reason (optional): " in (
+            stdout.getvalue()
+        )
+        assert stderr.getvalue() == ""
+        ratings = [
+            event.payload
+            for event in EventLog(tmp_path).stored(created.id)
+            if isinstance(event.payload, TurnRated)
+        ]
+        assert ratings == [TurnRated(verdict=TurnVerdict.BAD)]
+
+    asyncio.run(scenario())
+
+
+def test_repl_skips_a_rating_on_enter(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ReplRunner(),
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.EVERY_TURN,
+            stdin=StringIO("Hello\n\n"),
+            stdout=stdout,
+            stderr=StringIO(),
+        )
+
+        assert exit_code == 0
+        assert "Rate this turn [g]ood/[b]ad/[enter to skip]: " in stdout.getvalue()
+        assert not any(
+            isinstance(event.payload, TurnRated) for event in EventLog(tmp_path).stored(created.id)
+        )
+
+    asyncio.run(scenario())
+
+
+def test_repl_does_not_ask_for_a_failed_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                FailingReplRunner(),
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.EVERY_TURN,
+            stdin=StringIO("Hello\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert "Rate this turn" not in stdout.getvalue()
+        assert "The model turn failed unexpectedly." in stderr.getvalue()
+        assert not any(
+            isinstance(event.payload, TurnRated) for event in EventLog(tmp_path).stored(created.id)
+        )
+
+    asyncio.run(scenario())
+
+
+def test_repl_does_not_ask_for_an_interrupted_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runner = InterruptibleReplRunner()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        repl = asyncio.create_task(
+            run_repl(
+                client,
+                created.id,
+                feedback=FeedbackPolicy.EVERY_TURN,
+                stdin=StringIO("First\n"),
+                stdout=stdout,
+                stderr=StringIO(),
+            )
+        )
+        await asyncio.wait_for(runner.first_turn_started.wait(), timeout=1)
+
+        signal.raise_signal(signal.SIGINT)
+        exit_code = await asyncio.wait_for(repl, timeout=1)
+
+        assert exit_code == 0
+        assert stdout.getvalue() == "> (interrupted)\n> "
+        assert "Rate this turn" not in stdout.getvalue()
+
+    asyncio.run(scenario())
+
+
 def test_repl_streams_a_full_turn_through_the_dispatcher(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(
@@ -175,6 +366,7 @@ def test_repl_streams_a_full_turn_through_the_dispatcher(tmp_path: Path) -> None
         exit_code = await run_repl(
             client,
             created.id,
+            feedback=FeedbackPolicy.OFF,
             stdin=StringIO("Hello\n"),
             stdout=stdout,
             stderr=stderr,
@@ -216,6 +408,7 @@ def test_repl_does_not_print_recap_events(tmp_path: Path) -> None:
             run_repl(
                 client,
                 created.id,
+                feedback=FeedbackPolicy.OFF,
                 stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
@@ -258,6 +451,7 @@ def test_repl_pins_the_mode_before_starting_the_next_turn(tmp_path: Path) -> Non
         exit_code = await run_repl(
             client,
             created.id,
+            feedback=FeedbackPolicy.OFF,
             stdin=StringIO("/mode auto\nHello\n"),
             stdout=stdout,
             stderr=stderr,
@@ -287,6 +481,7 @@ def test_repl_interrupts_a_running_turn_on_ctrl_c(tmp_path: Path) -> None:
             run_repl(
                 client,
                 created.id,
+                feedback=FeedbackPolicy.OFF,
                 stdin=StringIO("First\nSecond\n"),
                 stdout=stdout,
                 stderr=stderr,
@@ -323,6 +518,7 @@ def test_repl_renders_tool_and_warning_events(tmp_path: Path) -> None:
         exit_code = await run_repl(
             client,
             created.id,
+            feedback=FeedbackPolicy.OFF,
             stdin=StringIO("Hello\n"),
             stdout=stdout,
             stderr=stderr,
@@ -354,6 +550,7 @@ def test_repl_answers_a_parked_approval(tmp_path: Path) -> None:
             run_repl(
                 client,
                 created.id,
+                feedback=FeedbackPolicy.OFF,
                 stdin=StringIO("Remember this\nyes\n"),
                 stdout=stdout,
                 stderr=stderr,
@@ -391,6 +588,7 @@ def test_repl_interrupts_while_waiting_for_approval(tmp_path: Path) -> None:
             run_repl(
                 client,
                 created.id,
+                feedback=FeedbackPolicy.OFF,
                 stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
@@ -437,6 +635,7 @@ def test_repl_starts_another_turn_on_an_existing_thread(tmp_path: Path) -> None:
         first = await run_repl(
             client,
             created.id,
+            feedback=FeedbackPolicy.OFF,
             stdin=StringIO("Hello\n"),
             stdout=first_out,
             stderr=stderr,
@@ -444,6 +643,7 @@ def test_repl_starts_another_turn_on_an_existing_thread(tmp_path: Path) -> None:
         second = await run_repl(
             client,
             created.id,
+            feedback=FeedbackPolicy.OFF,
             stdin=StringIO("Again\n"),
             stdout=second_out,
             stderr=stderr,

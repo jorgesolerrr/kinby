@@ -1,5 +1,14 @@
 {
   "$defs": {
+    "FeedbackPolicy": {
+      "description": "When kinby asks the user to rate a completed turn.",
+      "enum": [
+        "every-turn",
+        "off"
+      ],
+      "title": "FeedbackPolicy",
+      "type": "string"
+    },
     "RawConventions": {
       "additionalProperties": false,
       "properties": {
@@ -32,6 +41,17 @@
         }
       },
       "title": "RawConventions",
+      "type": "object"
+    },
+    "RawFeedback": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "$ref": "#/$defs/FeedbackPolicy",
+          "default": "every-turn"
+        }
+      },
+      "title": "RawFeedback",
       "type": "object"
     },
     "RawMemory": {
@@ -153,6 +173,12 @@
   "additionalProperties": false,
   "description": "The shape of ``kinby.toml``, validated once at load.",
   "properties": {
+    "feedback": {
+      "$ref": "#/$defs/RawFeedback",
+      "default": {
+        "ask": "every-turn"
+      }
+    },
     "id": {
       "minLength": 1,
       "title": "Id",

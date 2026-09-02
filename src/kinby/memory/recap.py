@@ -27,6 +27,7 @@ from kinby.contracts import (
     TurnInterrupted,
     TurnStarted,
     Warning,
+    is_turn_closing,
 )
 from kinby.instance import Instance, RecapPolicy, reload_manifest
 from kinby.instance.recap import load_recap_lens
@@ -118,7 +119,7 @@ class RecapWriter:
             request = _RecapRequest(event.thread_id, event.turn_id)
             if isinstance(event.payload, MemoryRecapped):
                 covered.add(request)
-            elif isinstance(event.payload, TurnCompleted | TurnFailed | TurnInterrupted):
+            elif is_turn_closing(event.payload):
                 closed.append(request)
         for request in closed:
             if request not in covered:
@@ -331,11 +332,7 @@ def _render_turn(events: list[Event], calls: list[ToolCall]) -> str:
             f"Arguments: {json.dumps(call.arguments, ensure_ascii=False, sort_keys=True)}\n"
             f"Result: {rendered_result}"
         )
-    closing = next(
-        event.payload
-        for event in reversed(events)
-        if isinstance(event.payload, TurnCompleted | TurnFailed | TurnInterrupted)
-    )
+    closing = next(event.payload for event in reversed(events) if is_turn_closing(event.payload))
     match closing:
         case TurnCompleted(input_tokens=input_tokens, output_tokens=output_tokens):
             rendered_closing = (

@@ -182,6 +182,7 @@ async def _run_instance(
     return await run_repl(
         client,
         opened,
+        feedback=instance.manifest.feedback.ask,
         stdin=sys.stdin,
         stdout=sys.stdout,
         stderr=sys.stderr,

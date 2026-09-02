@@ -48,11 +48,25 @@ class RecapPolicy(StrEnum):
     TRACE_ONLY = "off"
 
 
+class FeedbackPolicy(StrEnum):
+    """When kinby asks the user to rate a completed turn."""
+
+    EVERY_TURN = "every-turn"
+    OFF = "off"
+
+
 @dataclass(frozen=True)
 class Memory:
     """Memory behavior selected for one instance."""
 
     recap: RecapPolicy
+
+
+@dataclass(frozen=True)
+class Feedback:
+    """Turn-rating prompt behavior selected for one instance."""
+
+    ask: FeedbackPolicy
 
 
 @dataclass(frozen=True)
@@ -72,6 +86,7 @@ class Manifest:
     models: Models
     workspace: Workspace
     memory: Memory
+    feedback: Feedback
     tools: Tools
 
 

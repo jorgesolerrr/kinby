@@ -84,3 +84,25 @@ def test_manifest_schema_rejects_an_unknown_recap_policy() -> None:
 
     with pytest.raises(ValidationError):
         validate(instance=manifest, schema=manifest_schema())
+
+
+@pytest.mark.parametrize("policy", ["every-turn", "off"])
+def test_manifest_schema_accepts_feedback_policies(policy: str) -> None:
+    manifest = {
+        "id": "alice",
+        "models": {"main": "openai:gpt-5"},
+        "feedback": {"ask": policy},
+    }
+
+    validate(instance=manifest, schema=manifest_schema())
+
+
+def test_manifest_schema_rejects_an_unknown_feedback_key() -> None:
+    manifest = {
+        "id": "alice",
+        "models": {"main": "openai:gpt-5"},
+        "feedback": {"sometimes": True},
+    }
+
+    with pytest.raises(ValidationError):
+        validate(instance=manifest, schema=manifest_schema())

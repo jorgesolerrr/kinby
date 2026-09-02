@@ -21,7 +21,9 @@ from kinby.contracts import (
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
+    TurnRated,
     TurnStarted,
+    TurnVerdict,
 )
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
@@ -496,6 +498,263 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
         await replay.aclose()
 
         assert replayed == events
+
+    asyncio.run(scenario())
+
+
+def test_completed_turn_can_be_rated_through_the_dispatcher(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        subscription = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id},
+            {Scope.THREAD_READ},
+        )
+        for _ in range(4):
+            await asyncio.wait_for(anext(subscription), timeout=1)
+
+        accepted = await dispatcher.dispatch(
+            "thread.turn.rate",
+            {
+                "thread_id": created.id,
+                "turn_id": started.turn_id,
+                "verdict": "good",
+                "reason": "Answered the question directly.",
+            },
+            {Scope.THREAD_RATE},
+        )
+        rated = await asyncio.wait_for(anext(subscription), timeout=1)
+        await subscription.aclose()
+
+        assert accepted == AcceptedResult(
+            thread_id=created.id,
+            turn_id=started.turn_id,
+            sequence=5,
+        )
+        assert isinstance(rated, Event)
+        assert rated.payload == TurnRated(
+            verdict=TurnVerdict.GOOD,
+            reason="Answered the question directly.",
+        )
+
+    asyncio.run(scenario())
+
+
+def test_running_turn_cannot_be_rated(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runner = WaitingRunner()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await asyncio.wait_for(runner.started.wait(), timeout=1)
+
+        rated = await dispatcher.dispatch(
+            "thread.turn.rate",
+            {
+                "thread_id": created.id,
+                "turn_id": started.turn_id,
+                "verdict": "bad",
+            },
+            {Scope.THREAD_RATE},
+        )
+
+        assert rated == ErrorEnvelope(
+            code=ErrorCode.TURN_OPEN,
+            message=f'Turn "{started.turn_id}" is still open.',
+            retryable=False,
+        )
+        runner.release.set()
+
+    asyncio.run(scenario())
+
+
+def test_unknown_turn_or_thread_cannot_be_rated(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        subscription = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id},
+            {Scope.THREAD_READ},
+        )
+        for _ in range(4):
+            await asyncio.wait_for(anext(subscription), timeout=1)
+        await subscription.aclose()
+
+        unknown_turn = UUID("22222222-2222-2222-2222-222222222222")
+        unknown_thread = UUID("33333333-3333-3333-3333-333333333333")
+        for thread_id, turn_id in (
+            (created.id, unknown_turn),
+            (unknown_thread, started.turn_id),
+        ):
+            rated = await dispatcher.dispatch(
+                "thread.turn.rate",
+                {
+                    "thread_id": thread_id,
+                    "turn_id": turn_id,
+                    "verdict": "bad",
+                },
+                {Scope.THREAD_RATE},
+            )
+
+            assert rated == ErrorEnvelope(
+                code=ErrorCode.NOT_FOUND,
+                message=f'Turn "{turn_id}" was not found on thread "{thread_id}".',
+                retryable=False,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_non_turn_operation_cannot_be_rated(tmp_path: Path) -> None:
+    dispatcher = build_dispatcher(
+        tmp_path,
+        turns=TurnConfig(
+            fixed_turn_preparation,
+            fixed_permission_ceiling,
+            ScriptedRunner(),
+        ),
+    )
+    created = asyncio.run(dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE}))
+    assert isinstance(created, ThreadCreateResult)
+    pinned = asyncio.run(
+        dispatcher.dispatch(
+            "thread.mode.set",
+            {"thread_id": created.id, "mode": "auto"},
+            {Scope.THREAD_ADMIN},
+        )
+    )
+    assert isinstance(pinned, AcceptedResult)
+
+    rated = asyncio.run(
+        dispatcher.dispatch(
+            "thread.turn.rate",
+            {
+                "thread_id": created.id,
+                "turn_id": pinned.turn_id,
+                "verdict": "good",
+            },
+            {Scope.THREAD_RATE},
+        )
+    )
+
+    assert rated == ErrorEnvelope(
+        code=ErrorCode.NOT_FOUND,
+        message=f'Turn "{pinned.turn_id}" was not found on thread "{created.id}".',
+        retryable=False,
+    )
+
+
+def test_rate_turn_requires_thread_rate_scope(tmp_path: Path) -> None:
+    dispatcher = build_dispatcher(tmp_path)
+
+    denied = asyncio.run(dispatcher.dispatch("thread.turn.rate", {}, set()))
+
+    assert denied == ErrorEnvelope(
+        code=ErrorCode.PERMISSION_DENIED,
+        message='Missing required scope "thread:rate".',
+        retryable=False,
+    )
+
+
+def test_dispatcher_without_turn_service_appends_a_second_rating(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        subscription = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id},
+            {Scope.THREAD_READ},
+        )
+        for _ in range(4):
+            await asyncio.wait_for(anext(subscription), timeout=1)
+        await subscription.aclose()
+        first = await dispatcher.dispatch(
+            "thread.turn.rate",
+            {
+                "thread_id": created.id,
+                "turn_id": started.turn_id,
+                "verdict": "good",
+            },
+            {Scope.THREAD_RATE},
+        )
+        assert isinstance(first, AcceptedResult)
+
+        restarted = build_dispatcher(tmp_path)
+        second = await restarted.dispatch(
+            "thread.turn.rate",
+            {
+                "thread_id": created.id,
+                "turn_id": started.turn_id,
+                "verdict": "bad",
+                "reason": "I changed my mind.",
+            },
+            {Scope.THREAD_RATE},
+        )
+
+        assert isinstance(second, AcceptedResult)
+        assert second.sequence == first.sequence + 1
+        ratings = [
+            event.payload
+            for event in EventLog(tmp_path).stored(created.id)
+            if isinstance(event.payload, TurnRated)
+        ]
+        assert ratings == [
+            TurnRated(verdict=TurnVerdict.GOOD),
+            TurnRated(verdict=TurnVerdict.BAD, reason="I changed my mind."),
+        ]
 
     asyncio.run(scenario())
 

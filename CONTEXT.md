@@ -105,6 +105,14 @@ _Avoid_: task
 
 A user's request to stop the active turn before it completes.
 
+### Turn rating
+
+The user's good or bad verdict on a closed **turn**, with an optional reason. A later rating becomes the current verdict while earlier ratings remain part of the thread's history.
+
+### Feedback policy
+
+The **instance** setting that chooses whether to ask for a **turn rating** after every completed **turn** or never ask.
+
 ### Token usage
 
 The input and output tokens attributed to a turn, with totals rolled up for its thread.
