@@ -29,6 +29,7 @@ from kinby.contracts import (
     Warning,
 )
 from kinby.instance import Instance, RecapPolicy, reload_manifest
+from kinby.instance.recap import load_recap_lens
 from kinby.memory.facade import Episode, Memory, new_node_id
 
 if TYPE_CHECKING:
@@ -38,10 +39,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 _TOOL_CALL_SUMMARY_MAX_CHARS = 160
 _TOOL_RESULT_MAX_CHARS = 800
-_DEFAULT_RECAP_LENS = (
-    "Describe the turn's concrete outcome and decisions. "
-    "Name one honest way the work could have gone differently."
-)
 
 
 class RecapDraft(BaseModel):
@@ -150,7 +147,8 @@ class RecapWriter:
             await self._write_trace_only(request, events, calls)
             return
 
-        draft, usage = await self._draft(events, calls, manifest.models.recap)
+        lens = load_recap_lens(self._instance.path)
+        draft, usage = await self._draft(events, calls, manifest.models.recap, lens.text)
         episode = (
             _episode(
                 request,
@@ -209,10 +207,11 @@ class RecapWriter:
         events: list[Event],
         calls: list[ToolCall],
         model_name: str,
+        lens: str,
     ) -> tuple[RecapDraft, TokenTotals]:
         model = self._model_factory(model_name)
         runnable = model.with_structured_output(RecapDraft, include_raw=True)
-        result = await runnable.ainvoke((SystemMessage(content=_recap_frame(events, calls)),))
+        result = await runnable.ainvoke((SystemMessage(content=_recap_frame(events, calls, lens)),))
         if not isinstance(result, Mapping):
             raise TypeError("The recap model returned an invalid structured response.")
         parsing_error = result.get("parsing_error")
@@ -278,11 +277,11 @@ def _episode_body(draft: RecapDraft, calls: list[ToolCall]) -> str:
     )
 
 
-def _recap_frame(events: list[Event], calls: list[ToolCall]) -> str:
+def _recap_frame(events: list[Event], calls: list[ToolCall], lens: str) -> str:
     return (
         "Write a retrospective draft for this turn. Do not write facts. "
         "Set keep to false for trivial chat with no durable outcome or reusable path.\n\n"
-        f"# Recap lens\n{_DEFAULT_RECAP_LENS}\n\n"
+        f"# Recap lens\n{lens}\n\n"
         f"# Turn events\n{_render_turn(events, calls)}\n\n"
         f"# Deterministic trace\n{_path_taken(calls)}\n\n"
         "# Output contract\n"

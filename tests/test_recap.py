@@ -462,6 +462,71 @@ def test_recap_model_selection_reloads_the_manifest_for_each_turn(tmp_path: Path
     asyncio.run(scenario())
 
 
+def test_recap_lens_reloads_for_each_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        state_dir = tmp_path / ".state"
+        event_log = EventLog(state_dir)
+        model = ScriptedRecapModel(
+            RecapDraft(
+                keep=False,
+                description="Routine turn",
+                subjects=(),
+                happened="",
+                decided="",
+                retrospective="",
+            ),
+            input_tokens=1,
+            output_tokens=1,
+        )
+        recap = RecapWriter(
+            event_log,
+            GraphStore(tmp_path),
+            _instance(tmp_path, policy="every-turn"),
+            model_factory=lambda _: model,
+        )
+        dispatcher = build_dispatcher(
+            state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ClosingRunner(),
+                recap,
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+
+        for message, lens in (
+            ("First", "Ask whether the result solved the user's actual problem."),
+            ("Second", "Name every workspace assumption that shaped the work."),
+        ):
+            (tmp_path / "RECAP.md").write_text(lens, encoding="utf-8")
+            accepted = await dispatcher.dispatch(
+                "thread.turn.start",
+                {"thread_id": created.id, "message": message},
+                {Scope.THREAD_OPERATE},
+            )
+            assert isinstance(accepted, AcceptedResult)
+            closing = event_log.subscribe(created.id, accepted.sequence)
+            for _ in range(2):
+                await anext(closing)
+            await closing.aclose()
+            await asyncio.wait_for(recap.drain(), timeout=1)
+
+        prompts = [call[0].text for call in model.calls]
+        assert (
+            "# Recap lens\n"
+            "Ask whether the result solved the user's actual problem.\n\n"
+            "# Turn events"
+        ) in prompts[0]
+        assert (
+            "# Recap lens\nName every workspace assumption that shaped the work.\n\n# Turn events"
+        ) in prompts[1]
+
+    asyncio.run(scenario())
+
+
 class ToolRunner:
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
         for call_id, name, arguments, output in (

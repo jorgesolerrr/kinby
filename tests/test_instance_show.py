@@ -185,6 +185,20 @@ def test_instance_show_reports_a_missing_default_workspace(tmp_path, capsys):
     assert "embed: not configured" in captured.out
 
 
+def test_instance_show_reports_a_missing_recap_prompt(tmp_path, capsys):
+    instance = tmp_path / "alice"
+    _write_instance(instance, "alice")
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert (
+        f"recap prompt: {instance.resolve() / 'RECAP.md'} (missing, using kinby default)\n"
+    ) in captured.out
+    assert captured.err == ""
+
+
 def test_instance_show_preserves_absolute_paths(tmp_path, capsys):
     instance = tmp_path / "alice"
     instance.mkdir()
@@ -588,6 +602,8 @@ enabled = true
     )
     conventions = workspace / "AGENTS.md"
     conventions.write_text("# Project rules\n", encoding="utf-8")
+    recap_prompt = instance / "RECAP.md"
+    recap_prompt.write_text("Review tests and assumptions.\n", encoding="utf-8")
     instance_skill.write_text(
         """\
 ---
@@ -651,6 +667,7 @@ def remember(note: str) -> str:
     assert f"  planning: {instance_skill}\n" in captured.out
     assert f"  review: {workspace_skill}\n" in captured.out
     assert "prompt sections:\n" in captured.out
+    assert f"recap prompt: {recap_prompt} (29 characters)\n" in captured.out
     assert "  preamble: kinby (48 characters)\n" in captured.out
     assert f"  workspace conventions: {conventions.resolve()} (15 characters)\n" in captured.out
     assert "  skills catalogue: runtime (" in captured.out

@@ -3,6 +3,7 @@
 MANIFEST_NAME = "kinby.toml"
 ENV_NAME = ".env"
 SYSTEM_NAME = "SYSTEM.md"
+RECAP_NAME = "RECAP.md"
 PERMISSIONS_NAME = "permissions.toml"
 TOOLS_DIR = "tools"
 SKILLS_DIR = "skills"

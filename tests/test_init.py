@@ -9,6 +9,7 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
     assert exit_code == 0
     assert (target / "kinby.toml").is_file()
     assert (target / "SYSTEM.md").is_file()
+    assert (target / "RECAP.md").is_file()
     assert (target / "permissions.toml").is_file()
     assert (target / "tools" / "README.md").is_file()
     assert (target / "skills" / "README.md").is_file()
@@ -28,6 +29,12 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
     assert '[memory]\nrecap = "every-turn"' in manifest
     assert manifest.startswith("#")
     assert (target / "SYSTEM.md").read_text(encoding="utf-8").startswith("<!--")
+    recap_prompt = (target / "RECAP.md").read_text(encoding="utf-8")
+    assert recap_prompt.startswith("<!--")
+    assert (
+        "Describe the turn's concrete outcome and decisions. "
+        "Name one honest way the work could have gone differently."
+    ) in recap_prompt
     assert (target / "permissions.toml").read_text(encoding="utf-8").startswith("#")
     assert (target / "memory" / "profile.md").read_text(encoding="utf-8").startswith("<!--")
     assert (target / ".gitignore").read_text(encoding="utf-8").startswith("#")
