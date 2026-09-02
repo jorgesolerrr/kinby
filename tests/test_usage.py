@@ -1,8 +1,10 @@
 import asyncio
+import gc
+import weakref
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -12,6 +14,8 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Event,
+    MemoryRecapped,
+    MessageDelta,
     Scope,
     ThreadCreateResult,
     ThreadUsage,
@@ -21,6 +25,7 @@ from kinby.contracts import (
     UsageGetResult,
 )
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
+from kinby.core.events import EventLog
 from kinby.core.turns import Emit, TurnOutcome, TurnRequest
 from kinby.instance import init_instance, load_instance
 from tests.helpers import (
@@ -108,16 +113,22 @@ def _thread_usage(*turns: RecordedTurn) -> ThreadUsage:
                 turn_id=turn.turn_id,
                 input_tokens=turn.usage.input_tokens,
                 output_tokens=turn.usage.output_tokens,
+                recap_input_tokens=0,
+                recap_output_tokens=0,
             )
             for turn in turns
         ],
     )
 
 
-def test_usage_get_matches_two_recorded_turns_on_two_threads(tmp_path: Path) -> None:
+def test_usage_get_reports_zero_recap_tokens_with_zero_or_no_marker(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
+        event_log = EventLog(tmp_path)
         dispatcher = build_dispatcher(
             tmp_path,
+            event_log=event_log,
             turns=TurnConfig(
                 fixed_turn_preparation,
                 fixed_permission_ceiling,
@@ -126,6 +137,11 @@ def test_usage_get_matches_two_recorded_turns_on_two_threads(tmp_path: Path) -> 
         )
         first = await _record_turn(dispatcher, "First")
         second = await _record_turn(dispatcher, "Second")
+        await event_log.append(
+            first.thread_id,
+            first.turn_id,
+            MemoryRecapped(node=None, input_tokens=0, output_tokens=0),
+        )
 
         result = await dispatcher.dispatch(
             "usage.get",
@@ -173,6 +189,116 @@ def test_usage_get_sums_completed_turns_per_thread(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_usage_get_includes_recap_tokens_in_turn_and_thread_totals(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path)
+        dispatcher = build_dispatcher(
+            tmp_path,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                UsageRunner(),
+            ),
+        )
+        recorded = await _record_turn(dispatcher, "First")
+        await event_log.append(
+            recorded.thread_id,
+            recorded.turn_id,
+            MemoryRecapped(node=None, input_tokens=13, output_tokens=5),
+        )
+
+        result = await dispatcher.dispatch(
+            "usage.get",
+            {},
+            {Scope.INSTANCE_READ},
+        )
+
+        assert result == UsageGetResult(
+            threads=[
+                ThreadUsage(
+                    thread_id=recorded.thread_id,
+                    input_tokens=24,
+                    output_tokens=12,
+                    turns=[
+                        TurnUsage(
+                            turn_id=recorded.turn_id,
+                            input_tokens=24,
+                            output_tokens=12,
+                            recap_input_tokens=13,
+                            recap_output_tokens=5,
+                        )
+                    ],
+                )
+            ]
+        )
+
+    asyncio.run(scenario())
+
+
+def test_usage_get_releases_irrelevant_events_while_reading_log(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+
+    class StreamingEventLog(EventLog):
+        def all_events(self):
+            irrelevant = Event(
+                sequence=1,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                payload=MessageDelta(text="discarded"),
+                timestamp=datetime.now(UTC),
+            )
+            irrelevant_ref = weakref.ref(irrelevant)
+            yield irrelevant
+            del irrelevant
+            yield Event(
+                sequence=2,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                payload=MessageDelta(text="also discarded"),
+                timestamp=datetime.now(UTC),
+            )
+            gc.collect()
+            assert irrelevant_ref() is None
+            yield Event(
+                sequence=3,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                payload=TurnCompleted(input_tokens=11, output_tokens=7),
+                timestamp=datetime.now(UTC),
+            )
+
+    async def scenario() -> None:
+        result = await build_dispatcher(
+            tmp_path,
+            event_log=StreamingEventLog(tmp_path),
+        ).dispatch("usage.get", {}, {Scope.INSTANCE_READ})
+
+        assert result == UsageGetResult(
+            threads=[
+                ThreadUsage(
+                    thread_id=thread_id,
+                    input_tokens=11,
+                    output_tokens=7,
+                    turns=[
+                        TurnUsage(
+                            turn_id=turn_id,
+                            input_tokens=11,
+                            output_tokens=7,
+                            recap_input_tokens=0,
+                            recap_output_tokens=0,
+                        )
+                    ],
+                )
+            ]
+        )
+
+    asyncio.run(scenario())
+
+
 def test_usage_get_requires_instance_read_before_validating_payload(tmp_path: Path) -> None:
     result = asyncio.run(
         build_dispatcher(tmp_path).dispatch(
@@ -195,15 +321,23 @@ def test_cli_shows_token_totals_per_thread_and_turn(
 
     async def record_usage() -> RecordedTurn:
         loaded = load_instance(instance)
+        event_log = EventLog(loaded.manifest.state_dir)
         dispatcher = build_dispatcher(
             loaded.manifest.state_dir,
+            event_log=event_log,
             turns=TurnConfig(
                 fixed_turn_preparation,
                 fixed_permission_ceiling,
                 UsageRunner(),
             ),
         )
-        return await _record_turn(dispatcher, "First")
+        recorded = await _record_turn(dispatcher, "First")
+        await event_log.append(
+            recorded.thread_id,
+            recorded.turn_id,
+            MemoryRecapped(node=None, input_tokens=13, output_tokens=5),
+        )
+        return recorded
 
     recorded = asyncio.run(record_usage())
 
@@ -213,8 +347,8 @@ def test_cli_shows_token_totals_per_thread_and_turn(
     assert exit_code == 0
     assert output.err == ""
     assert output.out.splitlines() == [
-        f"thread {recorded.thread_id}: input=11 output=7 total=18",
-        f"  turn {recorded.turn_id}: input=11 output=7 total=18",
+        f"thread {recorded.thread_id}: input=24 output=12 total=36",
+        (f"  turn {recorded.turn_id}: input=24 output=12 recap_input=13 recap_output=5 total=36"),
     ]
 
 
@@ -238,8 +372,10 @@ def test_cli_rejects_a_usage_range_without_timezone(
 
 def test_usage_get_limits_totals_to_the_requested_event_range(tmp_path: Path) -> None:
     async def scenario() -> None:
+        event_log = EventLog(tmp_path)
         dispatcher = build_dispatcher(
             tmp_path,
+            event_log=event_log,
             turns=TurnConfig(
                 fixed_turn_preparation,
                 fixed_permission_ceiling,
@@ -249,6 +385,11 @@ def test_usage_get_limits_totals_to_the_requested_event_range(tmp_path: Path) ->
         earlier = await _record_turn(dispatcher, "Earlier")
         await asyncio.sleep(0.001)
         included = await _record_turn(dispatcher, "Included", earlier.thread_id)
+        await event_log.append(
+            included.thread_id,
+            included.turn_id,
+            MemoryRecapped(node=None, input_tokens=7, output_tokens=4),
+        )
 
         result = await dispatcher.dispatch(
             "usage.get",
@@ -259,6 +400,23 @@ def test_usage_get_limits_totals_to_the_requested_event_range(tmp_path: Path) ->
             {Scope.INSTANCE_READ},
         )
 
-        assert result == UsageGetResult(threads=[_thread_usage(included)])
+        assert result == UsageGetResult(
+            threads=[
+                ThreadUsage(
+                    thread_id=included.thread_id,
+                    input_tokens=10,
+                    output_tokens=6,
+                    turns=[
+                        TurnUsage(
+                            turn_id=included.turn_id,
+                            input_tokens=10,
+                            output_tokens=6,
+                            recap_input_tokens=7,
+                            recap_output_tokens=4,
+                        )
+                    ],
+                )
+            ]
+        )
 
     asyncio.run(scenario())

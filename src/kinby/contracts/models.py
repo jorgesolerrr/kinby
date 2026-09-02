@@ -226,6 +226,8 @@ class UsageGetCommand(ContractModel):
 
 class TurnUsage(TokenTotals):
     turn_id: UUID
+    recap_input_tokens: int
+    recap_output_tokens: int
 
 
 class ThreadUsage(TokenTotals):

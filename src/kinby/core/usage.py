@@ -9,6 +9,7 @@ from uuid import UUID
 
 from kinby.contracts import (
     Event,
+    MemoryRecapped,
     ThreadUsage,
     TurnCompleted,
     TurnUsage,
@@ -37,18 +38,29 @@ def usage_totals(
     usage_range: UsageRange,
 ) -> UsageGetResult:
     turns_by_thread: dict[UUID, list[TurnUsage]] = {}
+    selected_turns: dict[tuple[UUID, UUID], TurnUsage] = {}
     for event in events:
+        if isinstance(event.payload, MemoryRecapped):
+            turn = selected_turns.get((event.thread_id, event.turn_id))
+            if turn is not None:
+                turn.input_tokens += event.payload.input_tokens - turn.recap_input_tokens
+                turn.output_tokens += event.payload.output_tokens - turn.recap_output_tokens
+                turn.recap_input_tokens = event.payload.input_tokens
+                turn.recap_output_tokens = event.payload.output_tokens
+            continue
         if not isinstance(event.payload, TurnCompleted):
             continue
         if not usage_range.includes(event.timestamp):
             continue
-        turns_by_thread.setdefault(event.thread_id, []).append(
-            TurnUsage(
-                turn_id=event.turn_id,
-                input_tokens=event.payload.input_tokens,
-                output_tokens=event.payload.output_tokens,
-            )
+        turn = TurnUsage(
+            turn_id=event.turn_id,
+            input_tokens=event.payload.input_tokens,
+            output_tokens=event.payload.output_tokens,
+            recap_input_tokens=0,
+            recap_output_tokens=0,
         )
+        turns_by_thread.setdefault(event.thread_id, []).append(turn)
+        selected_turns[(event.thread_id, event.turn_id)] = turn
 
     return UsageGetResult(
         threads=[

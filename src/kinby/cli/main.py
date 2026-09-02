@@ -24,6 +24,7 @@ from kinby.contracts import (
     ThreadCreateCommand,
     ThreadListCommand,
     TokenTotals,
+    TurnUsage,
     UsageGetCommand,
 )
 from kinby.core import assemble_system_prompt, build_dispatcher, turn_config
@@ -118,6 +119,14 @@ def _token_totals(usage: TokenTotals) -> str:
     return f"input={usage.input_tokens} output={usage.output_tokens} total={usage.total}"
 
 
+def _turn_token_totals(usage: TurnUsage) -> str:
+    return (
+        f"input={usage.input_tokens} output={usage.output_tokens} "
+        f"recap_input={usage.recap_input_tokens} "
+        f"recap_output={usage.recap_output_tokens} total={usage.total}"
+    )
+
+
 def _usage_command(args: argparse.Namespace) -> UsageGetCommand:
     return UsageGetCommand.model_validate({"since": args.since, "until": args.until})
 
@@ -146,7 +155,7 @@ async def _show_usage(client: ContractClient, command: UsageGetCommand) -> int:
     for thread in result.threads:
         print(f"thread {thread.thread_id}: {_token_totals(thread)}")
         for turn in thread.turns:
-            print(f"  turn {turn.turn_id}: {_token_totals(turn)}")
+            print(f"  turn {turn.turn_id}: {_turn_token_totals(turn)}")
     return 0
 
 
