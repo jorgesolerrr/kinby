@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Literal, NewType
+from typing import Annotated, Literal, NewType, TypeIs
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
@@ -22,6 +22,7 @@ class Scope(StrEnum):
     THREAD_READ = "thread:read"
     THREAD_OPERATE = "thread:operate"
     THREAD_ADMIN = "thread:admin"
+    THREAD_RATE = "thread:rate"
     INSTANCE_READ = "instance:read"
     INSTANCE_ADMIN = "instance:admin"
 
@@ -29,6 +30,7 @@ class Scope(StrEnum):
 class ErrorCode(StrEnum):
     NOT_FOUND = "NOT_FOUND"
     THREAD_BUSY = "THREAD_BUSY"
+    TURN_OPEN = "TURN_OPEN"
     NO_ACTIVE_TURN = "NO_ACTIVE_TURN"
     PARKED_TURN_UNAVAILABLE = "PARKED_TURN_UNAVAILABLE"
     PERMISSION_DENIED = "PERMISSION_DENIED"
@@ -60,6 +62,7 @@ class EventType(StrEnum):
     TURN_COMPLETED = "turn.completed"
     TURN_FAILED = "turn.failed"
     TURN_INTERRUPTED = "turn.interrupted"
+    TURN_RATED = "turn.rated"
     MEMORY_RECAPPED = "memory.recapped"
 
 
@@ -132,6 +135,20 @@ class TurnInterrupted(ContractModel):
     type: Literal[EventType.TURN_INTERRUPTED] = EventType.TURN_INTERRUPTED
 
 
+type TurnClosingPayload = TurnCompleted | TurnFailed | TurnInterrupted
+
+
+class TurnVerdict(StrEnum):
+    GOOD = "good"
+    BAD = "bad"
+
+
+class TurnRated(ContractModel):
+    type: Literal[EventType.TURN_RATED] = EventType.TURN_RATED
+    verdict: TurnVerdict
+    reason: str | None = None
+
+
 class MemoryRecapped(TokenTotals):
     type: Literal[EventType.MEMORY_RECAPPED] = EventType.MEMORY_RECAPPED
     node: NodeId | None
@@ -148,9 +165,14 @@ Payload = Annotated[
     | TurnCompleted
     | TurnFailed
     | TurnInterrupted
+    | TurnRated
     | MemoryRecapped,
     Field(discriminator="type"),
 ]
+
+
+def is_turn_closing(payload: Payload) -> TypeIs[TurnClosingPayload]:
+    return isinstance(payload, TurnCompleted | TurnFailed | TurnInterrupted)
 
 
 class Event(ContractModel):
@@ -182,6 +204,13 @@ class ThreadModeSetCommand(ContractModel):
 
 class ThreadTurnInterruptCommand(ContractModel):
     thread_id: UUID
+
+
+class ThreadTurnRateCommand(ContractModel):
+    thread_id: UUID
+    turn_id: UUID
+    verdict: TurnVerdict
+    reason: str | None = None
 
 
 class ThreadApprovalRespondCommand(ContractModel):

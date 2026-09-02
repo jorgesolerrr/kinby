@@ -19,13 +19,13 @@ from kinby.contracts import (
     THREAD_MODE_SET,
     THREAD_SUBSCRIBE,
     THREAD_TURN_INTERRUPT,
+    THREAD_TURN_RATE,
     THREAD_TURN_START,
     AcceptedResult,
     ApprovalRequested,
     ErrorCode,
     ErrorEnvelope,
     Event,
-    EventType,
     MemoryRecapped,
     MessageDelta,
     PermissionMode,
@@ -33,20 +33,20 @@ from kinby.contracts import (
     ThreadModeSetCommand,
     ThreadSubscribeCommand,
     ThreadTurnInterruptCommand,
+    ThreadTurnRateCommand,
     ThreadTurnStartCommand,
     ToolCall,
     ToolResult,
+    TurnClosingPayload,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
+    TurnRated,
+    TurnVerdict,
     Warning,
+    is_turn_closing,
 )
-
-_TERMINAL_EVENTS = {
-    EventType.TURN_COMPLETED,
-    EventType.TURN_FAILED,
-    EventType.TURN_INTERRUPTED,
-}
+from kinby.instance import FeedbackPolicy
 
 
 class _AsyncInput:
@@ -131,6 +131,7 @@ async def run_repl(
     client: ContractClient,
     thread_id: UUID,
     *,
+    feedback: FeedbackPolicy,
     stdin: TextIO,
     stdout: TextIO,
     stderr: TextIO,
@@ -186,7 +187,7 @@ async def run_repl(
 
             interrupter = _InterruptOnSigint(client, thread_id)
             async with interrupter:
-                rendered = await _render_turn(
+                closing = await _render_turn(
                     client,
                     subscription,
                     accepted.turn_id,
@@ -196,8 +197,10 @@ async def run_repl(
             interrupted = interrupter.result
             if isinstance(interrupted, ErrorEnvelope):
                 _render_error(interrupted, stderr)
-            if not rendered:
+            if closing is None:
                 return 1
+            if isinstance(closing, TurnCompleted) and feedback is FeedbackPolicy.EVERY_TURN:
+                await _rate_turn(client, thread_id, accepted.turn_id, repl_io)
 
 
 def _render_error(error: ErrorEnvelope, stderr: TextIO) -> None:
@@ -211,23 +214,50 @@ async def _render_turn(
     turn_id: UUID,
     interrupted: asyncio.Event,
     repl_io: _ReplIO,
-) -> bool:
+) -> TurnClosingPayload | None:
     async for result in subscription:
         if isinstance(result, ErrorEnvelope):
             _render_error(result, repl_io.stderr)
-            return False
+            return None
         if result.turn_id != turn_id:
             continue
         if isinstance(result.payload, ApprovalRequested):
             if not await _answer_approval(client, result, interrupted, repl_io):
-                return False
+                return None
         else:
             _render_event(result, repl_io.stdout, repl_io.stderr)
-        if result.type in _TERMINAL_EVENTS:
-            return True
+        if is_turn_closing(result.payload):
+            return result.payload
     repl_io.stderr.write("INTERNAL: The thread subscription ended before completion.\n")
     repl_io.stderr.flush()
-    return False
+    return None
+
+
+async def _rate_turn(
+    client: ContractClient,
+    thread_id: UUID,
+    turn_id: UUID,
+    repl_io: _ReplIO,
+) -> None:
+    repl_io.stdout.write("Rate this turn [g]ood/[b]ad/[enter to skip]: ")
+    repl_io.stdout.flush()
+    answer = (await repl_io.stdin.readline()).rstrip("\r\n")
+    if answer not in {"g", "b"}:
+        return
+    repl_io.stdout.write("Reason (optional): ")
+    repl_io.stdout.flush()
+    reason = (await repl_io.stdin.readline()).rstrip("\r\n") or None
+    result = await client.call(
+        THREAD_TURN_RATE,
+        ThreadTurnRateCommand(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            verdict=TurnVerdict.GOOD if answer == "g" else TurnVerdict.BAD,
+            reason=reason,
+        ),
+    )
+    if isinstance(result, ErrorEnvelope):
+        _render_error(result, repl_io.stderr)
 
 
 async def _answer_approval(
@@ -293,5 +323,5 @@ def _render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
         case TurnInterrupted():
             stdout.write("(interrupted)\n")
             stdout.flush()
-        case MemoryRecapped():
+        case MemoryRecapped() | TurnRated():
             pass

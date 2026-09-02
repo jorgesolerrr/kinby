@@ -17,6 +17,7 @@ from kinby.contracts.models import (
     ThreadModeSetCommand,
     ThreadSubscribeCommand,
     ThreadTurnInterruptCommand,
+    ThreadTurnRateCommand,
     ThreadTurnStartCommand,
     UsageGetCommand,
     UsageGetResult,
@@ -58,6 +59,9 @@ THREAD_TURN_INTERRUPT = Method(
     Scope.THREAD_OPERATE,
     ThreadTurnInterruptCommand,
     AcceptedResult,
+)
+THREAD_TURN_RATE = Method(
+    "thread.turn.rate", Scope.THREAD_RATE, ThreadTurnRateCommand, AcceptedResult
 )
 THREAD_APPROVAL_RESPOND = Method(
     "thread.approval.respond",

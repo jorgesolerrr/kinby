@@ -128,6 +128,10 @@ def test_instance_show_names_a_malformed_model(tmp_path, capsys, model_setting, 
             "memory.enabled",
         ),
         (
+            ('id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n[feedback]\nsometimes = true\n'),
+            "feedback.sometimes",
+        ),
+        (
             (
                 'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n'
                 "[workspace.conventions]\ntools = true\n"

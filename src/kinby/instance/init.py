@@ -6,7 +6,7 @@ import re
 import unicodedata
 from pathlib import Path
 
-from kinby.instance.dataclasses import RecapPolicy
+from kinby.instance.dataclasses import FeedbackPolicy, RecapPolicy
 from kinby.instance.errors import InstanceExistsError
 from kinby.instance.layout import (
     ENV_NAME,
@@ -74,6 +74,9 @@ def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
             "\n"
             "[memory]\n"
             f"recap = {_toml_string(RecapPolicy.EVERY_TURN)}\n"
+            "\n"
+            "[feedback]\n"
+            f"ask = {_toml_string(FeedbackPolicy.EVERY_TURN)}\n"
         ),
         encoding="utf-8",
     )
