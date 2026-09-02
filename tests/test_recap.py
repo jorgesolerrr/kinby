@@ -383,6 +383,78 @@ def test_recap_model_error_warns_without_changing_the_closed_turn(tmp_path: Path
     asyncio.run(scenario())
 
 
+def test_catch_up_retries_a_failed_recap_and_writes_its_marker(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        state_dir = tmp_path / ".state"
+        event_log = EventLog(state_dir)
+        failed_recap = RecapWriter(
+            event_log,
+            GraphStore(tmp_path),
+            _instance(tmp_path, policy="every-turn"),
+            model_factory=lambda _: FailingRecapModel(),
+        )
+        dispatcher = build_dispatcher(
+            state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ClosingRunner(),
+                failed_recap,
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        accepted = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "First"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(accepted, AcceptedResult)
+        closing_events = event_log.subscribe(created.id, accepted.sequence)
+        for _ in range(2):
+            await anext(closing_events)
+        await closing_events.aclose()
+        await asyncio.wait_for(failed_recap.drain(), timeout=1)
+        assert isinstance(event_log.stored(created.id)[-1].payload, Warning)
+
+        model = ScriptedRecapModel(
+            RecapDraft(
+                keep=True,
+                description="Retried the failed recap",
+                subjects=(),
+                happened="The turn ran a test command.",
+                decided="Keep the result.",
+                retrospective="The first recap provider failed.",
+            ),
+            input_tokens=5,
+            output_tokens=3,
+        )
+        retry = RecapWriter(
+            event_log,
+            GraphStore(tmp_path),
+            _instance(tmp_path, policy="every-turn"),
+            model_factory=lambda _: model,
+        )
+
+        await retry.catch_up()
+        await asyncio.wait_for(retry.drain(), timeout=1)
+
+        markers = [
+            event
+            for event in event_log.stored(created.id)
+            if isinstance(event.payload, MemoryRecapped)
+        ]
+        assert len(model.calls) == 1
+        assert len(markers) == 1
+        assert markers[0].turn_id == accepted.turn_id
+        marker = markers[0].payload
+        assert isinstance(marker, MemoryRecapped)
+        assert marker.node is not None
+
+    asyncio.run(scenario())
+
+
 def test_recap_model_selection_reloads_the_manifest_for_each_turn(tmp_path: Path) -> None:
     async def scenario() -> None:
         state_dir = tmp_path / ".state"
@@ -575,6 +647,121 @@ def test_schedule_reads_the_transcript_in_the_worker(tmp_path: Path) -> None:
         assert event_log.background_read_seen
         event_log.require_background_read = False
         assert isinstance(event_log.stored(thread_id)[-1].payload, MemoryRecapped)
+
+    asyncio.run(scenario())
+
+
+def test_catch_up_recaps_a_closed_uncovered_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        thread_id = uuid4()
+        turn_id = uuid4()
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnStarted(
+                message="Check the weather",
+                model="test-model",
+                permission_mode=PermissionMode.READ_ONLY,
+            ),
+        )
+        await event_log.append(
+            thread_id,
+            turn_id,
+            ToolCall(call_id="weather-1", name="weather", arguments={"city": "Quito"}),
+        )
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnCompleted(input_tokens=4, output_tokens=2),
+        )
+        recap = _trace_only_writer(tmp_path, event_log, GraphStore(tmp_path))
+
+        await recap.catch_up()
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        marker = event_log.stored(thread_id)[-1]
+        assert marker.turn_id == turn_id
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload.node is not None
+
+    asyncio.run(scenario())
+
+
+def test_catch_up_queues_oldest_turns_before_a_newly_closed_turn(tmp_path: Path) -> None:
+    async def close_turn(event_log: EventLog, thread_id: UUID, turn_id: UUID) -> None:
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnStarted(
+                message=f"Old turn {turn_id}",
+                model="test-model",
+                permission_mode=PermissionMode.READ_ONLY,
+            ),
+        )
+        await event_log.append(
+            thread_id,
+            turn_id,
+            ToolCall(
+                call_id=f"{turn_id}-call",
+                name="bash",
+                arguments={"command": "uv run pytest"},
+            ),
+        )
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnCompleted(input_tokens=4, output_tokens=2),
+        )
+
+    async def scenario() -> None:
+        state_dir = tmp_path / ".state"
+        event_log = EventLog(state_dir)
+        oldest_thread_id = uuid4()
+        oldest_turn_id = uuid4()
+        second_thread_id = uuid4()
+        second_turn_id = uuid4()
+        await close_turn(event_log, oldest_thread_id, oldest_turn_id)
+        await close_turn(event_log, second_thread_id, second_turn_id)
+        memory = BlockingGraphStore(tmp_path)
+        recap = _trace_only_writer(tmp_path, event_log, memory)
+        dispatcher = build_dispatcher(
+            state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ClosingRunner(),
+                recap,
+            ),
+        )
+
+        await recap.catch_up()
+        await asyncio.wait_for(asyncio.to_thread(memory.write_started.wait), timeout=1)
+
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        newest = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "New turn"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(newest, AcceptedResult)
+        closing_events = event_log.subscribe(created.id, newest.sequence)
+        for _ in range(2):
+            await anext(closing_events)
+        await closing_events.aclose()
+        memory.release_write.set()
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        markers = [
+            event for event in event_log.all_events() if isinstance(event.payload, MemoryRecapped)
+        ]
+        assert [marker.turn_id for marker in markers] == [
+            oldest_turn_id,
+            second_turn_id,
+            newest.turn_id,
+        ]
 
     asyncio.run(scenario())
 
