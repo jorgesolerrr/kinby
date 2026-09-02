@@ -30,6 +30,9 @@ dev = [
     "ruff>=0.8",
     "ty>=0.0.75",
 ]
+evals = [
+    "inspect-ai>=0.3",
+]
 
 [tool.ruff]
 target-version = "py314"
@@ -50,3 +53,7 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "RUF", "ANN", "FBT", "TID"
 [tool.ty.rules]
 blanket-ignore-comment = "error"
 possibly-unresolved-reference = "error"
+
+[tool.ty.src]
+# Eval modules are checked explicitly with their optional dependency group installed.
+exclude = ["evals"]

@@ -1,0 +1,8 @@
+id = "memory-eval-temporal-day"
+
+[models]
+main = "inspect:active"
+recap = "inspect:active"
+
+[tools]
+defaults = false

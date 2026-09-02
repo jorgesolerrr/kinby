@@ -1,0 +1,3 @@
+# Inspect runs evals in process
+
+Inspect AI is kinby's eval harness. An adapter routes Inspect's active model through the runner and recap writer in the same process, so one task can exercise the dispatcher, tools, and recap path against every model supplied to Inspect. The eval code and Inspect dependency stay outside the core package in the `evals` dependency group. A normal `uv sync`, pytest, and CI do not install or run them. Eval changes are checked manually with that group installed, including `uv run --group evals ty check evals` and a real-provider Inspect run. This keeps optional evaluation machinery out of the shipped application and its automated test suite.
