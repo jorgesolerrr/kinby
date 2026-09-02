@@ -27,6 +27,7 @@ from kinby.contracts import (
     UsageGetCommand,
 )
 from kinby.core import assemble_system_prompt, build_dispatcher, turn_config
+from kinby.core.events import EventLog
 from kinby.instance import (
     PLACEHOLDER_MODEL,
     Instance,
@@ -149,9 +150,11 @@ async def _run_instance(
     model_override: str | None = None,
     thread_id: UUID | None = None,
 ) -> int:
+    event_log = EventLog(instance.manifest.state_dir)
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
-        turns=turn_config(instance, model_override=model_override),
+        event_log=event_log,
+        turns=turn_config(instance, event_log=event_log, model_override=model_override),
     )
     client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
     opened = await _thread_for_session(client, thread_id)

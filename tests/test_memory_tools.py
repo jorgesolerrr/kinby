@@ -1,8 +1,9 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, ToolMessage
@@ -19,12 +20,13 @@ from kinby.contracts import (
 from kinby.core import LangGraphRunner
 from kinby.core.turns import ApprovalDecision, ParkedTurn, TurnOutcome, TurnRequest
 from kinby.instance import init_instance, load_instance
-from kinby.memory import Fact, GraphStore, memory_tools
+from kinby.memory import Episode, Fact, GraphStore, NodeId, memory_tools
 from kinby.plugins import ToolContext
 
 _MODEL = "openai:gpt-5"
 _NODE = "2026-08-30-fixed-deployment"
 _TRACE = "Found the stale image tag, rebuilt the image, then restarted the container."
+_TURN_ID = UUID("22222222-2222-2222-2222-222222222222")
 
 
 class ScriptedModel:
@@ -51,6 +53,7 @@ def _instance_with_episode(tmp_path: Path):
             "---\n"
             "date: 2026-08-30\n"
             "thread: 11111111-1111-1111-1111-111111111111\n"
+            f"turn: {_TURN_ID}\n"
             "description: Fixed the deployment\n"
             "subjects: [kinby, deployment]\n"
             "tools: [grep, bash, edit]\n"
@@ -66,6 +69,35 @@ def _empty_instance(tmp_path: Path):
     instance_path = tmp_path / "instance"
     init_instance(instance_path, model=_MODEL)
     return load_instance(instance_path)
+
+
+def test_memory_open_returns_the_turn_of_a_round_tripped_episode(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _empty_instance(tmp_path)
+        memory = GraphStore(instance.path)
+        episode = Episode(
+            node=NodeId("2026-09-01-checked-the-weather"),
+            date=date(2026, 9, 1),
+            thread=UUID("11111111-1111-1111-1111-111111111111"),
+            turn=_TURN_ID,
+            description="Checked the weather",
+            subjects=(),
+            tools=("weather",),
+            body='## Path taken\n1. weather {"city": "Quito"}',
+        )
+
+        memory.remember(episode)
+        opened = memory.open(episode.node)
+        open_tool = next(tool for tool in memory_tools(memory) if tool.name == "memory_open")
+        result = await open_tool.ainvoke(
+            {"node": episode.node},
+            ToolContext(instance=instance, thread_id=episode.thread),
+        )
+
+        assert opened == episode
+        assert json.loads(result)["turn"] == str(_TURN_ID)
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("mode", list(PermissionMode))

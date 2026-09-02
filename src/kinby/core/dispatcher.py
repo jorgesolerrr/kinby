@@ -7,6 +7,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -42,6 +43,7 @@ from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnPreparation, TurnRunner, Turns
 from kinby.core.usage import UsageRange, usage_totals
 from kinby.instance import Instance
+from kinby.memory import GraphStore, RecapWriter
 
 Handler = Callable[[ContractModel], Awaitable[ContractModel]]
 SubscriptionHandler = Callable[[ContractModel], AsyncGenerator[ContractModel]]
@@ -59,6 +61,7 @@ class TurnConfig:
     prepare_for_turn: Callable[[], TurnPreparation]
     permission_ceiling: Callable[[], PermissionMode]
     runner: TurnRunner
+    recap: RecapWriter | None = None
 
 
 class Dispatcher:
@@ -198,6 +201,7 @@ def build_dispatcher(
             turns.runner,
             turns.prepare_for_turn,
             turns.permission_ceiling,
+            turns.recap.schedule if turns.recap is not None else _ignore_closed_turn,
         )
         dispatcher.register(THREAD_TURN_START, turn_service.start)
         dispatcher.register(THREAD_MODE_SET, turn_service.set_mode)
@@ -209,8 +213,17 @@ def build_dispatcher(
 def turn_config(
     instance: Instance,
     *,
+    event_log: EventLog,
     model_override: str | None = None,
 ) -> TurnConfig:
     """Build model turns from an instance, reloading its model at each turn."""
     runner = LangGraphRunner(instance, model_override=model_override)
-    return TurnConfig(runner.prepare_for_turn, runner.permission_ceiling, runner)
+    recap = RecapWriter(
+        event_log,
+        GraphStore(instance.path),
+    )
+    return TurnConfig(runner.prepare_for_turn, runner.permission_ceiling, runner, recap)
+
+
+def _ignore_closed_turn(thread_id: UUID, turn_id: UUID) -> None:
+    pass

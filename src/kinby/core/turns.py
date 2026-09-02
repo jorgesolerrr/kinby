@@ -97,6 +97,10 @@ class TurnRunner(Protocol):
     ) -> TurnResult: ...
 
 
+class ClosedTurnHook(Protocol):
+    def __call__(self, thread_id: UUID, turn_id: UUID) -> None: ...
+
+
 @dataclass
 class RunningTurn:
     request: TurnRequest
@@ -120,12 +124,14 @@ class Turns:
         runner: TurnRunner,
         prepare_for_turn: Callable[[], TurnPreparation],
         permission_ceiling: Callable[[], PermissionMode],
+        after_turn: ClosedTurnHook,
     ) -> None:
         self._store = store
         self._log = log
         self._runner = runner
         self._prepare_for_turn = prepare_for_turn
         self._permission_ceiling = permission_ceiling
+        self._after_turn = after_turn
         self._running: dict[UUID, RunningTurn] = {}
         self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim] = {}
 
@@ -217,6 +223,7 @@ class Turns:
                 turn_id,
                 TurnInterrupted(),
             )
+            self._schedule_after_turn(command.thread_id, turn_id)
         finally:
             self._release_claim(command.thread_id, claim)
         if running is not None and self._running.get(command.thread_id) is running:
@@ -324,9 +331,17 @@ class Turns:
                     output_tokens=outcome.output_tokens,
                 )
             )
+            self._schedule_after_turn(turn.thread_id, turn.turn_id)
             return
 
         await emit(TurnFailed(code=code, message=message))
+        self._schedule_after_turn(turn.thread_id, turn.turn_id)
+
+    def _schedule_after_turn(self, thread_id: UUID, turn_id: UUID) -> None:
+        try:
+            self._after_turn(thread_id, turn_id)
+        except Exception:
+            logger.exception("The turn recap could not be scheduled.")
 
     def _forget_task(self, thread_id: UUID, task: asyncio.Task[None]) -> None:
         running = self._running.get(thread_id)

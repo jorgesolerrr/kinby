@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-import re
 from datetime import date
-from uuid import uuid7
 
-from kinby.memory.facade import Episode, Fact, Memory, MemoryNode, NodeId
+from kinby.contracts import NodeId
+from kinby.memory.facade import Episode, Fact, Memory, MemoryNode, new_node_id
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 
@@ -47,7 +46,7 @@ def memory_tools(memory: Memory) -> tuple[Tool, ...]:
     ) -> str:
         """Remember one fact learned in this thread."""
         learned_on = date.today()
-        node = _fact_node(learned_on, description)
+        node = new_node_id(learned_on, description)
         return memory.remember(
             Fact(
                 node=node,
@@ -68,12 +67,6 @@ def memory_tools(memory: Memory) -> tuple[Tool, ...]:
     return memory_search, memory_open, remember, forget
 
 
-def _fact_node(learned_on: date, description: str) -> NodeId:
-    slug = re.sub(r"[^a-z0-9]+", "-", description.casefold()).strip("-")
-    readable = (slug or "fact")[:64].rstrip("-")
-    return NodeId(f"{learned_on.isoformat()}-{uuid7().hex}-{readable}")
-
-
 def _opened(memory: MemoryNode) -> dict[str, object]:
     opened: dict[str, object] = {
         "node": memory.node,
@@ -84,5 +77,6 @@ def _opened(memory: MemoryNode) -> dict[str, object]:
         "body": memory.body,
     }
     if isinstance(memory, Episode):
+        opened["turn"] = str(memory.turn)
         opened["tools"] = list(memory.tools)
     return opened

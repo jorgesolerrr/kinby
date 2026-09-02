@@ -2,38 +2,50 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic.dataclasses import dataclass
 
+from kinby.contracts import NodeId
 from kinby.frontmatter import (
     FrontmatterError,
     parse_frontmatter,
     render_frontmatter_value,
 )
 from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR
-from kinby.memory.facade import Episode, Fact, MemoryHit, MemoryNode, NodeId
+from kinby.memory.facade import Episode, Fact, MemoryHit, MemoryNode
 
 
 class MemoryNodeError(ValueError):
     """A graph node has missing or invalid frontmatter."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class _NodeFrontmatter:
     date: date
     thread: UUID
     description: Annotated[str, Field(min_length=1)]
     subjects: tuple[str, ...]
-    tools: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class _FactFrontmatter(_NodeFrontmatter):
     tombstone: bool = False
 
 
-_NODE_FRONTMATTER = TypeAdapter(_NodeFrontmatter)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class _EpisodeFrontmatter(_NodeFrontmatter):
+    turn: UUID
+    tools: tuple[str, ...]
+    tombstone: bool = False
+
+
+type _Frontmatter = _FactFrontmatter | _EpisodeFrontmatter
+_FRONTMATTER = TypeAdapter(_Frontmatter)
 
 
 class GraphStore:
@@ -105,11 +117,13 @@ def _render_node(memory: MemoryNode) -> str:
     tools = (
         f"tools: {render_frontmatter_value(memory.tools)}\n" if isinstance(memory, Episode) else ""
     )
+    turn = f"turn: {memory.turn}\n" if isinstance(memory, Episode) else ""
     body = memory.body.rstrip("\r\n")
     return (
         "---\n"
         f"date: {memory.date.isoformat()}\n"
         f"thread: {memory.thread}\n"
+        f"{turn}"
         f"description: {description}\n"
         f"subjects: {subjects}\n"
         f"{tools}"
@@ -121,13 +135,13 @@ def _render_node(memory: MemoryNode) -> str:
 def _read_node(path: Path) -> MemoryNode | None:
     try:
         values, body = parse_frontmatter(path.read_text(encoding="utf-8"))
-        frontmatter = _NODE_FRONTMATTER.validate_python(values)
+        frontmatter = _FRONTMATTER.validate_python(values)
     except (FrontmatterError, ValidationError) as exc:
         raise MemoryNodeError(f'Graph node "{path}" has invalid frontmatter.') from exc
     if frontmatter.tombstone:
         return None
     node = NodeId(path.stem)
-    if frontmatter.tools is None:
+    if isinstance(frontmatter, _FactFrontmatter):
         return Fact(
             node,
             frontmatter.date,
@@ -137,11 +151,12 @@ def _read_node(path: Path) -> MemoryNode | None:
             body,
         )
     return Episode(
-        node,
-        frontmatter.date,
-        frontmatter.thread,
-        frontmatter.description,
-        frontmatter.subjects,
-        body,
-        frontmatter.tools,
+        node=node,
+        date=frontmatter.date,
+        thread=frontmatter.thread,
+        description=frontmatter.description,
+        subjects=frontmatter.subjects,
+        body=body,
+        turn=frontmatter.turn,
+        tools=frontmatter.tools,
     )

@@ -20,6 +20,7 @@ from kinby.contracts import (
     TurnStarted,
 )
 from kinby.core import LangGraphRunner, TurnConfig, build_dispatcher, turn_config
+from kinby.core.events import EventLog
 from kinby.core.turns import TurnOutcome, TurnPreparation, TurnRequest
 from kinby.instance import Instance, load_instance
 from tests.helpers import GRAPH_EVENT_TIMEOUT
@@ -176,6 +177,7 @@ def test_turn_config_reapplies_the_session_model_override(tmp_path: Path) -> Non
     instance = _load_test_instance(tmp_path)
     configured = turn_config(
         instance,
+        event_log=EventLog(instance.manifest.state_dir),
         model_override="anthropic:claude-sonnet-4-6",
     )
     manifest_path = instance.path / "kinby.toml"
