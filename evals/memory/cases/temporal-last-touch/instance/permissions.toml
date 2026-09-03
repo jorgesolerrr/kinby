@@ -1,0 +1,6 @@
+mode = "full-access"
+ceiling = "full-access"
+
+[tools]
+remember = "allow"
+forget = "allow"

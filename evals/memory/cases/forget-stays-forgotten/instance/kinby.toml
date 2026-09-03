@@ -1,4 +1,4 @@
-id = "memory-eval-temporal-day"
+id = "memory-eval-forget-stays-forgotten"
 
 [models]
 main = "inspect:active"

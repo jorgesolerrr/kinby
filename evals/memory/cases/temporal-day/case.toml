@@ -1,5 +1,6 @@
 name = "temporal-day"
-turns = ["What happened on April 17, 2026?"]
+turns = [{ thread = "question", message = "What happened on April 17, 2026?" }]
 reference_answer = "Jorge signed the lease for the Rowan Street studio on April 17, 2026."
 expected_node = "2026-04-17-rowan-street-studio-lease"
+expectation = "open-node"
 must_pass = true
