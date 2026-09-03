@@ -95,7 +95,12 @@ def test_memory_open_returns_the_turn_of_a_round_tripped_episode(tmp_path: Path)
         )
 
         assert opened == episode
-        assert json.loads(result)["turn"] == str(_TURN_ID)
+        assert json.loads(result) == {
+            "node": episode.node,
+            "body": episode.body,
+            "turn": str(_TURN_ID),
+            "tools": ["weather"],
+        }
 
     asyncio.run(scenario())
 

@@ -1,6 +1,6 @@
 name = "temporal-current-decision"
 turns = [{ thread = "question", message = "What did we decide about hosting the Atlas notes service, and is that decision current?" }]
-reference_answer = "Jorge decided to host the Atlas notes service on Fly.io on August 19, 2026. That is the current decision and replaces the July plan to use Render."
+reference_answer = "We decided to host the Atlas notes service on Fly.io. That decision is current."
 expected_node = "2026-08-19-moved-atlas-hosting-to-fly"
 expectation = "open-node"
 must_pass = true

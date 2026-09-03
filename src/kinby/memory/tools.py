@@ -70,10 +70,6 @@ def memory_tools(memory: Memory) -> tuple[Tool, ...]:
 def _opened(memory: MemoryNode) -> dict[str, object]:
     opened: dict[str, object] = {
         "node": memory.node,
-        "date": memory.date.isoformat(),
-        "thread": str(memory.thread),
-        "description": memory.description,
-        "subjects": list(memory.subjects),
         "body": memory.body,
     }
     if isinstance(memory, Episode):
