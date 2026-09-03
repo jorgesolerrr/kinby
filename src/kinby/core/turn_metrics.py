@@ -43,6 +43,11 @@ class _TurnEvents:
     memory_characters: int = 0
 
 
+def estimate_memory_tokens(character_count: int) -> float:
+    """Apply the shared character estimate used for memory text."""
+    return character_count / _CHARACTERS_PER_ESTIMATED_MEMORY_TOKEN
+
+
 def turn_metrics(events: Iterable[Event]) -> list[TurnMetrics]:
     """Read event history once and return its closed turns in closing order."""
     open_turns: dict[tuple[UUID, UUID], _TurnEvents] = {}
@@ -94,9 +99,7 @@ def turn_metrics(events: Iterable[Event]) -> list[TurnMetrics]:
                 memory_calls=memory_calls,
                 memory_consulted=bool(memory_calls.search or memory_calls.open),
                 approvals_requested=turn.approvals_requested if turn else 0,
-                memory_tokens=(
-                    turn.memory_characters / _CHARACTERS_PER_ESTIMATED_MEMORY_TOKEN if turn else 0
-                ),
+                memory_tokens=(estimate_memory_tokens(turn.memory_characters) if turn else 0),
                 rating=None,
             )
             records.append(record)
