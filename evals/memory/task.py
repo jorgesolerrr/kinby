@@ -24,7 +24,7 @@ from inspect_ai.scorer import (
     scorer,
 )
 from inspect_ai.solver import Generate, Solver, TaskState, solver
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
 from kinby.cli.client import ContractClient
@@ -99,7 +99,13 @@ class MemoryCase:
     expected_node: NodeId | None = None
 
 
+@dataclass(frozen=True, config=ConfigDict(extra="ignore"))
+class MemoryOpenResult:
+    node: NodeId
+
+
 _MEMORY_CASE = TypeAdapter(MemoryCase)
+_MEMORY_OPEN_RESULT = TypeAdapter(MemoryOpenResult)
 
 
 @task
@@ -229,13 +235,11 @@ def _memory_behavior(
     match case.expectation:
         case MemoryExpectation.OPEN_NODE:
             expected_node = _expected_node(case)
-            searched = _called(events, last_turn, "memory_search")
+            searched = _successful_result(events, last_turn, "memory_search") is not None
             opened = any(
-                event.turn_id == last_turn
-                and isinstance(event.payload, ToolCall)
-                and event.payload.name == "memory_open"
-                and event.payload.arguments.get("node") == expected_node
-                for event in events
+                call.arguments.get("node") == expected_node
+                and _opened_node(result) == expected_node
+                for call, result in _successful_tool_uses(events, last_turn, "memory_open")
             )
             passed = searched and opened and _recapped(events, last_turn)
             return passed, (
@@ -255,15 +259,6 @@ def _expected_node(case: MemoryCase) -> NodeId:
     return case.expected_node
 
 
-def _called(events: Sequence[Event], turn_id: UUID, name: str) -> bool:
-    return any(
-        event.turn_id == turn_id
-        and isinstance(event.payload, ToolCall)
-        and event.payload.name == name
-        for event in events
-    )
-
-
 def _recapped(events: Sequence[Event], turn_id: UUID) -> bool:
     return any(
         event.turn_id == turn_id and isinstance(event.payload, MemoryRecapped) for event in events
@@ -276,16 +271,36 @@ def _successful_result(
     name: str,
 ) -> ToolResult | None:
     return next(
-        (
-            event.payload
-            for event in events
-            if event.turn_id == turn_id
-            and isinstance(event.payload, ToolResult)
-            and event.payload.name == name
-            and not event.payload.error
-        ),
+        (result for _, result in _successful_tool_uses(events, turn_id, name)),
         None,
     )
+
+
+def _successful_tool_uses(
+    events: Sequence[Event],
+    turn_id: UUID,
+    name: str,
+) -> list[tuple[ToolCall, ToolResult]]:
+    pending: dict[str, ToolCall] = {}
+    uses: list[tuple[ToolCall, ToolResult]] = []
+    for event in events:
+        if event.turn_id != turn_id:
+            continue
+        payload = event.payload
+        if isinstance(payload, ToolCall) and payload.name == name:
+            pending[payload.call_id] = payload
+        elif isinstance(payload, ToolResult) and payload.name == name:
+            call = pending.pop(payload.call_id, None)
+            if call is not None and not payload.error:
+                uses.append((call, payload))
+    return uses
+
+
+def _opened_node(result: ToolResult) -> NodeId | None:
+    try:
+        return _MEMORY_OPEN_RESULT.validate_json(result.output).node
+    except ValidationError:
+        return None
 
 
 def _started_turns(events: Sequence[Event]) -> list[Event]:
