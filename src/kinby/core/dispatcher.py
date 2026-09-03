@@ -12,6 +12,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from kinby.contracts import (
+    STATS_GET,
     THREAD_APPROVAL_RESPOND,
     THREAD_CREATE,
     THREAD_LIST,
@@ -29,6 +30,8 @@ from kinby.contracts import (
     Method,
     PermissionMode,
     Scope,
+    StatsGetCommand,
+    StatsGetResult,
     Subscription,
     ThreadCreateCommand,
     ThreadCreateResult,
@@ -44,10 +47,12 @@ from kinby.contracts import (
 )
 from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
+from kinby.core.stats import stats_buckets
 from kinby.core.threads import ThreadStore
+from kinby.core.turn_metrics import turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnPreparation, TurnRunner, Turns
-from kinby.core.usage import UsageRange, usage_totals
+from kinby.core.usage import TimeRange, usage_totals
 from kinby.instance import Instance
 from kinby.memory import GraphStore, RecapWriter
 
@@ -190,7 +195,19 @@ def build_dispatcher(
     async def get_usage(command: UsageGetCommand) -> UsageGetResult:
         return usage_totals(
             event_log.all_events(),
-            UsageRange(command.since, command.until),
+            TimeRange(command.since, command.until),
+        )
+
+    async def get_stats(command: StatsGetCommand) -> StatsGetResult:
+        records = [
+            record
+            for record in turn_metrics(event_log.all_events())
+            if TimeRange(command.since, command.until).includes(record.closed_at)
+        ]
+        return StatsGetResult(
+            records=records,
+            buckets=stats_buckets(records, command.by),
+            unpriced_models=[],
         )
 
     async def rate_turn(command: ThreadTurnRateCommand) -> AcceptedResult:
@@ -222,6 +239,7 @@ def build_dispatcher(
     dispatcher.register(THREAD_CREATE, create_thread)
     dispatcher.register(THREAD_LIST, list_threads)
     dispatcher.register(USAGE_GET, get_usage)
+    dispatcher.register(STATS_GET, get_stats)
     dispatcher.register(THREAD_TURN_RATE, rate_turn)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
     if turns is not None:

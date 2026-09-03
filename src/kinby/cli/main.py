@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections.abc import Callable
 from datetime import date
 from importlib.metadata import version
 from pathlib import Path
@@ -15,12 +16,16 @@ from pydantic import ValidationError
 from kinby.cli.client import ContractClient, format_error
 from kinby.cli.repl import run_repl
 from kinby.contracts import (
+    STATS_GET,
     THREAD_CREATE,
     THREAD_LIST,
     USAGE_GET,
     ErrorCode,
     ErrorEnvelope,
     Scope,
+    StatsBucketSize,
+    StatsGetCommand,
+    StatsSummary,
     ThreadCreateCommand,
     ThreadListCommand,
     TokenTotals,
@@ -29,6 +34,7 @@ from kinby.contracts import (
 )
 from kinby.core import assemble_system_prompt, build_dispatcher, turn_config
 from kinby.core.events import EventLog
+from kinby.core.stats import stats_summary
 from kinby.instance import (
     PLACEHOLDER_MODEL,
     Instance,
@@ -131,6 +137,22 @@ def _usage_command(args: argparse.Namespace) -> UsageGetCommand:
     return UsageGetCommand.model_validate({"since": args.since, "until": args.until})
 
 
+def _stats_command(args: argparse.Namespace) -> StatsGetCommand:
+    return StatsGetCommand.model_validate({"since": args.since, "until": args.until, "by": args.by})
+
+
+def _range_command[Command](build: Callable[[], Command]) -> Command | None:
+    try:
+        return build()
+    except ValidationError:
+        print(
+            "--since and --until must be ISO 8601 times with a timezone, "
+            "for example 2026-08-28T12:00:00Z",
+            file=sys.stderr,
+        )
+        return None
+
+
 def _load_selected_instance(
     args: argparse.Namespace,
     *,
@@ -156,6 +178,84 @@ async def _show_usage(client: ContractClient, command: UsageGetCommand) -> int:
         print(f"thread {thread.thread_id}: {_token_totals(thread)}")
         for turn in thread.turns:
             print(f"  turn {turn.turn_id}: {_turn_token_totals(turn)}")
+    return 0
+
+
+def _tool_call_counts(counts: dict[str, int]) -> str:
+    return ",".join(f"{name}={counts[name]}" for name in sorted(counts))
+
+
+def _stats_row(label: str, summary: StatsSummary) -> str:
+    memory = summary.memory_calls
+    return "\t".join(
+        (
+            label,
+            str(summary.completed),
+            str(summary.failed),
+            str(summary.interrupted),
+            str(summary.input_tokens),
+            str(summary.output_tokens),
+            str(summary.recap_input_tokens),
+            str(summary.recap_output_tokens),
+            _tool_call_counts(summary.tool_calls),
+            str(memory.search),
+            str(memory.open),
+            str(memory.remember),
+            str(memory.forget),
+            str(summary.turns_without_memory),
+            str(summary.approvals_requested),
+            (
+                f"{summary.mean_duration_seconds:.3f}"
+                if summary.mean_duration_seconds is not None
+                else "unknown"
+            ),
+            str(summary.good_ratings),
+            str(summary.bad_ratings),
+        )
+    )
+
+
+async def _show_stats(
+    client: ContractClient,
+    command: StatsGetCommand,
+    state_dir: Path,
+) -> int:
+    result = await client.call(STATS_GET, command)
+    if isinstance(result, ErrorEnvelope):
+        print(format_error(result), file=sys.stderr)
+        return 1
+    print(
+        "\t".join(
+            (
+                "bucket",
+                "completed",
+                "failed",
+                "interrupted",
+                "input",
+                "output",
+                "recap input",
+                "recap output",
+                "tool calls",
+                "memory search",
+                "memory open",
+                "remember",
+                "forget",
+                "without memory",
+                "approvals",
+                "mean seconds",
+                "good",
+                "bad",
+            )
+        )
+    )
+    for bucket in result.buckets:
+        print(_stats_row(bucket.start.isoformat(), bucket))
+    print(_stats_row("total", stats_summary(result.records)))
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "stats.json").write_text(
+        f"{result.model_dump_json(indent=2)}\n",
+        encoding="utf-8",
+    )
     return 0
 
 
@@ -300,6 +400,25 @@ def main(argv: list[str] | None = None) -> int:
         "--until",
         help="include events at or before this ISO 8601 time with a timezone",
     )
+    stats_parser = subparsers.add_parser(
+        "stats",
+        help="show instance statistics",
+    )
+    _add_instance_selector(stats_parser, "instance whose statistics to show")
+    stats_parser.add_argument(
+        "--since",
+        help="include turns closed at or after this ISO 8601 time with a timezone",
+    )
+    stats_parser.add_argument(
+        "--until",
+        help="include turns closed at or before this ISO 8601 time with a timezone",
+    )
+    stats_parser.add_argument(
+        "--by",
+        choices=[size.value for size in StatsBucketSize],
+        default="day",
+        help="group turns by UTC day or Monday-starting week",
+    )
     args = parser.parse_args(argv)
     if args.version:
         print(f"kinby {version('kinby')}")
@@ -343,17 +462,18 @@ def main(argv: list[str] | None = None) -> int:
                     return asyncio.run(_create_thread(client, args.title))
                 return asyncio.run(_list_threads(client))
             case "usage":
-                try:
-                    command = _usage_command(args)
-                except ValidationError:
-                    print(
-                        "--since and --until must be ISO 8601 times with a timezone, "
-                        "for example 2026-08-28T12:00:00Z",
-                        file=sys.stderr,
-                    )
+                command = _range_command(lambda: _usage_command(args))
+                if command is None:
                     return 1
                 client = _contract_client(_load_selected_instance(args))
                 return asyncio.run(_show_usage(client, command))
+            case "stats":
+                command = _range_command(lambda: _stats_command(args))
+                if command is None:
+                    return 1
+                instance = _load_selected_instance(args)
+                client = _contract_client(instance)
+                return asyncio.run(_show_stats(client, command, instance.manifest.state_dir))
     except (InstanceNotFoundError, ManifestError) as exc:
         print(exc, file=sys.stderr)
         return 1

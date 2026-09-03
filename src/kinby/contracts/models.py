@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Literal, NewType, TypeIs
 from uuid import UUID
@@ -266,3 +266,72 @@ class ThreadUsage(TokenTotals):
 
 class UsageGetResult(ContractModel):
     threads: list[ThreadUsage]
+
+
+class StatsBucketSize(StrEnum):
+    DAY = "day"
+    WEEK = "week"
+
+
+class TurnClosingKind(StrEnum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+class MemoryCallCounts(ContractModel):
+    search: int = 0
+    open: int = 0
+    remember: int = 0
+    forget: int = 0
+
+
+class TurnMetrics(TokenTotals):
+    thread_id: UUID
+    turn_id: UUID
+    model: str | None
+    closing_kind: TurnClosingKind
+    started_at: datetime | None
+    closed_at: datetime
+    duration_seconds: float | None
+    recap_input_tokens: int
+    recap_output_tokens: int
+    cost: float | None = None
+    tool_calls: dict[str, int]
+    memory_calls: MemoryCallCounts
+    memory_consulted: bool
+    approvals_requested: int
+    memory_tokens: float
+    rating: TurnRated | None
+
+
+class StatsSummary(TokenTotals):
+    completed: int
+    failed: int
+    interrupted: int
+    recap_input_tokens: int
+    recap_output_tokens: int
+    cost: float | None = None
+    tool_calls: dict[str, int]
+    memory_calls: MemoryCallCounts
+    turns_without_memory: int
+    approvals_requested: int
+    mean_duration_seconds: float | None
+    good_ratings: int
+    bad_ratings: int
+
+
+class StatsBucket(StatsSummary):
+    start: date
+
+
+class StatsGetCommand(ContractModel):
+    since: AwareDatetime | None = None
+    until: AwareDatetime | None = None
+    by: StatsBucketSize = StatsBucketSize.DAY
+
+
+class StatsGetResult(ContractModel):
+    records: list[TurnMetrics]
+    buckets: list[StatsBucket]
+    unpriced_models: list[str]
