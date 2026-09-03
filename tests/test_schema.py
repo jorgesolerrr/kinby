@@ -124,6 +124,17 @@ def test_manifest_schema_names_and_accepts_the_prices_section() -> None:
     validate(instance=manifest, schema=schema)
 
 
+def test_manifest_schema_rejects_an_invalid_price_model_name() -> None:
+    manifest = {
+        "id": "alice",
+        "models": {"main": "openai:gpt-5"},
+        "prices": {"not-a-model": {"input": 2, "output": 4}},
+    }
+
+    with pytest.raises(ValidationError):
+        validate(instance=manifest, schema=manifest_schema())
+
+
 @pytest.mark.parametrize(
     "price",
     [

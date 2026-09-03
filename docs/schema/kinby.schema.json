@@ -228,6 +228,7 @@
       "title": "Persona Name"
     },
     "prices": {
+      "additionalProperties": false,
       "patternProperties": {
         "^[^:\\s]+:[^:\\s]+(?![\\s\\S])": {
           "$ref": "#/$defs/RawModelPrice"

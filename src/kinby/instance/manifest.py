@@ -97,7 +97,10 @@ class RawManifest(_Section):
     memory: RawMemory = RawMemory()
     feedback: RawFeedback = RawFeedback()
     tools: RawTools = RawTools()
-    prices: dict[ModelName, RawModelPrice] = Field(default_factory=dict)
+    prices: dict[ModelName, RawModelPrice] = Field(
+        default_factory=dict,
+        json_schema_extra={"additionalProperties": False},
+    )
 
 
 def _manifest_error(exc: ValidationError) -> ManifestError:
