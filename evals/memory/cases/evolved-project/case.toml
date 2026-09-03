@@ -1,0 +1,6 @@
+name = "evolved-project"
+turns = [{ thread = "question", message = "Walk me through how the neighborhood oral-history project evolved." }]
+reference_answer = "The oral-history project began on February 4 as six audio interviews. On March 11 it expanded to include scanned photographs and transcripts. On April 26 it became a public library exhibit with twelve interviews, forty photographs, and a listening station."
+expected_node = "2026-04-26-oral-history-became-library-exhibit"
+expectation = "open-node"
+must_pass = false

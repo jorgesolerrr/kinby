@@ -1,0 +1,8 @@
+name = "remember-recall"
+turns = [
+  { thread = "record", message = "Remember that my spare apartment key is in the blue ceramic bowl by the front door." },
+  { thread = "recall", message = "Where is my spare apartment key?" },
+]
+reference_answer = "Jorge's spare apartment key is in the blue ceramic bowl by the front door."
+expectation = "remember-recall"
+must_pass = true

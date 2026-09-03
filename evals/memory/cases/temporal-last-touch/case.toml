@@ -1,0 +1,6 @@
+name = "temporal-last-touch"
+turns = [{ thread = "question", message = "When did I last touch the Harbor gallery catalog?" }]
+reference_answer = "Jorge last touched the Harbor gallery catalog on August 22, 2026, when he approved the final cover proof."
+expected_node = "2026-08-22-approved-harbor-catalog-cover"
+expectation = "open-node"
+must_pass = true

@@ -1,4 +1,4 @@
-id = "memory-eval-temporal-day"
+id = "memory-eval-temporal-last-touch"
 
 [models]
 main = "inspect:active"

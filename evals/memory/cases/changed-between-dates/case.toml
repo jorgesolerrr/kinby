@@ -1,0 +1,6 @@
+name = "changed-between-dates"
+turns = [{ thread = "question", message = "What changed about the studio move between May 1 and May 20, 2026?" }]
+reference_answer = "On May 1 the studio move was planned for May 12 with Northline Movers. By May 20, a freight-elevator repair had pushed the move to May 27, and Cedar Van Co. had replaced Northline Movers."
+expected_node = "2026-05-20-rescheduled-studio-move"
+expectation = "open-node"
+must_pass = false

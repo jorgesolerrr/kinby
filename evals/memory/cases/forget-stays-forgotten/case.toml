@@ -1,0 +1,9 @@
+name = "forget-stays-forgotten"
+turns = [
+  { thread = "forget", message = "Forget the storage locker code. Search for its memory first, then forget that node." },
+  { thread = "verify", message = "What is my storage locker code? Search memory before answering." },
+]
+reference_answer = "Jorge has no stored memory of the storage locker code."
+expected_node = "2026-06-18-storage-locker-code"
+expectation = "forget"
+must_pass = true
