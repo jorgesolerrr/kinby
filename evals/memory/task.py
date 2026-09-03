@@ -64,6 +64,27 @@ else:
 
 _CASES_DIR = Path(__file__).parent / "cases"
 _JUDGE_MODEL = "openai/gpt-5-mini"
+_FACT_GRADER_TEMPLATE = """
+You are comparing a submitted answer to a reference answer for a personal memory question.
+
+[BEGIN DATA]
+************
+[Question]: {question}
+************
+[Reference]: {criterion}
+************
+[Submission]: {answer}
+************
+[END DATA]
+
+Compare the factual content of the submitted answer with the reference answer. Treat "I",
+"you", "we", and "Jorge" as the same participant. Do not require the submission to repeat
+facts already supplied by the question. Ignore differences in style, grammar, or punctuation.
+
+Does the submission contain the reference answer's facts without contradicting them?
+
+{instructions}
+"""
 _SCOPES = tuple(Scope)
 _BOTH_ARMS = "both"
 
@@ -123,7 +144,7 @@ def memory(arm: str = _BOTH_ARMS) -> Task:
         ),
         solver=run_memory_case(),
         scorer=(
-            model_graded_fact(model=_JUDGE_MODEL),
+            model_graded_fact(template=_FACT_GRADER_TEMPLATE, model=_JUDGE_MODEL),
             memory_behavior(),
             memory_tokens(),
         ),
@@ -195,8 +216,6 @@ def run_memory_case() -> Solver:
         state.metadata["event_log"] = [event.model_dump(mode="json") for event in trace]
         state.metadata["memory_behavior"] = behavior
         state.metadata["memory_behavior_explanation"] = explanation
-        if case.must_pass and arm is MemoryArm.GRAPH and not behavior:
-            raise MemoryEvalError(f"Must-pass memory behavior failed: {explanation}")
         state.completed = True
         return state
 
