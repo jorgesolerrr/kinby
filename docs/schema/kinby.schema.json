@@ -65,6 +65,27 @@
       "title": "RawMemory",
       "type": "object"
     },
+    "RawModelPrice": {
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "minimum": 0,
+          "title": "Input",
+          "type": "number"
+        },
+        "output": {
+          "minimum": 0,
+          "title": "Output",
+          "type": "number"
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ],
+      "title": "RawModelPrice",
+      "type": "object"
+    },
     "RawModels": {
       "additionalProperties": false,
       "properties": {
@@ -205,6 +226,19 @@
       ],
       "default": null,
       "title": "Persona Name"
+    },
+    "prices": {
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[^:\\s]+:[^:\\s]+(?![\\s\\S])": {
+          "$ref": "#/$defs/RawModelPrice"
+        }
+      },
+      "propertyNames": {
+        "minLength": 1
+      },
+      "title": "Prices",
+      "type": "object"
     },
     "state_dir": {
       "default": ".state",

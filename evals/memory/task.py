@@ -214,7 +214,7 @@ def _memory_token_estimate(
     last_turn: UUID,
 ) -> float:
     record = next(
-        (record for record in turn_metrics(events) if record.turn_id == last_turn),
+        (record for record in turn_metrics(events).records if record.turn_id == last_turn),
         None,
     )
     if record is None:

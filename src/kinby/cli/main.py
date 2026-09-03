@@ -165,7 +165,10 @@ def _load_selected_instance(
 
 
 def _contract_client(instance: Instance) -> ContractClient:
-    dispatcher = build_dispatcher(instance.manifest.state_dir)
+    dispatcher = build_dispatcher(
+        instance.manifest.state_dir,
+        price_overrides=instance.manifest.prices,
+    )
     return ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
 
 
@@ -197,6 +200,7 @@ def _stats_row(label: str, summary: StatsSummary) -> str:
             str(summary.output_tokens),
             str(summary.recap_input_tokens),
             str(summary.recap_output_tokens),
+            f"{summary.cost:.8f}" if summary.cost is not None else "unknown",
             _tool_call_counts(summary.tool_calls),
             str(memory.search),
             str(memory.open),
@@ -235,6 +239,7 @@ async def _show_stats(
                 "output",
                 "recap input",
                 "recap output",
+                "cost",
                 "tool calls",
                 "memory search",
                 "memory open",
@@ -248,6 +253,11 @@ async def _show_stats(
             )
         )
     )
+    if result.unpriced_models:
+        print(
+            f"warning: unpriced models: {', '.join(result.unpriced_models)}",
+            file=sys.stderr,
+        )
     for bucket in result.buckets:
         print(_stats_row(bucket.start.isoformat(), bucket))
     print(_stats_row("total", stats_summary(result.records)))

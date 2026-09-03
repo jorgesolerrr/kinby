@@ -168,6 +168,7 @@ def test_kept_draft_writes_narrative_episode_and_token_marker(tmp_path: Path) ->
             node=marker.payload.node,
             input_tokens=17,
             output_tokens=9,
+            model="openai:main",
         )
         assert marker.payload.node is not None
         episode = GraphStore(tmp_path).open(marker.payload.node)
@@ -329,6 +330,7 @@ def test_discarded_draft_writes_marker_without_episode(tmp_path: Path) -> None:
             node=None,
             input_tokens=8,
             output_tokens=3,
+            model="openai:main",
         )
         assert not list((tmp_path / "memory" / "graph").glob("*.md"))
 
@@ -872,6 +874,7 @@ def test_completed_tool_turn_writes_trace_episode_and_marker(tmp_path: Path) -> 
             node=marker_event.payload.node,
             input_tokens=0,
             output_tokens=0,
+            model="openai:main",
         )
         assert marker_event.payload.node is not None
         episode_path = tmp_path / "memory" / "graph" / f"{marker_event.payload.node}.md"
@@ -1036,7 +1039,12 @@ def test_chat_only_turn_writes_marker_without_episode(tmp_path: Path) -> None:
 
         marker = events[-1]
         assert isinstance(marker, Event)
-        assert marker.payload == MemoryRecapped(node=None, input_tokens=0, output_tokens=0)
+        assert marker.payload == MemoryRecapped(
+            node=None,
+            input_tokens=0,
+            output_tokens=0,
+            model="openai:main",
+        )
         assert not (tmp_path / "memory" / "graph").exists()
 
     asyncio.run(scenario())

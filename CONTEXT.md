@@ -118,6 +118,10 @@ The **instance** setting that chooses whether to ask for a **turn rating** after
 The input and output tokens attributed to a turn, with totals rolled up for its thread.
 `usage.get` includes completed turns whose closing timestamp falls within its **time range**.
 
+### Price map
+
+The table of input and output prices per million tokens, keyed by exact `provider:model` names.
+
 ### Time range
 
 Optional, inclusive `since` and `until` bounds applied to a timestamp. `usage.get` and `stats.get` both apply it to a turn's closing timestamp.

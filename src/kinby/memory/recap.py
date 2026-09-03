@@ -160,7 +160,7 @@ class RecapWriter:
         calls = [event.payload for event in events if isinstance(event.payload, ToolCall)]
         manifest = reload_manifest(self._instance, model_override=self._model_override)
         if manifest.memory.recap is RecapPolicy.TRACE_ONLY:
-            await self._write_trace_only(request, events, calls)
+            await self._write_trace_only(request, events, calls, manifest.models.recap)
             return
 
         lens = load_recap_lens(self._instance.path)
@@ -176,13 +176,14 @@ class RecapWriter:
             if draft.keep
             else None
         )
-        await self._finish(request, episode, usage)
+        await self._finish(request, episode, usage, manifest.models.recap)
 
     async def _write_trace_only(
         self,
         request: _RecapRequest,
         events: list[Event],
         calls: list[ToolCall],
+        model: str,
     ) -> None:
         episode: Episode | None = None
         if calls:
@@ -197,13 +198,19 @@ class RecapWriter:
                 body=_path_taken(calls),
                 calls=calls,
             )
-        await self._finish(request, episode, TokenTotals(input_tokens=0, output_tokens=0))
+        await self._finish(
+            request,
+            episode,
+            TokenTotals(input_tokens=0, output_tokens=0),
+            model,
+        )
 
     async def _finish(
         self,
         request: _RecapRequest,
         episode: Episode | None,
         usage: TokenTotals,
+        model: str,
     ) -> None:
         node: NodeId | None = None
         if episode is not None:
@@ -215,6 +222,7 @@ class RecapWriter:
                 node=node,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
+                model=model,
             ),
         )
 

@@ -156,6 +156,34 @@ def test_instance_show_names_unknown_keys(tmp_path, capsys, manifest, offending_
     assert offending_key in captured.err
 
 
+@pytest.mark.parametrize(
+    ("price", "offending_key"),
+    [
+        ("input = 1\noutput = 2\ncached = 0.1", "prices.openai:gpt-5.cached"),
+        ('input = "one"\noutput = 2', "prices.openai:gpt-5.input"),
+    ],
+)
+def test_instance_show_rejects_invalid_model_prices(
+    tmp_path,
+    capsys,
+    price,
+    offending_key,
+):
+    instance = tmp_path / "alice"
+    instance.mkdir()
+    (instance / "kinby.toml").write_text(
+        (f'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n[prices."openai:gpt-5"]\n{price}\n'),
+        encoding="utf-8",
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert captured.out == ""
+    assert offending_key in captured.err
+
+
 def test_instance_show_rejects_an_unknown_recap_policy(tmp_path, capsys):
     instance = tmp_path / "alice"
     instance.mkdir()
