@@ -47,13 +47,14 @@ from kinby.contracts import (
 )
 from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
+from kinby.core.pricing import price_map
 from kinby.core.stats import stats_buckets
 from kinby.core.threads import ThreadStore
-from kinby.core.turn_metrics import turn_metrics
+from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnPreparation, TurnRunner, Turns
 from kinby.core.usage import TimeRange, usage_totals
-from kinby.instance import Instance
+from kinby.instance import Instance, ModelPrice
 from kinby.memory import GraphStore, RecapWriter
 
 Handler = Callable[[ContractModel], Awaitable[ContractModel]]
@@ -181,9 +182,11 @@ def build_dispatcher(
     *,
     event_log: EventLog | None = None,
     turns: TurnConfig | None = None,
+    price_overrides: Mapping[str, ModelPrice] | None = None,
 ) -> Dispatcher:
     store = ThreadStore(state_dir)
     event_log = event_log or EventLog(state_dir)
+    prices = price_map(price_overrides)
     dispatcher = Dispatcher()
 
     async def create_thread(command: ThreadCreateCommand) -> ThreadCreateResult:
@@ -199,15 +202,25 @@ def build_dispatcher(
         )
 
     async def get_stats(command: StatsGetCommand) -> StatsGetResult:
+        metrics = turn_metrics(event_log.all_events(), prices)
         records = [
             record
-            for record in turn_metrics(event_log.all_events())
+            for record in metrics.records
             if TimeRange(command.since, command.until).includes(record.closed_at)
         ]
         return StatsGetResult(
             records=records,
             buckets=stats_buckets(records, command.by),
-            unpriced_models=[],
+            unpriced_models=sorted(
+                {
+                    model
+                    for record in records
+                    for model in metrics.unpriced_models_by_turn.get(
+                        TurnKey(record.thread_id, record.turn_id),
+                        (),
+                    )
+                }
+            ),
         )
 
     async def rate_turn(command: ThreadTurnRateCommand) -> AcceptedResult:

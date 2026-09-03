@@ -38,7 +38,7 @@ def usage_totals(
     time_range: TimeRange,
 ) -> UsageGetResult:
     turns_by_thread: dict[UUID, list[TurnUsage]] = {}
-    for record in turn_metrics(events):
+    for record in turn_metrics(events).records:
         if record.closing_kind is not TurnClosingKind.COMPLETED:
             continue
         if not time_range.includes(record.closed_at):

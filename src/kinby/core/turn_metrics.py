@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import NewType
 from uuid import UUID
 
 from kinby.contracts import (
@@ -23,6 +24,8 @@ from kinby.contracts import (
     TurnRated,
     TurnStarted,
 )
+from kinby.core.pricing import SHIPPED_PRICES, token_cost
+from kinby.instance import ModelPrice
 
 _MEMORY_CALL_KINDS = {
     "memory_search": "search",
@@ -31,6 +34,14 @@ _MEMORY_CALL_KINDS = {
     "forget": "forget",
 }
 _CHARACTERS_PER_ESTIMATED_MEMORY_TOKEN = 4
+
+UnpricedModel = NewType("UnpricedModel", str)
+
+
+@dataclass(frozen=True)
+class TurnKey:
+    thread_id: UUID
+    turn_id: UUID
 
 
 @dataclass
@@ -48,14 +59,24 @@ def estimate_memory_tokens(character_count: int) -> float:
     return character_count / _CHARACTERS_PER_ESTIMATED_MEMORY_TOKEN
 
 
-def turn_metrics(events: Iterable[Event]) -> list[TurnMetrics]:
+@dataclass(frozen=True)
+class TurnMetricsResult:
+    records: list[TurnMetrics]
+    unpriced_models_by_turn: Mapping[TurnKey, frozenset[UnpricedModel]]
+
+
+def turn_metrics(
+    events: Iterable[Event],
+    prices: Mapping[str, ModelPrice] = SHIPPED_PRICES,
+) -> TurnMetricsResult:
     """Read event history once and return its closed turns in closing order."""
-    open_turns: dict[tuple[UUID, UUID], _TurnEvents] = {}
-    closed_turns: dict[tuple[UUID, UUID], TurnMetrics] = {}
+    open_turns: dict[TurnKey, _TurnEvents] = {}
+    closed_turns: dict[TurnKey, TurnMetrics] = {}
     records: list[TurnMetrics] = []
+    unpriced_models_by_turn: dict[TurnKey, set[UnpricedModel]] = {}
 
     for event in events:
-        key = event.thread_id, event.turn_id
+        key = TurnKey(event.thread_id, event.turn_id)
         payload = event.payload
         if isinstance(payload, TurnStarted):
             open_turns[key] = _TurnEvents(event.timestamp, payload.model)
@@ -81,6 +102,9 @@ def turn_metrics(events: Iterable[Event]) -> list[TurnMetrics]:
             input_tokens = payload.input_tokens if isinstance(payload, TurnCompleted) else 0
             output_tokens = payload.output_tokens if isinstance(payload, TurnCompleted) else 0
             memory_calls = MemoryCallCounts.model_validate(turn.memory_calls if turn else {})
+            price = prices.get(turn.model) if turn is not None else None
+            if turn is not None and price is None:
+                unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(turn.model))
             record = TurnMetrics(
                 thread_id=event.thread_id,
                 turn_id=event.turn_id,
@@ -95,6 +119,9 @@ def turn_metrics(events: Iterable[Event]) -> list[TurnMetrics]:
                 output_tokens=output_tokens,
                 recap_input_tokens=0,
                 recap_output_tokens=0,
+                cost=(
+                    token_cost(input_tokens, output_tokens, price) if price is not None else None
+                ),
                 tool_calls=dict(turn.tool_calls) if turn else {},
                 memory_calls=memory_calls,
                 memory_consulted=bool(memory_calls.search or memory_calls.open),
@@ -110,14 +137,29 @@ def turn_metrics(events: Iterable[Event]) -> list[TurnMetrics]:
         if record is None:
             continue
         if isinstance(payload, MemoryRecapped):
+            main_input_tokens = record.input_tokens - record.recap_input_tokens
+            main_output_tokens = record.output_tokens - record.recap_output_tokens
+            main_price = prices.get(record.model) if record.model is not None else None
+            recap_price = prices.get(payload.model) if payload.model is not None else None
+            if payload.model is not None and recap_price is None:
+                unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(payload.model))
             record.input_tokens += payload.input_tokens - record.recap_input_tokens
             record.output_tokens += payload.output_tokens - record.recap_output_tokens
             record.recap_input_tokens = payload.input_tokens
             record.recap_output_tokens = payload.output_tokens
+            record.cost = (
+                token_cost(main_input_tokens, main_output_tokens, main_price)
+                + token_cost(payload.input_tokens, payload.output_tokens, recap_price)
+                if main_price is not None and recap_price is not None
+                else None
+            )
         elif isinstance(payload, TurnRated):
             record.rating = payload
 
-    return records
+    return TurnMetricsResult(
+        records,
+        {key: frozenset(models) for key, models in unpriced_models_by_turn.items()},
+    )
 
 
 def _closing_kind(

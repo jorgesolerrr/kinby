@@ -18,6 +18,7 @@ from kinby.instance.dataclasses import (
     Manifest,
     MatchingRule,
     Memory,
+    ModelPrice,
     Models,
     RecapPolicy,
     Tools,
@@ -80,6 +81,11 @@ class RawTools(_Section):
     defaults: bool = True
 
 
+class RawModelPrice(_Section):
+    input: Annotated[float, Field(ge=0)]
+    output: Annotated[float, Field(ge=0)]
+
+
 class RawManifest(_Section):
     """The shape of ``kinby.toml``, validated once at load."""
 
@@ -91,6 +97,7 @@ class RawManifest(_Section):
     memory: RawMemory = RawMemory()
     feedback: RawFeedback = RawFeedback()
     tools: RawTools = RawTools()
+    prices: dict[ModelName, RawModelPrice] = Field(default_factory=dict)
 
 
 def _manifest_error(exc: ValidationError) -> ManifestError:
@@ -151,6 +158,10 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         memory=Memory(recap=raw.memory.recap),
         feedback=Feedback(ask=raw.feedback.ask),
         tools=Tools(defaults=raw.tools.defaults),
+        prices={
+            model: ModelPrice(input=price.input, output=price.output)
+            for model, price in raw.prices.items()
+        },
     )
 
 

@@ -106,3 +106,37 @@ def test_manifest_schema_rejects_an_unknown_feedback_key() -> None:
 
     with pytest.raises(ValidationError):
         validate(instance=manifest, schema=manifest_schema())
+
+
+def test_manifest_schema_names_and_accepts_the_prices_section() -> None:
+    schema = manifest_schema()
+    manifest = {
+        "id": "alice",
+        "models": {"main": "openai:gpt-5"},
+        "prices": {"openai:gpt-5": {"input": 2, "output": 4}},
+    }
+
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    prices = properties["prices"]
+    assert isinstance(prices, dict)
+    assert prices["title"] == "Prices"
+    validate(instance=manifest, schema=schema)
+
+
+@pytest.mark.parametrize(
+    "price",
+    [
+        {"input": "one", "output": 4},
+        {"input": 2, "output": 4, "cached": 0.2},
+    ],
+)
+def test_manifest_schema_rejects_invalid_model_prices(price: dict[str, object]) -> None:
+    manifest = {
+        "id": "alice",
+        "models": {"main": "openai:gpt-5"},
+        "prices": {"openai:gpt-5": price},
+    }
+
+    with pytest.raises(ValidationError):
+        validate(instance=manifest, schema=manifest_schema())

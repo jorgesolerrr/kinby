@@ -27,6 +27,7 @@ class _BucketTotals:
     output_tokens: int = 0
     recap_input_tokens: int = 0
     recap_output_tokens: int = 0
+    cost: float | None = None
     tool_calls: Counter[str] = field(default_factory=Counter)
     memory_calls: Counter[str] = field(default_factory=Counter)
     turns_without_memory: int = 0
@@ -48,6 +49,8 @@ class _BucketTotals:
         self.output_tokens += record.output_tokens
         self.recap_input_tokens += record.recap_input_tokens
         self.recap_output_tokens += record.recap_output_tokens
+        if record.cost is not None:
+            self.cost = record.cost if self.cost is None else self.cost + record.cost
         self.tool_calls.update(record.tool_calls)
         self.memory_calls.update(record.memory_calls.model_dump())
         self.turns_without_memory += not record.memory_consulted
@@ -98,6 +101,7 @@ def _stats_summary(totals: _BucketTotals) -> StatsSummary:
         output_tokens=totals.output_tokens,
         recap_input_tokens=totals.recap_input_tokens,
         recap_output_tokens=totals.recap_output_tokens,
+        cost=totals.cost,
         tool_calls=dict(totals.tool_calls),
         memory_calls=MemoryCallCounts.model_validate(totals.memory_calls),
         turns_without_memory=totals.turns_without_memory,

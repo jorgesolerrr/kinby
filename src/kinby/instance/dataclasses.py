@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -22,6 +23,14 @@ class Models:
     main: str
     recap: str
     embed: str | None
+
+
+@dataclass(frozen=True)
+class ModelPrice:
+    """Input and output prices per million tokens for one model."""
+
+    input: float
+    output: float
 
 
 @dataclass(frozen=True)
@@ -88,6 +97,7 @@ class Manifest:
     memory: Memory
     feedback: Feedback
     tools: Tools
+    prices: Mapping[str, ModelPrice]
 
 
 @dataclass(frozen=True)

@@ -152,6 +152,7 @@ class TurnRated(ContractModel):
 class MemoryRecapped(TokenTotals):
     type: Literal[EventType.MEMORY_RECAPPED] = EventType.MEMORY_RECAPPED
     node: NodeId | None
+    model: str | None = None
 
 
 Payload = Annotated[

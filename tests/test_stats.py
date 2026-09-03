@@ -142,7 +142,7 @@ def test_stats_get_reports_one_turn_record_from_the_event_log(tmp_path: Path) ->
         assert record.output_tokens == 7
         assert record.recap_input_tokens == 0
         assert record.recap_output_tokens == 0
-        assert record.cost is None
+        assert record.cost == 0.00008375
         assert record.tool_calls == {"bash": 2, "memory_search": 1, "memory_open": 1}
         assert record.memory_calls.model_dump() == {
             "search": 1,
@@ -154,8 +154,171 @@ def test_stats_get_reports_one_turn_record_from_the_event_log(tmp_path: Path) ->
         assert record.approvals_requested == 1
         assert record.memory_tokens == 3
         assert record.rating is None
+        assert result.buckets[0].cost == 0.00008375
 
     asyncio.run(scenario())
+
+
+def test_stats_get_uses_a_manifest_price_override(tmp_path: Path) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path, model="openai:gpt-5")
+    with (instance_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+        manifest.write('\n[prices."openai:gpt-5"]\ninput = 2\noutput = 4\n')
+    instance = load_instance(instance_path)
+    thread_id = uuid4()
+    turn_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            now,
+            TurnStarted(message="priced", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            now,
+            TurnCompleted(input_tokens=100, output_tokens=10),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(
+            instance.manifest.state_dir,
+            event_log=StaticEventLog(instance.manifest.state_dir, events),
+            price_overrides=instance.manifest.prices,
+        ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.records[0].cost == 0.00024
+    assert result.buckets[0].cost == 0.00024
+
+
+def test_stats_get_reports_unpriced_models_and_sums_only_priced_turns(
+    tmp_path: Path,
+) -> None:
+    thread_id = uuid4()
+    priced_id = uuid4()
+    unpriced_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            priced_id,
+            now,
+            TurnStarted(message="priced", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            priced_id,
+            now,
+            TurnCompleted(input_tokens=100, output_tokens=10),
+        ),
+        _event(
+            3,
+            thread_id,
+            unpriced_id,
+            now,
+            TurnStarted(message="unknown", model="other:model"),
+        ),
+        _event(
+            4,
+            thread_id,
+            unpriced_id,
+            now,
+            TurnCompleted(input_tokens=100, output_tokens=10),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get",
+            {},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert [record.cost for record in result.records] == [0.000225, None]
+    assert result.unpriced_models == ["other:model"]
+    assert result.buckets[0].cost == 0.000225
+
+
+def test_stats_get_prices_recap_tokens_at_their_model_and_keeps_old_markers_unknown(
+    tmp_path: Path,
+) -> None:
+    thread_id = uuid4()
+    priced_id = uuid4()
+    legacy_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            priced_id,
+            now,
+            TurnStarted(message="new marker", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            priced_id,
+            now,
+            TurnCompleted(input_tokens=100, output_tokens=10),
+        ),
+        _event(
+            3,
+            thread_id,
+            priced_id,
+            now,
+            MemoryRecapped(
+                node=None,
+                input_tokens=50,
+                output_tokens=5,
+                model="anthropic:claude-sonnet-4-6",
+            ),
+        ),
+        _event(
+            4,
+            thread_id,
+            legacy_id,
+            now,
+            TurnStarted(message="old marker", model="openai:gpt-5"),
+        ),
+        _event(
+            5,
+            thread_id,
+            legacy_id,
+            now,
+            TurnCompleted(input_tokens=100, output_tokens=10),
+        ),
+        _event(
+            6,
+            thread_id,
+            legacy_id,
+            now,
+            MemoryRecapped(node=None, input_tokens=50, output_tokens=5),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get",
+            {},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.records[0].cost == 0.00045
+    assert result.records[1].cost is None
+    assert result.buckets[0].cost == 0.00045
 
 
 class StaticEventLog(EventLog):
@@ -264,6 +427,7 @@ def test_stats_get_aggregates_closed_turns_by_utc_day(tmp_path: Path) -> None:
             output_tokens=7,
             recap_input_tokens=0,
             recap_output_tokens=0,
+            cost=None,
             tool_calls={"bash": 1},
             memory_calls={},
             turns_without_memory=1,
@@ -281,6 +445,7 @@ def test_stats_get_aggregates_closed_turns_by_utc_day(tmp_path: Path) -> None:
             output_tokens=0,
             recap_input_tokens=0,
             recap_output_tokens=0,
+            cost=None,
             tool_calls={},
             memory_calls={},
             turns_without_memory=1,
@@ -488,7 +653,13 @@ def test_stats_get_groups_monday_week_and_applies_inclusive_bounds(tmp_path: Pat
     monday = datetime(2026, 8, 31, 10, tzinfo=UTC)
     tuesday = datetime(2026, 9, 1, 10, tzinfo=UTC)
     events = [
-        _event(1, thread_id, monday_id, monday, TurnStarted(message="one", model="model")),
+        _event(
+            1,
+            thread_id,
+            monday_id,
+            monday,
+            TurnStarted(message="one", model="outside:model"),
+        ),
         _event(
             2,
             thread_id,
@@ -496,7 +667,13 @@ def test_stats_get_groups_monday_week_and_applies_inclusive_bounds(tmp_path: Pat
             monday + timedelta(seconds=10),
             TurnCompleted(input_tokens=2, output_tokens=1),
         ),
-        _event(3, thread_id, tuesday_id, tuesday, TurnStarted(message="two", model="model")),
+        _event(
+            3,
+            thread_id,
+            tuesday_id,
+            tuesday,
+            TurnStarted(message="two", model="inside:model"),
+        ),
         _event(
             4,
             thread_id,
@@ -520,6 +697,7 @@ def test_stats_get_groups_monday_week_and_applies_inclusive_bounds(tmp_path: Pat
     )
 
     assert isinstance(weekly, StatsGetResult)
+    assert weekly.unpriced_models == ["inside:model", "outside:model"]
     assert len(weekly.buckets) == 1
     assert weekly.buckets[0].start == monday.date()
     assert weekly.buckets[0].completed == 2
@@ -528,6 +706,7 @@ def test_stats_get_groups_monday_week_and_applies_inclusive_bounds(tmp_path: Pat
     assert weekly.buckets[0].mean_duration_seconds == 15
     assert StatsBucketSize.WEEK == "week"
     assert isinstance(bounded, StatsGetResult)
+    assert bounded.unpriced_models == ["inside:model"]
     assert [record.turn_id for record in bounded.records] == [tuesday_id]
     assert [bucket.start for bucket in bounded.buckets] == [tuesday.date()]
 
@@ -582,6 +761,7 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "output",
         "recap input",
         "recap output",
+        "cost",
         "tool calls",
         "memory search",
         "memory open",
@@ -594,7 +774,7 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "bad",
     ]
     bucket_fields = lines[1].split("\t")
-    assert bucket_fields[:15] == [
+    assert bucket_fields[:16] == [
         closed.timestamp.date().isoformat(),
         "1",
         "0",
@@ -603,6 +783,7 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "7",
         "0",
         "0",
+        "0.00008375",
         "bash=2,memory_open=1,memory_search=1",
         "1",
         "1",
@@ -611,8 +792,8 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "0",
         "1",
     ]
-    assert float(bucket_fields[15]) >= 0
-    assert bucket_fields[16:] == ["0", "0"]
+    assert float(bucket_fields[16]) >= 0
+    assert bucket_fields[17:] == ["0", "0"]
     total_fields = lines[2].split("\t")
     assert total_fields[0] == "total"
     assert total_fields[1:] == bucket_fields[1:]
@@ -620,6 +801,44 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
     assert len(report.records) == 1
     assert report.records[0].turn_id == closed.turn_id
     assert report.buckets[0].start == closed.timestamp.date()
+
+
+def test_cli_stats_warns_once_with_every_unpriced_model(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path)
+    instance = load_instance(instance_path)
+    event_log = EventLog(instance.manifest.state_dir)
+    thread_id = uuid4()
+
+    async def append_turn(model: str) -> None:
+        turn_id = uuid4()
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnStarted(message="unknown", model=model),
+        )
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnCompleted(input_tokens=100, output_tokens=10),
+        )
+
+    asyncio.run(append_turn("other:zeta"))
+    asyncio.run(append_turn("other:alpha"))
+
+    exit_code = main(["stats", str(instance_path)])
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    assert output.err == "warning: unpriced models: other:alpha, other:zeta\n"
+    lines = output.out.splitlines()
+    assert "\tcost\t" in lines[0]
+    cost_column = lines[0].split("\t").index("cost")
+    assert lines[1].split("\t")[cost_column] == "unknown"
+    assert lines[2].split("\t")[cost_column] == "unknown"
 
 
 def test_cli_stats_rejects_a_range_without_timezone(
