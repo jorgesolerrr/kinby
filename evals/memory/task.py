@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import tomllib
 from collections.abc import Sequence
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -11,7 +12,17 @@ from uuid import UUID
 from inspect_ai import Task, task
 from inspect_ai.dataset import MemoryDataset, Sample
 from inspect_ai.model import ChatMessageAssistant, ModelOutput, get_model
-from inspect_ai.scorer import model_graded_fact
+from inspect_ai.scorer import (
+    CORRECT,
+    INCORRECT,
+    Score,
+    Scorer,
+    Target,
+    accuracy,
+    mean,
+    model_graded_fact,
+    scorer,
+)
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 from pydantic import ConfigDict, TypeAdapter
 from pydantic.dataclasses import dataclass
@@ -38,8 +49,10 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
+from kinby.core.turn_metrics import estimate_memory_tokens, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.instance import load_instance
+from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR, PROFILE_NAME
 from kinby.memory import GraphStore, RecapWriter
 
 if TYPE_CHECKING or __package__ == "evals.memory":
@@ -57,6 +70,11 @@ class MemoryEvalError(RuntimeError):
     """Report a failure while running a memory eval case."""
 
 
+class MemoryArm(StrEnum):
+    GRAPH = "graph"
+    STUFFING = "stuffing"
+
+
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class MemoryCase:
     name: str
@@ -70,35 +88,72 @@ _MEMORY_CASE = TypeAdapter(MemoryCase)
 
 
 @task
-def memory() -> Task:
-    """Return the graph-memory eval task."""
+def memory(arm: str = MemoryArm.GRAPH) -> Task:
+    """Return one arm of the memory eval task."""
+    selected_arm = MemoryArm(arm)
     return Task(
         dataset=MemoryDataset(
             [_sample(path) for path in sorted(_CASES_DIR.iterdir()) if path.is_dir()]
         ),
-        solver=run_memory_case(),
-        scorer=model_graded_fact(model=_JUDGE_MODEL),
+        solver=run_memory_case(selected_arm),
+        scorer=(
+            model_graded_fact(model=_JUDGE_MODEL),
+            expected_node_opened(),
+            memory_tokens(),
+        ),
+        metadata={"arm": selected_arm},
     )
 
 
+@scorer(metrics=[accuracy()])
+def expected_node_opened() -> Scorer:
+    async def score(state: TaskState, target: Target) -> Score:
+        del target
+        opened = state.metadata.get("opened_expected_node")
+        if not isinstance(opened, bool):
+            raise TypeError("The memory sample has no expected-node result.")
+        return Score(
+            value=CORRECT if opened else INCORRECT,
+            explanation=(
+                "The last turn opened the expected memory node."
+                if opened
+                else "The last turn did not open the expected memory node."
+            ),
+        )
+
+    return score
+
+
+@scorer(metrics=[mean()])
+def memory_tokens() -> Scorer:
+    async def score(state: TaskState, target: Target) -> Score:
+        del target
+        value = state.metadata.get("memory_tokens")
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            raise TypeError("The memory sample has no memory-token estimate.")
+        return Score(value=value)
+
+    return score
+
+
 @solver
-def run_memory_case() -> Solver:
+def run_memory_case(arm: MemoryArm) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         del generate
         case_path = _case_path(state)
         case = _load_case(case_path)
         with tempfile.TemporaryDirectory(prefix="kinby-memory-eval-") as temporary:
             instance_path = Path(temporary) / "instance"
-            shutil.copytree(case_path / "instance", instance_path)
+            _prepare_instance(case_path, instance_path, arm)
             events, answer = await _run_turns(instance_path, case.turns)
+            last_turn = _last_turn(events)
+            state.metadata["memory_tokens"] = _memory_token_estimate(
+                instance_path,
+                events,
+                last_turn,
+            )
         state.output = ModelOutput.from_content(model=str(state.model), content=answer)
         state.messages.append(ChatMessageAssistant(content=answer, source="generate"))
-        last_turn = next(
-            (event.turn_id for event in reversed(events) if isinstance(event.payload, TurnStarted)),
-            None,
-        )
-        if last_turn is None:
-            raise MemoryEvalError("The memory eval recorded no started turn.")
         trace = [
             event
             for event in events
@@ -117,7 +172,11 @@ def run_memory_case() -> Solver:
         )
         recapped = any(isinstance(event.payload, MemoryRecapped) for event in trace)
         state.metadata["opened_expected_node"] = opened_expected_node
-        if case.must_pass and not (searched and opened_expected_node and recapped):
+        if (
+            case.must_pass
+            and arm is MemoryArm.GRAPH
+            and not (searched and opened_expected_node and recapped)
+        ):
             raise MemoryEvalError(
                 "Must-pass memory case did not search memory, open the expected node, and recap."
             )
@@ -125,6 +184,44 @@ def run_memory_case() -> Solver:
         return state
 
     return solve
+
+
+def _prepare_instance(case_path: Path, instance_path: Path, arm: MemoryArm) -> None:
+    shutil.copytree(case_path / "instance", instance_path)
+    if arm is MemoryArm.GRAPH:
+        return
+
+    shutil.rmtree(instance_path / MEMORY_DIR / GRAPH_DIR)
+    profile_path = instance_path / MEMORY_DIR / PROFILE_NAME
+    profile = profile_path.read_text(encoding="utf-8").rstrip("\r\n")
+    transcript = (case_path / "transcript.md").read_text(encoding="utf-8").strip("\r\n")
+    profile_path.write_text(f"{profile}\n\n{transcript}\n", encoding="utf-8")
+
+
+def _last_turn(events: Sequence[Event]) -> UUID:
+    turn_id = next(
+        (event.turn_id for event in reversed(events) if isinstance(event.payload, TurnStarted)),
+        None,
+    )
+    if turn_id is None:
+        raise MemoryEvalError("The memory eval recorded no started turn.")
+    return turn_id
+
+
+def _memory_token_estimate(
+    instance_path: Path,
+    events: Sequence[Event],
+    last_turn: UUID,
+) -> float:
+    record = next(
+        (record for record in turn_metrics(events) if record.turn_id == last_turn),
+        None,
+    )
+    if record is None:
+        raise MemoryEvalError("The memory eval recorded no closed turn metrics.")
+    profile_path = instance_path / MEMORY_DIR / PROFILE_NAME
+    profile = profile_path.read_text(encoding="utf-8").strip("\r\n")
+    return record.memory_tokens + estimate_memory_tokens(len(profile))
 
 
 def _sample(case_path: Path) -> Sample:

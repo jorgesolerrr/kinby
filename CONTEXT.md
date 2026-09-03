@@ -130,6 +130,18 @@ The derived record of one closed **turn**. It describes the outcome, duration, t
 
 UTC day or week totals derived from an **instance** event history through **turn metrics**. `kinby stats` recomputes these totals and writes `stats.json`.
 
+### Eval
+
+An offline run of fixed cases that measures an **instance** or one of its parts. Evals do not run in the shipped agent or its regular test suite.
+
+### Eval arm
+
+One way of preparing the same **eval** case for comparison. The memory eval has a graph arm, which uses the case's **knowledge graph**, and a stuffing arm, which puts the case's raw transcript in the **profile** and removes the graph.
+
+### Feed gate
+
+The correctness and memory-token thresholds a **feed** must pass before kinby adds the next feed.
+
 ### Turn runner
 
 The part of the runtime that produces the agent's response and the turn's events.
