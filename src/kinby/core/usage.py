@@ -9,16 +9,16 @@ from uuid import UUID
 
 from kinby.contracts import (
     Event,
-    MemoryRecapped,
     ThreadUsage,
-    TurnCompleted,
+    TurnClosingKind,
     TurnUsage,
     UsageGetResult,
 )
+from kinby.core.turn_metrics import turn_metrics
 
 
 @dataclass(frozen=True)
-class UsageRange:
+class TimeRange:
     since: datetime | None
     until: datetime | None
 
@@ -35,32 +35,22 @@ class UsageRange:
 
 def usage_totals(
     events: Iterable[Event],
-    usage_range: UsageRange,
+    time_range: TimeRange,
 ) -> UsageGetResult:
     turns_by_thread: dict[UUID, list[TurnUsage]] = {}
-    selected_turns: dict[tuple[UUID, UUID], TurnUsage] = {}
-    for event in events:
-        if isinstance(event.payload, MemoryRecapped):
-            turn = selected_turns.get((event.thread_id, event.turn_id))
-            if turn is not None:
-                turn.input_tokens += event.payload.input_tokens - turn.recap_input_tokens
-                turn.output_tokens += event.payload.output_tokens - turn.recap_output_tokens
-                turn.recap_input_tokens = event.payload.input_tokens
-                turn.recap_output_tokens = event.payload.output_tokens
+    for record in turn_metrics(events):
+        if record.closing_kind is not TurnClosingKind.COMPLETED:
             continue
-        if not isinstance(event.payload, TurnCompleted):
-            continue
-        if not usage_range.includes(event.timestamp):
+        if not time_range.includes(record.closed_at):
             continue
         turn = TurnUsage(
-            turn_id=event.turn_id,
-            input_tokens=event.payload.input_tokens,
-            output_tokens=event.payload.output_tokens,
-            recap_input_tokens=0,
-            recap_output_tokens=0,
+            turn_id=record.turn_id,
+            input_tokens=record.input_tokens,
+            output_tokens=record.output_tokens,
+            recap_input_tokens=record.recap_input_tokens,
+            recap_output_tokens=record.recap_output_tokens,
         )
-        turns_by_thread.setdefault(event.thread_id, []).append(turn)
-        selected_turns[(event.thread_id, event.turn_id)] = turn
+        turns_by_thread.setdefault(record.thread_id, []).append(turn)
 
     return UsageGetResult(
         threads=[

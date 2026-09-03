@@ -9,6 +9,8 @@ from kinby.contracts.models import (
     ContractModel,
     Event,
     Scope,
+    StatsGetCommand,
+    StatsGetResult,
     ThreadApprovalRespondCommand,
     ThreadCreateCommand,
     ThreadCreateResult,
@@ -70,6 +72,7 @@ THREAD_APPROVAL_RESPOND = Method(
     AcceptedResult,
 )
 USAGE_GET = Method("usage.get", Scope.INSTANCE_READ, UsageGetCommand, UsageGetResult)
+STATS_GET = Method("stats.get", Scope.INSTANCE_READ, StatsGetCommand, StatsGetResult)
 THREAD_SUBSCRIBE = Subscription(
     "thread.subscribe", Scope.THREAD_READ, ThreadSubscribeCommand, Event
 )

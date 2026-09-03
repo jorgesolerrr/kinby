@@ -116,7 +116,19 @@ The **instance** setting that chooses whether to ask for a **turn rating** after
 ### Token usage
 
 The input and output tokens attributed to a turn, with totals rolled up for its thread.
-A usage range includes completed turns whose event timestamp falls on or between its optional bounds.
+`usage.get` includes completed turns whose closing timestamp falls within its **time range**.
+
+### Time range
+
+Optional, inclusive `since` and `until` bounds applied to a timestamp. `usage.get` and `stats.get` both apply it to a turn's closing timestamp.
+
+### Turn metrics
+
+The derived record of one closed **turn**. It describes the outcome, duration, tokens, tool and memory calls, approvals, and current **turn rating**.
+
+### Instance statistics
+
+UTC day or week totals derived from an **instance** event history through **turn metrics**. `kinby stats` recomputes these totals and writes `stats.json`.
 
 ### Turn runner
 
