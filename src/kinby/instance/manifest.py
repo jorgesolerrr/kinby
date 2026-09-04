@@ -85,8 +85,8 @@ class RawTools(_Section):
 class RawBudgets(_Section):
     steps: Annotated[int, Field(gt=0)] | None = None
     tokens: Annotated[int, Field(gt=0)] | None = None
-    seconds: Annotated[float, Field(gt=0)] | None = None
-    usd_per_day: Annotated[float, Field(gt=0)] | None = None
+    seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
+    usd_per_day: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
 
 
 class RawModelPrice(_Section):

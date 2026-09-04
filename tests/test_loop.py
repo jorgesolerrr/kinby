@@ -11,6 +11,7 @@ from langchain_core.tools import StructuredTool
 
 from kinby.contracts import (
     AcceptedResult,
+    ApprovalRequested,
     ErrorCode,
     Event,
     MessageDelta,
@@ -166,6 +167,42 @@ class ProviderTimeoutChatModel(CoreSkillModel):
         raise TimeoutError("provider timed out")
 
 
+class ApprovalChatModel(CoreSkillModel):
+    def __init__(self, delay: float = 0) -> None:
+        self.calls = 0
+        self.delay = delay
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        self.calls += 1
+        await asyncio.sleep(self.delay)
+        yield AIMessageChunk(
+            content="",
+            tool_calls=[
+                {
+                    "name": "remember",
+                    "args": {
+                        "description": "A budget test",
+                        "subjects": ["budgets"],
+                        "body": "The approval belongs to this turn.",
+                    },
+                    "id": "remember-1",
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+
+class DelayedCompletingChatModel(CoreSkillModel):
+    def __init__(self, delay: float = 0) -> None:
+        self.calls = 0
+        self.delay = delay
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        self.calls += 1
+        await asyncio.sleep(self.delay)
+        yield AIMessageChunk(content="Done")
+
+
 async def _budget_session(
     tmp_path: Path,
     model: ChatModel,
@@ -193,6 +230,57 @@ async def _budget_session(
     created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
     assert isinstance(created, ThreadCreateResult)
     return dispatcher, created.id
+
+
+async def _park_budget_turn(dispatcher: Dispatcher, thread_id: UUID) -> Event:
+    accepted = await dispatcher.dispatch(
+        "thread.turn.start",
+        {"thread_id": thread_id, "message": "Remember this"},
+        {Scope.THREAD_OPERATE},
+    )
+    assert isinstance(accepted, AcceptedResult)
+    subscription = dispatcher.subscribe(
+        "thread.subscribe",
+        {"thread_id": thread_id},
+        {Scope.THREAD_READ},
+    )
+    while True:
+        event = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
+        assert isinstance(event, Event)
+        if isinstance(event.payload, ApprovalRequested):
+            await subscription.aclose()
+            return event
+
+
+async def _resume_budget_turn(
+    dispatcher: Dispatcher,
+    thread_id: UUID,
+    requested: Event,
+) -> list[Event]:
+    assert isinstance(requested.payload, ApprovalRequested)
+    accepted = await dispatcher.dispatch(
+        "thread.approval.respond",
+        {
+            "thread_id": thread_id,
+            "approval_id": requested.payload.approval_id,
+            "answer": "yes",
+        },
+        {Scope.THREAD_OPERATE},
+    )
+    assert isinstance(accepted, AcceptedResult)
+    subscription = dispatcher.subscribe(
+        "thread.subscribe",
+        {"thread_id": thread_id, "after_sequence": requested.sequence},
+        {Scope.THREAD_READ},
+    )
+    events: list[Event] = []
+    while True:
+        event = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
+        assert isinstance(event, Event)
+        events.append(event)
+        if is_turn_closing(event.payload):
+            await subscription.aclose()
+            return events
 
 
 async def _budget_turn_events(
@@ -303,6 +391,69 @@ def test_seconds_budget_does_not_relabel_a_provider_timeout(tmp_path: Path) -> N
             code=ErrorCode.INTERNAL,
             message="The model turn failed unexpectedly.",
         )
+
+    asyncio.run(scenario())
+
+
+def test_steps_budget_does_not_reset_after_approval(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        model = ApprovalChatModel()
+        dispatcher, thread_id = await _budget_session(tmp_path, model, "steps = 2")
+        requested = await _park_budget_turn(dispatcher, thread_id)
+        manifest_path = tmp_path / "bounded" / "kinby.toml"
+        manifest_path.write_text(
+            manifest_path.read_text(encoding="utf-8").replace("steps = 2", "steps = 100"),
+            encoding="utf-8",
+        )
+        resumed_model = DelayedCompletingChatModel()
+        instance = load_instance(tmp_path / "bounded")
+        runner = LangGraphRunner(instance, model_factory=lambda _: resumed_model)
+        restarted = build_dispatcher(
+            instance.manifest.state_dir,
+            turns=TurnConfig(
+                runner.prepare_for_turn,
+                runner.permission_ceiling,
+                runner,
+            ),
+        )
+
+        events = await _resume_budget_turn(restarted, thread_id, requested)
+
+        assert events[-1].payload == TurnFailed(
+            code=ErrorCode.BUDGET_EXCEEDED,
+            message="The turn exceeded the steps budget of 2.",
+        )
+        assert model.calls == 1
+        assert resumed_model.calls == 0
+
+    asyncio.run(scenario())
+
+
+def test_seconds_budget_does_not_reset_after_approval(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        model = ApprovalChatModel(delay=0.12)
+        dispatcher, thread_id = await _budget_session(tmp_path, model, "seconds = 0.2")
+        requested = await _park_budget_turn(dispatcher, thread_id)
+        resumed_model = DelayedCompletingChatModel(delay=0.12)
+        instance = load_instance(tmp_path / "bounded")
+        runner = LangGraphRunner(instance, model_factory=lambda _: resumed_model)
+        restarted = build_dispatcher(
+            instance.manifest.state_dir,
+            turns=TurnConfig(
+                runner.prepare_for_turn,
+                runner.permission_ceiling,
+                runner,
+            ),
+        )
+
+        events = await _resume_budget_turn(restarted, thread_id, requested)
+
+        assert events[-1].payload == TurnFailed(
+            code=ErrorCode.BUDGET_EXCEEDED,
+            message="The turn exceeded the seconds budget of 0.2.",
+        )
+        assert model.calls == 1
+        assert resumed_model.calls == 1
 
     asyncio.run(scenario())
 
