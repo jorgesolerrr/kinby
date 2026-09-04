@@ -28,6 +28,7 @@ from kinby.contracts import (
     TurnInterrupted,
     TurnStarted,
 )
+from kinby.core.budgets import DailyBudget, check_daily_budget
 from kinby.core.errors import (
     ApprovalNotFound,
     CoreError,
@@ -59,6 +60,7 @@ class TurnPreparation:
     model: str
     default_mode: PermissionMode
     ceiling: PermissionMode
+    daily_budget: DailyBudget | None = None
     budgets: Budgets = field(default_factory=Budgets)
 
 
@@ -181,6 +183,7 @@ class Turns:
         self._claims[command.thread_id] = claim
         try:
             preparation = self._prepare_for_turn()
+            check_daily_budget(preparation.daily_budget)
             turn = TurnRequest(
                 thread_id=command.thread_id,
                 turn_id=uuid4(),

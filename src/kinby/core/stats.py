@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, date, timedelta
+from datetime import date, timedelta
 
 from kinby.contracts import (
     MemoryCallCounts,
@@ -16,6 +16,7 @@ from kinby.contracts import (
     TurnMetrics,
     TurnVerdict,
 )
+from kinby.core.turn_metrics import closing_day
 
 
 @dataclass
@@ -71,7 +72,7 @@ def stats_buckets(
     """Group turn records by their UTC closing date."""
     totals_by_start: dict[date, _BucketTotals] = {}
     for record in records:
-        start = record.closed_at.astimezone(UTC).date()
+        start = closing_day(record)
         if by is StatsBucketSize.WEEK:
             start -= timedelta(days=start.weekday())
         totals_by_start.setdefault(start, _BucketTotals()).add(record)

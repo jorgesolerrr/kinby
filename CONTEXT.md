@@ -126,6 +126,10 @@ The input and output tokens attributed to a turn, with totals rolled up for its 
 
 The table of input and output prices per million tokens, keyed by exact `provider:model` names.
 
+### Daily cost
+
+The priced spend attributed to turns closed during one UTC day.
+
 ### Time range
 
 Optional, inclusive `since` and `until` bounds applied to a timestamp. `usage.get` and `stats.get` both apply it to a turn's closing timestamp.
