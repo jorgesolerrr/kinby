@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -23,6 +24,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph, add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
@@ -37,19 +39,20 @@ from kinby.contracts import (
     ToolCall,
     ToolResult,
 )
-from kinby.core.errors import InvalidApprovalRequest, ModelNoResponse
+from kinby.core.errors import BudgetExceeded, InvalidApprovalRequest, ModelNoResponse
 from kinby.core.gate import evaluate
 from kinby.core.prompt import assemble_system_prompt, render_system_prompt
 from kinby.core.turns import (
     ApprovalDecision,
     Emit,
     ParkedTurn,
+    TurnContext,
     TurnOutcome,
     TurnPreparation,
     TurnRequest,
     TurnResult,
 )
-from kinby.instance import Instance, reload_manifest
+from kinby.instance import Budgets, Instance, reload_manifest
 from kinby.instance.permissions import (
     SHIPPED_POLICY,
     GateAction,
@@ -106,6 +109,7 @@ class ModelContext:
     tools: ToolSnapshot
     tool_context: ToolContext
     user_message: HumanMessage
+    budgets: Budgets
 
 
 @dataclass(frozen=True)
@@ -154,6 +158,7 @@ class LangGraphRunner:
             model=manifest.models.main,
             default_mode=self._gate_policy.mode,
             ceiling=self._gate_policy.ceiling,
+            budgets=manifest.budgets,
         )
 
     def permission_ceiling(self) -> PermissionMode:
@@ -168,9 +173,9 @@ class LangGraphRunner:
         )
         return self._gate_policy_override
 
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult:
+    async def run(self, turn: TurnRequest, context: TurnContext) -> TurnResult:
         config = await self._start_config(turn)
-        return await self._invoke(turn, emit, ModelState(turn=turn), config)
+        return await self._invoke(turn, context, ModelState(turn=turn), config)
 
     async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None:
         config: RunnableConfig = {"configurable": {"thread_id": str(thread_id)}}
@@ -187,17 +192,24 @@ class LangGraphRunner:
         self,
         turn: TurnRequest,
         decision: ApprovalDecision,
-        emit: Emit,
+        context: TurnContext,
     ) -> TurnResult:
-        return await self._invoke(turn, emit, Command(resume=decision), _graph_config(turn))
+        return await self._invoke(
+            turn,
+            context,
+            Command(resume=decision),
+            _graph_config(turn),
+        )
 
     async def _invoke(
         self,
         turn: TurnRequest,
-        emit: Emit,
+        context: TurnContext,
         graph_input: ModelState | Command,
         config: RunnableConfig,
     ) -> TurnResult:
+        budgets = context.budgets
+        emit = context.emit
         skills, skill_warnings = load_skills(self._instance)
         sections = assemble_system_prompt(self._instance, skills, date.today())
         discovered_tools, tool_warnings = self._tools.refresh()
@@ -207,26 +219,40 @@ class LangGraphRunner:
         model = self._model_factory(turn.model)
         runnables = [tool.runnable for tool in tools.tools]
         bound_model = model.bind_tools(runnables) if runnables else model
-        async with self._graph() as (graph, _):
-            graph_result = await graph.ainvoke(
-                graph_input,
-                config,
-                context=ModelContext(
-                    emit=emit,
-                    model=bound_model,
-                    system_message=SystemMessage(content=render_system_prompt(sections)),
-                    gate_policy=self._gate_policy,
-                    permission_mode=turn.permission_mode,
-                    tools=tools,
-                    tool_context=ToolContext(
-                        instance=self._instance,
-                        thread_id=turn.thread_id,
+        if budgets.steps is not None:
+            config["recursion_limit"] = budgets.steps
+        seconds_budget = budgets.seconds
+        seconds_timeout = asyncio.timeout(seconds_budget)
+        try:
+            async with self._graph() as (graph, _), seconds_timeout:
+                graph_result = await graph.ainvoke(
+                    graph_input,
+                    config,
+                    context=ModelContext(
+                        emit=emit,
+                        model=bound_model,
+                        system_message=SystemMessage(content=render_system_prompt(sections)),
+                        gate_policy=self._gate_policy,
+                        permission_mode=turn.permission_mode,
+                        tools=tools,
+                        tool_context=ToolContext(
+                            instance=self._instance,
+                            thread_id=turn.thread_id,
+                        ),
+                        user_message=HumanMessage(content=turn.message),
+                        budgets=budgets,
                     ),
-                    user_message=HumanMessage(content=turn.message),
-                ),
-                # ADR 0011 keeps interrupted tool calls out of completed history.
-                durability="exit",
-            )
+                    # ADR 0011 keeps interrupted tool calls out of completed history.
+                    durability="exit",
+                )
+        except TimeoutError as exc:
+            if not seconds_timeout.expired() or seconds_budget is None:
+                raise
+            raise BudgetExceeded("seconds", seconds_budget) from exc
+        except GraphRecursionError as exc:
+            if budgets.steps is None:
+                raise
+            raise BudgetExceeded("steps", budgets.steps) from exc
         interrupts = _INTERRUPTS.validate_python(graph_result.get("__interrupt__", ()))
         if interrupts:
             approval = interrupts[0].value
@@ -284,15 +310,19 @@ class LangGraphRunner:
         if response is None:
             raise ModelNoResponse("The model returned no response.")
         usage = response.usage_metadata
+        input_tokens = state.input_tokens + (usage["input_tokens"] if usage is not None else 0)
+        output_tokens = state.output_tokens + (usage["output_tokens"] if usage is not None else 0)
+        token_budget = runtime.context.budgets.tokens
+        if token_budget is not None and input_tokens + output_tokens > token_budget:
+            raise BudgetExceeded("tokens", token_budget)
         returned_messages: list[AnyMessage] = [response]
         if not following_tool_call:
             returned_messages.insert(0, runtime.context.user_message)
         return ModelState(
             turn=state.turn,
             messages=returned_messages,
-            input_tokens=state.input_tokens + (usage["input_tokens"] if usage is not None else 0),
-            output_tokens=state.output_tokens
-            + (usage["output_tokens"] if usage is not None else 0),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
     async def _call_tools(

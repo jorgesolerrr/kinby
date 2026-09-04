@@ -18,7 +18,7 @@ from kinby.contracts import (
     ToolResult,
 )
 from kinby.core import LangGraphRunner
-from kinby.core.turns import ParkedTurn, TurnOutcome, TurnRequest, TurnResult
+from kinby.core.turns import ParkedTurn, TurnContext, TurnOutcome, TurnRequest, TurnResult
 from kinby.instance import Instance, load_instance
 from kinby.instance.permissions import BashPolicy, GatePolicy, PermissionsError
 
@@ -100,7 +100,7 @@ async def _run_turn(runner: LangGraphRunner) -> tuple[TurnResult, list[Payload]]
             model=preparation.model,
             permission_mode=preparation.default_mode,
         ),
-        emit,
+        TurnContext(preparation.budgets, emit),
     )
     return result, payloads
 

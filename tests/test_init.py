@@ -28,6 +28,15 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
     assert 'main = "provider:model"' in manifest
     assert '[memory]\nrecap = "every-turn"' in manifest
     assert '[feedback]\nask = "every-turn"' in manifest
+    assert (
+        "# [budgets]\n"
+        "# One step is one node execution.\n"
+        "# A budget of 7 steps allows four model calls and three tool rounds.\n"
+        "# steps = 7\n"
+        "# tokens = 50000\n"
+        "# seconds = 300\n"
+        "# usd_per_day = 5.0\n"
+    ) in manifest
     assert manifest.startswith("#")
     assert (target / "SYSTEM.md").read_text(encoding="utf-8").startswith("<!--")
     recap_prompt = (target / "RECAP.md").read_text(encoding="utf-8")

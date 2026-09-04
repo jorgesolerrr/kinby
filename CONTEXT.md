@@ -101,6 +101,10 @@ One run of the agent loop against a thread, from start to exit (a process, a REP
 One user-to-agent cycle within a thread: from a user message until the agent yields control back. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases. A turn is also the unit of work: what the user calls a task is a turn, and each turn earns at most one **episode**.
 _Avoid_: task
 
+### Budget
+
+A ceiling on the work or spend available to a **turn** or **instance**.
+
 ### Turn interruption
 
 A user's request to stop the active turn before it completes.

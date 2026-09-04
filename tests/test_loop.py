@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage
@@ -11,18 +11,23 @@ from langchain_core.tools import StructuredTool
 
 from kinby.contracts import (
     AcceptedResult,
+    ErrorCode,
     Event,
     MessageDelta,
     Payload,
     PermissionMode,
     Scope,
     ThreadCreateResult,
+    TurnCompleted,
+    TurnFailed,
     TurnStarted,
+    is_turn_closing,
 )
-from kinby.core import LangGraphRunner, TurnConfig, build_dispatcher, turn_config
+from kinby.core import Dispatcher, LangGraphRunner, TurnConfig, build_dispatcher, turn_config
 from kinby.core.events import EventLog
-from kinby.core.turns import TurnOutcome, TurnPreparation, TurnRequest
-from kinby.instance import Instance, load_instance
+from kinby.core.turn_runner import ChatModel
+from kinby.core.turns import TurnContext, TurnOutcome, TurnPreparation, TurnRequest
+from kinby.instance import Budgets, Instance, load_instance
 from tests.helpers import GRAPH_EVENT_TIMEOUT
 
 _MODEL = "openai:gpt-5"
@@ -91,6 +96,215 @@ class RecoveringChatModel(CoreSkillModel):
 class CompletingChatModel(CoreSkillModel):
     async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
         yield AIMessageChunk(content="Done")
+
+
+class LoopingChatModel(CoreSkillModel):
+    def __init__(self) -> None:
+        self.calls = 0
+        self.histories: list[list[object]] = []
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        self.calls += 1
+        self.histories.append(
+            [message.content for message in messages if not isinstance(message, SystemMessage)]
+        )
+        if self.calls > 2:
+            yield AIMessageChunk(content="Done")
+            return
+        yield AIMessageChunk(
+            content="",
+            tool_calls=[
+                {
+                    "name": "missing",
+                    "args": {},
+                    "id": f"missing-{self.calls}",
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+
+class TokenBudgetChatModel(CoreSkillModel):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        self.calls += 1
+        if self.calls == 1:
+            yield AIMessageChunk(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "missing",
+                        "args": {},
+                        "id": "missing-1",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={"input_tokens": 5, "output_tokens": 1, "total_tokens": 6},
+            )
+            return
+        yield AIMessageChunk(
+            content="Over budget",
+            usage_metadata={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+        )
+
+
+class StallingChatModel(CoreSkillModel):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        self.calls += 1
+        await asyncio.sleep(0.2)
+        yield AIMessageChunk(content="Too late")
+
+
+class ProviderTimeoutChatModel(CoreSkillModel):
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        yield AIMessageChunk(content="")
+        raise TimeoutError("provider timed out")
+
+
+async def _budget_session(
+    tmp_path: Path,
+    model: ChatModel,
+    budget: str,
+) -> tuple[Dispatcher, UUID]:
+    instance_path = tmp_path / "bounded"
+    instance_path.mkdir()
+    (instance_path / "kinby.toml").write_text(
+        (
+            f'id = "bounded"\n\n[models]\nmain = "{_MODEL}"\n\n'
+            f"[tools]\ndefaults = false\n\n[budgets]\n{budget}\n"
+        ),
+        encoding="utf-8",
+    )
+    instance = load_instance(instance_path)
+    runner = LangGraphRunner(instance, model_factory=lambda _: model)
+    dispatcher = build_dispatcher(
+        instance.manifest.state_dir,
+        turns=TurnConfig(
+            runner.prepare_for_turn,
+            runner.permission_ceiling,
+            runner,
+        ),
+    )
+    created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+    assert isinstance(created, ThreadCreateResult)
+    return dispatcher, created.id
+
+
+async def _budget_turn_events(
+    dispatcher: Dispatcher,
+    thread_id: UUID,
+    message: str,
+    after_sequence: int = 0,
+) -> list[Event]:
+    accepted = await dispatcher.dispatch(
+        "thread.turn.start",
+        {"thread_id": thread_id, "message": message},
+        {Scope.THREAD_OPERATE},
+    )
+    assert isinstance(accepted, AcceptedResult)
+    subscription = dispatcher.subscribe(
+        "thread.subscribe",
+        {"thread_id": thread_id, "after_sequence": after_sequence},
+        {Scope.THREAD_READ},
+    )
+    events: list[Event] = []
+    while True:
+        event = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
+        assert isinstance(event, Event)
+        events.append(event)
+        if is_turn_closing(event.payload):
+            await subscription.aclose()
+            return events
+
+
+def test_steps_budget_fails_a_tool_loop_without_another_model_call(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        model = LoopingChatModel()
+        dispatcher, thread_id = await _budget_session(tmp_path, model, "steps = 3")
+
+        events = await _budget_turn_events(dispatcher, thread_id, "Loop")
+
+        failed = events[-1].payload
+        assert failed == TurnFailed(
+            code=ErrorCode.BUDGET_EXCEEDED,
+            message="The turn exceeded the steps budget of 3.",
+        )
+        assert model.calls == 2
+
+    asyncio.run(scenario())
+
+
+def test_next_turn_after_a_tripped_budget_starts_from_the_clean_checkpoint(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        model = LoopingChatModel()
+        dispatcher, thread_id = await _budget_session(tmp_path, model, "steps = 3")
+        failed_events = await _budget_turn_events(dispatcher, thread_id, "Loop")
+
+        next_events = await _budget_turn_events(
+            dispatcher,
+            thread_id,
+            "Recover",
+            failed_events[-1].sequence,
+        )
+
+        assert isinstance(next_events[-1].payload, TurnCompleted)
+        assert model.histories[-1] == ["Recover"]
+
+    asyncio.run(scenario())
+
+
+def test_tokens_budget_fails_after_streamed_usage_passes_the_limit(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        model = TokenBudgetChatModel()
+        dispatcher, thread_id = await _budget_session(tmp_path, model, "tokens = 10")
+
+        events = await _budget_turn_events(dispatcher, thread_id, "Spend")
+
+        assert events[-1].payload == TurnFailed(
+            code=ErrorCode.BUDGET_EXCEEDED,
+            message="The turn exceeded the tokens budget of 10.",
+        )
+        assert model.calls == 2
+
+    asyncio.run(scenario())
+
+
+def test_seconds_budget_fails_a_stalled_model_call(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        model = StallingChatModel()
+        dispatcher, thread_id = await _budget_session(tmp_path, model, "seconds = 0.1")
+
+        events = await _budget_turn_events(dispatcher, thread_id, "Wait")
+
+        assert events[-1].payload == TurnFailed(
+            code=ErrorCode.BUDGET_EXCEEDED,
+            message="The turn exceeded the seconds budget of 0.1.",
+        )
+        assert model.calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_seconds_budget_does_not_relabel_a_provider_timeout(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        model = ProviderTimeoutChatModel()
+        dispatcher, thread_id = await _budget_session(tmp_path, model, "seconds = 1")
+
+        events = await _budget_turn_events(dispatcher, thread_id, "Wait")
+
+        assert events[-1].payload == TurnFailed(
+            code=ErrorCode.INTERNAL,
+            message="The model turn failed unexpectedly.",
+        )
+
+    asyncio.run(scenario())
 
 
 def test_runner_reloads_the_instance_model_between_turns(
@@ -222,7 +436,7 @@ def test_langgraph_runner_streams_one_model_turn(tmp_path: Path) -> None:
                 model=_MODEL,
                 permission_mode=PermissionMode.ASK,
             ),
-            emit,
+            TurnContext(Budgets(), emit),
         )
 
         assert isinstance(outcome, TurnOutcome)
@@ -258,7 +472,7 @@ def test_failed_model_call_does_not_enter_checkpointed_history(tmp_path: Path) -
                     model=_MODEL,
                     permission_mode=PermissionMode.ASK,
                 ),
-                emit,
+                TurnContext(Budgets(), emit),
             )
         await runner.run(
             TurnRequest(
@@ -268,7 +482,7 @@ def test_failed_model_call_does_not_enter_checkpointed_history(tmp_path: Path) -
                 model=_MODEL,
                 permission_mode=PermissionMode.ASK,
             ),
-            emit,
+            TurnContext(Budgets(), emit),
         )
 
         assert model.histories == [["Failed"], ["Retry"]]
@@ -303,7 +517,7 @@ def test_runner_keeps_thread_messages_between_turns(tmp_path: Path) -> None:
                     model=_MODEL,
                     permission_mode=PermissionMode.ASK,
                 ),
-                emit,
+                TurnContext(Budgets(), emit),
             )
 
         assert model.histories == [
@@ -339,7 +553,7 @@ def test_runner_keeps_thread_messages_after_restart(tmp_path: Path) -> None:
                     model=_MODEL,
                     permission_mode=PermissionMode.ASK,
                 ),
-                emit,
+                TurnContext(Budgets(), emit),
             )
 
         assert model.histories == [
