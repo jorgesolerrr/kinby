@@ -1,9 +1,13 @@
 import asyncio
 import json
+from collections.abc import Iterator
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
-from uuid import UUID
+from uuid import UUID, uuid4
+
+import pytest
 
 from kinby.contracts import (
     AcceptedResult,
@@ -25,8 +29,12 @@ from kinby.contracts import (
     TurnStarted,
     TurnVerdict,
 )
+from kinby.core.budgets import daily_cost
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
+from kinby.core.pricing import price_map
+from kinby.core.turn_metrics import UnpricedModel
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import (
     ApprovalDecision,
     Emit,
@@ -35,6 +43,7 @@ from kinby.core.turns import (
     TurnPreparation,
     TurnRequest,
 )
+from kinby.instance import Budgets, init_instance, load_instance
 from tests.helpers import (
     cannot_restore,
     does_not_park,
@@ -43,6 +52,25 @@ from tests.helpers import (
 )
 
 _APPROVAL_ID = UUID("11111111-1111-1111-1111-111111111111")
+
+
+def _daily_budget_preparation(
+    event_log: EventLog,
+    limit: float,
+    *,
+    model: str = "openai:gpt-5",
+) -> TurnPreparation:
+    prices = price_map()
+    return fixed_turn_preparation(
+        model=model,
+        daily_cost=daily_cost(
+            event_log.all_events(),
+            prices,
+            datetime.now(UTC).date(),
+        ),
+        unpriced_model=UnpricedModel(model) if model not in prices else None,
+        budgets=Budgets(usd_per_day=limit),
+    )
 
 
 class ScriptedRunner:
@@ -184,6 +212,37 @@ class PausingEventLog(EventLog):
             self.turns_started += 1
             await self.release.wait()
         return await super().append(thread_id, turn_id, payload)
+
+
+class HistoricalEventLog(EventLog):
+    def __init__(self, state_dir: Path, history: list[Event]) -> None:
+        super().__init__(state_dir)
+        self._history = history
+
+    def all_events(self) -> Iterator[Event]:
+        yield from self._history
+        yield from super().all_events()
+
+
+def _historical_turn(closed_at: datetime, model: str) -> list[Event]:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    return [
+        Event(
+            sequence=1,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            timestamp=closed_at - timedelta(seconds=1),
+            payload=TurnStarted(message="Earlier", model=model),
+        ),
+        Event(
+            sequence=2,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            timestamp=closed_at,
+            payload=TurnCompleted(input_tokens=4, output_tokens=2),
+        ),
+    ]
 
 
 def test_set_mode_requires_thread_admin_scope(tmp_path: Path) -> None:
@@ -498,6 +557,252 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
         await replay.aclose()
 
         assert replayed == events
+
+    asyncio.run(scenario())
+
+
+def test_daily_cost_budget_refuses_a_turn_at_the_limit_without_an_event(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path)
+
+        def prepare_for_turn() -> TurnPreparation:
+            return _daily_budget_preparation(event_log, 0.000025)
+
+        dispatcher = build_dispatcher(
+            tmp_path,
+            event_log=event_log,
+            turns=TurnConfig(
+                prepare_for_turn,
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+
+        accepted = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(accepted, AcceptedResult)
+        subscription = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id},
+            {Scope.THREAD_READ},
+        )
+        events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(4)]
+        await subscription.aclose()
+        assert isinstance(events[-1], Event)
+        assert isinstance(events[-1].payload, TurnCompleted)
+
+        refused = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert refused == ErrorEnvelope(
+            code=ErrorCode.BUDGET_EXCEEDED,
+            message="The daily cost reached the usd_per_day budget of 0.000025.",
+            retryable=False,
+        )
+        no_new_events = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id, "after_sequence": events[-1].sequence},
+            {Scope.THREAD_READ},
+        )
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(anext(no_new_events), timeout=0.01)
+        await no_new_events.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_daily_cost_budget_refuses_an_unpriced_model_but_unbounded_turns_run(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        bounded_path = tmp_path / "bounded"
+        bounded_log = EventLog(bounded_path)
+        bounded = build_dispatcher(
+            bounded_path,
+            event_log=bounded_log,
+            turns=TurnConfig(
+                lambda: _daily_budget_preparation(
+                    bounded_log,
+                    1,
+                    model="other:model",
+                ),
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        bounded_thread = await bounded.dispatch(
+            "thread.create",
+            {},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(bounded_thread, ThreadCreateResult)
+
+        refused = await bounded.dispatch(
+            "thread.turn.start",
+            {"thread_id": bounded_thread.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert refused == ErrorEnvelope(
+            code=ErrorCode.MODEL_UNPRICED,
+            message=('Model "other:model" has no price. Add [prices."other:model"] to kinby.toml.'),
+            retryable=False,
+        )
+
+        unbounded_path = tmp_path / "unbounded"
+        unbounded = build_dispatcher(
+            unbounded_path,
+            turns=TurnConfig(
+                lambda: TurnPreparation(
+                    model="other:model",
+                    default_mode=PermissionMode.ASK,
+                    ceiling=PermissionMode.FULL_ACCESS,
+                ),
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        unbounded_thread = await unbounded.dispatch(
+            "thread.create",
+            {},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(unbounded_thread, ThreadCreateResult)
+        accepted = await unbounded.dispatch(
+            "thread.turn.start",
+            {"thread_id": unbounded_thread.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(accepted, AcceptedResult)
+
+    asyncio.run(scenario())
+
+
+def test_daily_cost_budget_does_not_count_a_turn_closed_yesterday(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        event_log = HistoricalEventLog(
+            tmp_path,
+            _historical_turn(datetime.now(UTC) - timedelta(days=1), "openai:gpt-5"),
+        )
+
+        def prepare_for_turn() -> TurnPreparation:
+            return _daily_budget_preparation(event_log, 0.000025)
+
+        dispatcher = build_dispatcher(
+            tmp_path,
+            event_log=event_log,
+            turns=TurnConfig(
+                prepare_for_turn,
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+
+        accepted = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(accepted, AcceptedResult)
+
+    asyncio.run(scenario())
+
+
+def test_daily_cost_budget_refuses_an_unpriced_model_from_a_turn_closed_today(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        event_log = HistoricalEventLog(
+            tmp_path,
+            _historical_turn(datetime.now(UTC), "other:model"),
+        )
+
+        def prepare_for_turn() -> TurnPreparation:
+            return _daily_budget_preparation(event_log, 1)
+
+        dispatcher = build_dispatcher(
+            tmp_path,
+            event_log=event_log,
+            turns=TurnConfig(
+                prepare_for_turn,
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+
+        refused = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert refused == ErrorEnvelope(
+            code=ErrorCode.MODEL_UNPRICED,
+            message=('Model "other:model" has no price. Add [prices."other:model"] to kinby.toml.'),
+            retryable=False,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_turn_preparation_uses_the_event_log_and_manifest_price_override(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance_path = tmp_path / "priced"
+        init_instance(instance_path, model="other:model")
+        with (instance_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+            manifest.write(
+                "\n[budgets]\nusd_per_day = 0.000025\n"
+                '\n[prices."other:model"]\ninput = 1.25\noutput = 10\n'
+            )
+        instance = load_instance(instance_path)
+        event_log = HistoricalEventLog(
+            instance.manifest.state_dir,
+            _historical_turn(datetime.now(UTC), "other:model"),
+        )
+        runner = LangGraphRunner(instance, event_log=event_log)
+        dispatcher = build_dispatcher(
+            instance.manifest.state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                runner.prepare_for_turn,
+                runner.permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+
+        refused = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert refused == ErrorEnvelope(
+            code=ErrorCode.BUDGET_EXCEEDED,
+            message="The daily cost reached the usd_per_day budget of 0.000025.",
+            retryable=False,
+        )
 
     asyncio.run(scenario())
 

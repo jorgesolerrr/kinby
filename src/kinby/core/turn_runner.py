@@ -39,9 +39,13 @@ from kinby.contracts import (
     ToolCall,
     ToolResult,
 )
+from kinby.core.budgets import DailyBudget, daily_cost
 from kinby.core.errors import BudgetExceeded, InvalidApprovalRequest, ModelNoResponse
+from kinby.core.events import EventLog
 from kinby.core.gate import evaluate
+from kinby.core.pricing import price_map
 from kinby.core.prompt import assemble_system_prompt, render_system_prompt
+from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
     ApprovalDecision,
     Emit,
@@ -157,11 +161,15 @@ class LangGraphRunner:
         self,
         instance: Instance,
         *,
+        event_log: EventLog | None = None,
         model_factory: ModelFactory = _init_model,
         model_override: str | None = None,
         gate_policy: GatePolicy | None = None,
     ) -> None:
         self._instance = instance
+        self._event_log = (
+            event_log if event_log is not None else EventLog(instance.manifest.state_dir)
+        )
         self._model_factory = model_factory
         self._model_override = model_override
         self._gate_policy_override = gate_policy
@@ -184,10 +192,28 @@ class LangGraphRunner:
         manifest = reload_manifest(self._instance, model_override=self._model_override)
         self._instance = replace(self._instance, manifest=manifest)
         self._gate_policy = self._load_gate_policy()
+        limit = manifest.budgets.usd_per_day
+        daily_budget = None
+        if limit is not None:
+            prices = price_map(manifest.prices)
+            daily_budget = DailyBudget(
+                limit=limit,
+                cost=daily_cost(
+                    self._event_log.all_events(),
+                    prices,
+                    datetime.now(UTC).date(),
+                ),
+                unpriced_model=(
+                    UnpricedModel(manifest.models.main)
+                    if manifest.models.main not in prices
+                    else None
+                ),
+            )
         return TurnPreparation(
             model=manifest.models.main,
             default_mode=self._gate_policy.mode,
             ceiling=self._gate_policy.ceiling,
+            daily_budget=daily_budget,
             budgets=manifest.budgets,
         )
 

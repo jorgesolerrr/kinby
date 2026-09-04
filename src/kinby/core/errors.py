@@ -1,11 +1,17 @@
 """Errors raised by the core package."""
 
+from __future__ import annotations
+
 import asyncio
-from typing import Literal
+from decimal import Decimal
+from typing import TYPE_CHECKING, Literal
 
 from kinby.contracts import ErrorCode
 
-BudgetName = Literal["steps", "tokens", "seconds"]
+if TYPE_CHECKING:
+    from kinby.core.turn_metrics import UnpricedModel
+
+BudgetName = Literal["steps", "tokens", "seconds", "usd_per_day"]
 
 
 class CoreError(Exception):
@@ -38,7 +44,18 @@ class BudgetExceeded(CoreError):
     code = ErrorCode.BUDGET_EXCEEDED
 
     def __init__(self, budget: BudgetName, value: int | float) -> None:
+        if budget == "usd_per_day":
+            amount = format(Decimal(str(value)), "f")
+            super().__init__(f"The daily cost reached the usd_per_day budget of {amount}.")
+            return
         super().__init__(f"The turn exceeded the {budget} budget of {value}.")
+
+
+class ModelUnpriced(CoreError):
+    code = ErrorCode.MODEL_UNPRICED
+
+    def __init__(self, model: UnpricedModel) -> None:
+        super().__init__(f'Model "{model}" has no price. Add [prices."{model}"] to kinby.toml.')
 
 
 class NoActiveTurn(CoreError):

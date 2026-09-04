@@ -278,7 +278,11 @@ def turn_config(
     model_override: str | None = None,
 ) -> TurnConfig:
     """Build model turns from an instance, reloading its model at each turn."""
-    runner = LangGraphRunner(instance, model_override=model_override)
+    runner = LangGraphRunner(
+        instance,
+        event_log=event_log,
+        model_override=model_override,
+    )
     recap = RecapWriter(
         event_log,
         GraphStore(instance.path),

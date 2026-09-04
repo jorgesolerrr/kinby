@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, date, datetime
 from typing import NewType
 from uuid import UUID
 
@@ -57,6 +57,11 @@ class _TurnEvents:
 def estimate_memory_tokens(character_count: int) -> float:
     """Apply the shared character estimate used for memory text."""
     return character_count / _CHARACTERS_PER_ESTIMATED_MEMORY_TOKEN
+
+
+def closing_day(record: TurnMetrics) -> date:
+    """Return the UTC day on which a turn closed."""
+    return record.closed_at.astimezone(UTC).date()
 
 
 @dataclass(frozen=True)
