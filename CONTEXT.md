@@ -52,6 +52,14 @@ The single interface through which kinby recalls, opens, remembers, and forgets.
 
 One source of memory behind the **memory facade**, such as the **profile**, the **knowledge graph**, or a RAG index over the **transcript store**. Each feed must pass its evals before kinby adds the next one.
 
+### Eval
+
+An offline, scored run of one or more **turns** against reference answers, under a named model. Paid for and run on demand; never part of ordinary use. The check on the harness itself, as opposed to **instance statistics**, which observe real use.
+
+### Feed gate
+
+The **eval** thresholds a **feed** must pass before kinby builds the next one.
+
 ### Memory tool
 
 A core **tool** that exposes the **memory facade** to the model. Search and open are read tools, while remember and forget are write tools governed by the **gate**.
@@ -90,7 +98,7 @@ The workspace's own instruction files and skill directories an **instance** may 
 
 ### Thread
 
-One conversation with its own durable history. Survives across sessions; can be resumed later. What memory distills from and what evals replay.
+One conversation with its own durable history. Survives across sessions; can be resumed later. What memory distills from and what **instance statistics** are derived from.
 
 ### Session
 
@@ -153,6 +161,14 @@ One way of preparing the same **eval** case for comparison. The memory eval has 
 ### Feed gate
 
 The correctness and memory-token thresholds a **feed** must pass before kinby adds the next feed.
+
+### Turn rating
+
+The user's verdict on one **turn**: good or bad, with an optional reason. Recorded on the thread next to the turn it rates, whether given right after the turn or later. The live signal of whether an **instance** is improving.
+
+### Instance statistics
+
+Per-turn measures of one **instance** (tokens, cost, tool calls, memory calls, approvals, duration, **turn rating**) aggregated over a time window, with trends. Derived from the **transcript store**, never recorded separately.
 
 ### Turn runner
 
@@ -265,3 +281,29 @@ The **prompt section** that lists each available **skill** by name and descripti
 ### Environment block
 
 The last **prompt section**, containing the instance id, optional **persona name**, **workspace** path, main model, and date.
+
+### Wake
+
+The start of a **turn** by anything other than the user typing. Every wake carries an **origin**, which the thread records and the **system prompt** renders as a cue.
+
+### Origin
+
+What started a **turn**: the user, a **routine**, or a **signal**.
+
+### Routine
+
+A **wake** an **instance** owns and runs on a schedule: a prompt, and optionally the instance's own **code step** that runs first. Lives as a directory in the instance; its file is the source of truth.
+_Avoid_: cron job, automation, job
+
+### Code step
+
+A **routine**'s own deterministic code, a **tool** never offered to the model, that runs before the model and may report "nothing new" so no **turn** starts.
+
+### Signal
+
+An inbound stimulus from outside the **instance**, such as a webhook call or a received email, that wakes the agent without a schedule. Never called an event: that word names a thread history record.
+_Avoid_: event, trigger, webhook (as the concept)
+
+### Budget
+
+A ceiling an **instance** sets on one **turn** (steps, tokens, seconds) or on a UTC day (cost). Reaching it closes the turn as failed. Absent means unlimited; a **routine** may lower a budget, never raise it.

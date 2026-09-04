@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blueprint: Instance statistics, turn rating, and the eval harness</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f5f5f5;
+      --ink: #2d3142;
+      --muted: #4f5d75;
+      --soft: #7a8399;
+      --rule: rgba(45, 49, 66, 0.16);
+      --accent: #eb6c36;
+      --accent-tint: rgba(235, 108, 54, 0.08);
+      --link: #2e5aa8;
+      --new: #2e7d32;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', Georgia, serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #2d3142;
+        --ink: #f5f5f5;
+        --muted: #bfc0c0;
+        --soft: #8e98ac;
+        --rule: rgba(245, 245, 245, 0.16);
+        --accent: #f08a59;
+        --accent-tint: rgba(240, 138, 89, 0.10);
+        --link: #6a95d8;
+        --new: #66bb6a;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; padding: 3rem 2rem 4rem; font-family: var(--font-sans); font-size: 15px; line-height: 1.55; background: var(--paper); color: var(--ink); }
+    main { max-width: 960px; margin: 0 auto; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.5rem; }
+    h1 { font-family: var(--font-serif); font-weight: 400; font-size: 2.25rem; line-height: 1.1; margin: 0 0 0.5rem; }
+    h2 { font-family: var(--font-serif); font-weight: 400; font-size: 1.6rem; margin: 3rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+    h3 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+    .mode { font-family: var(--font-mono); font-size: 0.7rem; color: var(--soft); margin-left: 0.5rem; letter-spacing: 0.08em; }
+    .stamp { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+    code, pre { font-family: var(--font-mono); font-size: 0.85em; }
+    code { background: rgba(127, 127, 127, 0.12); padding: 0.05em 0.3em; border-radius: 3px; }
+    pre { padding: 0.75rem 1rem; border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+    th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--rule); }
+    th { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+    figure { margin: 1.5rem 0; }
+    figure svg { display: block; width: 100%; height: auto; }
+    figcaption { font-family: var(--font-serif); font-style: italic; font-size: 0.95rem; color: var(--muted); margin-top: 0.5rem; }
+    .overflow { overflow-x: auto; }
+    ol, ul { padding-left: 1.4rem; }
+    li { margin: 0.25rem 0; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1.25rem; }
+    dt { font-family: var(--font-mono); font-size: 0.85rem; }
+    dd { margin: 0; }
+    footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--rule); font-family: var(--font-mono); font-size: 0.75rem; color: var(--soft); }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Blueprint</p>
+  <h1>Instance statistics, turn rating, and the eval harness</h1>
+  <p class="stamp">Stamped at <code>de30ea9</code>: paths and symbols are true at this commit.</p>
+
+  <h2 id="at-a-glance">At a glance <span class="mode">explanation</span></h2>
+  <p>You get a per-instance table of how your kinby is doing, a good-or-bad prompt after each turn that feeds it, and an offline eval suite that gates the memory feeds. Everything is computed from the thread event log by one core function, <code>turn_metrics</code>; the REPL, <code>kinby stats</code>, and the Inspect AI scorer all read the same numbers. The decision that constrains the rest is that nothing is recorded twice: the rating is an event on the thread, the report is derived into <code>.state/</code>, and the evals never run in pytest or CI.</p>
+
+  <h2 id="problem">Problem <span class="mode">explanation</span></h2>
+  <p>You have run an instance for a few weeks. <code>kinby usage</code> prints tokens per turn and nothing else. You cannot tell how often the agent searched memory, which tools it leaned on, how many turns stopped at an approval, or how long a turn took. When an answer is bad there is nowhere to say so, and nothing you could later trace back. On the other side, the light graph feed shipped on the promise of expected-behavior checks (the three temporal questions, remember-then-recall, forget-stays-forgotten) that nobody has run. <code>evals/</code> holds a <code>.gitkeep</code>, Inspect AI is not a dependency, and the memory ticket left the pass thresholds to this one.</p>
+
+  <h2 id="solution">Solution <span class="mode">explanation</span></h2>
+  <p>After a completed turn the REPL asks for a verdict, good or bad, with an optional reason, and enter skips. The verdict is a <code>turn.rated</code> event under the turn it judges, and any client can send one later through <code>thread.turn.rate</code>. <code>kinby stats</code> prints one row per day or week with tokens, cost, tool calls, memory calls, turns that consulted no memory, approvals, mean duration and the good-to-bad split, then writes the same result as <code>stats.json</code> into the state directory. Cost comes from a shipped price map you can override per model in <code>kinby.toml</code>. An unpriced model prints a warning and no number. Under <code>evals/memory/</code> an Inspect AI task runs the memory question set against fixture instances in two arms, graph and transcript stuffing, and the feed gate reads the pair (correctness, memory tokens) off the log. I think the split matters more than any single number here. The rating is a trend for the person running the instance, the eval is a gate for the person building the next feed, and neither can stand in for the other.</p>
+
+  <h2 id="decision-log">Decision log <span class="mode">explanation</span></h2>
+  <p>One row per decision settled in the grilling on ticket #10 and in the spec (#94). Later sections cite them as <code>D3</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>#</th><th>Decision</th><th>Chosen</th><th>Rejected</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>Where measurements come from</td><td>The thread event log alone, for both live statistics and offline evals</td><td>A separate metrics store; hosted tracing as the source of truth</td><td>The transcript store is already canonical. A second record of the same turns drifts from it.</td></tr>
+      <tr><td>D2</td><td>Who computes per-turn metrics</td><td>One core function, <code>turn_metrics</code>, called by the stats handler, the eval scorer, and <code>usage_totals</code></td><td>Scorer and report each parse events</td><td>Two parsers disagree eventually. One function is the definition of "what a turn cost and did".</td></tr>
+      <tr><td>D3</td><td>How a rating is recorded</td><td><code>turn.rated</code> event under the turn id, sent through a new method <code>thread.turn.rate</code> with its own scope <code>thread:rate</code></td><td>A rating file in the instance; a field on the thread summary</td><td>The rating lives next to the turn it judges and rides replay and subscription like any event.</td></tr>
+      <tr><td>D4</td><td>Which turns can be rated, and how often</td><td>Any closed turn, through the contract; the latest rating wins; the REPL asks only after a completed turn</td><td>One immutable rating; rating only from the REPL right after the turn</td><td>A verdict formed after seeing the result still counts. Latest-wins is the rule facts already use.</td></tr>
+      <tr><td>D5</td><td>Shape of the REPL prompt and its policy</td><td>One key for good, one for bad, enter to skip, then an optional reason line; <code>[feedback] ask = "every-turn" | "off"</code>, default every-turn</td><td>A 1 to 5 scale; a calibration window that stops asking after N days</td><td>Binary is answerable in a second. The policy mirrors the recap policy so there is one pattern.</td></tr>
+      <tr><td>D6</td><td>Is the rating a gate?</td><td>No. A trend in the statistics, never a feed gate</td><td>Live rating as the feed gate</td><td>Noisy, user-dependent, no reference answer. The offline set is small and specific and can say pass or fail.</td></tr>
+      <tr><td>D7</td><td>What the statistics contain</td><td>Input, output and recap tokens; cost; tool calls by name; memory calls split search, open, remember, forget; turns without memory; approvals; duration; rating</td><td>Tokens only (what <code>usage.get</code> has)</td><td>A teammate that never looks things up is the failure the memory work exists to catch, so it gets its own count.</td></tr>
+      <tr><td>D8</td><td>The statistics surface</td><td><code>stats.get</code> on the contract; <code>kinby stats</code> prints a table and writes <code>stats.json</code> into <code>.state/</code></td><td>A markdown report; a web dashboard</td><td>The map rules out any UI beyond the REPL. The JSON is the seam a dashboard reads later without redoing aggregation.</td></tr>
+      <tr><td>D9</td><td>Cost</td><td>A shipped price map, overridable per model in <code>kinby.toml</code>; an unknown model reports cost as none and a warning</td><td>A user-maintained file only; zero for unknown</td><td>A zero hides in a trend. A missing number does not.</td></tr>
+      <tr><td>D10</td><td>What the offline set contains</td><td>The memory question set only: three must-pass temporal questions, remember-then-recall across threads, forget stays forgotten, plus stretch questions that report</td><td>Coding tasks scored by tests passing</td><td>Coding tasks need Docker and a workspace fixture and no decision waits on them. They stay fog on the map.</td></tr>
+      <tr><td>D11</td><td>How an eval case is seeded</td><td>A fixture instance directory and a fresh turn on a fresh thread</td><td>Replay a recorded event log to sequence N, then run turn N+1</td><td>The must-pass questions are "search and open on a seeded graph". Replay needs a rebuild-checkpoint path that does not exist.</td></tr>
+      <tr><td>D12</td><td>How Inspect drives kinby</td><td>In process: the solver calls the dispatcher with a <code>ModelFactory</code> adapter over Inspect's active model</td><td>Inspect's agent bridge; a Docker sandbox per sample</td><td>The seam exists and runs the same path the REPL does. The bridge is untested with LangGraph.</td></tr>
+      <tr><td>D13</td><td>Correctness scorer</td><td>Model-graded fact against the reference, and a deterministic check that the expected node was opened</td><td>Includes-match on the reference only</td><td>A correct answer reached without opening the node is a lucky guess and should fail.</td></tr>
+      <tr><td>D14</td><td>The stuffing baseline</td><td>A task parameter. The stuffing arm copies the fixture, removes <code>memory/graph/</code>, and appends the raw transcript to the profile</td><td>A harness flag that disables the memory tools</td><td>Core tools are always present (ADR 0012). The transcript in a memory-owned prompt section is exactly what the memory-token metric counts, so no flag is needed.</td></tr>
+      <tr><td>D15</td><td>Feed gate numbers</td><td>Must-pass correctness 100%; memory tokens on the graph arm at most 25% of the stuffing arm on average</td><td>A blended score; a lower correctness bar</td><td>The must-pass set is few and specific. Below 100% the feed does not answer its own questions.</td></tr>
+      <tr><td>D16</td><td>Cross-model comparison</td><td>Mechanism only: every task takes a model list, per-model usage stays in the Inspect log. Which models and how results are published is ticket #93</td><td>Settle the model list now</td><td>Nothing to compare until the first gate has run.</td></tr>
+      <tr><td>D17</td><td>Where evals run</td><td><code>inspect eval evals/...</code> under a dev dependency group <code>evals</code>; never pytest or CI; logs gitignored; a passing gate commits one markdown summary next to the task</td><td>Evals in the pytest suite</td><td>They cost money and need keys. The summary is the durable "why we added the next feed".</td></tr>
+      <tr><td>D18</td><td>Memory-token estimator</td><td>Characters divided by four, one function, applied to memory tool results and the profile section on both arms</td><td>A provider tokenizer</td><td>The gate reads a ratio. The same estimator on both arms makes the ratio honest without a tokenizer dependency.</td></tr>
+      <tr><td>D19</td><td>Pricing recap tokens</td><td><code>memory.recapped</code> gains an optional <code>model</code> field; old events read as unknown</td><td>Price recap tokens at the manifest's current recap model</td><td>The recap model can change between the turn and the report. The event is the only record of which model ran.</td></tr>
+      <tr><td>D20</td><td>Duration</td><td><code>turn.started</code> timestamp to the closing event's timestamp</td><td>A new duration field on the closing event</td><td>Both timestamps exist today. Ticket #12 confirms they suffice or adds what is missing.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="birds-eye">Bird's-eye flow <span class="mode">reference</span></h2>
+  <p>One figure of the whole feature end to end. Boxes are modules or systems. Arrows carry the call or data that crosses. Decision ids lead the label where a decision picked the route.</p>
+  <figure>
+    <svg viewBox="0 0 960 472" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-birdseye-title fig-birdseye-desc">
+      <title id="fig-birdseye-title">Instance statistics and evals from the REPL, the CLI and Inspect AI to the event log</title>
+      <desc id="fig-birdseye-desc">The REPL sends thread.turn.rate to the dispatcher, which appends turn.rated to the event log. kinby stats sends stats.get; the dispatcher calls turn_metrics, which reads events and prices, and the CLI writes stats.json. Inspect AI hands a sample to the evals task, which drives turns through the dispatcher and scores them with turn_metrics.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="var(--muted)" stroke-width="1.2"/></marker>
+        <marker id="diamond-filled" markerWidth="12" markerHeight="8" refX="12" refY="4" orient="auto"><polygon points="0 4, 6 0, 12 4, 6 8" fill="var(--ink)"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- zone -->
+      <rect x="24" y="328" width="440" height="104" rx="8" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <text x="36" y="344" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" letter-spacing="0.12em">EVALS DIRECTORY, NOT IN THE PACKAGE</text>
+      <!-- arrows -->
+      <path d="M 200,68 H 312 Q 320,68 320,76 V 144" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="216" y="48" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="260" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D3 thread.turn.rate</text>
+      <line x1="200" y1="172" x2="280" y2="172" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="204" y="152" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="161" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D8 stats.get</text>
+      <line x1="120" y1="200" x2="120" y2="248" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="128" y="216" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="132" y="225" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">StatsGetResult as JSON</text>
+      <path d="M 440,160 H 472 Q 480,160 480,152 V 76 Q 480,68 488,68 H 520" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="488" y="104" width="60" height="12" rx="2" fill="var(--paper)"/>
+      <text x="492" y="113" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">turn.rated</text>
+      <line x1="440" y1="184" x2="520" y2="184" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="444" y="192" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="201" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D2 turn_metrics</text>
+      <line x1="600" y1="96" x2="600" y2="144" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="608" y="112" width="40" height="12" rx="2" fill="var(--paper)"/>
+      <text x="612" y="121" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">Event</text>
+      <line x1="760" y1="172" x2="680" y2="172" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="700" y="152" width="40" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="161" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Price</text>
+      <line x1="200" y1="380" x2="280" y2="380" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="208" y="360" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="369" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Sample</text>
+      <line x1="360" y1="352" x2="360" y2="200" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="368" y="268" width="92" height="12" rx="2" fill="var(--paper)"/>
+      <text x="372" y="277" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">thread.turn.start</text>
+      <path d="M 440,380 H 632 Q 640,380 640,372 V 200" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="476" y="360" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="540" y="369" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D13 score via turn_metrics</text>
+      <!-- nodes -->
+      <rect x="40" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="66" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">cli.repl</text>
+      <text x="120" y="82" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/repl.py</text>
+      <rect x="40" y="144" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="144" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="170" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">cli.main</text>
+      <text x="120" y="186" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">kinby stats</text>
+      <rect x="40" y="248" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="248" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="40" y="248" width="160" height="8" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="120" y="278" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">stats.json</text>
+      <text x="120" y="294" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">.state/stats.json</text>
+      <rect x="40" y="352" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="352" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="120" y="382" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Inspect AI</text>
+      <text x="120" y="398" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">inspect eval</text>
+      <rect x="280" y="352" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="352" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="288" y="360" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="304" y="369" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="360" y="382" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">evals.memory</text>
+      <text x="360" y="398" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">evals/memory/task.py</text>
+      <rect x="280" y="144" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="144" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="170" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.dispatcher</text>
+      <text x="360" y="186" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/dispatcher.py</text>
+      <rect x="520" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="40" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="520" y="40" width="160" height="8" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="600" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.events</text>
+      <text x="600" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">.state/events.jsonl</text>
+      <rect x="520" y="144" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="144" width="160" height="56" rx="6" fill="var(--accent-tint)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="528" y="152" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="544" y="161" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="600" y="174" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.metrics</text>
+      <text x="600" y="190" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/metrics.py</text>
+      <rect x="760" y="144" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="144" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="768" y="152" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="784" y="161" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="840" y="174" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.prices</text>
+      <text x="840" y="190" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/prices.py</text>
+      <!-- legend -->
+      <line x1="40" y1="440" x2="920" y2="440" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="452" width="24" height="12" rx="2" fill="none" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="461" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new module</text>
+      <line x1="200" y1="456" x2="224" y2="456" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="232" y="461" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">crosses into Inspect</text>
+      <rect x="360" y="452" width="24" height="12" rx="2" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3"/>
+      <text x="392" y="461" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">external system</text>
+      <line x1="520" y1="456" x2="544" y2="456" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="552" y="461" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">the one function both consumers call</text>
+    </svg>
+    <figcaption>Figure: how a rating, a statistics request and an eval sample each reach the event log and meet in <code>turn_metrics</code>.</figcaption>
+  </figure>
+  <ol>
+    <li>After a completed turn, <code>run_repl</code> asks for a verdict and calls <code>thread.turn.rate</code> (D3, D5).</li>
+    <li>The dispatcher hands the command to <code>rate_turn</code>, which appends <code>turn.rated</code> under the turn id (D3, D4).</li>
+    <li><code>kinby stats</code> calls <code>stats.get</code> with the window and bucket size (D8).</li>
+    <li>The handler reads every event from the log and calls <code>turn_metrics</code> with the price map (D1, D2).</li>
+    <li><code>turn_metrics</code> prices each turn through <code>price_for</code>; a model without a price yields cost none (D9).</li>
+    <li>The CLI prints the buckets and writes the result as <code>stats.json</code> into the state directory (D8).</li>
+    <li>Inspect AI hands each sample to the <code>evals.memory</code> task, which copies the fixture and drives turns through <code>thread.turn.start</code> with an adapter model factory (D11, D12).</li>
+    <li>The task's scorer reads the copied instance's log through <code>turn_metrics</code> for memory tokens and the opened node, and grades the answer with a judge model (D13, D18).</li>
+  </ol>
+
+  <h2 id="module-map">Module map <span class="mode">reference</span></h2>
+  <p>Which modules the feature touches and how they depend on each other after the change. <code>core.usage</code> is also modified (it is re-expressed over <code>turn_metrics</code>) but omitted here to stay within budget; the file map lists it.</p>
+  <figure>
+    <svg viewBox="0 0 960 536" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-modules-title fig-modules-desc">
+      <title id="fig-modules-title">Modules instance statistics and evals touch</title>
+      <desc id="fig-modules-desc">cli.main, evals.memory and cli.repl sit on top. The dispatcher depends on core.turns, core.metrics, memory.recap and core.events. core.metrics depends on core.prices and contracts. contracts has the highest fan-in. core.metrics, core.prices and evals.memory are new.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- arrows -->
+      <path d="M 240,96 V 120 Q 240,128 232,128 H 188 Q 180,128 180,136 V 160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 320,96 V 120 Q 320,128 328,128 H 432 Q 440,128 440,136 V 160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="480" y1="96" x2="480" y2="160" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 544,96 V 120 Q 544,128 552,128 H 576 Q 584,128 584,136 V 232 a 8,8 0 0,1 0,16 V 256 Q 584,264 576,264 H 528 Q 520,264 520,272 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="592" y="184" width="52" height="12" rx="2" fill="var(--paper)"/>
+      <text x="596" y="193" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D2 score</text>
+      <path d="M 744,96 V 120 Q 744,128 752,128 H 792 Q 800,128 800,136 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="808" y="256" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="812" y="265" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D3 thread.turn.rate</text>
+      <path d="M 432,216 V 224 Q 432,232 424,232 H 188 Q 180,232 180,240 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 464,216 V 240 Q 464,248 456,248 H 320 Q 312,248 312,256 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="496" y1="216" x2="496" y2="280" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 528,216 V 232 Q 528,240 536,240 H 632 Q 640,240 640,248 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="240" y1="336" x2="240" y2="400" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="440" y1="336" x2="440" y2="400" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 520,336 V 360 Q 520,368 528,368 H 700 Q 708,368 708,376 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="760" y1="336" x2="760" y2="400" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- rank 0 -->
+      <rect x="200" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="200" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="280" y="66" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">cli.main</text>
+      <text x="280" y="82" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/main.py</text>
+      <rect x="400" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="408" y="48" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="424" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="480" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">evals.memory</text>
+      <text x="480" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">evals/memory/</text>
+      <rect x="600" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="600" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="680" y="66" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">cli.repl</text>
+      <text x="680" y="82" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/repl.py</text>
+      <!-- rank 1 -->
+      <rect x="100" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="100" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="224" y="168" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="238" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="180" y="190" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">instance.manifest</text>
+      <text x="180" y="206" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/instance/manifest.py</text>
+      <rect x="400" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="524" y="168" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="538" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="480" y="190" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.dispatcher</text>
+      <text x="480" y="206" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/dispatcher.py</text>
+      <!-- rank 2 -->
+      <rect x="200" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="200" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="324" y="288" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="338" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="280" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turns</text>
+      <text x="280" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turns.py</text>
+      <rect x="400" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="408" y="288" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="424" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="524" y="288" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="538" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="480" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.metrics</text>
+      <text x="480" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/metrics.py</text>
+      <rect x="600" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="600" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="724" y="288" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="738" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="680" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">memory.recap</text>
+      <text x="680" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/memory/recap.py</text>
+      <!-- rank 3 -->
+      <rect x="100" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="100" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="224" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="238" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="180" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.events</text>
+      <text x="180" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/events.py</text>
+      <rect x="400" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="408" y="408" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="424" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="524" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="538" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="480" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.prices</text>
+      <text x="480" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/prices.py</text>
+      <rect x="700" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="700" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="824" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="838" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">3 in</text>
+      <text x="780" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">contracts</text>
+      <text x="780" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/contracts/</text>
+      <!-- legend -->
+      <line x1="40" y1="488" x2="920" y2="488" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="500" width="24" height="12" rx="2" fill="none" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="509" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new module</text>
+      <rect x="200" y="500" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="214" y="509" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">n in</text>
+      <text x="240" y="509" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">modules in this figure that import it</text>
+    </svg>
+    <figcaption>Figure: dependency graph of the modules the feature touches, new ones marked; <code>contracts</code> carries the highest fan-in.</figcaption>
+  </figure>
+  <h3>Interfaces</h3>
+  <p>The functions and types other modules call. Names match the file map and the figures.</p>
+  <dl>
+    <dt><code>turn_metrics(events: Iterable[Event], prices: PriceMap) -> tuple[TurnMetrics, ...]</code></dt>
+    <dd>One record per closed turn, in log order. Called by the <code>stats.get</code> handler, by <code>usage_totals</code>, and by the eval scorer (D2).</dd>
+    <dt><code>instance_statistics(turns: Sequence[TurnMetrics], window: UsageRange, by: Bucket) -> StatsGetResult</code></dt>
+    <dd>Filters the turns to the window, buckets them by UTC day or Monday-start week, and lists the unpriced models. Called by the <code>stats.get</code> handler.</dd>
+    <dt><code>estimate_tokens(text: str) -> int</code></dt>
+    <dd>Characters divided by four (D18). Used by <code>turn_metrics</code> for memory tool results and by the eval scorer for the profile section.</dd>
+    <dt><code>price_for(model: str, prices: PriceMap) -> Price | None</code></dt>
+    <dd>Exact match on <code>provider:model</code>. <code>PriceMap</code> is <code>Mapping[str, Price]</code>; <code>SHIPPED_PRICES</code> is the default and the manifest's <code>prices</code> overlays it (D9).</dd>
+    <dt><code>rate_turn(event_log: EventLog, command: ThreadTurnRateCommand) -> AcceptedResult</code></dt>
+    <dd>Raises <code>NotFound</code> for an unknown thread or turn, <code>TurnOpen</code> when the turn has no closing event, otherwise appends <code>TurnRated</code> (D3, D4). Registered by <code>build_dispatcher</code> whether or not a turn service exists.</dd>
+    <dt><code>build_dispatcher(state_dir, *, event_log=None, turns=None, prices=SHIPPED_PRICES) -> Dispatcher</code></dt>
+    <dd>Gains the price map so <code>stats.get</code> can cost turns. The CLI passes the manifest's overlay.</dd>
+    <dt><code>run_repl(client, thread_id, *, stdin, stdout, stderr, ask_rating: bool) -> int</code></dt>
+    <dd>When <code>ask_rating</code> is true, prompts after each completed turn and calls <code>thread.turn.rate</code> (D5). The CLI derives the flag from <code>manifest.feedback.ask</code>.</dd>
+    <dt><code>THREAD_TURN_RATE</code>, <code>STATS_GET</code></dt>
+    <dd>The two new contract methods, <code>thread.turn.rate</code> under <code>Scope.THREAD_RATE</code> and <code>stats.get</code> under <code>Scope.INSTANCE_READ</code>.</dd>
+    <dt><code>memory_recall(arm: Arm = Arm.GRAPH, judge: str) -> Task</code></dt>
+    <dd>The Inspect task in <code>evals/memory/task.py</code>. One sample per case directory; the arm decides whether the fixture is copied as is or stuffed (D14).</dd>
+    <dt><code>inspect_model_factory(model: str) -> ChatModel</code></dt>
+    <dd>The <code>ModelFactory</code> adapter in <code>evals/memory/inspect_model.py</code>: returns an <code>InspectChatModel</code> whose <code>astream</code> and <code>bind_tools</code> route to Inspect's active model (D12). Passed to both <code>LangGraphRunner</code> and <code>RecapWriter</code>.</dd>
+  </dl>
+
+  <h2 id="ground-level">Ground-level flows <span class="mode">reference</span></h2>
+  <p>One subsection per flow in the bird's-eye figure. Participants are the functions from the module map. Each figure is followed by the steps with the data shape at each hop.</p>
+
+  <h3 id="flow-rate">Flow: rate a turn from the REPL</h3>
+  <figure>
+    <svg viewBox="0 0 960 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-rate-title fig-rate-desc">
+      <title id="fig-rate-title">Rating a completed turn</title>
+      <desc id="fig-rate-desc">run_repl renders turn.completed, asks for a verdict, and sends thread.turn.rate to the dispatcher. rate_turn reads the thread's events; when a closing event exists it appends TurnRated and returns AcceptedResult, otherwise it raises TurnOpen and the dispatcher returns an ErrorEnvelope.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <line x1="120" y1="64" x2="120" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="360" y1="64" x2="360" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="600" y1="64" x2="600" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="840" y1="64" x2="840" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <rect x="268" y="312" width="584" height="144" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="268" y="312" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="288" y="324" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="316" y="324" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[closing event found]</text>
+      <line x1="268" y1="416" x2="852" y2="416" stroke="var(--rule)" stroke-width="1" stroke-dasharray="4 3"/>
+      <text x="280" y="432" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[no closing event]</text>
+      <rect x="116" y="96" width="8" height="392" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="356" y="192" width="8" height="288" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="596" y="224" width="8" height="216" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="836" y="256" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="836" y="336" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <path d="M 124,96 H 152 V 112 H 132" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="160" y="108" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">_render_turn: turn.completed rendered</text>
+      <path d="M 124,144 H 152 V 160 H 132" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="160" y="156" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">[ask = every-turn] _ask_rating: verdict key, reason line</text>
+      <line x1="124" y1="192" x2="356" y2="192" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="152" y="172" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="181" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">thread.turn.rate ThreadTurnRateCommand</text>
+      <line x1="364" y1="224" x2="596" y2="224" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="408" y="204" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="213" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">rate_turn(event_log, command)</text>
+      <line x1="604" y1="256" x2="836" y2="256" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="676" y="236" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="245" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">stored(thread_id)</text>
+      <line x1="836" y1="288" x2="604" y2="288" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="688" y="268" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="277" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">list[Event]</text>
+      <line x1="604" y1="336" x2="836" y2="336" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="628" y="348" width="184" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="357" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D3 append(thread_id, turn_id, TurnRated)</text>
+      <line x1="836" y1="368" x2="604" y2="368" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="700" y="376" width="40" height="12" rx="2" fill="var(--paper)"/>
+      <text x="720" y="385" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Event</text>
+      <line x1="596" y1="400" x2="364" y2="400" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="440" y="380" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="389" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult</text>
+      <line x1="596" y1="440" x2="364" y2="440" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="400" y="444" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="453" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TurnOpen raised, code TURN_OPEN</text>
+      <line x1="356" y1="480" x2="124" y2="480" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="160" y="460" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="469" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult | ErrorEnvelope</text>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">run_repl</text>
+      <rect x="280" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Dispatcher.dispatch</text>
+      <rect x="520" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="520" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="600" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">rate_turn</text>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="840" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+    </svg>
+    <figcaption>Figure: sequence of calls when the REPL rates a completed turn, with the open-turn refusal as the second branch.</figcaption>
+  </figure>
+  <ol>
+    <li><code>_render_turn</code> returns after <code>turn.completed</code>; a failed or interrupted turn skips the rest (D4).</li>
+    <li>When <code>ask_rating</code> is true, <code>_ask_rating</code> prints the prompt and reads one line for the verdict and, on good or bad, one for the reason. Enter returns without a call (D5).</li>
+    <li><code>run_repl</code> calls <code>thread.turn.rate</code>: input <code>ThreadTurnRateCommand</code>.</li>
+    <li>The dispatcher validates scope <code>thread:rate</code> and payload, then calls <code>rate_turn</code>.</li>
+    <li><code>rate_turn</code> reads the thread's events: output <code>list[Event]</code>. No thread or no turn raises <code>NotFound</code>.</li>
+    <li>With a closing event under the turn id, it appends <code>TurnRated</code>: output <code>Event</code>, then <code>AcceptedResult</code> (D3).</li>
+    <li>Without one it raises <code>TurnOpen</code>, which the dispatcher turns into an <code>ErrorEnvelope</code> with code <code>TURN_OPEN</code>.</li>
+    <li>The REPL prints the error to stderr or nothing on success, and shows the next prompt. It ignores the <code>turn.rated</code> event on the subscription.</li>
+  </ol>
+
+  <h3 id="flow-stats">Flow: kinby stats</h3>
+  <figure>
+    <svg viewBox="0 0 960 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-stats-title fig-stats-desc">
+      <title id="fig-stats-title">Computing instance statistics</title>
+      <desc id="fig-stats-desc">main loads the instance and calls stats.get. The dispatcher reads all events, calls turn_metrics with the price map, which asks price_for per turn, then calls instance_statistics for the buckets. main prints the table and writes stats.json.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <line x1="80" y1="64" x2="80" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="240" y1="64" x2="240" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="400" y1="64" x2="400" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="560" y1="64" x2="560" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="720" y1="64" x2="720" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="880" y1="64" x2="880" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <rect x="76" y="96" width="8" height="400" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="236" y="128" width="8" height="288" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="396" y="160" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="556" y="224" width="8" height="96" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="256" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="876" y="352" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <path d="M 84,96 H 112 V 112 H 92" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="120" y="108" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">load_instance: manifest.prices, manifest.state_dir</text>
+      <line x1="84" y1="128" x2="236" y2="128" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="100" y="132" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="160" y="141" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">stats.get StatsGetCommand</text>
+      <line x1="244" y1="160" x2="396" y2="160" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="288" y="140" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="320" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">all_events()</text>
+      <line x1="396" y1="192" x2="244" y2="192" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="280" y="172" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="320" y="181" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Iterator[Event]</text>
+      <line x1="244" y1="224" x2="556" y2="224" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="320" y="204" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="400" y="213" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D2 turn_metrics(events, prices)</text>
+      <line x1="564" y1="256" x2="716" y2="256" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="576" y="236" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="640" y="245" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">price_for(model, prices) per turn</text>
+      <line x1="716" y1="288" x2="564" y2="288" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="604" y="268" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="640" y="277" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Price | None</text>
+      <line x1="556" y1="320" x2="244" y2="320" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="336" y="300" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="400" y="309" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">tuple[TurnMetrics, ...]</text>
+      <line x1="244" y1="352" x2="876" y2="352" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="440" y="332" width="240" height="12" rx="2" fill="var(--paper)"/>
+      <text x="560" y="341" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">instance_statistics(turns, UsageRange, Bucket)</text>
+      <line x1="876" y1="384" x2="244" y2="384" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="520" y="364" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="560" y="373" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">StatsGetResult</text>
+      <line x1="236" y1="416" x2="84" y2="416" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="120" y="396" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="160" y="405" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">StatsGetResult</text>
+      <path d="M 84,448 H 112 V 464 H 92" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="120" y="460" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">print one row per bucket, totals, unpriced warning</text>
+      <path d="M 84,480 H 112 V 496 H 92" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="120" y="492" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D8 write state_dir/stats.json</text>
+      <rect x="20" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="20" y="24" width="120" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="80" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">main</text>
+      <rect x="180" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="180" y="24" width="120" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="240" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Dispatcher.dispatch</text>
+      <rect x="340" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="340" y="24" width="120" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="400" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <rect x="500" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="500" y="24" width="120" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="560" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">turn_metrics</text>
+      <rect x="660" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="660" y="24" width="120" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="720" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">price_for</text>
+      <rect x="820" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="820" y="24" width="120" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="880" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">instance_statistics</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for <code>kinby stats</code>, from the CLI through <code>stats.get</code> to the bucketed result and the JSON file.</figcaption>
+  </figure>
+  <ol>
+    <li><code>main</code> loads the selected instance and builds the dispatcher with <code>manifest.prices</code> overlaid on <code>SHIPPED_PRICES</code> (D9).</li>
+    <li>It calls <code>stats.get</code>: input <code>StatsGetCommand</code> with <code>since</code>, <code>until</code> and <code>by</code>.</li>
+    <li>The handler reads every event: output <code>Iterator[Event]</code>.</li>
+    <li><code>turn_metrics</code> folds events by turn id: output <code>tuple[TurnMetrics, ...]</code>. For each closed turn it calls <code>price_for</code> with the turn's model and again with the recap model from <code>memory.recapped</code> (D19).</li>
+    <li><code>instance_statistics</code> keeps turns whose closing event falls in the window, buckets them, and lists models that priced as none: output <code>StatsGetResult</code>.</li>
+    <li><code>main</code> prints one row per bucket and the totals, prints one warning line naming the unpriced models when any, and writes the result's JSON to <code>stats.json</code> in the state directory (D8).</li>
+  </ol>
+
+  <h3 id="flow-eval">Flow: one eval sample under Inspect AI</h3>
+  <figure>
+    <svg viewBox="0 0 960 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-eval-title fig-eval-desc">
+      <title id="fig-eval-title">Running one memory case under Inspect AI</title>
+      <desc id="fig-eval-desc">Inspect hands a sample to the memory_recall solver, which copies the fixture and drives each turn through the dispatcher. LangGraphRunner streams from InspectChatModel, which calls Inspect's active model. After each turn the solver drains the recap writer. Inspect scores the final answer.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <line x1="80" y1="64" x2="80" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="240" y1="64" x2="240" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="400" y1="64" x2="400" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="560" y1="64" x2="560" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="720" y1="64" x2="720" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="880" y1="64" x2="880" y2="512" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <rect x="228" y="152" width="664" height="272" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="228" y="152" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="248" y="164" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">LOOP</text>
+      <text x="276" y="164" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[each turn in case.toml]</text>
+      <rect x="236" y="96" width="8" height="360" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="396" y="184" width="8" height="192" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="556" y="216" width="8" height="160" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="248" width="8" height="96" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="876" y="408" width="8" height="16" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <line x1="84" y1="96" x2="236" y2="96" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="104" y="100" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="160" y="109" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Sample(case dir, arm)</text>
+      <path d="M 244,128 H 272 V 144 H 252" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="280" y="140" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D11 D14 copy fixture (stuff profile when arm = stuffing); TurnConfig(inspect_model_factory)</text>
+      <line x1="244" y1="184" x2="396" y2="184" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="276" y="188" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="320" y="197" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">thread.turn.start</text>
+      <line x1="404" y1="216" x2="556" y2="216" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="440" y="196" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="205" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">run(turn, emit)</text>
+      <line x1="564" y1="248" x2="716" y2="248" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="596" y="228" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="640" y="237" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">astream(messages)</text>
+      <line x1="716" y1="280" x2="84" y2="280" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="296" y="260" width="208" height="12" rx="2" fill="var(--paper)"/>
+      <text x="400" y="269" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D12 get_model().generate(ChatMessage list, tools)</text>
+      <line x1="84" y1="312" x2="716" y2="312" stroke="var(--link)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-link)"/>
+      <rect x="364" y="292" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="400" y="301" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ModelOutput</text>
+      <line x1="716" y1="344" x2="564" y2="344" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="596" y="324" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="640" y="333" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AIMessageChunk</text>
+      <line x1="556" y1="376" x2="404" y2="376" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="444" y="356" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="365" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TurnOutcome</text>
+      <line x1="244" y1="408" x2="876" y2="408" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="520" y="388" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="560" y="397" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">drain()</text>
+      <line x1="236" y1="448" x2="84" y2="448" stroke="var(--link)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-link)"/>
+      <rect x="96" y="428" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="160" y="437" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TaskState with last answer</text>
+      <path d="M 84,480 H 112 V 496 H 92" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="120" y="492" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D13 D18 score: model_graded_fact, node_opened, memory_tokens via turn_metrics on the copied log</text>
+      <rect x="20" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="20" y="24" width="120" height="40" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="80" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Inspect AI</text>
+      <rect x="180" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="180" y="24" width="120" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="240" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">memory_recall</text>
+      <rect x="340" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="340" y="24" width="120" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="400" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Dispatcher.dispatch</text>
+      <rect x="500" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="500" y="24" width="120" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="560" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">LangGraphRunner</text>
+      <rect x="660" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="660" y="24" width="120" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="720" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">InspectChatModel</text>
+      <rect x="820" y="24" width="120" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="820" y="24" width="120" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="880" y="48" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RecapWriter</text>
+    </svg>
+    <figcaption>Figure: sequence of one eval sample, from Inspect's sample to the scored answer, with the drain between turns as the headline.</figcaption>
+  </figure>
+  <ol>
+    <li>Inspect calls the solver with a <code>Sample</code> whose input names the case directory; the task parameter names the arm (D16 lets <code>--model</code> carry a list).</li>
+    <li>The solver copies the fixture instance into a temporary directory. For the stuffing arm it deletes <code>memory/graph/</code> and appends <code>transcript.md</code> to <code>memory/profile.md</code> (D14). It builds <code>LangGraphRunner</code> and <code>RecapWriter</code> with <code>inspect_model_factory</code> and passes them in a <code>TurnConfig</code> to <code>build_dispatcher</code>.</li>
+    <li>For each turn in <code>case.toml</code> it calls <code>thread.turn.start</code> and waits on <code>thread.subscribe</code> for the closing event: input <code>ThreadTurnStartCommand</code>, output the turn's events.</li>
+    <li><code>LangGraphRunner.run</code> streams from <code>InspectChatModel.astream</code>, which converts the LangChain messages and bound tools, calls Inspect's active model, and converts <code>ModelOutput</code> back into <code>AIMessageChunk</code> with tool calls (D12).</li>
+    <li>After the closing event the solver calls <code>RecapWriter.drain</code> so the remember-then-recall case sees the episode before the next turn.</li>
+    <li>The solver returns a <code>TaskState</code> whose output is the last turn's assistant text and whose metadata holds the copied instance path.</li>
+    <li>Inspect runs the scorers: <code>model_graded_fact</code> with the judge model, <code>node_opened</code> reading <code>tool.call</code> events for <code>memory_open</code> with the expected node, and <code>memory_tokens</code> from <code>turn_metrics</code> plus <code>estimate_tokens</code> on the profile (D13, D18).</li>
+  </ol>
+
+  <h2 id="data-shapes">Data shapes <span class="mode">reference</span></h2>
+  <p>Every type the feature adds or changes, drawn with the fields a decision cites. Enumerations are named in the field types: <code>Verdict</code> (good, bad), <code>Bucket</code> (day, week), <code>TurnClosing</code> (completed, failed, interrupted), <code>RatingPolicy</code> (every-turn, off). <code>MemoryCalls</code> holds four counters: search, open, remember, forget.</p>
+  <figure>
+    <svg viewBox="0 0 960 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-shapes-title fig-shapes-desc">
+      <title id="fig-shapes-title">Contract types the feature adds or changes</title>
+      <desc id="fig-shapes-desc">TurnRated, ThreadTurnRateCommand and StatsGetCommand are new contract models. MemoryRecapped gains a model field. StatsGetResult owns a list of TurnMetrics and a list of StatsBucket, both new.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <line x1="464" y1="232" x2="512" y2="232" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <rect x="440" y="212" width="28" height="12" rx="2" fill="var(--paper)"/>
+      <text x="454" y="221" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">0..*</text>
+      <path d="M 116,312 V 336 Q 116,344 124,344 H 604 Q 612,344 612,336 V 264" fill="none" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <rect x="124" y="316" width="28" height="12" rx="2" fill="var(--paper)"/>
+      <text x="138" y="325" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">0..*</text>
+      <rect x="16" y="24" width="200" height="88" rx="6" fill="var(--paper)"/>
+      <rect x="16" y="24" width="200" height="88" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="16" y1="56" x2="216" y2="56" stroke="var(--rule)" stroke-width="1"/>
+      <text x="116" y="44" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnRated</text>
+      <text x="28" y="68" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">type: turn.rated</text>
+      <text x="28" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">verdict: Verdict</text>
+      <text x="28" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">reason: str | None</text>
+      <rect x="264" y="24" width="200" height="104" rx="6" fill="var(--paper)"/>
+      <rect x="264" y="24" width="200" height="104" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="264" y1="56" x2="464" y2="56" stroke="var(--rule)" stroke-width="1"/>
+      <text x="364" y="44" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ThreadTurnRateCommand</text>
+      <text x="276" y="68" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">thread_id: UUID</text>
+      <text x="276" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">turn_id: UUID</text>
+      <text x="276" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">verdict: Verdict</text>
+      <text x="276" y="116" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">reason: str | None</text>
+      <rect x="512" y="24" width="200" height="88" rx="6" fill="var(--paper)"/>
+      <rect x="512" y="24" width="200" height="88" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="512" y1="56" x2="712" y2="56" stroke="var(--rule)" stroke-width="1"/>
+      <text x="612" y="44" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">StatsGetCommand</text>
+      <text x="524" y="68" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">since: AwareDatetime | None</text>
+      <text x="524" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">until: AwareDatetime | None</text>
+      <text x="524" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">by: Bucket = day</text>
+      <rect x="760" y="24" width="200" height="72" rx="6" fill="var(--paper)"/>
+      <rect x="760" y="24" width="200" height="72" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="760" y1="56" x2="960" y2="56" stroke="var(--rule)" stroke-width="1"/>
+      <text x="860" y="44" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">MemoryRecapped</text>
+      <text x="772" y="68" font-size="8" font-family="var(--font-mono)" fill="var(--new)">model: str | None</text>
+      <text x="772" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">...</text>
+      <rect x="16" y="176" width="200" height="136" rx="6" fill="var(--paper)"/>
+      <rect x="16" y="176" width="200" height="136" rx="6" fill="var(--accent-tint)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="16" y1="208" x2="216" y2="208" stroke="var(--rule)" stroke-width="1"/>
+      <text x="116" y="196" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnMetrics</text>
+      <text x="28" y="220" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">closing: TurnClosing</text>
+      <text x="28" y="236" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">cost_usd: float | None</text>
+      <text x="28" y="252" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">memory_calls: MemoryCalls</text>
+      <text x="28" y="268" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">memory_tokens: int</text>
+      <text x="28" y="284" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">rating: Verdict | None</text>
+      <text x="28" y="300" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">...</text>
+      <rect x="264" y="176" width="200" height="136" rx="6" fill="var(--paper)"/>
+      <rect x="264" y="176" width="200" height="136" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="264" y1="208" x2="464" y2="208" stroke="var(--rule)" stroke-width="1"/>
+      <text x="364" y="196" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">StatsBucket</text>
+      <text x="276" y="220" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">start: date</text>
+      <text x="276" y="236" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">turns: int</text>
+      <text x="276" y="252" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">cost_usd: float | None</text>
+      <text x="276" y="268" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">turns_without_memory: int</text>
+      <text x="276" y="284" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">rated_good: int</text>
+      <text x="276" y="300" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">...</text>
+      <rect x="512" y="176" width="200" height="88" rx="6" fill="var(--paper)"/>
+      <rect x="512" y="176" width="200" height="88" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="512" y1="208" x2="712" y2="208" stroke="var(--rule)" stroke-width="1"/>
+      <text x="612" y="196" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">StatsGetResult</text>
+      <text x="524" y="220" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">turns: list[TurnMetrics]</text>
+      <text x="524" y="236" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">buckets: list[StatsBucket]</text>
+      <text x="524" y="252" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">unpriced_models: list[str]</text>
+    </svg>
+    <figcaption>Figure: contract types the feature adds or changes; <code>StatsGetResult</code> owns the per-turn records and the buckets.</figcaption>
+  </figure>
+  <figure>
+    <svg viewBox="0 0 960 384" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-manifest-title fig-manifest-desc">
+      <title id="fig-manifest-title">Manifest types the feature adds or changes</title>
+      <desc id="fig-manifest-desc">Manifest gains a feedback setting and a price map. Feedback holds the rating policy. Price holds input and output price per million tokens.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <path d="M 240,176 V 152 Q 240,144 248,144 H 432 Q 440,144 440,136 V 112" fill="none" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <path d="M 720,176 V 152 Q 720,144 712,144 H 528 Q 520,144 520,136 V 112" fill="none" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <line x1="240" y1="288" x2="240" y2="232" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <rect x="380" y="24" width="200" height="88" rx="6" fill="var(--paper)"/>
+      <rect x="380" y="24" width="200" height="88" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <line x1="380" y1="56" x2="580" y2="56" stroke="var(--rule)" stroke-width="1"/>
+      <text x="480" y="44" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Manifest</text>
+      <text x="392" y="68" font-size="8" font-family="var(--font-mono)" fill="var(--new)">feedback: Feedback</text>
+      <text x="392" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--new)">prices: Mapping[str, Price]</text>
+      <text x="392" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">...</text>
+      <rect x="140" y="176" width="200" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="140" y="176" width="200" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="140" y1="208" x2="340" y2="208" stroke="var(--rule)" stroke-width="1"/>
+      <text x="240" y="196" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Feedback</text>
+      <text x="152" y="220" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">ask: RatingPolicy</text>
+      <rect x="620" y="176" width="200" height="72" rx="6" fill="var(--paper)"/>
+      <rect x="620" y="176" width="200" height="72" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="620" y1="208" x2="820" y2="208" stroke="var(--rule)" stroke-width="1"/>
+      <text x="720" y="196" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Price</text>
+      <text x="632" y="220" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">input_per_million: float</text>
+      <text x="632" y="236" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">output_per_million: float</text>
+      <rect x="140" y="288" width="200" height="80" rx="6" fill="var(--paper)"/>
+      <rect x="140" y="288" width="200" height="80" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <line x1="140" y1="328" x2="340" y2="328" stroke="var(--rule)" stroke-width="1"/>
+      <text x="240" y="304" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;&lt;enum&gt;&gt;</text>
+      <text x="240" y="320" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RatingPolicy</text>
+      <text x="152" y="344" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">every-turn</text>
+      <text x="152" y="360" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">off</text>
+    </svg>
+    <figcaption>Figure: manifest types the feature adds; <code>Manifest</code> owns the feedback policy and the price overlay.</figcaption>
+  </figure>
+
+  <h2 id="file-map">File map <span class="mode">reference</span></h2>
+  <p>Every file the agent touches, stamped at <code>de30ea9</code>. Regenerate the existence check with <code>git ls-files src/kinby tests evals docs/schema</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Path</th><th>Action</th><th>What changes</th><th>Flow</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/kinby/contracts/models.py</code></td><td>modify</td><td><code>Verdict</code>, <code>TurnRated</code> in the payload union, <code>ThreadTurnRateCommand</code>, <code>Bucket</code>, <code>TurnClosing</code>, <code>MemoryCalls</code>, <code>TurnMetrics</code>, <code>StatsBucket</code>, <code>StatsGetCommand</code>, <code>StatsGetResult</code>, <code>Scope.THREAD_RATE</code>, <code>ErrorCode.TURN_OPEN</code>, <code>model</code> on <code>MemoryRecapped</code></td><td>all</td></tr>
+      <tr><td><code>src/kinby/contracts/methods.py</code></td><td>modify</td><td><code>THREAD_TURN_RATE</code>, <code>STATS_GET</code></td><td>rate, stats</td></tr>
+      <tr><td><code>src/kinby/contracts/__init__.py</code></td><td>modify</td><td>Export the new names</td><td>all</td></tr>
+      <tr><td><code>src/kinby/core/metrics.py</code></td><td>new</td><td><code>turn_metrics</code>, <code>instance_statistics</code>, <code>estimate_tokens</code></td><td>stats, eval</td></tr>
+      <tr><td><code>src/kinby/core/prices.py</code></td><td>new</td><td><code>PriceMap</code>, <code>SHIPPED_PRICES</code>, <code>price_for</code></td><td>stats</td></tr>
+      <tr><td><code>src/kinby/core/usage.py</code></td><td>modify</td><td><code>usage_totals</code> builds its result from <code>turn_metrics</code>; signature and output unchanged</td><td>stats</td></tr>
+      <tr><td><code>src/kinby/core/turns.py</code></td><td>modify</td><td>Module-level <code>rate_turn</code></td><td>rate</td></tr>
+      <tr><td><code>src/kinby/core/errors.py</code></td><td>modify</td><td><code>TurnOpen</code> with code <code>TURN_OPEN</code></td><td>rate</td></tr>
+      <tr><td><code>src/kinby/core/dispatcher.py</code></td><td>modify</td><td>Register <code>thread.turn.rate</code> and <code>stats.get</code> outside the turn-service branch; <code>prices</code> parameter on <code>build_dispatcher</code></td><td>rate, stats</td></tr>
+      <tr><td><code>src/kinby/memory/recap.py</code></td><td>modify</td><td>Write the recap model name on <code>MemoryRecapped</code></td><td>stats</td></tr>
+      <tr><td><code>src/kinby/instance/dataclasses.py</code></td><td>modify</td><td><code>RatingPolicy</code>, <code>Feedback</code>, <code>Price</code>; <code>feedback</code> and <code>prices</code> on <code>Manifest</code></td><td>rate, stats</td></tr>
+      <tr><td><code>src/kinby/instance/manifest.py</code></td><td>modify</td><td><code>RawFeedback</code> and <code>RawPrice</code> sections, parsed into the manifest</td><td>rate, stats</td></tr>
+      <tr><td><code>src/kinby/instance/init.py</code></td><td>modify</td><td>Starter <code>kinby.toml</code> gains <code>[feedback]</code> with its default</td><td>rate</td></tr>
+      <tr><td><code>src/kinby/instance/layout.py</code></td><td>modify</td><td><code>STATS_NAME = "stats.json"</code></td><td>stats</td></tr>
+      <tr><td><code>src/kinby/instance/__init__.py</code></td><td>modify</td><td>Export <code>RatingPolicy</code> and <code>Price</code></td><td>rate, stats</td></tr>
+      <tr><td><code>src/kinby/cli/main.py</code></td><td>modify</td><td><code>stats</code> subcommand with <code>--since</code>, <code>--until</code>, <code>--by</code>; passes <code>ask_rating</code> to the REPL; passes prices to the dispatcher</td><td>rate, stats</td></tr>
+      <tr><td><code>src/kinby/cli/repl.py</code></td><td>modify</td><td><code>ask_rating</code> parameter, <code>_ask_rating</code>, ignore <code>TurnRated</code> in <code>_render_event</code></td><td>rate</td></tr>
+      <tr><td><code>docs/schema/kinby.schema.json</code></td><td>modify</td><td>Regenerated with <code>uv run python -m kinby.instance.schema</code></td><td>rate, stats</td></tr>
+      <tr><td><code>pyproject.toml</code></td><td>modify</td><td><code>evals</code> dependency group with <code>inspect-ai</code></td><td>eval</td></tr>
+      <tr><td><code>.gitignore</code></td><td>modify</td><td><code>evals/logs/</code></td><td>eval</td></tr>
+      <tr><td><code>evals/.gitkeep</code></td><td>delete</td><td>Replaced by real content</td><td>eval</td></tr>
+      <tr><td><code>evals/memory/task.py</code></td><td>new</td><td><code>memory_recall</code> task, solver, <code>node_opened</code> and <code>memory_tokens</code> scorers, <code>Arm</code></td><td>eval</td></tr>
+      <tr><td><code>evals/memory/inspect_model.py</code></td><td>new</td><td><code>InspectChatModel</code>, <code>inspect_model_factory</code></td><td>eval</td></tr>
+      <tr><td><code>evals/memory/cases/&lt;case&gt;/</code></td><td>new</td><td><code>instance/</code> fixture, <code>transcript.md</code>, <code>case.toml</code>; one directory per must-pass and stretch question</td><td>eval</td></tr>
+      <tr><td><code>evals/memory/RESULTS.md</code></td><td>new</td><td>Written when the gate first passes; the committed summary (D17)</td><td>eval</td></tr>
+      <tr><td><code>tests/test_stats.py</code></td><td>new</td><td>Rating and statistics through the dispatcher and the CLI</td><td>rate, stats</td></tr>
+      <tr><td><code>tests/test_usage.py</code></td><td>modify</td><td>Existing cases unchanged; one case that recap tokens still fold in</td><td>stats</td></tr>
+      <tr><td><code>tests/test_repl.py</code></td><td>modify</td><td>Rating prompt cases</td><td>rate</td></tr>
+      <tr><td><code>tests/test_init.py</code></td><td>modify</td><td>Starter manifest has <code>[feedback]</code></td><td>rate</td></tr>
+      <tr><td><code>tests/test_schema.py</code></td><td>modify</td><td>Schema carries the two sections</td><td>rate, stats</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="testing">Testing <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Seams</dt><dd>One seam for rating and statistics: the dispatcher built by <code>build_dispatcher</code> with a scripted runner in <code>TurnConfig</code>, as the usage and turns tests already do (D1, D2). The REPL and the CLI are tested through their public entry points, <code>run_repl</code> and <code>main</code>, on top of the same dispatcher. The manifest is tested through <code>load_instance</code>. The evals are not tested in pytest (D17).</dd>
+    <dt>A good test here</dt><dd>Asserts what a subscriber sees on <code>thread.subscribe</code>, what <code>stats.get</code> and <code>usage.get</code> return, what <code>kinby stats</code> prints and writes, and what the REPL prints and sends. Never the bucket arithmetic through a private helper, never the queue in the recap writer.</dd>
+    <dt>Prior art</dt><dd><code>tests/test_usage.py</code> (scripted runner, dispatcher, CLI usage view), <code>tests/test_turns.py</code>, <code>tests/test_repl.py</code> (string streams over a real dispatcher), <code>tests/test_thread_cli.py</code>, <code>tests/test_instance_show.py</code>, <code>tests/test_schema.py</code>.</dd>
+  </dl>
+  <h3>Cases</h3>
+  <ol>
+    <li>Rating a completed turn appends <code>turn.rated</code> under the turn id, seen on <code>thread.subscribe</code>; flow rate; protects D3.</li>
+    <li>Rating a running turn returns <code>TURN_OPEN</code>; an unknown turn returns <code>NOT_FOUND</code>; flow rate; protects D4.</li>
+    <li>Two ratings on one turn: <code>stats.get</code> reports the second; flow stats; protects D4.</li>
+    <li>A scripted turn with two <code>bash</code> calls, one <code>memory_search</code>, one <code>memory_open</code> and one approval yields a <code>TurnMetrics</code> with those counts, <code>memory_consulted</code> true, and a duration from the two timestamps; flow stats; protects D7, D20.</li>
+    <li>A turn with no memory tool call counts under <code>turns_without_memory</code>; flow stats; protects D7.</li>
+    <li>Recap tokens fold into the turn's totals and price at the recap model on the marker; flow stats; protects D19.</li>
+    <li>A model absent from the price map yields <code>cost_usd</code> none and appears in <code>unpriced_models</code>; a manifest override changes the cost; flow stats; protects D9.</li>
+    <li>Turns on two days bucket into two rows by day and one by week; <code>since</code> and <code>until</code> exclude turns outside them; flow stats; protects D8.</li>
+    <li><code>usage.get</code> returns the same result as before for the existing usage cases; flow stats; protects D2.</li>
+    <li><code>kinby stats</code> prints a row per bucket and writes <code>stats.json</code> that parses back into <code>StatsGetResult</code>; flow stats; protects D8.</li>
+    <li>The REPL prompts after a completed turn, sends good with a reason on <code>g</code> then a line, skips on enter, never prompts under <code>off</code>, never prompts after a failed turn; flow rate; protects D5.</li>
+    <li><code>kinby init</code> writes <code>[feedback]</code>; a manifest with an unknown key under <code>[feedback]</code> or <code>[prices]</code> fails to load; the schema names both; flow rate, stats; protects D5, D9.</li>
+  </ol>
+
+  <h2 id="out-of-scope">Out of scope <span class="mode">reference</span></h2>
+  <ul>
+    <li>A web dashboard. Ruled out by the map; <code>stats.json</code> is what it would read.</li>
+    <li>A gate decision event and any denial statistic. Observability (#12).</li>
+    <li>Coding-task evals with a workspace and Docker sandbox; replay-from-thread eval cases. Fog on the map.</li>
+    <li>Which models to compare and how to publish results. Cross-model comparison protocol (#93).</li>
+    <li>A rating scale beyond good and bad; rating anything but a turn.</li>
+    <li>Hosted tracing. The event log stays the source of truth; #12 decides whether traces also go elsewhere.</li>
+  </ul>
+
+  <h2 id="open-questions">Open questions <span class="mode">reference</span></h2>
+  <p>Points the grilling did not settle. The agent building this stops and asks before acting on any of them.</p>
+  <ol>
+    <li>Which models the shipped price map covers at first. Options: only the models named in <code>examples/instances/</code>; every model a provider page lists. Default: the example models, prices copied from the provider pages on the build date.</li>
+    <li>The judge model for <code>model_graded_fact</code>. Options: a fixed task default; the sample's own model. Default: a fixed default in the task, overridable by a task parameter, never the model under test.</li>
+    <li>Whether <code>kinby instance show</code> prints the feedback policy and the price overrides. Options: yes as two more lines; no. Default: no, until someone asks.</li>
+    <li>The Inspect AI version pin. Options: a minimum bound; an exact pin. Default: a minimum bound at the release current on the build date, like every other dependency here.</li>
+  </ol>
+
+  <h2 id="glossary">Glossary <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Turn rating</dt><dd>The user's verdict on one turn: good or bad, with an optional reason. Recorded on the thread next to the turn it rates.</dd>
+    <dt>Instance statistics</dt><dd>Per-turn measures of one instance aggregated over a time window, with trends. Derived from the transcript store, never recorded separately.</dd>
+    <dt>Eval</dt><dd>An offline, scored run of one or more turns against reference answers, under a named model. Paid for and run on demand.</dd>
+    <dt>Feed gate</dt><dd>The eval thresholds a feed must pass before kinby builds the next one.</dd>
+    <dt>Turn</dt><dd>One user-to-agent cycle within a thread. The unit of token attribution and eval cases.</dd>
+    <dt>Event</dt><dd>One sequence-numbered record in a thread's durable history. Replaying it reproduces a thread.</dd>
+    <dt>Transcript store</dt><dd>The canonical record of every conversation with the agent.</dd>
+    <dt>Feed</dt><dd>One source of memory behind the memory facade. Each feed must pass its evals before kinby adds the next one.</dd>
+  </dl>
+
+  <footer>Blueprint for instance statistics, turn rating, and the eval harness · stamped at de30ea9 · 2026-09-02</footer>
+</main>
+</body>
+</html>

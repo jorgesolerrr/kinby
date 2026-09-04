@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blueprint: Routines, wakes and budgets</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f5f5f5;
+      --ink: #2d3142;
+      --muted: #4f5d75;
+      --soft: #7a8399;
+      --rule: rgba(45, 49, 66, 0.16);
+      --accent: #eb6c36;
+      --accent-tint: rgba(235, 108, 54, 0.08);
+      --link: #2e5aa8;
+      --new: #2e7d32;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', Georgia, serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #2d3142;
+        --ink: #f5f5f5;
+        --muted: #bfc0c0;
+        --soft: #8e98ac;
+        --rule: rgba(245, 245, 245, 0.16);
+        --accent: #f08a59;
+        --accent-tint: rgba(240, 138, 89, 0.10);
+        --link: #6a95d8;
+        --new: #66bb6a;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; padding: 3rem 2rem 4rem; font-family: var(--font-sans); font-size: 15px; line-height: 1.55; background: var(--paper); color: var(--ink); }
+    main { max-width: 960px; margin: 0 auto; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.5rem; }
+    h1 { font-family: var(--font-serif); font-weight: 400; font-size: 2.25rem; line-height: 1.1; margin: 0 0 0.5rem; }
+    h2 { font-family: var(--font-serif); font-weight: 400; font-size: 1.6rem; margin: 3rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+    h3 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+    .mode { font-family: var(--font-mono); font-size: 0.7rem; color: var(--soft); margin-left: 0.5rem; letter-spacing: 0.08em; }
+    .stamp { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+    code, pre { font-family: var(--font-mono); font-size: 0.85em; }
+    code { background: rgba(127, 127, 127, 0.12); padding: 0.05em 0.3em; border-radius: 3px; }
+    pre { padding: 0.75rem 1rem; border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+    th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--rule); }
+    th { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+    figure { margin: 1.5rem 0; }
+    figure svg { display: block; width: 100%; height: auto; }
+    figcaption { font-family: var(--font-serif); font-style: italic; font-size: 0.95rem; color: var(--muted); margin-top: 0.5rem; }
+    .overflow { overflow-x: auto; }
+    ol, ul { padding-left: 1.4rem; }
+    li { margin: 0.25rem 0; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1.25rem; }
+    dt { font-family: var(--font-mono); font-size: 0.85rem; }
+    dd { margin: 0; }
+    footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--rule); font-family: var(--font-mono); font-size: 0.75rem; color: var(--soft); }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Blueprint</p>
+  <h1>Routines, wakes and budgets</h1>
+  <p class="stamp">Stamped at <code>d131af9</code>: paths and symbols are true at this commit.</p>
+
+  <h2 id="at-a-glance">At a glance <span class="mode">explanation</span></h2>
+  <p>You get routines: a directory under <code>routines/</code> with a prompt, a cron line and an optional <code>run.py</code> that runs before the model, plus <code>kinby serve</code> to keep the instance alive so they fire, and a <code>[budgets]</code> table that bounds every turn by steps, tokens and seconds and the instance by USD per day. Every fire is an ordinary turn on a fresh thread, started through one wake entry point on the turn service that records its origin on <code>turn.started</code>. The decision that constrains the rest is that the event log stays the only run history: last run, next run and missed fires are all read from the origin on <code>turn.started</code>, so the scheduler keeps no file of its own.</p>
+
+  <h2 id="problem">Problem <span class="mode">explanation</span></h2>
+  <p>Your kinby only acts when you type. <code>kinby init</code> writes a <code>routines/</code> directory with a README that promises a trigger, a prompt and a destination, and nothing in the package reads it. <code>kinby run</code> is the REPL; in a container with no terminal it reads end of input and exits, so nothing stays alive to fire anything. On the other side, no turn is bounded. <code>LangGraphRunner._invoke</code> calls <code>graph.ainvoke</code> without a recursion limit, the model and tools cycle runs until the model stops, the only clock anywhere is the 120 second bash timeout, and <code>turn_metrics</code> computes cost per turn that nothing reads back. The one stop is <code>thread.turn.interrupt</code> from a REPL you may not have open.</p>
+
+  <h2 id="solution">Solution <span class="mode">explanation</span></h2>
+  <p>You write <code>routines/nightly/ROUTINE.md</code>: frontmatter with <code>schedule: 0 3 * * *</code>, a mode and budgets, and the prompt as the body. You add <code>run.py</code> beside it when deterministic code should run first: it is a kinby tool like any other, the model never sees it, and when it returns nothing the model is not called. You start <code>kinby serve</code> in the container. At three in your declared time zone the scheduler creates a thread named after the routine, wakes it with the prompt, and the turn runs under the gate, the recap and the statistics like every other turn. <code>kinby routine list</code> shows the last and next run of each routine; <code>kinby routine run nightly</code> fires it now. If the box was off at three, the routine fires once when it comes back. Only one turn runs at a time: a routine waits for you, and you wait for a routine, with a line that says which one. An approval during a routine run parks the turn, and the REPL shows it when you next open the instance. Under <code>[budgets]</code>, a turn that loops, bloats or stalls fails with the budget's name on the thread, and a day that has spent its money refuses the next turn before it starts. I think the wake is the part that matters beyond this ticket: signals, peer messages and subagent completions will all start turns, and they now have exactly one door to come through.</p>
+
+  <h2 id="decision-log">Decision log <span class="mode">explanation</span></h2>
+  <p>One row per decision settled in the grilling on ticket #11 and in the spec (#109). Later sections cite them as <code>D3</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>#</th><th>Decision</th><th>Chosen</th><th>Rejected</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>How a non-user turn starts</td><td>One wake on the turn service taking an origin (user, or routine with name and trigger); <code>turn.started</code> records it; the prompt renderer produces the cue</td><td>A separate routine runner; a bracketed cue in a user-role message that later code sniffs</td><td>One door for routines now and for signals and peer messages later. A typed origin on the event is readable forever; a cue in text is not.</td></tr>
+      <tr><td>D2</td><td>Which triggers ship</td><td>Cron plus a manual trigger, evaluated in a manifest-declared time zone (default UTC)</td><td>Event triggers on routines; manual only</td><td>Dreaming is nightly. Everything that is not a schedule is a signal, which is ticket #107.</td></tr>
+      <tr><td>D3</td><td>Where the scheduler runs</td><td>A reactor shaped like <code>RecapWriter</code>, in the process that owns the event log; <code>kinby serve</code> is that boot without the REPL</td><td>A scheduler only while a REPL is open; a separate scheduler process calling the dispatcher</td><td>ADR 0006 gives one process the event log. A container needs a process that stays up.</td></tr>
+      <tr><td>D4</td><td>Routine file shape</td><td>A directory <code>routines/&lt;name&gt;/ROUTINE.md</code> with frontmatter and the prompt as body, plus an optional <code>run.py</code>; the directory name is the routine name</td><td>A single markdown file; a TOML file; a <code>[routines]</code> table in the manifest</td><td>Same shape as <code>skills/&lt;name&gt;/SKILL.md</code>, one rule, and a file can hold a prompt or a module but not both.</td></tr>
+      <tr><td>D5</td><td>What the code step is</td><td><code>run.py</code> is a <code>@tool</code> loaded by the tool file loader, never entered in the model's registry, called only for a routine turn; or <code>run:</code> names a shared tool</td><td>A plain <code>run()</code> function; a shell command string</td><td>One contract, two homes. The write flag and the gate apply unchanged.</td></tr>
+      <tr><td>D6</td><td>Code step returns nothing</td><td>The turn completes with no model call and zero tokens</td><td>Always wake the model and let it end silent; the author filters in the prompt</td><td>A poller that finds nothing must cost nothing. The turn record keeps the log as the only run history (see open question 3).</td></tr>
+      <tr><td>D7</td><td>Thread per routine run</td><td>A fresh thread per fire, titled with the routine name and the fire time</td><td>One persistent thread per routine; the routine chooses</td><td>Bounded, no compaction question, and each run has the shape of an eval case. Continuity is the knowledge graph's job.</td></tr>
+      <tr><td>D8</td><td>Destination</td><td>Reserved, not built; the REPL prints each routine's last run at startup</td><td>A <code>send</code> tool now</td><td>No channel exists to send to. The send-only split arrives with channels.</td></tr>
+      <tr><td>D9</td><td>Concurrency</td><td>One turn at a time per instance: a due routine waits for the user turn; a user message during a routine turn gets a retryable <code>INSTANCE_BUSY</code> naming the routine, and the REPL waits visibly</td><td>Grok Bot lanes with preemption and redrive; run them concurrently</td><td>Redrive semantics are a second design. The reactor's queue makes lanes an addition later, not a rewrite.</td></tr>
+      <tr><td>D10</td><td>Missed fires and history</td><td>Last run, next run and history derive from <code>turn.started</code> origins in the event log; a missed schedule fires at most once at startup; <code>catch_up</code> per routine, default true</td><td>A <code>runs.json</code> next to the routine; skip missed fires; fire every missed occurrence</td><td>ADR 0018: the log is canonical and a second record drifts. A nightly routine that missed one night runs once, not three times.</td></tr>
+      <tr><td>D11</td><td>Which budgets ship</td><td>All four, one mechanism each: steps (graph recursion limit), tokens (the counters already in graph state), seconds (a timeout around <code>graph.ainvoke</code>), USD per UTC day (the <code>turn_metrics</code> fold at turn start); <code>[budgets]</code> in the manifest, absent means unlimited, a routine may lower per-turn budgets, never raise; user turns included</td><td>The three per-turn budgets only; budgets on routine turns only</td><td>The cost source exists since #10, so USD per day has no reason to wait. A user turn that loops for an hour is the same failure.</td></tr>
+      <tr><td>D12</td><td>USD per day on an unpriced model</td><td>Refuse to start the turn, naming the model and the <code>[prices]</code> override</td><td>Warn and run; treat unpriced as zero</td><td>ADR 0018 refuses to report unknown as zero. The fix is one manifest line.</td></tr>
+      <tr><td>D13</td><td>A tripped budget on the thread</td><td><code>turn.failed</code> with a new <code>BUDGET_EXCEEDED</code> code, the message naming the budget and its value, no wrap-up model call</td><td><code>turn.interrupted</code>; one final model call to wrap up</td><td>Interrupted means the user stopped it. A wrap-up call spends what the budget protects.</td></tr>
+      <tr><td>D14</td><td>Approvals during a routine run</td><td>Park the turn as today; the REPL lists parked routine turns when opened</td><td>Ask becomes deny during routine runs; routines may not run under ask</td><td>Parked approvals already survive restart (ADR 0015). It is the approval-first default the README promises.</td></tr>
+      <tr><td>D15</td><td>Autonomy per thread</td><td>Already built: mode pinned as <code>mode.pinned</code>, carried on <code>TurnRequest</code> and <code>ModelContext</code>, never in graph state; a routine declares its mode in frontmatter, clamped to the ceiling</td><td>Change it</td><td>Nothing to change.</td></tr>
+      <tr><td>D16</td><td>The routine-writing skill</td><td>kinby ships <code>write-routine</code> as a packaged skill through a new <code>kinby.skills</code> entry point group, disabled with <code>[tools] defaults = false</code></td><td>Written into <code>skills/</code> by <code>kinby init</code>; each instance writes its own</td><td>It encodes kinby's own file format, so it must update with kinby, not freeze at init time.</td></tr>
+      <tr><td>D17</td><td>Contract surface</td><td><code>routine.list</code> on <code>instance:read</code>; <code>routine.run</code> on <code>instance:admin</code>, the first method on that scope; CLI <code>kinby routine list</code> and <code>kinby routine run &lt;name&gt;</code></td><td>CLI only; enable and disable methods</td><td>The contract is the seam a server wraps. Enable and disable are a frontmatter line, and the file is the source of truth.</td></tr>
+      <tr><td>D18</td><td>Polling</td><td>A fallback: an inbox is a signal when the provider pushes and a code-step routine when it does not; a <code>run:</code> line with a minutes-level schedule is a smell</td><td>Rule polling out of kinby</td><td>Not every source pushes. The frontmatter makes the difference visible to a reviewer.</td></tr>
+      <tr><td>D19</td><td>Routines are re-read at turn time</td><td><code>TurnRequest</code> carries only the origin; the runner loads the routine by name when it prepares the turn</td><td>Serialize the routine into the checkpointed request</td><td>A <code>Tool</code> holds a runnable and cannot be checkpointed. Routines follow the same turn-boundary rhythm as tools and the manifest (ADR 0010).</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="birds-eye">Bird's-eye flow <span class="mode">reference</span></h2>
+  <p>One figure of a scheduled fire end to end. Boxes are modules or systems. Arrows carry the call or data that crosses. Decision ids lead the label where a decision picked the route. User turns enter <code>Turns</code> through <code>thread.turn.start</code> on the same wake path and are left out of the figure.</p>
+  <figure>
+    <svg viewBox="0 0 960 296" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-birdseye-title fig-birdseye-desc">
+      <title id="fig-birdseye-title">A scheduled routine fire from kinby serve to the chat model</title>
+      <desc id="fig-birdseye-desc">The CLI starts the scheduler, which loads routines from the instance directory and wakes the turn service with a routine origin. The turn service appends turn.started to the event log and hands the turn to the LangGraph runner, which runs the code step through the gate and then streams the model.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="var(--muted)" stroke-width="1.2"/></marker>
+        <marker id="diamond-filled" markerWidth="12" markerHeight="8" refX="0" refY="4" orient="auto"><polygon points="0 4, 6 0, 12 4, 6 8" fill="var(--ink)"/></marker>
+        <marker id="diamond-hollow" markerWidth="12" markerHeight="8" refX="0" refY="4" orient="auto"><polygon points="0 4, 6 0, 12 4, 6 8" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- zone -->
+      <rect x="204" y="8" width="552" height="216" rx="8" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <text x="216" y="24" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" letter-spacing="0.12em">KINBY.CORE, THE ONE PROCESS THAT OWNS THE EVENT LOG (ADR 0006)</text>
+      <!-- arrows -->
+      <line x1="140" y1="68" x2="220" y2="68" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="148" y="48" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="180" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">fire(name)</text>
+      <line x1="340" y1="68" x2="420" y2="68" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="344" y="48" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D1 wake(origin)</text>
+      <line x1="540" y1="68" x2="620" y2="68" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="544" y="48" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="580" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">run(turn, emit)</text>
+      <line x1="740" y1="68" x2="820" y2="68" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="756" y="48" width="48" height="12" rx="2" fill="var(--paper)"/>
+      <text x="780" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">astream</text>
+      <line x1="280" y1="96" x2="280" y2="152" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="292" y="116" width="68" height="12" rx="2" fill="var(--paper)"/>
+      <text x="296" y="125" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">load_routines</text>
+      <line x1="480" y1="96" x2="480" y2="152" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="492" y="116" width="100" height="12" rx="2" fill="var(--paper)"/>
+      <text x="496" y="125" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">turn.started(origin)</text>
+      <line x1="680" y1="96" x2="680" y2="152" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="692" y="116" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="696" y="125" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D5 gate, then run</text>
+      <!-- nodes row 1 -->
+      <rect x="20" y="40" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="20" y="40" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="80" y="66" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby serve</text>
+      <text x="80" y="82" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">cli/main.py</text>
+      <rect x="220" y="40" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="220" y="40" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="228" y="48" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="244" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="280" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Scheduler</text>
+      <text x="280" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/scheduler.py</text>
+      <rect x="420" y="40" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="420" y="40" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="480" y="66" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns</text>
+      <text x="480" y="82" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turns.py</text>
+      <rect x="620" y="40" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="620" y="40" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="680" y="66" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">LangGraphRunner</text>
+      <text x="680" y="82" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turn_runner.py</text>
+      <rect x="820" y="40" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="820" y="40" width="120" height="56" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="880" y="66" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ChatModel</text>
+      <text x="880" y="82" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">init_chat_model</text>
+      <!-- nodes row 2 -->
+      <rect x="220" y="152" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="220" y="152" width="120" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="220" y="152" width="120" height="8" rx="6" fill="none" stroke="var(--muted)" stroke-width="1"/>
+      <text x="280" y="180" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ROUTINE.md</text>
+      <text x="280" y="196" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">routines/&lt;name&gt;/</text>
+      <rect x="420" y="152" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="420" y="152" width="120" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="420" y="152" width="120" height="8" rx="6" fill="none" stroke="var(--muted)" stroke-width="1"/>
+      <text x="480" y="180" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <text x="480" y="196" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">.state/events.jsonl</text>
+      <rect x="620" y="152" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="620" y="152" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="628" y="160" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="644" y="169" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="680" y="182" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">CodeStep</text>
+      <text x="680" y="198" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">run.py or a tools/ name</text>
+      <!-- legend -->
+      <line x1="20" y1="248" x2="940" y2="248" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="20" y="264" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="52" y="274" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new module</text>
+      <rect x="180" y="264" width="24" height="12" rx="2" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="212" y="274" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">external system</text>
+      <line x1="340" y1="270" x2="364" y2="270" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="372" y="274" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">crosses the provider boundary</text>
+      <line x1="580" y1="270" x2="604" y2="270" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="612" y="274" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">the two calls the feature adds</text>
+    </svg>
+    <figcaption>Figure: how a scheduled fire travels from <code>kinby serve</code> through the scheduler and the wake to the runner, and where the code step sits before the model.</figcaption>
+  </figure>
+  <p>Prose walkthrough, one step per arrow.</p>
+  <ol>
+    <li><code>kinby serve</code> boots the instance like <code>kinby run</code> and calls <code>Scheduler.start()</code>; <code>kinby routine run</code> calls <code>Scheduler.fire(name)</code> once instead.</li>
+    <li>On each pass the scheduler calls <code>load_routines(instance)</code>, which reads every <code>routines/&lt;name&gt;/ROUTINE.md</code> and its optional <code>run.py</code> (D4, D19).</li>
+    <li>When a routine is due and the turn service is idle, the scheduler creates a thread in <code>ThreadStore</code> and calls <code>Turns.wake(thread_id, prompt, RoutineOrigin)</code> (D1, D7, D9).</li>
+    <li><code>Turns.wake</code> checks the daily cost budget from the turn preparation, then appends <code>turn.started</code> with the origin to the <code>EventLog</code> (D11, D12).</li>
+    <li>The turn service calls <code>LangGraphRunner.run(turn, emit)</code>, which loads the routine by name, combines its budgets with the manifest's, and runs the code step through the gate with the routine's mode (D5, D11).</li>
+    <li>When the code step returns nothing the turn completes here (D6). Otherwise the runner renders the cue, prompt and payload with <code>render_wake</code> and streams the model under the recursion limit and the timeout (D11, D13).</li>
+  </ol>
+
+  <h2 id="module-map">Module map <span class="mode">reference</span></h2>
+  <p>Which modules the feature touches and how they depend on each other after the change. New modules carry the <code>new</code> treatment. Plain imports of <code>contracts</code> and <code>instance</code> by every other module are not drawn; the badges count drawn edges. <code>plugins.skills</code> (the <code>kinby.skills</code> entry point) and <code>cli.repl</code> are modified too and appear in the file map.</p>
+  <figure>
+    <svg viewBox="0 0 960 544" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-modules-title fig-modules-desc">
+      <title id="fig-modules-title">Modules routines and budgets touch</title>
+      <desc id="fig-modules-desc">The CLI depends on the dispatcher, which builds the scheduler, the turn service and the runner. The scheduler and the runner both depend on the routine loader; the runner depends on budgets and the prompt renderer; the turn service has the highest fan-in.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- edges -->
+      <path d="M 480,96 V 120 Q 480,128 472,128 H 388 Q 380,128 380,136 V 160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="460" y1="188" x2="500" y2="188" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 356,216 V 232 Q 356,240 348,240 H 328 Q 320,240 320,248 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 404,216 V 236 Q 404,244 412,244 H 528 Q 536,244 536,252 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="604" y1="216" x2="604" y2="280" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 556,216 V 220 Q 556,228 548,228 H 460 Q 452,228 452,236 a 8,8 0 0,0 0,16 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 288,336 V 340 Q 288,348 280,348 H 88 Q 80,348 80,356 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 320,336 V 356 Q 320,364 312,364 H 256 Q 248,364 248,372 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 352,336 V 344 Q 352,352 360,352 H 392 Q 400,352 400,360 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 560,336 V 368 Q 560,376 568,376 H 712 Q 720,376 720,384 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 400,308 H 444 a 8,8 0 0,1 16,0 H 480" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="460" y1="428" x2="500" y2="428" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- rank 0 -->
+      <rect x="400" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="520" y="48" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-width="0.8"/>
+      <text x="536" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">0 in</text>
+      <text x="480" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.cli</text>
+      <text x="480" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/main.py</text>
+      <!-- rank 1 -->
+      <rect x="300" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="300" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="420" y="168" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-width="0.8"/>
+      <text x="436" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="380" y="190" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.dispatcher</text>
+      <text x="380" y="206" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/dispatcher.py</text>
+      <rect x="500" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="500" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="508" y="168" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="524" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="620" y="168" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-width="0.8"/>
+      <text x="636" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="580" y="190" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.scheduler</text>
+      <text x="580" y="206" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/scheduler.py</text>
+      <!-- rank 2 -->
+      <rect x="240" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="360" y="288" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-width="0.8"/>
+      <text x="376" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="320" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turn_runner</text>
+      <text x="320" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turn_runner.py</text>
+      <rect x="480" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="480" y="280" width="160" height="56" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <rect x="600" y="288" width="32" height="12" rx="2" fill="none" stroke="var(--accent)" stroke-width="0.8"/>
+      <text x="616" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--accent)" text-anchor="middle">3 in</text>
+      <text x="560" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turns</text>
+      <text x="560" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turns.py</text>
+      <!-- rank 3 -->
+      <rect x="20" y="400" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="20" y="400" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="100" y="408" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-width="0.8"/>
+      <text x="116" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="80" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.prompt</text>
+      <text x="80" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/prompt.py</text>
+      <rect x="180" y="400" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="180" y="400" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="188" y="408" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="204" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="260" y="408" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-width="0.8"/>
+      <text x="276" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="240" y="432" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.budgets</text>
+      <text x="240" y="448" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/budgets.py</text>
+      <rect x="340" y="400" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="340" y="400" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="348" y="408" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="364" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="420" y="408" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-width="0.8"/>
+      <text x="436" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="400" y="432" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">plugins.routines</text>
+      <text x="400" y="448" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">plugins/routines.py</text>
+      <rect x="500" y="400" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="500" y="400" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="580" y="408" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-width="0.8"/>
+      <text x="596" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="560" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">plugins.registry</text>
+      <text x="560" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">plugins/registry.py</text>
+      <rect x="660" y="400" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="660" y="400" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="740" y="408" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-width="0.8"/>
+      <text x="756" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="720" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">contracts</text>
+      <text x="720" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">contracts/models.py</text>
+      <rect x="820" y="400" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="820" y="400" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="900" y="408" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-width="0.8"/>
+      <text x="916" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">0 in</text>
+      <text x="880" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">instance</text>
+      <text x="880" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">instance/manifest.py</text>
+      <!-- legend -->
+      <line x1="20" y1="496" x2="940" y2="496" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="20" y="512" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="52" y="522" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new module</text>
+      <rect x="180" y="512" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-width="0.8"/>
+      <text x="196" y="521" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">n in</text>
+      <text x="220" y="522" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">modules in this figure that depend on it</text>
+    </svg>
+    <figcaption>Figure: dependency graph of the modules the feature touches, new ones marked; <code>core.turns</code> carries the highest fan-in because the dispatcher, the scheduler and the runner all reach it.</figcaption>
+  </figure>
+  <h3>Interfaces</h3>
+  <p>The functions and types other modules call, with their signatures.</p>
+  <dl>
+    <dt><code>Turns.wake(thread_id: UUID, message: str, origin: TurnOrigin) -> AcceptedResult</code></dt>
+    <dd>Starts one turn with an origin. <code>Turns.start</code> calls it with <code>UserOrigin()</code>; the scheduler calls it with a <code>RoutineOrigin</code>. Refuses with <code>BudgetExceeded</code>, <code>ModelUnpriced</code> or <code>InstanceBusy</code> before appending anything.</dd>
+    <dt><code>Turns.idle() -> None</code></dt>
+    <dd>Waits until no turn is running on any thread. The scheduler awaits it before a pass.</dd>
+    <dt><code>Turns.running_routine() -> RoutineOrigin | None</code></dt>
+    <dd>The routine whose turn is running, if any. Named in the <code>InstanceBusy</code> message.</dd>
+    <dt><code>Scheduler(instance, event_log, store, turns, *, now=_utc_now)</code></dt>
+    <dd>The reactor. <code>start()</code> spawns the worker, <code>stop()</code> cancels it, <code>fire(name, trigger) -> AcceptedResult</code> creates a thread and wakes it, <code>list() -> RoutineListResult</code> folds routines and history, <code>drain()</code> waits for the current pass.</dd>
+    <dt><code>load_routines(instance: Instance) -> tuple[tuple[Routine, ...], tuple[Warning, ...]]</code></dt>
+    <dd>Reads every <code>routines/&lt;name&gt;/ROUTINE.md</code> and its <code>run.py</code>. Broken routines become warnings, like skills.</dd>
+    <dt><code>load_tool_file(path: Path) -> tuple[Tool, ...]</code></dt>
+    <dd>The registry's file loader, made public so the routine loader reads <code>run.py</code> the same way <code>tools/</code> is read.</dd>
+    <dt><code>daily_cost(events: Iterable[Event], prices: Mapping[str, ModelPrice], today: date) -> DailyCost</code></dt>
+    <dd>Sums the cost of turns closed on the UTC day through <code>turn_metrics</code>; spent is none when any of them is unpriced.</dd>
+    <dt><code>effective_budgets(instance: Budgets, routine: Budgets) -> tuple[Budgets, tuple[Warning, ...]]</code></dt>
+    <dd>Takes the lower of each per-turn budget; a routine value above the instance value warns and the instance value applies.</dd>
+    <dt><code>check_daily_budget(budgets: Budgets, cost: DailyCost, model: str, prices: Mapping[str, ModelPrice]) -> None</code></dt>
+    <dd>Raises <code>ModelUnpriced</code> when <code>usd_per_day</code> is set and the model or the day is unpriced, <code>BudgetExceeded</code> when spent has reached the limit.</dd>
+    <dt><code>render_wake(origin: TurnOrigin, message: str, payload: str | None) -> str</code></dt>
+    <dd>The user message for the model: the message as is for a user origin; a bracketed routine cue, the prompt, and the payload in a tagged data block for a routine origin.</dd>
+    <dt><code>boot_instance(instance: Instance, *, event_log: EventLog, model_override: str | None = None) -> InstanceRuntime</code></dt>
+    <dd>The one boot shared by <code>kinby run</code>, <code>kinby serve</code> and <code>kinby routine run</code>: builds the dispatcher with turns, the recap writer and the scheduler, and returns them together.</dd>
+  </dl>
+
+  <h2 id="ground-level">Ground-level flows <span class="mode">reference</span></h2>
+  <p>One subsection per flow named in the bird's-eye figure. Each has a sequence whose participants are the functions from the module map, then a numbered step list naming the data shape at each hop.</p>
+
+  <h3 id="flow-fire">Flow: a scheduled fire</h3>
+  <figure>
+    <svg viewBox="0 0 960 624" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-fire-title fig-fire-desc">
+      <title id="fig-fire-title">A scheduled fire from the scheduler to the closing event</title>
+      <desc id="fig-fire-desc">The scheduler wakes the turn service with a routine origin, the turn service appends turn.started and runs the LangGraph runner, the runner runs the code step and emits its tool events, then either completes the turn with no model call or streams the chat model and completes with tokens.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- lifelines -->
+      <line x1="96" y1="64" x2="96" y2="608" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="288" y1="64" x2="288" y2="608" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="480" y1="64" x2="480" y2="608" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="672" y1="64" x2="672" y2="608" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="864" y1="64" x2="864" y2="608" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <!-- frame -->
+      <rect x="276" y="312" width="600" height="280" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="276" y="312" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="296" y="324" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="288" y="340" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[D6 the code step returned None]</text>
+      <line x1="276" y1="408" x2="876" y2="408" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="288" y="428" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[a payload, or no code step]</text>
+      <!-- activation bars -->
+      <rect x="92" y="96" width="8" height="96" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="284" y="96" width="8" height="480" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="668" y="224" width="8" height="320" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <!-- messages -->
+      <line x1="100" y1="96" x2="284" y2="96" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="112" y="76" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="192" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D1 wake(thread_id, prompt, RoutineOrigin)</text>
+      <line x1="292" y1="128" x2="480" y2="128" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="316" y="108" width="136" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">append(turn.started(origin))</text>
+      <line x1="480" y1="160" x2="292" y2="160" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="360" y="140" width="48" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Event</text>
+      <line x1="284" y1="192" x2="100" y2="192" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="152" y="172" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="192" y="181" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult</text>
+      <line x1="292" y1="224" x2="668" y2="224" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="440" y="204" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="213" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">run(turn, emit)</text>
+      <path d="M 676,252 H 704 V 268 H 684" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="712" y="264" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">load_routines, effective_budgets, gate.evaluate</text>
+      <line x1="668" y1="288" x2="480" y2="288" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-open)"/>
+      <rect x="500" y="268" width="148" height="12" rx="2" fill="var(--paper)"/>
+      <text x="574" y="277" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D5 emit(tool.call), emit(tool.result)</text>
+      <line x1="668" y1="352" x2="292" y2="352" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="432" y="332" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="341" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TurnOutcome(0, 0)</text>
+      <line x1="292" y1="384" x2="480" y2="384" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="320" y="364" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="373" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">append(turn.completed(0, 0))</text>
+      <line x1="676" y1="440" x2="864" y2="440" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="684" y="420" width="172" height="12" rx="2" fill="var(--paper)"/>
+      <text x="770" y="429" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">astream([system, render_wake(origin, ...)])</text>
+      <line x1="864" y1="472" x2="676" y2="472" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="708" y="452" width="124" height="12" rx="2" fill="var(--paper)"/>
+      <text x="770" y="461" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AIMessageChunk, usage_metadata</text>
+      <line x1="668" y1="504" x2="480" y2="504" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-open)"/>
+      <rect x="524" y="484" width="100" height="12" rx="2" fill="var(--paper)"/>
+      <text x="574" y="493" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">emit(message.delta)</text>
+      <line x1="668" y1="536" x2="292" y2="536" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="408" y="516" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="525" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TurnOutcome(input, output tokens)</text>
+      <line x1="292" y1="568" x2="480" y2="568" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="328" y="548" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="557" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">append(turn.completed)</text>
+      <!-- participants -->
+      <rect x="16" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="16" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="96" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Scheduler</text>
+      <text x="96" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/scheduler.py</text>
+      <rect x="208" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="208" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="288" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns</text>
+      <text x="288" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turns.py</text>
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="480" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <text x="480" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/events.py</text>
+      <rect x="592" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="592" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="672" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">LangGraphRunner</text>
+      <text x="672" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turn_runner.py</text>
+      <rect x="784" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="784" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="864" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ChatModel</text>
+      <text x="864" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">init_chat_model</text>
+    </svg>
+    <figcaption>Figure: sequence of one scheduled fire, with the code step's two exits, no model call or a streamed model turn, as the two branches.</figcaption>
+  </figure>
+  <ol>
+    <li>The scheduler's pass finds a due routine, waits on <code>Turns.idle()</code>, creates a thread through <code>ThreadStore.create(title)</code> and calls <code>Turns.wake</code>: input <code>UUID, str, RoutineOrigin(routine, trigger)</code>, output <code>AcceptedResult</code>.</li>
+    <li><code>Turns.wake</code> calls <code>prepare_for_turn()</code>, checks <code>TurnPreparation.budgets</code> and <code>TurnPreparation.daily_cost</code> through <code>check_daily_budget</code>, resolves the permission mode as today, and appends <code>TurnStarted(message, model, permission_mode, origin)</code>.</li>
+    <li><code>Turns._run</code> calls <code>LangGraphRunner.run(turn, emit)</code> with a <code>TurnRequest</code> that now carries <code>origin</code>.</li>
+    <li>The runner calls <code>load_routines</code> and picks the routine named in the origin (a missing routine fails the turn as not found), builds <code>effective_budgets</code>, and for a <code>CodeStep</code> calls <code>gate.evaluate</code> with the routine's mode: input <code>GatePolicy, PermissionMode, ToolCall, Tool, Path</code>, output <code>GateDecision</code>. Anything but allow fails the turn with the rule in the message.</li>
+    <li>The runner emits <code>ToolCall</code>, calls <code>Tool.ainvoke(arguments, ToolContext)</code>, and emits <code>ToolResult</code>.</li>
+    <li>When the step returned <code>None</code>, the runner returns <code>TurnOutcome(0, 0)</code> and the turn service appends <code>TurnCompleted(0, 0)</code>; the recap sees a turn with one tool call and writes a trace-only episode as today.</li>
+    <li>Otherwise the runner builds <code>HumanMessage(render_wake(origin, prompt, payload))</code>, sets <code>recursion_limit</code> from the budgets on the run config, wraps <code>graph.ainvoke</code> in <code>asyncio.timeout</code>, and streams the model as today. Message deltas, tool calls and approvals follow the existing path, and the turn closes with <code>TurnCompleted(input_tokens, output_tokens)</code>.</li>
+  </ol>
+
+  <h3 id="flow-budgets">Flow: a turn meets its budgets</h3>
+  <figure>
+    <svg viewBox="0 0 960 592" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-budgets-title fig-budgets-desc">
+      <title id="fig-budgets-title">A user turn refused by the daily budget, or failed by a per-turn budget</title>
+      <desc id="fig-budgets-desc">The dispatcher starts a turn, the turn service asks the runner to prepare it and reads the budgets and today's cost. Either the wake is refused with a budget error before any event, or the turn starts, the runner sets the recursion limit and the timeout, the model's usage crosses the tokens budget, and the turn closes as failed with the budget code.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <line x1="96" y1="64" x2="96" y2="576" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="288" y1="64" x2="288" y2="576" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="480" y1="64" x2="480" y2="576" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="672" y1="64" x2="672" y2="576" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="864" y1="64" x2="864" y2="576" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <rect x="84" y="184" width="792" height="376" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="84" y="184" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="104" y="196" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="96" y="212" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[D12 usd_per_day set, and spent reached it or a model is unpriced]</text>
+      <line x1="84" y1="248" x2="876" y2="248" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="96" y="268" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[otherwise]</text>
+      <rect x="284" y="96" width="8" height="448" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="476" y="344" width="8" height="168" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <line x1="100" y1="96" x2="284" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="120" y="76" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="192" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">start(ThreadTurnStartCommand)</text>
+      <line x1="292" y1="128" x2="476" y2="128" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="336" y="108" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">prepare_for_turn()</text>
+      <line x1="476" y1="160" x2="292" y2="160" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="300" y="140" width="168" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TurnPreparation(budgets, daily_cost)</text>
+      <line x1="284" y1="224" x2="104" y2="224" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4"/>
+      <line x1="92" y1="220" x2="100" y2="228" stroke="var(--muted)" stroke-width="1.2"/>
+      <line x1="100" y1="220" x2="92" y2="228" stroke="var(--muted)" stroke-width="1.2"/>
+      <rect x="116" y="228" width="152" height="12" rx="2" fill="var(--paper)"/>
+      <text x="192" y="237" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">BudgetExceeded or ModelUnpriced</text>
+      <line x1="292" y1="280" x2="864" y2="280" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="524" y="260" width="108" height="12" rx="2" fill="var(--paper)"/>
+      <text x="578" y="269" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">append(turn.started)</text>
+      <line x1="284" y1="312" x2="100" y2="312" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="152" y="292" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="192" y="301" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult</text>
+      <line x1="292" y1="344" x2="476" y2="344" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="344" y="324" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="333" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">run(turn, emit)</text>
+      <path d="M 484,372 H 512 V 388 H 492" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="520" y="384" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D11 recursion_limit = steps, asyncio.timeout(seconds)</text>
+      <line x1="484" y1="408" x2="672" y2="408" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="528" y="388" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="576" y="397" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">astream(messages)</text>
+      <line x1="672" y1="440" x2="484" y2="440" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="536" y="420" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="576" y="429" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">usage_metadata</text>
+      <path d="M 484,468 H 512 V 484 H 492" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="520" y="480" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">input + output tokens exceed the budget: raise BudgetExceeded</text>
+      <line x1="476" y1="504" x2="296" y2="504" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4"/>
+      <line x1="284" y1="500" x2="292" y2="508" stroke="var(--muted)" stroke-width="1.2"/>
+      <line x1="292" y1="500" x2="284" y2="508" stroke="var(--muted)" stroke-width="1.2"/>
+      <rect x="308" y="508" width="152" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="517" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">BudgetExceeded("tokens", 200000)</text>
+      <line x1="292" y1="536" x2="864" y2="536" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="480" y="516" width="196" height="12" rx="2" fill="var(--paper)"/>
+      <text x="578" y="525" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D13 append(turn.failed(BUDGET_EXCEEDED, message))</text>
+      <rect x="16" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="16" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="96" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Dispatcher</text>
+      <text x="96" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/dispatcher.py</text>
+      <rect x="208" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="208" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="288" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns</text>
+      <text x="288" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turns.py</text>
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="480" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">LangGraphRunner</text>
+      <text x="480" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turn_runner.py</text>
+      <rect x="592" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="592" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="672" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ChatModel</text>
+      <text x="672" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">init_chat_model</text>
+      <rect x="784" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="784" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="864" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <text x="864" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/events.py</text>
+    </svg>
+    <figcaption>Figure: sequence of a turn that meets its budgets, with the refusal before any event and the in-turn failure as the two branches.</figcaption>
+  </figure>
+  <ol>
+    <li><code>Dispatcher</code> routes <code>thread.turn.start</code> to <code>Turns.start</code>, which calls <code>Turns.wake</code> with <code>UserOrigin()</code>.</li>
+    <li><code>prepare_for_turn()</code> reloads the manifest and the gate policy as today, and now also computes <code>daily_cost(event_log.all_events(), price_map(manifest.prices), today)</code>: output <code>TurnPreparation(model, default_mode, ceiling, budgets, daily_cost)</code>.</li>
+    <li><code>check_daily_budget</code> raises <code>ModelUnpriced</code> when <code>usd_per_day</code> is set and the turn's model, or any model that closed a turn today, is missing from the price map, and <code>BudgetExceeded</code> when <code>DailyCost.spent</code> has reached the limit. The dispatcher returns the <code>ErrorEnvelope</code>; nothing is appended.</li>
+    <li>Otherwise <code>TurnStarted</code> is appended and the caller gets <code>AcceptedResult</code>.</li>
+    <li>In <code>LangGraphRunner._invoke</code> the run config gets <code>recursion_limit</code> from <code>Budgets.steps</code>, and <code>graph.ainvoke</code> runs inside <code>asyncio.timeout(Budgets.seconds)</code>. A <code>GraphRecursionError</code> or a <code>TimeoutError</code> becomes <code>BudgetExceeded</code> naming the budget.</li>
+    <li>In <code>_call_model</code>, after the usage is added to <code>ModelState.input_tokens</code> and <code>output_tokens</code>, a total above <code>Budgets.tokens</code> raises <code>BudgetExceeded</code>. The exception leaves the graph the way <code>ModelNoResponse</code> does, so no partial step is checkpointed (ADR 0011).</li>
+    <li><code>Turns._finish</code> catches the <code>CoreError</code> and appends <code>TurnFailed(code=BUDGET_EXCEEDED, message)</code>. The recap and the statistics treat it like any failed turn.</li>
+  </ol>
+
+  <h3 id="flow-busy">Flow: a user message while a routine runs</h3>
+  <figure>
+    <svg viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-busy-title fig-busy-desc">
+      <title id="fig-busy-title">A user turn waits for a running routine turn</title>
+      <desc id="fig-busy-desc">The scheduler has woken a routine turn. The REPL sends thread.turn.start, the turn service refuses it with a retryable instance-busy error naming the routine, the REPL prints the line and retries every second, and when the routine turn closes the retry is accepted while the scheduler waits on idle before its next pass.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <line x1="96" y1="64" x2="96" y2="544" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="288" y1="64" x2="288" y2="544" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="480" y1="64" x2="480" y2="544" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="672" y1="64" x2="672" y2="544" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <rect x="84" y="280" width="408" height="112" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="84" y="280" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="104" y="292" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">LOOP</text>
+      <text x="132" y="292" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[D9 until accepted, one retry per second]</text>
+      <rect x="476" y="96" width="8" height="384" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <line x1="668" y1="96" x2="484" y2="96" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="492" y="76" width="168" height="12" rx="2" fill="var(--paper)"/>
+      <text x="576" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">wake(thread_id, prompt, RoutineOrigin("nightly"))</text>
+      <line x1="484" y1="128" x2="668" y2="128" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="536" y="108" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="576" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult</text>
+      <line x1="100" y1="160" x2="288" y2="160" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="128" y="140" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="192" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">thread.turn.start(message)</text>
+      <line x1="292" y1="192" x2="476" y2="192" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="344" y="172" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="181" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">start(command)</text>
+      <line x1="476" y1="224" x2="296" y2="224" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4"/>
+      <line x1="284" y1="220" x2="292" y2="228" stroke="var(--muted)" stroke-width="1.2"/>
+      <line x1="292" y1="220" x2="284" y2="228" stroke="var(--muted)" stroke-width="1.2"/>
+      <rect x="300" y="228" width="168" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="237" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">InstanceBusy("routine nightly is running")</text>
+      <line x1="288" y1="256" x2="100" y2="256" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="108" y="236" width="168" height="12" rx="2" fill="var(--paper)"/>
+      <text x="192" y="245" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ErrorEnvelope(INSTANCE_BUSY, retryable)</text>
+      <path d="M 100,308 H 128 V 324 H 108" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="136" y="320" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">print the message once, sleep(1)</text>
+      <line x1="100" y1="344" x2="288" y2="344" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="128" y="324" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="192" y="333" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">thread.turn.start(message)</text>
+      <line x1="292" y1="376" x2="476" y2="376" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="344" y="356" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="365" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">start(command)</text>
+      <path d="M 484,412 H 512 V 428 H 492" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="520" y="424" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">the routine turn closes, no running turn</text>
+      <line x1="476" y1="448" x2="292" y2="448" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-accent)"/>
+      <rect x="344" y="428" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="384" y="437" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult</text>
+      <line x1="288" y1="480" x2="100" y2="480" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="152" y="460" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="192" y="469" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult</text>
+      <line x1="668" y1="512" x2="484" y2="512" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-open)"/>
+      <rect x="512" y="492" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="576" y="501" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">await idle() before the next pass</text>
+      <rect x="16" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="16" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="96" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">run_repl</text>
+      <text x="96" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">cli/repl.py</text>
+      <rect x="208" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="208" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="288" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Dispatcher</text>
+      <text x="288" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/dispatcher.py</text>
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="480" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns</text>
+      <text x="480" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turns.py</text>
+      <rect x="592" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="592" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="672" y="41" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Scheduler</text>
+      <text x="672" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/scheduler.py</text>
+    </svg>
+    <figcaption>Figure: sequence of a user message that arrives while a routine turn runs, with the retry loop the REPL owns and the idle wait the scheduler owns.</figcaption>
+  </figure>
+  <ol>
+    <li>The scheduler's <code>fire</code> has called <code>Turns.wake</code> with a <code>RoutineOrigin</code>; the routine turn is in <code>Turns._running</code>.</li>
+    <li>The REPL sends <code>ThreadTurnStartCommand(thread_id, message)</code> for the user's thread.</li>
+    <li><code>Turns.wake</code> with a <code>UserOrigin</code> finds <code>running_routine()</code> and raises <code>InstanceBusy</code>, a retryable <code>CoreError</code> with code <code>INSTANCE_BUSY</code> naming the routine. Two user threads keep the per-thread rule and are not affected.</li>
+    <li>The dispatcher returns <code>ErrorEnvelope(code=INSTANCE_BUSY, retryable=True)</code>. <code>run_repl</code> prints the message once and retries the same command every second until it gets <code>AcceptedResult</code>, then renders the turn as today.</li>
+    <li>A routine wake that finds any running turn raises the same error; the scheduler leaves the routine armed and awaits <code>Turns.idle()</code> before its next pass, so a due routine fires right after the user's turn closes.</li>
+  </ol>
+
+  <h2 id="data-shapes">Data shapes <span class="mode">reference</span></h2>
+  <p>Every type the feature adds or changes, drawn with its fields and relations. Contract types first, then instance and plugin types. Changed types show only the fields the feature adds plus one <code>...</code> line. <code>RoutineListCommand</code> (empty) and <code>RoutineListResult(routines, warnings)</code> are the list method's pair and are not drawn.</p>
+  <figure>
+    <svg viewBox="0 0 960 376" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-contract-shapes-title fig-contract-shapes-desc">
+      <title id="fig-contract-shapes-title">Contract types routines and budgets add or change</title>
+      <desc id="fig-contract-shapes-desc">turn.started gains an origin that is a user origin or a routine origin with a trigger; the error code enum gains three codes; routine.list returns summaries that hold the last run, and routine.run takes a name.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- relations -->
+      <line x1="256" y1="60" x2="208" y2="60" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <line x1="456" y1="60" x2="504" y2="60" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+      <line x1="504" y1="228" x2="456" y2="228" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <line x1="604" y1="184" x2="604" y2="104" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+      <rect x="612" y="136" width="52" height="12" rx="2" fill="var(--paper)"/>
+      <text x="616" y="145" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">trigger</text>
+      <!-- TurnStarted (changed) -->
+      <rect x="8" y="24" width="200" height="72" rx="6" fill="var(--paper)"/>
+      <rect x="8" y="24" width="200" height="72" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="108" y="40" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnStarted</text>
+      <line x1="8" y1="48" x2="208" y2="48" stroke="var(--rule)" stroke-width="1"/>
+      <text x="20" y="60" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">origin: TurnOrigin = UserOrigin()</text>
+      <text x="20" y="76" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">...</text>
+      <!-- RoutineOrigin (new, focal) -->
+      <rect x="256" y="24" width="200" height="80" rx="6" fill="var(--paper)"/>
+      <rect x="256" y="24" width="200" height="80" rx="6" fill="var(--accent-tint)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="264" y="32" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="280" y="41" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="356" y="40" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RoutineOrigin</text>
+      <line x1="256" y1="48" x2="456" y2="48" stroke="var(--rule)" stroke-width="1"/>
+      <text x="268" y="60" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">kind: "routine"</text>
+      <text x="268" y="76" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">routine: str</text>
+      <text x="268" y="92" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">trigger: RoutineTrigger</text>
+      <!-- RoutineTrigger (new enum) -->
+      <rect x="504" y="24" width="200" height="80" rx="6" fill="var(--paper)"/>
+      <rect x="504" y="24" width="200" height="80" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="604" y="34" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;&lt;enum&gt;&gt;</text>
+      <text x="604" y="46" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RoutineTrigger</text>
+      <line x1="504" y1="52" x2="704" y2="52" stroke="var(--rule)" stroke-width="1"/>
+      <text x="516" y="64" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">SCHEDULED = "scheduled"</text>
+      <text x="516" y="80" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">MANUAL = "manual"</text>
+      <text x="516" y="96" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">CATCH_UP = "catch-up"</text>
+      <!-- UserOrigin (new) -->
+      <rect x="752" y="24" width="200" height="48" rx="6" fill="var(--paper)"/>
+      <rect x="752" y="24" width="200" height="48" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="852" y="40" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">UserOrigin</text>
+      <line x1="752" y1="48" x2="952" y2="48" stroke="var(--rule)" stroke-width="1"/>
+      <text x="764" y="60" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">kind: "user"</text>
+      <!-- ErrorCode (changed enum) -->
+      <rect x="8" y="184" width="200" height="104" rx="6" fill="var(--paper)"/>
+      <rect x="8" y="184" width="200" height="104" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="108" y="194" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">&lt;&lt;enum&gt;&gt;</text>
+      <text x="108" y="206" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ErrorCode</text>
+      <line x1="8" y1="212" x2="208" y2="212" stroke="var(--rule)" stroke-width="1"/>
+      <text x="20" y="224" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">BUDGET_EXCEEDED</text>
+      <text x="20" y="240" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">MODEL_UNPRICED</text>
+      <text x="20" y="256" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">INSTANCE_BUSY</text>
+      <text x="20" y="272" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">...</text>
+      <!-- RoutineSummary (new) -->
+      <rect x="256" y="184" width="200" height="128" rx="6" fill="var(--paper)"/>
+      <rect x="256" y="184" width="200" height="128" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="356" y="200" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RoutineSummary</text>
+      <line x1="256" y1="208" x2="456" y2="208" stroke="var(--rule)" stroke-width="1"/>
+      <text x="268" y="220" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: str</text>
+      <text x="268" y="236" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">schedule: str | None</text>
+      <text x="268" y="252" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">enabled: bool</text>
+      <text x="268" y="268" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">next_run: datetime | None</text>
+      <text x="268" y="284" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">last_run: RoutineRun | None</text>
+      <text x="268" y="300" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">...</text>
+      <!-- RoutineRun (new) -->
+      <rect x="504" y="184" width="200" height="128" rx="6" fill="var(--paper)"/>
+      <rect x="504" y="184" width="200" height="128" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="604" y="200" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RoutineRun</text>
+      <line x1="504" y1="208" x2="704" y2="208" stroke="var(--rule)" stroke-width="1"/>
+      <text x="516" y="220" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">thread_id: UUID</text>
+      <text x="516" y="236" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">turn_id: UUID</text>
+      <text x="516" y="252" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">started_at: datetime</text>
+      <text x="516" y="268" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">closing_kind: TurnClosingKind | None</text>
+      <text x="516" y="284" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">parked: bool</text>
+      <text x="516" y="300" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">text: str</text>
+      <!-- RoutineRunCommand (new) -->
+      <rect x="752" y="184" width="200" height="48" rx="6" fill="var(--paper)"/>
+      <rect x="752" y="184" width="200" height="48" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="852" y="200" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RoutineRunCommand</text>
+      <line x1="752" y1="208" x2="952" y2="208" stroke="var(--rule)" stroke-width="1"/>
+      <text x="764" y="220" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: str</text>
+      <!-- legend -->
+      <line x1="8" y1="336" x2="952" y2="336" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="8" y="352" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="40" y="362" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new type</text>
+      <line x1="168" y1="358" x2="192" y2="358" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <text x="212" y="362" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">composition, diamond at the owner</text>
+      <line x1="408" y1="358" x2="432" y2="358" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+      <text x="440" y="362" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">uses</text>
+    </svg>
+    <figcaption>Figure: contract types the feature adds or changes; <code>RoutineOrigin</code> is the field that turns a routine fire into an ordinary, attributable turn.</figcaption>
+  </figure>
+  <figure>
+    <svg viewBox="0 0 960 376" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-instance-shapes-title fig-instance-shapes-desc">
+      <title id="fig-instance-shapes-title">Instance, plugin and runtime types routines and budgets add or change</title>
+      <desc id="fig-instance-shapes-desc">The manifest gains a budgets record and a routines config; a loaded routine holds its own lowered budgets and an optional code step; the turn preparation carries the budgets and today's cost; the turn request carries the origin.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- relations -->
+      <line x1="208" y1="52" x2="256" y2="52" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <line x1="504" y1="52" x2="456" y2="52" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <line x1="704" y1="68" x2="752" y2="68" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <line x1="604" y1="120" x2="604" y2="192" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)"/>
+      <line x1="852" y1="144" x2="852" y2="192" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)"/>
+      <line x1="456" y1="220" x2="504" y2="220" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <!-- RoutinesConfig (new) -->
+      <rect x="8" y="24" width="200" height="48" rx="6" fill="var(--paper)"/>
+      <rect x="8" y="24" width="200" height="48" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="108" y="40" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RoutinesConfig</text>
+      <line x1="8" y1="48" x2="208" y2="48" stroke="var(--rule)" stroke-width="1"/>
+      <text x="20" y="60" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">timezone: str = "UTC"</text>
+      <!-- Manifest (changed) -->
+      <rect x="256" y="24" width="200" height="80" rx="6" fill="var(--paper)"/>
+      <rect x="256" y="24" width="200" height="80" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="356" y="40" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Manifest</text>
+      <line x1="256" y1="48" x2="456" y2="48" stroke="var(--rule)" stroke-width="1"/>
+      <text x="268" y="60" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">budgets: Budgets</text>
+      <text x="268" y="76" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">routines: RoutinesConfig</text>
+      <text x="268" y="92" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">...</text>
+      <!-- Budgets (new, focal) -->
+      <rect x="504" y="24" width="200" height="96" rx="6" fill="var(--paper)"/>
+      <rect x="504" y="24" width="200" height="96" rx="6" fill="var(--accent-tint)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="512" y="32" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="528" y="41" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="604" y="40" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Budgets</text>
+      <line x1="504" y1="48" x2="704" y2="48" stroke="var(--rule)" stroke-width="1"/>
+      <text x="516" y="60" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">steps: int | None</text>
+      <text x="516" y="76" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">tokens: int | None</text>
+      <text x="516" y="92" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">seconds: float | None</text>
+      <text x="516" y="108" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">usd_per_day: float | None</text>
+      <!-- Routine (new) -->
+      <rect x="752" y="24" width="200" height="120" rx="6" fill="var(--paper)"/>
+      <rect x="752" y="24" width="200" height="120" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="852" y="40" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Routine</text>
+      <line x1="752" y1="48" x2="952" y2="48" stroke="var(--rule)" stroke-width="1"/>
+      <text x="764" y="60" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: str</text>
+      <text x="764" y="76" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">schedule: str | None</text>
+      <text x="764" y="92" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">mode: PermissionMode | None</text>
+      <text x="764" y="108" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">step: CodeStep | None</text>
+      <text x="764" y="124" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">budgets: Budgets</text>
+      <text x="764" y="140" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">...</text>
+      <!-- TurnRequest (changed) -->
+      <rect x="8" y="192" width="200" height="64" rx="6" fill="var(--paper)"/>
+      <rect x="8" y="192" width="200" height="64" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="108" y="208" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnRequest</text>
+      <line x1="8" y1="216" x2="208" y2="216" stroke="var(--rule)" stroke-width="1"/>
+      <text x="20" y="228" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">origin: TurnOrigin = UserOrigin()</text>
+      <text x="20" y="244" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">...</text>
+      <!-- DailyCost (new) -->
+      <rect x="256" y="192" width="200" height="64" rx="6" fill="var(--paper)"/>
+      <rect x="256" y="192" width="200" height="64" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="356" y="208" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">DailyCost</text>
+      <line x1="256" y1="216" x2="456" y2="216" stroke="var(--rule)" stroke-width="1"/>
+      <text x="268" y="228" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">spent: float | None</text>
+      <text x="268" y="244" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">unpriced_models: tuple[str, ...]</text>
+      <!-- TurnPreparation (changed) -->
+      <rect x="504" y="192" width="200" height="80" rx="6" fill="var(--paper)"/>
+      <rect x="504" y="192" width="200" height="80" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="604" y="208" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnPreparation</text>
+      <line x1="504" y1="216" x2="704" y2="216" stroke="var(--rule)" stroke-width="1"/>
+      <text x="516" y="228" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">budgets: Budgets</text>
+      <text x="516" y="244" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">daily_cost: DailyCost</text>
+      <text x="516" y="260" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">...</text>
+      <!-- CodeStep (new) -->
+      <rect x="752" y="192" width="200" height="80" rx="6" fill="var(--paper)"/>
+      <rect x="752" y="192" width="200" height="80" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="852" y="208" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">CodeStep</text>
+      <line x1="752" y1="216" x2="952" y2="216" stroke="var(--rule)" stroke-width="1"/>
+      <text x="764" y="228" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">tool: Tool</text>
+      <text x="764" y="244" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">arguments: dict[str, JsonValue]</text>
+      <text x="764" y="260" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">inline: bool</text>
+      <!-- legend -->
+      <line x1="8" y1="336" x2="952" y2="336" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="8" y="352" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="40" y="362" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new type</text>
+      <line x1="168" y1="358" x2="192" y2="358" stroke="var(--ink)" stroke-width="1" marker-end="url(#diamond-filled)"/>
+      <text x="212" y="362" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">composition, diamond at the owner</text>
+    </svg>
+    <figcaption>Figure: instance, plugin and runtime types the feature adds or changes; <code>Budgets</code> is owned three times, by the manifest, by a routine and by the turn preparation, and the runner takes the lowest.</figcaption>
+  </figure>
+  <p>The tool loaded from <code>run.py</code> is the existing <code>plugins.tools.Tool</code>; <code>CodeStep.inline</code> says whether it came from the routine directory or from the turn's tool snapshot by name. <code>TurnOrigin</code> is the discriminated union of <code>UserOrigin</code> and <code>RoutineOrigin</code> on <code>kind</code>, declared in the contracts and added to the checkpoint serializer's allowed modules next to <code>TurnRequest</code>.</p>
+
+  <h2 id="file-map">File map <span class="mode">reference</span></h2>
+  <p>Every file the agent touches. Stamped at the commit in the header; regenerate the existence check with <code>git ls-files src/kinby tests docs/schema</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Path</th><th>Action</th><th>What changes</th><th>Flow</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/kinby/contracts/models.py</code></td><td>modify</td><td><code>UserOrigin</code>, <code>RoutineOrigin</code>, <code>TurnOrigin</code>, <code>RoutineTrigger</code>; <code>TurnStarted.origin</code>; <code>ErrorCode</code> gains <code>BUDGET_EXCEEDED</code>, <code>MODEL_UNPRICED</code>, <code>INSTANCE_BUSY</code>; <code>RoutineRun</code>, <code>RoutineSummary</code>, <code>RoutineListCommand</code>, <code>RoutineListResult</code>, <code>RoutineRunCommand</code></td><td>all</td></tr>
+      <tr><td><code>src/kinby/contracts/methods.py</code></td><td>modify</td><td><code>ROUTINE_LIST</code> on <code>Scope.INSTANCE_READ</code>, <code>ROUTINE_RUN</code> on <code>Scope.INSTANCE_ADMIN</code></td><td>a scheduled fire</td></tr>
+      <tr><td><code>src/kinby/contracts/__init__.py</code></td><td>modify</td><td>Export the new names</td><td>all</td></tr>
+      <tr><td><code>src/kinby/core/errors.py</code></td><td>modify</td><td><code>BudgetExceeded</code>, <code>ModelUnpriced</code>, <code>InstanceBusy</code> (retryable), <code>RoutineNotFound</code></td><td>budgets, busy</td></tr>
+      <tr><td><code>src/kinby/core/budgets.py</code></td><td>new</td><td><code>DailyCost</code>, <code>daily_cost</code>, <code>effective_budgets</code>, <code>check_daily_budget</code></td><td>budgets</td></tr>
+      <tr><td><code>src/kinby/core/scheduler.py</code></td><td>new</td><td><code>Scheduler</code>: worker task, arming, history fold, <code>fire</code>, <code>list</code>, <code>drain</code></td><td>a scheduled fire, busy</td></tr>
+      <tr><td><code>src/kinby/core/turns.py</code></td><td>modify</td><td><code>TurnRequest.origin</code>; <code>TurnPreparation.budgets</code> and <code>daily_cost</code>; <code>Turns.wake</code>, <code>idle</code>, <code>running_routine</code>; <code>start</code> delegates to <code>wake</code>; instance-wide busy rule</td><td>all</td></tr>
+      <tr><td><code>src/kinby/core/turn_runner.py</code></td><td>modify</td><td><code>prepare_for_turn</code> computes budgets and daily cost (the runner takes the event log); <code>_invoke</code> loads the routine, runs the code step, renders the wake, sets <code>recursion_limit</code> and the timeout; <code>_call_model</code> checks the tokens budget; serializer allows the origin types</td><td>a scheduled fire, budgets</td></tr>
+      <tr><td><code>src/kinby/core/prompt.py</code></td><td>modify</td><td><code>render_wake</code></td><td>a scheduled fire</td></tr>
+      <tr><td><code>src/kinby/core/dispatcher.py</code></td><td>modify</td><td><code>boot_instance</code> and <code>InstanceRuntime</code>; <code>routine.list</code> and <code>routine.run</code> handlers registered with a scheduler; <code>turn_config</code> passes the event log to the runner</td><td>all</td></tr>
+      <tr><td><code>src/kinby/core/__init__.py</code></td><td>modify</td><td>Export <code>boot_instance</code>, <code>InstanceRuntime</code></td><td>all</td></tr>
+      <tr><td><code>src/kinby/plugins/routines.py</code></td><td>new</td><td><code>Routine</code>, <code>CodeStep</code>, <code>load_routines</code>; frontmatter keys, <code>run.py</code> loading, warnings</td><td>a scheduled fire</td></tr>
+      <tr><td><code>src/kinby/plugins/registry.py</code></td><td>modify</td><td><code>_load_file</code> becomes public <code>load_tool_file</code></td><td>a scheduled fire</td></tr>
+      <tr><td><code>src/kinby/plugins/skills.py</code></td><td>modify</td><td>Packaged skill roots from the <code>kinby.skills</code> entry point group, after instance skills and before workspace skills, skipped when defaults are disabled</td><td>a scheduled fire</td></tr>
+      <tr><td><code>src/kinby/plugins/defaults/__init__.py</code></td><td>modify</td><td>Export <code>SKILLS</code>, the packaged skill directory</td><td>a scheduled fire</td></tr>
+      <tr><td><code>src/kinby/plugins/defaults/skills/write-routine/SKILL.md</code></td><td>new</td><td>The routine-writing skill</td><td>a scheduled fire</td></tr>
+      <tr><td><code>src/kinby/instance/dataclasses.py</code></td><td>modify</td><td><code>Budgets</code>, <code>RoutinesConfig</code>; <code>Manifest.budgets</code>, <code>Manifest.routines</code></td><td>budgets</td></tr>
+      <tr><td><code>src/kinby/instance/manifest.py</code></td><td>modify</td><td><code>RawBudgets</code>, <code>RawRoutines</code> with time zone validation; mapping into the manifest</td><td>budgets</td></tr>
+      <tr><td><code>src/kinby/instance/layout.py</code></td><td>modify</td><td><code>ROUTINE_FILE = "ROUTINE.md"</code>, <code>ROUTINE_STEP_FILE = "run.py"</code></td><td>a scheduled fire</td></tr>
+      <tr><td><code>src/kinby/instance/init.py</code></td><td>modify</td><td>Commented <code>[budgets]</code> and <code>[routines]</code> sections in the starter manifest; the routines README names the directory shape</td><td>budgets</td></tr>
+      <tr><td><code>src/kinby/instance/__init__.py</code></td><td>modify</td><td>Export <code>Budgets</code>, <code>RoutinesConfig</code></td><td>budgets</td></tr>
+      <tr><td><code>docs/schema/kinby.schema.json</code></td><td>modify</td><td>Regenerated with <code>uv run python -m kinby.instance.schema</code></td><td>budgets</td></tr>
+      <tr><td><code>src/kinby/cli/main.py</code></td><td>modify</td><td><code>kinby serve</code>, <code>kinby routine list</code>, <code>kinby routine run</code>; <code>_run_instance</code> uses <code>boot_instance</code></td><td>a scheduled fire, busy</td></tr>
+      <tr><td><code>src/kinby/cli/repl.py</code></td><td>modify</td><td>Startup routine lines; pending approval prompt on open; <code>INSTANCE_BUSY</code> message and retry</td><td>busy</td></tr>
+      <tr><td><code>pyproject.toml</code></td><td>modify</td><td>Cron parser dependency; <code>kinby.skills</code> entry point</td><td>a scheduled fire</td></tr>
+      <tr><td><code>tests/helpers.py</code></td><td>modify</td><td><code>fixed_turn_preparation</code> gains default budgets and daily cost</td><td>all</td></tr>
+      <tr><td><code>tests/test_scheduler.py</code></td><td>new</td><td>Fires, catch-up, busy wait, history, <code>routine.list</code> and <code>routine.run</code> through the dispatcher on a fake clock</td><td>a scheduled fire, busy</td></tr>
+      <tr><td><code>tests/test_budgets.py</code></td><td>new</td><td>Daily refusal and unpriced refusal through the dispatcher; steps, tokens and seconds through the runner</td><td>budgets</td></tr>
+      <tr><td><code>tests/test_routines.py</code></td><td>new</td><td>The loader: frontmatter, <code>run.py</code>, warnings, budget clamping</td><td>a scheduled fire</td></tr>
+      <tr><td><code>tests/test_turns.py</code>, <code>tests/test_loop.py</code>, <code>tests/test_plugins.py</code></td><td>modify</td><td>Origin on <code>turn.started</code>; code step in the runner; packaged skill in the catalogue</td><td>a scheduled fire</td></tr>
+      <tr><td><code>tests/test_repl.py</code>, <code>tests/test_cli.py</code>, <code>tests/test_thread_cli.py</code></td><td>modify</td><td>Startup lines, busy retry, parked prompt; <code>serve</code> and <code>routine</code> commands</td><td>busy</td></tr>
+      <tr><td><code>tests/test_schema.py</code>, <code>tests/test_init.py</code></td><td>modify</td><td><code>[budgets]</code> and <code>[routines]</code> parse, reject unknown keys, appear in the schema and the starter manifest</td><td>budgets</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="testing">Testing <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Seams</dt><dd>The dispatcher with a scripted runner and the scheduler on a fake clock (D1, D3, D9, D10, D12, D17); the LangGraph runner with a scripted chat model (D5, D6, D11, D13); the routine loader on a temporary instance (D4, D5); the CLI through <code>main</code> and the REPL through <code>run_repl</code> (D8, D9, D14, D17); the manifest and schema (D11).</dd>
+    <dt>A good test here</dt><dd>Asserts the events a subscriber sees, the results the contract returns, and the text the CLI prints. Never the scheduler's arming table, the runner's private helpers, or the order of internal calls.</dd>
+    <dt>Prior art</dt><dd><code>tests/test_turns.py</code> (dispatcher with a scripted runner), <code>tests/test_recap.py</code> (a worker with <code>catch_up</code> and <code>drain</code>), <code>tests/test_loop.py</code> and <code>tests/test_plugins.py</code> (scripted <code>astream</code>, tool files in a temporary instance, skill loading), <code>tests/test_repl.py</code>, <code>tests/test_thread_cli.py</code>, <code>tests/test_schema.py</code>, <code>tests/test_init.py</code>.</dd>
+  </dl>
+  <h3>Cases</h3>
+  <ol>
+    <li>A routine with <code>schedule</code> fires when the fake clock passes its next occurrence; the new thread's <code>turn.started</code> carries <code>RoutineOrigin(name, SCHEDULED)</code>, flow a scheduled fire, protects D1, D7.</li>
+    <li>A routine whose last run in the log is older than its previous occurrence fires once at <code>start()</code> with <code>CATCH_UP</code>; one with <code>catch_up: false</code> or no history waits for the next occurrence, flow a scheduled fire, protects D10.</li>
+    <li>A routine edited or disabled between passes changes the next pass without a restart, flow a scheduled fire, protects D4, D19.</li>
+    <li><code>run.py</code> returning <code>None</code> closes the turn with <code>turn.completed(0, 0)</code> and no model call; returning text puts that text inside the data block the model receives, flow a scheduled fire, protects D5, D6.</li>
+    <li>A write code step under a routine mode of <code>ask</code> fails the turn with the gate rule in the message; under <code>full-access</code> it runs, flow a scheduled fire, protects D5, D14.</li>
+    <li>A routine naming both <code>run:</code> and <code>run.py</code>, or a broken <code>ROUTINE.md</code>, is a warning in <code>routine.list</code> and never fires, flow a scheduled fire, protects D4.</li>
+    <li><code>routine.run</code> fires a disabled or unscheduled routine with <code>MANUAL</code>; an unknown name is not found; the method needs <code>instance:admin</code>, flow a scheduled fire, protects D17.</li>
+    <li>With a running routine turn, <code>thread.turn.start</code> returns <code>INSTANCE_BUSY</code> naming the routine, and the REPL prints once and retries until accepted; with a running user turn, a due routine fires only after it closes, flow busy, protects D9.</li>
+    <li>With <code>usd_per_day</code> set and today's cost at the limit, <code>thread.turn.start</code> returns <code>BUDGET_EXCEEDED</code> and no event is appended; with an unpriced model it returns <code>MODEL_UNPRICED</code> naming the model, flow budgets, protects D11, D12.</li>
+    <li>A scripted model that loops on a tool past <code>steps</code>, streams usage past <code>tokens</code>, or stalls past <code>seconds</code> ends with <code>turn.failed(BUDGET_EXCEEDED)</code> naming the budget, and the next turn on the thread runs from the last clean checkpoint, flow budgets, protects D11, D13.</li>
+    <li>A routine <code>tokens</code> below the manifest value applies; one above it warns and the manifest value applies, flow budgets, protects D11.</li>
+    <li>The REPL opened on a parked routine thread prompts for the approval first; opened on a fresh thread it prints one line per routine with its last run, flow busy, protects D8, D14.</li>
+    <li><code>kinby serve</code> prints the instance and routine list, fires a due routine, and exits on the signal the test sends, draining the recap writer, flow a scheduled fire, protects D3.</li>
+    <li><code>kinby.toml</code> with <code>[budgets]</code> and <code>[routines]</code> parses; an unknown key or a bad time zone fails at load; the schema and the starter manifest carry both sections, flow budgets, protects D11.</li>
+    <li>The <code>write-routine</code> skill appears in a fresh instance's catalogue and disappears with <code>[tools] defaults = false</code>, flow a scheduled fire, protects D16.</li>
+  </ol>
+
+  <h2 id="out-of-scope">Out of scope <span class="mode">reference</span></h2>
+  <ul>
+    <li>Signals: the listener, inbound auth and the first sources. Ticket #107 reuses <code>Turns.wake</code> and <code>render_wake</code>.</li>
+    <li>Dreaming and the manual recap sweep. Ticket #108; it is a routine kinby ships or the skill writes.</li>
+    <li>Destinations and a <code>send</code> tool. Reserved on the map until a channel exists.</li>
+    <li>Preemption of a routine turn by the user. Serialization with a visible wait is v1.</li>
+    <li>Event triggers on routines. Every non-schedule stimulus is a signal.</li>
+    <li>A socket in front of <code>kinby serve</code>. The server effort adds it to this command.</li>
+    <li>The gated verb by which the agent writes into <code>routines/</code>. Ticket #61.</li>
+    <li>Gate decisions as events, and a daily budget on tokens. Ticket #12.</li>
+  </ul>
+
+  <h2 id="open-questions">Open questions <span class="mode">reference</span></h2>
+  <p>Points the grilling did not settle, or settled in words the build had to refine. Each with the options on the table and the default the flows above assume. The agent building this stops and asks before acting on any of them.</p>
+  <ol>
+    <li>Which cron parser. Options: <code>cronsim</code> (no dependencies, handles DST, MIT), <code>croniter</code> (widely used, larger). Default: <code>cronsim</code>, pinned in the runtime dependencies.</li>
+    <li>A code step the gate would ask about. The grilling parked approvals during routine runs (D14) and said a writing code step needs the routine's mode to allow it (D5). Options: fail the turn with the rule in the message; park the turn like a model tool call. Default: fail, because the step is the author's own code and the routine's mode is the author's answer.</li>
+    <li>What a code step that returns <code>None</code> leaves behind. The grilling said "no wake". Options: a completed turn with zero tokens on the routine's thread; no record at all. Default: the completed turn, because the event log is the only run history (D10) and a fire that leaves nothing would catch up again at the next start.</li>
+    <li>What <code>kinby serve</code> does with a running routine turn on shutdown. Options: interrupt it, as Ctrl+C in the REPL does; wait for it up to a grace period. Default: interrupt.</li>
+    <li>What the REPL prints at startup. The grilling said "routines that ran since the last session". No session record exists. Options: each routine's last run from <code>routine.list</code>; runs since the last user-origin turn. Default: each routine's last run.</li>
+  </ol>
+
+  <h2 id="glossary">Glossary <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Wake</dt><dd>The start of a turn by anything other than the user typing. Every wake carries an origin, which the thread records and the system prompt renders as a cue.</dd>
+    <dt>Origin</dt><dd>What started a turn: the user, a routine, or a signal.</dd>
+    <dt>Routine</dt><dd>A wake an instance owns and runs on a schedule: a prompt, and optionally the instance's own code step that runs first. Lives as a directory in the instance; its file is the source of truth.</dd>
+    <dt>Code step</dt><dd>A routine's own deterministic code, a tool never offered to the model, that runs before the model and may report "nothing new" so no model call is made.</dd>
+    <dt>Signal</dt><dd>An inbound stimulus from outside the instance, such as a webhook call or a received email, that wakes the agent without a schedule. Never called an event.</dd>
+    <dt>Budget</dt><dd>A ceiling an instance sets on one turn (steps, tokens, seconds) or on a UTC day (cost). Reaching it closes the turn as failed. Absent means unlimited; a routine may lower a budget, never raise it.</dd>
+    <dt>Turn</dt><dd>One user-to-agent cycle within a thread, from a message until the agent yields control. The unit of token attribution, checkpoint bracketing and eval cases.</dd>
+    <dt>Permission mode</dt><dd>A named preset of gate rules a thread runs under: read-only, ask, auto, or full-access. A thread, or a routine, may pin any mode up to the instance ceiling.</dd>
+    <dt>Event</dt><dd>One sequence-numbered record in a thread's durable history. The word keeps this meaning; inbound stimuli are signals.</dd>
+  </dl>
+
+  <footer>Blueprint for routines, wakes and budgets · stamped at d131af9 · 2026-09-04</footer>
+</main>
+</body>
+</html>
