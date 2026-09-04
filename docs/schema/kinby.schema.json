@@ -9,6 +9,65 @@
       "title": "FeedbackPolicy",
       "type": "string"
     },
+    "RawBudgets": {
+      "additionalProperties": false,
+      "properties": {
+        "seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seconds"
+        },
+        "steps": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Steps"
+        },
+        "tokens": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tokens"
+        },
+        "usd_per_day": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Usd Per Day"
+        }
+      },
+      "title": "RawBudgets",
+      "type": "object"
+    },
     "RawConventions": {
       "additionalProperties": false,
       "properties": {
@@ -194,6 +253,10 @@
   "additionalProperties": false,
   "description": "The shape of ``kinby.toml``, validated once at load.",
   "properties": {
+    "budgets": {
+      "$ref": "#/$defs/RawBudgets",
+      "title": "Budgets"
+    },
     "feedback": {
       "$ref": "#/$defs/RawFeedback",
       "default": {

@@ -128,6 +128,10 @@ def test_instance_show_names_a_malformed_model(tmp_path, capsys, model_setting, 
             "memory.enabled",
         ),
         (
+            ('id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n[budgets]\nturns = 3\n'),
+            "budgets.turns",
+        ),
+        (
             ('id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n[feedback]\nsometimes = true\n'),
             "feedback.sometimes",
         ),
@@ -182,6 +186,68 @@ def test_instance_show_rejects_invalid_model_prices(
     assert exit_code != 0
     assert captured.out == ""
     assert offending_key in captured.err
+
+
+@pytest.mark.parametrize(
+    ("budget", "value"),
+    [
+        ("steps", "0"),
+        ("tokens", "-1"),
+        ("seconds", "0.0"),
+        ("usd_per_day", "-0.01"),
+    ],
+)
+def test_instance_show_rejects_non_positive_budgets(tmp_path, capsys, budget, value):
+    instance = tmp_path / "alice"
+    instance.mkdir()
+    (instance / "kinby.toml").write_text(
+        (f'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n[budgets]\n{budget} = {value}\n'),
+        encoding="utf-8",
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert captured.out == ""
+    assert f"budgets.{budget}" in captured.err
+    assert "greater than 0" in captured.err
+
+
+def test_instance_show_accepts_integer_float_budgets(tmp_path, capsys):
+    instance = tmp_path / "alice"
+    instance.mkdir()
+    (instance / "kinby.toml").write_text(
+        (
+            'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n'
+            "[budgets]\nseconds = 300\nusd_per_day = 5\n"
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("budget", ["seconds", "usd_per_day"])
+def test_instance_show_rejects_infinite_budgets(tmp_path, capsys, budget):
+    instance = tmp_path / "alice"
+    instance.mkdir()
+    (instance / "kinby.toml").write_text(
+        (f'id = "alice"\n\n[models]\nmain = "openai:gpt-5"\n\n[budgets]\n{budget} = inf\n'),
+        encoding="utf-8",
+    )
+
+    exit_code = main(["instance", "show", str(instance)])
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert captured.out == ""
+    assert f"budgets.{budget}" in captured.err
+    assert "finite number" in captured.err
 
 
 def test_instance_show_rejects_an_unknown_recap_policy(tmp_path, capsys):

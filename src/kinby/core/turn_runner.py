@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Sequence
+import asyncio
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Annotated, Protocol, cast
 from uuid import UUID, uuid4
 
@@ -23,6 +24,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph, add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
@@ -37,19 +39,20 @@ from kinby.contracts import (
     ToolCall,
     ToolResult,
 )
-from kinby.core.errors import InvalidApprovalRequest, ModelNoResponse
+from kinby.core.errors import BudgetExceeded, InvalidApprovalRequest, ModelNoResponse
 from kinby.core.gate import evaluate
 from kinby.core.prompt import assemble_system_prompt, render_system_prompt
 from kinby.core.turns import (
     ApprovalDecision,
     Emit,
     ParkedTurn,
+    TurnContext,
     TurnOutcome,
     TurnPreparation,
     TurnRequest,
     TurnResult,
 )
-from kinby.instance import Instance, reload_manifest
+from kinby.instance import Budgets, Instance, reload_manifest
 from kinby.instance.permissions import (
     SHIPPED_POLICY,
     GateAction,
@@ -65,6 +68,15 @@ from kinby.plugins.tools import ToolContext
 
 _TOOL_ARGUMENTS = TypeAdapter(dict[str, JsonValue])
 _CHECKPOINTS_NAME = "checkpoints.sqlite"
+_BUDGET_VERSION = "kinby_budget_version"
+_BUDGET_START_STEP = "kinby_budget_start_step"
+_BUDGET_RESUMES = "kinby_budget_resumes"
+_BUDGET_SECONDS_USED = "kinby_budget_seconds_used"
+_BUDGET_SEGMENT_STARTED_AT = "kinby_budget_segment_started_at"
+_BUDGET_STEPS = "kinby_budget_steps"
+_BUDGET_TOKENS = "kinby_budget_tokens"
+_BUDGET_SECONDS = "kinby_budget_seconds"
+_BUDGET_USD_PER_DAY = "kinby_budget_usd_per_day"
 _CHECKPOINT_SERIALIZER = JsonPlusSerializer(
     allowed_msgpack_modules=(
         ApprovalDecision,
@@ -106,12 +118,34 @@ class ModelContext:
     tools: ToolSnapshot
     tool_context: ToolContext
     user_message: HumanMessage
+    budgets: Budgets
 
 
 @dataclass(frozen=True)
 class ToolCallResolution:
     call: ToolCall
     denied_by: str | None = None
+
+
+@dataclass(frozen=True)
+class _BudgetProgress:
+    budgets: Budgets
+    start_step: int
+    resumes: int = 0
+    steps_used: int = 0
+    seconds_used: float = 0
+
+    @property
+    def steps_remaining(self) -> int | None:
+        if self.budgets.steps is None:
+            return None
+        return self.budgets.steps - self.steps_used
+
+    @property
+    def seconds_remaining(self) -> float | None:
+        if self.budgets.seconds is None:
+            return None
+        return self.budgets.seconds - self.seconds_used
 
 
 def _init_model(model: str) -> ChatModel:
@@ -154,6 +188,7 @@ class LangGraphRunner:
             model=manifest.models.main,
             default_mode=self._gate_policy.mode,
             ceiling=self._gate_policy.ceiling,
+            budgets=manifest.budgets,
         )
 
     def permission_ceiling(self) -> PermissionMode:
@@ -168,9 +203,16 @@ class LangGraphRunner:
         )
         return self._gate_policy_override
 
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult:
-        config = await self._start_config(turn)
-        return await self._invoke(turn, emit, ModelState(turn=turn), config)
+    async def run(self, turn: TurnRequest, context: TurnContext) -> TurnResult:
+        config, start_step = await self._start_config(turn)
+        progress = _BudgetProgress(context.budgets, start_step)
+        return await self._invoke(
+            turn,
+            context,
+            ModelState(turn=turn),
+            config,
+            progress,
+        )
 
     async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None:
         config: RunnableConfig = {"configurable": {"thread_id": str(thread_id)}}
@@ -187,17 +229,36 @@ class LangGraphRunner:
         self,
         turn: TurnRequest,
         decision: ApprovalDecision,
-        emit: Emit,
+        context: TurnContext,
     ) -> TurnResult:
-        return await self._invoke(turn, emit, Command(resume=decision), _graph_config(turn))
+        progress = await self._resume_budget_progress(
+            turn,
+            context.budgets,
+        )
+        steps_budget = progress.budgets.steps
+        if steps_budget is not None and progress.steps_used >= steps_budget:
+            raise BudgetExceeded("steps", steps_budget)
+        seconds_budget = progress.budgets.seconds
+        if seconds_budget is not None and progress.seconds_used >= seconds_budget:
+            raise BudgetExceeded("seconds", seconds_budget)
+        return await self._invoke(
+            turn,
+            context,
+            Command(resume=decision),
+            _graph_config(turn),
+            replace(progress, resumes=progress.resumes + 1),
+        )
 
     async def _invoke(
         self,
         turn: TurnRequest,
-        emit: Emit,
+        context: TurnContext,
         graph_input: ModelState | Command,
         config: RunnableConfig,
+        progress: _BudgetProgress,
     ) -> TurnResult:
+        budgets = progress.budgets
+        emit = context.emit
         skills, skill_warnings = load_skills(self._instance)
         sections = assemble_system_prompt(self._instance, skills, date.today())
         discovered_tools, tool_warnings = self._tools.refresh()
@@ -207,26 +268,42 @@ class LangGraphRunner:
         model = self._model_factory(turn.model)
         runnables = [tool.runnable for tool in tools.tools]
         bound_model = model.bind_tools(runnables) if runnables else model
-        async with self._graph() as (graph, _):
-            graph_result = await graph.ainvoke(
-                graph_input,
-                config,
-                context=ModelContext(
-                    emit=emit,
-                    model=bound_model,
-                    system_message=SystemMessage(content=render_system_prompt(sections)),
-                    gate_policy=self._gate_policy,
-                    permission_mode=turn.permission_mode,
-                    tools=tools,
-                    tool_context=ToolContext(
-                        instance=self._instance,
-                        thread_id=turn.thread_id,
-                    ),
-                    user_message=HumanMessage(content=turn.message),
-                ),
-                # ADR 0011 keeps interrupted tool calls out of completed history.
-                durability="exit",
-            )
+        if progress.steps_remaining is not None:
+            config["recursion_limit"] = progress.steps_remaining
+        seconds_timeout = asyncio.timeout(progress.seconds_remaining)
+        try:
+            async with self._graph() as (graph, _):
+                started_at = datetime.now(UTC).timestamp()
+                config["metadata"] = _budget_metadata(progress, started_at)
+                async with seconds_timeout:
+                    graph_result = await graph.ainvoke(
+                        graph_input,
+                        config,
+                        context=ModelContext(
+                            emit=emit,
+                            model=bound_model,
+                            system_message=SystemMessage(content=render_system_prompt(sections)),
+                            gate_policy=self._gate_policy,
+                            permission_mode=turn.permission_mode,
+                            tools=tools,
+                            tool_context=ToolContext(
+                                instance=self._instance,
+                                thread_id=turn.thread_id,
+                            ),
+                            user_message=HumanMessage(content=turn.message),
+                            budgets=budgets,
+                        ),
+                        # ADR 0011 keeps interrupted tool calls out of completed history.
+                        durability="exit",
+                    )
+        except TimeoutError as exc:
+            if not seconds_timeout.expired() or budgets.seconds is None:
+                raise
+            raise BudgetExceeded("seconds", budgets.seconds) from exc
+        except GraphRecursionError as exc:
+            if budgets.steps is None:
+                raise
+            raise BudgetExceeded("steps", budgets.steps) from exc
         interrupts = _INTERRUPTS.validate_python(graph_result.get("__interrupt__", ()))
         if interrupts:
             approval = interrupts[0].value
@@ -240,14 +317,42 @@ class LangGraphRunner:
             output_tokens=result.output_tokens,
         )
 
-    async def _start_config(self, turn: TurnRequest) -> RunnableConfig:
+    async def _start_config(self, turn: TurnRequest) -> tuple[RunnableConfig, int]:
         async with self._graph() as (graph, checkpointer):
             async for state in graph.aget_state_history(_graph_config(turn)):
                 interrupted = any(task.interrupts for task in state.tasks)
                 if not state.next and not interrupted:
-                    return state.config
+                    return state.config, _checkpoint_step(state.metadata) + 1
             await checkpointer.adelete_thread(str(turn.thread_id))
-        return _graph_config(turn)
+        return _graph_config(turn), -1
+
+    async def _resume_budget_progress(
+        self,
+        turn: TurnRequest,
+        fallback: Budgets,
+    ) -> _BudgetProgress:
+        async with self._graph() as (graph, _):
+            state = await graph.aget_state(_graph_config(turn))
+        metadata = state.metadata or {}
+        if _metadata_int(metadata, _BUDGET_VERSION) != 1:
+            return _BudgetProgress(fallback, _checkpoint_step(metadata))
+
+        budgets = _budgets_from_metadata(metadata)
+        start_step = _metadata_int(metadata, _BUDGET_START_STEP)
+        resumes = _metadata_int(metadata, _BUDGET_RESUMES)
+        used_steps = max(0, _checkpoint_step(metadata) - start_step - resumes)
+        seconds_used = _metadata_float(metadata, _BUDGET_SECONDS_USED)
+        segment_started_at = _metadata_float(metadata, _BUDGET_SEGMENT_STARTED_AT)
+        checkpoint_at = _timestamp(state.created_at)
+        if checkpoint_at is not None:
+            seconds_used += max(0, checkpoint_at - segment_started_at)
+        return _BudgetProgress(
+            budgets=budgets,
+            start_step=start_step,
+            resumes=resumes,
+            steps_used=used_steps,
+            seconds_used=seconds_used,
+        )
 
     @asynccontextmanager
     async def _graph(
@@ -284,15 +389,19 @@ class LangGraphRunner:
         if response is None:
             raise ModelNoResponse("The model returned no response.")
         usage = response.usage_metadata
+        input_tokens = state.input_tokens + (usage["input_tokens"] if usage is not None else 0)
+        output_tokens = state.output_tokens + (usage["output_tokens"] if usage is not None else 0)
+        token_budget = runtime.context.budgets.tokens
+        if token_budget is not None and input_tokens + output_tokens > token_budget:
+            raise BudgetExceeded("tokens", token_budget)
         returned_messages: list[AnyMessage] = [response]
         if not following_tool_call:
             returned_messages.insert(0, runtime.context.user_message)
         return ModelState(
             turn=state.turn,
             messages=returned_messages,
-            input_tokens=state.input_tokens + (usage["input_tokens"] if usage is not None else 0),
-            output_tokens=state.output_tokens
-            + (usage["output_tokens"] if usage is not None else 0),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
     async def _call_tools(
@@ -415,3 +524,73 @@ def _after_model(state: ModelState) -> str:
 
 def _graph_config(turn: TurnRequest) -> RunnableConfig:
     return {"configurable": {"thread_id": str(turn.thread_id)}}
+
+
+def _budget_metadata(progress: _BudgetProgress, started_at: float) -> dict[str, int | float]:
+    metadata: dict[str, int | float] = {
+        _BUDGET_VERSION: 1,
+        _BUDGET_START_STEP: progress.start_step,
+        _BUDGET_RESUMES: progress.resumes,
+        _BUDGET_SECONDS_USED: progress.seconds_used,
+        _BUDGET_SEGMENT_STARTED_AT: started_at,
+    }
+    for key, value in (
+        (_BUDGET_STEPS, progress.budgets.steps),
+        (_BUDGET_TOKENS, progress.budgets.tokens),
+        (_BUDGET_SECONDS, progress.budgets.seconds),
+        (_BUDGET_USD_PER_DAY, progress.budgets.usd_per_day),
+    ):
+        if value is not None:
+            metadata[key] = value
+    return metadata
+
+
+def _budgets_from_metadata(metadata: Mapping[str, object]) -> Budgets:
+    return Budgets(
+        steps=_metadata_optional_int(metadata, _BUDGET_STEPS),
+        tokens=_metadata_optional_int(metadata, _BUDGET_TOKENS),
+        seconds=_metadata_optional_float(metadata, _BUDGET_SECONDS),
+        usd_per_day=_metadata_optional_float(metadata, _BUDGET_USD_PER_DAY),
+    )
+
+
+def _checkpoint_step(metadata: Mapping[str, object] | None) -> int:
+    return _metadata_int(metadata or {}, "step", default=-1)
+
+
+def _metadata_int(
+    metadata: Mapping[str, object],
+    key: str,
+    *,
+    default: int = 0,
+) -> int:
+    value = _metadata_optional_int(metadata, key)
+    return default if value is None else value
+
+
+def _metadata_optional_int(metadata: Mapping[str, object], key: str) -> int | None:
+    value = metadata.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _metadata_float(metadata: Mapping[str, object], key: str) -> float:
+    value = _metadata_optional_float(metadata, key)
+    return 0 if value is None else value
+
+
+def _metadata_optional_float(metadata: Mapping[str, object], key: str) -> float | None:
+    value = metadata.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _timestamp(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        return None

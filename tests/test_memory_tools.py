@@ -18,7 +18,7 @@ from kinby.contracts import (
     ToolResult,
 )
 from kinby.core import LangGraphRunner
-from kinby.core.turns import ApprovalDecision, ParkedTurn, TurnOutcome, TurnRequest
+from kinby.core.turns import ApprovalDecision, ParkedTurn, TurnContext, TurnOutcome, TurnRequest
 from kinby.instance import init_instance, load_instance
 from kinby.memory import Episode, Fact, GraphStore, NodeId, memory_tools
 from kinby.plugins import ToolContext
@@ -163,7 +163,7 @@ def test_model_walks_search_then_open_without_approval(
                 model=preparation.model,
                 permission_mode=mode,
             ),
-            emit,
+            TurnContext(preparation.budgets, emit),
         )
 
         assert isinstance(result, TurnOutcome)
@@ -253,13 +253,14 @@ def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None
             model=preparation.model,
             permission_mode=PermissionMode.ASK,
         )
-        parked = await runner.run(turn, emit)
+        context = TurnContext(preparation.budgets, emit)
+        parked = await runner.run(turn, context)
 
         assert isinstance(parked, ParkedTurn)
         assert any(isinstance(payload, ApprovalRequested) for payload in payloads)
         assert GraphStore(instance.path).recall("coding preferences") == ()
 
-        completed = await runner.resume(turn, ApprovalDecision.APPROVE, emit)
+        completed = await runner.resume(turn, ApprovalDecision.APPROVE, context)
 
         assert isinstance(completed, TurnOutcome)
         hits = GraphStore(instance.path).recall("coding preferences")
@@ -298,7 +299,7 @@ def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None
                 model=preparation.model,
                 permission_mode=PermissionMode.READ_ONLY,
             ),
-            emit_later,
+            TurnContext(preparation.budgets, emit_later),
         )
 
         assert isinstance(later, TurnOutcome)
@@ -394,8 +395,9 @@ def test_denied_remember_returns_an_error_and_the_turn_continues(tmp_path: Path)
             model=preparation.model,
             permission_mode=PermissionMode.ASK,
         )
-        parked = await runner.run(turn, emit)
-        completed = await runner.resume(turn, ApprovalDecision.DENY, emit)
+        context = TurnContext(preparation.budgets, emit)
+        parked = await runner.run(turn, context)
+        completed = await runner.resume(turn, ApprovalDecision.DENY, context)
 
         assert isinstance(parked, ParkedTurn)
         assert isinstance(completed, TurnOutcome)
@@ -477,7 +479,7 @@ def test_forget_hides_the_node_from_a_later_search_in_the_same_turn(
                 model=preparation.model,
                 permission_mode=PermissionMode.FULL_ACCESS,
             ),
-            emit,
+            TurnContext(preparation.budgets, emit),
         )
 
         assert isinstance(completed, TurnOutcome)
@@ -557,7 +559,7 @@ def test_read_only_denies_memory_write_tools(
                 model=preparation.model,
                 permission_mode=PermissionMode.READ_ONLY,
             ),
-            emit,
+            TurnContext(preparation.budgets, emit),
         )
 
         assert isinstance(completed, TurnOutcome)

@@ -86,6 +86,16 @@ class Tools:
 
 
 @dataclass(frozen=True)
+class Budgets:
+    """Limits configured for turns and instance spending."""
+
+    steps: int | None = None
+    tokens: int | None = None
+    seconds: float | None = None
+    usd_per_day: float | None = None
+
+
+@dataclass(frozen=True)
 class Manifest:
     """Validated settings from ``kinby.toml``."""
 
@@ -97,6 +107,7 @@ class Manifest:
     memory: Memory
     feedback: Feedback
     tools: Tools
+    budgets: Budgets
     prices: Mapping[str, ModelPrice]
 
 

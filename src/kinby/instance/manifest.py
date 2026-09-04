@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
 from kinby.instance.dataclasses import (
+    Budgets,
     Conventions,
     Feedback,
     FeedbackPolicy,
@@ -81,6 +82,13 @@ class RawTools(_Section):
     defaults: bool = True
 
 
+class RawBudgets(_Section):
+    steps: Annotated[int, Field(gt=0)] | None = None
+    tokens: Annotated[int, Field(gt=0)] | None = None
+    seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
+    usd_per_day: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
+
+
 class RawModelPrice(_Section):
     input: Annotated[float, Field(ge=0)]
     output: Annotated[float, Field(ge=0)]
@@ -97,6 +105,7 @@ class RawManifest(_Section):
     memory: RawMemory = RawMemory()
     feedback: RawFeedback = RawFeedback()
     tools: RawTools = RawTools()
+    budgets: RawBudgets = Field(default_factory=RawBudgets, title="Budgets")
     prices: dict[ModelName, RawModelPrice] = Field(
         default_factory=dict,
         json_schema_extra={"additionalProperties": False},
@@ -161,6 +170,12 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         memory=Memory(recap=raw.memory.recap),
         feedback=Feedback(ask=raw.feedback.ask),
         tools=Tools(defaults=raw.tools.defaults),
+        budgets=Budgets(
+            steps=raw.budgets.steps,
+            tokens=raw.budgets.tokens,
+            seconds=raw.budgets.seconds,
+            usd_per_day=raw.budgets.usd_per_day,
+        ),
         prices={
             model: ModelPrice(input=price.input, output=price.output)
             for model, price in raw.prices.items()

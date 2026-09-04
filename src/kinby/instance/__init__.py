@@ -1,6 +1,7 @@
 """On-disk shape of an instance: directory model, kinby.toml manifest, and discovery."""
 
 from kinby.instance.dataclasses import (
+    Budgets,
     Conventions,
     Feedback,
     FeedbackPolicy,
@@ -20,6 +21,7 @@ from kinby.instance.manifest import load_instance, reload_manifest
 
 __all__ = [
     "PLACEHOLDER_MODEL",
+    "Budgets",
     "Conventions",
     "Feedback",
     "FeedbackPolicy",

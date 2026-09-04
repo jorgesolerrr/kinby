@@ -77,6 +77,14 @@ def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
             "\n"
             "[feedback]\n"
             f"ask = {_toml_string(FeedbackPolicy.EVERY_TURN)}\n"
+            "\n"
+            "# [budgets]\n"
+            "# One step is one node execution.\n"
+            "# A budget of 7 steps allows four model calls and three tool rounds.\n"
+            "# steps = 7\n"
+            "# tokens = 50000\n"
+            "# seconds = 300\n"
+            "# usd_per_day = 5.0\n"
         ),
         encoding="utf-8",
     )

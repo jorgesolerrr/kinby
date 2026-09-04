@@ -64,6 +64,39 @@ def test_manifest_schema_accepts_the_tools_table() -> None:
     validate(instance=manifest, schema=manifest_schema())
 
 
+def test_manifest_schema_names_and_accepts_the_budgets_section() -> None:
+    schema = manifest_schema()
+    manifest = {
+        "id": "bounded",
+        "models": {"main": "openai:gpt-5"},
+        "budgets": {
+            "steps": 7,
+            "tokens": 1000,
+            "seconds": 2.5,
+            "usd_per_day": 1.25,
+        },
+    }
+
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    budgets = properties["budgets"]
+    assert isinstance(budgets, dict)
+    assert budgets["title"] == "Budgets"
+    validate(instance=manifest, schema=schema)
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_manifest_schema_rejects_a_non_positive_budget(value: int) -> None:
+    manifest = {
+        "id": "bounded",
+        "models": {"main": "openai:gpt-5"},
+        "budgets": {"steps": value},
+    }
+
+    with pytest.raises(ValidationError):
+        validate(instance=manifest, schema=manifest_schema())
+
+
 @pytest.mark.parametrize("policy", ["every-turn", "off"])
 def test_manifest_schema_accepts_recap_policies(policy: str) -> None:
     manifest = {

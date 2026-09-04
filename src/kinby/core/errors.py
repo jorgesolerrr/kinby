@@ -1,8 +1,11 @@
 """Errors raised by the core package."""
 
 import asyncio
+from typing import Literal
 
 from kinby.contracts import ErrorCode
+
+BudgetName = Literal["steps", "tokens", "seconds"]
 
 
 class CoreError(Exception):
@@ -29,6 +32,13 @@ class TurnNotFound(CoreError):
 
 class PermissionDenied(CoreError):
     code = ErrorCode.PERMISSION_DENIED
+
+
+class BudgetExceeded(CoreError):
+    code = ErrorCode.BUDGET_EXCEEDED
+
+    def __init__(self, budget: BudgetName, value: int | float) -> None:
+        super().__init__(f"The turn exceeded the {budget} budget of {value}.")
 
 
 class NoActiveTurn(CoreError):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import partial
 from typing import Protocol
@@ -40,6 +40,7 @@ from kinby.core.errors import (
 )
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
+from kinby.instance import Budgets
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class TurnPreparation:
     model: str
     default_mode: PermissionMode
     ceiling: PermissionMode
+    budgets: Budgets = field(default_factory=Budgets)
 
 
 @dataclass(frozen=True)
@@ -86,14 +88,25 @@ TurnResult = TurnOutcome | ParkedTurn
 Emit = Callable[[Payload], Awaitable[Event]]
 
 
+@dataclass(frozen=True)
+class TurnContext:
+    budgets: Budgets
+    emit: Emit
+
+    # Keep existing TurnRunner implementations that accept Emit protocol-compatible.
+    async def __call__(self, payload: Payload) -> Event:
+        return await self.emit(payload)
+
+
 class TurnRunner(Protocol):
     async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None: ...
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnResult: ...
+    async def run(self, turn: TurnRequest, context: TurnContext, /) -> TurnResult: ...
     async def resume(
         self,
         turn: TurnRequest,
         decision: ApprovalDecision,
-        emit: Emit,
+        context: TurnContext,
+        /,
     ) -> TurnResult: ...
 
 
@@ -190,7 +203,7 @@ class Turns:
             )
         finally:
             self._release_claim(command.thread_id, claim)
-        self._spawn(turn, self._run(turn))
+        self._spawn(turn, self._run(turn, preparation.budgets))
         return AcceptedResult(
             thread_id=turn.thread_id,
             turn_id=turn.turn_id,
@@ -269,7 +282,7 @@ class Turns:
             decision = (
                 ApprovalDecision.APPROVE if command.answer == "yes" else ApprovalDecision.DENY
             )
-            self._spawn(turn, self._resume(turn, decision))
+            self._spawn(turn, self._resume(turn, decision, preparation.budgets))
         finally:
             self._release_claim(command.thread_id, claim)
         # respond appends no event, so approval.requested is the resume cursor.
@@ -296,16 +309,26 @@ class Turns:
         self._running[turn.thread_id] = RunningTurn(turn, task)
         task.add_done_callback(partial(self._forget_task, turn.thread_id))
 
-    async def _run(self, turn: TurnRequest) -> None:
-        await self._finish(turn, lambda emit: self._runner.run(turn, emit))
+    async def _run(self, turn: TurnRequest, budgets: Budgets) -> None:
+        await self._finish(turn, budgets, lambda context: self._runner.run(turn, context))
 
-    async def _resume(self, turn: TurnRequest, decision: ApprovalDecision) -> None:
-        await self._finish(turn, lambda emit: self._runner.resume(turn, decision, emit))
+    async def _resume(
+        self,
+        turn: TurnRequest,
+        decision: ApprovalDecision,
+        budgets: Budgets,
+    ) -> None:
+        await self._finish(
+            turn,
+            budgets,
+            lambda context: self._runner.resume(turn, decision, context),
+        )
 
     async def _finish(
         self,
         turn: TurnRequest,
-        run: Callable[[Emit], Awaitable[TurnResult]],
+        budgets: Budgets,
+        run: Callable[[TurnContext], Awaitable[TurnResult]],
     ) -> None:
         async def emit(payload: Payload) -> Event:
             running = self._running.get(turn.thread_id)
@@ -314,7 +337,7 @@ class Turns:
             return await self._log.append(turn.thread_id, turn.turn_id, payload)
 
         try:
-            outcome = await run(emit)
+            outcome = await run(TurnContext(budgets, emit))
         except CoreError as exc:
             code = exc.code
             message = str(exc)
