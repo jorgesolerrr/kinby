@@ -87,7 +87,7 @@ class ToolRegistry:
                 candidate[path] = cached
                 continue
             try:
-                candidate[path] = _FileTools(modified_ns, _load_file(path))
+                candidate[path] = _FileTools(modified_ns, load_tool_file(path))
             except Exception as exc:
                 # Tool files are user code. Report every broken file and keep the last valid set.
                 warnings.append(Warning(sources=(str(path),), message=exception_message(exc)))
@@ -120,7 +120,7 @@ def _directory_signature(tools_path: Path) -> FileSignature:
     )
 
 
-def _load_file(path: Path) -> tuple[Tool, ...]:
+def load_tool_file(path: Path) -> tuple[Tool, ...]:
     module_name = f"_kinby_tool_{uuid4().hex}"
     module = ModuleType(module_name)
     module.__file__ = str(path)

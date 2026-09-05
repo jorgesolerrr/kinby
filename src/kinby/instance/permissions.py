@@ -95,3 +95,21 @@ def load_permissions(instance: Instance) -> GatePolicy:
         raise PermissionsError(f"{PERMISSIONS_NAME}: {key}: {message}") from exc
     validate_bash_regexes(policy)
     return policy
+
+
+_MODE_ORDER = (
+    PermissionMode.READ_ONLY,
+    PermissionMode.ASK,
+    PermissionMode.AUTO,
+    PermissionMode.FULL_ACCESS,
+)
+
+
+def constrain_mode(mode: PermissionMode, ceiling: PermissionMode) -> PermissionMode:
+    if exceeds_ceiling(mode, ceiling):
+        return ceiling
+    return mode
+
+
+def exceeds_ceiling(mode: PermissionMode, ceiling: PermissionMode) -> bool:
+    return _MODE_ORDER.index(mode) > _MODE_ORDER.index(ceiling)

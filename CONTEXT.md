@@ -106,7 +106,7 @@ One run of the agent loop against a thread, from start to exit (a process, a REP
 
 ### Turn
 
-One user-to-agent cycle within a thread: from a user message until the agent yields control back. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases. A turn is also the unit of work: what the user calls a task is a turn, and each turn earns at most one **episode**.
+One cycle of work within a thread, started by the user or a **wake**, until the agent yields control back. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases. A turn is also the unit of work: what the user calls a task is a turn, and each turn earns at most one **episode**.
 _Avoid_: task
 
 ### Budget
@@ -284,7 +284,7 @@ The last **prompt section**, containing the instance id, optional **persona name
 
 ### Wake
 
-The start of a **turn** by anything other than the user typing. Every wake carries an **origin**, which the thread records and the **system prompt** renders as a cue.
+The start of a **turn** by anything other than the user typing. Every wake carries an **origin**, which the thread records and the prompt renders as a cue.
 
 ### Origin
 
@@ -297,7 +297,11 @@ _Avoid_: cron job, automation, job
 
 ### Code step
 
-A **routine**'s own deterministic code, a **tool** never offered to the model, that runs before the model and may report "nothing new" so no **turn** starts.
+A **routine**'s own deterministic code, a **tool** never offered to the model, that runs before the model and may report "nothing new", completing the **turn** with **no work**.
+
+### No work
+
+A completed **turn** whose **code step** found nothing for the model to do. Neither the main model nor the **recap** model runs.
 
 ### Signal
 

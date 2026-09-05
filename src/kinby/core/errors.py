@@ -19,6 +19,18 @@ class CoreError(Exception):
     retryable: bool = False
 
 
+class CodeStepFailed(CoreError):
+    """A routine code step could not finish."""
+
+
+class CodeStepNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
+class RoutineNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
 class ThreadNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 

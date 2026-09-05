@@ -68,11 +68,34 @@ class EventType(StrEnum):
     MEMORY_RECAPPED = "memory.recapped"
 
 
+class UserOrigin(ContractModel):
+    kind: Literal["user"] = "user"
+
+
+class RoutineTrigger(StrEnum):
+    SCHEDULED = "scheduled"
+    MANUAL = "manual"
+    CATCH_UP = "catch-up"
+
+
+RoutineName = NewType("RoutineName", str)
+
+
+class RoutineOrigin(ContractModel):
+    kind: Literal["routine"] = "routine"
+    name: RoutineName
+    trigger: RoutineTrigger
+
+
+Origin = Annotated[UserOrigin | RoutineOrigin, Field(discriminator="kind")]
+
+
 class TurnStarted(ContractModel):
     type: Literal[EventType.TURN_STARTED] = EventType.TURN_STARTED
     message: str
     model: str
     permission_mode: PermissionMode | None = None
+    origin: Origin = Field(default_factory=UserOrigin)
 
 
 class ModePinned(ContractModel):
@@ -123,8 +146,14 @@ class TokenTotals(ContractModel):
         return self.input_tokens + self.output_tokens
 
 
+class CompletionOutcome(StrEnum):
+    WORK = "work"
+    NO_WORK = "no-work"
+
+
 class TurnCompleted(TokenTotals):
     type: Literal[EventType.TURN_COMPLETED] = EventType.TURN_COMPLETED
+    outcome: CompletionOutcome = CompletionOutcome.WORK
 
 
 class TurnFailed(ContractModel):
