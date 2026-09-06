@@ -407,7 +407,11 @@ async def _run_routine_command(client: ContractClient, name: RoutineName) -> int
             if isinstance(event.payload, TurnFailed):
                 print(event.payload.message, file=sys.stderr)
                 status = 1
-            if is_turn_closing(event.payload) or isinstance(event.payload, ApprovalRequested):
+            if isinstance(event.payload, ApprovalRequested):
+                print("Routine parked, waiting for approval.", file=sys.stderr)
+                status = 1
+                break
+            if is_turn_closing(event.payload):
                 break
     finally:
         await stream.aclose()

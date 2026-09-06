@@ -413,6 +413,58 @@ def test_cli_routine_list_and_no_work_run(tmp_path, capsys):
     assert "disabled" in output and "no-work" in output
 
 
+def test_cli_parked_routine_reports_non_success(tmp_path, capsys, monkeypatch):
+    from importlib import import_module
+
+    from tests.test_repl import ApprovalReplRunner
+
+    instance = instance_at(tmp_path)
+    routine_file(instance, "description: News\nmode: ask")
+    monkeypatch.setattr(
+        import_module("kinby.cli.main"),
+        "turn_config",
+        lambda *args, **kwargs: TurnConfig(
+            fixed_turn_preparation, fixed_permission_ceiling, ApprovalReplRunner()
+        ),
+    )
+    assert main(["routine", "run", "news", "--instance", str(tmp_path)]) == 1
+    output = capsys.readouterr()
+    assert "thread:" in output.out
+    assert "parked" in output.err and "approval" in output.err
+
+
+@pytest.mark.parametrize("thread_count", [1, 8])
+def test_availability_reads_history_once(tmp_path, monkeypatch, thread_count):
+    from kinby.core.events import EventLog
+    from tests.test_repl import ApprovalReplRunner
+
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        clock = FakeClock(datetime(2026, 9, 6, tzinfo=UTC))
+        dispatcher = runtime(instance, clock, ApprovalReplRunner())
+        await call(dispatcher, "routine.run", name="news")
+        await dispatcher.scheduler.drain()
+        user = await call(dispatcher, "thread.create")
+        for _ in range(thread_count - 1):
+            await call(dispatcher, "thread.create")
+        restarted = runtime(instance, clock)
+        reads = 0
+        all_events = EventLog.all_events
+
+        def counted_events(log):
+            nonlocal reads
+            reads += 1
+            return all_events(log)
+
+        monkeypatch.setattr(EventLog, "all_events", counted_events)
+        busy = await call(restarted, "thread.turn.start", thread_id=user.id, message="Hello")
+        assert busy.code == "INSTANCE_BUSY"
+        assert reads == 1
+
+    asyncio.run(scenario())
+
+
 def test_repl_waits_visibly_and_shows_routines(tmp_path):
     async def scenario():
         instance = instance_at(tmp_path)

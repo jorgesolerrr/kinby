@@ -169,11 +169,16 @@ class Turns:
         for thread, claim in self._claims.items():
             if isinstance(claim, TurnClaim):
                 origins[thread] = claim.origin
-        for thread in self._store.list().threads:
-            events = self._log.stored(thread.id)
+        events_by_thread: dict[UUID, list[Event]] = {
+            thread.id: [] for thread in self._store.list().threads
+        }
+        for event in self._log.all_events():
+            if event.thread_id in events_by_thread:
+                events_by_thread[event.thread_id].append(event)
+        for thread_id, events in events_by_thread.items():
             pending = _pending_approval(events)
             if pending is not None:
-                origins[thread.id] = _turn_origin(events, pending.event.turn_id)
+                origins[thread_id] = _turn_origin(events, pending.event.turn_id)
         return tuple(origins.values())
 
     def require_available(self, origin: Origin) -> None:
