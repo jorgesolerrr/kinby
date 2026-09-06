@@ -1,12 +1,14 @@
 """Load the instance's routine instructions at turn boundaries."""
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
+from cronsim import CronSim
 from pydantic import BaseModel, ConfigDict, Field, Json, JsonValue  # noqa: TID251 - file boundary
 
-from kinby.contracts import PermissionMode, RoutineName, Warning
+from kinby.contracts import CronSchedule, PermissionMode, RoutineName, Warning
 from kinby.frontmatter import parse_frontmatter, required_string
 from kinby.instance import Budgets, Instance
 from kinby.instance.layout import ROUTINE_CODE_FILE, ROUTINE_FILE, ROUTINES_DIR
@@ -41,7 +43,7 @@ class Routine:
     description: str
     source: Path
     prompt: str
-    schedule: str | None
+    schedule: CronSchedule | None
     enabled: bool
     mode: PermissionMode
     catch_up: bool
@@ -71,6 +73,11 @@ def _load_routine(path: Path, policy: GatePolicy) -> Routine:
     values, body = parse_frontmatter(path.read_text(encoding="utf-8"))
     required_string(values, "description")
     raw = _RawRoutine.model_validate(values)
+    if raw.schedule is not None:
+        if len(raw.schedule.split()) != 5:
+            raise ValueError("A routine schedule must have five cron fields.")
+        if next(CronSim(raw.schedule, datetime.now(UTC)), None) is None:
+            raise ValueError("The routine schedule has no occurrence in the next fifty years.")
     mode = raw.mode if raw.mode is not None else policy.mode
     mode = constrain_mode(mode, policy.ceiling)
     code_path = path.parent / ROUTINE_CODE_FILE
@@ -87,7 +94,7 @@ def _load_routine(path: Path, policy: GatePolicy) -> Routine:
         description=raw.description,
         source=path,
         prompt=body,
-        schedule=raw.schedule,
+        schedule=CronSchedule(raw.schedule) if raw.schedule is not None else None,
         enabled=raw.enabled,
         mode=mode,
         catch_up=raw.catch_up,
@@ -95,3 +102,19 @@ def _load_routine(path: Path, policy: GatePolicy) -> Routine:
         arguments=raw.arguments,
         budgets=Budgets(steps=raw.steps, tokens=raw.tokens, seconds=raw.seconds),
     )
+
+
+def disable_routine(routine: Routine) -> None:
+    """Change only the enabled field, retaining the author's other file content."""
+    lines = routine.source.read_bytes().decode("utf-8").splitlines(keepends=True)
+    closing = next(i for i, line in enumerate(lines[1:], 1) if line.strip() == "---")
+    newline = "\r\n" if lines[0].endswith("\r\n") else "\n"
+    found = False
+    for i in range(1, closing):
+        key, separator, _ = lines[i].partition(":")
+        if separator and key.strip() == "enabled":
+            lines[i] = f"{key}: false{newline}"
+            found = True
+    if not found:
+        lines.insert(closing, f"enabled: false{newline}")
+    routine.source.write_bytes("".join(lines).encode("utf-8"))

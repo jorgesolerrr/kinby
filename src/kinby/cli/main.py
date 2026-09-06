@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import date
 from importlib.metadata import version
 from pathlib import Path
@@ -15,25 +17,37 @@ from pydantic import ValidationError
 
 from kinby.cli.client import ContractClient, format_error
 from kinby.cli.repl import run_repl
+from kinby.cli.routines import show_routines
 from kinby.contracts import (
+    ROUTINE_RUN,
     STATS_GET,
     THREAD_CREATE,
     THREAD_LIST,
+    THREAD_SUBSCRIBE,
     USAGE_GET,
+    ApprovalRequested,
     ErrorCode,
     ErrorEnvelope,
+    MessageDelta,
+    RoutineName,
+    RoutineRunCommand,
     Scope,
     StatsBucketSize,
     StatsGetCommand,
     StatsSummary,
     ThreadCreateCommand,
     ThreadListCommand,
+    ThreadSubscribeCommand,
     TokenTotals,
+    TurnFailed,
     TurnUsage,
     UsageGetCommand,
+    is_turn_closing,
 )
 from kinby.core import assemble_system_prompt, build_dispatcher, turn_config
+from kinby.core.dispatcher import ScheduledTurnConfig
 from kinby.core.events import EventLog
+from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.stats import stats_summary
 from kinby.instance import (
     PLACEHOLDER_MODEL,
@@ -46,6 +60,7 @@ from kinby.instance import (
     load_instance,
 )
 from kinby.instance.recap import load_recap_lens
+from kinby.memory import RecapWriter
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
@@ -269,34 +284,55 @@ async def _show_stats(
     return 0
 
 
+@dataclass(frozen=True)
+class InstanceSession:
+    client: ContractClient
+    scheduler: Scheduler
+    recap: RecapWriter | None
+
+
+@asynccontextmanager
+async def _instance_session(
+    instance: Instance, model_override: str | None = None
+) -> AsyncIterator[InstanceSession]:
+    event_log = EventLog(instance.manifest.state_dir)
+    turns = turn_config(instance, event_log=event_log, model_override=model_override)
+    dispatcher = build_dispatcher(
+        instance.manifest.state_dir,
+        event_log=event_log,
+        turns=ScheduledTurnConfig(turns, SchedulerConfig(instance)),
+    )
+    client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+    try:
+        yield InstanceSession(client, dispatcher.scheduler, turns.recap)
+    finally:
+        await dispatcher.scheduler.stop()
+        if turns.recap is not None:
+            await turns.recap.drain()
+
+
 async def _run_instance(
     instance: Instance,
     *,
     model_override: str | None = None,
     thread_id: UUID | None = None,
 ) -> int:
-    event_log = EventLog(instance.manifest.state_dir)
-    turns = turn_config(instance, event_log=event_log, model_override=model_override)
-    if turns.recap is not None:
-        await turns.recap.catch_up()
-    dispatcher = build_dispatcher(
-        instance.manifest.state_dir,
-        event_log=event_log,
-        turns=turns,
-    )
-    client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
-    opened = await _thread_for_session(client, thread_id)
-    if isinstance(opened, ErrorEnvelope):
-        print(format_error(opened), file=sys.stderr)
-        return 1
-    return await run_repl(
-        client,
-        opened,
-        feedback=instance.manifest.feedback.ask,
-        stdin=sys.stdin,
-        stdout=sys.stdout,
-        stderr=sys.stderr,
-    )
+    async with _instance_session(instance, model_override) as session:
+        if session.recap is not None:
+            await session.recap.catch_up()
+        opened = await _thread_for_session(session.client, thread_id)
+        if isinstance(opened, ErrorEnvelope):
+            print(format_error(opened), file=sys.stderr)
+            return 1
+        session.scheduler.start()
+        return await run_repl(
+            session.client,
+            opened,
+            feedback=instance.manifest.feedback.ask,
+            stdin=sys.stdin,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+        )
 
 
 async def _thread_for_session(
@@ -338,6 +374,48 @@ async def _list_threads(client: ContractClient) -> int:
     for thread in listed.threads:
         print(f"{thread.id}\t{thread.created_at.isoformat()}\t{thread.title or ''}")
     return 0
+
+
+async def _list_routines(instance: Instance) -> int:
+    async with _instance_session(instance) as session:
+        return await show_routines(session.client, sys.stdout, sys.stderr)
+
+
+async def _run_routine(instance: Instance, name: RoutineName) -> int:
+    async with _instance_session(instance) as session:
+        return await _run_routine_command(session.client, name)
+
+
+async def _run_routine_command(client: ContractClient, name: RoutineName) -> int:
+    accepted = await client.call(ROUTINE_RUN, RoutineRunCommand(name=name))
+    if isinstance(accepted, ErrorEnvelope):
+        print(format_error(accepted), file=sys.stderr)
+        return 1
+    print(f"thread: {accepted.thread_id}")
+    stream = client.subscribe(
+        THREAD_SUBSCRIBE, ThreadSubscribeCommand(thread_id=accepted.thread_id)
+    )
+    status = 0
+    try:
+        async for event in stream:
+            if isinstance(event, ErrorEnvelope):
+                print(format_error(event), file=sys.stderr)
+                status = 1
+                break
+            if isinstance(event.payload, MessageDelta):
+                print(event.payload.text, end="", flush=True)
+            if isinstance(event.payload, TurnFailed):
+                print(event.payload.message, file=sys.stderr)
+                status = 1
+            if isinstance(event.payload, ApprovalRequested):
+                print("Routine parked, waiting for approval.", file=sys.stderr)
+                status = 1
+                break
+            if is_turn_closing(event.payload):
+                break
+    finally:
+        await stream.aclose()
+    return status
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -397,6 +475,13 @@ def main(argv: list[str] | None = None) -> int:
         help="list threads",
     )
     _add_instance_selector(thread_list_parser, "instance whose threads to list")
+    routine_parser = subparsers.add_parser("routine", help="list and run routines")
+    routine_subparsers = routine_parser.add_subparsers(dest="routine_command")
+    routine_list = routine_subparsers.add_parser("list", help="show routine schedules and history")
+    _add_instance_selector(routine_list, "instance whose routines to list")
+    routine_run = routine_subparsers.add_parser("run", help="run a routine manually")
+    routine_run.add_argument("name", help="routine name")
+    _add_instance_selector(routine_run, "instance that owns the routine")
     usage_parser = subparsers.add_parser(
         "usage",
         help="show token totals",
@@ -471,6 +556,11 @@ def main(argv: list[str] | None = None) -> int:
                 if args.thread_command == "create":
                     return asyncio.run(_create_thread(client, args.title))
                 return asyncio.run(_list_threads(client))
+            case "routine" if args.routine_command in {"list", "run"}:
+                instance = _load_selected_instance(args)
+                if args.routine_command == "run":
+                    return asyncio.run(_run_routine(instance, RoutineName(args.name)))
+                return asyncio.run(_list_routines(instance))
             case "usage":
                 command = _range_command(lambda: _usage_command(args))
                 if command is None:

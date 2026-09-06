@@ -311,3 +311,27 @@ _Avoid_: event, trigger, webhook (as the concept)
 ### Budget
 
 A ceiling an **instance** sets on one **turn** (steps, tokens, seconds) or on a UTC day (cost). Reaching it closes the turn as failed. Absent means unlimited; a **routine** may lower a budget, never raise it.
+
+### Scheduler
+
+The instance's coordinator of scheduled **routine** wakes.
+
+### Firing
+
+One attempt to start a **routine** turn, whether scheduled, caught up after downtime, or requested manually.
+
+### Armed routine
+
+An enabled scheduled **routine** with its next firing time selected.
+
+### Routine notice
+
+A durable message about a **routine**'s first failure in a streak or its automatic disablement.
+
+### Failure policy
+
+The rule that counts consecutive failed **firings**, reports the first failure, and disables a **routine** at ten failures. Successful work resets the count; no work, interruption, and daily-budget refusal leave it unchanged.
+
+### Cron schedule
+
+A five-field recurrence rule for a **routine**, interpreted in the instance's time zone.

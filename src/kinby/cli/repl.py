@@ -14,6 +14,7 @@ from typing import TextIO
 from uuid import UUID
 
 from kinby.cli.client import ContractClient, format_error
+from kinby.cli.routines import show_routines, watch_routine_notices
 from kinby.contracts import (
     THREAD_APPROVAL_RESPOND,
     THREAD_MODE_SET,
@@ -136,6 +137,26 @@ async def run_repl(
     stdout: TextIO,
     stderr: TextIO,
 ) -> int:
+    notices = asyncio.create_task(watch_routine_notices(client, stdout))
+    try:
+        return await _run_repl(
+            client, thread_id, feedback=feedback, stdin=stdin, stdout=stdout, stderr=stderr
+        )
+    finally:
+        notices.cancel()
+        with suppress(asyncio.CancelledError):
+            await notices
+
+
+async def _run_repl(
+    client: ContractClient,
+    thread_id: UUID,
+    *,
+    feedback: FeedbackPolicy,
+    stdin: TextIO,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> int:
     repl_io = _ReplIO(_AsyncInput(stdin), stdout, stderr)
     subscription = client.subscribe(
         THREAD_SUBSCRIBE,
@@ -152,6 +173,9 @@ async def run_repl(
             if not message:
                 continue
             command, _, argument = message.partition(" ")
+            if command == "/routines":
+                await show_routines(client, stdout, stderr)
+                continue
             if command == "/mode":
                 try:
                     mode = PermissionMode(argument)
@@ -181,6 +205,16 @@ async def run_repl(
                 THREAD_TURN_START,
                 ThreadTurnStartCommand(thread_id=thread_id, message=message),
             )
+            if isinstance(accepted, ErrorEnvelope) and accepted.code is ErrorCode.INSTANCE_BUSY:
+                _render_error(accepted, stderr)
+                while (
+                    isinstance(accepted, ErrorEnvelope) and accepted.code is ErrorCode.INSTANCE_BUSY
+                ):
+                    await asyncio.sleep(1)
+                    accepted = await client.call(
+                        THREAD_TURN_START,
+                        ThreadTurnStartCommand(thread_id=thread_id, message=message),
+                    )
             if isinstance(accepted, ErrorEnvelope):
                 _render_error(accepted, stderr)
                 continue
