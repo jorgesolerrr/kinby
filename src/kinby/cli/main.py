@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import shlex
 import signal
 import sys
 from collections.abc import AsyncIterator, Callable
@@ -386,10 +387,14 @@ async def _list_routines(instance: Instance) -> int:
 
 async def _run_routine(instance: Instance, name: RoutineName) -> int:
     async with _instance_session(instance) as client:
-        return await _run_routine_command(client, name)
+        return await _run_routine_command(client, name, instance.path)
 
 
-async def _run_routine_command(client: ContractClient, name: RoutineName) -> int:
+async def _run_routine_command(
+    client: ContractClient,
+    name: RoutineName,
+    instance_path: Path,
+) -> int:
     accepted = await client.call(ROUTINE_RUN, RoutineRunCommand(name=name))
     if isinstance(accepted, ErrorEnvelope):
         print(format_error(accepted), file=sys.stderr)
@@ -407,7 +412,17 @@ async def _run_routine_command(client: ContractClient, name: RoutineName) -> int
                 break
             if isinstance(event.payload, ApprovalRequested):
                 print("Routine parked, waiting for approval.", file=sys.stderr)
-                print(f"Resume with: kinby run --thread {accepted.thread_id}")
+                command = shlex.join(
+                    (
+                        "kinby",
+                        "run",
+                        "--thread",
+                        str(accepted.thread_id),
+                        "--instance",
+                        str(instance_path),
+                    )
+                )
+                print(f"Resume with: {command}")
                 status = 1
                 break
             render_event(event, sys.stdout, sys.stderr)

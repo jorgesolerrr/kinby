@@ -170,6 +170,42 @@ def test_start_catches_up_once(tmp_path, catch_up, history, expected):
     asyncio.run(scenario())
 
 
+def test_interrupted_scheduled_run_does_not_catch_up_after_restart(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nschedule: * * * * *")
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        runner = BlockingRunner()
+        dispatcher = runtime(instance, clock, runner)
+
+        clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
+        ticking = asyncio.create_task(dispatcher.scheduler.tick())
+        while not (await call(dispatcher, "thread.list")).threads:
+            await asyncio.sleep(0)
+        await dispatcher.scheduler.interrupt()
+        await ticking
+
+        path = instance.manifest.state_dir / "events.jsonl"
+        events = [Event.model_validate_json(line) for line in path.read_text().splitlines()]
+        path.write_text(
+            "".join(
+                event.model_copy(update={"timestamp": clock.now}).model_dump_json() + "\n"
+                for event in events
+            )
+        )
+        clock.now = datetime(2026, 9, 6, 9, 3, tzinfo=UTC)
+        restarted = runtime(instance, clock)
+        await restarted.scheduler.tick()
+
+        threads = await call(restarted, "thread.list")
+        assert len(threads.threads) == 1
+        listed = await call(restarted, "routine.list")
+        assert listed.routines[0].last_run.outcome == "interrupted"
+        assert listed.routines[0].next_run == datetime(2026, 9, 6, 9, 4, tzinfo=UTC)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "start,expected",
     [
@@ -420,7 +456,9 @@ def test_cli_parked_routine_reports_non_success(tmp_path, capsys, monkeypatch):
 
     from tests.test_repl import ApprovalReplRunner
 
-    instance = instance_at(tmp_path)
+    instance_path = tmp_path / "instance with spaces"
+    instance_path.mkdir()
+    instance = instance_at(instance_path)
     routine_file(instance, "description: News\nmode: ask")
     monkeypatch.setattr(
         import_module("kinby.core.runtime"),
@@ -429,11 +467,13 @@ def test_cli_parked_routine_reports_non_success(tmp_path, capsys, monkeypatch):
             fixed_turn_preparation, fixed_permission_ceiling, ApprovalReplRunner()
         ),
     )
-    assert main(["routine", "run", "news", "--instance", str(tmp_path)]) == 1
+    assert main(["routine", "run", "news", "--instance", str(instance_path)]) == 1
     output = capsys.readouterr()
     assert "thread:" in output.out
     thread_id = output.out.splitlines()[0].removeprefix("thread: ")
-    assert f"kinby run --thread {thread_id}" in output.out
+    assert (
+        f"Resume with: kinby run --thread {thread_id} --instance '{instance_path}'\n"
+    ) in output.out
     assert "parked" in output.err and "approval" in output.err
     events = EventLog(instance.manifest.state_dir).all_events()
     assert not any(isinstance(event.payload, TurnInterrupted) for event in events)
