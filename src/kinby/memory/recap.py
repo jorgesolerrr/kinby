@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import TYPE_CHECKING, Protocol, cast
 from uuid import UUID
@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field  # noqa: TID251 - model output boundary
 
 from kinby.contracts import (
+    CompletionOutcome,
     MemoryRecapped,
     MessageDelta,
     NodeId,
@@ -82,6 +83,11 @@ def _init_model(model: str) -> RecapModel:
 class _RecapRequest:
     thread_id: UUID
     turn_id: UUID
+
+
+@dataclass(frozen=True)
+class _NoWorkTrace:
+    recorded_on: date
 
 
 class RecapWriter:
@@ -158,6 +164,15 @@ class RecapWriter:
         if self._is_recapped(events):
             return
         calls = [event.payload for event in events if isinstance(event.payload, ToolCall)]
+        if any(
+            isinstance(event.payload, TurnCompleted)
+            and event.payload.outcome is CompletionOutcome.NO_WORK
+            for event in events
+        ):
+            await self._write_trace_only(
+                request, events, calls, _NoWorkTrace(events[0].timestamp.date())
+            )
+            return
         manifest = reload_manifest(self._instance, model_override=self._model_override)
         if manifest.memory.recap is RecapPolicy.TRACE_ONLY:
             await self._write_trace_only(request, events, calls, manifest.models.recap)
@@ -183,7 +198,7 @@ class RecapWriter:
         request: _RecapRequest,
         events: list[Event],
         calls: list[ToolCall],
-        model: str,
+        recap: str | _NoWorkTrace,
     ) -> None:
         episode: Episode | None = None
         if calls:
@@ -198,11 +213,18 @@ class RecapWriter:
                 body=_path_taken(calls),
                 calls=calls,
             )
+            if isinstance(recap, _NoWorkTrace):
+                recorded_on = recap.recorded_on
+                episode = replace(
+                    episode,
+                    node=NodeId(f"{recorded_on.isoformat()}-{request.turn_id.hex}-trace"),
+                    date=recorded_on,
+                )
         await self._finish(
             request,
             episode,
             TokenTotals(input_tokens=0, output_tokens=0),
-            model,
+            None if isinstance(recap, _NoWorkTrace) else recap,
         )
 
     async def _finish(
@@ -210,7 +232,7 @@ class RecapWriter:
         request: _RecapRequest,
         episode: Episode | None,
         usage: TokenTotals,
-        model: str,
+        model: str | None,
     ) -> None:
         node: NodeId | None = None
         if episode is not None:

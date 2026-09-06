@@ -14,7 +14,7 @@ from pydantic import JsonValue
 
 from kinby.instance import Instance
 
-ToolFunction = Callable[..., str]
+ToolFunction = Callable[..., object]
 
 
 @dataclass(frozen=True)
@@ -45,10 +45,19 @@ class Tool:
         arguments: Mapping[str, JsonValue],
         context: ToolContext,
     ) -> str:
+        return str(await self.ainvoke_raw(arguments, context))
+
+    async def ainvoke_raw(
+        self,
+        arguments: Mapping[str, JsonValue],
+        context: ToolContext,
+    ) -> str | None:
+        """Preserve a code step's None result before rendering tool output."""
         invocation = self.resolve_paths(arguments, context.workspace)
         if self.context_parameter is not None:
             invocation[self.context_parameter] = context
-        return str(await self.runnable.ainvoke(invocation))
+        result = await self.runnable.ainvoke(invocation)
+        return None if result is None else str(result)
 
     def resolve_paths(
         self,

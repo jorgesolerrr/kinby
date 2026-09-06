@@ -14,9 +14,11 @@ from uuid import UUID, uuid4
 from kinby.contracts import (
     AcceptedResult,
     ApprovalRequested,
+    CompletionOutcome,
     ErrorCode,
     Event,
     ModePinned,
+    Origin,
     Payload,
     PermissionMode,
     ThreadApprovalRespondCommand,
@@ -27,6 +29,7 @@ from kinby.contracts import (
     TurnFailed,
     TurnInterrupted,
     TurnStarted,
+    UserOrigin,
 )
 from kinby.core.budgets import DailyBudget, check_daily_budget
 from kinby.core.errors import (
@@ -42,6 +45,7 @@ from kinby.core.errors import (
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 from kinby.instance import Budgets
+from kinby.instance.permissions import constrain_mode, exceeds_ceiling
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +57,7 @@ class TurnRequest:
     message: str
     model: str
     permission_mode: PermissionMode
+    origin: Origin = field(default_factory=UserOrigin)
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,7 @@ class TurnPreparation:
 class TurnOutcome:
     input_tokens: int = 0
     output_tokens: int = 0
+    outcome: CompletionOutcome = CompletionOutcome.WORK
 
 
 @dataclass(frozen=True)
@@ -158,7 +164,7 @@ class Turns:
         if command.thread_id in self._claims or active or _pending_approval(events) is not None:
             raise _thread_busy(command.thread_id)
         ceiling = self._permission_ceiling()
-        if _exceeds_ceiling(command.mode, ceiling):
+        if exceeds_ceiling(command.mode, ceiling):
             raise PermissionDenied(
                 f'Permission mode "{command.mode.value}" exceeds the instance ceiling '
                 f'"{ceiling.value}".'
@@ -171,24 +177,28 @@ class Turns:
         )
 
     async def start(self, command: ThreadTurnStartCommand) -> AcceptedResult:
-        self._require_thread(command.thread_id)
-        events = self._log.stored(command.thread_id)
+        return await self.wake(command.thread_id, command.message, UserOrigin())
+
+    async def wake(self, thread_id: UUID, message: str, origin: Origin) -> AcceptedResult:
+        self._require_thread(thread_id)
+        events = self._log.stored(thread_id)
         pending = _pending_approval(events)
-        running = self._running.get(command.thread_id)
+        running = self._running.get(thread_id)
         active = running is not None and not running.task.done()
-        if command.thread_id in self._claims or active or pending is not None:
-            raise _thread_busy(command.thread_id)
+        if thread_id in self._claims or active or pending is not None:
+            raise _thread_busy(thread_id)
 
         claim = TurnClaim()
-        self._claims[command.thread_id] = claim
+        self._claims[thread_id] = claim
         try:
             preparation = self._prepare_for_turn()
             check_daily_budget(preparation.daily_budget)
             turn = TurnRequest(
-                thread_id=command.thread_id,
+                thread_id=thread_id,
                 turn_id=uuid4(),
-                message=command.message,
+                message=message,
                 model=preparation.model,
+                origin=origin,
                 permission_mode=_permission_mode(
                     events,
                     preparation.default_mode,
@@ -200,12 +210,13 @@ class Turns:
                 turn.turn_id,
                 TurnStarted(
                     message=turn.message,
+                    origin=turn.origin,
                     model=turn.model,
                     permission_mode=turn.permission_mode,
                 ),
             )
         finally:
-            self._release_claim(command.thread_id, claim)
+            self._release_claim(thread_id, claim)
         self._spawn(turn, self._run(turn, preparation.budgets))
         return AcceptedResult(
             thread_id=turn.thread_id,
@@ -277,7 +288,7 @@ class Turns:
                 raise InvalidParkedTurn("The parked turn cannot resume after a runtime restart.")
             turn = replace(
                 turn,
-                permission_mode=_constrain_mode(
+                permission_mode=constrain_mode(
                     turn.permission_mode,
                     preparation.ceiling,
                 ),
@@ -353,6 +364,7 @@ class Turns:
                 return
             await emit(
                 TurnCompleted(
+                    outcome=outcome.outcome,
                     input_tokens=outcome.input_tokens,
                     output_tokens=outcome.output_tokens,
                 )
@@ -398,17 +410,7 @@ def _permission_mode(
         (event.payload.mode for event in reversed(events) if isinstance(event.payload, ModePinned)),
         default,
     )
-    return _constrain_mode(mode, ceiling)
-
-
-def _constrain_mode(mode: PermissionMode, ceiling: PermissionMode) -> PermissionMode:
-    if _exceeds_ceiling(mode, ceiling):
-        return ceiling
-    return mode
-
-
-def _exceeds_ceiling(mode: PermissionMode, ceiling: PermissionMode) -> bool:
-    return _MODE_ORDER.index(mode) > _MODE_ORDER.index(ceiling)
+    return constrain_mode(mode, ceiling)
 
 
 def _thread_busy(thread_id: UUID) -> ThreadBusy:
@@ -417,11 +419,3 @@ def _thread_busy(thread_id: UUID) -> ThreadBusy:
 
 def _no_active_turn(thread_id: UUID) -> NoActiveTurn:
     return NoActiveTurn(f'Thread "{thread_id}" has no active turn.')
-
-
-_MODE_ORDER = (
-    PermissionMode.READ_ONLY,
-    PermissionMode.ASK,
-    PermissionMode.AUTO,
-    PermissionMode.FULL_ACCESS,
-)

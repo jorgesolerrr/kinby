@@ -11,6 +11,7 @@ from uuid import UUID
 
 from kinby.contracts import (
     ApprovalRequested,
+    CompletionOutcome,
     Event,
     MemoryCallCounts,
     MemoryRecapped,
@@ -78,6 +79,7 @@ def turn_metrics(
     open_turns: dict[TurnKey, _TurnEvents] = {}
     closed_turns: dict[TurnKey, TurnMetrics] = {}
     records: list[TurnMetrics] = []
+    no_work: set[TurnKey] = set()
     unpriced_models_by_turn: dict[TurnKey, set[UnpricedModel]] = {}
 
     for event in events:
@@ -108,7 +110,9 @@ def turn_metrics(
             output_tokens = payload.output_tokens if isinstance(payload, TurnCompleted) else 0
             memory_calls = MemoryCallCounts.model_validate(turn.memory_calls if turn else {})
             price = prices.get(turn.model) if turn is not None else None
-            if turn is not None and price is None:
+            if isinstance(payload, TurnCompleted) and payload.outcome is CompletionOutcome.NO_WORK:
+                no_work.add(key)
+            if turn is not None and price is None and key not in no_work:
                 unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(turn.model))
             record = TurnMetrics(
                 thread_id=event.thread_id,
@@ -125,7 +129,11 @@ def turn_metrics(
                 recap_input_tokens=0,
                 recap_output_tokens=0,
                 cost=(
-                    token_cost(input_tokens, output_tokens, price) if price is not None else None
+                    0
+                    if key in no_work
+                    else token_cost(input_tokens, output_tokens, price)
+                    if price is not None
+                    else None
                 ),
                 tool_calls=dict(turn.tool_calls) if turn else {},
                 memory_calls=memory_calls,
@@ -142,6 +150,8 @@ def turn_metrics(
         if record is None:
             continue
         if isinstance(payload, MemoryRecapped):
+            if key in no_work:
+                continue
             main_input_tokens = record.input_tokens - record.recap_input_tokens
             main_output_tokens = record.output_tokens - record.recap_output_tokens
             main_price = prices.get(record.model) if record.model is not None else None

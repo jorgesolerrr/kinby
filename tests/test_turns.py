@@ -28,6 +28,7 @@ from kinby.contracts import (
     TurnRated,
     TurnStarted,
     TurnVerdict,
+    UserOrigin,
 )
 from kinby.core.budgets import daily_cost
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
@@ -298,6 +299,8 @@ def test_pinned_mode_is_recorded_and_used_by_the_next_turn(tmp_path: Path) -> No
         assert typed_events[0].payload == ModePinned(mode=PermissionMode.AUTO)
         assert typed_events[-1].payload == TurnCompleted(input_tokens=0, output_tokens=0)
         assert runner.modes == [PermissionMode.AUTO]
+        assert isinstance(typed_events[1].payload, TurnStarted)
+        assert typed_events[1].payload.origin == UserOrigin()
 
     asyncio.run(scenario())
 
@@ -1922,3 +1925,8 @@ def test_unknown_approval_id_with_no_active_turn_returns_not_found(
         )
 
     asyncio.run(scenario())
+
+
+def test_old_turn_started_defaults_to_user_origin() -> None:
+    started = TurnStarted.model_validate({"message": "Hello", "model": "openai:gpt-5"})
+    assert started.origin == UserOrigin()

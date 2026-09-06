@@ -33,18 +33,31 @@ from pydantic import JsonValue, TypeAdapter
 
 from kinby.contracts import (
     ApprovalRequested,
+    CompletionOutcome,
     EventType,
     MessageDelta,
     PermissionMode,
+    RoutineOrigin,
+    RoutineTrigger,
     ToolCall,
     ToolResult,
+    UserOrigin,
+    Warning,
 )
 from kinby.core.budgets import DailyBudget, daily_cost
-from kinby.core.errors import BudgetExceeded, InvalidApprovalRequest, ModelNoResponse
+from kinby.core.errors import (
+    BudgetExceeded,
+    CodeStepFailed,
+    CodeStepNotFound,
+    InvalidApprovalRequest,
+    ModelNoResponse,
+    PermissionDenied,
+    RoutineNotFound,
+)
 from kinby.core.events import EventLog
 from kinby.core.gate import evaluate
 from kinby.core.pricing import price_map
-from kinby.core.prompt import assemble_system_prompt, render_system_prompt
+from kinby.core.prompt import assemble_system_prompt, render_system_prompt, render_wake
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
     ApprovalDecision,
@@ -67,8 +80,9 @@ from kinby.instance.permissions import (
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
+from kinby.plugins.routines import Routine, SharedCodeStep, load_routines
 from kinby.plugins.skills import load_skills
-from kinby.plugins.tools import ToolContext
+from kinby.plugins.tools import Tool, ToolContext
 
 _TOOL_ARGUMENTS = TypeAdapter(dict[str, JsonValue])
 _CHECKPOINTS_NAME = "checkpoints.sqlite"
@@ -88,6 +102,9 @@ _CHECKPOINT_SERIALIZER = JsonPlusSerializer(
         EventType,
         PermissionMode,
         TurnRequest,
+        UserOrigin,
+        RoutineOrigin,
+        RoutineTrigger,
     )
 )
 
@@ -150,6 +167,15 @@ class _BudgetProgress:
         if self.budgets.seconds is None:
             return None
         return self.budgets.seconds - self.seconds_used
+
+
+@dataclass(frozen=True)
+class _PreparedTurn:
+    tools: ToolSnapshot
+    progress: _BudgetProgress
+    permission_mode: PermissionMode
+    message: str
+    payload: str | None
 
 
 def _init_model(model: str) -> ChatModel:
@@ -291,6 +317,12 @@ class LangGraphRunner:
         tools, core_tool_warnings = discovered_tools.with_core(*core_tools(self._instance, skills))
         for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
             await emit(warning)
+        prepared = await self._prepare_turn(turn, graph_input, tools, progress, emit)
+        if isinstance(prepared, TurnOutcome):
+            return prepared
+        tools = prepared.tools
+        progress = prepared.progress
+        budgets = progress.budgets
         model = self._model_factory(turn.model)
         runnables = [tool.runnable for tool in tools.tools]
         bound_model = model.bind_tools(runnables) if runnables else model
@@ -310,13 +342,15 @@ class LangGraphRunner:
                             model=bound_model,
                             system_message=SystemMessage(content=render_system_prompt(sections)),
                             gate_policy=self._gate_policy,
-                            permission_mode=turn.permission_mode,
+                            permission_mode=prepared.permission_mode,
                             tools=tools,
                             tool_context=ToolContext(
                                 instance=self._instance,
                                 thread_id=turn.thread_id,
                             ),
-                            user_message=HumanMessage(content=turn.message),
+                            user_message=HumanMessage(
+                                content=render_wake(turn.origin, prepared.message, prepared.payload)
+                            ),
                             budgets=budgets,
                         ),
                         # ADR 0011 keeps interrupted tool calls out of completed history.
@@ -342,6 +376,104 @@ class LangGraphRunner:
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
         )
+
+    async def _prepare_turn(
+        self,
+        turn: TurnRequest,
+        graph_input: ModelState | Command,
+        tools: ToolSnapshot,
+        progress: _BudgetProgress,
+        emit: Emit,
+    ) -> _PreparedTurn | TurnOutcome:
+        budgets = progress.budgets
+        permission_mode = turn.permission_mode
+        message = turn.message
+        payload = None
+        if isinstance(turn.origin, RoutineOrigin):
+            routines, warnings = load_routines(self._instance, policy=self._gate_policy)
+            for warning in warnings:
+                await emit(warning)
+            routine = next(
+                (routine for routine in routines if routine.name == turn.origin.name), None
+            )
+            if routine is None:
+                raise RoutineNotFound(f'Routine "{turn.origin.name}" was not found.')
+            budgets, budget_warnings = _routine_budgets(budgets, routine)
+            progress = replace(progress, budgets=budgets)
+            for warning in budget_warnings:
+                await emit(warning)
+            permission_mode = routine.mode
+            message = routine.prompt
+            code_step = routine.code_step
+            if isinstance(code_step, SharedCodeStep):
+                name = code_step.name
+                code_step = tools.get(name)
+                if code_step is None:
+                    raise CodeStepNotFound(
+                        f'Code step tool "{name}" is not available in this turn.'
+                    )
+            if code_step is not None:
+                tools = ToolSnapshot(
+                    tuple(tool for tool in tools.tools if tool.name != code_step.name)
+                )
+            if code_step is not None and isinstance(graph_input, ModelState):
+                code_started = asyncio.get_running_loop().time()
+                output = await self._run_code_step(routine, code_step, turn, emit, budgets)
+                progress = replace(
+                    progress,
+                    seconds_used=progress.seconds_used
+                    + asyncio.get_running_loop().time()
+                    - code_started,
+                )
+                if output is None:
+                    return TurnOutcome(outcome=CompletionOutcome.NO_WORK)
+                payload = output
+        return _PreparedTurn(tools, progress, permission_mode, message, payload)
+
+    async def _run_code_step(
+        self,
+        routine: Routine,
+        code_step: Tool,
+        turn: TurnRequest,
+        emit: Emit,
+        budgets: Budgets,
+    ) -> str | None:
+        call = ToolCall(call_id=str(uuid4()), name=code_step.name, arguments=routine.arguments)
+        decision = evaluate(
+            self._gate_policy,
+            routine.mode,
+            call,
+            code_step,
+            self._instance.manifest.workspace.path,
+        )
+        await emit(call)
+        if decision.action is not GateAction.ALLOW:
+            message = (
+                f'Code step "{call.name}" requires allow; gate rule '
+                f'"{decision.rule}" returned {decision.action.value}.'
+            )
+            await emit(ToolResult(call_id=call.call_id, name=call.name, output=message, error=True))
+            raise PermissionDenied(message)
+        timeout = asyncio.timeout(budgets.seconds)
+        try:
+            async with timeout:
+                output = await code_step.ainvoke_raw(
+                    call.arguments, ToolContext(instance=self._instance, thread_id=turn.thread_id)
+                )
+        except Exception as exc:
+            failure = (
+                BudgetExceeded("seconds", budgets.seconds)
+                if timeout.expired() and budgets.seconds is not None
+                else CodeStepFailed(exception_message(exc))
+            )
+            await emit(
+                ToolResult(call_id=call.call_id, name=call.name, output=str(failure), error=True)
+            )
+            raise failure from exc
+        await emit(
+            ToolResult(call_id=call.call_id, name=call.name, output=str(output), error=False)
+        )
+        return output
 
     async def _start_config(self, turn: TurnRequest) -> tuple[RunnableConfig, int]:
         async with self._graph() as (graph, checkpointer):
@@ -620,3 +752,32 @@ def _timestamp(value: str | None) -> float | None:
         return datetime.fromisoformat(value).timestamp()
     except ValueError:
         return None
+
+
+def _routine_budgets(manifest: Budgets, routine: Routine) -> tuple[Budgets, tuple[Warning, ...]]:
+    warnings = tuple(
+        Warning(
+            sources=(str(routine.source),),
+            message=(
+                f"Routine {name} budget {value} exceeds the manifest budget. {ceiling} applies."
+            ),
+        )
+        for name, value, ceiling in (
+            ("steps", routine.budgets.steps, manifest.steps),
+            ("tokens", routine.budgets.tokens, manifest.tokens),
+            ("seconds", routine.budgets.seconds, manifest.seconds),
+        )
+        if value is not None and ceiling is not None and value > ceiling
+    )
+    return replace(
+        manifest,
+        steps=_lower_limit(manifest.steps, routine.budgets.steps),
+        tokens=_lower_limit(manifest.tokens, routine.budgets.tokens),
+        seconds=_lower_limit(manifest.seconds, routine.budgets.seconds),
+    ), warnings
+
+
+def _lower_limit[Limit: (int, float)](ceiling: Limit | None, value: Limit | None) -> Limit | None:
+    if ceiling is None:
+        return value
+    return ceiling if value is None else min(ceiling, value)

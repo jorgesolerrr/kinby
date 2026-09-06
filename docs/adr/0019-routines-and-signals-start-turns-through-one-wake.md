@@ -5,7 +5,7 @@ Ticket #11 chose to make every non-user start of a turn a wake: one runtime entr
 ## Consequences
 
 - A routine is a directory, `routines/<name>/ROUTINE.md` plus an optional `run.py`, and the file is the source of truth: enable, disable, schedule, mode and budgets are frontmatter.
-- The routine's own code is a tool: same decorator, loader and write flag, loaded from the routine's directory, never offered to the model, called only by the scheduler. Returning none means no wake and no model tokens.
+- The routine's own code is a tool: same decorator, loader and write flag, loaded from the routine's directory, never offered to the model, called by the turn runner before the model. Returning none completes a recorded no-work turn without main-model or recap-model calls, as specified in [ADR 0021](0021-no-work-is-a-recorded-turn-outcome.md). Code-step gate decisions follow [ADR 0022](0022-routine-code-steps-require-gate-allow.md).
 - The scheduler is a reactor in the process that owns the event log (ADR 0006), started with the recap catch-up. `kinby serve` runs that boot without the REPL. One turn runs at a time per instance; no preemption in v1.
 - Last run, next run and missed fires derive from the event log through the origin on `turn.started`; a missed schedule fires at most once at startup.
 - Polling a source on a schedule is a code-step routine and is a fallback; a push is a signal and preferred when the provider offers one.
