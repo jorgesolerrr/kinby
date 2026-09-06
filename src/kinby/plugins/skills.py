@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import NewType
 
@@ -16,6 +17,7 @@ from kinby.frontmatter import (
 )
 from kinby.instance import Instance
 from kinby.instance.layout import SKILL_FILE, SKILLS_DIR
+from kinby.plugins.errors import exception_message
 from kinby.plugins.tools import Tool, tool
 
 SkillName = NewType("SkillName", str)
@@ -40,16 +42,45 @@ class Skill:
 
 
 def load_skills(instance: Instance) -> tuple[tuple[Skill, ...], tuple[Warning, ...]]:
-    """Load instance skills before workspace convention skills."""
+    """Load instance, packaged, then workspace convention skills."""
     instance_skills, instance_warnings = _load_skill_roots((instance.path / SKILLS_DIR,))
+    packaged_roots, package_warnings = _packaged_skill_roots(
+        defaults=instance.manifest.tools.defaults
+    )
+    packaged_skills, packaged_warnings = _load_skill_roots(packaged_roots)
     workspace_skills, workspace_warnings = _load_skill_roots(
         instance.manifest.workspace.conventions.skills,
     )
-    skills = (
-        *instance_skills.values(),
-        *(skill for name, skill in workspace_skills.items() if name not in instance_skills),
+    skills: dict[SkillName, Skill] = {}
+    for tier in (instance_skills, packaged_skills, workspace_skills):
+        for name, skill in tier.items():
+            skills.setdefault(name, skill)
+    return tuple(skills.values()), (
+        *instance_warnings,
+        *package_warnings,
+        *packaged_warnings,
+        *workspace_warnings,
     )
-    return skills, (*instance_warnings, *workspace_warnings)
+
+
+def _packaged_skill_roots(*, defaults: bool) -> tuple[tuple[Path, ...], tuple[Warning, ...]]:
+    roots: list[Path] = []
+    warnings: list[Warning] = []
+    for entry_point in entry_points(group="kinby.skills"):
+        if not defaults and entry_point.name == "defaults":
+            distribution = entry_point.dist
+            if distribution is not None and distribution.name == "kinby":
+                continue
+        try:
+            root = entry_point.load()
+            if not isinstance(root, Path) or not root.is_dir():
+                raise TypeError(
+                    f'Entry point "{entry_point.value}" does not export a skill directory Path.'
+                )
+            roots.append(root)
+        except Exception as exc:
+            warnings.append(Warning(sources=(entry_point.value,), message=exception_message(exc)))
+    return tuple(roots), tuple(warnings)
 
 
 def _load_skill_roots(

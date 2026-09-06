@@ -50,7 +50,11 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
     assert (target / ".gitignore").read_text(encoding="utf-8").startswith("#")
     assert (target / "tools" / "README.md").read_text(encoding="utf-8").startswith("<!--")
     assert (target / "skills" / "README.md").read_text(encoding="utf-8").startswith("<!--")
-    assert (target / "routines" / "README.md").read_text(encoding="utf-8").startswith("<!--")
+    routines_readme = (target / "routines" / "README.md").read_text(encoding="utf-8")
+    assert routines_readme.startswith("<!--")
+    assert "routines/<name>/ROUTINE.md" in routines_readme
+    assert "run.py" in routines_readme
+    assert "When kinby's packaged defaults are enabled" in routines_readme
 
 
 def test_init_writes_the_commented_permissions_template(tmp_path):

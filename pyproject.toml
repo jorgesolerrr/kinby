@@ -20,6 +20,9 @@ kinby = "kinby.cli:main"
 [project.entry-points."kinby.tools"]
 defaults = "kinby.plugins.defaults:TOOLS"
 
+[project.entry-points."kinby.skills"]
+defaults = "kinby.plugins.defaults:SKILLS"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
