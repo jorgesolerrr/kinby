@@ -1,0 +1,5 @@
+# Routine checks without work skip both models
+
+Spec [#109](https://github.com/jorgesolerrr/kinby/issues/109) records a completed turn when a routine's code step returns `None`, so scheduling history survives restart. The September 5 research review confirmed that this outcome must cost zero model tokens, including recap. Keep the deterministic tool trace and an explicit durable distinction for this outcome, then record recap coverage without calling either model. Startup catch-up must preserve that behavior, and statistics must report zero cost without attributing usage to an unused recap model. Existing daily-budget admission checks still apply before the code step runs.
+
+This refines ADR 0019's earlier "no wake" wording. Omitting the turn would lose run history, while applying ordinary model-assisted recap would charge for a check that found nothing. Zero token usage alone does not identify this outcome: failures, interruptions, and other turns can also use no tokens. A future successful model turn with no outgoing message is a separate delivery decision, reserved for destinations.
