@@ -8,6 +8,9 @@ from kinby.contracts.models import (
     AcceptedResult,
     ContractModel,
     Event,
+    RoutineListCommand,
+    RoutineListResult,
+    RoutineRunCommand,
     Scope,
     StatsGetCommand,
     StatsGetResult,
@@ -76,3 +79,6 @@ STATS_GET = Method("stats.get", Scope.INSTANCE_READ, StatsGetCommand, StatsGetRe
 THREAD_SUBSCRIBE = Subscription(
     "thread.subscribe", Scope.THREAD_READ, ThreadSubscribeCommand, Event
 )
+
+ROUTINE_LIST = Method("routine.list", Scope.INSTANCE_READ, RoutineListCommand, RoutineListResult)
+ROUTINE_RUN = Method("routine.run", Scope.INSTANCE_ADMIN, RoutineRunCommand, AcceptedResult)

@@ -189,6 +189,18 @@
       "title": "RawModels",
       "type": "object"
     },
+    "RawRoutines": {
+      "additionalProperties": false,
+      "properties": {
+        "timezone": {
+          "default": "UTC",
+          "title": "Timezone",
+          "type": "string"
+        }
+      },
+      "title": "RawRoutines",
+      "type": "object"
+    },
     "RawTools": {
       "additionalProperties": false,
       "properties": {
@@ -302,6 +314,12 @@
       },
       "title": "Prices",
       "type": "object"
+    },
+    "routines": {
+      "$ref": "#/$defs/RawRoutines",
+      "default": {
+        "timezone": "UTC"
+      }
     },
     "state_dir": {
       "default": ".state",

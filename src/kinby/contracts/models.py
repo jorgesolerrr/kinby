@@ -30,6 +30,7 @@ class Scope(StrEnum):
 class ErrorCode(StrEnum):
     NOT_FOUND = "NOT_FOUND"
     THREAD_BUSY = "THREAD_BUSY"
+    INSTANCE_BUSY = "INSTANCE_BUSY"
     TURN_OPEN = "TURN_OPEN"
     NO_ACTIVE_TURN = "NO_ACTIVE_TURN"
     PARKED_TURN_UNAVAILABLE = "PARKED_TURN_UNAVAILABLE"
@@ -66,6 +67,7 @@ class EventType(StrEnum):
     TURN_INTERRUPTED = "turn.interrupted"
     TURN_RATED = "turn.rated"
     MEMORY_RECAPPED = "memory.recapped"
+    ROUTINE_FAILURE_HANDLED = "routine.failure.handled"
 
 
 class UserOrigin(ContractModel):
@@ -79,6 +81,7 @@ class RoutineTrigger(StrEnum):
 
 
 RoutineName = NewType("RoutineName", str)
+CronSchedule = NewType("CronSchedule", str)
 
 
 class RoutineOrigin(ContractModel):
@@ -186,6 +189,24 @@ class MemoryRecapped(TokenTotals):
     model: str | None = None
 
 
+class RoutineNoticeKind(StrEnum):
+    FIRST_FAILURE = "first-failure"
+    DISABLED = "disabled"
+
+
+class RoutineNotice(ContractModel):
+    kind: RoutineNoticeKind
+    message: str
+    thread_id: UUID
+    turn_id: UUID
+
+
+class RoutineFailureHandled(ContractModel):
+    type: Literal[EventType.ROUTINE_FAILURE_HANDLED] = EventType.ROUTINE_FAILURE_HANDLED
+    name: RoutineName
+    notice: RoutineNotice | None = None
+
+
 Payload = Annotated[
     ModePinned
     | TurnStarted
@@ -198,7 +219,8 @@ Payload = Annotated[
     | TurnFailed
     | TurnInterrupted
     | TurnRated
-    | MemoryRecapped,
+    | MemoryRecapped
+    | RoutineFailureHandled,
     Field(discriminator="type"),
 ]
 
@@ -367,3 +389,46 @@ class StatsGetResult(ContractModel):
     records: list[TurnMetrics]
     buckets: list[StatsBucket]
     unpriced_models: list[str]
+
+
+class RoutineListCommand(ContractModel):
+    pass
+
+
+class RoutineRunCommand(ContractModel):
+    name: RoutineName
+
+
+class RoutineRunOutcome(StrEnum):
+    RUNNING = "running"
+    PARKED = "parked"
+    WORK = "work"
+    NO_WORK = "no-work"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+class RoutineLastRun(ContractModel):
+    thread_id: UUID
+    turn_id: UUID
+    started_at: datetime
+    outcome: RoutineRunOutcome
+    first_line: str = ""
+
+
+class RoutineSummary(ContractModel):
+    name: RoutineName
+    description: str
+    schedule: CronSchedule | None
+    enabled: bool
+    mode: PermissionMode
+    failure_count: int = 0
+    last_failure: str | None = None
+    notices: list[RoutineNotice] = Field(default_factory=list)
+    last_run: RoutineLastRun | None
+    next_run: datetime | None
+
+
+class RoutineListResult(ContractModel):
+    routines: list[RoutineSummary]
+    warnings: tuple[Warning, ...]

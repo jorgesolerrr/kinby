@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 MatchingRule = Literal[
     "explicit directory",
@@ -96,6 +97,11 @@ class Budgets:
 
 
 @dataclass(frozen=True)
+class Routines:
+    timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
+
+
+@dataclass(frozen=True)
 class Manifest:
     """Validated settings from ``kinby.toml``."""
 
@@ -109,6 +115,7 @@ class Manifest:
     tools: Tools
     budgets: Budgets
     prices: Mapping[str, ModelPrice]
+    routines: Routines = field(default_factory=Routines)
 
 
 @dataclass(frozen=True)

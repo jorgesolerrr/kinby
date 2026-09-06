@@ -35,6 +35,11 @@ class ThreadNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class InstanceBusy(CoreError):
+    code = ErrorCode.INSTANCE_BUSY
+    retryable = True
+
+
 class ThreadBusy(CoreError):
     code = ErrorCode.THREAD_BUSY
     retryable = True

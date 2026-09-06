@@ -6,12 +6,14 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Map
 from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import cast, overload
 from uuid import UUID
 
 from pydantic import ValidationError
 
 from kinby.contracts import (
+    ROUTINE_LIST,
+    ROUTINE_RUN,
     STATS_GET,
     THREAD_APPROVAL_RESPOND,
     THREAD_CREATE,
@@ -48,6 +50,7 @@ from kinby.contracts import (
 from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
 from kinby.core.pricing import price_map
+from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.stats import stats_buckets
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_metrics import TurnKey, turn_metrics
@@ -74,6 +77,12 @@ class TurnConfig:
     permission_ceiling: Callable[[], PermissionMode]
     runner: TurnRunner
     recap: RecapWriter | None = None
+
+
+@dataclass(frozen=True)
+class ScheduledTurnConfig:
+    turns: TurnConfig
+    scheduler: SchedulerConfig
 
 
 class Dispatcher:
@@ -177,17 +186,68 @@ class Dispatcher:
             )
 
 
+class ScheduledDispatcher(Dispatcher):
+    def __init__(self, scheduler: Scheduler) -> None:
+        super().__init__()
+        self._scheduler = scheduler
+
+    @property
+    def scheduler(self) -> Scheduler:
+        return self._scheduler
+
+
+@overload
+def build_dispatcher(
+    state_dir: Path,
+    *,
+    turns: ScheduledTurnConfig,
+    event_log: EventLog | None = None,
+    price_overrides: Mapping[str, ModelPrice] | None = None,
+) -> ScheduledDispatcher: ...
+
+
+@overload
+def build_dispatcher(
+    state_dir: Path,
+    *,
+    turns: TurnConfig | None = None,
+    event_log: EventLog | None = None,
+    price_overrides: Mapping[str, ModelPrice] | None = None,
+) -> Dispatcher: ...
+
+
 def build_dispatcher(
     state_dir: Path,
     *,
     event_log: EventLog | None = None,
-    turns: TurnConfig | None = None,
+    turns: TurnConfig | ScheduledTurnConfig | None = None,
     price_overrides: Mapping[str, ModelPrice] | None = None,
 ) -> Dispatcher:
     store = ThreadStore(state_dir)
     event_log = event_log or EventLog(state_dir)
     prices = price_map(price_overrides)
-    dispatcher = Dispatcher()
+    scheduler = None
+    turn_service = None
+    turn_settings = turns.turns if isinstance(turns, ScheduledTurnConfig) else turns
+    if turn_settings is not None:
+
+        def after_turn(thread_id: UUID, turn_id: UUID) -> None:
+            if turn_settings.recap is not None:
+                turn_settings.recap.schedule(thread_id, turn_id)
+            if scheduler is not None:
+                scheduler.schedule()
+
+        turn_service = Turns(
+            store,
+            event_log,
+            turn_settings.runner,
+            turn_settings.prepare_for_turn,
+            turn_settings.permission_ceiling,
+            after_turn,
+        )
+        if isinstance(turns, ScheduledTurnConfig):
+            scheduler = Scheduler(turns.scheduler, event_log, turn_service)
+    dispatcher = ScheduledDispatcher(scheduler) if scheduler is not None else Dispatcher()
 
     async def create_thread(command: ThreadCreateCommand) -> ThreadCreateResult:
         return store.create(command.title)
@@ -255,15 +315,10 @@ def build_dispatcher(
     dispatcher.register(STATS_GET, get_stats)
     dispatcher.register(THREAD_TURN_RATE, rate_turn)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
-    if turns is not None:
-        turn_service = Turns(
-            store,
-            event_log,
-            turns.runner,
-            turns.prepare_for_turn,
-            turns.permission_ceiling,
-            turns.recap.schedule if turns.recap is not None else _ignore_closed_turn,
-        )
+    if scheduler is not None:
+        dispatcher.register(ROUTINE_LIST, scheduler.list)
+        dispatcher.register(ROUTINE_RUN, scheduler.run)
+    if turn_service is not None:
         dispatcher.register(THREAD_TURN_START, turn_service.start)
         dispatcher.register(THREAD_MODE_SET, turn_service.set_mode)
         dispatcher.register(THREAD_TURN_INTERRUPT, turn_service.interrupt)
@@ -290,7 +345,3 @@ def turn_config(
         model_override=model_override,
     )
     return TurnConfig(runner.prepare_for_turn, runner.permission_ceiling, runner, recap)
-
-
-def _ignore_closed_turn(thread_id: UUID, turn_id: UUID) -> None:
-    pass

@@ -21,6 +21,7 @@ from kinby.contracts import (
     Origin,
     Payload,
     PermissionMode,
+    RoutineOrigin,
     ThreadApprovalRespondCommand,
     ThreadModeSetCommand,
     ThreadTurnInterruptCommand,
@@ -35,6 +36,7 @@ from kinby.core.budgets import DailyBudget, check_daily_budget
 from kinby.core.errors import (
     ApprovalNotFound,
     CoreError,
+    InstanceBusy,
     InvalidParkedTurn,
     NoActiveTurn,
     PermissionDenied,
@@ -129,8 +131,9 @@ class RunningTurn:
     interrupted: bool = False
 
 
+@dataclass(frozen=True)
 class TurnClaim:
-    pass
+    origin: Origin = field(default_factory=UserOrigin)
 
 
 class InterruptedTurnClaim:
@@ -153,8 +156,45 @@ class Turns:
         self._prepare_for_turn = prepare_for_turn
         self._permission_ceiling = permission_ceiling
         self._after_turn = after_turn
+        self._changed = asyncio.Event()
         self._running: dict[UUID, RunningTurn] = {}
         self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim] = {}
+
+    def running(self) -> tuple[Origin, ...]:
+        origins = {
+            thread: running.request.origin
+            for thread, running in self._running.items()
+            if not running.task.done()
+        }
+        for thread, claim in self._claims.items():
+            if isinstance(claim, TurnClaim):
+                origins[thread] = claim.origin
+        for thread in self._store.list().threads:
+            events = self._log.stored(thread.id)
+            pending = _pending_approval(events)
+            if pending is not None:
+                origins[thread.id] = _turn_origin(events, pending.event.turn_id)
+        return tuple(origins.values())
+
+    def require_available(self, origin: Origin) -> None:
+        running = self.running()
+        routine = next((item for item in running if isinstance(item, RoutineOrigin)), None)
+        if routine is not None:
+            raise InstanceBusy(f'Routine "{routine.name}" is running. Waiting for it to finish.')
+        if running and isinstance(origin, RoutineOrigin):
+            raise InstanceBusy(f'Routine "{origin.name}" is waiting for the running user turn.')
+
+    async def wait_idle(self) -> None:
+        while True:
+            self._changed.clear()
+            if not self.running():
+                return
+            await self._changed.wait()
+
+    async def drain(self) -> None:
+        tasks = [running.task for running in self._running.values()]
+        if tasks:
+            await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
     async def set_mode(self, command: ThreadModeSetCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
@@ -181,6 +221,7 @@ class Turns:
 
     async def wake(self, thread_id: UUID, message: str, origin: Origin) -> AcceptedResult:
         self._require_thread(thread_id)
+        self.require_available(origin)
         events = self._log.stored(thread_id)
         pending = _pending_approval(events)
         running = self._running.get(thread_id)
@@ -188,11 +229,22 @@ class Turns:
         if thread_id in self._claims or active or pending is not None:
             raise _thread_busy(thread_id)
 
-        claim = TurnClaim()
+        return await self._wake(lambda: thread_id, message, origin)
+
+    async def wake_new_thread(self, title: str, message: str, origin: Origin) -> AcceptedResult:
+        self.require_available(origin)
+        return await self._wake(lambda: self._store.create(title).id, message, origin)
+
+    async def _wake(
+        self, thread: Callable[[], UUID], message: str, origin: Origin
+    ) -> AcceptedResult:
+        preparation = self._prepare_for_turn()
+        check_daily_budget(preparation.daily_budget)
+        thread_id = thread()
+        events = self._log.stored(thread_id)
+        claim = TurnClaim(origin)
         self._claims[thread_id] = claim
         try:
-            preparation = self._prepare_for_turn()
-            check_daily_budget(preparation.daily_budget)
             turn = TurnRequest(
                 thread_id=thread_id,
                 turn_id=uuid4(),
@@ -277,7 +329,9 @@ class Turns:
         running = self._running.get(command.thread_id)
         if command.thread_id in self._claims or (running is not None and not running.task.done()):
             raise _thread_busy(command.thread_id)
-        claim = TurnClaim()
+        origin = _turn_origin(events, pending.event.turn_id)
+        # The parked turn itself owns the instance reservation.
+        claim = TurnClaim(origin)
         self._claims[command.thread_id] = claim
         try:
             preparation = self._prepare_for_turn()
@@ -317,6 +371,7 @@ class Turns:
     ) -> None:
         if self._claims.get(thread_id) is claim:
             del self._claims[thread_id]
+        self._changed.set()
 
     def _spawn(self, turn: TurnRequest, work: Coroutine[object, object, None]) -> None:
         task = asyncio.create_task(work)
@@ -382,6 +437,7 @@ class Turns:
             logger.exception("The turn recap could not be scheduled.")
 
     def _forget_task(self, thread_id: UUID, task: asyncio.Task[None]) -> None:
+        self._changed.set()
         running = self._running.get(thread_id)
         if running is not None and running.task is task:
             del self._running[thread_id]
@@ -393,6 +449,14 @@ class Turns:
                     "task": task,
                 }
             )
+
+
+def _turn_origin(events: Sequence[Event], turn_id: UUID) -> Origin:
+    return next(
+        event.payload.origin
+        for event in events
+        if event.turn_id == turn_id and isinstance(event.payload, TurnStarted)
+    )
 
 
 def _pending_approval(events: Sequence[Event]) -> PendingApproval | None:

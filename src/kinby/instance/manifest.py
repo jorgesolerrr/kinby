@@ -6,9 +6,18 @@ import re
 import tomllib
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 
 from kinby.instance.dataclasses import (
     Budgets,
@@ -22,6 +31,7 @@ from kinby.instance.dataclasses import (
     ModelPrice,
     Models,
     RecapPolicy,
+    Routines,
     Tools,
     Workspace,
 )
@@ -94,6 +104,19 @@ class RawModelPrice(_Section):
     output: Annotated[float, Field(ge=0)]
 
 
+class RawRoutines(_Section):
+    timezone: str = "UTC"
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"Unknown IANA time zone: {value}") from exc
+        return value
+
+
 class RawManifest(_Section):
     """The shape of ``kinby.toml``, validated once at load."""
 
@@ -105,6 +128,7 @@ class RawManifest(_Section):
     memory: RawMemory = RawMemory()
     feedback: RawFeedback = RawFeedback()
     tools: RawTools = RawTools()
+    routines: RawRoutines = RawRoutines()
     budgets: RawBudgets = Field(default_factory=RawBudgets, title="Budgets")
     prices: dict[ModelName, RawModelPrice] = Field(
         default_factory=dict,
@@ -170,6 +194,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         memory=Memory(recap=raw.memory.recap),
         feedback=Feedback(ask=raw.feedback.ask),
         tools=Tools(defaults=raw.tools.defaults),
+        routines=Routines(timezone=ZoneInfo(raw.routines.timezone)),
         budgets=Budgets(
             steps=raw.budgets.steps,
             tokens=raw.budgets.tokens,
