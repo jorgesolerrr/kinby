@@ -14,7 +14,7 @@ from typing import TextIO
 from uuid import UUID
 
 from kinby.cli.client import ContractClient, format_error
-from kinby.cli.routines import show_routines, watch_routine_notices
+from kinby.cli.routines import show_routines, show_startup_routines, watch_routine_notices
 from kinby.contracts import (
     THREAD_APPROVAL_RESPOND,
     THREAD_MODE_SET,
@@ -30,6 +30,8 @@ from kinby.contracts import (
     MemoryRecapped,
     MessageDelta,
     PermissionMode,
+    RoutineListResult,
+    RoutineRunOutcome,
     ThreadApprovalRespondCommand,
     ThreadModeSetCommand,
     ThreadSubscribeCommand,
@@ -137,10 +139,17 @@ async def run_repl(
     stdout: TextIO,
     stderr: TextIO,
 ) -> int:
+    routines = await show_startup_routines(client, stdout, stderr)
     notices = asyncio.create_task(watch_routine_notices(client, stdout))
     try:
         return await _run_repl(
-            client, thread_id, feedback=feedback, stdin=stdin, stdout=stdout, stderr=stderr
+            client,
+            thread_id,
+            routines=routines,
+            feedback=feedback,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
         )
     finally:
         notices.cancel()
@@ -152,6 +161,7 @@ async def _run_repl(
     client: ContractClient,
     thread_id: UUID,
     *,
+    routines: RoutineListResult | None,
     feedback: FeedbackPolicy,
     stdin: TextIO,
     stdout: TextIO,
@@ -163,6 +173,17 @@ async def _run_repl(
         ThreadSubscribeCommand(thread_id=thread_id),
     )
     async with aclosing(subscription):
+        parked_turn_id = _parked_routine_turn(routines, thread_id)
+        if parked_turn_id is not None:
+            closing = await _resume_parked_turn(
+                client,
+                subscription,
+                thread_id,
+                parked_turn_id,
+                repl_io,
+            )
+            if closing is None:
+                return 1
         while True:
             repl_io.stdout.write("> ")
             repl_io.stdout.flush()
@@ -235,6 +256,50 @@ async def _run_repl(
                 return 1
             if isinstance(closing, TurnCompleted) and feedback is FeedbackPolicy.EVERY_TURN:
                 await _rate_turn(client, thread_id, accepted.turn_id, repl_io)
+
+
+def _parked_routine_turn(routines: RoutineListResult | None, thread_id: UUID) -> UUID | None:
+    if routines is None:
+        return None
+    for routine in routines.routines:
+        last = routine.last_run
+        if (
+            last is not None
+            and last.thread_id == thread_id
+            and last.outcome is RoutineRunOutcome.PARKED
+        ):
+            return last.turn_id
+    return None
+
+
+async def _resume_parked_turn(
+    client: ContractClient,
+    subscription: AsyncGenerator[Event | ErrorEnvelope],
+    thread_id: UUID,
+    turn_id: UUID,
+    repl_io: _ReplIO,
+) -> TurnClosingPayload | None:
+    async for result in subscription:
+        if isinstance(result, ErrorEnvelope):
+            _render_error(result, repl_io.stderr)
+            return None
+        if result.turn_id != turn_id or not isinstance(result.payload, ApprovalRequested):
+            continue
+        interrupter = _InterruptOnSigint(client, thread_id)
+        async with interrupter:
+            if not await _answer_approval(client, result, interrupter.requested, repl_io):
+                return None
+            closing = await _render_turn(
+                client,
+                subscription,
+                turn_id,
+                interrupter.requested,
+                repl_io,
+            )
+        if isinstance(interrupter.result, ErrorEnvelope):
+            _render_error(interrupter.result, repl_io.stderr)
+        return closing
+    return None
 
 
 def _render_error(error: ErrorEnvelope, stderr: TextIO) -> None:

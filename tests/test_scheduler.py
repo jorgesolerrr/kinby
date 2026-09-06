@@ -536,8 +536,202 @@ def test_repl_waits_visibly_and_shows_routines(tmp_path):
         runner.release.set()
         assert await repl == 0
         assert stderr.getvalue().count("INSTANCE_BUSY") == 1
+        starts = [
+            event.payload
+            for event in EventLog(instance.manifest.state_dir).stored(thread.id)
+            if isinstance(event.payload, TurnStarted)
+        ]
+        assert [started.message for started in starts] == ["Hello"]
         assert "News today" in stdout.getvalue()
         assert "news" in stdout.getvalue()
+
+    asyncio.run(scenario())
+
+
+def test_repl_shows_each_routine_before_the_first_prompt(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        untouched = instance.path / "routines" / "untouched" / "ROUTINE.md"
+        untouched.parent.mkdir(parents=True)
+        untouched.write_text("---\ndescription: Untouched\n---\nWait.\n")
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, tzinfo=UTC)))
+        accepted = await call(dispatcher, "routine.run", name="news")
+        await events_for(dispatcher, accepted.thread_id)
+        event_log = EventLog(instance.manifest.state_dir)
+        events = list(event_log.all_events())
+        (instance.manifest.state_dir / "events.jsonl").write_text(
+            "".join(
+                event.model_copy(
+                    update={"timestamp": datetime(2026, 9, 6, 9, tzinfo=UTC)}
+                ).model_dump_json()
+                + "\n"
+                for event in events
+            ),
+            encoding="utf-8",
+        )
+        thread = await call(dispatcher, "thread.create")
+        stdout = StringIO()
+
+        exit_code = await run_repl(
+            ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope)),
+            thread.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO(),
+            stdout=stdout,
+            stderr=StringIO(),
+        )
+
+        assert exit_code == 0
+        assert stdout.getvalue() == (
+            'Routine "news": 2026-09-06T09:00:00+00:00, work, News today\n'
+            'Routine "untouched": never ran.\n'
+            "> "
+        )
+
+    asyncio.run(scenario())
+
+
+def test_repl_startup_names_the_thread_for_a_parked_routine(tmp_path: Path) -> None:
+    from tests.test_repl import ApprovalReplRunner
+
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = ApprovalReplRunner()
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, tzinfo=UTC)), runner)
+        accepted = await call(dispatcher, "routine.run", name="news")
+        await asyncio.wait_for(runner.parked.wait(), timeout=1)
+        await dispatcher.scheduler.drain()
+        thread = await call(dispatcher, "thread.create")
+        stdout = StringIO()
+
+        exit_code = await run_repl(
+            ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope)),
+            thread.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO(),
+            stdout=stdout,
+            stderr=StringIO(),
+        )
+
+        assert exit_code == 0
+        assert f", parked on thread {accepted.thread_id}\n" in stdout.getvalue()
+
+    asyncio.run(scenario())
+
+
+def test_repl_answers_a_parked_routine_approval_before_input(tmp_path: Path) -> None:
+    from kinby.core.turns import ApprovalDecision
+    from tests.test_repl import ApprovalReplRunner
+
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = ApprovalReplRunner()
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, tzinfo=UTC)), runner)
+        accepted = await call(dispatcher, "routine.run", name="news")
+        await asyncio.wait_for(runner.parked.wait(), timeout=1)
+        await dispatcher.scheduler.drain()
+        listed = await call(dispatcher, "routine.list")
+        started_at = listed.routines[0].last_run.started_at.isoformat()
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await asyncio.wait_for(
+            run_repl(
+                ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope)),
+                accepted.thread_id,
+                feedback=FeedbackPolicy.OFF,
+                stdin=StringIO("yes\n"),
+                stdout=stdout,
+                stderr=stderr,
+            ),
+            timeout=1,
+        )
+
+        assert exit_code == 0
+        assert runner.decisions == [ApprovalDecision.APPROVE]
+        assert stdout.getvalue() == (
+            f'Routine "news": {started_at}, parked on thread {accepted.thread_id}\n'
+            'Approve write_note {"note": "remember me"} under rule "mode.ask.write"? '
+            "[yes/no] "
+            '[tool.call] write_note {"note": "remember me"}\n'
+            "[tool.result] write_note (ok): remember me\nDone\n> "
+        )
+        assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())
+
+
+def test_repl_startup_shows_a_routines_first_failure(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        dispatcher = runtime(
+            instance,
+            FakeClock(datetime(2026, 9, 6, tzinfo=UTC)),
+            FailingRunner(),
+        )
+        await call(dispatcher, "routine.run", name="news")
+        await dispatcher.scheduler.drain()
+        thread = await call(dispatcher, "thread.create")
+        stdout = StringIO()
+
+        await run_repl(
+            ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope)),
+            thread.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO(),
+            stdout=stdout,
+            stderr=StringIO(),
+        )
+
+        assert ", failed\n  Last failure: feed unavailable\n" in stdout.getvalue()
+        assert '  Routine "news" failed: feed unavailable\n' in stdout.getvalue()
+
+    asyncio.run(scenario())
+
+
+def test_repl_startup_explains_an_automatically_disabled_routine(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nenabled: true")
+        runner = FailingRunner()
+        dispatcher = runtime(
+            instance,
+            FakeClock(datetime(2026, 9, 6, tzinfo=UTC)),
+            runner,
+        )
+        for _ in range(10):
+            await call(dispatcher, "routine.run", name="news")
+            await dispatcher.scheduler.drain()
+        runner.result = TurnOutcome()
+        await call(dispatcher, "routine.run", name="news")
+        await dispatcher.scheduler.drain()
+        listed = await call(dispatcher, "routine.list")
+        assert not listed.routines[0].enabled
+        assert listed.routines[0].last_run.outcome == "work"
+        thread = await call(dispatcher, "thread.create")
+        stdout = StringIO()
+
+        await run_repl(
+            ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope)),
+            thread.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO(),
+            stdout=stdout,
+            stderr=StringIO(),
+        )
+
+        assert ", work\n" in stdout.getvalue()
+        assert 'Routine "news" disabled after 10 failed firings: feed unavailable' in (
+            stdout.getvalue()
+        )
+        assert (
+            "Re-enable it by setting enabled = true in routines/news/ROUTINE.md."
+            in stdout.getvalue()
+        )
 
     asyncio.run(scenario())
 
