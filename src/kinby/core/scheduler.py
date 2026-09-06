@@ -22,6 +22,7 @@ from kinby.contracts import (
     RoutineNoticeKind,
     RoutineOrigin,
     RoutineRunCommand,
+    RoutineRunOutcome,
     RoutineSummary,
     RoutineTrigger,
 )
@@ -82,7 +83,9 @@ class Scheduler:
             with suppress(asyncio.CancelledError):
                 await self._worker
             self._worker = None
-        await self.drain()
+
+    async def interrupt(self) -> None:
+        await self._turns.interrupt_routine()
 
     async def _work(self) -> None:
         while True:
@@ -118,7 +121,12 @@ class Scheduler:
             current = self._armed.get(routine.name)
             if current is None or current.schedule != routine.schedule:
                 last = history.get(routine.name, RoutineHistory()).last_run
-                after = last.started_at if last and routine.catch_up else self._clock()
+                can_catch_up = (
+                    last is not None
+                    and last.outcome is not RoutineRunOutcome.INTERRUPTED
+                    and routine.catch_up
+                )
+                after = last.started_at if can_catch_up else self._clock()
                 current = ArmedRoutine(routine.schedule, self._next(routine.schedule, after))
             armed[routine.name] = current
         return armed

@@ -201,6 +201,12 @@ class Turns:
         if tasks:
             await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
+    async def interrupt_routine(self) -> None:
+        for thread_id, running in tuple(self._running.items()):
+            if not running.task.done() and isinstance(running.request.origin, RoutineOrigin):
+                await self.interrupt(ThreadTurnInterruptCommand(thread_id=thread_id))
+                return
+
     async def set_mode(self, command: ThreadModeSetCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
         events = self._log.stored(command.thread_id)

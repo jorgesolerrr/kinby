@@ -259,7 +259,7 @@ async def _render_turn(
             if not await _answer_approval(client, result, interrupted, repl_io):
                 return None
         else:
-            _render_event(result, repl_io.stdout, repl_io.stderr)
+            render_event(result, repl_io.stdout, repl_io.stderr)
         if is_turn_closing(result.payload):
             return result.payload
     repl_io.stderr.write("INTERNAL: The thread subscription ended before completion.\n")
@@ -333,7 +333,7 @@ async def _answer_approval(
     return True
 
 
-def _render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
+def render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
     match event.payload:
         case MessageDelta(text=text):
             stdout.write(text)
