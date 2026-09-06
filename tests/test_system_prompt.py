@@ -221,7 +221,8 @@ def test_missing_optional_files_leave_core_sections(
         assert system_message.text == (
             "You are a personal AI teammate running on kinby.\n\n"
             "# Skills\n"
-            "Use the `skill` tool to read a skill's full instructions.\n\n"
+            "Use the `skill` tool to read a skill's full instructions.\n"
+            "- write-routine: Draft kinby routine files for recurring or manual work.\n\n"
             "# Environment\n"
             "instance id: bare\n"
             f"workspace path: {instance.manifest.workspace.path}\n"

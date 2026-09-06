@@ -158,7 +158,9 @@ def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
     )
     _write_readme(
         directory / ROUTINES_DIR,
-        "Routines live here: a trigger, a prompt, and a destination.",
+        "Each routine is routines/<name>/ROUTINE.md with frontmatter and a prompt body. "
+        "An optional run.py beside it supplies the code step. "
+        "Read the write-routine skill for the format.",
     )
     (directory / WORKSPACE_DIR).mkdir(exist_ok=True)
     (directory / STATE_DIR).mkdir(exist_ok=True)
