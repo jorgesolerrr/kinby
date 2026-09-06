@@ -8,6 +8,7 @@ from kinby.contracts import ROUTINE_LIST, ErrorEnvelope, RoutineListCommand, Rou
 
 
 def render_routines(result: RoutineListResult, stdout: TextIO) -> None:
+    stdout.write("name\tschedule\tenabled\tlast run\tnext run\n")
     for routine in result.routines:
         state = "enabled" if routine.enabled else "disabled"
         next_run = routine.next_run.isoformat() if routine.next_run else "none"
@@ -16,9 +17,7 @@ def render_routines(result: RoutineListResult, stdout: TextIO) -> None:
             f"{last.started_at.isoformat()} {last.outcome} {last.first_line}" if last else "none"
         )
         stdout.write(
-            f"{routine.name}\t{routine.description}\t{state}\t"
-            f"schedule={routine.schedule or 'none'}\tmode={routine.mode.value}\t"
-            f"failures={routine.failure_count}\tnext={next_run}\tlast={last_run}\n"
+            f"{routine.name}\t{routine.schedule or 'none'}\t{state}\t{last_run}\t{next_run}\n"
         )
         if routine.last_failure is not None:
             stdout.write(f"  Last failure: {routine.last_failure}\n")

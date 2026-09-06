@@ -19,11 +19,13 @@ from kinby.contracts import (
     Scope,
     ThreadListResult,
     TurnCompleted,
+    TurnInterrupted,
     TurnStarted,
     is_turn_closing,
 )
 from kinby.core.dispatcher import ScheduledTurnConfig, TurnConfig, build_dispatcher
 from kinby.core.errors import BudgetExceeded, CodeStepFailed
+from kinby.core.events import EventLog
 from kinby.core.scheduler import SchedulerConfig
 from kinby.core.turns import TurnOutcome
 from kinby.instance import FeedbackPolicy, ManifestError, load_instance
@@ -421,7 +423,7 @@ def test_cli_parked_routine_reports_non_success(tmp_path, capsys, monkeypatch):
     instance = instance_at(tmp_path)
     routine_file(instance, "description: News\nmode: ask")
     monkeypatch.setattr(
-        import_module("kinby.cli.main"),
+        import_module("kinby.core.runtime"),
         "turn_config",
         lambda *args, **kwargs: TurnConfig(
             fixed_turn_preparation, fixed_permission_ceiling, ApprovalReplRunner()
@@ -430,7 +432,11 @@ def test_cli_parked_routine_reports_non_success(tmp_path, capsys, monkeypatch):
     assert main(["routine", "run", "news", "--instance", str(tmp_path)]) == 1
     output = capsys.readouterr()
     assert "thread:" in output.out
+    thread_id = output.out.splitlines()[0].removeprefix("thread: ")
+    assert f"kinby run --thread {thread_id}" in output.out
     assert "parked" in output.err and "approval" in output.err
+    events = EventLog(instance.manifest.state_dir).all_events()
+    assert not any(isinstance(event.payload, TurnInterrupted) for event in events)
 
 
 @pytest.mark.parametrize("thread_count", [1, 8])
@@ -514,6 +520,9 @@ def test_parked_routine_reserves_instance_and_interruption_is_neutral(tmp_path):
         routine = (await call(dispatcher, "routine.list")).routines[0]
         assert routine.last_run.outcome == "parked" and routine.failure_count == 1
         restarted = runtime(instance, clock, runner)
+        await restarted.scheduler.interrupt()
+        routine = (await call(restarted, "routine.list")).routines[0]
+        assert routine.last_run.outcome == "parked"
         user = await call(restarted, "thread.create")
         busy = await call(restarted, "thread.turn.start", thread_id=user.id, message="Hello")
         assert busy.code == "INSTANCE_BUSY"

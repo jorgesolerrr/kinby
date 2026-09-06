@@ -82,7 +82,9 @@ class Scheduler:
             with suppress(asyncio.CancelledError):
                 await self._worker
             self._worker = None
-        await self.drain()
+
+    async def interrupt(self) -> None:
+        await self._turns.interrupt_routine()
 
     async def _work(self) -> None:
         while True:

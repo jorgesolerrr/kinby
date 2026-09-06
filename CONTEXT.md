@@ -84,6 +84,18 @@ One kinby deployment: a directory (and, when deployed, a container) that owns it
 
 The ordered lookup that selects an existing **instance** when a command does not name one directly. The matching rule is part of the result so kinby can tell the user why it selected that instance.
 
+### Instance boot
+
+The transition from a loaded **instance** to its live **instance runtime**.
+
+### Instance runtime
+
+The live state and background work of one booted **instance**, owned and stopped together. It can stop after a running **routine** finishes or interrupt that routine immediately.
+
+### Serve mode
+
+An **instance runtime** without a REPL, kept alive so the **scheduler** can fire **routines**.
+
 ### Manifest
 
 The portable description of an instance's identity and configuration. It contains no secrets or runtime state.

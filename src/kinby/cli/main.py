@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import signal
 import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import date
 from importlib.metadata import version
 from pathlib import Path
@@ -16,7 +16,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from kinby.cli.client import ContractClient, format_error
-from kinby.cli.repl import run_repl
+from kinby.cli.repl import render_event, run_repl
 from kinby.cli.routines import show_routines
 from kinby.contracts import (
     ROUTINE_RUN,
@@ -28,7 +28,6 @@ from kinby.contracts import (
     ApprovalRequested,
     ErrorCode,
     ErrorEnvelope,
-    MessageDelta,
     RoutineName,
     RoutineRunCommand,
     Scope,
@@ -44,10 +43,7 @@ from kinby.contracts import (
     UsageGetCommand,
     is_turn_closing,
 )
-from kinby.core import assemble_system_prompt, build_dispatcher, turn_config
-from kinby.core.dispatcher import ScheduledTurnConfig
-from kinby.core.events import EventLog
-from kinby.core.scheduler import Scheduler, SchedulerConfig
+from kinby.core import Dispatcher, assemble_system_prompt, boot_instance, build_dispatcher
 from kinby.core.stats import stats_summary
 from kinby.instance import (
     PLACEHOLDER_MODEL,
@@ -60,7 +56,6 @@ from kinby.instance import (
     load_instance,
 )
 from kinby.instance.recap import load_recap_lens
-from kinby.memory import RecapWriter
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
@@ -184,6 +179,10 @@ def _contract_client(instance: Instance) -> ContractClient:
         instance.manifest.state_dir,
         price_overrides=instance.manifest.prices,
     )
+    return _contract_client_for(dispatcher)
+
+
+def _contract_client_for(dispatcher: Dispatcher) -> ContractClient:
     return ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
 
 
@@ -284,31 +283,16 @@ async def _show_stats(
     return 0
 
 
-@dataclass(frozen=True)
-class InstanceSession:
-    client: ContractClient
-    scheduler: Scheduler
-    recap: RecapWriter | None
-
-
 @asynccontextmanager
 async def _instance_session(
     instance: Instance, model_override: str | None = None
-) -> AsyncIterator[InstanceSession]:
-    event_log = EventLog(instance.manifest.state_dir)
-    turns = turn_config(instance, event_log=event_log, model_override=model_override)
-    dispatcher = build_dispatcher(
-        instance.manifest.state_dir,
-        event_log=event_log,
-        turns=ScheduledTurnConfig(turns, SchedulerConfig(instance)),
-    )
-    client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+) -> AsyncIterator[ContractClient]:
+    runtime = await boot_instance(instance, model_override=model_override)
+    client = _contract_client_for(runtime.dispatcher)
     try:
-        yield InstanceSession(client, dispatcher.scheduler, turns.recap)
+        yield client
     finally:
-        await dispatcher.scheduler.stop()
-        if turns.recap is not None:
-            await turns.recap.drain()
+        await runtime.stop_after_running_routine()
 
 
 async def _run_instance(
@@ -317,22 +301,41 @@ async def _run_instance(
     model_override: str | None = None,
     thread_id: UUID | None = None,
 ) -> int:
-    async with _instance_session(instance, model_override) as session:
-        if session.recap is not None:
-            await session.recap.catch_up()
-        opened = await _thread_for_session(session.client, thread_id)
+    async with _instance_session(instance, model_override) as client:
+        opened = await _thread_for_session(client, thread_id)
         if isinstance(opened, ErrorEnvelope):
             print(format_error(opened), file=sys.stderr)
             return 1
-        session.scheduler.start()
         return await run_repl(
-            session.client,
+            client,
             opened,
             feedback=instance.manifest.feedback.ask,
             stdin=sys.stdin,
             stdout=sys.stdout,
             stderr=sys.stderr,
         )
+
+
+async def _serve_instance(instance: Instance) -> int:
+    loop = asyncio.get_running_loop()
+    stopping = asyncio.Event()
+    shutdown_signals = (signal.SIGINT, signal.SIGTERM)
+    for shutdown_signal in shutdown_signals:
+        loop.add_signal_handler(shutdown_signal, stopping.set)
+    runtime = None
+    try:
+        runtime = await boot_instance(instance)
+        client = _contract_client_for(runtime.dispatcher)
+        status = await show_routines(client, sys.stdout, sys.stderr)
+        if status:
+            return status
+        await stopping.wait()
+        return 0
+    finally:
+        if runtime is not None:
+            await runtime.stop_interrupting_running_routine()
+        for shutdown_signal in shutdown_signals:
+            loop.remove_signal_handler(shutdown_signal)
 
 
 async def _thread_for_session(
@@ -377,13 +380,13 @@ async def _list_threads(client: ContractClient) -> int:
 
 
 async def _list_routines(instance: Instance) -> int:
-    async with _instance_session(instance) as session:
-        return await show_routines(session.client, sys.stdout, sys.stderr)
+    async with _instance_session(instance) as client:
+        return await show_routines(client, sys.stdout, sys.stderr)
 
 
 async def _run_routine(instance: Instance, name: RoutineName) -> int:
-    async with _instance_session(instance) as session:
-        return await _run_routine_command(session.client, name)
+    async with _instance_session(instance) as client:
+        return await _run_routine_command(client, name)
 
 
 async def _run_routine_command(client: ContractClient, name: RoutineName) -> int:
@@ -402,15 +405,14 @@ async def _run_routine_command(client: ContractClient, name: RoutineName) -> int
                 print(format_error(event), file=sys.stderr)
                 status = 1
                 break
-            if isinstance(event.payload, MessageDelta):
-                print(event.payload.text, end="", flush=True)
-            if isinstance(event.payload, TurnFailed):
-                print(event.payload.message, file=sys.stderr)
-                status = 1
             if isinstance(event.payload, ApprovalRequested):
                 print("Routine parked, waiting for approval.", file=sys.stderr)
+                print(f"Resume with: kinby run --thread {accepted.thread_id}")
                 status = 1
                 break
+            render_event(event, sys.stdout, sys.stderr)
+            if isinstance(event.payload, TurnFailed):
+                status = 1
             if is_turn_closing(event.payload):
                 break
     finally:
@@ -459,6 +461,11 @@ def main(argv: list[str] | None = None) -> int:
         "--thread",
         help="resume this thread instead of creating one",
     )
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="run scheduled routines without a REPL",
+    )
+    _add_instance_selector(serve_parser, "instance to serve")
     thread_parser = subparsers.add_parser(
         "thread",
         help="create and list threads",
@@ -551,6 +558,10 @@ def main(argv: list[str] | None = None) -> int:
                         thread_id=thread_id,
                     )
                 )
+            case "serve":
+                instance = _load_selected_instance(args)
+                _print_instance(instance)
+                return asyncio.run(_serve_instance(instance))
             case "thread" if args.thread_command in {"create", "list"}:
                 client = _contract_client(_load_selected_instance(args))
                 if args.thread_command == "create":
