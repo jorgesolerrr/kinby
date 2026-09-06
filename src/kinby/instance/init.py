@@ -160,7 +160,8 @@ def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
         directory / ROUTINES_DIR,
         "Each routine is routines/<name>/ROUTINE.md with frontmatter and a prompt body. "
         "An optional run.py beside it supplies the code step. "
-        "Read the write-routine skill for the format.",
+        "When kinby's packaged defaults are enabled, read the write-routine skill "
+        "for the format.",
     )
     (directory / WORKSPACE_DIR).mkdir(exist_ok=True)
     (directory / STATE_DIR).mkdir(exist_ok=True)

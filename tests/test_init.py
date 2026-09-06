@@ -54,6 +54,7 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
     assert routines_readme.startswith("<!--")
     assert "routines/<name>/ROUTINE.md" in routines_readme
     assert "run.py" in routines_readme
+    assert "When kinby's packaged defaults are enabled" in routines_readme
 
 
 def test_init_writes_the_commented_permissions_template(tmp_path):

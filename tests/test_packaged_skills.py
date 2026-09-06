@@ -121,17 +121,24 @@ def test_other_packages_survive_defaults_flag_and_keep_first_duplicate(
     assert warnings[0].sources == (str(first), str(second))
 
 
-@pytest.mark.parametrize("broken_export", ["wrong-type", "import-error"])
+@pytest.mark.parametrize(
+    "broken_export", ["wrong-type", "missing-path", "file-path", "import-error"]
+)
 def test_broken_packaged_skill_export_warns_and_preserves_other_skills(
     tmp_path, monkeypatch, broken_export
 ):
     path = init_instance(tmp_path / "instance")
     installed = entry_points(group="kinby.skills")
+    invalid_path = tmp_path / broken_export
+    if broken_export == "file-path":
+        invalid_path.write_text("not a skill directory", encoding="utf-8")
 
     def load():
         if broken_export == "import-error":
             raise ImportError("Skill package is broken.")
-        return "not a Path"
+        if broken_export == "wrong-type":
+            return "not a Path"
+        return invalid_path
 
     def discover(*, group):
         assert group == "kinby.skills"

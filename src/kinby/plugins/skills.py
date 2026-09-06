@@ -73,7 +73,7 @@ def _packaged_skill_roots(*, defaults: bool) -> tuple[tuple[Path, ...], tuple[Wa
                 continue
         try:
             root = entry_point.load()
-            if not isinstance(root, Path):
+            if not isinstance(root, Path) or not root.is_dir():
                 raise TypeError(
                     f'Entry point "{entry_point.value}" does not export a skill directory Path.'
                 )
