@@ -167,7 +167,7 @@ def test_prompt_files_and_manifest_are_reloaded_between_turns(tmp_path: Path) ->
             )
             events = [
                 await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
-                for _ in range(3)
+                for _ in range(4)
             ]
             await subscription.aclose()
             last = events[-1]

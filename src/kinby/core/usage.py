@@ -47,6 +47,8 @@ def usage_totals(
             turn_id=record.turn_id,
             input_tokens=record.input_tokens,
             output_tokens=record.output_tokens,
+            cache_read_tokens=record.cache_read_tokens,
+            cache_creation_tokens=record.cache_creation_tokens,
             recap_input_tokens=record.recap_input_tokens,
             recap_output_tokens=record.recap_output_tokens,
         )
@@ -58,6 +60,8 @@ def usage_totals(
                 thread_id=thread_id,
                 input_tokens=sum(turn.input_tokens for turn in turns),
                 output_tokens=sum(turn.output_tokens for turn in turns),
+                cache_read_tokens=sum(turn.cache_read_tokens for turn in turns),
+                cache_creation_tokens=sum(turn.cache_creation_tokens for turn in turns),
                 turns=turns,
             )
             for thread_id, turns in turns_by_thread.items()

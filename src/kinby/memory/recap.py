@@ -30,6 +30,7 @@ from kinby.contracts import (
     Warning,
     is_turn_closing,
 )
+from kinby.core.model_calls import completed_model_call
 from kinby.instance import Instance, RecapPolicy, reload_manifest
 from kinby.instance.recap import load_recap_lens
 from kinby.memory.facade import Episode, Memory, new_node_id
@@ -179,7 +180,13 @@ class RecapWriter:
             return
 
         lens = load_recap_lens(self._instance.path)
-        draft, usage = await self._draft(events, calls, manifest.models.recap, lens.text)
+        draft, usage = await self._draft(
+            request,
+            events,
+            calls,
+            manifest.models.recap,
+            lens.text,
+        )
         episode = (
             _episode(
                 request,
@@ -244,12 +251,15 @@ class RecapWriter:
                 node=node,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
+                cache_read_tokens=usage.cache_read_tokens,
+                cache_creation_tokens=usage.cache_creation_tokens,
                 model=model,
             ),
         )
 
     async def _draft(
         self,
+        request: _RecapRequest,
         events: list[Event],
         calls: list[ToolCall],
         model_name: str,
@@ -257,23 +267,31 @@ class RecapWriter:
     ) -> tuple[RecapDraft, TokenTotals]:
         model = self._model_factory(model_name)
         runnable = model.with_structured_output(RecapDraft, include_raw=True)
+        started_at = asyncio.get_running_loop().time()
         result = await runnable.ainvoke((SystemMessage(content=_recap_frame(events, calls, lens)),))
         if not isinstance(result, Mapping):
             raise TypeError("The recap model returned an invalid structured response.")
+        raw = result.get("raw")
+        if not isinstance(raw, AIMessage):
+            raise TypeError("The recap model returned no token usage.")
+        completed = completed_model_call(
+            model_name,
+            raw.usage_metadata,
+            started_at=started_at,
+            completed_at=asyncio.get_running_loop().time(),
+        )
+        await self._event_log.append(
+            request.thread_id,
+            request.turn_id,
+            completed,
+        )
         parsing_error = result.get("parsing_error")
         if isinstance(parsing_error, BaseException):
             raise parsing_error
         parsed = result.get("parsed")
         if not isinstance(parsed, RecapDraft):
             raise TypeError("The recap model returned an invalid draft.")
-        raw = result.get("raw")
-        if not isinstance(raw, AIMessage):
-            raise TypeError("The recap model returned no token usage.")
-        usage = raw.usage_metadata
-        return parsed, TokenTotals(
-            input_tokens=usage["input_tokens"] if usage is not None else 0,
-            output_tokens=usage["output_tokens"] if usage is not None else 0,
-        )
+        return parsed, completed
 
     def _turn_events(self, thread_id: UUID, turn_id: UUID) -> list[Event]:
         return [event for event in self._event_log.stored(thread_id) if event.turn_id == turn_id]
