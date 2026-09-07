@@ -13,6 +13,7 @@ from kinby.cli.repl import run_repl
 from kinby.contracts import (
     AcceptedResult,
     CompletionOutcome,
+    ContractModel,
     Delivery,
     DeliveryId,
     ErrorEnvelope,
@@ -29,7 +30,12 @@ from kinby.contracts import (
     TurnStarted,
     is_turn_closing,
 )
-from kinby.core.dispatcher import ScheduledTurnConfig, TurnConfig, build_dispatcher
+from kinby.core.dispatcher import (
+    Dispatcher,
+    ScheduledTurnConfig,
+    TurnConfig,
+    build_dispatcher,
+)
 from kinby.core.errors import BudgetExceeded, CodeStepFailed
 from kinby.core.events import EventLog
 from kinby.core.scheduler import SchedulerConfig
@@ -131,7 +137,9 @@ async def call(dispatcher, method, **payload):
     return await dispatcher.dispatch(method, payload, set(Scope))
 
 
-async def start_payload_call(dispatcher, name, payload):
+async def start_payload_call(
+    dispatcher: Dispatcher, name: str, payload: str
+) -> asyncio.Task[ContractModel]:
     pending_call = asyncio.create_task(
         call(
             dispatcher,
@@ -144,7 +152,7 @@ async def start_payload_call(dispatcher, name, payload):
     return pending_call
 
 
-async def cancel_call(pending_call):
+async def cancel_call(pending_call: asyncio.Task[ContractModel]) -> None:
     pending_call.cancel()
     with suppress(asyncio.CancelledError):
         await pending_call

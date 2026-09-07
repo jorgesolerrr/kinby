@@ -174,9 +174,9 @@ def test_routine_run_renders_the_turn_event_stream(tmp_path, capsys, monkeypatch
     [('{"action":"opened"}', "application/json"), ("issue opened", "text/plain")],
 )
 def test_routine_run_payload_records_and_streams_delivery(
-    tmp_path,
-    capsys,
-    monkeypatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
     body: str,
     content_type: str,
 ) -> None:
@@ -317,7 +317,9 @@ def test_run_fires_a_due_routine_while_the_repl_waits(tmp_path, monkeypatch) -> 
     assert any(isinstance(event.origin, RoutineOrigin) for event in started)
 
 
-def test_run_fires_pending_delivery_on_boot(tmp_path, monkeypatch) -> None:
+def test_run_fires_pending_delivery_on_boot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SIGNAL_SECRET", "secret")
     instance = instance_at(tmp_path)
     routine_file(

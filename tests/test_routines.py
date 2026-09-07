@@ -33,7 +33,12 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.budgets import daily_cost
-from kinby.core.dispatcher import ScheduledTurnConfig, TurnConfig, build_dispatcher
+from kinby.core.dispatcher import (
+    ScheduledDispatcher,
+    ScheduledTurnConfig,
+    TurnConfig,
+    build_dispatcher,
+)
 from kinby.core.errors import BudgetExceeded, ModelUnpriced
 from kinby.core.events import EventLog
 from kinby.core.pricing import price_map
@@ -333,7 +338,7 @@ class RoutineModel:
         )
 
 
-def signal_runtime(instance: Instance, model: RoutineModel):
+def signal_runtime(instance: Instance, model: RoutineModel) -> tuple[ScheduledDispatcher, EventLog]:
     log = EventLog(instance.manifest.state_dir)
     runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
     dispatcher = build_dispatcher(
