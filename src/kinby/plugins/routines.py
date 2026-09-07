@@ -123,6 +123,8 @@ def _load_routine(path: Path, policy: GatePolicy, instance: Instance) -> Routine
         code_step = tools[0]
     signal = None
     if raw.signal is not None:
+        if not raw.signal.secret:
+            raise ValueError("Signal secret must name an environment variable.")
         if not os.environ.get(raw.signal.secret):
             raise ValueError(f"Signal secret {raw.signal.secret} is unset.")
         if raw.signal.auth is SignalAuth.HMAC_SHA256 and not raw.signal.signature_header:

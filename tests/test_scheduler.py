@@ -63,6 +63,7 @@ def test_serve_listen_parses_host_and_port(tmp_path: Path) -> None:
     "setting,named",
     [
         ('listen = "not-an-address"', "listen"),
+        ('listen = "bad host:8484"', "listen"),
         ('listen = "127.0.0.1:8484"\nsurprise = true', "surprise"),
     ],
 )

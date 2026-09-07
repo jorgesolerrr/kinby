@@ -144,6 +144,9 @@ def fetch() -> str:
     return "ok"
 ''',
     )
+    empty_secret = write_routine(
+        instance, "empty-secret", 'description: Empty\nsignal:\n  secret: ""'
+    )
     shared = write_routine(
         instance,
         "shared-no-param",
@@ -161,6 +164,7 @@ def fetch() -> str:
     assert [routine.name for routine in routines] == ["ok"]
     messages = {warning.sources[0]: warning.message for warning in warnings}
     assert "MISSING_SECRET" in messages[str(missing)]
+    assert "environment variable" in messages[str(empty_secret)].lower()
     assert "signature" in messages[str(hmac)].lower()
     assert "signal" in messages[str(no_param)].lower()
     assert "signal" in messages[str(shared)].lower()

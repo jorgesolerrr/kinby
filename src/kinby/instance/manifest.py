@@ -123,7 +123,7 @@ class RawRoutines(_Section):
 def _parse_listen(value: object) -> Serve:
     if isinstance(value, Serve):
         return value
-    if not isinstance(value, str):
+    if not isinstance(value, str) or any(character.isspace() for character in value):
         raise ValueError("must be a host:port address")
     host, separator, port_text = value.rpartition(":")
     if not separator or not host or not port_text:
