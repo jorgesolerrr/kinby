@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from typing import Annotated, Protocol, cast
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import (
@@ -650,9 +650,12 @@ class LangGraphRunner:
         if not isinstance(response, AIMessage):
             raise ModelNoResponse("The model returned an invalid tool call response.")
         calls: list[ToolCallResolution] = []
-        for model_call in response.tool_calls:
+        message_index = len(state.messages) - 1
+        for call_index, model_call in enumerate(response.tool_calls):
             name = model_call["name"]
-            call_id = model_call["id"] or str(uuid4())
+            call_id = model_call["id"] or str(
+                uuid5(state.turn.turn_id, f"{message_index}:{call_index}")
+            )
             arguments = _TOOL_ARGUMENTS.validate_python(model_call["args"])
             selected = runtime.context.tools.get(name)
             call = ToolCall(

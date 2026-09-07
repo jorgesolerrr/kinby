@@ -1004,6 +1004,50 @@ def test_yes_runs_the_parked_write_tool_and_completes(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_idless_tool_call_keeps_its_id_after_approval_resume(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        (instance.path / "tools" / "write_note.py").write_text(
+            """from kinby.plugins import tool
+
+@tool(write=True)
+def write_note(note: str) -> str:
+    \"\"\"Write one note.\"\"\"
+    return note
+""",
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "write_note",
+                            "args": {"note": "remember me"},
+                            "id": None,
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model, approval_answers=("yes",))
+
+        activity = [
+            event.payload
+            for event in events
+            if isinstance(event.payload, ToolCall | ToolGated | ToolResult)
+        ]
+        assert len(activity) == 3
+        assert activity[0].call_id
+        assert {payload.call_id for payload in activity} == {activity[0].call_id}
+
+    asyncio.run(scenario())
+
+
 def test_resume_does_not_repeat_tools_before_approval(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = _instance(tmp_path)
