@@ -9,6 +9,7 @@ from kinby.cli import main
 from kinby.contracts import (
     AcceptedResult,
     ApprovalRequested,
+    CompletionOutcome,
     ErrorCode,
     ErrorEnvelope,
     Event,
@@ -257,6 +258,53 @@ def test_stats_warns_when_model_calls_disagree_with_the_closing_total(
     assert result.buckets[0].cache_read_tokens == 1
     assert result.buckets[0].cache_creation_tokens == 2
     assert result.warnings == [ModelCallMismatch(thread_id=thread_id, turn_id=turn_id)]
+
+
+def test_stats_does_not_warn_for_no_work_closing_totals(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            now,
+            TurnStarted(message="no work", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            now,
+            ModelCompleted(
+                model="openai:gpt-5",
+                input_tokens=3,
+                output_tokens=2,
+                duration_ms=10,
+            ),
+        ),
+        _event(
+            3,
+            thread_id,
+            turn_id,
+            now,
+            TurnCompleted(
+                input_tokens=0,
+                output_tokens=0,
+                outcome=CompletionOutcome.NO_WORK,
+            ),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get", {}, {Scope.INSTANCE_READ}
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.warnings == []
 
 
 def test_stats_warning_eligibility_is_scoped_to_each_turn(

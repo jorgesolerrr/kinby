@@ -126,9 +126,13 @@ def turn_metrics(
             turn = open_turns.pop(key, None)
             input_tokens = payload.input_tokens
             output_tokens = payload.output_tokens
+            no_work_completion = (
+                isinstance(payload, TurnCompleted) and payload.outcome is CompletionOutcome.NO_WORK
+            )
             if (
                 turn is not None
                 and turn.has_model_calls
+                and not no_work_completion
                 and _model_totals(turn)
                 != TokenTotals(
                     input_tokens=payload.input_tokens,
@@ -145,7 +149,7 @@ def turn_metrics(
                 )
             memory_calls = MemoryCallCounts.model_validate(turn.memory_calls if turn else {})
             price = prices.get(turn.model) if turn is not None else None
-            if isinstance(payload, TurnCompleted) and payload.outcome is CompletionOutcome.NO_WORK:
+            if no_work_completion:
                 no_work.add(key)
             if turn is not None and price is None and key not in no_work:
                 unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(turn.model))
