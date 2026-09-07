@@ -8,6 +8,7 @@ from kinby.core.dispatcher import (
 )
 from kinby.core.prompt import PromptSection, assemble_system_prompt
 from kinby.core.runtime import InstanceRuntime, boot_instance
+from kinby.core.turn_metrics import turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnRunner
 
@@ -22,4 +23,5 @@ __all__ = [
     "boot_instance",
     "build_dispatcher",
     "turn_config",
+    "turn_metrics",
 ]

@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from typing import Annotated, Protocol, cast
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import (
@@ -37,15 +37,19 @@ from kinby.contracts import (
     CompletionOutcome,
     Delivery,
     EventType,
+    GateDecider,
+    GateOutcome,
     MessageDelta,
     PermissionMode,
     RoutineOrigin,
     RoutineTrigger,
     SignalReceived,
     ToolCall,
+    ToolGated,
     ToolResult,
     UserOrigin,
     Warning,
+    gate_denial_source,
 )
 from kinby.core.budgets import DailyBudget, daily_cost
 from kinby.core.errors import (
@@ -154,7 +158,7 @@ class ModelContext:
 @dataclass(frozen=True)
 class ToolCallResolution:
     call: ToolCall
-    denied_by: str | None = None
+    gate: ToolGated
 
 
 @dataclass(frozen=True)
@@ -214,6 +218,7 @@ class LangGraphRunner:
             instance.path,
             defaults=instance.manifest.tools.defaults,
         )
+        self._emitted_tool_calls: set[tuple[UUID, UUID, str]] = set()
         self._checkpoint_path = instance.manifest.state_dir / _CHECKPOINTS_NAME
         graph_builder = StateGraph(ModelState, context_schema=ModelContext)
         graph_builder.add_node("model", self._call_model)
@@ -302,6 +307,7 @@ class LangGraphRunner:
         seconds_budget = progress.budgets.seconds
         if seconds_budget is not None and progress.seconds_used >= seconds_budget:
             raise BudgetExceeded("seconds", seconds_budget)
+        self._restore_emitted_tool_calls(turn)
         return await self._invoke(
             turn,
             context,
@@ -485,7 +491,13 @@ class LangGraphRunner:
             arguments["signal"] = _TOOL_ARGUMENTS.validate_python(raw_signal)
         elif routine.signal is not None and origin.trigger is not RoutineTrigger.SIGNAL:
             arguments["signal"] = {}
-        call = ToolCall(call_id=str(uuid4()), name=code_step.name, arguments=arguments)
+        call = ToolCall(
+            call_id=str(uuid4()),
+            name=code_step.name,
+            arguments=arguments,
+            write=code_step.write,
+        )
+        await emit(call)
         decision = evaluate(
             self._gate_policy,
             routine.mode,
@@ -493,7 +505,15 @@ class LangGraphRunner:
             code_step,
             self._instance.manifest.workspace.path,
         )
-        await emit(call)
+        await emit(
+            ToolGated(
+                call_id=call.call_id,
+                name=call.name,
+                action=_gate_outcome(decision.action),
+                rule=decision.rule,
+                decided_by=GateDecider.POLICY,
+            )
+        )
         if decision.action is not GateAction.ALLOW:
             message = (
                 f'Code step "{call.name}" requires allow; gate rule '
@@ -502,6 +522,7 @@ class LangGraphRunner:
             await emit(ToolResult(call_id=call.call_id, name=call.name, output=message, error=True))
             raise PermissionDenied(message)
         timeout = asyncio.timeout(budgets.seconds)
+        started_at = asyncio.get_running_loop().time()
         try:
             async with timeout:
                 output = await code_step.ainvoke_raw(
@@ -514,11 +535,23 @@ class LangGraphRunner:
                 else CodeStepFailed(exception_message(exc))
             )
             await emit(
-                ToolResult(call_id=call.call_id, name=call.name, output=str(failure), error=True)
+                ToolResult(
+                    call_id=call.call_id,
+                    name=call.name,
+                    output=str(failure),
+                    error=True,
+                    duration_ms=_elapsed_ms(started_at),
+                )
             )
             raise failure from exc
         await emit(
-            ToolResult(call_id=call.call_id, name=call.name, output=str(output), error=False)
+            ToolResult(
+                call_id=call.call_id,
+                name=call.name,
+                output=str(output),
+                error=False,
+                duration_ms=_elapsed_ms(started_at),
+            )
         )
         return output
 
@@ -625,12 +658,21 @@ class LangGraphRunner:
         if not isinstance(response, AIMessage):
             raise ModelNoResponse("The model returned an invalid tool call response.")
         calls: list[ToolCallResolution] = []
-        for model_call in response.tool_calls:
+        message_index = len(state.messages) - 1
+        for call_index, model_call in enumerate(response.tool_calls):
             name = model_call["name"]
-            call_id = model_call["id"] or str(uuid4())
+            call_id = model_call["id"] or str(
+                uuid5(state.turn.turn_id, f"{message_index}:{call_index}")
+            )
             arguments = _TOOL_ARGUMENTS.validate_python(model_call["args"])
-            call = ToolCall(call_id=call_id, name=name, arguments=arguments)
             selected = runtime.context.tools.get(name)
+            call = ToolCall(
+                call_id=call_id,
+                name=name,
+                arguments=arguments,
+                write=selected.write if selected is not None else True,
+            )
+            await self._emit_tool_call_once(state.turn, call, runtime.context.emit)
             gate_decision = evaluate(
                 runtime.context.gate_policy,
                 runtime.context.permission_mode,
@@ -638,7 +680,6 @@ class LangGraphRunner:
                 selected,
                 runtime.context.tool_context.workspace,
             )
-            denied_by: str | None = None
             if gate_decision.action is GateAction.ASK:
                 approval_decision = ApprovalDecision(
                     interrupt(
@@ -650,20 +691,39 @@ class LangGraphRunner:
                         )
                     )
                 )
-                if approval_decision is ApprovalDecision.DENY:
-                    denied_by = "the user"
-            elif gate_decision.action is GateAction.DENY:
-                denied_by = f'policy rule "{gate_decision.rule}"'
-            calls.append(ToolCallResolution(call, denied_by))
+                action = (
+                    GateOutcome.ALLOW
+                    if approval_decision is ApprovalDecision.APPROVE
+                    else GateOutcome.DENY
+                )
+                decided_by = GateDecider.USER
+            else:
+                action = _gate_outcome(gate_decision.action)
+                decided_by = GateDecider.POLICY
+            calls.append(
+                ToolCallResolution(
+                    call,
+                    ToolGated(
+                        call_id=call.call_id,
+                        name=call.name,
+                        action=action,
+                        rule=gate_decision.rule,
+                        decided_by=decided_by,
+                    ),
+                )
+            )
 
         messages: list[AnyMessage] = []
         for resolution in calls:
             call = resolution.call
-            if resolution.denied_by is not None:
+            await runtime.context.emit(resolution.gate)
+            if resolution.gate.action is GateOutcome.DENY:
                 result = ToolResult(
                     call_id=call.call_id,
                     name=call.name,
-                    output=f'Tool "{call.name}" was denied by {resolution.denied_by}.',
+                    output=(
+                        f'Tool "{call.name}" was denied by {gate_denial_source(resolution.gate)}.'
+                    ),
                     error=True,
                 )
                 await runtime.context.emit(result)
@@ -675,8 +735,8 @@ class LangGraphRunner:
                         status="error",
                     )
                 )
+                self._forget_tool_call(state.turn, call)
                 continue
-            await runtime.context.emit(call)
             result = await self._run_tool(
                 call.call_id,
                 call.name,
@@ -692,12 +752,40 @@ class LangGraphRunner:
                     status="error" if result.error else "success",
                 )
             )
+            self._forget_tool_call(state.turn, call)
         return ModelState(
             turn=state.turn,
             messages=messages,
             input_tokens=state.input_tokens,
             output_tokens=state.output_tokens,
         )
+
+    async def _emit_tool_call_once(
+        self,
+        turn: TurnRequest,
+        call: ToolCall,
+        emit: Emit,
+    ) -> None:
+        key = (turn.thread_id, turn.turn_id, call.call_id)
+        if key in self._emitted_tool_calls:
+            return
+        await emit(call)
+        self._emitted_tool_calls.add(key)
+
+    def _restore_emitted_tool_calls(self, turn: TurnRequest) -> None:
+        if any(
+            thread_id == turn.thread_id and turn_id == turn.turn_id
+            for thread_id, turn_id, _ in self._emitted_tool_calls
+        ):
+            return
+        self._emitted_tool_calls.update(
+            (turn.thread_id, turn.turn_id, payload.call_id)
+            for event in self._event_log.stored(turn.thread_id)
+            if event.turn_id == turn.turn_id and isinstance(payload := event.payload, ToolCall)
+        )
+
+    def _forget_tool_call(self, turn: TurnRequest, call: ToolCall) -> None:
+        self._emitted_tool_calls.discard((turn.thread_id, turn.turn_id, call.call_id))
 
     async def _run_tool(
         self,
@@ -714,6 +802,7 @@ class LangGraphRunner:
                 output=f'Tool "{name}" is not available in this turn.',
                 error=True,
             )
+        started_at = asyncio.get_running_loop().time()
         try:
             # A tool is user code. Turn its failures into model-visible tool errors.
             output = await selected.ainvoke(arguments, runtime.context.tool_context)
@@ -723,8 +812,27 @@ class LangGraphRunner:
                 name=name,
                 output=exception_message(exc),
                 error=True,
+                duration_ms=_elapsed_ms(started_at),
             )
-        return ToolResult(call_id=call_id, name=name, output=output, error=False)
+        return ToolResult(
+            call_id=call_id,
+            name=name,
+            output=output,
+            error=False,
+            duration_ms=_elapsed_ms(started_at),
+        )
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return round((asyncio.get_running_loop().time() - started_at) * 1000)
+
+
+def _gate_outcome(action: GateAction) -> GateOutcome:
+    match action:
+        case GateAction.ALLOW:
+            return GateOutcome.ALLOW
+        case GateAction.ASK | GateAction.DENY:
+            return GateOutcome.DENY
 
 
 def _after_model(state: ModelState) -> str:

@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from kinby.contracts import PermissionMode, ToolCall
+from kinby.contracts import GateRule, PermissionMode, ToolCall
 from kinby.instance.permissions import GateAction, GatePolicy
 from kinby.plugins.tools import Tool
 
@@ -14,7 +14,7 @@ from kinby.plugins.tools import Tool
 @dataclass(frozen=True)
 class GateDecision:
     action: GateAction
-    rule: str
+    rule: GateRule
 
 
 _PRESETS = {
@@ -52,23 +52,23 @@ def evaluate(
     ):
         for index, pattern in enumerate(policy.bash.deny):
             if re.search(pattern, command):
-                return GateDecision(GateAction.DENY, f"bash.deny[{index}]")
+                return GateDecision(GateAction.DENY, GateRule(f"bash.deny[{index}]"))
         for index, pattern in enumerate(policy.bash.ask):
             if re.search(pattern, command):
-                return GateDecision(GateAction.ASK, f"bash.ask[{index}]")
+                return GateDecision(GateAction.ASK, GateRule(f"bash.ask[{index}]"))
     override = policy.tools.get(call.name)
     if override is not None:
-        return GateDecision(override, f"tools.{call.name}")
+        return GateDecision(override, GateRule(f"tools.{call.name}"))
     writes = tool is not None and tool.write
     if (
         mode is PermissionMode.AUTO
         and writes
         and _paths_are_inside_workspace(tool, call, workspace)
     ):
-        return GateDecision(GateAction.ALLOW, "mode.auto.workspace")
+        return GateDecision(GateAction.ALLOW, GateRule("mode.auto.workspace"))
     return GateDecision(
         _PRESETS[mode][writes],
-        f"mode.{mode.value}.{'write' if writes else 'read'}",
+        GateRule(f"mode.{mode.value}.{'write' if writes else 'read'}"),
     )
 
 

@@ -12,14 +12,18 @@ from uuid import UUID
 from kinby.contracts import (
     ApprovalRequested,
     CompletionOutcome,
+    DenyCounts,
     Event,
+    GateOutcome,
     MemoryCallCounts,
     MemoryRecapped,
     ModelCallMismatch,
     ModelCompleted,
     TokenTotals,
     ToolCall,
+    ToolGated,
     ToolResult,
+    ToolTime,
     TurnClosingKind,
     TurnCompleted,
     TurnFailed,
@@ -53,6 +57,9 @@ class _TurnEvents:
     started_at: datetime
     model: str
     tool_calls: Counter[str] = field(default_factory=Counter)
+    tool_writes: dict[str, bool | None] = field(default_factory=dict)
+    denies: Counter[str] = field(default_factory=Counter)
+    tool_duration: Counter[str] = field(default_factory=Counter)
     memory_calls: Counter[str] = field(default_factory=Counter)
     approvals_requested: int = 0
     memory_characters: int = 0
@@ -111,12 +118,21 @@ def turn_metrics(
         if isinstance(payload, ToolCall):
             if turn is not None:
                 turn.tool_calls[payload.name] += 1
+                turn.tool_writes[payload.call_id] = payload.write
                 if kind := _MEMORY_CALL_KINDS.get(payload.name):
                     turn.memory_calls[kind] += 1
             continue
+        if isinstance(payload, ToolGated):
+            if turn is not None and payload.action is GateOutcome.DENY:
+                turn.denies[payload.decided_by.value] += 1
+            continue
         if isinstance(payload, ToolResult):
-            if turn is not None and payload.name in _MEMORY_CALL_KINDS:
-                turn.memory_characters += len(payload.output)
+            if turn is not None:
+                if payload.name in _MEMORY_CALL_KINDS:
+                    turn.memory_characters += len(payload.output)
+                write = turn.tool_writes.get(payload.call_id)
+                if payload.duration_ms is not None and write is not None:
+                    turn.tool_duration["write_ms" if write else "read_ms"] += payload.duration_ms
             continue
         if isinstance(payload, ApprovalRequested):
             if turn is not None:
@@ -180,6 +196,8 @@ def turn_metrics(
                 memory_calls=memory_calls,
                 memory_consulted=bool(memory_calls.search or memory_calls.open),
                 approvals_requested=turn.approvals_requested if turn else 0,
+                denies=DenyCounts.model_validate(turn.denies if turn else {}),
+                tool_duration=ToolTime.model_validate(turn.tool_duration if turn else {}),
                 memory_tokens=(estimate_memory_tokens(turn.memory_characters) if turn else 0),
                 rating=None,
             )

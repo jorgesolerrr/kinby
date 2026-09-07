@@ -10,9 +10,12 @@ from kinby.contracts import (
     AcceptedResult,
     ApprovalRequested,
     CompletionOutcome,
+    DenyCounts,
     ErrorCode,
     ErrorEnvelope,
     Event,
+    GateDecider,
+    GateOutcome,
     MemoryRecapped,
     ModelCallMismatch,
     ModelCompleted,
@@ -22,7 +25,9 @@ from kinby.contracts import (
     StatsGetResult,
     ThreadCreateResult,
     ToolCall,
+    ToolGated,
     ToolResult,
+    ToolTime,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
@@ -30,6 +35,7 @@ from kinby.contracts import (
     TurnStarted,
     TurnVerdict,
 )
+from kinby.core import turn_metrics
 from kinby.core.budgets import daily_cost
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
@@ -47,31 +53,34 @@ from tests.helpers import (
 class MetricsRunner:
     async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
         for call_id in ("bash-1", "bash-2"):
-            await emit(ToolCall(call_id=call_id, name="bash", arguments={}))
+            await emit(ToolCall(call_id=call_id, name="bash", arguments={}, write=True))
             await emit(
                 ToolResult(
                     call_id=call_id,
                     name="bash",
                     output="done",
                     error=False,
+                    duration_ms=5,
                 )
             )
-        await emit(ToolCall(call_id="search-1", name="memory_search", arguments={}))
+        await emit(ToolCall(call_id="search-1", name="memory_search", arguments={}, write=False))
         await emit(
             ToolResult(
                 call_id="search-1",
                 name="memory_search",
                 output="find",
                 error=False,
+                duration_ms=2,
             )
         )
-        await emit(ToolCall(call_id="open-1", name="memory_open", arguments={}))
+        await emit(ToolCall(call_id="open-1", name="memory_open", arguments={}, write=False))
         await emit(
             ToolResult(
                 call_id="open-1",
                 name="memory_open",
                 output="remember",
                 error=False,
+                duration_ms=2,
             )
         )
         await emit(
@@ -80,6 +89,24 @@ class MetricsRunner:
                 name="bash",
                 arguments={},
                 rule="ask",
+            )
+        )
+        await emit(
+            ToolGated(
+                call_id="deny-policy",
+                name="bash",
+                action=GateOutcome.DENY,
+                rule="bash.deny[0]",
+                decided_by=GateDecider.POLICY,
+            )
+        )
+        await emit(
+            ToolGated(
+                call_id="deny-user",
+                name="remember",
+                action=GateOutcome.DENY,
+                rule="mode.ask.write",
+                decided_by=GateDecider.USER,
             )
         )
         return TurnOutcome(input_tokens=11, output_tokens=7)
@@ -157,6 +184,8 @@ def test_stats_get_reports_one_turn_record_from_the_event_log(tmp_path: Path) ->
         }
         assert record.memory_consulted is True
         assert record.approvals_requested == 1
+        assert record.denies == DenyCounts(policy=1, user=1)
+        assert record.tool_duration == ToolTime(read_ms=4, write_ms=10)
         assert record.memory_tokens == 3
         assert record.rating is None
         assert result.buckets[0].cost == 0.00008375
@@ -551,6 +580,139 @@ class StaticEventLog(EventLog):
 
     def all_events(self):
         yield from self._events
+
+
+def test_turn_metrics_reports_denies_and_read_write_tool_time() -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    started_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            started_at,
+            TurnStarted(message="measure tools", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolCall(call_id="read-1", name="read", arguments={}, write=False),
+        ),
+        _event(
+            3,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolGated(
+                call_id="read-1",
+                name="read",
+                action=GateOutcome.ALLOW,
+                rule="mode.ask.read",
+                decided_by=GateDecider.POLICY,
+            ),
+        ),
+        _event(
+            4,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolResult(
+                call_id="read-1",
+                name="read",
+                output="contents",
+                error=False,
+                duration_ms=7,
+            ),
+        ),
+        _event(
+            5,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolCall(call_id="write-1", name="edit", arguments={}, write=True),
+        ),
+        _event(
+            6,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolGated(
+                call_id="write-1",
+                name="edit",
+                action=GateOutcome.ALLOW,
+                rule="mode.full-access.write",
+                decided_by=GateDecider.POLICY,
+            ),
+        ),
+        _event(
+            7,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolResult(
+                call_id="write-1",
+                name="edit",
+                output="edited",
+                error=False,
+                duration_ms=11,
+            ),
+        ),
+        _event(
+            8,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolGated(
+                call_id="deny-1",
+                name="bash",
+                action=GateOutcome.DENY,
+                rule="bash.deny[0]",
+                decided_by=GateDecider.POLICY,
+            ),
+        ),
+        _event(
+            9,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolGated(
+                call_id="deny-2",
+                name="remember",
+                action=GateOutcome.DENY,
+                rule="mode.ask.write",
+                decided_by=GateDecider.USER,
+            ),
+        ),
+        _event(
+            10,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolCall(call_id="legacy", name="old", arguments={}),
+        ),
+        _event(
+            11,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolResult(call_id="legacy", name="old", output="old", error=False),
+        ),
+        _event(
+            12,
+            thread_id,
+            turn_id,
+            started_at + timedelta(seconds=1),
+            TurnCompleted(input_tokens=1, output_tokens=1),
+        ),
+    ]
+
+    record = turn_metrics(events).records[0]
+
+    assert record.denies == DenyCounts(policy=1, user=1)
+    assert record.tool_duration == ToolTime(read_ms=7, write_ms=11)
 
 
 def _event(
@@ -1023,12 +1185,16 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "forget",
         "without memory",
         "approvals",
+        "policy denies",
+        "user denies",
+        "read tool ms",
+        "write tool ms",
         "mean seconds",
         "good",
         "bad",
     ]
     bucket_fields = lines[1].split("\t")
-    assert bucket_fields[:18] == [
+    assert bucket_fields[:22] == [
         closed.timestamp.date().isoformat(),
         "1",
         "0",
@@ -1047,9 +1213,13 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "0",
         "0",
         "1",
+        "1",
+        "1",
+        "4",
+        "10",
     ]
-    assert float(bucket_fields[18]) >= 0
-    assert bucket_fields[19:] == ["0", "0"]
+    assert float(bucket_fields[22]) >= 0
+    assert bucket_fields[23:] == ["0", "0"]
     total_fields = lines[2].split("\t")
     assert total_fields[0] == "total"
     assert total_fields[1:] == bucket_fields[1:]
