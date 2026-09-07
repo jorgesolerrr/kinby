@@ -1,10 +1,19 @@
 import asyncio
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 from kinby.contracts import (
+    Delivery,
+    DeliveryId,
+    Event,
     MessageDelta,
     PermissionMode,
+    RoutineOrigin,
+    RoutineRunCommand,
+    RoutineTrigger,
+    SignalReceived,
     ToolCall,
     ToolResult,
     TurnCompleted,
@@ -182,3 +191,66 @@ def test_subscriber_does_not_receive_live_events_before_its_cursor(tmp_path: Pat
         assert received == third
 
     asyncio.run(scenario())
+
+
+def test_old_event_logs_without_delivery_fields_still_read(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "sequence": 1,
+                "thread_id": str(thread_id),
+                "turn_id": str(turn_id),
+                "timestamp": "2026-09-06T09:00:00+00:00",
+                "payload": {
+                    "type": "turn.started",
+                    "message": "Hello",
+                    "model": "openai:gpt-5",
+                    "origin": {
+                        "kind": "routine",
+                        "name": "news",
+                        "trigger": "scheduled",
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
+    event = next(EventLog(tmp_path).all_events())
+    assert isinstance(event.payload, TurnStarted)
+    assert isinstance(event.payload.origin, RoutineOrigin)
+    assert event.payload.origin.delivery_id is None
+    assert event.payload.origin.trigger is RoutineTrigger.SCHEDULED
+
+
+def test_signal_received_and_manual_payload_shapes() -> None:
+    received = datetime(2026, 9, 6, 9, tzinfo=UTC)
+    delivery = Delivery(
+        headers={"content-type": "application/json"},
+        content_type="application/json",
+        body='{"action":"opened"}',
+        delivery_id=DeliveryId("abc"),
+        received_at=received,
+    )
+    payload = SignalReceived(delivery=delivery)
+    event = Event.model_validate(
+        {
+            "sequence": 1,
+            "thread_id": str(uuid4()),
+            "turn_id": str(uuid4()),
+            "timestamp": received.isoformat(),
+            "payload": payload.model_dump(mode="json"),
+        }
+    )
+    assert isinstance(event.payload, SignalReceived)
+    assert event.payload.delivery.delivery_id == "abc"
+    origin = RoutineOrigin(
+        name="news",
+        trigger=RoutineTrigger.SIGNAL,
+        delivery_id=DeliveryId("abc"),
+    )
+    assert origin.delivery_id == "abc"
+    command = RoutineRunCommand.model_validate({"name": "news", "payload": delivery.body})
+    assert command.payload == delivery.body
+    assert RoutineRunCommand(name="news").payload is None

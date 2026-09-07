@@ -130,6 +130,36 @@ def test_manifest_schema_accepts_feedback_policies(policy: str) -> None:
     validate(instance=manifest, schema=manifest_schema())
 
 
+def test_manifest_schema_accepts_the_serve_table() -> None:
+    schema = manifest_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    assert "serve" in properties
+    validate(
+        instance={
+            "id": "alice",
+            "models": {"main": "openai:gpt-5"},
+            "serve": {"listen": "127.0.0.1:8484"},
+        },
+        schema=schema,
+    )
+
+
+@pytest.mark.parametrize(
+    "listen",
+    ["not-an-address", "bad host:8484", "http://localhost:8484", "localhost:+8484"],
+)
+def test_manifest_schema_rejects_a_malformed_listen_address(listen: str) -> None:
+    manifest = {
+        "id": "alice",
+        "models": {"main": "openai:gpt-5"},
+        "serve": {"listen": listen},
+    }
+
+    with pytest.raises(ValidationError):
+        validate(instance=manifest, schema=manifest_schema())
+
+
 def test_manifest_schema_rejects_an_unknown_feedback_key() -> None:
     manifest = {
         "id": "alice",

@@ -201,6 +201,21 @@
       "title": "RawRoutines",
       "type": "object"
     },
+    "RawServe": {
+      "additionalProperties": false,
+      "properties": {
+        "listen": {
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*:[0-9]+(?![\\s\\S])",
+          "title": "Listen",
+          "type": "string"
+        }
+      },
+      "required": [
+        "listen"
+      ],
+      "title": "RawServe",
+      "type": "object"
+    },
     "RawTools": {
       "additionalProperties": false,
       "properties": {
@@ -320,6 +335,17 @@
       "default": {
         "timezone": "UTC"
       }
+    },
+    "serve": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RawServe"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "state_dir": {
       "default": ".state",

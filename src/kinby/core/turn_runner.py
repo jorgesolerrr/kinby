@@ -80,7 +80,7 @@ from kinby.instance.permissions import (
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
-from kinby.plugins.routines import Routine, SharedCodeStep, load_routines
+from kinby.plugins.routines import Routine, load_routines, resolve_code_step
 from kinby.plugins.skills import load_skills
 from kinby.plugins.tools import Tool, ToolContext
 
@@ -404,21 +404,30 @@ class LangGraphRunner:
                 await emit(warning)
             permission_mode = routine.mode
             message = routine.prompt
-            code_step = routine.code_step
-            if isinstance(code_step, SharedCodeStep):
-                name = code_step.name
-                code_step = tools.get(name)
-                if code_step is None:
+            declared = routine.code_step
+            if declared is None:
+                code_step = None
+            else:
+                try:
+                    code_step = resolve_code_step(declared, tools)
+                except ValueError as exc:
                     raise CodeStepNotFound(
-                        f'Code step tool "{name}" is not available in this turn.'
-                    )
+                        f'Code step tool "{declared.name}" is not available in this turn.'
+                    ) from exc
             if code_step is not None:
                 tools = ToolSnapshot(
                     tuple(tool for tool in tools.tools if tool.name != code_step.name)
                 )
             if code_step is not None and isinstance(graph_input, ModelState):
                 code_started = asyncio.get_running_loop().time()
-                output = await self._run_code_step(routine, code_step, turn, emit, budgets)
+                output = await self._run_code_step(
+                    routine,
+                    code_step,
+                    turn.origin,
+                    turn.thread_id,
+                    emit,
+                    budgets,
+                )
                 progress = replace(
                     progress,
                     seconds_used=progress.seconds_used
@@ -434,11 +443,15 @@ class LangGraphRunner:
         self,
         routine: Routine,
         code_step: Tool,
-        turn: TurnRequest,
+        origin: RoutineOrigin,
+        thread_id: UUID,
         emit: Emit,
         budgets: Budgets,
     ) -> str | None:
-        call = ToolCall(call_id=str(uuid4()), name=code_step.name, arguments=routine.arguments)
+        arguments = dict(routine.arguments)
+        if routine.signal is not None and origin.trigger is not RoutineTrigger.SIGNAL:
+            arguments["signal"] = {}
+        call = ToolCall(call_id=str(uuid4()), name=code_step.name, arguments=arguments)
         decision = evaluate(
             self._gate_policy,
             routine.mode,
@@ -458,7 +471,7 @@ class LangGraphRunner:
         try:
             async with timeout:
                 output = await code_step.ainvoke_raw(
-                    call.arguments, ToolContext(instance=self._instance, thread_id=turn.thread_id)
+                    call.arguments, ToolContext(instance=self._instance, thread_id=thread_id)
                 )
         except Exception as exc:
             failure = (

@@ -11,11 +11,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dotenv import load_dotenv
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StringConstraints,
     TypeAdapter,
     ValidationError,
+    WithJsonSchema,
     field_validator,
 )
 
@@ -32,6 +34,7 @@ from kinby.instance.dataclasses import (
     Models,
     RecapPolicy,
     Routines,
+    Serve,
     Tools,
     Workspace,
 )
@@ -40,6 +43,10 @@ from kinby.instance.layout import ENV_NAME, MANIFEST_NAME, STATE_DIR, WORKSPACE_
 
 # Unlike $, this absolute-end assertion rejects a trailing newline in Python and JSON Schema.
 _MODEL_PATTERN = re.compile(r"^[^:\s]+:[^:\s]+(?![\s\S])")
+_LISTEN_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_LISTEN_HOST_PATTERN = rf"{_LISTEN_LABEL}(?:\.{_LISTEN_LABEL})*"
+_LISTEN_HOST = re.compile(rf"^{_LISTEN_HOST_PATTERN}$")
+_LISTEN_PATTERN = rf"^{_LISTEN_HOST_PATTERN}:[0-9]+(?![\s\S])"
 _MODEL_ERROR = "must use provider:model form"
 NonEmpty = Annotated[str, StringConstraints(min_length=1)]
 ModelName = Annotated[
@@ -117,6 +124,31 @@ class RawRoutines(_Section):
         return value
 
 
+def _parse_listen(value: object) -> Serve:
+    if isinstance(value, Serve):
+        return value
+    if not isinstance(value, str) or any(character.isspace() for character in value):
+        raise ValueError("must be a host:port address")
+    host, separator, port_text = value.rpartition(":")
+    if not separator or _LISTEN_HOST.fullmatch(host) is None or not port_text.isdigit():
+        raise ValueError("must be a host:port address")
+    port = int(port_text)
+    if not 1 <= port <= 65535:
+        raise ValueError("must be a host:port address")
+    return Serve(host=host, port=port)
+
+
+ListenAddress = Annotated[
+    Serve,
+    BeforeValidator(_parse_listen),
+    WithJsonSchema({"title": "Listen", "type": "string", "pattern": _LISTEN_PATTERN}),
+]
+
+
+class RawServe(_Section):
+    listen: ListenAddress
+
+
 class RawManifest(_Section):
     """The shape of ``kinby.toml``, validated once at load."""
 
@@ -129,6 +161,7 @@ class RawManifest(_Section):
     feedback: RawFeedback = RawFeedback()
     tools: RawTools = RawTools()
     routines: RawRoutines = RawRoutines()
+    serve: RawServe | None = None
     budgets: RawBudgets = Field(default_factory=RawBudgets, title="Budgets")
     prices: dict[ModelName, RawModelPrice] = Field(
         default_factory=dict,
@@ -195,6 +228,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         feedback=Feedback(ask=raw.feedback.ask),
         tools=Tools(defaults=raw.tools.defaults),
         routines=Routines(timezone=ZoneInfo(raw.routines.timezone)),
+        serve=raw.serve.listen if raw.serve is not None else None,
         budgets=Budgets(
             steps=raw.budgets.steps,
             tokens=raw.budgets.tokens,

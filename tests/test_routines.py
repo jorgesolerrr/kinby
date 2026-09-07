@@ -40,7 +40,7 @@ from kinby.core.usage import TimeRange, usage_totals
 from kinby.instance import Budgets, Instance, load_instance
 from kinby.memory import Episode, GraphStore, RecapWriter
 from kinby.memory.recap import RecapModel
-from kinby.plugins.routines import SharedCodeStep, load_routines
+from kinby.plugins.routines import SharedCodeStep, SignalAuth, load_routines
 
 
 def instance_at(path: Path) -> Instance:
@@ -51,8 +51,10 @@ def instance_at(path: Path) -> Instance:
     return load_instance(path)
 
 
-def routine_file(instance: Instance, frontmatter: str, body: str = "Read the news.") -> Path:
-    path = instance.path / "routines" / "news" / "ROUTINE.md"
+def routine_file(
+    instance: Instance, frontmatter: str, body: str = "Read the news.", *, name: str = "news"
+) -> Path:
+    path = instance.path / "routines" / name / "ROUTINE.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"---\n{frontmatter}\n---\n{body}\n")
     return path
@@ -88,6 +90,142 @@ seconds: 2.5""",
     assert routine.arguments == {"topic": "python", "count": 3}
     assert routine.budgets == Budgets(steps=5, tokens=100, seconds=2.5)
     assert routine.prompt == "Read the news."
+
+
+def test_load_signal_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
+    instance = instance_at(tmp_path)
+    routine_file(
+        instance,
+        """description: GitHub issues
+signal:
+  secret: GITHUB_WEBHOOK_SECRET
+  delivery_header: X-GitHub-Delivery""",
+    )
+    routines, warnings = load_routines(instance)
+    assert warnings == ()
+    signal = routines[0].signal
+    assert signal is not None
+    assert signal.auth is SignalAuth.TOKEN
+    assert signal.secret_name == "GITHUB_WEBHOOK_SECRET"
+    assert signal.signature_header is None
+    assert signal.delivery_header == "X-GitHub-Delivery"
+
+
+def write_routine(instance: Instance, name: str, frontmatter: str, code: str | None = None) -> Path:
+    path = routine_file(instance, frontmatter, "Handle the delivery.", name=name)
+    if code is not None:
+        (path.parent / "run.py").write_text(code)
+    return path
+
+
+def test_invalid_signal_routines_warn_and_skip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GOOD_SECRET", "s3cret")
+    instance = instance_at(tmp_path)
+    write_routine(instance, "ok", "description: Good\nsignal:\n  secret: GOOD_SECRET")
+    missing = write_routine(
+        instance, "missing-secret", "description: Missing\nsignal:\n  secret: MISSING_SECRET"
+    )
+    hmac = write_routine(
+        instance,
+        "hmac",
+        "description: HMAC\nsignal:\n  auth: hmac-sha256\n  secret: GOOD_SECRET",
+    )
+    no_param = write_routine(
+        instance,
+        "no-param",
+        "description: No param\nsignal:\n  secret: GOOD_SECRET",
+        '''from kinby.plugins import tool
+@tool(write=False)
+def fetch() -> str:
+    """Fetch."""
+    return "ok"
+''',
+    )
+    empty_secret = write_routine(
+        instance, "empty-secret", 'description: Empty\nsignal:\n  secret: ""'
+    )
+    missing_shared = write_routine(
+        instance,
+        "missing-shared",
+        "description: Missing shared\nrun: missing\nsignal:\n  secret: GOOD_SECRET",
+    )
+    shared = write_routine(
+        instance,
+        "shared-no-param",
+        "description: Shared\nrun: fetch\nsignal:\n  secret: GOOD_SECRET",
+    )
+    tools = instance.path / "tools"
+    tools.mkdir()
+    (tools / "fetch.py").write_text('''from kinby.plugins import tool
+@tool(write=False)
+def fetch() -> str:
+    """Fetch."""
+    return "ok"
+''')
+    routines, warnings = load_routines(instance)
+    assert [routine.name for routine in routines] == ["ok"]
+    messages = {warning.sources[0]: warning.message for warning in warnings}
+    assert "MISSING_SECRET" in messages[str(missing)]
+    assert "environment variable" in messages[str(empty_secret)].lower()
+    assert "signature" in messages[str(hmac)].lower()
+    assert "signal" in messages[str(no_param)].lower()
+    assert "not available" in messages[str(missing_shared)].lower()
+    assert "signal" in messages[str(shared)].lower()
+
+
+def test_shared_code_step_with_signal_param_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GOOD_SECRET", "s3cret")
+    instance = instance_at(tmp_path)
+    write_routine(
+        instance, "shared-ok", "description: Shared\nrun: fetch\nsignal:\n  secret: GOOD_SECRET"
+    )
+    tools = instance.path / "tools"
+    tools.mkdir()
+    (tools / "fetch.py").write_text('''from kinby.plugins import tool
+@tool(write=False)
+def fetch(signal: dict) -> str:
+    """Fetch."""
+    return "ok"
+''')
+    routines, warnings = load_routines(instance)
+    assert warnings == ()
+    assert routines[0].signal is not None
+    assert routines[0].code_step == SharedCodeStep("fetch")
+
+
+def test_signal_routine_keeps_its_schedule(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
+    instance = instance_at(tmp_path)
+    write_routine(
+        instance,
+        "news",
+        """description: GitHub issues
+schedule: 0 9 * * *
+catch_up: false
+signal:
+  auth: hmac-sha256
+  secret: GITHUB_WEBHOOK_SECRET
+  signature_header: X-Hub-Signature-256""",
+        '''from kinby.plugins import tool
+@tool(write=False)
+def fetch(signal: dict) -> str:
+    """Fetch."""
+    return "ok"
+''',
+    )
+    routines, warnings = load_routines(instance)
+    assert warnings == ()
+    routine = routines[0]
+    assert routine.schedule == "0 9 * * *"
+    assert not routine.catch_up
+    assert routine.signal is not None
+    assert routine.signal.auth is SignalAuth.HMAC_SHA256
+    assert routine.signal.signature_header == "X-Hub-Signature-256"
 
 
 def test_inline_code_loads_one_tool_and_defaults(tmp_path: Path) -> None:
@@ -194,7 +332,11 @@ def no_recap(thread_id: UUID, turn_id: UUID) -> None:
 
 
 async def fire(
-    instance: Instance, model: RoutineModel, after_turn: ClosedTurnHook = no_recap
+    instance: Instance,
+    model: RoutineModel,
+    after_turn: ClosedTurnHook = no_recap,
+    *,
+    trigger: RoutineTrigger = RoutineTrigger.MANUAL,
 ) -> list[Event]:
     log = EventLog(instance.manifest.state_dir)
     store = ThreadStore(instance.manifest.state_dir)
@@ -203,9 +345,7 @@ async def fire(
         store, log, runner, runner.prepare_for_turn, runner.permission_ceiling, after_turn
     )
     thread = store.create(None)
-    await turns.wake(
-        thread.id, "", RoutineOrigin(name=RoutineName("news"), trigger=RoutineTrigger.MANUAL)
-    )
+    await turns.wake(thread.id, "", RoutineOrigin(name=RoutineName("news"), trigger=trigger))
     subscription = log.subscribe(thread.id)
     events: list[Event] = []
     async with asyncio.timeout(5):
@@ -274,6 +414,31 @@ def fetch() -> str:
     assert path.read_text() == original
     assert isinstance(events[0].payload, TurnStarted)
     assert events[0].payload.message == ""
+
+
+def test_scheduled_signal_routine_runs_code_step_without_a_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
+    instance = instance_at(tmp_path)
+    path = routine_file(
+        instance,
+        "description: News\nschedule: 0 9 * * *\nsignal:\n  secret: GITHUB_WEBHOOK_SECRET",
+    )
+    (path.parent / "run.py").write_text('''from kinby.plugins import tool
+@tool(write=False)
+def fetch(signal: dict) -> str:
+    """Fetch news."""
+    return "scheduled fallback" if signal == {} else "signal delivery"
+''')
+    model = RoutineModel()
+
+    events = asyncio.run(fire(instance, model, trigger=RoutineTrigger.SCHEDULED))
+
+    assert isinstance(events[-1].payload, TurnCompleted)
+    call = next(event.payload for event in events if isinstance(event.payload, ToolCall))
+    assert call.arguments == {"signal": {}}
+    assert "scheduled fallback" in str(model.messages[0][-1].content)
 
 
 @pytest.mark.parametrize("mode", ["ask", "read-only", "full-access"])

@@ -102,6 +102,12 @@ class Routines:
 
 
 @dataclass(frozen=True)
+class Serve:
+    host: str
+    port: int
+
+
+@dataclass(frozen=True)
 class Manifest:
     """Validated settings from ``kinby.toml``."""
 
@@ -116,6 +122,7 @@ class Manifest:
     budgets: Budgets
     prices: Mapping[str, ModelPrice]
     routines: Routines = field(default_factory=Routines)
+    serve: Serve | None = None
 
 
 @dataclass(frozen=True)
