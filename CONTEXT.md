@@ -228,6 +228,10 @@ The normalized answer to an **approval**: approve or deny. The answer `yes` appr
 
 The check every **tool** call passes through before it runs. It reads the tool's write flag and the instance's permission policy, and answers allow, ask (raise an **approval**), or deny. The policy is the instance's ceiling; a **thread** may narrow it, never widen it.
 
+### Gate rule
+
+The identifier for the policy condition that produced a **gate decision**, such as `mode.ask.write` or `bash.deny[0]`.
+
 
 ### Gate decision
 

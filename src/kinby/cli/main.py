@@ -226,6 +226,10 @@ def _stats_row(label: str, summary: StatsSummary) -> str:
             str(memory.forget),
             str(summary.turns_without_memory),
             str(summary.approvals_requested),
+            str(summary.denies.policy),
+            str(summary.denies.user),
+            str(summary.tool_duration.read_ms),
+            str(summary.tool_duration.write_ms),
             (
                 f"{summary.mean_duration_seconds:.3f}"
                 if summary.mean_duration_seconds is not None
@@ -265,6 +269,10 @@ async def _show_stats(
                 "forget",
                 "without memory",
                 "approvals",
+                "policy denies",
+                "user denies",
+                "read tool ms",
+                "write tool ms",
                 "mean seconds",
                 "good",
                 "bad",

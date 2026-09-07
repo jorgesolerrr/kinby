@@ -10,6 +10,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
 
 NodeId = NewType("NodeId", str)
+GateRule = NewType("GateRule", str)
 
 
 class ContractModel(BaseModel):
@@ -54,11 +55,22 @@ class PermissionMode(StrEnum):
     FULL_ACCESS = "full-access"
 
 
+class GateOutcome(StrEnum):
+    ALLOW = "allow"
+    DENY = "deny"
+
+
+class GateDecider(StrEnum):
+    POLICY = "policy"
+    USER = "user"
+
+
 class EventType(StrEnum):
     MODE_PINNED = "mode.pinned"
     TURN_STARTED = "turn.started"
     MESSAGE_DELTA = "message.delta"
     TOOL_CALL = "tool.call"
+    TOOL_GATED = "tool.gated"
     TOOL_RESULT = "tool.result"
     WARNING = "warning"
     APPROVAL_REQUESTED = "approval.requested"
@@ -125,6 +137,20 @@ class ToolCall(ContractModel):
     call_id: str
     name: str
     arguments: dict[str, JsonValue]
+    write: bool | None = None
+
+
+class ToolGated(ContractModel):
+    type: Literal[EventType.TOOL_GATED] = EventType.TOOL_GATED
+    call_id: str
+    name: str
+    action: GateOutcome
+    rule: GateRule
+    decided_by: GateDecider
+
+
+def gate_denial_source(gate: ToolGated) -> str:
+    return "the user" if gate.decided_by is GateDecider.USER else f'policy rule "{gate.rule}"'
 
 
 class ToolResult(ContractModel):
@@ -133,6 +159,7 @@ class ToolResult(ContractModel):
     name: str
     output: str
     error: bool
+    duration_ms: int | None = None
 
 
 class Warning(ContractModel):
@@ -146,7 +173,7 @@ class ApprovalRequested(ContractModel):
     approval_id: UUID
     name: str
     arguments: dict[str, JsonValue]
-    rule: str
+    rule: GateRule
 
 
 class TokenTotals(ContractModel):
@@ -235,6 +262,7 @@ Payload = Annotated[
     | TurnStarted
     | MessageDelta
     | ToolCall
+    | ToolGated
     | ToolResult
     | Warning
     | ApprovalRequested
@@ -364,6 +392,16 @@ class MemoryCallCounts(ContractModel):
     forget: int = 0
 
 
+class DenyCounts(ContractModel):
+    policy: int = 0
+    user: int = 0
+
+
+class ToolTime(ContractModel):
+    read_ms: int = 0
+    write_ms: int = 0
+
+
 class TurnMetrics(TokenTotals):
     thread_id: UUID
     turn_id: UUID
@@ -379,6 +417,8 @@ class TurnMetrics(TokenTotals):
     memory_calls: MemoryCallCounts
     memory_consulted: bool
     approvals_requested: int
+    denies: DenyCounts = Field(default_factory=DenyCounts)
+    tool_duration: ToolTime = Field(default_factory=ToolTime)
     memory_tokens: float
     rating: TurnRated | None
 
@@ -394,6 +434,8 @@ class StatsSummary(TokenTotals):
     memory_calls: MemoryCallCounts
     turns_without_memory: int
     approvals_requested: int
+    denies: DenyCounts = Field(default_factory=DenyCounts)
+    tool_duration: ToolTime = Field(default_factory=ToolTime)
     mean_duration_seconds: float | None
     good_ratings: int
     bad_ratings: int

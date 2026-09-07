@@ -10,6 +10,8 @@ from kinby.cli.repl import run_repl
 from kinby.contracts import (
     THREAD_CREATE,
     ApprovalRequested,
+    GateDecider,
+    GateOutcome,
     MemoryRecapped,
     MessageDelta,
     PermissionMode,
@@ -17,6 +19,7 @@ from kinby.contracts import (
     ThreadCreateCommand,
     ThreadCreateResult,
     ToolCall,
+    ToolGated,
     ToolResult,
     TurnRated,
     TurnVerdict,
@@ -84,6 +87,32 @@ class ToolEventRunner:
             )
         )
         await emit(Warning(sources=("tools/weather.py",), message="Using cached tool set."))
+        return TurnOutcome()
+
+    resume = does_not_park
+    restore = cannot_restore
+
+
+class DeniedToolEventRunner:
+    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+        await emit(ToolCall(call_id="bash-1", name="bash", arguments={}, write=True))
+        await emit(
+            ToolGated(
+                call_id="bash-1",
+                name="bash",
+                action=GateOutcome.DENY,
+                rule="bash.deny[0]",
+                decided_by=GateDecider.POLICY,
+            )
+        )
+        await emit(
+            ToolResult(
+                call_id="bash-1",
+                name="bash",
+                output='Tool "bash" was denied by policy rule "bash.deny[0]".',
+                error=True,
+            )
+        )
         return TurnOutcome()
 
     resume = does_not_park
@@ -529,6 +558,40 @@ def test_repl_renders_tool_and_warning_events(tmp_path: Path) -> None:
             '> [tool.call] weather {"city": "Quito"}\n[tool.result] weather (ok): 18 C\n\n> '
         )
         assert stderr.getvalue() == "[warning] tools/weather.py: Using cached tool set.\n"
+
+    asyncio.run(scenario())
+
+
+def test_repl_renders_a_denial_from_the_gate_event(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                DeniedToolEventRunner(),
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("Do not run this\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert stdout.getvalue() == (
+            '> [tool.call] bash {}\n[tool.gated] bash denied by policy rule "bash.deny[0]"\n\n> '
+        )
+        assert stderr.getvalue() == ""
 
     asyncio.run(scenario())
 

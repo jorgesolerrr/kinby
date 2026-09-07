@@ -225,6 +225,49 @@ def test_old_event_logs_without_delivery_fields_still_read(tmp_path: Path) -> No
     assert event.payload.origin.trigger is RoutineTrigger.SCHEDULED
 
 
+def test_old_tool_events_read_with_unknown_write_and_no_duration(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    records = [
+        {
+            "sequence": 1,
+            "thread_id": str(thread_id),
+            "turn_id": str(turn_id),
+            "timestamp": "2026-09-06T09:00:00+00:00",
+            "payload": {
+                "type": "tool.call",
+                "call_id": "weather-1",
+                "name": "weather",
+                "arguments": {"city": "Quito"},
+            },
+        },
+        {
+            "sequence": 2,
+            "thread_id": str(thread_id),
+            "turn_id": str(turn_id),
+            "timestamp": "2026-09-06T09:00:01+00:00",
+            "payload": {
+                "type": "tool.result",
+                "call_id": "weather-1",
+                "name": "weather",
+                "output": "18 C",
+                "error": False,
+            },
+        },
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "".join(f"{json.dumps(record)}\n" for record in records),
+        encoding="utf-8",
+    )
+
+    call, result = [event.payload for event in EventLog(tmp_path).all_events()]
+
+    assert isinstance(call, ToolCall)
+    assert call.write is None
+    assert isinstance(result, ToolResult)
+    assert result.duration_ms is None
+
+
 def test_signal_received_and_manual_payload_shapes() -> None:
     received = datetime(2026, 9, 6, 9, tzinfo=UTC)
     delivery = Delivery(
