@@ -1,14 +1,18 @@
+import asyncio
 import re
 from datetime import date
 from importlib import import_module
 from importlib.metadata import entry_points
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
 from kinby.cli import main
+from kinby.contracts import PermissionMode
 from kinby.core.prompt import PromptSectionName, assemble_system_prompt
 from kinby.instance import init_instance, load_instance
+from kinby.plugins import Tool, ToolContext
 from kinby.plugins.routines import load_routines
 from kinby.plugins.skills import load_skills
 
@@ -163,14 +167,16 @@ def test_write_routine_documents_every_frontmatter_key_from_spec(tmp_path):
     skills, _ = load_skills(load_instance(path))
 
     document = skills[0].source.read_text(encoding="utf-8")
+    frontmatter_section = document.partition("## Frontmatter")[2].partition("\n## ")[0]
 
-    assert set(re.findall(r"^\| `([a-z_]+)` \|", document, re.MULTILINE)) == {
+    assert set(re.findall(r"^\| `([a-z_]+)` \|", frontmatter_section, re.MULTILINE)) == {
         "description",
         "schedule",
         "enabled",
         "mode",
         "catch_up",
         "run",
+        "signal",
         "arguments",
         "steps",
         "tokens",
@@ -178,15 +184,146 @@ def test_write_routine_documents_every_frontmatter_key_from_spec(tmp_path):
     }
 
 
-def test_write_routine_example_loads_as_one_firing_with_documented_defaults(tmp_path):
+def test_write_routine_documents_signal_configuration(tmp_path):
+    path = init_instance(tmp_path / "instance")
+    skills, _ = load_skills(load_instance(path))
+    body = skills[0].body
+    signal_section = body.partition("## Receive signals")[2].partition("\n## ")[0]
+
+    assert set(re.findall(r"^\| `([a-z_]+)` \|", signal_section, re.MULTILINE)) == {
+        "auth",
+        "secret",
+        "signature_header",
+        "delivery_header",
+    }
+    for guidance in (
+        "`token`",
+        "`Authorization: Bearer <secret>`",
+        "`hmac-sha256`",
+        "raw request body",
+        "GitHub",
+        "instance `.env`",
+        "existing process value first",
+        "delivery id",
+        "deduplicate",
+        "origin",
+    ):
+        assert guidance in signal_section
+
+
+def test_write_routine_github_example_loads_and_filters_deliveries(tmp_path, monkeypatch):
+    path = init_instance(tmp_path / "instance")
+    instance = load_instance(path)
+    skills, _ = load_skills(instance)
+    example = skills[0].body.partition("## Example: GitHub `ready-for-agent`")[2]
+    example_text = " ".join(example.split())
+
+    for content in (
+        "`routines/ready-for-agent/ROUTINE.md`",
+        "mode: ask",
+        "auth: hmac-sha256",
+        "secret: GITHUB_WEBHOOK_SECRET",
+        "signature_header: X-Hub-Signature-256",
+        "delivery_header: X-GitHub-Delivery",
+        "`routines/ready-for-agent/run.py`",
+        "requiring approval for each workspace write",
+        "development-loop",
+    ):
+        assert content in example_text
+
+    (routine_document,) = re.findall(r"```markdown\n(.*?)\n```", example, re.DOTALL)
+    (code_step,) = re.findall(r"```python\n(.*?)\n```", example, re.DOTALL)
+    routine_path = path / "routines" / "ready-for-agent" / "ROUTINE.md"
+    routine_path.parent.mkdir(parents=True)
+    routine_path.write_text(routine_document, encoding="utf-8")
+    (routine_path.parent / "run.py").write_text(code_step, encoding="utf-8")
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+
+    routines, warnings = load_routines(instance)
+
+    assert not warnings
+    assert len(routines) == 1
+    routine = routines[0]
+    assert routine.mode is PermissionMode.ASK
+    code_step = routine.code_step
+    assert isinstance(code_step, Tool)
+    context = ToolContext(instance, uuid4())
+
+    def invoke(signal):
+        return asyncio.run(code_step.ainvoke_raw({"signal": signal}, context))
+
+    matching = {
+        "body": {
+            "action": "labeled",
+            "label": {"name": "ready-for-agent"},
+            "issue": {
+                "number": 131,
+                "title": "Teach write-routine to handle signals",
+                "html_url": "https://github.com/jorgesolerrr/kinby/issues/131",
+            },
+        }
+    }
+    assert invoke(matching) == (
+        "ReadyIssue(number=131, title='Teach write-routine to handle signals', "
+        "url='https://github.com/jorgesolerrr/kinby/issues/131')"
+    )
+    no_work_bodies = (
+        {"action": "opened"},
+        {"action": "labeled", "label": {"name": "needs-info"}},
+        {
+            "action": "labeled",
+            "label": {"name": "ready-for-agent"},
+            "issue": {"number": 131, "title": "Missing URL"},
+        },
+        {
+            "action": "labeled",
+            "label": {"name": "ready-for-agent"},
+            "issue": {"number": True, "title": "Wrong number", "html_url": "url"},
+        },
+        {
+            "action": "labeled",
+            "label": {"name": "ready-for-agent"},
+            "issue": {"number": 131, "title": 42, "html_url": "url"},
+        },
+        {
+            "action": "labeled",
+            "label": {"name": "ready-for-agent"},
+            "issue": {"number": 131, "title": "Wrong URL", "html_url": None},
+        },
+    )
+    for body in no_work_bodies:
+        assert invoke({"body": body}) is None
+
+
+def test_write_routine_teaches_when_and_how_to_use_signals(tmp_path):
+    path = init_instance(tmp_path / "instance")
+    skills, _ = load_skills(load_instance(path))
+    body = " ".join(skills[0].body.split())
+
+    for guidance in (
+        "Prefer a signal over a schedule in that case",
+        "declare both `signal` and `schedule`",
+        "schedule as a fallback",
+        "chatty signal",
+        "returns `None` for most deliveries",
+        "`kinby routine run <name> --payload <file>`",
+        "saved delivery",
+    ):
+        assert guidance in body
+    assert "The signal receiver is separate work" not in body
+
+
+def test_write_routine_daily_example_loads_with_documented_defaults(tmp_path):
     path = init_instance(tmp_path / "instance")
     instance = load_instance(path)
     skills, _ = load_skills(instance)
     examples = re.findall(r"```markdown\n(.*?)\n```", skills[0].body, re.DOTALL)
-    assert len(examples) == 1
+    example = next(
+        example for example in examples if "description: Summarize today's notes." in example
+    )
     routine_path = path / "routines" / "daily-summary" / "ROUTINE.md"
     routine_path.parent.mkdir()
-    routine_path.write_text(examples[0], encoding="utf-8")
+    routine_path.write_text(example, encoding="utf-8")
 
     routines, warnings = load_routines(instance)
 
