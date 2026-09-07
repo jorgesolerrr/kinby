@@ -51,8 +51,10 @@ def instance_at(path: Path) -> Instance:
     return load_instance(path)
 
 
-def routine_file(instance: Instance, frontmatter: str, body: str = "Read the news.") -> Path:
-    path = instance.path / "routines" / "news" / "ROUTINE.md"
+def routine_file(
+    instance: Instance, frontmatter: str, body: str = "Read the news.", *, name: str = "news"
+) -> Path:
+    path = instance.path / "routines" / name / "ROUTINE.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"---\n{frontmatter}\n---\n{body}\n")
     return path
@@ -111,9 +113,7 @@ signal:
 
 
 def write_routine(instance: Instance, name: str, frontmatter: str, code: str | None = None) -> Path:
-    path = instance.path / "routines" / name / "ROUTINE.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"---\n{frontmatter}\n---\nHandle the delivery.\n")
+    path = routine_file(instance, frontmatter, "Handle the delivery.", name=name)
     if code is not None:
         (path.parent / "run.py").write_text(code)
     return path
@@ -144,12 +144,26 @@ def fetch() -> str:
     return "ok"
 ''',
     )
+    shared = write_routine(
+        instance,
+        "shared-no-param",
+        "description: Shared\nrun: fetch\nsignal:\n  secret: GOOD_SECRET",
+    )
+    tools = instance.path / "tools"
+    tools.mkdir()
+    (tools / "fetch.py").write_text('''from kinby.plugins import tool
+@tool(write=False)
+def fetch() -> str:
+    """Fetch."""
+    return "ok"
+''')
     routines, warnings = load_routines(instance)
     assert [routine.name for routine in routines] == ["ok"]
     messages = {warning.sources[0]: warning.message for warning in warnings}
     assert "MISSING_SECRET" in messages[str(missing)]
     assert "signature" in messages[str(hmac)].lower()
     assert "signal" in messages[str(no_param)].lower()
+    assert "signal" in messages[str(shared)].lower()
 
 
 def test_signal_routine_keeps_its_schedule(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

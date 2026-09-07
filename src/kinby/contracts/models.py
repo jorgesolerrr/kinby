@@ -89,13 +89,14 @@ class SignalAuth(StrEnum):
 
 RoutineName = NewType("RoutineName", str)
 CronSchedule = NewType("CronSchedule", str)
+DeliveryId = NewType("DeliveryId", str)
 
 
 class RoutineOrigin(ContractModel):
     kind: Literal["routine"] = "routine"
     name: RoutineName
     trigger: RoutineTrigger
-    delivery: str | None = None
+    delivery_id: DeliveryId | None = None
 
 
 Origin = Annotated[UserOrigin | RoutineOrigin, Field(discriminator="kind")]
@@ -219,7 +220,7 @@ class Delivery(ContractModel):
     headers: dict[str, str]
     content_type: str
     body: str
-    delivery_id: str | None = None
+    delivery_id: DeliveryId | None = None
     received_at: AwareDatetime
 
 

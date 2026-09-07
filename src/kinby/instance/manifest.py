@@ -11,11 +11,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dotenv import load_dotenv
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StringConstraints,
     TypeAdapter,
     ValidationError,
+    WithJsonSchema,
     field_validator,
 )
 
@@ -118,7 +120,11 @@ class RawRoutines(_Section):
         return value
 
 
-def _parse_listen(value: str) -> Serve:
+def _parse_listen(value: object) -> Serve:
+    if isinstance(value, Serve):
+        return value
+    if not isinstance(value, str):
+        raise ValueError("must be a host:port address")
     host, separator, port_text = value.rpartition(":")
     if not separator or not host or not port_text:
         raise ValueError("must be a host:port address")
@@ -131,14 +137,15 @@ def _parse_listen(value: str) -> Serve:
     return Serve(host=host, port=port)
 
 
-class RawServe(_Section):
-    listen: str
+ListenAddress = Annotated[
+    Serve,
+    BeforeValidator(_parse_listen),
+    WithJsonSchema({"title": "Listen", "type": "string"}),
+]
 
-    @field_validator("listen")
-    @classmethod
-    def valid_listen(cls, value: str) -> str:
-        _parse_listen(value)
-        return value
+
+class RawServe(_Section):
+    listen: ListenAddress
 
 
 class RawManifest(_Section):
@@ -220,7 +227,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         feedback=Feedback(ask=raw.feedback.ask),
         tools=Tools(defaults=raw.tools.defaults),
         routines=Routines(timezone=ZoneInfo(raw.routines.timezone)),
-        serve=_parse_listen(raw.serve.listen) if raw.serve is not None else None,
+        serve=raw.serve.listen if raw.serve is not None else None,
         budgets=Budgets(
             steps=raw.budgets.steps,
             tokens=raw.budgets.tokens,

@@ -14,22 +14,22 @@ from kinby.frontmatter import parse_frontmatter, required_string
 from kinby.instance import Budgets, Instance
 from kinby.instance.layout import ROUTINE_CODE_FILE, ROUTINE_FILE, ROUTINES_DIR
 from kinby.instance.permissions import GatePolicy, constrain_mode, load_permissions
-from kinby.plugins.registry import load_tool_file
+from kinby.plugins.registry import ToolRegistry, load_tool_file
 from kinby.plugins.tools import Tool
 
 
-class _RawSignal(BaseModel):
+class _RawFrontmatter(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+
+class _RawSignal(_RawFrontmatter):
     auth: SignalAuth = SignalAuth.TOKEN
     secret: str
     signature_header: str | None = None
     delivery_header: str | None = None
 
 
-class _RawRoutine(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class _RawRoutine(_RawFrontmatter):
     description: str
     schedule: str | None = None
     enabled: bool = True
@@ -82,14 +82,26 @@ def load_routines(
     warnings: list[Warning] = []
     for path in sorted((instance.path / ROUTINES_DIR).glob(f"*/{ROUTINE_FILE}")):
         try:
-            routines.append(_load_routine(path, policy))
+            routines.append(_load_routine(path, policy, instance))
         except Exception as exc:
             # Routine files are user code. One broken routine must not hide the rest.
             warnings.append(Warning(sources=(str(path),), message=str(exc)))
     return tuple(routines), tuple(warnings)
 
 
-def _load_routine(path: Path, policy: GatePolicy) -> Routine:
+def _code_step_has_signal(code_step: SharedCodeStep | Tool | None, instance: Instance) -> bool:
+    tool = _resolved_code_step(code_step, instance)
+    return tool is None or "signal" in tool.runnable.args
+
+
+def _resolved_code_step(code_step: SharedCodeStep | Tool | None, instance: Instance) -> Tool | None:
+    if code_step is None or isinstance(code_step, Tool):
+        return code_step
+    snapshot, _ = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults).refresh()
+    return snapshot.get(code_step.name)
+
+
+def _load_routine(path: Path, policy: GatePolicy, instance: Instance) -> Routine:
     values, body = parse_frontmatter(path.read_text(encoding="utf-8"))
     required_string(values, "description")
     raw = _RawRoutine.model_validate(values)
@@ -115,7 +127,7 @@ def _load_routine(path: Path, policy: GatePolicy) -> Routine:
             raise ValueError(f"Signal secret {raw.signal.secret} is unset.")
         if raw.signal.auth is SignalAuth.HMAC_SHA256 and not raw.signal.signature_header:
             raise ValueError("HMAC signal requires a signature header.")
-        if isinstance(code_step, Tool) and "signal" not in code_step.runnable.args:
+        if not _code_step_has_signal(code_step, instance):
             raise ValueError("The code step has no signal parameter.")
         signal = SignalConfig(
             auth=raw.signal.auth,

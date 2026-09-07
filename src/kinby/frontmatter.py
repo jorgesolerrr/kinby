@@ -64,8 +64,11 @@ def parse_frontmatter(document: str) -> tuple[dict[str, FrontmatterValue], str]:
             continue
         parsed = _parse_value(value)
         if indented:
-            if table is not None and isinstance(parsed, str):
-                table[key.strip()] = parsed
+            if table is None:
+                raise FrontmatterError("Indented field is outside a table.")
+            if not isinstance(parsed, str):
+                raise FrontmatterError("Table fields must be strings.")
+            table[key.strip()] = parsed
             continue
         if parsed == "":
             table = {}

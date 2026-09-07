@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from kinby.contracts import (
     Delivery,
+    DeliveryId,
     Event,
     MessageDelta,
     PermissionMode,
@@ -219,7 +220,7 @@ def test_old_event_logs_without_delivery_fields_still_read(tmp_path: Path) -> No
     event = next(EventLog(tmp_path).all_events())
     assert isinstance(event.payload, TurnStarted)
     assert isinstance(event.payload.origin, RoutineOrigin)
-    assert event.payload.origin.delivery is None
+    assert event.payload.origin.delivery_id is None
     assert event.payload.origin.trigger is RoutineTrigger.SCHEDULED
 
 
@@ -229,7 +230,7 @@ def test_signal_received_and_manual_payload_shapes() -> None:
         headers={"content-type": "application/json"},
         content_type="application/json",
         body='{"action":"opened"}',
-        delivery_id="abc",
+        delivery_id=DeliveryId("abc"),
         received_at=received,
     )
     payload = SignalReceived(delivery=delivery)
@@ -247,9 +248,9 @@ def test_signal_received_and_manual_payload_shapes() -> None:
     origin = RoutineOrigin(
         name="news",
         trigger=RoutineTrigger.SIGNAL,
-        delivery="abc",
+        delivery_id=DeliveryId("abc"),
     )
-    assert origin.delivery == "abc"
+    assert origin.delivery_id == "abc"
     command = RoutineRunCommand.model_validate({"name": "news", "payload": delivery.body})
     assert command.payload == delivery.body
     assert RoutineRunCommand(name="news").payload is None
