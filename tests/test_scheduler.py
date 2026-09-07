@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import suppress
 from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
@@ -12,11 +13,16 @@ from kinby.cli.repl import run_repl
 from kinby.contracts import (
     AcceptedResult,
     CompletionOutcome,
+    Delivery,
+    DeliveryId,
     ErrorEnvelope,
     Event,
     MessageDelta,
+    RoutineName,
     RoutineOrigin,
+    RoutineTrigger,
     Scope,
+    SignalReceived,
     ThreadListResult,
     TurnCompleted,
     TurnInterrupted,
@@ -123,6 +129,25 @@ def runtime(instance, clock, runner=None):
 
 async def call(dispatcher, method, **payload):
     return await dispatcher.dispatch(method, payload, set(Scope))
+
+
+async def start_payload_call(dispatcher, name, payload):
+    pending_call = asyncio.create_task(
+        call(
+            dispatcher,
+            "routine.run",
+            name=name,
+            payload={"body": payload, "content_type": "text/plain"},
+        )
+    )
+    await asyncio.sleep(0)
+    return pending_call
+
+
+async def cancel_call(pending_call):
+    pending_call.cancel()
+    with suppress(asyncio.CancelledError):
+        await pending_call
 
 
 async def events_for(dispatcher, thread_id):
@@ -323,6 +348,43 @@ class BlockingRunner(ScriptedRunner):
         return await super().run(turn, context)
 
 
+def test_delivery_received_while_routine_runs_waits_then_fires(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = BlockingRunner()
+        dispatcher = runtime(
+            instance,
+            FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)),
+            runner,
+        )
+        assert dispatcher.scheduler is not None
+        running = await call(dispatcher, "routine.run", name="news")
+        assert isinstance(running, AcceptedResult)
+        receiving = await start_payload_call(dispatcher, "news", "later")
+        received_event = next(
+            event
+            for event in EventLog(instance.manifest.state_dir).all_events()
+            if isinstance(event.payload, SignalReceived)
+        )
+        assert not receiving.done()
+        assert not any(
+            isinstance(event.payload, TurnStarted)
+            for event in EventLog(instance.manifest.state_dir).stored(received_event.thread_id)
+        )
+
+        runner.release.set()
+        received = await receiving
+        assert isinstance(received, AcceptedResult)
+
+        assert any(
+            isinstance(event.payload, TurnStarted)
+            for event in EventLog(instance.manifest.state_dir).stored(received.thread_id)
+        )
+
+    asyncio.run(scenario())
+
+
 def test_instance_busy_serializes_routines_but_not_users(tmp_path):
     async def scenario():
         instance = instance_at(tmp_path)
@@ -417,6 +479,36 @@ def test_failure_notices_disable_and_restart(tmp_path):
     asyncio.run(scenario())
 
 
+def test_failed_signal_firings_disable_routine_at_ten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        routine_file(
+            instance,
+            "description: Issues\nenabled: true\nsignal:\n  secret: SIGNAL_SECRET",
+        )
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        dispatcher = runtime(instance, clock, FailingRunner())
+        assert dispatcher.scheduler is not None
+        for count in range(1, 11):
+            await call(
+                dispatcher,
+                "routine.run",
+                name="news",
+                payload={"body": str(count), "content_type": "text/plain"},
+            )
+            listed = await call(dispatcher, "routine.list")
+            assert not isinstance(listed, ErrorEnvelope)
+            assert listed.routines[0].failure_count == count
+
+        assert not listed.routines[0].enabled
+        assert listed.routines[0].notices[-1].kind == "disabled"
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "failure",
     [CodeStepFailed("code broke"), RuntimeError("model broke"), BudgetExceeded("tokens", 5)],
@@ -493,6 +585,233 @@ signal:
     output = capsys.readouterr().out
     assert "/signals/news" in output
     assert "token" in output
+
+
+def test_receive_records_delivery_and_drops_repeated_id(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        assert dispatcher.scheduler is not None
+        delivery = Delivery(
+            headers={"content-type": "application/json"},
+            content_type="application/json",
+            body='{"action":"opened"}',
+            delivery_id=DeliveryId("delivery-1"),
+            received_at=clock.now,
+        )
+
+        accepted = await dispatcher.scheduler.receive(
+            RoutineName("issues"), delivery, RoutineTrigger.SIGNAL
+        )
+        repeated = await dispatcher.scheduler.receive(
+            RoutineName("issues"), delivery, RoutineTrigger.SIGNAL
+        )
+
+        assert repeated == accepted
+        threads = await call(dispatcher, "thread.list")
+        assert isinstance(threads, ThreadListResult)
+        assert [(thread.id, thread.title) for thread in threads.threads] == [
+            (accepted.thread_id, "issues · delivery-1")
+        ]
+        events = EventLog(instance.manifest.state_dir).stored(accepted.thread_id)
+        assert len(events) == 1
+        assert events[0].turn_id == accepted.turn_id
+        assert events[0].sequence == accepted.sequence
+        assert events[0].payload == SignalReceived(
+            origin=RoutineOrigin(
+                name=RoutineName("issues"),
+                trigger=RoutineTrigger.SIGNAL,
+                delivery_id=DeliveryId("delivery-1"),
+            ),
+            delivery=delivery,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_routine_list_counts_pending_deliveries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        routine_file(
+            instance,
+            "description: Issues\nsignal:\n  secret: SIGNAL_SECRET",
+            name="issues",
+        )
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        runner = BlockingRunner()
+        dispatcher = runtime(instance, clock, runner)
+        assert dispatcher.scheduler is not None
+        await call(dispatcher, "routine.run", name="issues")
+        receiving = await start_payload_call(dispatcher, "issues", "opened")
+
+        listed = await call(dispatcher, "routine.list")
+        assert not isinstance(listed, ErrorEnvelope)
+        assert listed.routines[0].pending == 1
+        runner.release.set()
+        await receiving
+
+    asyncio.run(scenario())
+
+
+def test_first_scheduler_pass_fires_pending_delivery_with_fixed_turn_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        routine_file(
+            instance,
+            "description: Issues\nsignal:\n  secret: SIGNAL_SECRET",
+            name="issues",
+        )
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        runner = BlockingRunner()
+        dispatcher = runtime(instance, clock, runner)
+        assert dispatcher.scheduler is not None
+        await call(dispatcher, "routine.run", name="issues")
+        receiving = await start_payload_call(dispatcher, "issues", "opened")
+        received = next(
+            event
+            for event in EventLog(instance.manifest.state_dir).all_events()
+            if isinstance(event.payload, SignalReceived)
+        )
+        await cancel_call(receiving)
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+
+        restarted = runtime(instance, clock)
+        assert restarted.scheduler is not None
+        await restarted.scheduler.tick()
+        await restarted.scheduler.drain()
+
+        events = EventLog(instance.manifest.state_dir).stored(received.thread_id)
+        assert [type(event.payload) for event in events] == [
+            SignalReceived,
+            TurnStarted,
+            MessageDelta,
+            TurnCompleted,
+        ]
+        assert {event.turn_id for event in events} == {received.turn_id}
+        started = events[1].payload
+        assert isinstance(started, TurnStarted)
+        assert started.origin == RoutineOrigin(
+            name=RoutineName("issues"), trigger=RoutineTrigger.SIGNAL
+        )
+        listed = await call(restarted, "routine.list")
+        assert not isinstance(listed, ErrorEnvelope)
+        assert listed.routines[0].pending == 0
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "delivery_time,expected",
+    [
+        (
+            datetime(2026, 9, 6, 9, 1, tzinfo=UTC),
+            [RoutineTrigger.SCHEDULED, RoutineTrigger.SIGNAL],
+        ),
+        (
+            datetime(2026, 9, 6, 8, 58, tzinfo=UTC),
+            [RoutineTrigger.SIGNAL, RoutineTrigger.SCHEDULED],
+        ),
+    ],
+)
+def test_scheduler_fires_oldest_ready_work_one_per_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    delivery_time: datetime,
+    expected: list[RoutineTrigger],
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        routine_file(
+            instance,
+            "description: Schedule\nschedule: 0 9 * * *",
+            name="scheduled",
+        )
+        routine_file(
+            instance,
+            "description: Delivery\nsignal:\n  secret: SIGNAL_SECRET",
+            name="issues",
+        )
+        clock = FakeClock(datetime(2026, 9, 6, 8, 59, tzinfo=UTC))
+        runner = BlockingRunner()
+        dispatcher = runtime(instance, clock, runner)
+        assert dispatcher.scheduler is not None
+        await call(dispatcher, "routine.run", name="issues")
+        clock.now = delivery_time
+        receiving = await start_payload_call(dispatcher, "issues", "opened")
+        await cancel_call(receiving)
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+        clock.now = datetime(2026, 9, 6, 9, 2, tzinfo=UTC)
+
+        observed = []
+        for _ in range(2):
+            await dispatcher.scheduler.tick()
+            started = [
+                event.payload
+                for event in EventLog(instance.manifest.state_dir).all_events()
+                if isinstance(event.payload, TurnStarted)
+                and isinstance(event.payload.origin, RoutineOrigin)
+                and event.payload.origin.trigger is not RoutineTrigger.MANUAL
+            ]
+            assert len(started) == len(observed) + 1
+            origin = started[-1].origin
+            assert isinstance(origin, RoutineOrigin)
+            observed.append(origin.trigger)
+
+        assert observed == expected
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_fires_every_pending_delivery_oldest_first(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        runner = BlockingRunner()
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        dispatcher = runtime(
+            instance,
+            clock,
+            runner,
+        )
+        assert dispatcher.scheduler is not None
+        await call(dispatcher, "routine.run", name="news")
+        receiving = []
+        for body, minute in (("first", 2), ("second", 1)):
+            clock.now = datetime(2026, 9, 6, 9, minute, tzinfo=UTC)
+            receiving.append(await start_payload_call(dispatcher, "news", body))
+
+        received = [
+            event
+            for event in EventLog(instance.manifest.state_dir).all_events()
+            if isinstance(event.payload, SignalReceived)
+        ]
+        for task in receiving:
+            await cancel_call(task)
+
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+
+        await dispatcher.scheduler.tick()
+        await dispatcher.scheduler.tick()
+
+        assert [
+            event.thread_id
+            for event in EventLog(instance.manifest.state_dir).all_events()
+            if isinstance(event.payload, TurnStarted)
+            and isinstance(event.payload.origin, RoutineOrigin)
+            and event.payload.origin.trigger is RoutineTrigger.SIGNAL
+        ] == [item.thread_id for item in received]
+
+    asyncio.run(scenario())
 
 
 def test_cli_routine_list_and_no_work_run(tmp_path, capsys):
@@ -857,10 +1176,19 @@ def test_daily_refusal_leaves_failure_count_unchanged(tmp_path):
         refused = await call(dispatcher, "routine.run", name="news")
         assert refused.code == "BUDGET_EXCEEDED"
         assert len((await call(dispatcher, "thread.list")).threads) == 1
+        accepted = await call(
+            dispatcher,
+            "routine.run",
+            name="news",
+            payload={"body": "pending", "content_type": "text/plain"},
+        )
+        assert isinstance(accepted, AcceptedResult)
+        listed = await call(dispatcher, "routine.list")
+        assert listed.routines[0].pending == 1
         await dispatcher.scheduler.tick()
         clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
         await dispatcher.scheduler.tick()
-        assert len((await call(dispatcher, "thread.list")).threads) == 1
+        assert len((await call(dispatcher, "thread.list")).threads) == 2
         await dispatcher.scheduler.drain()
         routine = (await call(dispatcher, "routine.list")).routines[0]
         assert routine.failure_count == 1 and len(routine.notices) == 1
@@ -880,7 +1208,8 @@ def test_many_frequent_routines_have_no_artificial_limit(tmp_path):
         listed = await call(dispatcher, "routine.list")
         assert len(listed.routines) == 21 and not listed.warnings
         clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
-        await dispatcher.scheduler.tick()
+        for _ in range(21):
+            await dispatcher.scheduler.tick()
         assert len((await call(dispatcher, "thread.list")).threads) == 21
 
     asyncio.run(scenario())

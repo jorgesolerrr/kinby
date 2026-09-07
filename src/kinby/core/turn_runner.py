@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -34,11 +35,13 @@ from pydantic import JsonValue, TypeAdapter
 from kinby.contracts import (
     ApprovalRequested,
     CompletionOutcome,
+    Delivery,
     EventType,
     MessageDelta,
     PermissionMode,
     RoutineOrigin,
     RoutineTrigger,
+    SignalReceived,
     ToolCall,
     ToolResult,
     UserOrigin,
@@ -404,6 +407,7 @@ class LangGraphRunner:
                 await emit(warning)
             permission_mode = routine.mode
             message = routine.prompt
+            delivery = self._delivery_for_turn(turn)
             declared = routine.code_step
             if declared is None:
                 code_step = None
@@ -425,6 +429,7 @@ class LangGraphRunner:
                     code_step,
                     turn.origin,
                     turn.thread_id,
+                    delivery,
                     emit,
                     budgets,
                 )
@@ -437,7 +442,19 @@ class LangGraphRunner:
                 if output is None:
                     return TurnOutcome(outcome=CompletionOutcome.NO_WORK)
                 payload = output
+            elif delivery is not None:
+                payload = delivery.body
         return _PreparedTurn(tools, progress, permission_mode, message, payload)
+
+    def _delivery_for_turn(self, turn: TurnRequest) -> Delivery | None:
+        return next(
+            (
+                event.payload.delivery
+                for event in self._event_log.stored(turn.thread_id)
+                if event.turn_id == turn.turn_id and isinstance(event.payload, SignalReceived)
+            ),
+            None,
+        )
 
     async def _run_code_step(
         self,
@@ -445,11 +462,29 @@ class LangGraphRunner:
         code_step: Tool,
         origin: RoutineOrigin,
         thread_id: UUID,
+        delivery: Delivery | None,
         emit: Emit,
         budgets: Budgets,
     ) -> str | None:
         arguments = dict(routine.arguments)
-        if routine.signal is not None and origin.trigger is not RoutineTrigger.SIGNAL:
+        if delivery is not None:
+            signature_header = (
+                routine.signal.signature_header.lower()
+                if routine.signal is not None and routine.signal.signature_header is not None
+                else None
+            )
+            headers = {
+                name.lower(): value
+                for name, value in delivery.headers.items()
+                if name.lower() not in {"authorization", signature_header}
+            }
+            raw_signal = delivery.model_dump(mode="json")
+            raw_signal["headers"] = headers
+            media_type = delivery.content_type.partition(";")[0].strip().lower()
+            if media_type == "application/json":
+                raw_signal["body"] = json.loads(delivery.body)
+            arguments["signal"] = _TOOL_ARGUMENTS.validate_python(raw_signal)
+        elif routine.signal is not None and origin.trigger is not RoutineTrigger.SIGNAL:
             arguments["signal"] = {}
         call = ToolCall(call_id=str(uuid4()), name=code_step.name, arguments=arguments)
         decision = evaluate(

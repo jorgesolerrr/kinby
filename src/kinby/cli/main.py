@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import shlex
 import signal
 import sys
@@ -30,6 +31,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     RoutineName,
+    RoutinePayload,
     RoutineRunCommand,
     Scope,
     StatsBucketSize,
@@ -385,17 +387,27 @@ async def _list_routines(instance: Instance) -> int:
         return await show_routines(client, sys.stdout, sys.stderr)
 
 
-async def _run_routine(instance: Instance, name: RoutineName) -> int:
+async def _run_routine(
+    instance: Instance,
+    name: RoutineName,
+    payload_path: Path | None,
+) -> int:
+    try:
+        payload = _read_routine_payload(payload_path) if payload_path is not None else None
+    except OSError as exc:
+        print(f'Could not read payload "{payload_path}": {exc}', file=sys.stderr)
+        return 1
     async with _instance_session(instance) as client:
-        return await _run_routine_command(client, name, instance.path)
+        return await _run_routine_command(client, name, instance.path, payload)
 
 
 async def _run_routine_command(
     client: ContractClient,
     name: RoutineName,
     instance_path: Path,
+    payload: RoutinePayload | None,
 ) -> int:
-    accepted = await client.call(ROUTINE_RUN, RoutineRunCommand(name=name))
+    accepted = await client.call(ROUTINE_RUN, RoutineRunCommand(name=name, payload=payload))
     if isinstance(accepted, ErrorEnvelope):
         print(format_error(accepted), file=sys.stderr)
         return 1
@@ -433,6 +445,17 @@ async def _run_routine_command(
     finally:
         await stream.aclose()
     return status
+
+
+def _read_routine_payload(path: Path) -> RoutinePayload:
+    body = path.read_text(encoding="utf-8")
+    try:
+        json.loads(body)
+    except json.JSONDecodeError:
+        content_type = "text/plain"
+    else:
+        content_type = "application/json"
+    return RoutinePayload(body=body, content_type=content_type)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -503,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_instance_selector(routine_list, "instance whose routines to list")
     routine_run = routine_subparsers.add_parser("run", help="run a routine manually")
     routine_run.add_argument("name", help="routine name")
+    routine_run.add_argument("--payload", type=Path, help="delivery payload file")
     _add_instance_selector(routine_run, "instance that owns the routine")
     usage_parser = subparsers.add_parser(
         "usage",
@@ -585,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
             case "routine" if args.routine_command in {"list", "run"}:
                 instance = _load_selected_instance(args)
                 if args.routine_command == "run":
-                    return asyncio.run(_run_routine(instance, RoutineName(args.name)))
+                    return asyncio.run(_run_routine(instance, RoutineName(args.name), args.payload))
                 return asyncio.run(_list_routines(instance))
             case "usage":
                 command = _range_command(lambda: _usage_command(args))

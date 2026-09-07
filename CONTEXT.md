@@ -340,6 +340,10 @@ The instance's coordinator of **routine** wakes, whether due by schedule or wait
 
 One attempt to start a **routine** turn, whether scheduled, caught up after downtime, requested manually, or started by a **delivery**.
 
+### Routine payload
+
+The body text and inferred content type read from a file passed to `kinby routine run --payload`.
+
 ### Armed routine
 
 An enabled scheduled **routine** with its next firing time selected.

@@ -246,7 +246,7 @@ def build_dispatcher(
             after_turn,
         )
         if isinstance(turns, ScheduledTurnConfig):
-            scheduler = Scheduler(turns.scheduler, event_log, turn_service)
+            scheduler = Scheduler(turns.scheduler, event_log, store, turn_service)
     dispatcher = ScheduledDispatcher(scheduler) if scheduler is not None else Dispatcher()
 
     async def create_thread(command: ThreadCreateCommand) -> ThreadCreateResult:

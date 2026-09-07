@@ -230,7 +230,12 @@ class Turns:
     async def start(self, command: ThreadTurnStartCommand) -> AcceptedResult:
         return await self.wake(command.thread_id, command.message, UserOrigin())
 
-    async def wake(self, thread_id: UUID, message: str, origin: Origin) -> AcceptedResult:
+    async def wake(
+        self,
+        thread_id: UUID,
+        message: str,
+        origin: Origin,
+    ) -> AcceptedResult:
         self._require_thread(thread_id)
         self.require_available(origin)
         events = self._log.stored(thread_id)
@@ -240,14 +245,29 @@ class Turns:
         if thread_id in self._claims or active or pending is not None:
             raise _thread_busy(thread_id)
 
-        return await self._wake(lambda: thread_id, message, origin)
+        return await self._wake(lambda: thread_id, message, origin, uuid4())
+
+    async def wake_recorded(
+        self,
+        thread_id: UUID,
+        turn_id: UUID,
+        message: str,
+        origin: RoutineOrigin,
+    ) -> AcceptedResult:
+        self._require_thread(thread_id)
+        self.require_available(origin)
+        return await self._wake(lambda: thread_id, message, origin, turn_id)
 
     async def wake_new_thread(self, title: str, message: str, origin: Origin) -> AcceptedResult:
         self.require_available(origin)
-        return await self._wake(lambda: self._store.create(title).id, message, origin)
+        return await self._wake(lambda: self._store.create(title).id, message, origin, uuid4())
 
     async def _wake(
-        self, thread: Callable[[], UUID], message: str, origin: Origin
+        self,
+        thread: Callable[[], UUID],
+        message: str,
+        origin: Origin,
+        turn_id: UUID,
     ) -> AcceptedResult:
         preparation = self._prepare_for_turn()
         check_daily_budget(preparation.daily_budget)
@@ -258,7 +278,7 @@ class Turns:
         try:
             turn = TurnRequest(
                 thread_id=thread_id,
-                turn_id=uuid4(),
+                turn_id=turn_id,
                 message=message,
                 model=preparation.model,
                 origin=origin,
