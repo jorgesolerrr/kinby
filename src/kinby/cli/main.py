@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import shlex
 import signal
 import sys
@@ -64,6 +65,14 @@ from kinby.instance.recap import load_recap_lens
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
+
+
+class _CurrentStderr:
+    def write(self, message: str) -> int:
+        return sys.stderr.write(message)
+
+    def flush(self) -> None:
+        sys.stderr.flush()
 
 
 def _add_instance_selector(parser: argparse.ArgumentParser, help_text: str) -> None:
@@ -496,6 +505,7 @@ def _read_routine_payload(path: Path) -> RoutinePayload:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="kinby")
+    parser.set_defaults(verbose=False)
     parser.add_argument(
         "--version",
         action="store_true",
@@ -535,11 +545,21 @@ def main(argv: list[str] | None = None) -> int:
         "--thread",
         help="resume this thread instead of creating one",
     )
+    run_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="show debug logs",
+    )
     serve_parser = subparsers.add_parser(
         "serve",
         help="run scheduled routines without a REPL",
     )
     _add_instance_selector(serve_parser, "instance to serve")
+    serve_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="show debug logs",
+    )
     thread_parser = subparsers.add_parser(
         "thread",
         help="create and list threads",
@@ -597,6 +617,12 @@ def main(argv: list[str] | None = None) -> int:
         help="group turns by UTC day or Monday-starting week",
     )
     args = parser.parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(levelname)s %(name)s %(message)s",
+        stream=_CurrentStderr(),
+        force=True,
+    )
     if args.version:
         print(f"kinby {version('kinby')}")
         return 0
