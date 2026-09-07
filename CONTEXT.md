@@ -304,7 +304,7 @@ What started a **turn**: the user, a **routine**, or a **signal**.
 
 ### Routine
 
-A **wake** an **instance** owns and runs on a schedule: a prompt, and optionally the instance's own **code step** that runs first. Lives as a directory in the instance; its file is the source of truth.
+A **wake** an **instance** owns: a prompt, and optionally the instance's own **code step** that runs first. Started by a schedule, by a **delivery**, or by hand. Lives as a directory in the instance; its file is the source of truth.
 _Avoid_: cron job, automation, job
 
 ### Code step
@@ -320,17 +320,25 @@ A completed **turn** whose **code step** found nothing for the model to do. Neit
 An inbound stimulus from outside the **instance**, such as a webhook call or a received email, that wakes the agent without a schedule. Never called an event: that word names a thread history record.
 _Avoid_: event, trigger, webhook (as the concept)
 
+### Receiver
+
+The part of **serve mode** that listens for **signals**, authenticates each call against the **routine** it names, and records the accepted ones as **deliveries**. A rejected call leaves no record.
+
+### Delivery
+
+One authenticated inbound call the **receiver** accepted for a **routine**. Recorded the moment it arrives, before any work starts, so it survives a restart. The **scheduler** starts its **turn** when the instance is free. Two deliveries with the same provider id are one delivery.
+
 ### Budget
 
 A ceiling an **instance** sets on one **turn** (steps, tokens, seconds) or on a UTC day (cost). Reaching it closes the turn as failed. Absent means unlimited; a **routine** may lower a budget, never raise it.
 
 ### Scheduler
 
-The instance's coordinator of scheduled **routine** wakes.
+The instance's coordinator of **routine** wakes, whether due by schedule or waiting as a **delivery**.
 
 ### Firing
 
-One attempt to start a **routine** turn, whether scheduled, caught up after downtime, or requested manually.
+One attempt to start a **routine** turn, whether scheduled, caught up after downtime, requested manually, or started by a **delivery**.
 
 ### Armed routine
 

@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blueprint: Signal receiver</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f5f5f5;
+      --ink: #2d3142;
+      --muted: #4f5d75;
+      --soft: #7a8399;
+      --rule: rgba(45, 49, 66, 0.16);
+      --accent: #eb6c36;
+      --accent-tint: rgba(235, 108, 54, 0.08);
+      --link: #2e5aa8;
+      --new: #2e7d32;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', Georgia, serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #2d3142;
+        --ink: #f5f5f5;
+        --muted: #bfc0c0;
+        --soft: #8e98ac;
+        --rule: rgba(245, 245, 245, 0.16);
+        --accent: #f08a59;
+        --accent-tint: rgba(240, 138, 89, 0.10);
+        --link: #6a95d8;
+        --new: #66bb6a;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; padding: 3rem 2rem 4rem; font-family: var(--font-sans); font-size: 15px; line-height: 1.55; background: var(--paper); color: var(--ink); }
+    main { max-width: 960px; margin: 0 auto; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.5rem; }
+    h1 { font-family: var(--font-serif); font-weight: 400; font-size: 2.25rem; line-height: 1.1; margin: 0 0 0.5rem; }
+    h2 { font-family: var(--font-serif); font-weight: 400; font-size: 1.6rem; margin: 3rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+    h3 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+    .mode { font-family: var(--font-mono); font-size: 0.7rem; color: var(--soft); margin-left: 0.5rem; letter-spacing: 0.08em; }
+    .stamp { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+    code, pre { font-family: var(--font-mono); font-size: 0.85em; }
+    code { background: rgba(127, 127, 127, 0.12); padding: 0.05em 0.3em; border-radius: 3px; }
+    pre { padding: 0.75rem 1rem; border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+    th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--rule); }
+    th { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+    figure { margin: 1.5rem 0; }
+    figure svg { display: block; width: 100%; height: auto; }
+    figcaption { font-family: var(--font-serif); font-style: italic; font-size: 0.95rem; color: var(--muted); margin-top: 0.5rem; }
+    .overflow { overflow-x: auto; }
+    ol, ul { padding-left: 1.4rem; }
+    li { margin: 0.25rem 0; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1.25rem; }
+    dt { font-family: var(--font-mono); font-size: 0.85rem; }
+    dd { margin: 0; }
+    footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--rule); font-family: var(--font-mono); font-size: 0.75rem; color: var(--soft); }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Blueprint</p>
+  <h1>Signal receiver</h1>
+  <p class="stamp">Stamped at <code>63e8236</code>: paths and symbols are true at this commit.</p>
+
+  <h2 id="at-a-glance">At a glance <span class="mode">explanation</span></h2>
+  <p>You get a routine that a webhook can wake: a <code>signal</code> block in <code>ROUTINE.md</code>, a <code>[serve] listen</code> address in <code>kinby.toml</code>, and <code>kinby serve</code> answering <code>POST /signals/&lt;routine&gt;</code> with a bearer or HMAC check. The receiver never starts a turn. It records each accepted call as a <code>signal.received</code> event on a fresh thread and answers 202, and the scheduler fires those deliveries oldest first when the instance is free, through the same wake path a cron firing uses. The decision that constrains the rest is that the event log is the delivery queue: a delivery that arrives during an hour-long firing or just before a crash waits in the log instead of being lost, which is what makes GitHub, a provider that never retries, a safe first source.</p>
+
+  <h2 id="problem">Problem <span class="mode">explanation</span></h2>
+  <p>Your kinby acts on a schedule now and on nothing else. When someone labels a GitHub issue <code>ready-for-agent</code>, the only way your agent notices is a routine that polls every few minutes and spends a turn each time to find nothing. Every provider that can push has to be polled. <code>kinby serve</code> opens no socket: <code>_serve_instance</code> in <code>src/kinby/cli/main.py</code> boots the runtime, starts the scheduler, prints the routine list and waits for a signal to stop. <code>RoutineTrigger</code> knows scheduled, manual and catch-up. <code>Turns.wake</code> takes an origin, and only <code>Scheduler._fire</code> calls it. The write-routine skill already calls a minutes-level poll on a source that can push a smell, and offers nothing else.</p>
+
+  <h2 id="solution">Solution <span class="mode">explanation</span></h2>
+  <p>You add a <code>signal</code> block to a routine and a <code>[serve] listen</code> line to the manifest, put the secret in the instance <code>.env</code>, and point the provider at <code>/signals/&lt;routine&gt;</code>. Each accepted call becomes a delivery on its own thread, answered 202 at once. When the instance is free the scheduler fires it as an ordinary routine turn: the code step runs first with the delivery as its <code>signal</code> argument and returns <code>None</code> for anything that needs no work, the prompt says the routine was woken by a signal, and the gate, recap, statistics, rating and failure policy apply unchanged. <code>kinby routine run &lt;name&gt; --payload &lt;file&gt;</code> fires the same path by hand with a saved delivery, so you test the GitHub routine before wiring the hook. <code>kinby routine list</code> shows the path, the auth scheme and how many deliveries are waiting.</p>
+
+  <h2 id="decision-log">Decision log <span class="mode">explanation</span></h2>
+  <p>One row per decision settled in the grilling on #107, September 6. Numbered so later sections can cite <code>D10</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>#</th><th>Decision</th><th>Chosen</th><th>Rejected</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>What a signal wakes</td><td>A routine. <code>ROUTINE.md</code> gains a <code>signal</code> block; <code>RoutineTrigger</code> gains <code>SIGNAL</code>.</td><td>A new <code>signals/&lt;name&gt;/SIGNAL.md</code> artifact with its own loader and list.</td><td>Prompt, mode, budgets, code step, failure policy, list and REPL lines all apply unchanged. One file format, one history.</td></tr>
+      <tr><td>D2</td><td>Where the listener lives</td><td>Inside <code>kinby serve</code> on its asyncio loop. <code>kinby run</code> never listens. The library must serve WebSocket later in the same process.</td><td>A separate listener process.</td><td>ADR 0006 fixes one process per event log. The library choice is research #125.</td></tr>
+      <tr><td>D3</td><td>Listening configuration</td><td>Off when the manifest has no listen address. Sample manifest binds loopback. TLS is a proxy's or tunnel's job.</td><td>Listening by default; TLS in kinby.</td><td>Exposing a port is the user's choice. Certificates are not kinby's problem.</td></tr>
+      <tr><td>D4</td><td>Endpoint shape</td><td><code>POST /signals/&lt;routine&gt;</code> and <code>GET /health</code>, nothing else.</td><td>A path per source with fan-out to routines.</td><td>The routine name is the whole routing rule. No source registry.</td></tr>
+      <tr><td>D5</td><td>Inbound auth</td><td>Per routine: <code>token</code> (bearer header, default) or <code>hmac-sha256</code> over the raw body. Secret from an env var in <code>.env</code>. Missing var fails the routine at load. 401 with an empty body, nothing recorded.</td><td>Token only.</td><td>GitHub, the first real source, signs bodies rather than sending a token. A missing secret must never expose a path.</td></tr>
+      <tr><td>D6</td><td>Filtering before the model</td><td>The code step is the filter. It receives the delivery as a <code>signal</code> argument; <code>None</code> means no work. Without a code step the raw body is the data block.</td><td>Filter expressions in frontmatter.</td><td>kinby never inspects payloads. The author's code decides.</td></tr>
+      <tr><td>D7</td><td>Is every delivery a recorded turn</td><td>Yes. A filtered delivery is a no-work turn, like a routine check today.</td><td>A separate durable inbox with a thread only when the model runs.</td><td>One history covers signals for free: failure policy, statistics, catch-up. The skill warns about chatty hooks.</td></tr>
+      <tr><td>D8</td><td>Sources that ship first</td><td>Generic webhook only. Gmail via Pub/Sub is a documented recipe with a code step that fetches on push.</td><td>Provider adapters in core.</td><td>The map rules Gmail connectors out of scope, and a Pub/Sub push is itself a webhook.</td></tr>
+      <tr><td>D9</td><td>Workflows</td><td>No term yet. Today a workflow is a routine whose prompt follows a skill-described loop, started by a signal. Fog entry on the map with the issue-to-PR loop as the first case.</td><td>A first-class multi-turn workflow now.</td><td>The multi-turn shape (wait on CI, continue later) is not known yet. Do not invent it here.</td></tr>
+      <tr><td>D10</td><td>Busy instance</td><td>The receiver records a <code>signal.received</code> event on a fresh thread and answers 202. The scheduler fires it when idle. The log is the queue. ADR 0025.</td><td>Hold the request then 503. In-memory queue. Durable inbox file.</td><td>GitHub does not retry, and a firing can hold the instance for an hour, so 503 loses the deliveries the workflow exists for. A memory queue loses them on stop. A second file is a second run history.</td></tr>
+      <tr><td>D11</td><td>Origin of a signal firing</td><td><code>RoutineOrigin</code> with <code>trigger=signal</code> and an optional <code>delivery</code> id taken from the header the routine names. Thread title is routine name plus delivery id or received time.</td><td>A separate <code>SignalOrigin</code> type.</td><td>Every consumer of the routine origin keeps working.</td></tr>
+      <tr><td>D12</td><td>Cue rendering</td><td><code>[Routine: &lt;name&gt;, woken by a signal]</code>, then the prompt, then the same data block used for code step results.</td><td>A second block type for signal bodies.</td><td>One block, one framing sentence.</td></tr>
+      <tr><td>D13</td><td>Firing by hand</td><td><code>routine.run</code> gains an optional payload. <code>kinby routine run &lt;name&gt; --payload &lt;file&gt;</code> sends it with the manual trigger, skipping auth.</td><td>A separate <code>signal</code> command.</td><td>That is how the GitHub routine is tested with a saved delivery before the hook exists.</td></tr>
+      <tr><td>D14</td><td>Failure policy and disabled routines</td><td>Signal firings count like scheduled ones. A delivery for a disabled routine is authenticated, answered 410, recorded nowhere. Unknown path is 404 before auth.</td><td>Skip the failure policy for signals.</td><td>The provider's hook page shows the 410 with its reason, which is the notice until channels exist.</td></tr>
+      <tr><td>D15</td><td>What the code step receives</td><td>A <code>signal</code> parameter: headers with auth and signature headers removed and keys lowercased, plus the body, decoded when the content type is JSON. Frontmatter <code>arguments</code> merge in. A step without the parameter fails the routine at load.</td><td>Only the body.</td><td>A secret must never reach the model. The loader check turns a wrong signature into a warning at serve start.</td></tr>
+      <tr><td>D16</td><td>Limits</td><td>Body capped at one megabyte, 413 above. No inline processing, so no request timeout beyond the server default. Deliveries fire one at a time in arrival order.</td><td>Unbounded bodies.</td><td>A runaway provider must not fill the event log.</td></tr>
+      <tr><td>D17</td><td>Duplicates</td><td>Core drops an exact repeat of a delivery id when the routine names the header, answering 200 with the existing thread. Semantic duplicates stay with the code step.</td><td>No dedup in core.</td><td>The id already sits in the log the scheduler reads, so the check is one fold.</td></tr>
+      <tr><td>D18</td><td>Workflow term and the GitHub example</td><td>No <code>Workflow</code> term. The GitHub <code>ready-for-agent</code> routine ships as a documented example in the spec and the write-routine skill, not as package code.</td><td>An <code>examples/</code> directory in the package.</td><td>The example is tested by hand once and never rots in CI.</td></tr>
+      <tr><td>D19</td><td>Frontmatter shape</td><td><code>signal:</code> table with <code>auth</code>, <code>secret</code>, <code>signature_header</code>, <code>delivery_header</code>. A routine may carry both <code>schedule</code> and <code>signal</code>; <code>catch_up</code> applies to the schedule only.</td><td>Flat keys prefixed <code>signal_</code>.</td><td>Push as the fast path and the schedule as fallback, one history.</td></tr>
+      <tr><td>D20</td><td>Manifest table name</td><td><code>[serve] listen</code>. With <code>[serve]</code> present, <code>kinby serve</code> listens even when no routine declares a signal, so <code>/health</code> works.</td><td><code>[signals] listen</code>.</td><td>The server effort adds its RPC socket to the same server rather than opening a second port.</td></tr>
+      <tr><td>D21</td><td>What <code>signal.received</code> carries and what 202 returns</td><td>The whole delivery: headers (secrets stripped, lowercased), content type, body text, delivery id, received time. 202 returns JSON with thread id and sequence.</td><td>A reference to a body stored elsewhere.</td><td>The log is canonical, so the delivery lives there and nowhere else. The sender's log can name the run.</td></tr>
+      <tr><td>D22</td><td>Auth mechanics</td><td>Token: <code>Authorization: Bearer &lt;secret&gt;</code>. HMAC: hex SHA-256 of the raw body, optional <code>sha256=</code> prefix. Both through <code>hmac.compare_digest</code>. No timestamp window.</td><td>Stripe's <code>t=...,v1=...</code> format.</td><td>One header format per scheme covers GitHub and most providers. Stripe waits for a Stripe routine.</td></tr>
+      <tr><td>D23</td><td>When pending deliveries fire</td><td>Oldest ready work first, a delivery by its sequence or a schedule by its armed time. All pending deliveries fire, no at-most-once. A delivery fires even if the routine was disabled after receipt; a missing file fails the turn as not found. <code>kinby run</code> fires them too.</td><td>At-most-once catch-up like schedules.</td><td>Each delivery is a distinct stimulus. Disabling after receipt is like a manual run of accepted work.</td></tr>
+      <tr><td>D24</td><td>Visibility</td><td><code>routine.list</code> gains path, auth scheme and pending count. CLI, REPL startup line and <code>kinby serve</code> start banner show them.</td><td>A separate <code>signal.list</code> method.</td><td>Signal routines are routines.</td></tr>
+      <tr><td>D25</td><td>Rejected calls</td><td>401, 404, 405, 410, 413 go to the process log with path and reason. Never to the event log. A delivery id in a rejected call is ignored.</td><td>A <code>signal.rejected</code> event.</td><td>A rejected call is not a delivery.</td></tr>
+      <tr><td>D27</td><td>HTTP library (research #125, closed the same day)</td><td>aiohttp through <code>web.AppRunner</code> and <code>web.TCPSite</code> on the loop <code>kinby serve</code> owns, no aiohttp signal handlers, <code>client_max_size</code> as the 1 MiB cap.</td><td>Starlette plus uvicorn, Hypercorn, Granian.</td><td>uvicorn swaps the process signal handlers and stops on a 100 ms tick; Hypercorn cannot report an ephemeral port without a pre-bind; Granian's embedded mode is experimental. aiohttp reads raw bytes and raises 413 from the same call, and serves WebSocket as another route later.</td></tr>
+      <tr><td>D26</td><td>What the ticket hands off</td><td>Spec #126 blocked by research #125, terms receiver and delivery in <code>CONTEXT.md</code>, routine widened, Workflows fog entry, ADR 0025, this blueprint.</td><td>Build tickets in this session.</td><td>Build tickets follow from the spec once #125 picks the library.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="birds-eye">Bird's-eye flow <span class="mode">reference</span></h2>
+  <p>One figure of the whole feature end to end. Boxes are modules or systems. Arrows carry the data or event that crosses. Decision ids lead the label where a decision picked the route.</p>
+  <figure>
+    <svg viewBox="0 0 960 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-birdseye-title fig-birdseye-desc">
+      <title id="fig-birdseye-title">A signal from the provider to the routine's code step</title>
+      <desc id="fig-birdseye-desc">A provider posts to the receiver, which appends a signal.received event to the event log; the scheduler reads pending deliveries from the log and wakes a turn through Turns, and the LangGraph runner hands the delivery to the routine's code step.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="var(--muted)" stroke-width="1.2"/></marker>
+        <marker id="diamond-filled" markerWidth="12" markerHeight="8" refX="0" refY="4" orient="auto"><polygon points="0 4, 6 0, 12 4, 6 8" fill="var(--ink)"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- arrows -->
+      <line x1="200" y1="68" x2="320" y2="68" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="204" y="48" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="260" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">POST /signals/&lt;name&gt;</text>
+
+      <line x1="320" y1="84" x2="200" y2="84" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="200" y="92" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="260" y="101" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">202 thread_id, sequence</text>
+
+      <line x1="480" y1="68" x2="600" y2="68" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="484" y="48" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="540" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D10 signal.received</text>
+
+      <line x1="680" y1="96" x2="680" y2="176" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="688" y="128" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="692" y="137" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">pending deliveries</text>
+
+      <line x1="600" y1="204" x2="480" y2="204" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="484" y="184" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="540" y="193" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D11 wake(origin, turn_id)</text>
+
+      <line x1="320" y1="204" x2="200" y2="204" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="220" y="184" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="260" y="193" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TurnRequest</text>
+
+      <line x1="120" y1="232" x2="120" y2="312" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="128" y="264" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="132" y="273" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D15 signal: Delivery</text>
+
+      <!-- nodes -->
+      <rect x="40" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="40" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <rect x="48" y="48" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">SYS</text>
+      <text x="120" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Webhook provider</text>
+      <text x="120" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">GitHub, Stripe, Pub/Sub</text>
+
+      <rect x="320" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="320" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="328" y="48" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="344" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="400" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Receiver</text>
+      <text x="400" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/receiver.py</text>
+
+      <rect x="600" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="600" y="40" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="600" y="40" width="160" height="8" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="608" y="52" width="32" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="624" y="61" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">DB</text>
+      <text x="680" y="72" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <text x="680" y="88" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/events.py</text>
+
+      <rect x="600" y="176" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="600" y="176" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="608" y="184" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="624" y="193" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">MOD</text>
+      <text x="680" y="206" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Scheduler</text>
+      <text x="680" y="222" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/scheduler.py</text>
+
+      <rect x="320" y="176" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="320" y="176" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="328" y="184" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="344" y="193" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">MOD</text>
+      <text x="400" y="206" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns</text>
+      <text x="400" y="222" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turns.py</text>
+
+      <rect x="40" y="176" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="176" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="48" y="184" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="193" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">MOD</text>
+      <text x="120" y="206" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">LangGraphRunner</text>
+      <text x="120" y="222" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turn_runner.py</text>
+
+      <rect x="40" y="312" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="312" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="48" y="320" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="329" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">FN</text>
+      <text x="120" y="342" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">code step</text>
+      <text x="120" y="358" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">routines/&lt;name&gt;/run.py</text>
+
+      <!-- legend -->
+      <line x1="40" y1="392" x2="920" y2="392" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="408" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">new module</text>
+      <line x1="200" y1="414" x2="224" y2="414" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="232" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">crosses the network</text>
+      <line x1="360" y1="414" x2="384" y2="414" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <text x="392" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">response</text>
+    </svg>
+    <figcaption>Figure: data flow of a signal from the provider's POST to the routine's code step, with the event log as the queue between receiver and scheduler.</figcaption>
+  </figure>
+  <p>Prose walkthrough, one step per arrow.</p>
+  <ol>
+    <li>The provider posts to <code>/signals/&lt;name&gt;</code>. The receiver resolves the routine, checks the body size and verifies the token or signature (D4, D5, D16).</li>
+    <li>The receiver hands the delivery to <code>Scheduler.receive</code>, which creates the thread, fixes the turn id and appends <code>signal.received</code> to <code>EventLog</code> (D10, D21).</li>
+    <li>The receiver answers 202 with the thread id and sequence. On a repeated delivery id it answers 200 with the existing thread (D17).</li>
+    <li><code>Scheduler.tick</code> folds the log through <code>routine_history</code> and finds the pending deliveries next to the due schedules (D23).</li>
+    <li>When the instance is idle the scheduler calls <code>Turns.wake</code> on the delivery's thread with the routine prompt, the signal origin and the fixed turn id (D11).</li>
+    <li><code>Turns</code> appends <code>turn.started</code> with that turn id and spawns <code>LangGraphRunner.run</code> with the <code>TurnRequest</code>.</li>
+    <li>The runner reads the delivery back from the thread and calls the code step with it as the <code>signal</code> argument. <code>None</code> closes the turn as no work; any other result becomes the data block under the signal cue (D6, D12, D15).</li>
+  </ol>
+
+  <h2 id="module-map">Module map <span class="mode">reference</span></h2>
+  <p>Which modules are touched and how they depend on each other after the change. New modules carry the <code>new</code> treatment. <code>kinby.core.dispatcher</code>, which wires <code>turn_runner</code>, <code>turns</code> and <code>scheduler</code> today, is omitted; it registers the changed <code>routine.run</code> command and nothing else. Every module shown imports <code>kinby.contracts</code>.</p>
+  <figure>
+    <svg viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-modules-title fig-modules-desc">
+      <title id="fig-modules-title">Modules the signal receiver touches</title>
+      <desc id="fig-modules-desc">cli.main starts the new core.receiver and core.runtime; the receiver and the runtime depend on core.scheduler, which depends on core.turns, core.routine_history and plugins.routines; core.turn_runner depends on core.turns, core.prompt and plugins.routines, which has the highest fan-in.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- arrows -->
+      <line x1="360" y1="96" x2="360" y2="160" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 320,96 V 120 Q 320,128 312,128 H 168 Q 160,128 160,136 V 160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="360" y1="216" x2="360" y2="280" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 200,216 V 240 Q 200,248 208,248 H 312 Q 320,248 320,256 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="208" y="228" width="104" height="12" rx="2" fill="var(--paper)"/>
+      <text x="260" y="237" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D10 receive(delivery)</text>
+      <line x1="120" y1="216" x2="120" y2="400" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="360" y1="336" x2="360" y2="400" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 320,336 V 348 Q 320,356 312,356 H 168 Q 160,356 160,364 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="440" y1="308" x2="480" y2="308" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 720,96 V 248 Q 720,256 712,256 H 568 Q 560,256 560,264 V 280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="760" y1="96" x2="760" y2="280" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 800,96 V 112 Q 800,120 808,120 H 872 Q 880,120 880,128 V 364 Q 880,372 872,372 H 368 a 8,8 0 0,0 -16,0 H 208 Q 200,372 200,380 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- rank 0 -->
+      <rect x="280" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">cli.main</text>
+      <text x="360" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/main.py</text>
+      <rect x="404" y="48" width="28" height="12" rx="2" fill="none" stroke="var(--rule)" stroke-width="0.8"/>
+      <text x="418" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">0 in</text>
+
+      <rect x="680" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="680" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="760" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turn_runner</text>
+      <text x="760" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turn_runner.py</text>
+      <rect x="804" y="48" width="28" height="12" rx="2" fill="none" stroke="var(--rule)" stroke-width="0.8"/>
+      <text x="818" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">0 in</text>
+
+      <!-- rank 1 -->
+      <rect x="80" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="80" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="88" y="168" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="104" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="160" y="190" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.receiver</text>
+      <text x="160" y="206" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/receiver.py</text>
+      <rect x="204" y="168" width="28" height="12" rx="2" fill="none" stroke="var(--rule)" stroke-width="0.8"/>
+      <text x="218" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1 in</text>
+
+      <rect x="280" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="190" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.runtime</text>
+      <text x="360" y="206" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/runtime.py</text>
+      <rect x="404" y="168" width="28" height="12" rx="2" fill="none" stroke="var(--rule)" stroke-width="0.8"/>
+      <text x="418" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1 in</text>
+
+      <!-- rank 2 -->
+      <rect x="280" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.scheduler</text>
+      <text x="360" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/scheduler.py</text>
+      <rect x="404" y="288" width="28" height="12" rx="2" fill="none" stroke="var(--rule)" stroke-width="0.8"/>
+      <text x="418" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">2 in</text>
+
+      <rect x="480" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="480" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="560" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turns</text>
+      <text x="560" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turns.py</text>
+      <rect x="604" y="288" width="28" height="12" rx="2" fill="none" stroke="var(--rule)" stroke-width="0.8"/>
+      <text x="618" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">2 in</text>
+
+      <rect x="680" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="680" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="760" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.prompt</text>
+      <text x="760" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/prompt.py</text>
+      <rect x="804" y="288" width="28" height="12" rx="2" fill="none" stroke="var(--rule)" stroke-width="0.8"/>
+      <text x="818" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1 in</text>
+
+      <!-- rank 3 -->
+      <rect x="80" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="80" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="160" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">plugins.routines</text>
+      <text x="160" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/plugins/routines.py</text>
+      <rect x="204" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--rule)" stroke-width="0.8"/>
+      <text x="218" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">3 in</text>
+
+      <rect x="280" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="280" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="360" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.routine_history</text>
+      <text x="360" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/routine_history.py</text>
+      <rect x="404" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--rule)" stroke-width="0.8"/>
+      <text x="418" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1 in</text>
+
+      <!-- legend -->
+      <line x1="40" y1="480" x2="920" y2="480" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="496" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="505" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">new module</text>
+      <rect x="200" y="496" width="28" height="12" rx="2" fill="none" stroke="var(--rule)" stroke-width="0.8"/>
+      <text x="214" y="505" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">n in</text>
+      <text x="240" y="505" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">modules that depend on it</text>
+    </svg>
+    <figcaption>Figure: dependency graph of the modules the signal receiver touches, with the new receiver depending on the scheduler and the routine loader carrying the highest fan-in.</figcaption>
+  </figure>
+  <h3>Interfaces</h3>
+  <p>The functions and types other modules call, with their signatures. Names marked new do not exist at the stamped commit.</p>
+  <dl>
+    <dt><code>Receiver(config: ReceiverConfig, scheduler: Scheduler, instance: Instance)</code> new</dt>
+    <dd>The HTTP adapter over aiohttp's <code>web.AppRunner</code> and <code>web.TCPSite</code>. <code>start()</code> binds the listen address, <code>stop()</code> awaits cleanup. Started by <code>_serve_instance</code> after <code>boot_instance</code>, stopped before the scheduler on shutdown.</dd>
+    <dt><code>verify(signal: SignalConfig, headers: Mapping[str, str], body: bytes) -&gt; bool</code> new</dt>
+    <dd>Bearer or HMAC check with <code>hmac.compare_digest</code>. Lives in the receiver module; tested through the socket.</dd>
+    <dt><code>Scheduler.receive(name: RoutineName, delivery: Delivery, trigger: RoutineTrigger) -&gt; AcceptedResult</code> new</dt>
+    <dd>Drops a repeated delivery id, otherwise creates the thread, fixes the turn id, appends <code>SignalReceived</code>, nudges the worker. Called by the receiver with the signal trigger and by <code>Scheduler.run</code> with the manual trigger when a payload is given.</dd>
+    <dt><code>Scheduler.tick() -&gt; None</code> changed</dt>
+    <dd>Fires the oldest ready work across pending deliveries and due schedules, one per pass, under the existing busy rule.</dd>
+    <dt><code>Turns.wake(thread_id: UUID, message: str, origin: Origin, turn_id: UUID | None = None) -&gt; AcceptedResult</code> changed</dt>
+    <dd>Accepts the turn id fixed at receipt so <code>turn.started</code> shares it with <code>signal.received</code>.</dd>
+    <dt><code>routine_history(events: Iterable[Event]) -&gt; RoutineHistories</code> changed</dt>
+    <dd><code>RoutineHistory</code> gains <code>pending: list[PendingDelivery]</code>, a <code>signal.received</code> with no <code>turn.started</code> for its turn id, ordered by sequence.</dd>
+    <dt><code>load_routines(instance: Instance, *, policy: GatePolicy | None = None)</code> changed</dt>
+    <dd>Parses the <code>signal</code> block into <code>Routine.signal: SignalConfig | None</code>, checks the secret variable, the signature header and the code step's <code>signal</code> parameter, and warns and skips on failure.</dd>
+    <dt><code>render_wake(origin: Origin, message: str, payload: str | None = None) -&gt; str</code> changed</dt>
+    <dd>Renders <code>[Routine: &lt;name&gt;, woken by a signal]</code> when the trigger is <code>SIGNAL</code>.</dd>
+    <dt><code>LangGraphRunner._prepare_turn(...)</code> changed</dt>
+    <dd>For a signal trigger, reads the <code>Delivery</code> from the thread's <code>signal.received</code> event and passes it as the <code>signal</code> argument to the code step, or uses the body as the payload without one.</dd>
+  </dl>
+
+  <h2 id="ground-level">Ground-level flows <span class="mode">reference</span></h2>
+  <p>One subsection per flow named in the bird's-eye figure. Each has a sequence whose participants are the functions from the module map, then a numbered step list naming the data shape at each hop. A third figure draws the delivery lifecycle.</p>
+
+  <h3 id="flow-receive">Flow: receive</h3>
+  <figure>
+    <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-receive-title fig-receive-desc">
+      <title id="fig-receive-title">Receiving one delivery</title>
+      <desc id="fig-receive-desc">The provider posts to the receiver, which loads the routine and verifies the call; a rejected call gets a 4xx and no record, an accepted one becomes a signal.received event appended by Scheduler.receive, and the provider gets 202 with the thread id and sequence.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- lifelines -->
+      <line x1="120" y1="64" x2="120" y2="576" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="320" y1="64" x2="320" y2="576" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="520" y1="64" x2="520" y2="576" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="720" y1="64" x2="720" y2="576" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <!-- frame -->
+      <rect x="108" y="184" width="624" height="376" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="108" y="184" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="128" y="196" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="120" y="216" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[rejected: 401, 404, 410, 413]</text>
+      <line x1="108" y1="248" x2="732" y2="248" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="120" y="264" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[accepted]</text>
+
+      <!-- activation bars -->
+      <rect x="316" y="96" width="8" height="448" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="516" y="288" width="8" height="224" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="320" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="416" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <!-- m1 -->
+      <line x1="120" y1="96" x2="316" y2="96" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="148" y="76" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">POST /signals/&lt;name&gt;, raw body</text>
+      <!-- m2 self -->
+      <path d="M 324,124 H 352 V 140 H 328" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="360" y="136" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">load_routines() -&gt; Routine.signal: SignalConfig</text>
+      <!-- m3 self -->
+      <path d="M 324,156 H 352 V 172 H 328" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="360" y="168" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D22 verify(signal, headers, body) via hmac.compare_digest</text>
+      <!-- m4 return rejected -->
+      <line x1="316" y1="224" x2="120" y2="224" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="140" y="204" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="213" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D25 status only, nothing recorded</text>
+      <!-- m5 -->
+      <line x1="324" y1="288" x2="516" y2="288" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="348" y="268" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="277" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">receive(name, Delivery, SIGNAL)</text>
+      <!-- m6 -->
+      <line x1="524" y1="320" x2="716" y2="320" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="548" y="300" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="309" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D17 all_events(), same delivery id?</text>
+      <!-- m7 return -->
+      <line x1="716" y1="352" x2="524" y2="352" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="572" y="332" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="341" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Event | none</text>
+      <!-- m8 self -->
+      <path d="M 524,380 H 552 V 396 H 528" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="560" y="392" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">ThreadStore.create(title), turn_id = uuid4()</text>
+      <!-- m9 accent -->
+      <line x1="524" y1="416" x2="716" y2="416" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="548" y="396" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="405" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D10 append(SignalReceived)</text>
+      <!-- m10 return -->
+      <line x1="716" y1="448" x2="524" y2="448" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="572" y="428" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="437" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Event(sequence)</text>
+      <!-- m11 self -->
+      <path d="M 524,476 H 552 V 492 H 528" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="560" y="488" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">schedule() wakes the worker</text>
+      <!-- m12 return -->
+      <line x1="516" y1="512" x2="324" y2="512" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="372" y="492" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="501" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult</text>
+      <!-- m13 accent return -->
+      <line x1="316" y1="544" x2="120" y2="544" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="148" y="524" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="533" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D21 202 thread_id, sequence</text>
+
+      <!-- participants -->
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="120" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Webhook provider</text>
+      <text x="120" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">GitHub</text>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="320" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Receiver</text>
+      <text x="320" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/receiver.py</text>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="520" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Scheduler.receive</text>
+      <text x="520" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/scheduler.py</text>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="720" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <text x="720" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/events.py</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for receiving one delivery, from the provider's POST to the 202, with the rejected branch above the divider.</figcaption>
+  </figure>
+  <ol>
+    <li>The provider posts to <code>/signals/&lt;name&gt;</code>: input raw bytes and headers. A body over one megabyte answers 413 here.</li>
+    <li>The receiver calls <code>load_routines</code> and looks the routine up by name: output <code>Routine</code> with <code>signal: SignalConfig</code>. Unknown name or no signal block answers 404.</li>
+    <li>The receiver verifies the call: input <code>SignalConfig</code>, headers, raw body; output a boolean from <code>hmac.compare_digest</code>. False answers 401 with an empty body. A disabled routine answers 410 after this check.</li>
+    <li>Rejected: the status goes back, the process log gets path and reason, the event log gets nothing.</li>
+    <li>Accepted: the receiver builds a <code>Delivery</code> (secrets stripped, keys lowercased, content type, body text, delivery id, received time) and calls <code>Scheduler.receive</code> with the signal trigger.</li>
+    <li><code>Scheduler.receive</code> folds <code>all_events()</code> through <code>routine_history</code>; a matching delivery id returns the existing thread and sequence, answered 200.</li>
+    <li>Otherwise it creates the thread titled <code>&lt;name&gt; · &lt;delivery id or time&gt;</code>, fixes a turn id, and appends <code>SignalReceived(delivery)</code>: output <code>Event</code> with its sequence.</li>
+    <li>It nudges the worker with <code>schedule()</code> and returns <code>AcceptedResult</code>. The receiver answers 202 with the thread id and sequence.</li>
+  </ol>
+
+  <h3 id="flow-fire">Flow: fire</h3>
+  <figure>
+    <svg viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-fire-title fig-fire-desc">
+      <title id="fig-fire-title">Firing a pending delivery</title>
+      <desc id="fig-fire-desc">The scheduler folds the log, finds the oldest pending delivery, wakes a turn on its thread with the fixed turn id, and the runner reads the delivery back and calls the code step; None ends the turn as no work, text becomes the payload under the signal cue.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <line x1="120" y1="64" x2="120" y2="536" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="320" y1="64" x2="320" y2="536" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="520" y1="64" x2="520" y2="536" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="720" y1="64" x2="720" y2="536" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <!-- frame -->
+      <rect x="508" y="344" width="224" height="176" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="508" y="344" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="528" y="356" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="520" y="376" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[None]</text>
+      <line x1="508" y1="440" x2="732" y2="440" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="520" y="456" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[str]</text>
+
+      <!-- activation bars -->
+      <rect x="116" y="96" width="8" height="128" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="316" y="160" width="8" height="96" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="516" y="256" width="8" height="256" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="320" width="8" height="160" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <!-- m1 self -->
+      <path d="M 124,92 H 152 V 108 H 128" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="160" y="104" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">routine_history(all_events()) -&gt; pending: PendingDelivery</text>
+      <!-- m2 self -->
+      <path d="M 124,124 H 152 V 140 H 128" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="160" y="136" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D23 wait_idle(), oldest of pending and due</text>
+      <!-- m3 accent -->
+      <line x1="124" y1="160" x2="316" y2="160" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="140" y="140" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D11 wake(thread_id, prompt, origin, turn_id)</text>
+      <!-- m4 self -->
+      <path d="M 324,188 H 352 V 204 H 328" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="360" y="200" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">append(TurnStarted) with the same turn_id</text>
+      <!-- m5 return -->
+      <line x1="316" y1="224" x2="124" y2="224" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="172" y="204" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="213" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AcceptedResult</text>
+      <!-- m6 async -->
+      <line x1="324" y1="256" x2="516" y2="256" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-open)"/>
+      <rect x="348" y="236" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="245" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">run(TurnRequest, TurnContext)</text>
+      <!-- m7 self -->
+      <path d="M 524,284 H 552 V 300 H 528" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="560" y="296" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">stored(thread_id) -&gt; Delivery from signal.received</text>
+      <!-- m8 -->
+      <line x1="524" y1="320" x2="716" y2="320" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="548" y="300" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="309" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D15 ainvoke_raw({signal, **arguments})</text>
+      <!-- m9 return None -->
+      <line x1="716" y1="392" x2="524" y2="392" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="596" y="372" width="48" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="381" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">None</text>
+      <!-- m10 self -->
+      <path d="M 524,412 H 552 V 428 H 528" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="560" y="424" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">TurnOutcome(NO_WORK), no model</text>
+      <!-- m11 return str -->
+      <line x1="716" y1="472" x2="524" y2="472" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="580" y="452" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="461" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">str payload</text>
+      <!-- m12 self -->
+      <path d="M 524,492 H 552 V 508 H 528" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="560" y="504" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D12 render_wake(origin, prompt, payload)</text>
+
+      <!-- participants -->
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Scheduler.tick</text>
+      <text x="120" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/scheduler.py</text>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="320" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns.wake</text>
+      <text x="320" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turns.py</text>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="520" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">LangGraphRunner</text>
+      <text x="520" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turn_runner.py</text>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="720" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">code step</text>
+      <text x="720" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">routines/&lt;name&gt;/run.py</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for firing a pending delivery, from the scheduler's fold to the code step's answer.</figcaption>
+  </figure>
+  <ol>
+    <li><code>Scheduler.tick</code> folds <code>all_events()</code> through <code>routine_history</code>: output per routine a <code>RoutineHistory</code> with <code>pending: list[PendingDelivery]</code> next to the last run and failure count.</li>
+    <li>It waits for the instance to be idle and picks the oldest ready work: a pending delivery by sequence or a due schedule by armed time.</li>
+    <li>It calls <code>Turns.wake</code> on the delivery's thread: input the routine prompt, <code>RoutineOrigin(name, trigger=SIGNAL, delivery=id)</code>, and the fixed turn id. The daily budget check and the busy rule apply as for any wake.</li>
+    <li><code>Turns</code> appends <code>TurnStarted</code> with that turn id, returns <code>AcceptedResult</code>, and spawns the runner with a <code>TurnRequest</code>.</li>
+    <li><code>LangGraphRunner._prepare_turn</code> loads the routine by name, reads the thread's events with <code>stored(thread_id)</code>, and takes the <code>Delivery</code> from its <code>signal.received</code> event.</li>
+    <li>With a code step, it calls <code>ainvoke_raw</code> with <code>signal</code> set to the delivery (body decoded when JSON) merged with the frontmatter arguments, under the routine's mode and the gate, as today.</li>
+    <li><code>None</code>: the turn closes as <code>turn.completed</code> with the no-work outcome and no model call.</li>
+    <li>Text: <code>render_wake</code> frames it as <code>[Routine: &lt;name&gt;, woken by a signal]</code> plus the prompt and the data block, and the model runs. Without a code step the body text is the payload.</li>
+  </ol>
+
+  <h3 id="flow-lifecycle">Flow: delivery lifecycle</h3>
+  <figure>
+    <svg viewBox="0 0 960 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-lifecycle-title fig-lifecycle-desc">
+      <title id="fig-lifecycle-title">States of one delivery</title>
+      <desc id="fig-lifecycle-desc">A delivery is received, then started by the scheduler's tick, then closes as completed with work, completed with no work, failed, or interrupted; a repeated delivery id loops on received without a new record.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- transitions -->
+      <line x1="46" y1="140" x2="80" y2="140" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="200" y1="140" x2="280" y2="140" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="152" y="104" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="240" y="113" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D23 tick [idle, oldest] / wake(turn_id)</text>
+      <path d="M 100,120 C 100,88 180,88 180,120" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="60" y="72" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="140" y="81" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D17 same delivery id / no record</text>
+      <path d="M 340,120 V 68 Q 340,60 348,60 H 480" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="376" y="40" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="416" y="49" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">model done</text>
+      <line x1="400" y1="140" x2="480" y2="140" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="400" y="120" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="440" y="129" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">code step None</text>
+      <path d="M 380,160 V 212 Q 380,220 388,220 H 480" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="396" y="200" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="436" y="209" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">error | budget</text>
+      <path d="M 340,160 V 292 Q 340,300 348,300 H 480" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="380" y="280" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="289" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">user stop</text>
+
+      <!-- states -->
+      <circle cx="40" cy="140" r="6" fill="var(--ink)"/>
+      <rect x="80" y="120" width="120" height="40" rx="8" fill="var(--paper)"/>
+      <rect x="80" y="120" width="120" height="40" rx="8" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <text x="140" y="144" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">signal.received</text>
+      <rect x="280" y="120" width="120" height="40" rx="8" fill="var(--paper)"/>
+      <rect x="280" y="120" width="120" height="40" rx="8" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="340" y="144" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">turn.started</text>
+      <rect x="480" y="40" width="120" height="40" rx="8" fill="var(--paper)"/>
+      <rect x="480" y="40" width="120" height="40" rx="8" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="540" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">turn.completed</text>
+      <text x="540" y="72" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">outcome: work</text>
+      <rect x="480" y="120" width="120" height="40" rx="8" fill="var(--paper)"/>
+      <rect x="480" y="120" width="120" height="40" rx="8" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="540" y="138" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">turn.completed</text>
+      <text x="540" y="152" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">outcome: no-work</text>
+      <rect x="480" y="200" width="120" height="40" rx="8" fill="var(--paper)"/>
+      <rect x="480" y="200" width="120" height="40" rx="8" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="540" y="224" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">turn.failed</text>
+      <rect x="480" y="280" width="120" height="40" rx="8" fill="var(--paper)"/>
+      <rect x="480" y="280" width="120" height="40" rx="8" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="540" y="304" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">turn.interrupted</text>
+
+      <!-- annotations -->
+      <text x="40" y="340" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">signal.received -&gt; turn.started fires even if the routine was disabled after receipt; a missing ROUTINE.md closes as turn.failed (not found)</text>
+      <text x="40" y="352" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">turn.failed counts for the failure policy; no-work and interrupted leave the count unchanged</text>
+    </svg>
+    <figcaption>Figure: the events one delivery passes through on its thread, from receipt to a closing turn event.</figcaption>
+  </figure>
+
+  <h2 id="data-shapes">Data shapes <span class="mode">reference</span></h2>
+  <p>Every type the feature adds or changes, drawn with its fields and relations. Changed types show only the fields a decision cites.</p>
+  <figure>
+    <svg viewBox="0 0 960 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-shapes-title fig-shapes-desc">
+      <title id="fig-shapes-title">Types the signal receiver adds or changes</title>
+      <desc id="fig-shapes-desc">Routine owns an optional SignalConfig; the SignalReceived event owns a Delivery; RoutineOrigin refers to the delivery by id; Serve, RoutineSummary and RoutineRunCommand gain fields.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- relations -->
+      <line x1="240" y1="90" x2="380" y2="90" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)"/>
+      <rect x="348" y="72" width="24" height="12" rx="2" fill="var(--paper)"/>
+      <text x="360" y="81" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">0..1</text>
+      <line x1="240" y1="222" x2="380" y2="222" stroke="var(--accent)" stroke-width="1" marker-start="url(#diamond-filled)"/>
+      <rect x="356" y="204" width="16" height="12" rx="2" fill="var(--paper)"/>
+      <text x="364" y="213" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">1</text>
+      <line x1="720" y1="238" x2="580" y2="238" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+      <rect x="608" y="220" width="84" height="12" rx="2" fill="var(--paper)"/>
+      <text x="650" y="229" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">delivery id</text>
+
+      <!-- Routine (changed) -->
+      <rect x="40" y="40" width="200" height="100" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="40" width="200" height="100" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="140" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Routine</text>
+      <line x1="40" y1="68" x2="240" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="52" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: RoutineName</text>
+      <text x="52" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">schedule: CronSchedule | None</text>
+      <text x="52" y="116" font-size="8" font-family="var(--font-mono)" fill="var(--new)">signal: SignalConfig | None</text>
+      <text x="52" y="132" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">...</text>
+
+      <!-- SignalConfig (new) -->
+      <rect x="380" y="40" width="200" height="100" rx="6" fill="var(--paper)"/>
+      <rect x="380" y="40" width="200" height="100" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="388" y="46" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="404" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="480" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">SignalConfig</text>
+      <line x1="380" y1="68" x2="580" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="392" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">auth: SignalAuth (token | hmac-sha256)</text>
+      <text x="392" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">secret: str (env var name)</text>
+      <text x="392" y="116" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">signature_header: str | None</text>
+      <text x="392" y="132" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">delivery_header: str | None</text>
+
+      <!-- Serve (new) -->
+      <rect x="720" y="40" width="200" height="68" rx="6" fill="var(--paper)"/>
+      <rect x="720" y="40" width="200" height="68" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="728" y="46" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="744" y="55" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="820" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Serve</text>
+      <line x1="720" y1="68" x2="920" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="732" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">host: str</text>
+      <text x="732" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">port: int</text>
+
+      <!-- SignalReceived (new) -->
+      <rect x="40" y="188" width="200" height="68" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="188" width="200" height="68" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="48" y="194" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="203" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="140" y="206" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">SignalReceived</text>
+      <line x1="40" y1="216" x2="240" y2="216" stroke="var(--rule)" stroke-width="1"/>
+      <text x="52" y="232" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">type: "signal.received"</text>
+      <text x="52" y="248" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">delivery: Delivery</text>
+
+      <!-- Delivery (new) -->
+      <rect x="380" y="188" width="200" height="116" rx="6" fill="var(--paper)"/>
+      <rect x="380" y="188" width="200" height="116" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="388" y="194" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="404" y="203" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="480" y="206" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Delivery</text>
+      <line x1="380" y1="216" x2="580" y2="216" stroke="var(--rule)" stroke-width="1"/>
+      <text x="392" y="232" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">headers: dict[str, str]</text>
+      <text x="392" y="248" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">content_type: str</text>
+      <text x="392" y="264" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">body: str</text>
+      <text x="392" y="280" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">delivery_id: str | None</text>
+      <text x="392" y="296" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">received_at: AwareDatetime</text>
+
+      <!-- RoutineOrigin (changed) -->
+      <rect x="720" y="188" width="200" height="100" rx="6" fill="var(--paper)"/>
+      <rect x="720" y="188" width="200" height="100" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="820" y="206" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RoutineOrigin</text>
+      <line x1="720" y1="216" x2="920" y2="216" stroke="var(--rule)" stroke-width="1"/>
+      <text x="732" y="232" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">kind: "routine"</text>
+      <text x="732" y="248" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: RoutineName</text>
+      <text x="732" y="264" font-size="8" font-family="var(--font-mono)" fill="var(--new)">trigger: RoutineTrigger (+ signal)</text>
+      <text x="732" y="280" font-size="8" font-family="var(--font-mono)" fill="var(--new)">delivery: str | None</text>
+
+      <!-- RoutineSummary (changed) -->
+      <rect x="40" y="352" width="200" height="84" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="352" width="200" height="84" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="140" y="370" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RoutineSummary</text>
+      <line x1="40" y1="380" x2="240" y2="380" stroke="var(--rule)" stroke-width="1"/>
+      <text x="52" y="396" font-size="8" font-family="var(--font-mono)" fill="var(--new)">signal: SignalSummary | None</text>
+      <text x="52" y="412" font-size="8" font-family="var(--font-mono)" fill="var(--new)">pending: int</text>
+      <text x="52" y="428" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">...</text>
+
+      <!-- RoutineRunCommand (changed) -->
+      <rect x="380" y="352" width="200" height="68" rx="6" fill="var(--paper)"/>
+      <rect x="380" y="352" width="200" height="68" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="480" y="370" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RoutineRunCommand</text>
+      <line x1="380" y1="380" x2="580" y2="380" stroke="var(--rule)" stroke-width="1"/>
+      <text x="392" y="396" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: RoutineName</text>
+      <text x="392" y="412" font-size="8" font-family="var(--font-mono)" fill="var(--new)">payload: str | None</text>
+
+      <!-- legend -->
+      <line x1="40" y1="464" x2="920" y2="464" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="480" width="24" height="12" rx="2" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="489" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">new type</text>
+      <text x="200" y="489" font-size="8" font-family="var(--font-mono)" fill="var(--new)">green field</text>
+      <text x="264" y="489" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">added to an existing type</text>
+    </svg>
+    <figcaption>Figure: types the signal receiver adds or changes, with Delivery owned by the new event and referenced by id from the origin.</figcaption>
+  </figure>
+  <p><code>SignalSummary</code> is the pair of path and auth scheme <code>routine.list</code> returns. <code>PendingDelivery</code>, in <code>core.routine_history</code>, holds the thread id, turn id, sequence and <code>Delivery</code> of a received signal with no <code>turn.started</code>. <code>ReceiverConfig</code> holds the <code>Serve</code> record and the one-megabyte cap. The frontmatter that produces <code>SignalConfig</code>:</p>
+  <pre><code>signal:
+  auth: hmac-sha256                       # or token (default)
+  secret: GITHUB_WEBHOOK_SECRET           # env var in the instance .env
+  signature_header: X-Hub-Signature-256   # hmac only
+  delivery_header: X-GitHub-Delivery      # optional; enables the id and dedup</code></pre>
+
+  <h2 id="file-map">File map <span class="mode">reference</span></h2>
+  <p>Every file the agent touches. Stamped at the commit in the header; regenerate the existence check with <code>git ls-files [paths]</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Path</th><th>Action</th><th>What changes</th><th>Flow</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/kinby/core/receiver.py</code></td><td>new</td><td><code>Receiver</code>, <code>ReceiverConfig</code>, <code>verify</code>; routes, status codes, body cap, process log lines. The only module that imports aiohttp (D27).</td><td>receive</td></tr>
+      <tr><td><code>src/kinby/core/scheduler.py</code></td><td>modify</td><td><code>Scheduler.receive</code>; <code>tick</code> orders pending deliveries with due schedules; <code>run</code> takes a payload; <code>list</code> fills signal and pending.</td><td>receive, fire</td></tr>
+      <tr><td><code>src/kinby/core/routine_history.py</code></td><td>modify</td><td><code>PendingDelivery</code>; <code>RoutineHistory.pending</code>; the fold reads <code>SignalReceived</code> and matches it to <code>TurnStarted</code> by turn id.</td><td>fire</td></tr>
+      <tr><td><code>src/kinby/core/turns.py</code></td><td>modify</td><td><code>wake</code> and <code>_wake</code> accept an optional turn id.</td><td>fire</td></tr>
+      <tr><td><code>src/kinby/core/turn_runner.py</code></td><td>modify</td><td><code>_prepare_turn</code> reads the delivery for a signal trigger and passes it as the <code>signal</code> argument, or uses the body as payload.</td><td>fire</td></tr>
+      <tr><td><code>src/kinby/core/prompt.py</code></td><td>modify</td><td><code>render_wake</code> cue for the signal trigger.</td><td>fire</td></tr>
+      <tr><td><code>src/kinby/core/runtime.py</code></td><td>modify</td><td><code>InstanceRuntime</code> exposes what the receiver needs; stop order is receiver, scheduler, drain.</td><td>receive</td></tr>
+      <tr><td><code>src/kinby/contracts/models.py</code></td><td>modify</td><td><code>EventType.SIGNAL_RECEIVED</code>, <code>Delivery</code>, <code>SignalReceived</code> in <code>Payload</code>, <code>RoutineTrigger.SIGNAL</code>, <code>RoutineOrigin.delivery</code>, <code>RoutineRunCommand.payload</code>, <code>SignalSummary</code>, <code>RoutineSummary.signal</code> and <code>.pending</code>.</td><td>all</td></tr>
+      <tr><td><code>src/kinby/plugins/routines.py</code></td><td>modify</td><td><code>SignalAuth</code>, <code>SignalConfig</code>, <code>Routine.signal</code>; loader checks for secret, signature header and the code step's <code>signal</code> parameter.</td><td>receive, fire</td></tr>
+      <tr><td><code>src/kinby/instance/manifest.py</code></td><td>modify</td><td><code>RawServe</code> with <code>listen</code>, validated as <code>host:port</code>.</td><td>receive</td></tr>
+      <tr><td><code>src/kinby/instance/dataclasses.py</code></td><td>modify</td><td><code>Serve</code> record on <code>Manifest</code>.</td><td>receive</td></tr>
+      <tr><td><code>src/kinby/instance/init.py</code></td><td>modify</td><td>Commented <code>[serve]</code> section in the generated manifest.</td><td>receive</td></tr>
+      <tr><td><code>docs/schema/kinby.schema.json</code></td><td>modify</td><td>Regenerated with the <code>[serve]</code> table.</td><td>receive</td></tr>
+      <tr><td><code>src/kinby/cli/main.py</code></td><td>modify</td><td><code>_serve_instance</code> starts and stops the receiver and prints the listen address and signal paths; <code>routine run</code> gains <code>--payload</code>.</td><td>receive, fire</td></tr>
+      <tr><td><code>src/kinby/cli/routines.py</code></td><td>modify</td><td>Path, auth scheme and pending count in the table and the startup lines.</td><td>fire</td></tr>
+      <tr><td><code>src/kinby/plugins/defaults/skills/write-routine/SKILL.md</code></td><td>modify</td><td>The <code>signal</code> block, auth schemes, when to prefer a signal, and the GitHub <code>ready-for-agent</code> routine.</td><td>—</td></tr>
+      <tr><td><code>pyproject.toml</code></td><td>modify</td><td><code>aiohttp</code> as a runtime dependency (D27).</td><td>receive</td></tr>
+      <tr><td><code>tests/test_receiver.py</code></td><td>new</td><td>The socket seam: status codes, the <code>signal.received</code> event, dedup, and the fired turn.</td><td>receive, fire</td></tr>
+      <tr><td><code>tests/test_scheduler.py</code></td><td>modify</td><td>Ordering, restart catch-up, disabled-after-receipt, manual payload.</td><td>fire</td></tr>
+      <tr><td><code>tests/test_routines.py</code></td><td>modify</td><td>Loader cases for the <code>signal</code> block.</td><td>receive</td></tr>
+      <tr><td><code>tests/test_loop.py</code></td><td>modify</td><td>Code step receives the delivery; no-work; body as payload under the cue.</td><td>fire</td></tr>
+      <tr><td><code>tests/test_serve.py</code>, <code>tests/test_cli.py</code>, <code>tests/test_thread_cli.py</code></td><td>modify</td><td>Serve banner, list columns, <code>--payload</code>.</td><td>receive, fire</td></tr>
+      <tr><td><code>tests/test_repl.py</code></td><td>modify</td><td>Pending count in the startup line.</td><td>fire</td></tr>
+      <tr><td><code>tests/test_schema.py</code>, <code>tests/test_init.py</code></td><td>modify</td><td><code>[serve]</code> parsing, rejection, schema and init output.</td><td>receive</td></tr>
+      <tr><td><code>tests/test_packaged_skills.py</code></td><td>modify</td><td>The skill body mentions the <code>signal</code> block and the GitHub example.</td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="testing">Testing <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Seams</dt><dd>One new seam: the receiver over a real socket on an ephemeral port, in front of the dispatcher with a scripted runner and the scheduler on a fake clock (D2, D10, D16). Every other case reuses an existing seam: the scheduler on a fake clock, the LangGraph runner with a scripted chat model, the routine loader, the CLI through <code>main</code>, the REPL through <code>run_repl</code>, the manifest and schema, the packaged skill.</dd>
+    <dt>A good test here</dt><dd>Asserts what a caller or subscriber sees: the HTTP status and body, the events on the delivery's thread, the routine list result, the printed lines. Never the receiver's routing table, the scheduler's ready list, or the fold's private state.</dd>
+    <dt>Prior art</dt><dd><code>tests/test_scheduler.py</code>, <code>tests/test_turns.py</code>, <code>tests/test_loop.py</code>, <code>tests/test_routines.py</code>, <code>tests/test_serve.py</code>, <code>tests/test_cli.py</code>, <code>tests/test_thread_cli.py</code>, <code>tests/test_repl.py</code>, <code>tests/test_schema.py</code>, <code>tests/test_init.py</code>, <code>tests/test_packaged_skills.py</code>.</dd>
+  </dl>
+  <h3>Cases</h3>
+  <ol>
+    <li>A signed body gets 202 with thread id and sequence, and a <code>signal.received</code> event holding the delivery with the signature header stripped, flow receive, protects D10, D21, D15.</li>
+    <li>A wrong signature gets 401 with an empty body and no new thread, flow receive, protects D5, D25.</li>
+    <li>A bearer routine accepts the right token and rejects a wrong one, flow receive, protects D22.</li>
+    <li>An unknown path gets 404 with no secret read, flow receive, protects D4.</li>
+    <li>A disabled routine gets 410 after auth and no record, flow receive, protects D14.</li>
+    <li>A body over one megabyte gets 413, flow receive, protects D16.</li>
+    <li>A repeated delivery id gets 200 with the existing thread and no second event, flow receive, protects D17.</li>
+    <li>A routine whose secret variable is unset warns and is absent from the receiver's routes, flow receive, protects D5.</li>
+    <li>After the scheduler drains, the delivery's thread has <code>turn.started</code> with the signal trigger, the delivery id and the same turn id as <code>signal.received</code>, flow fire, protects D11.</li>
+    <li>A pending delivery and a due schedule fire oldest first, flow fire, protects D23.</li>
+    <li>A log holding <code>signal.received</code> with no <code>turn.started</code> fires on the first pass after boot, flow fire, protects D10, D23.</li>
+    <li>A delivery received while a routine turn runs waits and fires after it, flow fire, protects D10.</li>
+    <li>A delivery for a routine disabled after receipt fires; one for a deleted routine fails as not found, flow lifecycle, protects D23.</li>
+    <li>The code step receives <code>signal</code> with a decoded JSON body and the frontmatter arguments; <code>None</code> closes the turn as no work with no model call, flow fire, protects D6, D15.</li>
+    <li>Without a code step, the model receives the body in the data block under <code>[Routine: name, woken by a signal]</code>, flow fire, protects D12.</li>
+    <li>A failed signal firing increments the failure count and the tenth disables the routine, flow lifecycle, protects D14.</li>
+    <li><code>routine.run</code> with a payload records a delivery with the manual trigger and fires it, and <code>kinby routine run --payload</code> streams the turn, flow fire, protects D13.</li>
+    <li><code>routine.list</code> carries path, auth scheme and pending count; the CLI table, the REPL startup line and the serve banner print them, flow fire, protects D24.</li>
+    <li>The loader parses both <code>schedule</code> and <code>signal</code> on one routine, rejects HMAC without a signature header, and rejects a code step without a <code>signal</code> parameter, flow receive, protects D19, D15.</li>
+    <li><code>[serve] listen</code> parses, a malformed address and an unknown key fail at load, the schema includes the table, and <code>kinby init</code> writes it commented, flow receive, protects D20.</li>
+  </ol>
+
+  <h2 id="out-of-scope">Out of scope <span class="mode">reference</span></h2>
+  <ul>
+        <li>Provider adapters in core. Gmail push, Stripe's timestamped signature and any provider-specific parsing are recipes or instance code.</li>
+    <li>Destinations and a <code>send</code> tool. A silent successful firing stays with the destinations design on the map.</li>
+    <li>Workflows as a first-class concept. Fog on the map, first case the GitHub issue-to-PR loop.</li>
+    <li>Preemption of a running turn by a delivery. Deliveries wait in the log.</li>
+    <li>The RPC socket in front of the dispatcher. The server effort adds it to the <code>[serve]</code> server.</li>
+    <li>TLS, rate limiting and IP allowlists. A reverse proxy or tunnel owns them.</li>
+    <li>The agent writing a signal routine itself. Agent modifies its own instance (#61).</li>
+    <li>One-shot reminders. One-shot scheduling (#119).</li>
+  </ul>
+
+  <h2 id="open-questions">Open questions <span class="mode">reference</span></h2>
+  <p>Points the grilling did not settle. The agent building this stops and asks before acting on any of them.</p>
+  <ol>
+        <li>Content type of a manual payload from <code>--payload &lt;file&gt;</code>. Options: infer <code>application/json</code> when the file parses as JSON and <code>text/plain</code> otherwise; a <code>--content-type</code> flag. Default: infer.</li>
+    <li>Body of <code>GET /health</code>. Options: empty 200; JSON with the instance id. Default: JSON with the instance id.</li>
+    <li>Where the receiver is constructed. Options: <code>boot_instance</code> builds it and <code>_serve_instance</code> starts it; <code>_serve_instance</code> builds it from the runtime. Default: <code>_serve_instance</code> builds it, so <code>kinby run</code> never imports the HTTP library.</li>
+  </ol>
+
+  <h2 id="glossary">Glossary <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Signal</dt><dd>An inbound stimulus from outside the instance, such as a webhook call, that wakes the agent without a schedule.</dd>
+    <dt>Receiver</dt><dd>The part of serve mode that listens for signals, authenticates each call against the routine it names, and records the accepted ones as deliveries.</dd>
+    <dt>Delivery</dt><dd>One authenticated inbound call the receiver accepted for a routine, recorded the moment it arrives. The scheduler starts its turn when the instance is free.</dd>
+    <dt>Routine</dt><dd>A wake an instance owns: a prompt and optionally a code step, started by a schedule, by a delivery, or by hand.</dd>
+    <dt>Firing</dt><dd>One attempt to start a routine turn, whether scheduled, caught up, manual, or started by a delivery.</dd>
+    <dt>Code step</dt><dd>A routine's own deterministic tool that runs before the model and may report nothing new, completing the turn with no work.</dd>
+    <dt>No work</dt><dd>A completed turn whose code step found nothing for the model to do. Neither model runs.</dd>
+    <dt>Wake</dt><dd>The start of a turn by anything other than the user typing. Every wake carries an origin.</dd>
+    <dt>Origin</dt><dd>What started a turn: the user, a routine, or a signal.</dd>
+    <dt>Scheduler</dt><dd>The instance's coordinator of routine wakes, whether due by schedule or waiting as a delivery.</dd>
+    <dt>Serve mode</dt><dd>An instance runtime without a REPL, kept alive so the scheduler can fire routines and the receiver can listen.</dd>
+    <dt>Event</dt><dd>One sequence-numbered record in a thread's durable history. Never a synonym for signal.</dd>
+  </dl>
+
+  <footer>Blueprint for the signal receiver · stamped at 63e8236 · 2026-09-06</footer>
+</main>
+</body>
+</html>
