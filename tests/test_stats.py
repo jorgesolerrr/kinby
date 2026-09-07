@@ -259,7 +259,7 @@ def test_stats_warns_when_model_calls_disagree_with_the_closing_total(
     assert result.warnings == [ModelCallMismatch(thread_id=thread_id, turn_id=turn_id)]
 
 
-def test_stats_warns_only_for_missing_calls_after_model_call_events(
+def test_stats_warning_eligibility_is_scoped_to_each_turn(
     tmp_path: Path,
 ) -> None:
     thread_id = uuid4()
@@ -331,7 +331,7 @@ def test_stats_warns_only_for_missing_calls_after_model_call_events(
     )
 
     assert isinstance(result, StatsGetResult)
-    assert result.warnings == [ModelCallMismatch(thread_id=thread_id, turn_id=missing_call_id)]
+    assert result.warnings == []
 
 
 def test_stats_and_daily_budget_count_failed_turn_tokens(tmp_path: Path) -> None:

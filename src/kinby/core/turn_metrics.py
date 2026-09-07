@@ -56,6 +56,7 @@ class _TurnEvents:
     memory_calls: Counter[str] = field(default_factory=Counter)
     approvals_requested: int = 0
     memory_characters: int = 0
+    has_model_calls: bool = False
     model_input_tokens: int = 0
     model_output_tokens: int = 0
     model_cache_read_tokens: int = 0
@@ -90,7 +91,6 @@ def turn_metrics(
     no_work: set[TurnKey] = set()
     unpriced_models_by_turn: dict[TurnKey, set[UnpricedModel]] = {}
     mismatches: list[ModelCallMismatch] = []
-    model_call_seen = False
 
     for event in events:
         key = TurnKey(event.thread_id, event.turn_id)
@@ -101,8 +101,8 @@ def turn_metrics(
 
         turn = open_turns.get(key)
         if isinstance(payload, ModelCompleted):
-            model_call_seen = True
             if turn is not None:
+                turn.has_model_calls = True
                 turn.model_input_tokens += payload.input_tokens
                 turn.model_output_tokens += payload.output_tokens
                 turn.model_cache_read_tokens += payload.cache_read_tokens
@@ -128,7 +128,7 @@ def turn_metrics(
             output_tokens = payload.output_tokens
             if (
                 turn is not None
-                and model_call_seen
+                and turn.has_model_calls
                 and _model_totals(turn)
                 != TokenTotals(
                     input_tokens=payload.input_tokens,

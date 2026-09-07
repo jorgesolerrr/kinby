@@ -12,11 +12,13 @@ import pytest
 from kinby.contracts import (
     AcceptedResult,
     ApprovalRequested,
+    CompletionOutcome,
     ErrorCode,
     ErrorEnvelope,
     Event,
     EventType,
     MessageDelta,
+    ModelCompleted,
     ModePinned,
     Payload,
     PermissionMode,
@@ -80,6 +82,26 @@ class ScriptedRunner:
         await emit(MessageDelta(text="Hi"))
         await emit(MessageDelta(text=" there"))
         return TurnOutcome(input_tokens=4, output_tokens=2)
+
+    resume = does_not_park
+    restore = cannot_restore
+
+
+class NoWorkAfterModelCallRunner:
+    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+        await emit(
+            ModelCompleted(
+                model=turn.model,
+                input_tokens=4,
+                output_tokens=2,
+                duration_ms=1,
+            )
+        )
+        return TurnOutcome(
+            input_tokens=4,
+            output_tokens=2,
+            outcome=CompletionOutcome.NO_WORK,
+        )
 
     resume = does_not_park
     restore = cannot_restore
@@ -560,6 +582,45 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
         await replay.aclose()
 
         assert replayed == events
+
+    asyncio.run(scenario())
+
+
+def test_no_work_turn_closes_with_zero_tokens_after_a_model_call(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                NoWorkAfterModelCallRunner(),
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        accepted = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(accepted, AcceptedResult)
+        subscription = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id, "after_sequence": accepted.sequence},
+            {Scope.THREAD_READ},
+        )
+        model_completed = await asyncio.wait_for(anext(subscription), timeout=1)
+        completed = await asyncio.wait_for(anext(subscription), timeout=1)
+        await subscription.aclose()
+
+        assert isinstance(model_completed, Event)
+        assert isinstance(model_completed.payload, ModelCompleted)
+        assert isinstance(completed, Event)
+        assert completed.payload == TurnCompleted(
+            input_tokens=0,
+            output_tokens=0,
+            outcome=CompletionOutcome.NO_WORK,
+        )
 
     asyncio.run(scenario())
 

@@ -135,7 +135,7 @@ class RunningTurn:
     request: TurnRequest
     task: asyncio.Task[None]
     interrupted: bool = False
-    model_calls: int = 0
+    has_model_calls: bool = False
     usage: TokenTotals = field(default_factory=_no_token_usage)
 
 
@@ -423,7 +423,7 @@ class Turns:
         self._running[turn.thread_id] = RunningTurn(
             turn,
             task,
-            model_calls=len(model_calls),
+            has_model_calls=bool(model_calls),
             usage=_sum_model_calls(model_calls),
         )
         task.add_done_callback(partial(self._forget_task, turn.thread_id))
@@ -455,7 +455,7 @@ class Turns:
                 raise TurnInterruptedError
             event = await self._log.append(turn.thread_id, turn.turn_id, payload)
             if isinstance(payload, ModelCompleted):
-                running.model_calls += 1
+                running.has_model_calls = True
                 running.usage = _sum_model_calls((running.usage, payload))
             return event
 
@@ -472,14 +472,15 @@ class Turns:
             if isinstance(outcome, ParkedTurn):
                 return
             running = self._running[turn.thread_id]
-            usage = (
-                running.usage
-                if running.model_calls
-                else TokenTotals(
+            if outcome.outcome is CompletionOutcome.NO_WORK:
+                usage = _no_token_usage()
+            elif running.has_model_calls:
+                usage = running.usage
+            else:
+                usage = TokenTotals(
                     input_tokens=outcome.input_tokens,
                     output_tokens=outcome.output_tokens,
                 )
-            )
             await emit(
                 TurnCompleted(
                     outcome=outcome.outcome,
