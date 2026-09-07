@@ -163,14 +163,16 @@ def test_write_routine_documents_every_frontmatter_key_from_spec(tmp_path):
     skills, _ = load_skills(load_instance(path))
 
     document = skills[0].source.read_text(encoding="utf-8")
+    frontmatter_section = document.partition("## Frontmatter")[2].partition("\n## ")[0]
 
-    assert set(re.findall(r"^\| `([a-z_]+)` \|", document, re.MULTILINE)) == {
+    assert set(re.findall(r"^\| `([a-z_]+)` \|", frontmatter_section, re.MULTILINE)) == {
         "description",
         "schedule",
         "enabled",
         "mode",
         "catch_up",
         "run",
+        "signal",
         "arguments",
         "steps",
         "tokens",
@@ -178,15 +180,84 @@ def test_write_routine_documents_every_frontmatter_key_from_spec(tmp_path):
     }
 
 
-def test_write_routine_example_loads_as_one_firing_with_documented_defaults(tmp_path):
+def test_write_routine_documents_signal_configuration(tmp_path):
+    path = init_instance(tmp_path / "instance")
+    skills, _ = load_skills(load_instance(path))
+    body = skills[0].body
+    signal_section = body.partition("## Receive signals")[2].partition("\n## ")[0]
+
+    assert set(re.findall(r"^\| `([a-z_]+)` \|", signal_section, re.MULTILINE)) == {
+        "auth",
+        "secret",
+        "signature_header",
+        "delivery_header",
+    }
+    for guidance in (
+        "`token`",
+        "`Authorization: Bearer <secret>`",
+        "`hmac-sha256`",
+        "raw request body",
+        "GitHub",
+        "instance `.env`",
+        "delivery id",
+        "deduplicate",
+        "origin",
+    ):
+        assert guidance in signal_section
+
+
+def test_write_routine_includes_github_ready_for_agent_example(tmp_path):
+    path = init_instance(tmp_path / "instance")
+    skills, _ = load_skills(load_instance(path))
+    example = skills[0].body.partition("## Example: GitHub `ready-for-agent`")[2]
+
+    for content in (
+        "`routines/ready-for-agent/ROUTINE.md`",
+        "mode: full-access",
+        "auth: hmac-sha256",
+        "secret: GITHUB_WEBHOOK_SECRET",
+        "signature_header: X-Hub-Signature-256",
+        "delivery_header: X-GitHub-Delivery",
+        "`routines/ready-for-agent/run.py`",
+        'body.get("action") != "labeled"',
+        'label.get("name") != "ready-for-agent"',
+        '"number": issue["number"]',
+        '"title": issue["title"]',
+        '"url": issue["html_url"]',
+        "development-loop",
+    ):
+        assert content in example
+
+
+def test_write_routine_teaches_when_and_how_to_use_signals(tmp_path):
+    path = init_instance(tmp_path / "instance")
+    skills, _ = load_skills(load_instance(path))
+    body = " ".join(skills[0].body.split())
+
+    for guidance in (
+        "Prefer a signal over a schedule in that case",
+        "declare both `signal` and `schedule`",
+        "schedule as a fallback",
+        "chatty hook",
+        "returns `None` for most deliveries",
+        "`kinby routine run <name> --payload <file>`",
+        "saved delivery",
+    ):
+        assert guidance in body
+    assert "The signal receiver is separate work" not in body
+
+
+def test_write_routine_daily_example_loads_with_documented_defaults(tmp_path):
     path = init_instance(tmp_path / "instance")
     instance = load_instance(path)
     skills, _ = load_skills(instance)
     examples = re.findall(r"```markdown\n(.*?)\n```", skills[0].body, re.DOTALL)
-    assert len(examples) == 1
+    example = next(
+        example for example in examples if "description: Summarize today's notes." in example
+    )
     routine_path = path / "routines" / "daily-summary" / "ROUTINE.md"
     routine_path.parent.mkdir()
-    routine_path.write_text(examples[0], encoding="utf-8")
+    routine_path.write_text(example, encoding="utf-8")
 
     routines, warnings = load_routines(instance)
 

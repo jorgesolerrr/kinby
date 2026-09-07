@@ -34,6 +34,7 @@ Use one `key: value` per line between `---` delimiters.
 | `mode` | Instance default | `read-only`, `ask`, `auto`, or `full-access`, clamped to the instance ceiling. |
 | `catch_up` | `true` | After downtime, fire a missed schedule at most once. A routine with no run history waits for its next scheduled time. |
 | `run` | Absent | Name of a shared code-step tool. Without this key or `run.py`, the model runs directly. |
+| `signal` | Absent | Inbound hook configuration. Without this block, the routine has no signal path. |
 | `arguments` | `{}` | JSON object passed to the code step, written on one line. |
 | `steps` | Inherit instance budget, otherwise unlimited | Positive integer counting node executions. |
 | `tokens` | Inherit instance budget, otherwise unlimited | Positive integer limiting input plus output tokens. |
@@ -43,6 +44,68 @@ A routine may lower a per-turn budget and never raise one. A value above the
 instance budget produces a warning and the instance limit applies. `steps`
 counts node executions: `steps: 7` allows four model calls and three tool rounds.
 Daily spending stays in the instance's `[budgets] usd_per_day`, outside routine frontmatter.
+
+## Receive signals
+
+Add a `signal` block when an external provider can send a hook:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `auth` | `token` | Authentication scheme: `token` or `hmac-sha256`. |
+| `secret` | Required, no default | Environment variable name. Kinby reads its value from the instance `.env`; do not put the secret itself in this file. |
+| `signature_header` | Absent | Header containing the HMAC SHA-256 hex digest of the raw request body. Required with `hmac-sha256`; a `sha256=` prefix is accepted. |
+| `delivery_header` | Absent | Header containing the provider's delivery id. When present, kinby adds the id to the routine origin and uses it to deduplicate deliveries. |
+
+Use `token` when the provider lets you configure a fixed
+`Authorization: Bearer <secret>` header. Use `hmac-sha256` for GitHub, which signs
+the raw request body. Set `signature_header: X-Hub-Signature-256` for GitHub.
+Stripe also signs hooks, but its timestamped signature format is not the built-in
+`hmac-sha256` format and needs provider-specific support.
+
+## Example: GitHub `ready-for-agent`
+
+Configure a GitHub Issues hook to send the `issues` event. Put its secret in
+`GITHUB_WEBHOOK_SECRET` in the instance `.env`. Then draft
+`routines/ready-for-agent/ROUTINE.md`:
+
+```markdown
+---
+description: Implement a GitHub issue labeled ready-for-agent.
+mode: full-access
+signal:
+  auth: hmac-sha256
+  secret: GITHUB_WEBHOOK_SECRET
+  signature_header: X-Hub-Signature-256
+  delivery_header: X-GitHub-Delivery
+---
+Implement the issue in the code-step data. Read the `development-loop` skill and
+follow it for the full development cycle. Do not choose a different issue.
+```
+
+Add `routines/ready-for-agent/run.py` beside it:
+
+```python
+from kinby.plugins import tool
+
+
+@tool(write=False)
+def select_ready_issue(signal: dict[str, object]) -> dict[str, object] | None:
+    """Select a GitHub issue labeled ready-for-agent."""
+    body = signal.get("body")
+    if not isinstance(body, dict) or body.get("action") != "labeled":
+        return None
+    label = body.get("label")
+    if not isinstance(label, dict) or label.get("name") != "ready-for-agent":
+        return None
+    issue = body.get("issue")
+    if not isinstance(issue, dict):
+        return None
+    return {
+        "number": issue["number"],
+        "title": issue["title"],
+        "url": issue["html_url"],
+    }
+```
 
 ## Choose a code step
 
@@ -69,7 +132,16 @@ applies before the firing starts.
 
 Match the frequency to how often the source changes and how soon the user needs
 the result. Prefer push when the source supports it; incoming pushes are signals.
-The signal receiver is separate work, not a capability this skill installs.
+Prefer a signal over a schedule in that case. A routine may declare both `signal`
+and `schedule`, with the signal as the fast path and the schedule as a fallback.
+Put a chatty hook behind a code step that returns `None` for most deliveries, so
+only relevant deliveries reach the model.
+
+Test the routine with a saved delivery before the hook exists. Save the delivery
+body to a file and run `kinby routine run <name> --payload <file>`. A manual
+payload skips signal authentication but otherwise follows the same code-step and
+prompt path.
+
 A `run` line with a minutes-level schedule is a smell when the source can push.
 Use polling as a fallback for sources without push. Kinby imposes no hard minimum
 interval or enabled-routine cap. Per-turn and daily budgets still apply.
