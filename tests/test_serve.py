@@ -3,15 +3,24 @@ import os
 import signal
 from datetime import UTC, datetime, timedelta
 from importlib import import_module
+from io import StringIO
+from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import Thread
+from uuid import uuid4
+
+import pytest
 
 from kinby.cli import main
 from kinby.contracts import (
+    Delivery,
     MemoryRecapped,
     MessageDelta,
+    RoutineName,
     RoutineOrigin,
+    RoutineTrigger,
     Scope,
+    SignalReceived,
     ThreadListResult,
     ToolCall,
     ToolResult,
@@ -23,6 +32,7 @@ from kinby.contracts import (
 from kinby.core import boot_instance
 from kinby.core.dispatcher import TurnConfig
 from kinby.core.events import EventLog
+from kinby.core.threads import ThreadStore
 from kinby.core.turns import TurnOutcome
 from kinby.memory import GraphStore, RecapWriter
 from tests.helpers import fixed_permission_ceiling, fixed_turn_preparation
@@ -159,6 +169,64 @@ def test_routine_run_renders_the_turn_event_stream(tmp_path, capsys, monkeypatch
     assert output.err == "[warning] tools/fetch.py: Using cached results.\n"
 
 
+@pytest.mark.parametrize(
+    "body,content_type",
+    [('{"action":"opened"}', "application/json"), ("issue opened", "text/plain")],
+)
+def test_routine_run_payload_records_and_streams_delivery(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    body: str,
+    content_type: str,
+) -> None:
+    monkeypatch.setenv("SIGNAL_SECRET", "secret")
+    instance = instance_at(tmp_path)
+    routine_file(
+        instance,
+        "description: Issues\nsignal:\n  secret: SIGNAL_SECRET",
+    )
+    payload = tmp_path / "delivery.txt"
+    payload.write_text(body)
+    monkeypatch.setattr(
+        "kinby.core.runtime.turn_config",
+        lambda *args, **kwargs: TurnConfig(
+            fixed_turn_preparation,
+            fixed_permission_ceiling,
+            EventRunner(),
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "news",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr()
+    assert output.out.endswith("Done\n")
+    events = list(EventLog(instance.manifest.state_dir).all_events())
+    received = events[0]
+    started = next(event for event in events if isinstance(event.payload, TurnStarted))
+    assert isinstance(received.payload, SignalReceived)
+    assert received.payload.delivery.body == body
+    assert received.payload.delivery.content_type == content_type
+    assert received.payload.origin.trigger is RoutineTrigger.MANUAL
+    assert started.turn_id == received.turn_id
+    assert isinstance(started.payload, TurnStarted)
+    assert isinstance(started.payload.origin, RoutineOrigin)
+    assert started.payload.origin.trigger is RoutineTrigger.SIGNAL
+
+
 def test_routine_run_rejects_an_unknown_name(tmp_path, capsys) -> None:
     instance_at(tmp_path)
 
@@ -167,6 +235,34 @@ def test_routine_run_rejects_an_unknown_name(tmp_path, capsys) -> None:
     output = capsys.readouterr()
     assert output.out == ""
     assert 'NOT_FOUND: Routine "missing" was not found.' in output.err
+
+
+def test_routine_run_rejects_a_non_utf8_payload(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    instance = instance_at(tmp_path)
+    routine_file(instance, "description: News")
+    payload = tmp_path / "delivery.dat"
+    payload.write_bytes(b"\xff")
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "news",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(tmp_path),
+            ]
+        )
+        == 1
+    )
+
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert f'Could not read payload "{payload}":' in output.err
 
 
 def test_run_fires_a_due_routine_while_the_repl_waits(tmp_path, monkeypatch) -> None:
@@ -219,6 +315,51 @@ def test_run_fires_a_due_routine_while_the_repl_waits(tmp_path, monkeypatch) -> 
     assert fired.is_set()
     assert not closer.is_alive()
     assert any(isinstance(event.origin, RoutineOrigin) for event in started)
+
+
+def test_run_fires_pending_delivery_on_boot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SIGNAL_SECRET", "secret")
+    instance = instance_at(tmp_path)
+    routine_file(
+        instance,
+        "description: Issues\nsignal:\n  secret: SIGNAL_SECRET",
+    )
+    thread = ThreadStore(instance.manifest.state_dir).create("news · pending")
+    turn_id = uuid4()
+
+    async def seed() -> None:
+        await EventLog(instance.manifest.state_dir).append(
+            thread.id,
+            turn_id,
+            SignalReceived(
+                origin=RoutineOrigin(name=RoutineName("news"), trigger=RoutineTrigger.SIGNAL),
+                delivery=Delivery(
+                    headers={},
+                    content_type="text/plain",
+                    body="opened",
+                    received_at=datetime(2026, 9, 7, 10, tzinfo=UTC),
+                ),
+            ),
+        )
+
+    asyncio.run(seed())
+    monkeypatch.setattr(
+        "kinby.core.runtime.turn_config",
+        lambda *args, **kwargs: TurnConfig(
+            fixed_turn_preparation,
+            fixed_permission_ceiling,
+            EventRunner(),
+        ),
+    )
+    monkeypatch.setattr("sys.stdin", StringIO())
+
+    assert main(["run", "--instance", str(tmp_path)]) == 0
+
+    events = EventLog(instance.manifest.state_dir).stored(thread.id)
+    started = next(event for event in events if isinstance(event.payload, TurnStarted))
+    assert started.turn_id == turn_id
 
 
 def test_serve_interrupts_a_running_routine_and_drains_its_recap(

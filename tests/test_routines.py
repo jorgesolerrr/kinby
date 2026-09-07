@@ -9,9 +9,12 @@ import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.tools import StructuredTool
 
+from kinby.cli import main
 from kinby.contracts import (
     ApprovalRequested,
     CompletionOutcome,
+    Delivery,
+    DeliveryId,
     ErrorCode,
     Event,
     MemoryRecapped,
@@ -19,6 +22,7 @@ from kinby.contracts import (
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
+    SignalReceived,
     ThreadApprovalRespondCommand,
     ToolCall,
     ToolResult,
@@ -29,9 +33,16 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.budgets import daily_cost
+from kinby.core.dispatcher import (
+    ScheduledDispatcher,
+    ScheduledTurnConfig,
+    TurnConfig,
+    build_dispatcher,
+)
 from kinby.core.errors import BudgetExceeded, ModelUnpriced
 from kinby.core.events import EventLog
 from kinby.core.pricing import price_map
+from kinby.core.scheduler import SchedulerConfig
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_metrics import turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
@@ -327,6 +338,41 @@ class RoutineModel:
         )
 
 
+def signal_runtime(instance: Instance, model: RoutineModel) -> tuple[ScheduledDispatcher, EventLog]:
+    log = EventLog(instance.manifest.state_dir)
+    runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
+    dispatcher = build_dispatcher(
+        instance.manifest.state_dir,
+        event_log=log,
+        turns=ScheduledTurnConfig(
+            TurnConfig(
+                runner.prepare_for_turn,
+                runner.permission_ceiling,
+                runner,
+            ),
+            SchedulerConfig(instance),
+        ),
+    )
+    return dispatcher, log
+
+
+def use_routine_model(
+    monkeypatch: pytest.MonkeyPatch,
+    instance: Instance,
+    model: RoutineModel,
+) -> None:
+    log = EventLog(instance.manifest.state_dir)
+    runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
+    monkeypatch.setattr(
+        "kinby.core.runtime.turn_config",
+        lambda *args, **kwargs: TurnConfig(
+            runner.prepare_for_turn,
+            runner.permission_ceiling,
+            runner,
+        ),
+    )
+
+
 def no_recap(thread_id: UUID, turn_id: UUID) -> None:
     pass
 
@@ -345,7 +391,11 @@ async def fire(
         store, log, runner, runner.prepare_for_turn, runner.permission_ceiling, after_turn
     )
     thread = store.create(None)
-    await turns.wake(thread.id, "", RoutineOrigin(name=RoutineName("news"), trigger=trigger))
+    await turns.wake(
+        thread.id,
+        "Read the news.",
+        RoutineOrigin(name=RoutineName("news"), trigger=trigger),
+    )
     subscription = log.subscribe(thread.id)
     events: list[Event] = []
     async with asyncio.timeout(5):
@@ -413,7 +463,7 @@ def fetch() -> str:
     assert "fetch" not in model.tools
     assert path.read_text() == original
     assert isinstance(events[0].payload, TurnStarted)
-    assert events[0].payload.message == ""
+    assert events[0].payload.message == "Read the news."
 
 
 def test_scheduled_signal_routine_runs_code_step_without_a_delivery(
@@ -439,6 +489,254 @@ def fetch(signal: dict) -> str:
     call = next(event.payload for event in events if isinstance(event.payload, ToolCall))
     assert call.arguments == {"signal": {}}
     assert "scheduled fallback" in str(model.messages[0][-1].content)
+
+
+def test_signal_delivery_is_decoded_for_code_step_and_none_skips_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        path = routine_file(
+            instance,
+            """description: Issues
+arguments: {"owner": "jorge"}
+signal:
+  auth: hmac-sha256
+  secret: GITHUB_WEBHOOK_SECRET
+  signature_header: X-Hub-Signature-256""",
+        )
+        (path.parent / "run.py").write_text('''from kinby.plugins import tool
+@tool(write=False)
+def fetch(signal: dict, owner: str) -> None:
+    """Filter a delivery."""
+    return None
+''')
+        model = RoutineModel()
+        dispatcher, log = signal_runtime(instance, model)
+        scheduler = dispatcher.scheduler
+        delivery = Delivery(
+            headers={
+                "Authorization": "Bearer secret",
+                "Content-Type": "application/json",
+                "X-Hub-Signature-256": "sha256=secret",
+                "X-GitHub-Event": "issues",
+            },
+            content_type="application/json; charset=utf-8",
+            body='{"action":"opened","number":128}',
+            delivery_id=DeliveryId("delivery-128"),
+            received_at=datetime(2026, 9, 7, 10, tzinfo=UTC),
+        )
+
+        accepted = await scheduler.receive(RoutineName("news"), delivery, RoutineTrigger.SIGNAL)
+        await scheduler.tick()
+        await scheduler.drain()
+
+        assert model.messages == []
+        events = log.stored(accepted.thread_id)
+        assert isinstance(events[0].payload, SignalReceived)
+        call = next(event.payload for event in events if isinstance(event.payload, ToolCall))
+        assert call.arguments == {
+            "owner": "jorge",
+            "signal": {
+                "headers": {
+                    "content-type": "application/json",
+                    "x-github-event": "issues",
+                },
+                "content_type": "application/json; charset=utf-8",
+                "body": {"action": "opened", "number": 128},
+                "delivery_id": "delivery-128",
+                "received_at": "2026-09-07T10:00:00Z",
+            },
+        }
+        completed = events[-1].payload
+        assert isinstance(completed, TurnCompleted)
+        assert completed.outcome is CompletionOutcome.NO_WORK
+
+    asyncio.run(scenario())
+
+
+def test_signal_body_reaches_model_under_signal_cue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SIGNAL_SECRET", "secret")
+    instance = instance_at(tmp_path)
+    routine_file(
+        instance,
+        "description: Issues\nsignal:\n  secret: SIGNAL_SECRET",
+        "Handle the issue.",
+    )
+    payload = tmp_path / "delivery.txt"
+    payload.write_text("issue 128 opened")
+    model = RoutineModel()
+    use_routine_model(monkeypatch, instance, model)
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "news",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+
+    content = str(model.messages[0][-1].content)
+    assert content.startswith(
+        "[Routine: news, woken by a signal]\n"
+        "You must not create, list, or change routines unless explicitly instructed.\n\n"
+        "Handle the issue."
+    )
+    assert "<routine-data>\nissue 128 opened\n</routine-data>" in content
+
+
+def test_malformed_json_signal_fails_with_specific_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        path = routine_file(
+            instance,
+            "description: Issues\nsignal:\n  secret: SIGNAL_SECRET",
+        )
+        (path.parent / "run.py").write_text('''from kinby.plugins import tool
+@tool(write=False)
+def fetch(signal: dict) -> str:
+    """Filter a delivery."""
+    return "accepted"
+''')
+        model = RoutineModel()
+        dispatcher, log = signal_runtime(instance, model)
+        assert dispatcher.scheduler is not None
+        delivery = Delivery(
+            headers={"content-type": "application/json"},
+            content_type="application/json",
+            body="not-json",
+            received_at=datetime(2026, 9, 7, 10, tzinfo=UTC),
+        )
+
+        accepted = await dispatcher.scheduler.receive(
+            RoutineName("news"), delivery, RoutineTrigger.SIGNAL
+        )
+        await dispatcher.scheduler.tick()
+
+        failed = next(
+            event.payload
+            for event in log.stored(accepted.thread_id)
+            if isinstance(event.payload, TurnFailed)
+        )
+        assert failed.code is ErrorCode.INTERNAL
+        assert failed.message.startswith("The signal body is not valid JSON:")
+        assert model.messages == []
+
+    asyncio.run(scenario())
+
+
+def test_signal_code_step_text_reaches_model_as_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SIGNAL_SECRET", "secret")
+    instance = instance_at(tmp_path)
+    path = routine_file(
+        instance,
+        "description: Issues\nsignal:\n  secret: SIGNAL_SECRET",
+        "Handle the issue.",
+    )
+    (path.parent / "run.py").write_text('''from kinby.plugins import tool
+@tool(write=False)
+def fetch(signal: dict) -> str:
+    """Filter a delivery."""
+    return f"accepted {signal['body']}"
+''')
+    payload = tmp_path / "delivery.txt"
+    payload.write_text("issue 128")
+    model = RoutineModel()
+    use_routine_model(monkeypatch, instance, model)
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "news",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+
+    content = str(model.messages[0][-1].content)
+    assert content.startswith(
+        "[Routine: news, woken by a signal]\n"
+        "You must not create, list, or change routines unless explicitly instructed.\n\n"
+        "Handle the issue."
+    )
+    assert "<routine-data>\naccepted issue 128\n</routine-data>" in content
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_pending_delivery_fires_after_routine_is_disabled_or_deleted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deleted: bool,
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        path = routine_file(
+            instance,
+            "description: Issues\nsignal:\n  secret: SIGNAL_SECRET",
+            "Handle the issue.",
+        )
+        model = RoutineModel()
+        dispatcher, log = signal_runtime(instance, model)
+        scheduler = dispatcher.scheduler
+        accepted = await scheduler.receive(
+            RoutineName("news"),
+            Delivery(
+                headers={},
+                content_type="text/plain",
+                body="opened",
+                received_at=datetime(2026, 9, 7, 10, tzinfo=UTC),
+            ),
+            RoutineTrigger.SIGNAL,
+        )
+        if deleted:
+            path.unlink()
+        else:
+            path.write_text(
+                path.read_text().replace(
+                    "description: Issues", "description: Issues\nenabled: false"
+                )
+            )
+
+        await scheduler.tick()
+        await scheduler.drain()
+
+        closing = next(
+            event.payload
+            for event in log.stored(accepted.thread_id)
+            if isinstance(event.payload, TurnCompleted | TurnFailed)
+        )
+        if deleted:
+            assert isinstance(closing, TurnFailed)
+            assert closing.code is ErrorCode.NOT_FOUND
+            assert "news" in closing.message
+            assert model.messages == []
+        else:
+            assert isinstance(closing, TurnCompleted)
+            assert len(model.messages) == 1
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("mode", ["ask", "read-only", "full-access"])

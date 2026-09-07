@@ -8,12 +8,14 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from cronsim import CronSim
 
 from kinby.contracts import (
     AcceptedResult,
     CronSchedule,
+    Delivery,
     RoutineFailureHandled,
     RoutineListCommand,
     RoutineListResult,
@@ -25,11 +27,13 @@ from kinby.contracts import (
     RoutineRunOutcome,
     RoutineSummary,
     RoutineTrigger,
+    SignalReceived,
     SignalSummary,
 )
 from kinby.core.errors import BudgetExceeded, InstanceBusy, ModelUnpriced, RoutineNotFound
 from kinby.core.events import EventLog
 from kinby.core.routine_history import RoutineHistory, routine_history
+from kinby.core.threads import ThreadStore
 from kinby.core.turns import Turns
 from kinby.instance import Instance
 from kinby.plugins.routines import Routine, disable_routine, load_routines
@@ -56,12 +60,14 @@ class Scheduler:
         self,
         config: SchedulerConfig,
         log: EventLog,
+        store: ThreadStore,
         turns: Turns,
     ) -> None:
         self._instance = config.instance
         self._clock = config.clock
         self._started_at = self._clock()
         self._log = log
+        self._store = store
         self._turns = turns
         self._armed: dict[RoutineName, ArmedRoutine] = {}
         self._pass = asyncio.Lock()
@@ -87,6 +93,44 @@ class Scheduler:
 
     async def interrupt(self) -> None:
         await self._turns.interrupt_routine()
+
+    async def receive(
+        self,
+        name: RoutineName,
+        delivery: Delivery,
+        trigger: RoutineTrigger,
+    ) -> AcceptedResult:
+        if delivery.delivery_id is not None:
+            for event in self._log.all_events():
+                payload = event.payload
+                if (
+                    isinstance(payload, SignalReceived)
+                    and payload.origin.name == name
+                    and payload.delivery.delivery_id == delivery.delivery_id
+                ):
+                    return AcceptedResult(
+                        thread_id=event.thread_id,
+                        turn_id=event.turn_id,
+                        sequence=event.sequence,
+                    )
+        origin = RoutineOrigin(
+            name=name,
+            trigger=trigger,
+            delivery_id=delivery.delivery_id,
+        )
+        title_suffix = delivery.delivery_id or delivery.received_at.isoformat()
+        thread = self._store.create(f"{name} · {title_suffix}")
+        event = await self._log.append(
+            thread.id,
+            uuid4(),
+            SignalReceived(origin=origin, delivery=delivery),
+        )
+        self.schedule()
+        return AcceptedResult(
+            thread_id=event.thread_id,
+            turn_id=event.turn_id,
+            sequence=event.sequence,
+        )
 
     async def _work(self) -> None:
         while True:
@@ -160,7 +204,7 @@ class Scheduler:
                         if routine.signal is not None
                         else None
                     ),
-                    pending=0,
+                    pending=len(record.pending),
                 )
             )
         return RoutineListResult(routines=result, warnings=warnings)
@@ -170,6 +214,19 @@ class Scheduler:
         routine = next((r for r in routines if r.name == command.name), None)
         if routine is None:
             raise RoutineNotFound(f'Routine "{command.name}" was not found.')
+        if command.payload is not None:
+            accepted = await self.receive(
+                routine.name,
+                Delivery(
+                    headers={"content-type": command.payload.content_type},
+                    content_type=command.payload.content_type,
+                    body=command.payload.body,
+                    received_at=self._clock(),
+                ),
+                RoutineTrigger.MANUAL,
+            )
+            await self.tick()
+            return accepted
         return await self._fire(routine, RoutineTrigger.MANUAL)
 
     async def _fire(self, routine: Routine, trigger: RoutineTrigger) -> AcceptedResult:
@@ -191,29 +248,57 @@ class Scheduler:
         async with self._pass:
             await self._handle_failures()
             routines, _ = load_routines(self._instance)
-            history = routine_history(self._log.all_events()).routines
+            histories = routine_history(self._log.all_events())
+            history = histories.routines
             self._armed = self._arm(routines, history)
-            for routine in routines:
-                armed = self._armed.get(routine.name)
-                if armed is not None and armed.time <= self._clock():
-                    trigger = (
-                        RoutineTrigger.CATCH_UP
-                        if armed.time < self._started_at
-                        else RoutineTrigger.SCHEDULED
+            pending = [item for record in history.values() for item in record.pending]
+            delivery = min(pending, key=lambda item: item.receipt_order) if pending else None
+            due = [
+                (armed.time, routine, armed)
+                for routine in routines
+                if (armed := self._armed.get(routine.name)) is not None
+                and armed.time <= self._clock()
+            ]
+            scheduled = min(due, key=lambda item: item[0]) if due else None
+            if delivery is None and scheduled is None:
+                return
+            if self._turns.running():
+                return
+            if delivery is not None and (
+                scheduled is None or delivery.delivery.received_at <= scheduled[0]
+            ):
+                origin = delivery.origin.model_copy(update={"trigger": RoutineTrigger.SIGNAL})
+                firing = self._turns.wake_recorded(
+                    delivery.thread_id,
+                    delivery.turn_id,
+                    delivery.delivery.body,
+                    origin,
+                )
+                rearm = None
+            elif scheduled is not None:
+                _, routine, armed = scheduled
+                trigger = (
+                    RoutineTrigger.CATCH_UP
+                    if armed.time < self._started_at
+                    else RoutineTrigger.SCHEDULED
+                )
+                firing = self._fire(routine, trigger)
+                rearm = routine.name, armed
+            else:
+                return
+            try:
+                await firing
+            except InstanceBusy:
+                return
+            except BudgetExceeded, ModelUnpriced:
+                if rearm is not None:
+                    name, armed = rearm
+                    self._armed[name] = ArmedRoutine(
+                        armed.schedule, self._next(armed.schedule, self._clock())
                     )
-                    if self._turns.running():
-                        return
-                    try:
-                        await self._fire(routine, trigger)
-                    except InstanceBusy:
-                        return
-                    except BudgetExceeded, ModelUnpriced:
-                        self._armed[routine.name] = ArmedRoutine(
-                            armed.schedule, self._next(armed.schedule, self._clock())
-                        )
-                        continue
-                    await self._turns.drain()
-                    await self._handle_failures()
+                return
+            await self._turns.drain()
+            await self._handle_failures()
 
     async def _handle_failures(self) -> None:
         history = routine_history(self._log.all_events())

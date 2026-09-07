@@ -10,6 +10,7 @@ from kinby.contracts import (
     Event,
     MessageDelta,
     PermissionMode,
+    RoutineName,
     RoutineOrigin,
     RoutineRunCommand,
     RoutineTrigger,
@@ -233,7 +234,14 @@ def test_signal_received_and_manual_payload_shapes() -> None:
         delivery_id=DeliveryId("abc"),
         received_at=received,
     )
-    payload = SignalReceived(delivery=delivery)
+    payload = SignalReceived(
+        origin=RoutineOrigin(
+            name=RoutineName("news"),
+            trigger=RoutineTrigger.SIGNAL,
+            delivery_id=DeliveryId("abc"),
+        ),
+        delivery=delivery,
+    )
     event = Event.model_validate(
         {
             "sequence": 1,
@@ -251,6 +259,13 @@ def test_signal_received_and_manual_payload_shapes() -> None:
         delivery_id=DeliveryId("abc"),
     )
     assert origin.delivery_id == "abc"
-    command = RoutineRunCommand.model_validate({"name": "news", "payload": delivery.body})
-    assert command.payload == delivery.body
+    command = RoutineRunCommand.model_validate(
+        {
+            "name": "news",
+            "payload": {"body": delivery.body, "content_type": "application/json"},
+        }
+    )
+    assert command.payload is not None
+    assert command.payload.body == delivery.body
+    assert command.payload.content_type == "application/json"
     assert RoutineRunCommand(name="news").payload is None

@@ -226,6 +226,7 @@ class Delivery(ContractModel):
 
 class SignalReceived(ContractModel):
     type: Literal[EventType.SIGNAL_RECEIVED] = EventType.SIGNAL_RECEIVED
+    origin: RoutineOrigin
     delivery: Delivery
 
 
@@ -418,9 +419,14 @@ class RoutineListCommand(ContractModel):
     pass
 
 
+class RoutinePayload(ContractModel):
+    body: str
+    content_type: Literal["application/json", "text/plain"]
+
+
 class RoutineRunCommand(ContractModel):
     name: RoutineName
-    payload: str | None = None
+    payload: RoutinePayload | None = None
 
 
 class RoutineRunOutcome(StrEnum):
