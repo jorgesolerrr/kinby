@@ -6,6 +6,7 @@ import pytest
 from jsonschema import validate
 from jsonschema.exceptions import ValidationError
 
+from kinby.instance import ModelPrice, init_instance, load_instance
 from kinby.instance.schema import checkout_schema_path, main, manifest_schema
 
 EXAMPLE_INSTANCES = Path(__file__).parents[1] / "examples" / "instances"
@@ -185,6 +186,55 @@ def test_manifest_schema_names_and_accepts_the_prices_section() -> None:
     assert isinstance(prices, dict)
     assert prices["title"] == "Prices"
     validate(instance=manifest, schema=schema)
+
+
+def test_manifest_schema_lists_and_accepts_cache_prices() -> None:
+    schema = manifest_schema()
+    defs = schema["$defs"]
+    assert isinstance(defs, dict)
+    raw_price = defs["RawModelPrice"]
+    assert isinstance(raw_price, dict)
+    properties = raw_price["properties"]
+    assert isinstance(properties, dict)
+    assert "cache_read" in properties
+    assert "cache_write" in properties
+    validate(
+        instance={
+            "id": "alice",
+            "models": {"main": "openai:gpt-5"},
+            "prices": {
+                "openai:gpt-5": {
+                    "input": 1.25,
+                    "output": 10,
+                    "cache_read": 0.125,
+                    "cache_write": 1.5625,
+                }
+            },
+        },
+        schema=schema,
+    )
+
+
+def test_manifest_loads_cache_prices(tmp_path: Path) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path, model="openai:gpt-5")
+    with (instance_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+        manifest.write(
+            '\n[prices."openai:gpt-5"]\n'
+            "input = 1.25\n"
+            "output = 10\n"
+            "cache_read = 0.125\n"
+            "cache_write = 1.5625\n"
+        )
+
+    instance = load_instance(instance_path)
+
+    assert instance.manifest.prices["openai:gpt-5"] == ModelPrice(
+        input=1.25,
+        output=10,
+        cache_read=0.125,
+        cache_write=1.5625,
+    )
 
 
 def test_manifest_schema_rejects_an_invalid_price_model_name() -> None:

@@ -127,6 +127,32 @@
     "RawModelPrice": {
       "additionalProperties": false,
       "properties": {
+        "cache_read": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Read"
+        },
+        "cache_write": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Write"
+        },
         "input": {
           "minimum": 0,
           "title": "Input",
