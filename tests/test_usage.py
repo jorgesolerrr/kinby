@@ -207,7 +207,13 @@ def test_usage_get_includes_recap_tokens_in_turn_and_thread_totals(
         await event_log.append(
             recorded.thread_id,
             recorded.turn_id,
-            MemoryRecapped(node=None, input_tokens=13, output_tokens=5),
+            MemoryRecapped(
+                node=None,
+                input_tokens=13,
+                output_tokens=5,
+                cache_read_tokens=8,
+                cache_creation_tokens=2,
+            ),
         )
 
         result = await dispatcher.dispatch(
@@ -222,11 +228,15 @@ def test_usage_get_includes_recap_tokens_in_turn_and_thread_totals(
                     thread_id=recorded.thread_id,
                     input_tokens=24,
                     output_tokens=12,
+                    cache_read_tokens=8,
+                    cache_creation_tokens=2,
                     turns=[
                         TurnUsage(
                             turn_id=recorded.turn_id,
                             input_tokens=24,
                             output_tokens=12,
+                            cache_read_tokens=8,
+                            cache_creation_tokens=2,
                             recap_input_tokens=13,
                             recap_output_tokens=5,
                         )
@@ -335,7 +345,13 @@ def test_cli_shows_token_totals_per_thread_and_turn(
         await event_log.append(
             recorded.thread_id,
             recorded.turn_id,
-            MemoryRecapped(node=None, input_tokens=13, output_tokens=5),
+            MemoryRecapped(
+                node=None,
+                input_tokens=13,
+                output_tokens=5,
+                cache_read_tokens=8,
+                cache_creation_tokens=2,
+            ),
         )
         return recorded
 
@@ -348,7 +364,10 @@ def test_cli_shows_token_totals_per_thread_and_turn(
     assert output.err == ""
     assert output.out.splitlines() == [
         f"thread {recorded.thread_id}: input=24 output=12 total=36",
-        (f"  turn {recorded.turn_id}: input=24 output=12 recap_input=13 recap_output=5 total=36"),
+        (
+            f"  turn {recorded.turn_id}: input=24 output=12 cache_read=8 cache_creation=2 "
+            "recap_input=13 recap_output=5 total=36"
+        ),
     ]
 
 

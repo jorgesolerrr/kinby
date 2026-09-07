@@ -9,17 +9,25 @@ from kinby.cli import main
 from kinby.contracts import (
     AcceptedResult,
     ApprovalRequested,
+    CompletionOutcome,
+    DenyCounts,
     ErrorCode,
     ErrorEnvelope,
     Event,
+    GateDecider,
+    GateOutcome,
     MemoryRecapped,
+    ModelCallMismatch,
+    ModelCompleted,
     Scope,
     StatsBucket,
     StatsBucketSize,
     StatsGetResult,
     ThreadCreateResult,
     ToolCall,
+    ToolGated,
     ToolResult,
+    ToolTime,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
@@ -27,8 +35,11 @@ from kinby.contracts import (
     TurnStarted,
     TurnVerdict,
 )
+from kinby.core import turn_metrics
+from kinby.core.budgets import daily_cost
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
+from kinby.core.pricing import price_map
 from kinby.core.turns import Emit, PreparedTurnRequest, TurnOutcome
 from kinby.instance import init_instance, load_instance
 from tests.helpers import (
@@ -42,31 +53,34 @@ from tests.helpers import (
 class MetricsRunner:
     async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         for call_id in ("bash-1", "bash-2"):
-            await emit(ToolCall(call_id=call_id, name="bash", arguments={}))
+            await emit(ToolCall(call_id=call_id, name="bash", arguments={}, write=True))
             await emit(
                 ToolResult(
                     call_id=call_id,
                     name="bash",
                     output="done",
                     error=False,
+                    duration_ms=5,
                 )
             )
-        await emit(ToolCall(call_id="search-1", name="memory_search", arguments={}))
+        await emit(ToolCall(call_id="search-1", name="memory_search", arguments={}, write=False))
         await emit(
             ToolResult(
                 call_id="search-1",
                 name="memory_search",
                 output="find",
                 error=False,
+                duration_ms=2,
             )
         )
-        await emit(ToolCall(call_id="open-1", name="memory_open", arguments={}))
+        await emit(ToolCall(call_id="open-1", name="memory_open", arguments={}, write=False))
         await emit(
             ToolResult(
                 call_id="open-1",
                 name="memory_open",
                 output="remember",
                 error=False,
+                duration_ms=2,
             )
         )
         await emit(
@@ -75,6 +89,24 @@ class MetricsRunner:
                 name="bash",
                 arguments={},
                 rule="ask",
+            )
+        )
+        await emit(
+            ToolGated(
+                call_id="deny-policy",
+                name="bash",
+                action=GateOutcome.DENY,
+                rule="bash.deny[0]",
+                decided_by=GateDecider.POLICY,
+            )
+        )
+        await emit(
+            ToolGated(
+                call_id="deny-user",
+                name="remember",
+                action=GateOutcome.DENY,
+                rule="mode.ask.write",
+                decided_by=GateDecider.USER,
             )
         )
         return TurnOutcome(input_tokens=11, output_tokens=7)
@@ -153,6 +185,8 @@ def test_stats_get_reports_one_turn_record_from_the_event_log(tmp_path: Path) ->
         }
         assert record.memory_consulted is True
         assert record.approvals_requested == 1
+        assert record.denies == DenyCounts(policy=1, user=1)
+        assert record.tool_duration == ToolTime(read_ms=4, write_ms=10)
         assert record.memory_tokens == 3
         assert record.rating is None
         assert result.buckets[0].cost == 0.00008375
@@ -197,6 +231,224 @@ def test_stats_get_uses_a_manifest_price_override(tmp_path: Path) -> None:
     assert isinstance(result, StatsGetResult)
     assert result.records[0].cost == 0.00024
     assert result.buckets[0].cost == 0.00024
+
+
+def test_stats_warns_when_model_calls_disagree_with_the_closing_total(
+    tmp_path: Path,
+) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            now,
+            TurnStarted(message="priced", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            now,
+            ModelCompleted(
+                model="openai:gpt-5",
+                input_tokens=3,
+                output_tokens=2,
+                cache_read_tokens=1,
+                cache_creation_tokens=2,
+                duration_ms=10,
+            ),
+        ),
+        _event(
+            3,
+            thread_id,
+            turn_id,
+            now,
+            TurnCompleted(
+                input_tokens=4,
+                output_tokens=2,
+                cache_read_tokens=1,
+                cache_creation_tokens=2,
+            ),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get", {}, {Scope.INSTANCE_READ}
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.records[0].cost == 0.000025
+    assert result.records[0].cache_read_tokens == 1
+    assert result.records[0].cache_creation_tokens == 2
+    assert result.buckets[0].cache_read_tokens == 1
+    assert result.buckets[0].cache_creation_tokens == 2
+    assert result.warnings == [ModelCallMismatch(thread_id=thread_id, turn_id=turn_id)]
+
+
+def test_stats_does_not_warn_for_no_work_closing_totals(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            now,
+            TurnStarted(message="no work", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            now,
+            ModelCompleted(
+                model="openai:gpt-5",
+                input_tokens=3,
+                output_tokens=2,
+                duration_ms=10,
+            ),
+        ),
+        _event(
+            3,
+            thread_id,
+            turn_id,
+            now,
+            TurnCompleted(
+                input_tokens=0,
+                output_tokens=0,
+                outcome=CompletionOutcome.NO_WORK,
+            ),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get", {}, {Scope.INSTANCE_READ}
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.warnings == []
+
+
+def test_stats_warning_eligibility_is_scoped_to_each_turn(
+    tmp_path: Path,
+) -> None:
+    thread_id = uuid4()
+    legacy_id = uuid4()
+    missing_call_id = uuid4()
+    recorded_call_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            legacy_id,
+            now,
+            TurnStarted(message="legacy", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            legacy_id,
+            now,
+            TurnCompleted(input_tokens=4, output_tokens=2),
+        ),
+        _event(
+            3,
+            thread_id,
+            recorded_call_id,
+            now,
+            TurnStarted(message="recorded", model="openai:gpt-5"),
+        ),
+        _event(
+            4,
+            thread_id,
+            recorded_call_id,
+            now,
+            ModelCompleted(
+                model="openai:gpt-5",
+                input_tokens=3,
+                output_tokens=1,
+                duration_ms=10,
+            ),
+        ),
+        _event(
+            5,
+            thread_id,
+            recorded_call_id,
+            now,
+            TurnCompleted(input_tokens=3, output_tokens=1),
+        ),
+        _event(
+            6,
+            thread_id,
+            missing_call_id,
+            now,
+            TurnStarted(message="missing", model="openai:gpt-5"),
+        ),
+        _event(
+            7,
+            thread_id,
+            missing_call_id,
+            now,
+            TurnCompleted(input_tokens=4, output_tokens=2),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get", {}, {Scope.INSTANCE_READ}
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.warnings == []
+
+
+def test_stats_and_daily_budget_count_failed_turn_tokens(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            now,
+            TurnStarted(message="failed", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            now,
+            TurnFailed(
+                code=ErrorCode.INTERNAL,
+                message="failed",
+                input_tokens=4,
+                output_tokens=2,
+            ),
+        ),
+    ]
+    log = StaticEventLog(tmp_path, events)
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=log).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.records[0].closing_kind == "failed"
+    assert result.records[0].input_tokens == 4
+    assert result.records[0].output_tokens == 2
+    assert result.records[0].cost == 0.000025
+    assert daily_cost(log.all_events(), price_map(), now.date()).usd == 0.000025
 
 
 def test_stats_get_reports_unpriced_models_and_sums_only_priced_turns(
@@ -330,6 +582,139 @@ class StaticEventLog(EventLog):
 
     def all_events(self):
         yield from self._events
+
+
+def test_turn_metrics_reports_denies_and_read_write_tool_time() -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    started_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            started_at,
+            TurnStarted(message="measure tools", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolCall(call_id="read-1", name="read", arguments={}, write=False),
+        ),
+        _event(
+            3,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolGated(
+                call_id="read-1",
+                name="read",
+                action=GateOutcome.ALLOW,
+                rule="mode.ask.read",
+                decided_by=GateDecider.POLICY,
+            ),
+        ),
+        _event(
+            4,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolResult(
+                call_id="read-1",
+                name="read",
+                output="contents",
+                error=False,
+                duration_ms=7,
+            ),
+        ),
+        _event(
+            5,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolCall(call_id="write-1", name="edit", arguments={}, write=True),
+        ),
+        _event(
+            6,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolGated(
+                call_id="write-1",
+                name="edit",
+                action=GateOutcome.ALLOW,
+                rule="mode.full-access.write",
+                decided_by=GateDecider.POLICY,
+            ),
+        ),
+        _event(
+            7,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolResult(
+                call_id="write-1",
+                name="edit",
+                output="edited",
+                error=False,
+                duration_ms=11,
+            ),
+        ),
+        _event(
+            8,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolGated(
+                call_id="deny-1",
+                name="bash",
+                action=GateOutcome.DENY,
+                rule="bash.deny[0]",
+                decided_by=GateDecider.POLICY,
+            ),
+        ),
+        _event(
+            9,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolGated(
+                call_id="deny-2",
+                name="remember",
+                action=GateOutcome.DENY,
+                rule="mode.ask.write",
+                decided_by=GateDecider.USER,
+            ),
+        ),
+        _event(
+            10,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolCall(call_id="legacy", name="old", arguments={}),
+        ),
+        _event(
+            11,
+            thread_id,
+            turn_id,
+            started_at,
+            ToolResult(call_id="legacy", name="old", output="old", error=False),
+        ),
+        _event(
+            12,
+            thread_id,
+            turn_id,
+            started_at + timedelta(seconds=1),
+            TurnCompleted(input_tokens=1, output_tokens=1),
+        ),
+    ]
+
+    record = turn_metrics(events).records[0]
+
+    assert record.denies == DenyCounts(policy=1, user=1)
+    assert record.tool_duration == ToolTime(read_ms=7, write_ms=11)
 
 
 def _event(
@@ -666,18 +1051,42 @@ def test_stats_get_groups_monday_week_and_applies_inclusive_bounds(tmp_path: Pat
             2,
             thread_id,
             monday_id,
+            monday + timedelta(seconds=5),
+            ModelCompleted(
+                model="outside:model",
+                input_tokens=1,
+                output_tokens=1,
+                duration_ms=5,
+            ),
+        ),
+        _event(
+            3,
+            thread_id,
+            monday_id,
             monday + timedelta(seconds=10),
             TurnCompleted(input_tokens=2, output_tokens=1),
         ),
         _event(
-            3,
+            4,
             thread_id,
             tuesday_id,
             tuesday,
             TurnStarted(message="two", model="inside:model"),
         ),
         _event(
-            4,
+            5,
+            thread_id,
+            tuesday_id,
+            tuesday + timedelta(seconds=10),
+            ModelCompleted(
+                model="inside:model",
+                input_tokens=1,
+                output_tokens=1,
+                duration_ms=5,
+            ),
+        ),
+        _event(
+            6,
             thread_id,
             tuesday_id,
             tuesday + timedelta(seconds=20),
@@ -707,10 +1116,15 @@ def test_stats_get_groups_monday_week_and_applies_inclusive_bounds(tmp_path: Pat
     assert weekly.buckets[0].output_tokens == 3
     assert weekly.buckets[0].mean_duration_seconds == 15
     assert StatsBucketSize.WEEK == "week"
+    assert weekly.warnings == [
+        ModelCallMismatch(thread_id=thread_id, turn_id=monday_id),
+        ModelCallMismatch(thread_id=thread_id, turn_id=tuesday_id),
+    ]
     assert isinstance(bounded, StatsGetResult)
     assert bounded.unpriced_models == ["inside:model"]
     assert [record.turn_id for record in bounded.records] == [tuesday_id]
     assert [bucket.start for bucket in bounded.buckets] == [tuesday.date()]
+    assert bounded.warnings == [ModelCallMismatch(thread_id=thread_id, turn_id=tuesday_id)]
 
 
 def test_stats_get_requires_instance_read_before_validating_payload(tmp_path: Path) -> None:
@@ -761,6 +1175,8 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "interrupted",
         "input",
         "output",
+        "cache read",
+        "cache creation",
         "recap input",
         "recap output",
         "cost",
@@ -771,18 +1187,24 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "forget",
         "without memory",
         "approvals",
+        "policy denies",
+        "user denies",
+        "read tool ms",
+        "write tool ms",
         "mean seconds",
         "good",
         "bad",
     ]
     bucket_fields = lines[1].split("\t")
-    assert bucket_fields[:16] == [
+    assert bucket_fields[:22] == [
         closed.timestamp.date().isoformat(),
         "1",
         "0",
         "0",
         "11",
         "7",
+        "0",
+        "0",
         "0",
         "0",
         "0.00008375",
@@ -793,9 +1215,13 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "0",
         "0",
         "1",
+        "1",
+        "1",
+        "4",
+        "10",
     ]
-    assert float(bucket_fields[16]) >= 0
-    assert bucket_fields[17:] == ["0", "0"]
+    assert float(bucket_fields[22]) >= 0
+    assert bucket_fields[23:] == ["0", "0"]
     total_fields = lines[2].split("\t")
     assert total_fields[0] == "total"
     assert total_fields[1:] == bucket_fields[1:]
@@ -842,6 +1268,51 @@ def test_cli_stats_warns_once_with_every_unpriced_model(
     cost_column = lines[0].split("\t").index("cost")
     assert lines[1].split("\t")[cost_column] == "unknown"
     assert lines[2].split("\t")[cost_column] == "unknown"
+
+
+def test_cli_stats_prints_a_model_call_mismatch_warning(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path)
+    instance = load_instance(instance_path)
+    event_log = EventLog(instance.manifest.state_dir)
+    thread_id = uuid4()
+    turn_id = uuid4()
+
+    async def append_turn() -> None:
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnStarted(message="mismatch", model="openai:gpt-5"),
+        )
+        await event_log.append(
+            thread_id,
+            turn_id,
+            ModelCompleted(
+                model="openai:gpt-5",
+                input_tokens=3,
+                output_tokens=2,
+                duration_ms=10,
+            ),
+        )
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnCompleted(input_tokens=4, output_tokens=2),
+        )
+
+    asyncio.run(append_turn())
+
+    exit_code = main(["stats", str(instance_path)])
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    assert output.err == (
+        f"warning: Model call totals for turn {turn_id} on thread {thread_id} do not match "
+        "its closing totals.\n"
+    )
 
 
 def test_cli_stats_rejects_a_range_without_timezone(

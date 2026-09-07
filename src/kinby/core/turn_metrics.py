@@ -12,12 +12,19 @@ from uuid import UUID
 from kinby.contracts import (
     ApprovalRequested,
     CompletionOutcome,
+    DenyCounts,
     Event,
+    GateOutcome,
     MemoryCallCounts,
     MemoryRecapped,
+    ModelCallMismatch,
+    ModelCompleted,
     PromptVersion,
+    TokenTotals,
     ToolCall,
+    ToolGated,
     ToolResult,
+    ToolTime,
     TurnClosingKind,
     TurnCompleted,
     TurnFailed,
@@ -52,9 +59,17 @@ class _TurnEvents:
     model: str
     prompt_version: PromptVersion | None
     tool_calls: Counter[str] = field(default_factory=Counter)
+    tool_writes: dict[str, bool | None] = field(default_factory=dict)
+    denies: Counter[str] = field(default_factory=Counter)
+    tool_duration: Counter[str] = field(default_factory=Counter)
     memory_calls: Counter[str] = field(default_factory=Counter)
     approvals_requested: int = 0
     memory_characters: int = 0
+    has_model_calls: bool = False
+    model_input_tokens: int = 0
+    model_output_tokens: int = 0
+    model_cache_read_tokens: int = 0
+    model_cache_creation_tokens: int = 0
 
 
 def estimate_memory_tokens(character_count: int) -> float:
@@ -71,6 +86,7 @@ def closing_day(record: TurnMetrics) -> date:
 class TurnMetricsResult:
     records: list[TurnMetrics]
     unpriced_models_by_turn: Mapping[TurnKey, frozenset[UnpricedModel]]
+    warnings: list[ModelCallMismatch]
 
 
 def turn_metrics(
@@ -83,6 +99,7 @@ def turn_metrics(
     records: list[TurnMetrics] = []
     no_work: set[TurnKey] = set()
     unpriced_models_by_turn: dict[TurnKey, set[UnpricedModel]] = {}
+    mismatches: list[ModelCallMismatch] = []
 
     for event in events:
         key = TurnKey(event.thread_id, event.turn_id)
@@ -96,15 +113,32 @@ def turn_metrics(
             continue
 
         turn = open_turns.get(key)
+        if isinstance(payload, ModelCompleted):
+            if turn is not None:
+                turn.has_model_calls = True
+                turn.model_input_tokens += payload.input_tokens
+                turn.model_output_tokens += payload.output_tokens
+                turn.model_cache_read_tokens += payload.cache_read_tokens
+                turn.model_cache_creation_tokens += payload.cache_creation_tokens
+            continue
         if isinstance(payload, ToolCall):
             if turn is not None:
                 turn.tool_calls[payload.name] += 1
+                turn.tool_writes[payload.call_id] = payload.write
                 if kind := _MEMORY_CALL_KINDS.get(payload.name):
                     turn.memory_calls[kind] += 1
             continue
+        if isinstance(payload, ToolGated):
+            if turn is not None and payload.action is GateOutcome.DENY:
+                turn.denies[payload.decided_by.value] += 1
+            continue
         if isinstance(payload, ToolResult):
-            if turn is not None and payload.name in _MEMORY_CALL_KINDS:
-                turn.memory_characters += len(payload.output)
+            if turn is not None:
+                if payload.name in _MEMORY_CALL_KINDS:
+                    turn.memory_characters += len(payload.output)
+                write = turn.tool_writes.get(payload.call_id)
+                if payload.duration_ms is not None and write is not None:
+                    turn.tool_duration["write_ms" if write else "read_ms"] += payload.duration_ms
             continue
         if isinstance(payload, ApprovalRequested):
             if turn is not None:
@@ -112,11 +146,32 @@ def turn_metrics(
             continue
         if isinstance(payload, TurnCompleted | TurnFailed | TurnInterrupted):
             turn = open_turns.pop(key, None)
-            input_tokens = payload.input_tokens if isinstance(payload, TurnCompleted) else 0
-            output_tokens = payload.output_tokens if isinstance(payload, TurnCompleted) else 0
+            input_tokens = payload.input_tokens
+            output_tokens = payload.output_tokens
+            no_work_completion = (
+                isinstance(payload, TurnCompleted) and payload.outcome is CompletionOutcome.NO_WORK
+            )
+            if (
+                turn is not None
+                and turn.has_model_calls
+                and not no_work_completion
+                and _model_totals(turn)
+                != TokenTotals(
+                    input_tokens=payload.input_tokens,
+                    output_tokens=payload.output_tokens,
+                    cache_read_tokens=payload.cache_read_tokens,
+                    cache_creation_tokens=payload.cache_creation_tokens,
+                )
+            ):
+                mismatches.append(
+                    ModelCallMismatch(
+                        thread_id=event.thread_id,
+                        turn_id=event.turn_id,
+                    )
+                )
             memory_calls = MemoryCallCounts.model_validate(turn.memory_calls if turn else {})
             price = prices.get(turn.model) if turn is not None else None
-            if isinstance(payload, TurnCompleted) and payload.outcome is CompletionOutcome.NO_WORK:
+            if no_work_completion:
                 no_work.add(key)
             if turn is not None and price is None and key not in no_work:
                 unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(turn.model))
@@ -133,6 +188,8 @@ def turn_metrics(
                 ),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                cache_read_tokens=payload.cache_read_tokens,
+                cache_creation_tokens=payload.cache_creation_tokens,
                 recap_input_tokens=0,
                 recap_output_tokens=0,
                 cost=(
@@ -146,6 +203,8 @@ def turn_metrics(
                 memory_calls=memory_calls,
                 memory_consulted=bool(memory_calls.search or memory_calls.open),
                 approvals_requested=turn.approvals_requested if turn else 0,
+                denies=DenyCounts.model_validate(turn.denies if turn else {}),
+                tool_duration=ToolTime.model_validate(turn.tool_duration if turn else {}),
                 memory_tokens=(estimate_memory_tokens(turn.memory_characters) if turn else 0),
                 rating=None,
             )
@@ -167,6 +226,8 @@ def turn_metrics(
                 unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(payload.model))
             record.input_tokens += payload.input_tokens - record.recap_input_tokens
             record.output_tokens += payload.output_tokens - record.recap_output_tokens
+            record.cache_read_tokens += payload.cache_read_tokens
+            record.cache_creation_tokens += payload.cache_creation_tokens
             record.recap_input_tokens = payload.input_tokens
             record.recap_output_tokens = payload.output_tokens
             record.cost = (
@@ -181,6 +242,16 @@ def turn_metrics(
     return TurnMetricsResult(
         records,
         {key: frozenset(models) for key, models in unpriced_models_by_turn.items()},
+        mismatches,
+    )
+
+
+def _model_totals(turn: _TurnEvents) -> TokenTotals:
+    return TokenTotals(
+        input_tokens=turn.model_input_tokens,
+        output_tokens=turn.model_output_tokens,
+        cache_read_tokens=turn.model_cache_read_tokens,
+        cache_creation_tokens=turn.model_cache_creation_tokens,
     )
 
 

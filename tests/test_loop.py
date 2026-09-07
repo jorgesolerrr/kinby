@@ -15,6 +15,7 @@ from kinby.contracts import (
     ErrorCode,
     Event,
     MessageDelta,
+    ModelCompleted,
     Payload,
     PermissionMode,
     Scope,
@@ -22,6 +23,7 @@ from kinby.contracts import (
     ThreadCreateResult,
     TurnCompleted,
     TurnFailed,
+    TurnInterrupted,
     TurnStarted,
     is_turn_closing,
 )
@@ -152,6 +154,61 @@ class TokenBudgetChatModel(CoreSkillModel):
         )
 
 
+class TwoCallChatModel(CoreSkillModel):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        self.calls += 1
+        if self.calls == 1:
+            yield AIMessageChunk(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "missing",
+                        "args": {},
+                        "id": "missing-1",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={
+                    "input_tokens": 5,
+                    "output_tokens": 1,
+                    "total_tokens": 6,
+                    "input_token_details": {"cache_read": 3, "cache_creation": 1},
+                },
+            )
+            return
+        yield AIMessageChunk(
+            content="Done",
+            usage_metadata={"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
+        )
+
+
+class FailingSecondCallChatModel(TwoCallChatModel):
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        if self.calls == 1:
+            self.calls += 1
+            raise RuntimeError("provider unavailable")
+        async for chunk in super().astream(messages):
+            yield chunk
+
+
+class InterruptibleSecondCallChatModel(TwoCallChatModel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.second_call_started = asyncio.Event()
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        if self.calls == 1:
+            self.calls += 1
+            self.second_call_started.set()
+            await asyncio.Event().wait()
+            return
+        async for chunk in super().astream(messages):
+            yield chunk
+
+
 class StallingChatModel(CoreSkillModel):
     def __init__(self) -> None:
         self.calls = 0
@@ -190,6 +247,12 @@ class ApprovalChatModel(CoreSkillModel):
                     "type": "tool_call",
                 }
             ],
+            usage_metadata={
+                "input_tokens": 5,
+                "output_tokens": 1,
+                "total_tokens": 6,
+                "input_token_details": {"cache_read": 3, "cache_creation": 1},
+            },
         )
 
 
@@ -359,8 +422,124 @@ def test_tokens_budget_fails_after_streamed_usage_passes_the_limit(tmp_path: Pat
         assert events[-1].payload == TurnFailed(
             code=ErrorCode.BUDGET_EXCEEDED,
             message="The turn exceeded the tokens budget of 10.",
+            input_tokens=8,
+            output_tokens=3,
         )
         assert model.calls == 2
+
+    asyncio.run(scenario())
+
+
+def test_runner_records_each_model_call_and_closes_with_their_totals(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher, thread_id = await _budget_session(tmp_path, TwoCallChatModel(), "")
+
+        events = await _budget_turn_events(dispatcher, thread_id, "Work")
+
+        calls = [event.payload for event in events if isinstance(event.payload, ModelCompleted)]
+        assert len(calls) == 2
+        assert calls[0] == ModelCompleted(
+            model=_MODEL,
+            input_tokens=5,
+            output_tokens=1,
+            cache_read_tokens=3,
+            cache_creation_tokens=1,
+            duration_ms=calls[0].duration_ms,
+        )
+        assert calls[0].duration_ms >= 0
+        assert calls[1] == ModelCompleted(
+            model=_MODEL,
+            input_tokens=2,
+            output_tokens=3,
+            duration_ms=calls[1].duration_ms,
+        )
+        assert calls[1].duration_ms >= 0
+        assert events[-1].payload == TurnCompleted(
+            input_tokens=7,
+            output_tokens=4,
+            cache_read_tokens=3,
+            cache_creation_tokens=1,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_failed_second_model_call_closes_with_the_first_calls_tokens(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher, thread_id = await _budget_session(tmp_path, FailingSecondCallChatModel(), "")
+
+        events = await _budget_turn_events(dispatcher, thread_id, "Work")
+
+        calls = [event.payload for event in events if isinstance(event.payload, ModelCompleted)]
+        assert len(calls) == 1
+        assert events[-1].payload == TurnFailed(
+            code=ErrorCode.INTERNAL,
+            message="The model turn failed unexpectedly.",
+            input_tokens=5,
+            output_tokens=1,
+            cache_read_tokens=3,
+            cache_creation_tokens=1,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_interrupted_turn_closes_with_the_model_call_tally(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        model = InterruptibleSecondCallChatModel()
+        dispatcher, thread_id = await _budget_session(tmp_path, model, "")
+        accepted = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Work"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(accepted, AcceptedResult)
+        await asyncio.wait_for(model.second_call_started.wait(), timeout=GRAPH_EVENT_TIMEOUT)
+
+        interrupted = await dispatcher.dispatch(
+            "thread.turn.interrupt",
+            {"thread_id": thread_id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(interrupted, AcceptedResult)
+        events = [
+            event
+            for event in EventLog(tmp_path / "bounded" / ".state").stored(thread_id)
+            if event.turn_id == accepted.turn_id
+        ]
+        assert events[-1].payload == TurnInterrupted(
+            input_tokens=5,
+            output_tokens=1,
+            cache_read_tokens=3,
+            cache_creation_tokens=1,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_parked_turn_interrupt_closes_with_the_recorded_model_call_tally(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        dispatcher, thread_id = await _budget_session(tmp_path, ApprovalChatModel(), "")
+        requested = await _park_budget_turn(dispatcher, thread_id)
+
+        interrupted = await dispatcher.dispatch(
+            "thread.turn.interrupt",
+            {"thread_id": thread_id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(interrupted, AcceptedResult)
+        events = EventLog(tmp_path / "bounded" / ".state").stored(thread_id)
+        assert events[-1].turn_id == requested.turn_id
+        assert events[-1].payload == TurnInterrupted(
+            input_tokens=5,
+            output_tokens=1,
+            cache_read_tokens=3,
+            cache_creation_tokens=1,
+        )
 
     asyncio.run(scenario())
 
@@ -423,6 +602,10 @@ def test_steps_budget_does_not_reset_after_approval(tmp_path: Path) -> None:
         assert events[-1].payload == TurnFailed(
             code=ErrorCode.BUDGET_EXCEEDED,
             message="The turn exceeded the steps budget of 2.",
+            input_tokens=5,
+            output_tokens=1,
+            cache_read_tokens=3,
+            cache_creation_tokens=1,
         )
         assert model.calls == 1
         assert resumed_model.calls == 0
@@ -452,6 +635,10 @@ def test_seconds_budget_does_not_reset_after_approval(tmp_path: Path) -> None:
         assert events[-1].payload == TurnFailed(
             code=ErrorCode.BUDGET_EXCEEDED,
             message="The turn exceeded the seconds budget of 0.2.",
+            input_tokens=5,
+            output_tokens=1,
+            cache_read_tokens=3,
+            cache_creation_tokens=1,
         )
         assert model.calls == 1
         assert resumed_model.calls == 1
@@ -516,7 +703,7 @@ def test_runner_reloads_the_instance_model_between_turns(
             )
             events = [
                 await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
-                for _ in range(3)
+                for _ in range(4)
             ]
             await subscription.aclose()
             started = events[0]
@@ -594,7 +781,8 @@ def test_langgraph_runner_streams_one_model_turn(tmp_path: Path) -> None:
 
         assert isinstance(outcome, TurnOutcome)
         assert requested_models == ["openai:gpt-5"]
-        assert events == [MessageDelta(text="Hi"), MessageDelta(text=" there")]
+        assert events[:2] == [MessageDelta(text="Hi"), MessageDelta(text=" there")]
+        assert isinstance(events[2], ModelCompleted)
         assert outcome.input_tokens == 4
         assert outcome.output_tokens == 2
 

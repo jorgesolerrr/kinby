@@ -167,6 +167,10 @@ UTC day or week totals derived from an **instance** event history through **turn
 
 One request to a model during a **turn**, recorded as an event with its tokens and duration. A turn's **token usage** is the sum of its model calls; the closing event carries that sum.
 
+### Model call mismatch
+
+A **turn** whose recorded **model calls** do not sum to the **token usage** on its closing event.
+
 ### Navigation
 
 The read-only **tool** calls and the model reasoning a **turn** spends locating what it needs in the **workspace** before acting. Measured per turn as read calls, their time, distinct paths opened, and the tokens spent before the first write. Memory tools and the skill tool are not navigation. Its trend for one workspace shows whether memory is teaching the agent the workspace.
@@ -227,6 +231,10 @@ The normalized answer to an **approval**: approve or deny. The answer `yes` appr
 ### Gate
 
 The check every **tool** call passes through before it runs. It reads the tool's write flag and the instance's permission policy, and answers allow, ask (raise an **approval**), or deny. The policy is the instance's ceiling; a **thread** may narrow it, never widen it.
+
+### Gate rule
+
+The identifier for the policy condition that produced a **gate decision**, such as `mode.ask.write` or `bash.deny[0]`.
 
 
 ### Gate decision

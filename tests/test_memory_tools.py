@@ -12,10 +12,14 @@ from langchain_core.tools import StructuredTool
 from kinby.contracts import (
     ApprovalRequested,
     Event,
+    GateDecider,
+    GateOutcome,
     MessageDelta,
     Payload,
     PermissionMode,
     SystemPrompt,
+    ToolCall,
+    ToolGated,
     ToolResult,
 )
 from kinby.core import LangGraphRunner
@@ -281,9 +285,35 @@ def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None
         assert remembered.description == "Jorge prefers small modules"
         assert remembered.subjects == ("Jorge", "coding preferences")
         assert remembered.body == "Jorge prefers small modules with one reason to change."
-        result = next(payload for payload in payloads if isinstance(payload, ToolResult))
+        tool_events = [
+            payload
+            for payload in payloads
+            if isinstance(payload, ToolCall | ToolGated | ToolResult)
+        ]
+        assert tool_events[:2] == [
+            ToolCall(
+                call_id="remember-1",
+                name="remember",
+                arguments={
+                    "description": "Jorge prefers small modules",
+                    "subjects": ["Jorge", "coding preferences"],
+                    "body": "Jorge prefers small modules with one reason to change.",
+                },
+                write=True,
+            ),
+            ToolGated(
+                call_id="remember-1",
+                name="remember",
+                action=GateOutcome.ALLOW,
+                rule="mode.ask.write",
+                decided_by=GateDecider.USER,
+            ),
+        ]
+        result = tool_events[2]
+        assert isinstance(result, ToolResult)
         assert result.name == "remember"
         assert not result.error
+        assert result.duration_ms is not None
         assert MessageDelta(text="I saved that preference.") in payloads
 
         later_thread_id = uuid4()
@@ -413,7 +443,32 @@ def test_denied_remember_returns_an_error_and_the_turn_continues(tmp_path: Path)
         assert isinstance(parked, ParkedTurn)
         assert isinstance(completed, TurnOutcome)
         assert GraphStore(instance.path).recall("coding preferences") == ()
-        result = next(payload for payload in payloads if isinstance(payload, ToolResult))
+        tool_events = [
+            payload
+            for payload in payloads
+            if isinstance(payload, ToolCall | ToolGated | ToolResult)
+        ]
+        assert tool_events[:2] == [
+            ToolCall(
+                call_id="remember-1",
+                name="remember",
+                arguments={
+                    "description": "Jorge prefers small modules",
+                    "subjects": ["Jorge", "coding preferences"],
+                    "body": "Jorge prefers small modules with one reason to change.",
+                },
+                write=True,
+            ),
+            ToolGated(
+                call_id="remember-1",
+                name="remember",
+                action=GateOutcome.DENY,
+                rule="mode.ask.write",
+                decided_by=GateDecider.USER,
+            ),
+        ]
+        result = tool_events[2]
+        assert isinstance(result, ToolResult)
         assert result == ToolResult(
             call_id="remember-1",
             name="remember",

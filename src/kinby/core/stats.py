@@ -8,10 +8,12 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from kinby.contracts import (
+    DenyCounts,
     MemoryCallCounts,
     StatsBucket,
     StatsBucketSize,
     StatsSummary,
+    ToolTime,
     TurnClosingKind,
     TurnMetrics,
     TurnVerdict,
@@ -26,6 +28,8 @@ class _BucketTotals:
     interrupted: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
     recap_input_tokens: int = 0
     recap_output_tokens: int = 0
     cost: float | None = None
@@ -33,6 +37,8 @@ class _BucketTotals:
     memory_calls: Counter[str] = field(default_factory=Counter)
     turns_without_memory: int = 0
     approvals_requested: int = 0
+    denies: Counter[str] = field(default_factory=Counter)
+    tool_duration: Counter[str] = field(default_factory=Counter)
     duration_seconds: float = 0
     durations: int = 0
     good_ratings: int = 0
@@ -48,6 +54,8 @@ class _BucketTotals:
                 self.interrupted += 1
         self.input_tokens += record.input_tokens
         self.output_tokens += record.output_tokens
+        self.cache_read_tokens += record.cache_read_tokens
+        self.cache_creation_tokens += record.cache_creation_tokens
         self.recap_input_tokens += record.recap_input_tokens
         self.recap_output_tokens += record.recap_output_tokens
         if record.cost is not None:
@@ -56,6 +64,8 @@ class _BucketTotals:
         self.memory_calls.update(record.memory_calls.model_dump())
         self.turns_without_memory += not record.memory_consulted
         self.approvals_requested += record.approvals_requested
+        self.denies.update(record.denies.model_dump())
+        self.tool_duration.update(record.tool_duration.model_dump())
         if record.duration_seconds is not None:
             self.duration_seconds += record.duration_seconds
             self.durations += 1
@@ -100,6 +110,8 @@ def _stats_summary(totals: _BucketTotals) -> StatsSummary:
         interrupted=totals.interrupted,
         input_tokens=totals.input_tokens,
         output_tokens=totals.output_tokens,
+        cache_read_tokens=totals.cache_read_tokens,
+        cache_creation_tokens=totals.cache_creation_tokens,
         recap_input_tokens=totals.recap_input_tokens,
         recap_output_tokens=totals.recap_output_tokens,
         cost=totals.cost,
@@ -107,6 +119,8 @@ def _stats_summary(totals: _BucketTotals) -> StatsSummary:
         memory_calls=MemoryCallCounts.model_validate(totals.memory_calls),
         turns_without_memory=totals.turns_without_memory,
         approvals_requested=totals.approvals_requested,
+        denies=DenyCounts.model_validate(totals.denies),
+        tool_duration=ToolTime.model_validate(totals.tool_duration),
         mean_duration_seconds=(
             totals.duration_seconds / totals.durations if totals.durations else None
         ),

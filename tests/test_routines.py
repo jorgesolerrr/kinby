@@ -17,6 +17,8 @@ from kinby.contracts import (
     DeliveryId,
     ErrorCode,
     Event,
+    GateDecider,
+    GateOutcome,
     MemoryRecapped,
     PermissionMode,
     RoutineName,
@@ -25,6 +27,7 @@ from kinby.contracts import (
     SignalReceived,
     ThreadApprovalRespondCommand,
     ToolCall,
+    ToolGated,
     ToolResult,
     TurnCompleted,
     TurnFailed,
@@ -423,9 +426,28 @@ def fetch() -> None:
     assert [type(event.payload) for event in events] == [
         TurnStarted,
         ToolCall,
+        ToolGated,
         ToolResult,
         TurnCompleted,
     ]
+    call = events[1].payload
+    assert isinstance(call, ToolCall)
+    assert call == ToolCall(
+        call_id=call.call_id,
+        name="fetch",
+        arguments={},
+        write=False,
+    )
+    assert events[2].payload == ToolGated(
+        call_id=call.call_id,
+        name="fetch",
+        action=GateOutcome.ALLOW,
+        rule="mode.ask.read",
+        decided_by=GateDecider.POLICY,
+    )
+    result = events[3].payload
+    assert isinstance(result, ToolResult)
+    assert result.duration_ms is not None
     assert isinstance(events[0].payload, TurnStarted)
     assert events[0].payload.origin == RoutineOrigin(
         name=RoutineName("news"), trigger=RoutineTrigger.MANUAL
@@ -809,6 +831,7 @@ def fetch() -> str:
         assert [type(event.payload) for event in events] == [
             TurnStarted,
             ToolCall,
+            ToolGated,
             ToolResult,
             TurnFailed,
         ]
@@ -967,6 +990,7 @@ def fetch() -> str:
     assert [type(event.payload) for event in events] == [
         TurnStarted,
         ToolCall,
+        ToolGated,
         ToolResult,
         TurnFailed,
     ]
@@ -1086,7 +1110,7 @@ def fetch() -> str:
         calls = [
             event.payload for event in log.stored(thread.id) if isinstance(event.payload, ToolCall)
         ]
-        assert [call.name for call in calls] == ["fetch"]
+        assert [call.name for call in calls] == ["fetch", "remember"]
 
     asyncio.run(scenario())
 

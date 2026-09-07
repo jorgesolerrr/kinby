@@ -18,6 +18,7 @@ from kinby.contracts import (
     ToolCall,
     ToolResult,
     TurnCompleted,
+    TurnFailed,
     TurnStarted,
     Warning,
 )
@@ -224,6 +225,88 @@ def test_old_event_logs_without_delivery_fields_still_read(tmp_path: Path) -> No
     assert event.payload.origin.delivery_id is None
     assert event.payload.origin.trigger is RoutineTrigger.SCHEDULED
     assert event.payload.prompt_version is None
+
+
+def test_old_tool_events_read_with_unknown_write_and_no_duration(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    records = [
+        {
+            "sequence": 1,
+            "thread_id": str(thread_id),
+            "turn_id": str(turn_id),
+            "timestamp": "2026-09-06T09:00:00+00:00",
+            "payload": {
+                "type": "tool.call",
+                "call_id": "weather-1",
+                "name": "weather",
+                "arguments": {"city": "Quito"},
+            },
+        },
+        {
+            "sequence": 2,
+            "thread_id": str(thread_id),
+            "turn_id": str(turn_id),
+            "timestamp": "2026-09-06T09:00:01+00:00",
+            "payload": {
+                "type": "tool.result",
+                "call_id": "weather-1",
+                "name": "weather",
+                "output": "18 C",
+                "error": False,
+            },
+        },
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "".join(f"{json.dumps(record)}\n" for record in records),
+        encoding="utf-8",
+    )
+
+    call, result = [event.payload for event in EventLog(tmp_path).all_events()]
+
+    assert isinstance(call, ToolCall)
+    assert call.write is None
+    assert isinstance(result, ToolResult)
+    assert result.duration_ms is None
+
+
+def test_old_closing_events_read_with_zero_new_token_fields(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    completed_id = uuid4()
+    failed_id = uuid4()
+    records = [
+        {
+            "sequence": 1,
+            "thread_id": str(thread_id),
+            "turn_id": str(completed_id),
+            "timestamp": "2026-09-06T09:00:00+00:00",
+            "payload": {
+                "type": "turn.completed",
+                "input_tokens": 4,
+                "output_tokens": 2,
+            },
+        },
+        {
+            "sequence": 2,
+            "thread_id": str(thread_id),
+            "turn_id": str(failed_id),
+            "timestamp": "2026-09-06T09:01:00+00:00",
+            "payload": {
+                "type": "turn.failed",
+                "code": "INTERNAL",
+                "message": "failed",
+            },
+        },
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "".join(f"{json.dumps(record)}\n" for record in records),
+        encoding="utf-8",
+    )
+
+    completed, failed = [event.payload for event in EventLog(tmp_path).all_events()]
+
+    assert completed == TurnCompleted(input_tokens=4, output_tokens=2)
+    assert failed == TurnFailed(code="INTERNAL", message="failed")
 
 
 def test_signal_received_and_manual_payload_shapes() -> None:

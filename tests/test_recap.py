@@ -15,6 +15,7 @@ from kinby.contracts import (
     EventType,
     MemoryRecapped,
     MessageDelta,
+    ModelCompleted,
     PermissionMode,
     Scope,
     ThreadCreateResult,
@@ -44,10 +45,20 @@ _EXPECTED_DEFAULT_RECAP_LENS = (
 
 
 class ScriptedRecapModel:
-    def __init__(self, draft: RecapDraft, input_tokens: int, output_tokens: int) -> None:
+    def __init__(
+        self,
+        draft: RecapDraft,
+        input_tokens: int,
+        output_tokens: int,
+        *,
+        cache_read_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+    ) -> None:
         self._draft = draft
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
+        self._cache_read_tokens = cache_read_tokens
+        self._cache_creation_tokens = cache_creation_tokens
         self.calls: list[tuple[BaseMessage, ...]] = []
 
     def with_structured_output(
@@ -69,6 +80,10 @@ class ScriptedRecapModel:
                     "input_tokens": self._input_tokens,
                     "output_tokens": self._output_tokens,
                     "total_tokens": self._input_tokens + self._output_tokens,
+                    "input_token_details": {
+                        "cache_read": self._cache_read_tokens,
+                        "cache_creation": self._cache_creation_tokens,
+                    },
                 },
             ),
             "parsed": self._draft,
@@ -88,7 +103,19 @@ class FailingRecapModel:
         return self
 
     async def ainvoke(self, messages: Sequence[BaseMessage]) -> object:
-        raise RuntimeError("recap provider unavailable")
+        return {
+            "raw": AIMessage(
+                content="",
+                usage_metadata={
+                    "input_tokens": 6,
+                    "output_tokens": 2,
+                    "total_tokens": 8,
+                    "input_token_details": {"cache_read": 4, "cache_creation": 1},
+                },
+            ),
+            "parsed": None,
+            "parsing_error": RuntimeError("recap response could not be parsed"),
+        }
 
 
 def _instance(tmp_path: Path, *, policy: str, recap_model: str | None = None):
@@ -129,6 +156,8 @@ def test_kept_draft_writes_narrative_episode_and_token_marker(tmp_path: Path) ->
             ),
             input_tokens=17,
             output_tokens=9,
+            cache_read_tokens=11,
+            cache_creation_tokens=2,
         )
         recap = RecapWriter(
             event_log,
@@ -162,12 +191,26 @@ def test_kept_draft_writes_narrative_episode_and_token_marker(tmp_path: Path) ->
         await asyncio.wait_for(recap.drain(), timeout=1)
         events = event_log.stored(created.id)
         marker = events[-1]
+        call = events[-2]
+        assert call.turn_id == accepted.turn_id
+        assert isinstance(call.payload, ModelCompleted)
+        assert call.payload == ModelCompleted(
+            model="openai:main",
+            input_tokens=17,
+            output_tokens=9,
+            cache_read_tokens=11,
+            cache_creation_tokens=2,
+            duration_ms=call.payload.duration_ms,
+        )
+        assert call.payload.duration_ms >= 0
         assert marker.turn_id == accepted.turn_id
         assert isinstance(marker.payload, MemoryRecapped)
         assert marker.payload == MemoryRecapped(
             node=marker.payload.node,
             input_tokens=17,
             output_tokens=9,
+            cache_read_tokens=11,
+            cache_creation_tokens=2,
             model="openai:main",
         )
         assert marker.payload.node is not None
@@ -373,11 +416,21 @@ def test_recap_model_error_warns_without_changing_the_closed_turn(tmp_path: Path
         await asyncio.wait_for(recap.drain(), timeout=1)
 
         events = event_log.stored(created.id)
-        assert events[-2].payload == TurnCompleted(input_tokens=4, output_tokens=2)
+        assert events[-3].payload == TurnCompleted(input_tokens=4, output_tokens=2)
+        call = events[-2].payload
+        assert isinstance(call, ModelCompleted)
+        assert call == ModelCompleted(
+            model="openai:main",
+            input_tokens=6,
+            output_tokens=2,
+            cache_read_tokens=4,
+            cache_creation_tokens=1,
+            duration_ms=call.duration_ms,
+        )
         assert events[-1].turn_id == accepted.turn_id
         assert events[-1].payload == Warning(
             sources=("recap",),
-            message=("The turn recap failed: RuntimeError: recap provider unavailable"),
+            message=("The turn recap failed: RuntimeError: recap response could not be parsed"),
         )
         assert not any(isinstance(event.payload, MemoryRecapped) for event in events)
         assert not list((tmp_path / "memory" / "graph").glob("*.md"))

@@ -10,6 +10,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
 
 NodeId = NewType("NodeId", str)
+GateRule = NewType("GateRule", str)
 
 
 class ContractModel(BaseModel):
@@ -54,11 +55,23 @@ class PermissionMode(StrEnum):
     FULL_ACCESS = "full-access"
 
 
+class GateOutcome(StrEnum):
+    ALLOW = "allow"
+    DENY = "deny"
+
+
+class GateDecider(StrEnum):
+    POLICY = "policy"
+    USER = "user"
+
+
 class EventType(StrEnum):
     MODE_PINNED = "mode.pinned"
     TURN_STARTED = "turn.started"
     MESSAGE_DELTA = "message.delta"
+    MODEL_COMPLETED = "model.completed"
     TOOL_CALL = "tool.call"
+    TOOL_GATED = "tool.gated"
     TOOL_RESULT = "tool.result"
     WARNING = "warning"
     APPROVAL_REQUESTED = "approval.requested"
@@ -128,6 +141,20 @@ class ToolCall(ContractModel):
     call_id: str
     name: str
     arguments: dict[str, JsonValue]
+    write: bool | None = None
+
+
+class ToolGated(ContractModel):
+    type: Literal[EventType.TOOL_GATED] = EventType.TOOL_GATED
+    call_id: str
+    name: str
+    action: GateOutcome
+    rule: GateRule
+    decided_by: GateDecider
+
+
+def gate_denial_source(gate: ToolGated) -> str:
+    return "the user" if gate.decided_by is GateDecider.USER else f'policy rule "{gate.rule}"'
 
 
 class ToolResult(ContractModel):
@@ -136,6 +163,7 @@ class ToolResult(ContractModel):
     name: str
     output: str
     error: bool
+    duration_ms: int | None = None
 
 
 class Warning(ContractModel):
@@ -149,12 +177,14 @@ class ApprovalRequested(ContractModel):
     approval_id: UUID
     name: str
     arguments: dict[str, JsonValue]
-    rule: str
+    rule: GateRule
 
 
 class TokenTotals(ContractModel):
     input_tokens: int
     output_tokens: int
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
     @property
     def total(self) -> int:
@@ -171,14 +201,24 @@ class TurnCompleted(TokenTotals):
     outcome: CompletionOutcome = CompletionOutcome.WORK
 
 
-class TurnFailed(ContractModel):
+class ModelCompleted(TokenTotals):
+    type: Literal[EventType.MODEL_COMPLETED] = EventType.MODEL_COMPLETED
+    model: str
+    duration_ms: int
+
+
+class TurnFailed(TokenTotals):
     type: Literal[EventType.TURN_FAILED] = EventType.TURN_FAILED
+    input_tokens: int = 0
+    output_tokens: int = 0
     code: ErrorCode
     message: str
 
 
-class TurnInterrupted(ContractModel):
+class TurnInterrupted(TokenTotals):
     type: Literal[EventType.TURN_INTERRUPTED] = EventType.TURN_INTERRUPTED
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 type TurnClosingPayload = TurnCompleted | TurnFailed | TurnInterrupted
@@ -237,7 +277,9 @@ Payload = Annotated[
     ModePinned
     | TurnStarted
     | MessageDelta
+    | ModelCompleted
     | ToolCall
+    | ToolGated
     | ToolResult
     | Warning
     | ApprovalRequested
@@ -367,6 +409,16 @@ class MemoryCallCounts(ContractModel):
     forget: int = 0
 
 
+class DenyCounts(ContractModel):
+    policy: int = 0
+    user: int = 0
+
+
+class ToolTime(ContractModel):
+    read_ms: int = 0
+    write_ms: int = 0
+
+
 class TurnMetrics(TokenTotals):
     thread_id: UUID
     turn_id: UUID
@@ -383,6 +435,8 @@ class TurnMetrics(TokenTotals):
     memory_calls: MemoryCallCounts
     memory_consulted: bool
     approvals_requested: int
+    denies: DenyCounts = Field(default_factory=DenyCounts)
+    tool_duration: ToolTime = Field(default_factory=ToolTime)
     memory_tokens: float
     rating: TurnRated | None
 
@@ -398,6 +452,8 @@ class StatsSummary(TokenTotals):
     memory_calls: MemoryCallCounts
     turns_without_memory: int
     approvals_requested: int
+    denies: DenyCounts = Field(default_factory=DenyCounts)
+    tool_duration: ToolTime = Field(default_factory=ToolTime)
     mean_duration_seconds: float | None
     good_ratings: int
     bad_ratings: int
@@ -405,6 +461,11 @@ class StatsSummary(TokenTotals):
 
 class StatsBucket(StatsSummary):
     start: date
+
+
+class ModelCallMismatch(ContractModel):
+    thread_id: UUID
+    turn_id: UUID
 
 
 class StatsGetCommand(ContractModel):
@@ -417,6 +478,7 @@ class StatsGetResult(ContractModel):
     records: list[TurnMetrics]
     buckets: list[StatsBucket]
     unpriced_models: list[str]
+    warnings: list[ModelCallMismatch] = Field(default_factory=list)
 
 
 class RoutineListCommand(ContractModel):

@@ -27,6 +27,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Event,
+    GateOutcome,
     MemoryRecapped,
     MessageDelta,
     PermissionMode,
@@ -39,6 +40,7 @@ from kinby.contracts import (
     ThreadTurnRateCommand,
     ThreadTurnStartCommand,
     ToolCall,
+    ToolGated,
     ToolResult,
     TurnClosingPayload,
     TurnCompleted,
@@ -47,6 +49,7 @@ from kinby.contracts import (
     TurnRated,
     TurnVerdict,
     Warning,
+    gate_denial_source,
     is_turn_closing,
 )
 from kinby.instance import FeedbackPolicy
@@ -314,6 +317,7 @@ async def _render_turn(
     interrupted: asyncio.Event,
     repl_io: _ReplIO,
 ) -> TurnClosingPayload | None:
+    denied_calls: set[str] = set()
     async for result in subscription:
         if isinstance(result, ErrorEnvelope):
             _render_error(result, repl_io.stderr)
@@ -324,7 +328,12 @@ async def _render_turn(
             if not await _answer_approval(client, result, interrupted, repl_io):
                 return None
         else:
-            render_event(result, repl_io.stdout, repl_io.stderr)
+            if isinstance(result.payload, ToolGated) and result.payload.action is GateOutcome.DENY:
+                denied_calls.add(result.payload.call_id)
+            if not (
+                isinstance(result.payload, ToolResult) and result.payload.call_id in denied_calls
+            ):
+                render_event(result, repl_io.stdout, repl_io.stderr)
         if is_turn_closing(result.payload):
             return result.payload
     repl_io.stderr.write("INTERNAL: The thread subscription ended before completion.\n")
@@ -405,6 +414,14 @@ def render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
             stdout.flush()
         case ToolCall(name=name, arguments=arguments):
             stdout.write(f"[tool.call] {name} {json.dumps(arguments, sort_keys=True)}\n")
+            stdout.flush()
+        case (
+            ToolGated(
+                name=name,
+                action=GateOutcome.DENY,
+            ) as gate
+        ):
+            stdout.write(f"[tool.gated] {name} denied by {gate_denial_source(gate)}\n")
             stdout.flush()
         case ToolResult(name=name, output=output, error=error):
             status = "error" if error else "ok"

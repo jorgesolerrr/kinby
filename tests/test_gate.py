@@ -11,11 +11,14 @@ from langchain_core.tools import StructuredTool
 from kinby.contracts import (
     ApprovalRequested,
     Event,
+    GateDecider,
+    GateOutcome,
     MessageDelta,
     Payload,
     PermissionMode,
     SystemPrompt,
     ToolCall,
+    ToolGated,
     ToolResult,
 )
 from kinby.core import LangGraphRunner
@@ -184,15 +187,32 @@ def weather(city: str) -> str:
 
         assert isinstance(result, TurnOutcome)
         assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
-        assert [payload for payload in payloads if isinstance(payload, ToolCall | ToolResult)] == [
-            ToolCall(call_id="weather-1", name="weather", arguments={"city": "Quito"}),
-            ToolResult(
+        tool_events = [
+            payload
+            for payload in payloads
+            if isinstance(payload, ToolCall | ToolGated | ToolResult)
+        ]
+        assert tool_events[:2] == [
+            ToolCall(
                 call_id="weather-1",
                 name="weather",
-                output="Clear in Quito",
-                error=False,
+                arguments={"city": "Quito"},
+                write=False,
+            ),
+            ToolGated(
+                call_id="weather-1",
+                name="weather",
+                action=GateOutcome.ALLOW,
+                rule="mode.ask.read",
+                decided_by=GateDecider.POLICY,
             ),
         ]
+        result_event = tool_events[2]
+        assert isinstance(result_event, ToolResult)
+        assert result_event.output == "Clear in Quito"
+        assert result_event.error is False
+        assert result_event.duration_ms is not None
+        assert result_event.duration_ms >= 0
 
     asyncio.run(scenario())
 
@@ -237,15 +257,78 @@ def write_note(note: str, context: ToolContext) -> str:
 
         assert isinstance(result, TurnOutcome)
         assert not marker.exists()
-        assert next(
-            payload for payload in payloads if isinstance(payload, ToolResult)
-        ) == ToolResult(
-            call_id="write-1",
-            name="write_note",
-            output='Tool "write_note" was denied by policy rule "mode.read-only.write".',
-            error=True,
-        )
+        assert [
+            payload
+            for payload in payloads
+            if isinstance(payload, ToolCall | ToolGated | ToolResult)
+        ] == [
+            ToolCall(
+                call_id="write-1",
+                name="write_note",
+                arguments={"note": "remember me"},
+                write=True,
+            ),
+            ToolGated(
+                call_id="write-1",
+                name="write_note",
+                action=GateOutcome.DENY,
+                rule="mode.read-only.write",
+                decided_by=GateDecider.POLICY,
+            ),
+            ToolResult(
+                call_id="write-1",
+                name="write_note",
+                output='Tool "write_note" was denied by policy rule "mode.read-only.write".',
+                error=True,
+            ),
+        ]
         assert MessageDelta(text="I will not write it.") in payloads
+
+    asyncio.run(scenario())
+
+
+def test_missing_tool_is_recorded_as_a_write_without_a_duration(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "missing",
+                            "args": {},
+                            "id": "missing-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Recovered"),
+            ]
+        )
+
+        result, payloads = await _run(_instance(tmp_path), model)
+
+        assert isinstance(result, TurnOutcome)
+        assert [
+            payload
+            for payload in payloads
+            if isinstance(payload, ToolCall | ToolGated | ToolResult)
+        ] == [
+            ToolCall(call_id="missing-1", name="missing", arguments={}, write=True),
+            ToolGated(
+                call_id="missing-1",
+                name="missing",
+                action=GateOutcome.ALLOW,
+                rule="mode.ask.read",
+                decided_by=GateDecider.POLICY,
+            ),
+            ToolResult(
+                call_id="missing-1",
+                name="missing",
+                output='Tool "missing" is not available in this turn.',
+                error=True,
+            ),
+        ]
 
     asyncio.run(scenario())
 
@@ -562,14 +645,31 @@ def bash(command: str) -> str:
 
         assert isinstance(result, TurnOutcome)
         assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
-        assert next(
-            payload for payload in payloads if isinstance(payload, ToolResult)
-        ) == ToolResult(
-            call_id="bash-1",
-            name="bash",
-            output='Tool "bash" was denied by policy rule "bash.deny[0]".',
-            error=True,
-        )
+        assert [
+            payload
+            for payload in payloads
+            if isinstance(payload, ToolCall | ToolGated | ToolResult)
+        ] == [
+            ToolCall(
+                call_id="bash-1",
+                name="bash",
+                arguments={"command": "deploy production"},
+                write=True,
+            ),
+            ToolGated(
+                call_id="bash-1",
+                name="bash",
+                action=GateOutcome.DENY,
+                rule="bash.deny[0]",
+                decided_by=GateDecider.POLICY,
+            ),
+            ToolResult(
+                call_id="bash-1",
+                name="bash",
+                output='Tool "bash" was denied by policy rule "bash.deny[0]".',
+                error=True,
+            ),
+        ]
 
     asyncio.run(scenario())
 
@@ -693,19 +793,19 @@ def test_auto_allows_an_edit_inside_the_workspace(tmp_path: Path) -> None:
         assert isinstance(result, TurnOutcome)
         assert note.read_text(encoding="utf-8") == "after"
         assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
-        assert [payload for payload in payloads if isinstance(payload, ToolCall | ToolResult)] == [
-            ToolCall(
-                call_id="edit-1",
-                name="edit",
-                arguments={"path": "note.txt", "old": "before", "new": "after"},
-            ),
-            ToolResult(
-                call_id="edit-1",
-                name="edit",
-                output="Edited note.txt.",
-                error=False,
-            ),
+        call, tool_result = [
+            payload for payload in payloads if isinstance(payload, ToolCall | ToolResult)
         ]
+        assert call == ToolCall(
+            call_id="edit-1",
+            name="edit",
+            arguments={"path": "note.txt", "old": "before", "new": "after"},
+            write=True,
+        )
+        assert isinstance(tool_result, ToolResult)
+        assert tool_result.output == "Edited note.txt."
+        assert tool_result.error is False
+        assert tool_result.duration_ms is not None
 
     asyncio.run(scenario())
 

@@ -17,9 +17,12 @@ from kinby.contracts import (
     AcceptedResult,
     ApprovalRequested,
     Event,
+    GateDecider,
+    GateOutcome,
     Scope,
     ThreadCreateResult,
     ToolCall,
+    ToolGated,
     ToolResult,
     TurnCompleted,
     TurnInterrupted,
@@ -31,6 +34,11 @@ from kinby.plugins import Tool, tool
 from tests.helpers import GRAPH_EVENT_TIMEOUT
 
 _MODEL = "openai:gpt-5"
+
+
+def _without_duration(result: ToolResult) -> ToolResult:
+    assert result.duration_ms is not None
+    return result.model_copy(update={"duration_ms": None})
 
 
 class ScriptedModel:
@@ -525,7 +533,7 @@ def test_default_read_resolves_paths_from_the_workspace(tmp_path: Path) -> None:
         events = await _start_turn(instance, model)
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
-        assert result == ToolResult(
+        assert _without_duration(result) == ToolResult(
             call_id="read-1",
             name="read",
             output="Ship the default tools.\n",
@@ -559,7 +567,7 @@ def test_default_read_rejects_a_path_outside_the_workspace(tmp_path: Path) -> No
         events = await _start_turn(instance, model)
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
-        assert result == ToolResult(
+        assert _without_duration(result) == ToolResult(
             call_id="read-1",
             name="read",
             output='ValueError: Path "../secret.txt" is outside the workspace.',
@@ -693,7 +701,7 @@ def test_default_bash_reports_a_nonzero_exit_code(tmp_path: Path, monkeypatch) -
         events = await _start_turn(instance, model, approval_answers=("yes",))
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
-        assert result == ToolResult(
+        assert _without_duration(result) == ToolResult(
             call_id="bash-1",
             name="bash",
             output="Exit code: 2\nstderr:\nbad command",
@@ -740,7 +748,7 @@ def test_default_bash_kills_a_timed_out_process_and_returns_partial_output(
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert process.killed
         assert process.wait_timeouts == [120.0, None]
-        assert result == ToolResult(
+        assert _without_duration(result) == ToolResult(
             call_id="bash-1",
             name="bash",
             output="TimeoutError: Bash timed out after 120 seconds.\npartial output",
@@ -849,15 +857,20 @@ def greet(name: str) -> str:
         activity = [
             event.payload for event in events if isinstance(event.payload, ToolCall | ToolResult)
         ]
-        assert activity == [
-            ToolCall(call_id="call-1", name="greet", arguments={"name": "Jorge"}),
-            ToolResult(
-                call_id="call-1",
-                name="greet",
-                output="Hello, Jorge",
-                error=False,
-            ),
-        ]
+        assert activity[0] == ToolCall(
+            call_id="call-1",
+            name="greet",
+            arguments={"name": "Jorge"},
+            write=False,
+        )
+        result = activity[1]
+        assert isinstance(result, ToolResult)
+        assert _without_duration(result) == ToolResult(
+            call_id="call-1",
+            name="greet",
+            output="Hello, Jorge",
+            error=False,
+        )
 
     asyncio.run(scenario())
 
@@ -907,7 +920,11 @@ def write_note(note: str, context: ToolContext) -> str:
         {Scope.THREAD_READ},
     )
     started = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
-    requested = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
+    while True:
+        requested = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
+        assert isinstance(requested, Event)
+        if isinstance(requested.payload, ApprovalRequested):
+            break
     await subscription.aclose()
     assert isinstance(started, Event)
     assert isinstance(requested, Event)
@@ -966,21 +983,69 @@ def test_yes_runs_the_parked_write_tool_and_completes(tmp_path: Path) -> None:
         instance, dispatcher, thread_id, requested, _ = await _park_write_tool(tmp_path)
         events = await _answer_write_tool(dispatcher, thread_id, requested, "yes")
 
-        assert [
-            event.payload for event in events if isinstance(event.payload, ToolCall | ToolResult)
-        ] == [
-            ToolCall(call_id="write-1", name="write_note", arguments={"note": "remember me"}),
-            ToolResult(
-                call_id="write-1",
-                name="write_note",
-                output="remember me",
-                error=False,
-            ),
-        ]
+        gated = next(event.payload for event in events if isinstance(event.payload, ToolGated))
+        assert gated == ToolGated(
+            call_id="write-1",
+            name="write_note",
+            action=GateOutcome.ALLOW,
+            rule="mode.ask.write",
+            decided_by=GateDecider.USER,
+        )
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert _without_duration(result) == ToolResult(
+            call_id="write-1",
+            name="write_note",
+            output="remember me",
+            error=False,
+        )
         assert (instance.manifest.workspace.path / "note.txt").read_text(
             encoding="utf-8"
         ) == "remember me"
         assert isinstance(events[-1].payload, TurnCompleted)
+
+    asyncio.run(scenario())
+
+
+def test_idless_tool_call_keeps_its_id_after_approval_resume(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        (instance.path / "tools" / "write_note.py").write_text(
+            """from kinby.plugins import tool
+
+@tool(write=True)
+def write_note(note: str) -> str:
+    \"\"\"Write one note.\"\"\"
+    return note
+""",
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "write_note",
+                            "args": {"note": "remember me"},
+                            "id": None,
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model, approval_answers=("yes",))
+
+        activity = [
+            event.payload
+            for event in events
+            if isinstance(event.payload, ToolCall | ToolGated | ToolResult)
+        ]
+        assert len(activity) == 3
+        assert activity[0].call_id
+        assert {payload.call_id for payload in activity} == {activity[0].call_id}
 
     asyncio.run(scenario())
 
@@ -1060,15 +1125,18 @@ def write_note(note: str, context: ToolContext) -> str:
 
         events.extend(await _answer_write_tool(dispatcher, thread_id, requested, "yes"))
 
-        assert [
+        activity = [
             event.payload
             for event in events
             if isinstance(event.payload, ToolCall | ToolResult)
             and event.payload.call_id == "count-1"
-        ] == [
-            ToolCall(call_id="count-1", name="count", arguments={}),
-            ToolResult(call_id="count-1", name="count", output="1", error=False),
         ]
+        assert activity[0] == ToolCall(call_id="count-1", name="count", arguments={}, write=False)
+        count_result = activity[1]
+        assert isinstance(count_result, ToolResult)
+        assert _without_duration(count_result) == ToolResult(
+            call_id="count-1", name="count", output="1", error=False
+        )
 
     asyncio.run(scenario())
 
@@ -1235,7 +1303,7 @@ def test_instance_skill_is_catalogued_and_skill_tool_is_bound(tmp_path: Path) ->
             "skill",
         ]
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
-        assert result == ToolResult(
+        assert _without_duration(result) == ToolResult(
             call_id="skill-1",
             name="skill",
             output="These are the detailed planning instructions.",
@@ -1364,7 +1432,7 @@ def test_unknown_skill_returns_a_tool_error(tmp_path: Path) -> None:
         events = await _start_turn(instance, model)
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
-        assert result == ToolResult(
+        assert _without_duration(result) == ToolResult(
             call_id="missing-skill",
             name="skill",
             output='SkillNotFoundError: Skill "missing" is not available in this turn.',
@@ -1960,7 +2028,7 @@ def where(label: str, context: ToolContext) -> str:
         where = next(tool for tool in model.bound_tools[0] if tool.name == "where")
         assert where.args == {"label": {"title": "Label", "type": "string"}}
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
-        assert result == ToolResult(
+        assert _without_duration(result) == ToolResult(
             call_id="where-1",
             name="where",
             output=f"here|test|{instance.manifest.workspace.path}|{thread_id}",
@@ -2032,7 +2100,7 @@ def fail() -> str:
         events = await _start_turn(instance, model)
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
-        assert result == ToolResult(
+        assert _without_duration(result) == ToolResult(
             call_id="fail-1",
             name="fail",
             output="ValueError: bad weather",
@@ -2112,7 +2180,11 @@ def second() -> str:
         await subscription.aclose()
 
         calls = [event.payload.name for event in events if isinstance(event.payload, ToolCall)]
-        assert calls == ["slow"]
+        assert calls == ["slow", "second"]
+        assert not any(
+            isinstance(event.payload, ToolResult) and event.payload.name == "second"
+            for event in events
+        )
         assert isinstance(events[-1].payload, TurnInterrupted)
 
         recovered, _ = await _turn_events(
