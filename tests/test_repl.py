@@ -14,6 +14,7 @@ from kinby.contracts import (
     GateOutcome,
     MemoryRecapped,
     MessageDelta,
+    ModelCompleted,
     PermissionMode,
     Scope,
     ThreadCreateCommand,
@@ -46,6 +47,14 @@ class ReplRunner:
         self.modes.append(turn.permission_mode)
         await emit(MessageDelta(text="Hi"))
         await emit(MessageDelta(text=" there"))
+        await emit(
+            ModelCompleted(
+                model="openai:gpt-5",
+                input_tokens=1,
+                output_tokens=1,
+                duration_ms=1,
+            )
+        )
         return TurnOutcome()
 
     resume = does_not_park

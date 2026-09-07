@@ -69,6 +69,7 @@ class EventType(StrEnum):
     MODE_PINNED = "mode.pinned"
     TURN_STARTED = "turn.started"
     MESSAGE_DELTA = "message.delta"
+    MODEL_COMPLETED = "model.completed"
     TOOL_CALL = "tool.call"
     TOOL_GATED = "tool.gated"
     TOOL_RESULT = "tool.result"
@@ -179,6 +180,8 @@ class ApprovalRequested(ContractModel):
 class TokenTotals(ContractModel):
     input_tokens: int
     output_tokens: int
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
     @property
     def total(self) -> int:
@@ -195,14 +198,24 @@ class TurnCompleted(TokenTotals):
     outcome: CompletionOutcome = CompletionOutcome.WORK
 
 
-class TurnFailed(ContractModel):
+class ModelCompleted(TokenTotals):
+    type: Literal[EventType.MODEL_COMPLETED] = EventType.MODEL_COMPLETED
+    model: str
+    duration_ms: int
+
+
+class TurnFailed(TokenTotals):
     type: Literal[EventType.TURN_FAILED] = EventType.TURN_FAILED
+    input_tokens: int = 0
+    output_tokens: int = 0
     code: ErrorCode
     message: str
 
 
-class TurnInterrupted(ContractModel):
+class TurnInterrupted(TokenTotals):
     type: Literal[EventType.TURN_INTERRUPTED] = EventType.TURN_INTERRUPTED
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 type TurnClosingPayload = TurnCompleted | TurnFailed | TurnInterrupted
@@ -261,6 +274,7 @@ Payload = Annotated[
     ModePinned
     | TurnStarted
     | MessageDelta
+    | ModelCompleted
     | ToolCall
     | ToolGated
     | ToolResult
@@ -445,6 +459,11 @@ class StatsBucket(StatsSummary):
     start: date
 
 
+class ModelCallMismatch(ContractModel):
+    thread_id: UUID
+    turn_id: UUID
+
+
 class StatsGetCommand(ContractModel):
     since: AwareDatetime | None = None
     until: AwareDatetime | None = None
@@ -455,6 +474,7 @@ class StatsGetResult(ContractModel):
     records: list[TurnMetrics]
     buckets: list[StatsBucket]
     unpriced_models: list[str]
+    warnings: list[ModelCallMismatch] = Field(default_factory=list)
 
 
 class RoutineListCommand(ContractModel):

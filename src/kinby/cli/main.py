@@ -30,6 +30,7 @@ from kinby.contracts import (
     ApprovalRequested,
     ErrorCode,
     ErrorEnvelope,
+    ModelCallMismatch,
     RoutineName,
     RoutinePayload,
     RoutineRunCommand,
@@ -142,6 +143,8 @@ def _token_totals(usage: TokenTotals) -> str:
 def _turn_token_totals(usage: TurnUsage) -> str:
     return (
         f"input={usage.input_tokens} output={usage.output_tokens} "
+        f"cache_read={usage.cache_read_tokens} "
+        f"cache_creation={usage.cache_creation_tokens} "
         f"recap_input={usage.recap_input_tokens} "
         f"recap_output={usage.recap_output_tokens} total={usage.total}"
     )
@@ -216,6 +219,8 @@ def _stats_row(label: str, summary: StatsSummary) -> str:
             str(summary.interrupted),
             str(summary.input_tokens),
             str(summary.output_tokens),
+            str(summary.cache_read_tokens),
+            str(summary.cache_creation_tokens),
             str(summary.recap_input_tokens),
             str(summary.recap_output_tokens),
             f"{summary.cost:.8f}" if summary.cost is not None else "unknown",
@@ -241,6 +246,13 @@ def _stats_row(label: str, summary: StatsSummary) -> str:
     )
 
 
+def _model_call_mismatch(mismatch: ModelCallMismatch) -> str:
+    return (
+        f"warning: Model call totals for turn {mismatch.turn_id} "
+        f"on thread {mismatch.thread_id} do not match its closing totals."
+    )
+
+
 async def _show_stats(
     client: ContractClient,
     command: StatsGetCommand,
@@ -259,6 +271,8 @@ async def _show_stats(
                 "interrupted",
                 "input",
                 "output",
+                "cache read",
+                "cache creation",
                 "recap input",
                 "recap output",
                 "cost",
@@ -284,6 +298,8 @@ async def _show_stats(
             f"warning: unpriced models: {', '.join(result.unpriced_models)}",
             file=sys.stderr,
         )
+    for mismatch in result.warnings:
+        print(_model_call_mismatch(mismatch), file=sys.stderr)
     for bucket in result.buckets:
         print(_stats_row(bucket.start.isoformat(), bucket))
     print(_stats_row("total", stats_summary(result.records)))

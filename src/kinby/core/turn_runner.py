@@ -63,6 +63,7 @@ from kinby.core.errors import (
 )
 from kinby.core.events import EventLog
 from kinby.core.gate import evaluate
+from kinby.core.model_calls import completed_model_call
 from kinby.core.pricing import price_map
 from kinby.core.prompt import assemble_system_prompt, render_system_prompt, render_wake
 from kinby.core.turn_metrics import UnpricedModel
@@ -617,6 +618,7 @@ class LangGraphRunner:
             else [*state.messages, runtime.context.user_message]
         )
         response: AIMessageChunk | None = None
+        started_at = asyncio.get_running_loop().time()
         async for chunk in runtime.context.model.astream(
             [runtime.context.system_message, *messages]
         ):
@@ -625,9 +627,15 @@ class LangGraphRunner:
                 await runtime.context.emit(MessageDelta(text=chunk.text))
         if response is None:
             raise ModelNoResponse("The model returned no response.")
-        usage = response.usage_metadata
-        input_tokens = state.input_tokens + (usage["input_tokens"] if usage is not None else 0)
-        output_tokens = state.output_tokens + (usage["output_tokens"] if usage is not None else 0)
+        completed = completed_model_call(
+            state.turn.model,
+            response.usage_metadata,
+            started_at=started_at,
+            completed_at=asyncio.get_running_loop().time(),
+        )
+        await runtime.context.emit(completed)
+        input_tokens = state.input_tokens + completed.input_tokens
+        output_tokens = state.output_tokens + completed.output_tokens
         token_budget = runtime.context.budgets.tokens
         if token_budget is not None and input_tokens + output_tokens > token_budget:
             raise BudgetExceeded("tokens", token_budget)

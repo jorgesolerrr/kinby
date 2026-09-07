@@ -920,9 +920,11 @@ def write_note(note: str, context: ToolContext) -> str:
         {Scope.THREAD_READ},
     )
     started = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
-    requested = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
-    while isinstance(requested, Event) and not isinstance(requested.payload, ApprovalRequested):
+    while True:
         requested = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
+        assert isinstance(requested, Event)
+        if isinstance(requested.payload, ApprovalRequested):
+            break
     await subscription.aclose()
     assert isinstance(started, Event)
     assert isinstance(requested, Event)
