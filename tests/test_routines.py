@@ -332,7 +332,11 @@ def no_recap(thread_id: UUID, turn_id: UUID) -> None:
 
 
 async def fire(
-    instance: Instance, model: RoutineModel, after_turn: ClosedTurnHook = no_recap
+    instance: Instance,
+    model: RoutineModel,
+    after_turn: ClosedTurnHook = no_recap,
+    *,
+    trigger: RoutineTrigger = RoutineTrigger.MANUAL,
 ) -> list[Event]:
     log = EventLog(instance.manifest.state_dir)
     store = ThreadStore(instance.manifest.state_dir)
@@ -341,9 +345,7 @@ async def fire(
         store, log, runner, runner.prepare_for_turn, runner.permission_ceiling, after_turn
     )
     thread = store.create(None)
-    await turns.wake(
-        thread.id, "", RoutineOrigin(name=RoutineName("news"), trigger=RoutineTrigger.MANUAL)
-    )
+    await turns.wake(thread.id, "", RoutineOrigin(name=RoutineName("news"), trigger=trigger))
     subscription = log.subscribe(thread.id)
     events: list[Event] = []
     async with asyncio.timeout(5):
@@ -412,6 +414,31 @@ def fetch() -> str:
     assert path.read_text() == original
     assert isinstance(events[0].payload, TurnStarted)
     assert events[0].payload.message == ""
+
+
+def test_scheduled_signal_routine_runs_code_step_without_a_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
+    instance = instance_at(tmp_path)
+    path = routine_file(
+        instance,
+        "description: News\nschedule: 0 9 * * *\nsignal:\n  secret: GITHUB_WEBHOOK_SECRET",
+    )
+    (path.parent / "run.py").write_text('''from kinby.plugins import tool
+@tool(write=False)
+def fetch(signal: dict) -> str:
+    """Fetch news."""
+    return "scheduled fallback" if signal == {} else "signal delivery"
+''')
+    model = RoutineModel()
+
+    events = asyncio.run(fire(instance, model, trigger=RoutineTrigger.SCHEDULED))
+
+    assert isinstance(events[-1].payload, TurnCompleted)
+    call = next(event.payload for event in events if isinstance(event.payload, ToolCall))
+    assert call.arguments == {"signal": {}}
+    assert "scheduled fallback" in str(model.messages[0][-1].content)
 
 
 @pytest.mark.parametrize("mode", ["ask", "read-only", "full-access"])

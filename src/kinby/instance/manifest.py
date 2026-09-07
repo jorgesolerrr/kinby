@@ -44,7 +44,9 @@ from kinby.instance.layout import ENV_NAME, MANIFEST_NAME, STATE_DIR, WORKSPACE_
 # Unlike $, this absolute-end assertion rejects a trailing newline in Python and JSON Schema.
 _MODEL_PATTERN = re.compile(r"^[^:\s]+:[^:\s]+(?![\s\S])")
 _LISTEN_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-_LISTEN_HOST = re.compile(rf"^{_LISTEN_LABEL}(?:\.{_LISTEN_LABEL})*$")
+_LISTEN_HOST_PATTERN = rf"{_LISTEN_LABEL}(?:\.{_LISTEN_LABEL})*"
+_LISTEN_HOST = re.compile(rf"^{_LISTEN_HOST_PATTERN}$")
+_LISTEN_PATTERN = rf"^{_LISTEN_HOST_PATTERN}:[0-9]+(?![\s\S])"
 _MODEL_ERROR = "must use provider:model form"
 NonEmpty = Annotated[str, StringConstraints(min_length=1)]
 ModelName = Annotated[
@@ -139,7 +141,7 @@ def _parse_listen(value: object) -> Serve:
 ListenAddress = Annotated[
     Serve,
     BeforeValidator(_parse_listen),
-    WithJsonSchema({"title": "Listen", "type": "string"}),
+    WithJsonSchema({"title": "Listen", "type": "string", "pattern": _LISTEN_PATTERN}),
 ]
 
 

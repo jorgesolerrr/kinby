@@ -420,7 +420,14 @@ class LangGraphRunner:
                 )
             if code_step is not None and isinstance(graph_input, ModelState):
                 code_started = asyncio.get_running_loop().time()
-                output = await self._run_code_step(routine, code_step, turn, emit, budgets)
+                output = await self._run_code_step(
+                    routine,
+                    code_step,
+                    turn.origin,
+                    turn.thread_id,
+                    emit,
+                    budgets,
+                )
                 progress = replace(
                     progress,
                     seconds_used=progress.seconds_used
@@ -436,11 +443,15 @@ class LangGraphRunner:
         self,
         routine: Routine,
         code_step: Tool,
-        turn: TurnRequest,
+        origin: RoutineOrigin,
+        thread_id: UUID,
         emit: Emit,
         budgets: Budgets,
     ) -> str | None:
-        call = ToolCall(call_id=str(uuid4()), name=code_step.name, arguments=routine.arguments)
+        arguments = dict(routine.arguments)
+        if routine.signal is not None and origin.trigger is not RoutineTrigger.SIGNAL:
+            arguments["signal"] = {}
+        call = ToolCall(call_id=str(uuid4()), name=code_step.name, arguments=arguments)
         decision = evaluate(
             self._gate_policy,
             routine.mode,
@@ -460,7 +471,7 @@ class LangGraphRunner:
         try:
             async with timeout:
                 output = await code_step.ainvoke_raw(
-                    call.arguments, ToolContext(instance=self._instance, thread_id=turn.thread_id)
+                    call.arguments, ToolContext(instance=self._instance, thread_id=thread_id)
                 )
         except Exception as exc:
             failure = (
