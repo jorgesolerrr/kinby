@@ -772,9 +772,11 @@ def test_scheduler_fires_oldest_ready_work_one_per_pass(
     asyncio.run(scenario())
 
 
-def test_scheduler_fires_every_pending_delivery_oldest_first(tmp_path: Path) -> None:
+def test_scheduler_fires_every_pending_delivery_in_receipt_order(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        routine_file(instance, "description: Issues", name="issues")
         runner = BlockingRunner()
         clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
         dispatcher = runtime(
@@ -783,25 +785,31 @@ def test_scheduler_fires_every_pending_delivery_oldest_first(tmp_path: Path) -> 
             runner,
         )
         assert dispatcher.scheduler is not None
-        await call(dispatcher, "routine.run", name="news")
+        running = await call(dispatcher, "routine.run", name="news")
+        assert isinstance(running, AcceptedResult)
         receiving = []
-        for body, minute in (("first", 2), ("second", 1)):
+        for name, body, minute in (
+            ("news", "first", 2),
+            ("issues", "second", 1),
+            ("news", "third", 0),
+        ):
             clock.now = datetime(2026, 9, 6, 9, minute, tzinfo=UTC)
-            receiving.append(await start_payload_call(dispatcher, "news", body))
+            receiving.append(await start_payload_call(dispatcher, name, body))
 
         received = [
             event
             for event in EventLog(instance.manifest.state_dir).all_events()
             if isinstance(event.payload, SignalReceived)
         ]
+        assert len(received) == 3
         for task in receiving:
             await cancel_call(task)
 
         runner.release.set()
         await dispatcher.scheduler.drain()
 
-        await dispatcher.scheduler.tick()
-        await dispatcher.scheduler.tick()
+        for _ in received:
+            await dispatcher.scheduler.tick()
 
         assert [
             event.thread_id

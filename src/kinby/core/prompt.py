@@ -125,13 +125,14 @@ def render_wake(origin: Origin, message: str, payload: str | None = None) -> str
     """Frame the current routine firing without changing stored instructions."""
     if isinstance(origin, UserOrigin):
         return message
+    restriction = "You must not create, list, or change routines unless explicitly instructed."
     if origin.trigger is RoutineTrigger.SIGNAL:
-        rendered = f"[Routine: {origin.name}, woken by a signal]\n{message}"
+        rendered = f"[Routine: {origin.name}, woken by a signal]\n{restriction}\n\n{message}"
     else:
         rendered = (
             f"[Routine: {origin.name}]\n"
             "Execute this firing now and do the work in this turn. "
-            "You must not create, list, or change routines unless explicitly instructed.\n\n"
+            f"{restriction}\n\n"
             f"{message}"
         )
     if payload is not None:

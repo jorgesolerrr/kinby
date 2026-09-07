@@ -252,7 +252,7 @@ class Scheduler:
             history = histories.routines
             self._armed = self._arm(routines, history)
             pending = [item for record in history.values() for item in record.pending]
-            delivery = min(pending, key=lambda item: item.sequence) if pending else None
+            delivery = min(pending, key=lambda item: item.receipt_order) if pending else None
             due = [
                 (armed.time, routine, armed)
                 for routine in routines

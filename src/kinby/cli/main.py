@@ -394,7 +394,7 @@ async def _run_routine(
 ) -> int:
     try:
         payload = _read_routine_payload(payload_path) if payload_path is not None else None
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         print(f'Could not read payload "{payload_path}": {exc}', file=sys.stderr)
         return 1
     async with _instance_session(instance) as client:

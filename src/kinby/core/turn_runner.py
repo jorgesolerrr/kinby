@@ -482,7 +482,10 @@ class LangGraphRunner:
             raw_signal["headers"] = headers
             media_type = delivery.content_type.partition(";")[0].strip().lower()
             if media_type == "application/json":
-                raw_signal["body"] = json.loads(delivery.body)
+                try:
+                    raw_signal["body"] = json.loads(delivery.body)
+                except json.JSONDecodeError as exc:
+                    raise CodeStepFailed(f"The signal body is not valid JSON: {exc}") from exc
             arguments["signal"] = _TOOL_ARGUMENTS.validate_python(raw_signal)
         elif routine.signal is not None and origin.trigger is not RoutineTrigger.SIGNAL:
             arguments["signal"] = {}

@@ -4,6 +4,7 @@ import signal
 from datetime import UTC, datetime, timedelta
 from importlib import import_module
 from io import StringIO
+from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import Thread
 from uuid import uuid4
@@ -234,6 +235,34 @@ def test_routine_run_rejects_an_unknown_name(tmp_path, capsys) -> None:
     output = capsys.readouterr()
     assert output.out == ""
     assert 'NOT_FOUND: Routine "missing" was not found.' in output.err
+
+
+def test_routine_run_rejects_a_non_utf8_payload(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    instance = instance_at(tmp_path)
+    routine_file(instance, "description: News")
+    payload = tmp_path / "delivery.dat"
+    payload.write_bytes(b"\xff")
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "news",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(tmp_path),
+            ]
+        )
+        == 1
+    )
+
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert f'Could not read payload "{payload}":' in output.err
 
 
 def test_run_fires_a_due_routine_while_the_repl_waits(tmp_path, monkeypatch) -> None:

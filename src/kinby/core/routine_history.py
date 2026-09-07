@@ -31,7 +31,7 @@ from kinby.core.turn_metrics import TurnKey
 class PendingDelivery:
     thread_id: UUID
     turn_id: UUID
-    sequence: int
+    receipt_order: int
     origin: RoutineOrigin
     delivery: Delivery
 
@@ -67,7 +67,7 @@ def routine_history(events: Iterable[Event]) -> RoutineHistories:
     handled: set[TurnKey] = set()
     failures: dict[TurnKey, UnhandledFailure] = {}
     pending: dict[TurnKey, tuple[RoutineName, PendingDelivery]] = {}
-    for event in events:
+    for receipt_order, event in enumerate(events):
         key = TurnKey(event.thread_id, event.turn_id)
         payload = event.payload
         if isinstance(payload, SignalReceived):
@@ -76,7 +76,7 @@ def routine_history(events: Iterable[Event]) -> RoutineHistories:
             item = PendingDelivery(
                 thread_id=event.thread_id,
                 turn_id=event.turn_id,
-                sequence=event.sequence,
+                receipt_order=receipt_order,
                 origin=payload.origin,
                 delivery=payload.delivery,
             )

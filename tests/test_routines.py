@@ -582,8 +582,55 @@ def test_signal_body_reaches_model_under_signal_cue(
     )
 
     content = str(model.messages[0][-1].content)
-    assert content.startswith("[Routine: news, woken by a signal]\nHandle the issue.")
+    assert content.startswith(
+        "[Routine: news, woken by a signal]\n"
+        "You must not create, list, or change routines unless explicitly instructed.\n\n"
+        "Handle the issue."
+    )
     assert "<routine-data>\nissue 128 opened\n</routine-data>" in content
+
+
+def test_malformed_json_signal_fails_with_specific_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        path = routine_file(
+            instance,
+            "description: Issues\nsignal:\n  secret: SIGNAL_SECRET",
+        )
+        (path.parent / "run.py").write_text('''from kinby.plugins import tool
+@tool(write=False)
+def fetch(signal: dict) -> str:
+    """Filter a delivery."""
+    return "accepted"
+''')
+        model = RoutineModel()
+        dispatcher, log = signal_runtime(instance, model)
+        assert dispatcher.scheduler is not None
+        delivery = Delivery(
+            headers={"content-type": "application/json"},
+            content_type="application/json",
+            body="not-json",
+            received_at=datetime(2026, 9, 7, 10, tzinfo=UTC),
+        )
+
+        accepted = await dispatcher.scheduler.receive(
+            RoutineName("news"), delivery, RoutineTrigger.SIGNAL
+        )
+        await dispatcher.scheduler.tick()
+
+        failed = next(
+            event.payload
+            for event in log.stored(accepted.thread_id)
+            if isinstance(event.payload, TurnFailed)
+        )
+        assert failed.code is ErrorCode.INTERNAL
+        assert failed.message.startswith("The signal body is not valid JSON:")
+        assert model.messages == []
+
+    asyncio.run(scenario())
 
 
 def test_signal_code_step_text_reaches_model_as_data(
@@ -623,7 +670,11 @@ def fetch(signal: dict) -> str:
     )
 
     content = str(model.messages[0][-1].content)
-    assert content.startswith("[Routine: news, woken by a signal]\nHandle the issue.")
+    assert content.startswith(
+        "[Routine: news, woken by a signal]\n"
+        "You must not create, list, or change routines unless explicitly instructed.\n\n"
+        "Handle the issue."
+    )
     assert "<routine-data>\naccepted issue 128\n</routine-data>" in content
 
 
