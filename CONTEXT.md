@@ -139,7 +139,7 @@ The **instance** setting that chooses whether to ask for a **turn rating** after
 
 ### Token usage
 
-The input and output tokens attributed to a turn, with totals rolled up for its thread.
+The input and output tokens attributed to a turn, with totals rolled up for its thread. Input tokens include the cached tokens the provider reports, recorded as a split so a lost prompt cache is visible.
 `usage.get` includes completed turns whose closing timestamp falls within its **time range**.
 
 ### Price map
@@ -161,6 +161,20 @@ The derived record of one closed **turn**. It describes the outcome, duration, t
 ### Instance statistics
 
 UTC day or week totals derived from an **instance** event history through **turn metrics**. `kinby stats` recomputes these totals and writes `stats.json`.
+
+
+### Model call
+
+One request to a model during a **turn**, recorded as an event with its tokens and duration. A turn's **token usage** is the sum of its model calls; the closing event carries that sum.
+
+### Navigation
+
+The read-only **tool** calls and the model reasoning a **turn** spends locating what it needs in the **workspace** before acting. Measured per turn as read calls, their time, distinct paths opened, and the tokens spent before the first write. Memory tools and the skill tool are not navigation. Its trend for one workspace shows whether memory is teaching the agent the workspace.
+_Avoid_: exploration, workspace search
+
+### Prompt version
+
+A hash of the rendered **system prompt** without the **environment block**, recorded when a turn starts. Groups turns by the prompt the user wrote.
 
 ### Eval
 
@@ -213,6 +227,11 @@ The normalized answer to an **approval**: approve or deny. The answer `yes` appr
 ### Gate
 
 The check every **tool** call passes through before it runs. It reads the tool's write flag and the instance's permission policy, and answers allow, ask (raise an **approval**), or deny. The policy is the instance's ceiling; a **thread** may narrow it, never widen it.
+
+
+### Gate decision
+
+The **gate**'s final verdict on one **tool** call, recorded as an event: allow or deny, the rule that decided it, and whether policy or the user decided. An **approval** the user refuses is a deny decided by the user.
 
 ### Sandbox
 
