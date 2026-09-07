@@ -6,7 +6,7 @@ from kinby.core.dispatcher import (
     build_dispatcher,
     turn_config,
 )
-from kinby.core.prompt import PromptSection, assemble_system_prompt
+from kinby.core.prompt import PromptSection, assemble_system_prompt, prompt_version
 from kinby.core.runtime import InstanceRuntime, boot_instance
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnRunner
@@ -21,5 +21,6 @@ __all__ = [
     "assemble_system_prompt",
     "boot_instance",
     "build_dispatcher",
+    "prompt_version",
     "turn_config",
 ]

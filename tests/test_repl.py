@@ -24,7 +24,7 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
-from kinby.core.turns import ApprovalDecision, Emit, ParkedTurn, TurnOutcome, TurnRequest
+from kinby.core.turns import ApprovalDecision, Emit, ParkedTurn, PreparedTurnRequest, TurnOutcome
 from kinby.instance import FeedbackPolicy, load_instance
 from kinby.memory import GraphStore, RecapWriter
 from tests.helpers import (
@@ -39,7 +39,7 @@ class ReplRunner:
     def __init__(self) -> None:
         self.modes: list[PermissionMode] = []
 
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         self.modes.append(turn.permission_mode)
         await emit(MessageDelta(text="Hi"))
         await emit(MessageDelta(text=" there"))
@@ -54,7 +54,7 @@ class InterruptibleReplRunner:
         self.first_turn_started = asyncio.Event()
         self.turn_count = 0
 
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         self.turn_count += 1
         if self.turn_count == 1:
             self.first_turn_started.set()
@@ -67,7 +67,7 @@ class InterruptibleReplRunner:
 
 
 class ToolEventRunner:
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         await emit(
             ToolCall(
                 call_id="call-1",
@@ -91,7 +91,7 @@ class ToolEventRunner:
 
 
 class FailingReplRunner:
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         raise RuntimeError("provider unavailable")
 
     resume = does_not_park
@@ -102,9 +102,9 @@ class ApprovalReplRunner:
     def __init__(self) -> None:
         self.decisions: list[ApprovalDecision] = []
         self.parked = asyncio.Event()
-        self.parked_turn: TurnRequest | None = None
+        self.parked_turn: PreparedTurnRequest | None = None
 
-    async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None:
+    async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None:
         if (
             self.parked_turn is not None
             and self.parked_turn.thread_id == thread_id
@@ -113,7 +113,7 @@ class ApprovalReplRunner:
             return self.parked_turn
         return None
 
-    async def run(self, turn: TurnRequest, emit: Emit) -> ParkedTurn:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> ParkedTurn:
         self.parked_turn = turn
         await emit(
             ApprovalRequested(
@@ -128,7 +128,7 @@ class ApprovalReplRunner:
 
     async def resume(
         self,
-        turn: TurnRequest,
+        turn: PreparedTurnRequest,
         decision: ApprovalDecision,
         emit: Emit,
     ) -> TurnOutcome:

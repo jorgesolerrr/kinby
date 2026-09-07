@@ -14,11 +14,12 @@ from kinby.contracts import (
     MessageDelta,
     Payload,
     PermissionMode,
+    SystemPrompt,
     ToolCall,
     ToolResult,
 )
 from kinby.core import LangGraphRunner
-from kinby.core.turns import ParkedTurn, TurnContext, TurnOutcome, TurnRequest, TurnResult
+from kinby.core.turns import ParkedTurn, PreparedTurnRequest, TurnContext, TurnOutcome, TurnResult
 from kinby.instance import Instance, load_instance
 from kinby.instance.permissions import BashPolicy, GatePolicy, PermissionsError
 
@@ -93,12 +94,13 @@ async def _run_turn(runner: LangGraphRunner) -> tuple[TurnResult, list[Payload]]
         )
 
     result = await runner.run(
-        TurnRequest(
+        PreparedTurnRequest(
             thread_id=thread_id,
             turn_id=turn_id,
             message="Remember this",
             model=preparation.model,
             permission_mode=preparation.default_mode,
+            system_prompt=SystemPrompt("System prompt"),
         ),
         TurnContext(preparation.budgets, emit),
     )

@@ -15,6 +15,7 @@ from kinby.contracts import (
     Event,
     MemoryCallCounts,
     MemoryRecapped,
+    PromptVersion,
     ToolCall,
     ToolResult,
     TurnClosingKind,
@@ -49,6 +50,7 @@ class TurnKey:
 class _TurnEvents:
     started_at: datetime
     model: str
+    prompt_version: PromptVersion | None
     tool_calls: Counter[str] = field(default_factory=Counter)
     memory_calls: Counter[str] = field(default_factory=Counter)
     approvals_requested: int = 0
@@ -86,7 +88,11 @@ def turn_metrics(
         key = TurnKey(event.thread_id, event.turn_id)
         payload = event.payload
         if isinstance(payload, TurnStarted):
-            open_turns[key] = _TurnEvents(event.timestamp, payload.model)
+            open_turns[key] = _TurnEvents(
+                event.timestamp,
+                payload.model,
+                payload.prompt_version,
+            )
             continue
 
         turn = open_turns.get(key)
@@ -118,6 +124,7 @@ def turn_metrics(
                 thread_id=event.thread_id,
                 turn_id=event.turn_id,
                 model=turn.model if turn else None,
+                prompt_version=turn.prompt_version if turn else None,
                 closing_kind=_closing_kind(payload),
                 started_at=turn.started_at if turn else None,
                 closed_at=event.timestamp,

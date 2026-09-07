@@ -21,7 +21,9 @@ from kinby.contracts import (
     Origin,
     Payload,
     PermissionMode,
+    PromptVersion,
     RoutineOrigin,
+    SystemPrompt,
     ThreadApprovalRespondCommand,
     ThreadModeSetCommand,
     ThreadTurnInterruptCommand,
@@ -61,12 +63,30 @@ class TurnRequest:
     permission_mode: PermissionMode
     origin: Origin = field(default_factory=UserOrigin)
 
+    def prepare(self, system_prompt: SystemPrompt) -> PreparedTurnRequest:
+        return PreparedTurnRequest(
+            thread_id=self.thread_id,
+            turn_id=self.turn_id,
+            message=self.message,
+            model=self.model,
+            permission_mode=self.permission_mode,
+            origin=self.origin,
+            system_prompt=system_prompt,
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class PreparedTurnRequest(TurnRequest):
+    system_prompt: SystemPrompt
+
 
 @dataclass(frozen=True)
 class TurnPreparation:
     model: str
     default_mode: PermissionMode
     ceiling: PermissionMode
+    prompt_version: PromptVersion
+    system_prompt: SystemPrompt
     daily_budget: DailyBudget | None = None
     budgets: Budgets = field(default_factory=Budgets)
 
@@ -109,11 +129,11 @@ class TurnContext:
 
 
 class TurnRunner(Protocol):
-    async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None: ...
-    async def run(self, turn: TurnRequest, context: TurnContext, /) -> TurnResult: ...
+    async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None: ...
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext, /) -> TurnResult: ...
     async def resume(
         self,
-        turn: TurnRequest,
+        turn: PreparedTurnRequest,
         decision: ApprovalDecision,
         context: TurnContext,
         /,
@@ -126,7 +146,7 @@ class ClosedTurnHook(Protocol):
 
 @dataclass
 class RunningTurn:
-    request: TurnRequest
+    request: PreparedTurnRequest
     task: asyncio.Task[None]
     interrupted: bool = False
 
@@ -276,7 +296,7 @@ class Turns:
         claim = TurnClaim(origin)
         self._claims[thread_id] = claim
         try:
-            turn = TurnRequest(
+            turn = PreparedTurnRequest(
                 thread_id=thread_id,
                 turn_id=turn_id,
                 message=message,
@@ -287,6 +307,7 @@ class Turns:
                     preparation.default_mode,
                     preparation.ceiling,
                 ),
+                system_prompt=preparation.system_prompt,
             )
             started = await self._log.append(
                 turn.thread_id,
@@ -296,6 +317,7 @@ class Turns:
                     origin=turn.origin,
                     model=turn.model,
                     permission_mode=turn.permission_mode,
+                    prompt_version=preparation.prompt_version,
                 ),
             )
         finally:
@@ -404,17 +426,17 @@ class Turns:
             del self._claims[thread_id]
         self._changed.set()
 
-    def _spawn(self, turn: TurnRequest, work: Coroutine[object, object, None]) -> None:
+    def _spawn(self, turn: PreparedTurnRequest, work: Coroutine[object, object, None]) -> None:
         task = asyncio.create_task(work)
         self._running[turn.thread_id] = RunningTurn(turn, task)
         task.add_done_callback(partial(self._forget_task, turn.thread_id))
 
-    async def _run(self, turn: TurnRequest, budgets: Budgets) -> None:
+    async def _run(self, turn: PreparedTurnRequest, budgets: Budgets) -> None:
         await self._finish(turn, budgets, lambda context: self._runner.run(turn, context))
 
     async def _resume(
         self,
-        turn: TurnRequest,
+        turn: PreparedTurnRequest,
         decision: ApprovalDecision,
         budgets: Budgets,
     ) -> None:
@@ -426,7 +448,7 @@ class Turns:
 
     async def _finish(
         self,
-        turn: TurnRequest,
+        turn: PreparedTurnRequest,
         budgets: Budgets,
         run: Callable[[TurnContext], Awaitable[TurnResult]],
     ) -> None:

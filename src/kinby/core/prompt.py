@@ -6,9 +6,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
+from hashlib import sha256
 from pathlib import Path
 
-from kinby.contracts import Origin, RoutineTrigger, UserOrigin
+from kinby.contracts import Origin, PromptVersion, RoutineTrigger, SystemPrompt, UserOrigin
 from kinby.instance import Instance
 from kinby.instance.layout import MEMORY_DIR, PROFILE_NAME, SYSTEM_NAME
 from kinby.plugins.skills import Skill
@@ -117,8 +118,17 @@ def assemble_system_prompt(
     return tuple(sections)
 
 
-def render_system_prompt(sections: Sequence[PromptSection]) -> str:
-    return "\n\n".join(section.text for section in sections)
+def render_system_prompt(sections: Sequence[PromptSection]) -> SystemPrompt:
+    return SystemPrompt("\n\n".join(section.text for section in sections))
+
+
+def prompt_version(sections: Sequence[PromptSection]) -> PromptVersion:
+    """Hash the stable system prompt sections into a short version."""
+    stable_sections = tuple(
+        section for section in sections if section.name is not PromptSectionName.ENVIRONMENT
+    )
+    prompt = render_system_prompt(stable_sections)
+    return PromptVersion(sha256(prompt.encode("utf-8")).hexdigest()[:12])
 
 
 def render_wake(origin: Origin, message: str, payload: str | None = None) -> str:
