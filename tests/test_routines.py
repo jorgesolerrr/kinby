@@ -176,6 +176,28 @@ def fetch() -> str:
     assert "signal" in messages[str(shared)].lower()
 
 
+def test_shared_code_step_with_signal_param_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GOOD_SECRET", "s3cret")
+    instance = instance_at(tmp_path)
+    write_routine(
+        instance, "shared-ok", "description: Shared\nrun: fetch\nsignal:\n  secret: GOOD_SECRET"
+    )
+    tools = instance.path / "tools"
+    tools.mkdir()
+    (tools / "fetch.py").write_text('''from kinby.plugins import tool
+@tool(write=False)
+def fetch(signal: dict) -> str:
+    """Fetch."""
+    return "ok"
+''')
+    routines, warnings = load_routines(instance)
+    assert warnings == ()
+    assert routines[0].signal is not None
+    assert routines[0].code_step == SharedCodeStep("fetch")
+
+
 def test_signal_routine_keeps_its_schedule(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
     instance = instance_at(tmp_path)

@@ -70,6 +70,8 @@ def test_serve_listen_parses_host_and_port(tmp_path: Path) -> None:
         ('listen = "foo..bar:8484"', "listen"),
         ('listen = ".:8484"', "listen"),
         ('listen = "-:8484"', "listen"),
+        ('listen = "127.0.0.1:0"', "listen"),
+        ('listen = "127.0.0.1:65536"', "listen"),
         ('listen = "127.0.0.1:8484"\nsurprise = true', "surprise"),
     ],
 )
