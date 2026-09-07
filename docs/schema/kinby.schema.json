@@ -201,6 +201,20 @@
       "title": "RawRoutines",
       "type": "object"
     },
+    "RawServe": {
+      "additionalProperties": false,
+      "properties": {
+        "listen": {
+          "title": "Listen",
+          "type": "string"
+        }
+      },
+      "required": [
+        "listen"
+      ],
+      "title": "RawServe",
+      "type": "object"
+    },
     "RawTools": {
       "additionalProperties": false,
       "properties": {
@@ -320,6 +334,17 @@
       "default": {
         "timezone": "UTC"
       }
+    },
+    "serve": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RawServe"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "state_dir": {
       "default": ".state",

@@ -1,5 +1,6 @@
 """Load the instance's routine instructions at turn boundaries."""
 
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -8,13 +9,22 @@ from typing import Annotated
 from cronsim import CronSim
 from pydantic import BaseModel, ConfigDict, Field, Json, JsonValue  # noqa: TID251 - file boundary
 
-from kinby.contracts import CronSchedule, PermissionMode, RoutineName, Warning
+from kinby.contracts import CronSchedule, PermissionMode, RoutineName, SignalAuth, Warning
 from kinby.frontmatter import parse_frontmatter, required_string
 from kinby.instance import Budgets, Instance
 from kinby.instance.layout import ROUTINE_CODE_FILE, ROUTINE_FILE, ROUTINES_DIR
 from kinby.instance.permissions import GatePolicy, constrain_mode, load_permissions
 from kinby.plugins.registry import load_tool_file
 from kinby.plugins.tools import Tool
+
+
+class _RawSignal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auth: SignalAuth = SignalAuth.TOKEN
+    secret: str
+    signature_header: str | None = None
+    delivery_header: str | None = None
 
 
 class _RawRoutine(BaseModel):
@@ -26,6 +36,7 @@ class _RawRoutine(BaseModel):
     mode: PermissionMode | None = None
     catch_up: bool = True
     run: str | None = None
+    signal: _RawSignal | None = None
     arguments: Json[dict[str, JsonValue]] = Field(default_factory=dict)
     steps: Annotated[int, Field(gt=0)] | None = None
     tokens: Annotated[int, Field(gt=0)] | None = None
@@ -35,6 +46,14 @@ class _RawRoutine(BaseModel):
 @dataclass(frozen=True)
 class SharedCodeStep:
     name: str
+
+
+@dataclass(frozen=True)
+class SignalConfig:
+    auth: SignalAuth
+    secret: str
+    signature_header: str | None = None
+    delivery_header: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +69,7 @@ class Routine:
     arguments: dict[str, JsonValue]
     budgets: Budgets
     code_step: SharedCodeStep | Tool | None
+    signal: SignalConfig | None = None
 
 
 def load_routines(
@@ -89,6 +109,20 @@ def _load_routine(path: Path, policy: GatePolicy) -> Routine:
         if len(tools) != 1:
             raise ValueError("run.py must define exactly one tool.")
         code_step = tools[0]
+    signal = None
+    if raw.signal is not None:
+        if not os.environ.get(raw.signal.secret):
+            raise ValueError(f"Signal secret {raw.signal.secret} is unset.")
+        if raw.signal.auth is SignalAuth.HMAC_SHA256 and not raw.signal.signature_header:
+            raise ValueError("HMAC signal requires a signature header.")
+        if isinstance(code_step, Tool) and "signal" not in code_step.runnable.args:
+            raise ValueError("The code step has no signal parameter.")
+        signal = SignalConfig(
+            auth=raw.signal.auth,
+            secret=raw.signal.secret,
+            signature_header=raw.signal.signature_header,
+            delivery_header=raw.signal.delivery_header,
+        )
     return Routine(
         name=RoutineName(path.parent.name),
         description=raw.description,
@@ -101,6 +135,7 @@ def _load_routine(path: Path, policy: GatePolicy) -> Routine:
         code_step=code_step,
         arguments=raw.arguments,
         budgets=Budgets(steps=raw.steps, tokens=raw.tokens, seconds=raw.seconds),
+        signal=signal,
     )
 
 

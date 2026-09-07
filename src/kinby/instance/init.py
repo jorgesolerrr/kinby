@@ -85,6 +85,9 @@ def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
             "# tokens = 50000\n"
             "# seconds = 300\n"
             "# usd_per_day = 5.0\n"
+            "\n"
+            "# [serve]\n"
+            '# listen = "127.0.0.1:8484"\n'
         ),
         encoding="utf-8",
     )

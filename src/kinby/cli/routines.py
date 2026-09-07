@@ -17,7 +17,7 @@ from kinby.contracts import (
 
 
 def render_routines(result: RoutineListResult, stdout: TextIO) -> None:
-    stdout.write("name\tschedule\tenabled\tlast run\tnext run\n")
+    stdout.write("name\tschedule\tenabled\tlast run\tnext run\tsignal\tauth\n")
     for routine in result.routines:
         state = "enabled" if routine.enabled else "disabled"
         next_run = routine.next_run.isoformat() if routine.next_run else "none"
@@ -25,8 +25,11 @@ def render_routines(result: RoutineListResult, stdout: TextIO) -> None:
         last_run = (
             f"{last.started_at.isoformat()} {last.outcome} {last.first_line}" if last else "none"
         )
+        path = routine.signal.path if routine.signal is not None else "none"
+        auth = routine.signal.auth if routine.signal is not None else "none"
         stdout.write(
-            f"{routine.name}\t{routine.schedule or 'none'}\t{state}\t{last_run}\t{next_run}\n"
+            f"{routine.name}\t{routine.schedule or 'none'}\t{state}\t"
+            f"{last_run}\t{next_run}\t{path}\t{auth}\n"
         )
         render_routine_status(routine, stdout)
     for warning in result.warnings:

@@ -48,6 +48,32 @@ def test_routine_timezone_defaults_and_schema(tmp_path: Path) -> None:
     assert '"routines"' in json.dumps(manifest_schema())
 
 
+def test_serve_listen_parses_host_and_port(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    assert instance.manifest.serve is None
+    with (tmp_path / "kinby.toml").open("a") as manifest:
+        manifest.write('[serve]\nlisten = "127.0.0.1:8484"\n')
+    loaded = load_instance(tmp_path)
+    assert loaded.manifest.serve is not None
+    assert loaded.manifest.serve.host == "127.0.0.1"
+    assert loaded.manifest.serve.port == 8484
+
+
+@pytest.mark.parametrize(
+    "setting,named",
+    [
+        ('listen = "not-an-address"', "listen"),
+        ('listen = "127.0.0.1:8484"\nsurprise = true', "surprise"),
+    ],
+)
+def test_invalid_serve_settings_fail_load(tmp_path: Path, setting: str, named: str) -> None:
+    instance_at(tmp_path)
+    with (tmp_path / "kinby.toml").open("a") as manifest:
+        manifest.write(f"[serve]\n{setting}\n")
+    with pytest.raises(ManifestError, match=named):
+        load_instance(tmp_path)
+
+
 @pytest.mark.parametrize("setting", ['timezone = "Unknown/Zone"', "surprise = true"])
 def test_invalid_routine_settings_fail_load(tmp_path: Path, setting: str) -> None:
     instance_at(tmp_path)
@@ -433,6 +459,31 @@ def test_worker_fires_and_drains(tmp_path):
         assert listed.routines[0].last_run.outcome == "work"
 
     asyncio.run(scenario())
+
+
+def test_routine_list_shows_signal_path_and_auth(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
+    instance = instance_at(tmp_path)
+    routine_file(
+        instance,
+        """description: GitHub issues
+signal:
+  secret: GITHUB_WEBHOOK_SECRET""",
+    )
+
+    async def scenario():
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)))
+        listed = await call(dispatcher, "routine.list")
+        assert listed.routines[0].signal is not None
+        assert listed.routines[0].signal.path == "/signals/news"
+        assert listed.routines[0].signal.auth == "token"
+        assert listed.routines[0].pending == 0
+
+    asyncio.run(scenario())
+    assert main(["routine", "list", "--instance", str(tmp_path)]) == 0
+    output = capsys.readouterr().out
+    assert "/signals/news" in output
+    assert "token" in output
 
 
 def test_cli_routine_list_and_no_work_run(tmp_path, capsys):

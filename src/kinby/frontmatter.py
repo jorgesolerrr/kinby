@@ -2,7 +2,7 @@
 
 import json
 
-type FrontmatterValue = str | list[str]
+type FrontmatterValue = str | list[str] | dict[str, str]
 
 
 class FrontmatterError(ValueError):
@@ -55,9 +55,23 @@ def parse_frontmatter(document: str) -> tuple[dict[str, FrontmatterValue], str]:
     except ValueError as exc:
         raise FrontmatterError("Frontmatter is missing.") from exc
     values: dict[str, FrontmatterValue] = {}
+    table: dict[str, str] | None = None
     for line in lines[1:closing]:
-        key, separator, value = line.partition(":")
-        if separator:
-            values[key.strip()] = _parse_value(value)
+        stripped = line.lstrip()
+        indented = bool(stripped) and line[: len(line) - len(stripped)] != ""
+        key, separator, value = stripped.partition(":")
+        if not separator:
+            continue
+        parsed = _parse_value(value)
+        if indented:
+            if table is not None and isinstance(parsed, str):
+                table[key.strip()] = parsed
+            continue
+        if parsed == "":
+            table = {}
+            values[key.strip()] = table
+        else:
+            table = None
+            values[key.strip()] = parsed
     body = "\n".join(lines[closing + 1 :]).strip("\r\n")
     return values, body

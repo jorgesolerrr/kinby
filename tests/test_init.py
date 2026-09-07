@@ -37,6 +37,7 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
         "# seconds = 300\n"
         "# usd_per_day = 5.0\n"
     ) in manifest
+    assert ('# [serve]\n# listen = "127.0.0.1:8484"\n') in manifest
     assert manifest.startswith("#")
     assert (target / "SYSTEM.md").read_text(encoding="utf-8").startswith("<!--")
     recap_prompt = (target / "RECAP.md").read_text(encoding="utf-8")

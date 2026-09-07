@@ -130,6 +130,21 @@ def test_manifest_schema_accepts_feedback_policies(policy: str) -> None:
     validate(instance=manifest, schema=manifest_schema())
 
 
+def test_manifest_schema_accepts_the_serve_table() -> None:
+    schema = manifest_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    assert "serve" in properties
+    validate(
+        instance={
+            "id": "alice",
+            "models": {"main": "openai:gpt-5"},
+            "serve": {"listen": "127.0.0.1:8484"},
+        },
+        schema=schema,
+    )
+
+
 def test_manifest_schema_rejects_an_unknown_feedback_key() -> None:
     manifest = {
         "id": "alice",

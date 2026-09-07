@@ -25,6 +25,7 @@ from kinby.contracts import (
     RoutineRunOutcome,
     RoutineSummary,
     RoutineTrigger,
+    SignalSummary,
 )
 from kinby.core.errors import BudgetExceeded, InstanceBusy, ModelUnpriced, RoutineNotFound
 from kinby.core.events import EventLog
@@ -151,6 +152,15 @@ class Scheduler:
                     last_failure=record.last_failure,
                     notices=record.notices,
                     next_run=armed[routine.name].time if routine.name in armed else None,
+                    signal=(
+                        SignalSummary(
+                            path=f"/signals/{routine.name}",
+                            auth=routine.signal.auth,
+                        )
+                        if routine.signal is not None
+                        else None
+                    ),
+                    pending=0,
                 )
             )
         return RoutineListResult(routines=result, warnings=warnings)

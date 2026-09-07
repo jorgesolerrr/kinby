@@ -68,6 +68,7 @@ class EventType(StrEnum):
     TURN_RATED = "turn.rated"
     MEMORY_RECAPPED = "memory.recapped"
     ROUTINE_FAILURE_HANDLED = "routine.failure.handled"
+    SIGNAL_RECEIVED = "signal.received"
 
 
 class UserOrigin(ContractModel):
@@ -78,6 +79,12 @@ class RoutineTrigger(StrEnum):
     SCHEDULED = "scheduled"
     MANUAL = "manual"
     CATCH_UP = "catch-up"
+    SIGNAL = "signal"
+
+
+class SignalAuth(StrEnum):
+    TOKEN = "token"
+    HMAC_SHA256 = "hmac-sha256"
 
 
 RoutineName = NewType("RoutineName", str)
@@ -88,6 +95,7 @@ class RoutineOrigin(ContractModel):
     kind: Literal["routine"] = "routine"
     name: RoutineName
     trigger: RoutineTrigger
+    delivery: str | None = None
 
 
 Origin = Annotated[UserOrigin | RoutineOrigin, Field(discriminator="kind")]
@@ -207,6 +215,19 @@ class RoutineFailureHandled(ContractModel):
     notice: RoutineNotice | None = None
 
 
+class Delivery(ContractModel):
+    headers: dict[str, str]
+    content_type: str
+    body: str
+    delivery_id: str | None = None
+    received_at: AwareDatetime
+
+
+class SignalReceived(ContractModel):
+    type: Literal[EventType.SIGNAL_RECEIVED] = EventType.SIGNAL_RECEIVED
+    delivery: Delivery
+
+
 Payload = Annotated[
     ModePinned
     | TurnStarted
@@ -220,7 +241,8 @@ Payload = Annotated[
     | TurnInterrupted
     | TurnRated
     | MemoryRecapped
-    | RoutineFailureHandled,
+    | RoutineFailureHandled
+    | SignalReceived,
     Field(discriminator="type"),
 ]
 
@@ -397,6 +419,7 @@ class RoutineListCommand(ContractModel):
 
 class RoutineRunCommand(ContractModel):
     name: RoutineName
+    payload: str | None = None
 
 
 class RoutineRunOutcome(StrEnum):
@@ -416,6 +439,11 @@ class RoutineLastRun(ContractModel):
     first_line: str = ""
 
 
+class SignalSummary(ContractModel):
+    path: str
+    auth: SignalAuth
+
+
 class RoutineSummary(ContractModel):
     name: RoutineName
     description: str
@@ -427,6 +455,8 @@ class RoutineSummary(ContractModel):
     notices: list[RoutineNotice] = Field(default_factory=list)
     last_run: RoutineLastRun | None
     next_run: datetime | None
+    signal: SignalSummary | None = None
+    pending: int = 0
 
 
 class RoutineListResult(ContractModel):

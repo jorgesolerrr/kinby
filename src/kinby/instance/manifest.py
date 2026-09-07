@@ -32,6 +32,7 @@ from kinby.instance.dataclasses import (
     Models,
     RecapPolicy,
     Routines,
+    Serve,
     Tools,
     Workspace,
 )
@@ -117,6 +118,29 @@ class RawRoutines(_Section):
         return value
 
 
+def _parse_listen(value: str) -> Serve:
+    host, separator, port_text = value.rpartition(":")
+    if not separator or not host or not port_text:
+        raise ValueError("must be a host:port address")
+    try:
+        port = int(port_text)
+    except ValueError as exc:
+        raise ValueError("must be a host:port address") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError("must be a host:port address")
+    return Serve(host=host, port=port)
+
+
+class RawServe(_Section):
+    listen: str
+
+    @field_validator("listen")
+    @classmethod
+    def valid_listen(cls, value: str) -> str:
+        _parse_listen(value)
+        return value
+
+
 class RawManifest(_Section):
     """The shape of ``kinby.toml``, validated once at load."""
 
@@ -129,6 +153,7 @@ class RawManifest(_Section):
     feedback: RawFeedback = RawFeedback()
     tools: RawTools = RawTools()
     routines: RawRoutines = RawRoutines()
+    serve: RawServe | None = None
     budgets: RawBudgets = Field(default_factory=RawBudgets, title="Budgets")
     prices: dict[ModelName, RawModelPrice] = Field(
         default_factory=dict,
@@ -195,6 +220,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         feedback=Feedback(ask=raw.feedback.ask),
         tools=Tools(defaults=raw.tools.defaults),
         routines=Routines(timezone=ZoneInfo(raw.routines.timezone)),
+        serve=_parse_listen(raw.serve.listen) if raw.serve is not None else None,
         budgets=Budgets(
             steps=raw.budgets.steps,
             tokens=raw.budgets.tokens,
