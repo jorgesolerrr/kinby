@@ -173,7 +173,7 @@ A **turn** whose recorded **model calls** do not sum to the **token usage** on i
 
 ### Navigation
 
-The read-only **tool** calls and the model reasoning a **turn** spends locating what it needs in the **workspace** before acting. Measured per turn as read calls, their time, distinct paths opened, and the tokens spent before the first write. Memory tools and the skill tool are not navigation. Its trend for one workspace shows whether memory is teaching the agent the workspace.
+The read-only **tool** calls and model reasoning a **turn** spends locating what it needs in the **workspace**. A turn's navigation records all read calls and their duration. It also records the read calls before the first write, distinct paths, repeat opens, tokens before the first write, and write calls. The write count identifies turns that acted. Memory tools and the skill tool are not navigation. Its trend for one workspace shows whether memory is teaching the agent the workspace.
 _Avoid_: exploration, workspace search
 
 ### Prompt version

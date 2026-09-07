@@ -244,15 +244,20 @@ def _stats_row(label: str, summary: StatsSummary) -> str:
             str(summary.denies.user),
             str(summary.tool_duration.read_ms),
             str(summary.tool_duration.write_ms),
-            (
-                f"{summary.mean_duration_seconds:.3f}"
-                if summary.mean_duration_seconds is not None
-                else "unknown"
-            ),
+            _optional_mean(summary.mean_duration_seconds),
             str(summary.good_ratings),
             str(summary.bad_ratings),
+            str(summary.navigation.turns),
+            _optional_mean(summary.navigation.read_calls),
+            _optional_mean(summary.navigation.duration_ms),
+            _optional_mean(summary.navigation.tokens_before_first_write),
+            _optional_mean(summary.navigation.repeat_opens),
         )
     )
+
+
+def _optional_mean(value: float | None) -> str:
+    return f"{value:.3f}" if value is not None else "unknown"
 
 
 def _model_call_mismatch(mismatch: ModelCallMismatch) -> str:
@@ -299,6 +304,11 @@ async def _show_stats(
                 "mean seconds",
                 "good",
                 "bad",
+                "nav turns",
+                "nav reads",
+                "nav ms",
+                "nav tokens",
+                "nav repeats",
             )
         )
     )

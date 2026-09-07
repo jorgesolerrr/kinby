@@ -19,6 +19,7 @@ from kinby.contracts import (
     MemoryRecapped,
     ModelCallMismatch,
     ModelCompleted,
+    Navigation,
     PromptVersion,
     TokenTotals,
     ToolCall,
@@ -42,6 +43,8 @@ _MEMORY_CALL_KINDS = {
     "remember": "remember",
     "forget": "forget",
 }
+_SKILL_TOOL = "skill"
+_NAVIGATION_EXCLUDED = frozenset((*_MEMORY_CALL_KINDS, _SKILL_TOOL))
 _CHARACTERS_PER_ESTIMATED_MEMORY_TOKEN = 4
 
 UnpricedModel = NewType("UnpricedModel", str)
@@ -70,6 +73,13 @@ class _TurnEvents:
     model_output_tokens: int = 0
     model_cache_read_tokens: int = 0
     model_cache_creation_tokens: int = 0
+    read_calls: int = 0
+    reads_before_first_write: int = 0
+    navigation_writes: int = 0
+    read_duration_ms: int = 0
+    opened_paths: Counter[str] = field(default_factory=Counter)
+    read_call_ids: set[str] = field(default_factory=set)
+    tokens_before_first_write: int = 0
 
 
 def estimate_memory_tokens(character_count: int) -> float:
@@ -120,6 +130,8 @@ def turn_metrics(
                 turn.model_output_tokens += payload.output_tokens
                 turn.model_cache_read_tokens += payload.cache_read_tokens
                 turn.model_cache_creation_tokens += payload.cache_creation_tokens
+                if turn.navigation_writes == 0:
+                    turn.tokens_before_first_write += payload.input_tokens + payload.output_tokens
             continue
         if isinstance(payload, ToolCall):
             if turn is not None:
@@ -127,6 +139,7 @@ def turn_metrics(
                 turn.tool_writes[payload.call_id] = payload.write
                 if kind := _MEMORY_CALL_KINDS.get(payload.name):
                     turn.memory_calls[kind] += 1
+                _record_navigation_call(turn, payload)
             continue
         if isinstance(payload, ToolGated):
             if turn is not None and payload.action is GateOutcome.DENY:
@@ -139,6 +152,8 @@ def turn_metrics(
                 write = turn.tool_writes.get(payload.call_id)
                 if payload.duration_ms is not None and write is not None:
                     turn.tool_duration["write_ms" if write else "read_ms"] += payload.duration_ms
+                if payload.call_id in turn.read_call_ids and payload.duration_ms is not None:
+                    turn.read_duration_ms += payload.duration_ms
             continue
         if isinstance(payload, ApprovalRequested):
             if turn is not None:
@@ -207,6 +222,7 @@ def turn_metrics(
                 tool_duration=ToolTime.model_validate(turn.tool_duration if turn else {}),
                 memory_tokens=(estimate_memory_tokens(turn.memory_characters) if turn else 0),
                 rating=None,
+                navigation=_navigation(turn) if turn else Navigation(),
             )
             records.append(record)
             closed_turns[key] = record
@@ -243,6 +259,34 @@ def turn_metrics(
         records,
         {key: frozenset(models) for key, models in unpriced_models_by_turn.items()},
         mismatches,
+    )
+
+
+def _record_navigation_call(turn: _TurnEvents, payload: ToolCall) -> None:
+    if payload.name in _NAVIGATION_EXCLUDED:
+        return
+    if payload.write is False:
+        turn.read_calls += 1
+        turn.read_call_ids.add(payload.call_id)
+        path = payload.arguments.get("path")
+        if isinstance(path, str):
+            turn.opened_paths[path] += 1
+        if turn.navigation_writes == 0:
+            turn.reads_before_first_write += 1
+    elif payload.write is True:
+        turn.navigation_writes += 1
+
+
+def _navigation(turn: _TurnEvents) -> Navigation:
+    distinct_paths = len(turn.opened_paths)
+    return Navigation(
+        read_calls=turn.read_calls,
+        reads_before_first_write=turn.reads_before_first_write,
+        write_calls=turn.navigation_writes,
+        duration_ms=turn.read_duration_ms,
+        distinct_paths=distinct_paths,
+        repeat_opens=sum(turn.opened_paths.values()) - distinct_paths,
+        tokens_before_first_write=turn.tokens_before_first_write,
     )
 
 
