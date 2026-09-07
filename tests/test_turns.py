@@ -22,7 +22,9 @@ from kinby.contracts import (
     ModePinned,
     Payload,
     PermissionMode,
+    PromptVersion,
     Scope,
+    SystemPrompt,
     ThreadCreateResult,
     TurnCompleted,
     TurnFailed,
@@ -42,9 +44,9 @@ from kinby.core.turns import (
     ApprovalDecision,
     Emit,
     ParkedTurn,
+    PreparedTurnRequest,
     TurnOutcome,
     TurnPreparation,
-    TurnRequest,
 )
 from kinby.instance import Budgets, init_instance, load_instance
 from tests.helpers import (
@@ -77,7 +79,7 @@ def _daily_budget_preparation(
 
 
 class ScriptedRunner:
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         assert turn.message == "Hello"
         await emit(MessageDelta(text="Hi"))
         await emit(MessageDelta(text=" there"))
@@ -88,7 +90,7 @@ class ScriptedRunner:
 
 
 class NoWorkAfterModelCallRunner:
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         await emit(
             ModelCompleted(
                 model=turn.model,
@@ -112,7 +114,7 @@ class WaitingRunner:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         self.started.set()
         await self.release.wait()
         return TurnOutcome()
@@ -125,7 +127,7 @@ class ModeRecordingRunner:
     def __init__(self) -> None:
         self.modes: list[PermissionMode] = []
 
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         self.modes.append(turn.permission_mode)
         return TurnOutcome()
 
@@ -134,7 +136,7 @@ class ModeRecordingRunner:
 
 
 class FailingRunner:
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         raise RuntimeError("provider unavailable")
 
     resume = does_not_park
@@ -142,11 +144,11 @@ class FailingRunner:
 
 
 class ParkingRunner:
-    def __init__(self, parked: TurnRequest | None = None) -> None:
+    def __init__(self, parked: PreparedTurnRequest | None = None) -> None:
         self.parked = parked
         self.resumed_modes: list[PermissionMode] = []
 
-    async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None:
+    async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None:
         if (
             self.parked is not None
             and self.parked.thread_id == thread_id
@@ -155,7 +157,7 @@ class ParkingRunner:
             return self.parked
         return None
 
-    async def run(self, turn: TurnRequest, emit: Emit) -> ParkedTurn:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> ParkedTurn:
         self.parked = turn
         await emit(
             ApprovalRequested(
@@ -169,7 +171,7 @@ class ParkingRunner:
 
     async def resume(
         self,
-        turn: TurnRequest,
+        turn: PreparedTurnRequest,
         decision: ApprovalDecision,
         emit: Emit,
     ) -> TurnOutcome:
@@ -180,14 +182,14 @@ class ParkingRunner:
 
 
 class PausingRestoreRunner(ParkingRunner):
-    def __init__(self, parked: TurnRequest) -> None:
+    def __init__(self, parked: PreparedTurnRequest) -> None:
         super().__init__(parked)
         self.restore_started = asyncio.Event()
         self.release_restore = asyncio.Event()
         self.restore_calls = 0
         self.resume_calls = 0
 
-    async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None:
+    async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None:
         self.restore_calls += 1
         self.restore_started.set()
         await self.release_restore.wait()
@@ -195,7 +197,7 @@ class PausingRestoreRunner(ParkingRunner):
 
     async def resume(
         self,
-        turn: TurnRequest,
+        turn: PreparedTurnRequest,
         decision: ApprovalDecision,
         emit: Emit,
     ) -> TurnOutcome:
@@ -207,7 +209,7 @@ class CancellationSuppressingRunner:
     def __init__(self) -> None:
         self.started = asyncio.Event()
 
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         await emit(MessageDelta(text="Before interrupt"))
         self.started.set()
         with suppress(asyncio.CancelledError):
@@ -335,6 +337,8 @@ def test_set_mode_rejects_a_mode_above_the_instance_ceiling(tmp_path: Path) -> N
                 model="openai:gpt-5",
                 default_mode=PermissionMode.ASK,
                 ceiling=PermissionMode.AUTO,
+                prompt_version=PromptVersion("123456789abc"),
+                system_prompt=SystemPrompt("System prompt"),
             ),
             lambda: PermissionMode.AUTO,
             ScriptedRunner(),
@@ -400,6 +404,8 @@ def test_lowered_ceiling_constrains_an_existing_pin(tmp_path: Path) -> None:
                 model="openai:gpt-5",
                 default_mode=PermissionMode.ASK,
                 ceiling=ceiling,
+                prompt_version=PromptVersion("123456789abc"),
+                system_prompt=SystemPrompt("System prompt"),
             )
 
         runner = ModeRecordingRunner()
@@ -493,6 +499,8 @@ def test_unpinned_thread_uses_the_instance_default_mode(tmp_path: Path) -> None:
                     model="openai:gpt-5",
                     default_mode=PermissionMode.AUTO,
                     ceiling=PermissionMode.FULL_ACCESS,
+                    prompt_version=PromptVersion("123456789abc"),
+                    system_prompt=SystemPrompt("System prompt"),
                 ),
                 fixed_permission_ceiling,
                 runner,
@@ -568,6 +576,7 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
             message="Hello",
             model="openai:gpt-5",
             permission_mode=PermissionMode.ASK,
+            prompt_version=PromptVersion("123456789abc"),
         )
         assert typed_events[1].payload == MessageDelta(text="Hi")
         assert typed_events[2].payload == MessageDelta(text=" there")
@@ -582,6 +591,47 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
         await replay.aclose()
 
         assert replayed == events
+
+    asyncio.run(scenario())
+
+
+def test_turn_started_records_the_prepared_prompt_version(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        version = PromptVersion("123456789abc")
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                lambda: TurnPreparation(
+                    model="openai:gpt-5",
+                    default_mode=PermissionMode.ASK,
+                    ceiling=PermissionMode.FULL_ACCESS,
+                    prompt_version=version,
+                    system_prompt=SystemPrompt("System prompt"),
+                ),
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+
+        accepted = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(accepted, AcceptedResult)
+        subscription = dispatcher.subscribe(
+            "thread.subscribe",
+            {"thread_id": created.id},
+            {Scope.THREAD_READ},
+        )
+        started = await asyncio.wait_for(anext(subscription), timeout=1)
+        await subscription.aclose()
+
+        assert isinstance(started, Event)
+        assert isinstance(started.payload, TurnStarted)
+        assert started.payload.prompt_version == version
 
     asyncio.run(scenario())
 
@@ -731,6 +781,8 @@ def test_daily_cost_budget_refuses_an_unpriced_model_but_unbounded_turns_run(
                     model="other:model",
                     default_mode=PermissionMode.ASK,
                     ceiling=PermissionMode.FULL_ACCESS,
+                    prompt_version=PromptVersion("123456789abc"),
+                    system_prompt=SystemPrompt("System prompt"),
                 ),
                 fixed_permission_ceiling,
                 ScriptedRunner(),
@@ -1440,12 +1492,13 @@ def test_parked_approval_resumes_after_dispatcher_restart(tmp_path: Path) -> Non
                 fixed_turn_preparation,
                 fixed_permission_ceiling,
                 ParkingRunner(
-                    TurnRequest(
+                    PreparedTurnRequest(
                         thread_id=created.id,
                         turn_id=accepted.turn_id,
                         message="Hello",
                         model=fixed_turn_preparation().model,
                         permission_mode=PermissionMode.ASK,
+                        system_prompt=SystemPrompt("System prompt"),
                     )
                 ),
             ),
@@ -1486,12 +1539,13 @@ def test_concurrent_approval_responses_resume_once(tmp_path: Path) -> None:
     async def scenario() -> None:
         _, created, accepted, requested = await _park_turn(tmp_path)
         runner = PausingRestoreRunner(
-            TurnRequest(
+            PreparedTurnRequest(
                 thread_id=created.id,
                 turn_id=accepted.turn_id,
                 message="Hello",
                 model=fixed_turn_preparation().model,
                 permission_mode=PermissionMode.ASK,
+                system_prompt=SystemPrompt("System prompt"),
             )
         )
         restarted = build_dispatcher(
@@ -1544,12 +1598,13 @@ def test_interrupt_during_approval_restore_prevents_resume(tmp_path: Path) -> No
     async def scenario() -> None:
         _, created, accepted, requested = await _park_turn(tmp_path)
         runner = PausingRestoreRunner(
-            TurnRequest(
+            PreparedTurnRequest(
                 thread_id=created.id,
                 turn_id=accepted.turn_id,
                 message="Hello",
                 model=fixed_turn_preparation().model,
                 permission_mode=PermissionMode.ASK,
+                system_prompt=SystemPrompt("System prompt"),
             )
         )
         restarted = build_dispatcher(
@@ -1606,12 +1661,13 @@ def test_parked_turn_uses_checkpoint_mode_when_event_lacks_mode(tmp_path: Path) 
             encoding="utf-8",
         )
         runner = ParkingRunner(
-            TurnRequest(
+            PreparedTurnRequest(
                 thread_id=created.id,
                 turn_id=accepted.turn_id,
                 message="Hello",
                 model=fixed_turn_preparation().model,
                 permission_mode=PermissionMode.ASK,
+                system_prompt=SystemPrompt("System prompt"),
             )
         )
         restarted = build_dispatcher(
@@ -1621,6 +1677,8 @@ def test_parked_turn_uses_checkpoint_mode_when_event_lacks_mode(tmp_path: Path) 
                     model="openai:gpt-5",
                     default_mode=PermissionMode.AUTO,
                     ceiling=PermissionMode.FULL_ACCESS,
+                    prompt_version=PromptVersion("123456789abc"),
+                    system_prompt=SystemPrompt("System prompt"),
                 ),
                 fixed_permission_ceiling,
                 runner,
@@ -1723,12 +1781,13 @@ def test_parked_approval_resumes_with_the_turns_pinned_mode(tmp_path: Path) -> N
         assert requested.type is EventType.APPROVAL_REQUESTED
 
         runner = ParkingRunner(
-            TurnRequest(
+            PreparedTurnRequest(
                 thread_id=created.id,
                 turn_id=started.turn_id,
                 message="Hello",
                 model=fixed_turn_preparation().model,
                 permission_mode=PermissionMode.READ_ONLY,
+                system_prompt=SystemPrompt("System prompt"),
             )
         )
         restarted = build_dispatcher(
@@ -1768,6 +1827,8 @@ def test_lowered_ceiling_constrains_a_parked_turn_on_resume(tmp_path: Path) -> N
                 model="openai:gpt-5",
                 default_mode=PermissionMode.AUTO,
                 ceiling=ceiling,
+                prompt_version=PromptVersion("123456789abc"),
+                system_prompt=SystemPrompt("System prompt"),
             )
 
         runner = ParkingRunner()

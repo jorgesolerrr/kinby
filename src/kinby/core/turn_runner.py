@@ -57,6 +57,7 @@ from kinby.core.errors import (
     CodeStepFailed,
     CodeStepNotFound,
     InvalidApprovalRequest,
+    InvalidParkedTurn,
     ModelNoResponse,
     PermissionDenied,
     RoutineNotFound,
@@ -65,12 +66,19 @@ from kinby.core.events import EventLog
 from kinby.core.gate import evaluate
 from kinby.core.model_calls import completed_model_call
 from kinby.core.pricing import price_map
-from kinby.core.prompt import assemble_system_prompt, render_system_prompt, render_wake
+from kinby.core.prompt import (
+    PromptSection,
+    assemble_system_prompt,
+    prompt_version,
+    render_system_prompt,
+    render_wake,
+)
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
     ApprovalDecision,
     Emit,
     ParkedTurn,
+    PreparedTurnRequest,
     TurnContext,
     TurnOutcome,
     TurnPreparation,
@@ -114,6 +122,7 @@ _CHECKPOINT_SERIALIZER = JsonPlusSerializer(
         ApprovalRequested,
         EventType,
         PermissionMode,
+        PreparedTurnRequest,
         TurnRequest,
         UserOrigin,
         RoutineOrigin,
@@ -132,7 +141,7 @@ ModelFactory = Callable[[str], ChatModel]
 
 @dataclass
 class ModelState:
-    turn: TurnRequest
+    turn: PreparedTurnRequest
     messages: Annotated[list[AnyMessage], add_messages] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
@@ -204,6 +213,7 @@ class LangGraphRunner:
         model_factory: ModelFactory = _init_model,
         model_override: str | None = None,
         gate_policy: GatePolicy | None = None,
+        today: Callable[[], date] = date.today,
     ) -> None:
         self._instance = instance
         self._event_log = (
@@ -213,6 +223,7 @@ class LangGraphRunner:
         self._model_override = model_override
         self._gate_policy_override = gate_policy
         self._gate_policy = gate_policy if gate_policy is not None else SHIPPED_POLICY
+        self._today = today
         instance.manifest.state_dir.mkdir(parents=True, exist_ok=True)
         self._tools = ToolRegistry(
             instance.path,
@@ -232,6 +243,7 @@ class LangGraphRunner:
         manifest = reload_manifest(self._instance, model_override=self._model_override)
         self._instance = replace(self._instance, manifest=manifest)
         self._gate_policy = self._load_gate_policy()
+        sections = self._prompt_sections()
         limit = manifest.budgets.usd_per_day
         daily_budget = None
         if limit is not None:
@@ -253,6 +265,8 @@ class LangGraphRunner:
             model=manifest.models.main,
             default_mode=self._gate_policy.mode,
             ceiling=self._gate_policy.ceiling,
+            prompt_version=prompt_version(sections),
+            system_prompt=render_system_prompt(sections),
             daily_budget=daily_budget,
             budgets=manifest.budgets,
         )
@@ -269,7 +283,7 @@ class LangGraphRunner:
         )
         return self._gate_policy_override
 
-    async def run(self, turn: TurnRequest, context: TurnContext) -> TurnResult:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnResult:
         config, start_step = await self._start_config(turn)
         progress = _BudgetProgress(context.budgets, start_step)
         return await self._invoke(
@@ -280,20 +294,25 @@ class LangGraphRunner:
             progress,
         )
 
-    async def restore(self, thread_id: UUID, turn_id: UUID) -> TurnRequest | None:
+    async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None:
         config: RunnableConfig = {"configurable": {"thread_id": str(thread_id)}}
         async with self._graph() as (graph, _):
             state = await graph.aget_state(config)
         if not any(task.interrupts for task in state.tasks):
             return None
-        restored = _MODEL_STATE.validate_python(state.values).turn
+        values = dict(state.values)
+        stored = values.get("turn")
+        if not isinstance(stored, TurnRequest):
+            raise InvalidParkedTurn("The parked turn checkpoint is invalid.")
+        values["turn"] = self._prepare_restored_turn(stored)
+        restored = _MODEL_STATE.validate_python(values).turn
         if restored.thread_id != thread_id or restored.turn_id != turn_id:
             return None
         return restored
 
     async def resume(
         self,
-        turn: TurnRequest,
+        turn: PreparedTurnRequest,
         decision: ApprovalDecision,
         context: TurnContext,
     ) -> TurnResult:
@@ -316,9 +335,18 @@ class LangGraphRunner:
             replace(progress, resumes=progress.resumes + 1),
         )
 
+    def _prepare_restored_turn(self, turn: TurnRequest) -> PreparedTurnRequest:
+        if isinstance(turn, PreparedTurnRequest):
+            return turn
+        return turn.prepare(render_system_prompt(self._prompt_sections()))
+
+    def _prompt_sections(self) -> tuple[PromptSection, ...]:
+        skills, _ = load_skills(self._instance)
+        return assemble_system_prompt(self._instance, skills, self._today())
+
     async def _invoke(
         self,
-        turn: TurnRequest,
+        turn: PreparedTurnRequest,
         context: TurnContext,
         graph_input: ModelState | Command,
         config: RunnableConfig,
@@ -327,7 +355,6 @@ class LangGraphRunner:
         budgets = progress.budgets
         emit = context.emit
         skills, skill_warnings = load_skills(self._instance)
-        sections = assemble_system_prompt(self._instance, skills, date.today())
         discovered_tools, tool_warnings = self._tools.refresh()
         tools, core_tool_warnings = discovered_tools.with_core(*core_tools(self._instance, skills))
         for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
@@ -355,7 +382,7 @@ class LangGraphRunner:
                         context=ModelContext(
                             emit=emit,
                             model=bound_model,
-                            system_message=SystemMessage(content=render_system_prompt(sections)),
+                            system_message=SystemMessage(content=turn.system_prompt),
                             gate_policy=self._gate_policy,
                             permission_mode=prepared.permission_mode,
                             tools=tools,
@@ -394,7 +421,7 @@ class LangGraphRunner:
 
     async def _prepare_turn(
         self,
-        turn: TurnRequest,
+        turn: PreparedTurnRequest,
         graph_input: ModelState | Command,
         tools: ToolSnapshot,
         progress: _BudgetProgress,
@@ -458,7 +485,7 @@ class LangGraphRunner:
                 payload = delivery.body
         return _PreparedTurn(tools, progress, permission_mode, message, payload)
 
-    def _delivery_for_turn(self, turn: TurnRequest) -> Delivery | None:
+    def _delivery_for_turn(self, turn: PreparedTurnRequest) -> Delivery | None:
         return next(
             (
                 event.payload.delivery
@@ -555,7 +582,7 @@ class LangGraphRunner:
         )
         return output
 
-    async def _start_config(self, turn: TurnRequest) -> tuple[RunnableConfig, int]:
+    async def _start_config(self, turn: PreparedTurnRequest) -> tuple[RunnableConfig, int]:
         async with self._graph() as (graph, checkpointer):
             async for state in graph.aget_state_history(_graph_config(turn)):
                 interrupted = any(task.interrupts for task in state.tasks)
@@ -566,7 +593,7 @@ class LangGraphRunner:
 
     async def _resume_budget_progress(
         self,
-        turn: TurnRequest,
+        turn: PreparedTurnRequest,
         fallback: Budgets,
     ) -> _BudgetProgress:
         async with self._graph() as (graph, _):
@@ -842,7 +869,7 @@ def _after_model(state: ModelState) -> str:
     return END
 
 
-def _graph_config(turn: TurnRequest) -> RunnableConfig:
+def _graph_config(turn: PreparedTurnRequest) -> RunnableConfig:
     return {"configurable": {"thread_id": str(turn.thread_id)}}
 
 

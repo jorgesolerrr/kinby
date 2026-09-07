@@ -17,12 +17,19 @@ from kinby.contracts import (
     MessageDelta,
     Payload,
     PermissionMode,
+    SystemPrompt,
     ToolCall,
     ToolGated,
     ToolResult,
 )
 from kinby.core import LangGraphRunner
-from kinby.core.turns import ApprovalDecision, ParkedTurn, TurnContext, TurnOutcome, TurnRequest
+from kinby.core.turns import (
+    ApprovalDecision,
+    ParkedTurn,
+    PreparedTurnRequest,
+    TurnContext,
+    TurnOutcome,
+)
 from kinby.instance import init_instance, load_instance
 from kinby.memory import Episode, Fact, GraphStore, NodeId, memory_tools
 from kinby.plugins import ToolContext
@@ -160,12 +167,13 @@ def test_model_walks_search_then_open_without_approval(
             )
 
         result = await runner.run(
-            TurnRequest(
+            PreparedTurnRequest(
                 thread_id=thread_id,
                 turn_id=turn_id,
                 message="What happened with the deployment?",
                 model=preparation.model,
                 permission_mode=mode,
+                system_prompt=SystemPrompt("System prompt"),
             ),
             TurnContext(preparation.budgets, emit),
         )
@@ -250,12 +258,13 @@ def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None
                 timestamp=datetime.now(UTC),
             )
 
-        turn = TurnRequest(
+        turn = PreparedTurnRequest(
             thread_id=thread_id,
             turn_id=turn_id,
             message="Remember that I prefer small modules.",
             model=preparation.model,
             permission_mode=PermissionMode.ASK,
+            system_prompt=SystemPrompt("System prompt"),
         )
         context = TurnContext(preparation.budgets, emit)
         parked = await runner.run(turn, context)
@@ -322,12 +331,13 @@ def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None
             )
 
         later = await runner.run(
-            TurnRequest(
+            PreparedTurnRequest(
                 thread_id=later_thread_id,
                 turn_id=later_turn_id,
                 message="What are my coding preferences?",
                 model=preparation.model,
                 permission_mode=PermissionMode.READ_ONLY,
+                system_prompt=SystemPrompt("System prompt"),
             ),
             TurnContext(preparation.budgets, emit_later),
         )
@@ -418,12 +428,13 @@ def test_denied_remember_returns_an_error_and_the_turn_continues(tmp_path: Path)
                 timestamp=datetime.now(UTC),
             )
 
-        turn = TurnRequest(
+        turn = PreparedTurnRequest(
             thread_id=thread_id,
             turn_id=turn_id,
             message="Remember that I prefer small modules.",
             model=preparation.model,
             permission_mode=PermissionMode.ASK,
+            system_prompt=SystemPrompt("System prompt"),
         )
         context = TurnContext(preparation.budgets, emit)
         parked = await runner.run(turn, context)
@@ -527,12 +538,13 @@ def test_forget_hides_the_node_from_a_later_search_in_the_same_turn(
             )
 
         completed = await runner.run(
-            TurnRequest(
+            PreparedTurnRequest(
                 thread_id=thread_id,
                 turn_id=turn_id,
                 message="Forget the deployment memory and check that it is gone.",
                 model=preparation.model,
                 permission_mode=PermissionMode.FULL_ACCESS,
+                system_prompt=SystemPrompt("System prompt"),
             ),
             TurnContext(preparation.budgets, emit),
         )
@@ -607,12 +619,13 @@ def test_read_only_denies_memory_write_tools(
             )
 
         completed = await runner.run(
-            TurnRequest(
+            PreparedTurnRequest(
                 thread_id=thread_id,
                 turn_id=turn_id,
                 message="Change memory.",
                 model=preparation.model,
                 permission_mode=PermissionMode.READ_ONLY,
+                system_prompt=SystemPrompt("System prompt"),
             ),
             TurnContext(preparation.budgets, emit),
         )

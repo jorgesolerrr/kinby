@@ -1,14 +1,14 @@
 from uuid import UUID
 
-from kinby.contracts import PermissionMode
+from kinby.contracts import PermissionMode, PromptVersion, SystemPrompt
 from kinby.core.budgets import DailyBudget, DailyCost
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
     ApprovalDecision,
     Emit,
+    PreparedTurnRequest,
     TurnOutcome,
     TurnPreparation,
-    TurnRequest,
 )
 from kinby.instance import Budgets
 
@@ -33,6 +33,8 @@ def fixed_turn_preparation(
         model=model,
         default_mode=PermissionMode.ASK,
         ceiling=PermissionMode.FULL_ACCESS,
+        prompt_version=PromptVersion("123456789abc"),
+        system_prompt=SystemPrompt("System prompt"),
         daily_budget=daily_budget,
         budgets=budgets,
     )
@@ -46,13 +48,13 @@ async def cannot_restore(
     self: object,
     thread_id: UUID,
     turn_id: UUID,
-) -> TurnRequest | None:
+) -> PreparedTurnRequest | None:
     return None
 
 
 async def does_not_park(
     self: object,
-    turn: TurnRequest,
+    turn: PreparedTurnRequest,
     decision: ApprovalDecision,
     emit: Emit,
 ) -> TurnOutcome:

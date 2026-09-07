@@ -103,6 +103,8 @@ class SignalAuth(StrEnum):
 RoutineName = NewType("RoutineName", str)
 CronSchedule = NewType("CronSchedule", str)
 DeliveryId = NewType("DeliveryId", str)
+PromptVersion = NewType("PromptVersion", str)
+SystemPrompt = NewType("SystemPrompt", str)
 
 
 class RoutineOrigin(ContractModel):
@@ -121,6 +123,7 @@ class TurnStarted(ContractModel):
     model: str
     permission_mode: PermissionMode | None = None
     origin: Origin = Field(default_factory=UserOrigin)
+    prompt_version: PromptVersion | None = None
 
 
 class ModePinned(ContractModel):
@@ -420,6 +423,7 @@ class TurnMetrics(TokenTotals):
     thread_id: UUID
     turn_id: UUID
     model: str | None
+    prompt_version: PromptVersion | None
     closing_kind: TurnClosingKind
     started_at: datetime | None
     closed_at: datetime

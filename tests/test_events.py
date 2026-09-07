@@ -224,6 +224,7 @@ def test_old_event_logs_without_delivery_fields_still_read(tmp_path: Path) -> No
     assert isinstance(event.payload.origin, RoutineOrigin)
     assert event.payload.origin.delivery_id is None
     assert event.payload.origin.trigger is RoutineTrigger.SCHEDULED
+    assert event.payload.prompt_version is None
 
 
 def test_old_tool_events_read_with_unknown_write_and_no_duration(tmp_path: Path) -> None:

@@ -40,7 +40,7 @@ from kinby.core.budgets import daily_cost
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.pricing import price_map
-from kinby.core.turns import Emit, TurnOutcome, TurnRequest
+from kinby.core.turns import Emit, PreparedTurnRequest, TurnOutcome
 from kinby.instance import init_instance, load_instance
 from tests.helpers import (
     cannot_restore,
@@ -51,7 +51,7 @@ from tests.helpers import (
 
 
 class MetricsRunner:
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         for call_id in ("bash-1", "bash-2"):
             await emit(ToolCall(call_id=call_id, name="bash", arguments={}, write=True))
             await emit(
@@ -166,6 +166,7 @@ def test_stats_get_reports_one_turn_record_from_the_event_log(tmp_path: Path) ->
         assert record.thread_id == accepted.thread_id
         assert record.turn_id == accepted.turn_id
         assert record.model == "openai:gpt-5"
+        assert record.prompt_version == "123456789abc"
         assert record.closing_kind == "completed"
         assert record.started_at == started.timestamp
         assert record.closed_at == closed.timestamp
@@ -570,6 +571,7 @@ def test_stats_get_prices_recap_tokens_at_their_model_and_keeps_old_markers_unkn
     assert isinstance(result, StatsGetResult)
     assert result.records[0].cost == 0.00045
     assert result.records[1].cost is None
+    assert result.records[1].prompt_version is None
     assert result.buckets[0].cost == 0.00045
 
 
@@ -1226,6 +1228,7 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
     report = StatsGetResult.model_validate_json(report_path.read_text())
     assert len(report.records) == 1
     assert report.records[0].turn_id == closed.turn_id
+    assert report.records[0].prompt_version == "123456789abc"
     assert report.buckets[0].start == closed.timestamp.date()
 
 

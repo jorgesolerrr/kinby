@@ -19,6 +19,7 @@ from kinby.contracts import (
     Payload,
     PermissionMode,
     Scope,
+    SystemPrompt,
     ThreadCreateResult,
     TurnCompleted,
     TurnFailed,
@@ -29,7 +30,7 @@ from kinby.contracts import (
 from kinby.core import Dispatcher, LangGraphRunner, TurnConfig, build_dispatcher, turn_config
 from kinby.core.events import EventLog
 from kinby.core.turn_runner import ChatModel
-from kinby.core.turns import TurnContext, TurnOutcome, TurnPreparation, TurnRequest
+from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome, TurnRequest
 from kinby.instance import Budgets, Instance, load_instance
 from tests.helpers import GRAPH_EVENT_TIMEOUT
 
@@ -739,11 +740,11 @@ def test_turn_config_reapplies_the_session_model_override(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    assert configured.prepare_for_turn() == TurnPreparation(
-        model="anthropic:claude-sonnet-4-6",
-        default_mode=PermissionMode.ASK,
-        ceiling=PermissionMode.FULL_ACCESS,
-    )
+    preparation = configured.prepare_for_turn()
+
+    assert preparation.model == "anthropic:claude-sonnet-4-6"
+    assert preparation.default_mode is PermissionMode.ASK
+    assert preparation.ceiling is PermissionMode.FULL_ACCESS
 
 
 def test_langgraph_runner_streams_one_model_turn(tmp_path: Path) -> None:
@@ -767,12 +768,13 @@ def test_langgraph_runner_streams_one_model_turn(tmp_path: Path) -> None:
 
         runner = LangGraphRunner(_load_test_instance(tmp_path), model_factory=model_factory)
         outcome = await runner.run(
-            TurnRequest(
+            PreparedTurnRequest(
                 thread_id=uuid4(),
                 turn_id=uuid4(),
                 message="Hello",
                 model=_MODEL,
                 permission_mode=PermissionMode.ASK,
+                system_prompt=SystemPrompt("System prompt"),
             ),
             TurnContext(Budgets(), emit),
         )
@@ -785,6 +787,21 @@ def test_langgraph_runner_streams_one_model_turn(tmp_path: Path) -> None:
         assert outcome.output_tokens == 2
 
     asyncio.run(scenario())
+
+
+def test_old_checkpoint_request_prepares_with_a_system_prompt() -> None:
+    stored = TurnRequest(
+        thread_id=uuid4(),
+        turn_id=uuid4(),
+        message="Hello",
+        model=_MODEL,
+        permission_mode=PermissionMode.ASK,
+    )
+
+    prepared = stored.prepare(SystemPrompt("System prompt"))
+
+    assert isinstance(prepared, PreparedTurnRequest)
+    assert prepared.system_prompt == "System prompt"
 
 
 def test_failed_model_call_does_not_enter_checkpointed_history(tmp_path: Path) -> None:
@@ -804,22 +821,24 @@ def test_failed_model_call_does_not_enter_checkpointed_history(tmp_path: Path) -
 
         with pytest.raises(RuntimeError, match="provider unavailable"):
             await runner.run(
-                TurnRequest(
+                PreparedTurnRequest(
                     thread_id=thread_id,
                     turn_id=uuid4(),
                     message="Failed",
                     model=_MODEL,
                     permission_mode=PermissionMode.ASK,
+                    system_prompt=SystemPrompt("System prompt"),
                 ),
                 TurnContext(Budgets(), emit),
             )
         await runner.run(
-            TurnRequest(
+            PreparedTurnRequest(
                 thread_id=thread_id,
                 turn_id=uuid4(),
                 message="Retry",
                 model=_MODEL,
                 permission_mode=PermissionMode.ASK,
+                system_prompt=SystemPrompt("System prompt"),
             ),
             TurnContext(Budgets(), emit),
         )
@@ -849,12 +868,13 @@ def test_runner_keeps_thread_messages_between_turns(tmp_path: Path) -> None:
 
         for message in ("First", "Second"):
             await runner.run(
-                TurnRequest(
+                PreparedTurnRequest(
                     thread_id=thread_id,
                     turn_id=uuid4(),
                     message=message,
                     model=_MODEL,
                     permission_mode=PermissionMode.ASK,
+                    system_prompt=SystemPrompt("System prompt"),
                 ),
                 TurnContext(Budgets(), emit),
             )
@@ -885,12 +905,13 @@ def test_runner_keeps_thread_messages_after_restart(tmp_path: Path) -> None:
         for message in ("First", "Second"):
             runner = LangGraphRunner(instance, model_factory=lambda _: model)
             await runner.run(
-                TurnRequest(
+                PreparedTurnRequest(
                     thread_id=thread_id,
                     turn_id=uuid4(),
                     message=message,
                     model=_MODEL,
                     permission_mode=PermissionMode.ASK,
+                    system_prompt=SystemPrompt("System prompt"),
                 ),
                 TurnContext(Budgets(), emit),
             )

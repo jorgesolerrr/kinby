@@ -27,7 +27,7 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
-from kinby.core.turns import Emit, TurnOutcome, TurnRequest
+from kinby.core.turns import Emit, PreparedTurnRequest, TurnOutcome
 from kinby.instance import load_instance
 from kinby.memory import GraphStore, MemoryNode, NodeId, RecapDraft, RecapWriter
 from tests.helpers import (
@@ -235,7 +235,7 @@ def test_kept_draft_writes_narrative_episode_and_token_marker(tmp_path: Path) ->
 
 def test_recap_model_receives_the_harness_owned_turn_frame(tmp_path: Path) -> None:
     class FrameRunner:
-        async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+        async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
             await emit(MessageDelta(text="Compared "))
             await emit(MessageDelta(text="both cities."))
             await emit(
@@ -655,7 +655,7 @@ def test_recap_lens_reloads_for_each_turn(tmp_path: Path) -> None:
 
 
 class ToolRunner:
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         for call_id, name, arguments, output in (
             ("weather-1", "weather", {"city": "Quito"}, "18 C"),
             ("weather-2", "weather", {"city": "Cuenca"}, "16 C"),
@@ -680,7 +680,7 @@ class ClosingRunner:
     def __init__(self) -> None:
         self.interruptible_started = asyncio.Event()
 
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         if turn.message == "Chat only":
             return TurnOutcome()
         await emit(
@@ -968,7 +968,7 @@ def test_completed_tool_turn_writes_trace_episode_and_marker(tmp_path: Path) -> 
 
 def test_tool_call_summary_is_one_bounded_line(tmp_path: Path) -> None:
     class LongArgumentRunner:
-        async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+        async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
             await emit(
                 ToolCall(
                     call_id="write-1",

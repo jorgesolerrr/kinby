@@ -26,7 +26,7 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
-from kinby.core.turns import Emit, TurnOutcome, TurnRequest
+from kinby.core.turns import Emit, PreparedTurnRequest, TurnOutcome
 from kinby.instance import init_instance, load_instance
 from tests.helpers import (
     cannot_restore,
@@ -37,7 +37,7 @@ from tests.helpers import (
 
 
 class UsageRunner:
-    async def run(self, turn: TurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         usage = {
             "First": TokenTotals(input_tokens=11, output_tokens=7),
             "Next": TokenTotals(input_tokens=4, output_tokens=2),

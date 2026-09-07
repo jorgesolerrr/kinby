@@ -32,6 +32,7 @@ from kinby.contracts import (
     TurnCompleted,
     TurnFailed,
     TurnStarted,
+    UserOrigin,
     Warning,
     is_turn_closing,
 )
@@ -455,6 +456,47 @@ def fetch() -> None:
     assert isinstance(completed, TurnCompleted)
     assert completed.input_tokens == completed.output_tokens == 0
     assert completed.outcome == "no-work"
+
+
+def test_routine_and_user_turns_use_the_same_prompt_version(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        log = EventLog(instance.manifest.state_dir)
+        store = ThreadStore(instance.manifest.state_dir)
+        runner = LangGraphRunner(
+            instance,
+            event_log=log,
+            model_factory=lambda _: RoutineModel(),
+        )
+        turns = Turns(
+            store,
+            log,
+            runner,
+            runner.prepare_for_turn,
+            runner.permission_ceiling,
+            no_recap,
+        )
+
+        user_thread = store.create(None)
+        await turns.wake(user_thread.id, "Hello", UserOrigin())
+        await turns.wait_idle()
+        routine_thread = store.create(None)
+        await turns.wake(
+            routine_thread.id,
+            "Read the news.",
+            RoutineOrigin(name=RoutineName("news"), trigger=RoutineTrigger.MANUAL),
+        )
+        await turns.wait_idle()
+
+        started = [
+            event.payload for event in log.all_events() if isinstance(event.payload, TurnStarted)
+        ]
+        assert len(started) == 2
+        assert started[0].prompt_version is not None
+        assert started[0].prompt_version == started[1].prompt_version
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
