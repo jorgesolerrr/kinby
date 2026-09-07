@@ -56,10 +56,13 @@ class SignalConfig:
     delivery_header: str | None = None
 
 
-def resolve_code_step(code_step: SharedCodeStep | Tool | None, tools: ToolSnapshot) -> Tool | None:
-    if isinstance(code_step, SharedCodeStep):
-        return tools.get(code_step.name)
-    return code_step
+def resolve_code_step(code_step: SharedCodeStep | Tool, tools: ToolSnapshot) -> Tool:
+    if isinstance(code_step, Tool):
+        return code_step
+    resolved = tools.get(code_step.name)
+    if resolved is None:
+        raise ValueError(f'Code step tool "{code_step.name}" is not available.')
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -96,15 +99,12 @@ def load_routines(
 
 
 def _signal_code_step(code_step: SharedCodeStep | Tool | None, instance: Instance) -> Tool | None:
-    if isinstance(code_step, SharedCodeStep):
-        snapshot, _ = ToolRegistry(
-            instance.path, defaults=instance.manifest.tools.defaults
-        ).refresh()
-        resolved = resolve_code_step(code_step, snapshot)
-        if resolved is None:
-            raise ValueError(f'Code step tool "{code_step.name}" is not available.')
-        return resolved
-    return code_step
+    if code_step is None:
+        return None
+    if isinstance(code_step, Tool):
+        return code_step
+    snapshot, _ = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults).refresh()
+    return resolve_code_step(code_step, snapshot)
 
 
 def _load_routine(path: Path, policy: GatePolicy, instance: Instance) -> Routine:

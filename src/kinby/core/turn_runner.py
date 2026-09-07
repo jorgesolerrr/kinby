@@ -80,7 +80,7 @@ from kinby.instance.permissions import (
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
-from kinby.plugins.routines import Routine, SharedCodeStep, load_routines, resolve_code_step
+from kinby.plugins.routines import Routine, load_routines, resolve_code_step
 from kinby.plugins.skills import load_skills
 from kinby.plugins.tools import Tool, ToolContext
 
@@ -405,11 +405,15 @@ class LangGraphRunner:
             permission_mode = routine.mode
             message = routine.prompt
             declared = routine.code_step
-            code_step = resolve_code_step(declared, tools)
-            if isinstance(declared, SharedCodeStep) and code_step is None:
-                raise CodeStepNotFound(
-                    f'Code step tool "{declared.name}" is not available in this turn.'
-                )
+            if declared is None:
+                code_step = None
+            else:
+                try:
+                    code_step = resolve_code_step(declared, tools)
+                except ValueError as exc:
+                    raise CodeStepNotFound(
+                        f'Code step tool "{declared.name}" is not available in this turn.'
+                    ) from exc
             if code_step is not None:
                 tools = ToolSnapshot(
                     tuple(tool for tool in tools.tools if tool.name != code_step.name)
