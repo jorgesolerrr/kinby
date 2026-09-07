@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<!--
+  Blueprint for observability per instance. Built from the grilling on ticket #12 and ADR 0026.
+  Figures are inline SVG on a 4px grid. No script, no remote asset beyond the font link.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blueprint: Observability per instance</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f5f5f5;
+      --ink: #2d3142;
+      --muted: #4f5d75;
+      --soft: #7a8399;
+      --rule: rgba(45, 49, 66, 0.16);
+      --accent: #eb6c36;
+      --accent-tint: rgba(235, 108, 54, 0.08);
+      --link: #2e5aa8;
+      --new: #2e7d32;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', Georgia, serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #2d3142;
+        --ink: #f5f5f5;
+        --muted: #bfc0c0;
+        --soft: #8e98ac;
+        --rule: rgba(245, 245, 245, 0.16);
+        --accent: #f08a59;
+        --accent-tint: rgba(240, 138, 89, 0.10);
+        --link: #6a95d8;
+        --new: #66bb6a;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 3rem 2rem 4rem;
+      font-family: var(--font-sans);
+      font-size: 15px;
+      line-height: 1.55;
+      background: var(--paper);
+      color: var(--ink);
+    }
+    main { max-width: 960px; margin: 0 auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 0.5rem;
+    }
+    h1 { font-family: var(--font-serif); font-weight: 400; font-size: 2.25rem; line-height: 1.1; margin: 0 0 0.5rem; }
+    h2 { font-family: var(--font-serif); font-weight: 400; font-size: 1.6rem; margin: 3rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+    h3 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+    .mode { font-family: var(--font-mono); font-size: 0.7rem; color: var(--soft); margin-left: 0.5rem; letter-spacing: 0.08em; }
+    .stamp { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+    code, pre { font-family: var(--font-mono); font-size: 0.85em; }
+    code { background: rgba(127, 127, 127, 0.12); padding: 0.05em 0.3em; border-radius: 3px; }
+    pre { padding: 0.75rem 1rem; border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+    th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--rule); }
+    th { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+    figure { margin: 1.5rem 0; }
+    figure svg { display: block; width: 100%; height: auto; }
+    figcaption { font-family: var(--font-serif); font-style: italic; font-size: 0.95rem; color: var(--muted); margin-top: 0.5rem; }
+    .overflow { overflow-x: auto; }
+    ol, ul { padding-left: 1.4rem; }
+    li { margin: 0.25rem 0; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1.25rem; }
+    dt { font-family: var(--font-mono); font-size: 0.85rem; }
+    dd { margin: 0; }
+    footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--rule); font-family: var(--font-mono); font-size: 0.75rem; color: var(--soft); }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Blueprint</p>
+  <h1>Observability per instance</h1>
+  <p class="stamp">Stamped at <code>9719fef</code>: paths and symbols are true at this commit. Decided in ticket #12, recorded in ADR 0026, built from spec #137.</p>
+
+  <h2 id="at-a-glance">At a glance <span class="mode">explanation</span></h2>
+  <p>You get a true cost for every turn, a gate verdict for every tool call, and a per-turn measure of how much of the work went into finding things in the workspace before acting. The event log widens to carry this: one event per model call, one gate decision per tool call, a write flag and a duration on the tool events, and a prompt version on the turn start. The decision that constrains everything is that the event log stays the only record: tracing stays local, statistics derive from the log, and nothing is written next to it.</p>
+
+  <h2 id="problem">Problem <span class="mode">explanation</span></h2>
+  <p>You run <code>kinby stats</code> after a week and the numbers lie in four ways. A turn that made five model calls and then hit a budget shows zero tokens, because <code>turn.failed</code> carries none, so your daily spend and the USD budget undercount every failure. You cannot see whether a tool rescan blew the prompt cache, because the runner reads only <code>input_tokens</code> and <code>output_tokens</code> and drops the cache counts. A deny by the gate is a sentence inside a <code>tool.result</code>, and nothing records an allow or the answer you gave to an approval. And you edited <code>SYSTEM.md</code> on Tuesday, but the rating trend cannot be split at Tuesday because no turn knows which prompt it ran under.</p>
+  <p>Behind those four sits the question you care about: is the agent learning your workspace? Memory records the trace of tools used in each episode, and recall is meant to hand that path back. If it works, the read, grep and glob calls a turn spends before its first edit should fall over time for the same repo. Today the log cannot show that. Tool calls carry no write flag, tool results carry no duration, and tokens are known only per turn, so the reasoning spent between reads cannot be told from the reasoning spent editing.</p>
+
+  <h2 id="solution">Solution <span class="mode">explanation</span></h2>
+  <p>Every turn records its model calls, its gate verdicts and its tool timings on the same thread it already writes to. A failed turn costs what it cost. <code>kinby usage</code> shows cached tokens per turn. The REPL prints a deny as a gate line. Each turn carries the version of the prompt it ran under, so you can split any trend at the day you changed <code>SYSTEM.md</code>.</p>
+  <p>On top of those events, turn metrics report <strong>navigation</strong>: read calls, their time, the distinct paths opened, how often a file was reopened, and the tokens spent before the first write. <code>kinby stats</code> averages navigation per day and per week over turns that wrote something. Watching that average fall for one workspace is how you see memory work. Nothing leaves the machine, and nothing new appears under <code>.state/</code> except the fields on events already there.</p>
+
+  <h2 id="decision-log">Decision log <span class="mode">explanation</span></h2>
+  <p>One row per decision settled on ticket #12. Later sections cite rows as <code>D3</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>#</th><th>Decision</th><th>Chosen</th><th>Rejected</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>How the gate's verdict is recorded</td><td>One <code>tool.gated</code> event per requested call, after the decision is final: action, rule, and whether policy or the user decided. <code>tool.call</code> is emitted for denied calls too.</td><td>Fields on <code>tool.result</code>; two events <code>gate.allowed</code> and <code>gate.denied</code>.</td><td>A denied call has no result to carry the verdict, and only a separate event can record the user's answer to an approval. One shape keeps the REPL and statistics off text parsing.</td></tr>
+      <tr><td>D2</td><td>Tokens on failed and interrupted turns</td><td><code>turn.failed</code> and <code>turn.interrupted</code> carry the totals spent before closing, the same shape as <code>turn.completed</code>.</td><td>Leave failures at zero.</td><td>The daily budget and the statistics read closing totals. A turn that dies after five model calls must cost what it cost.</td></tr>
+      <tr><td>D3</td><td>Per-call model usage</td><td>One <code>model.completed</code> event per model call, main model and recap alike: model, tokens, cache split, duration. Closing totals stay as the summary.</td><td>Per-turn totals only (the first recommendation); per-call events as the only record with no closing totals.</td><td>Navigation needs the tokens spent between tool calls, and a crash between calls must not lose them. Budgets, the no-work path and the recap already read the closing totals, so both stay and turn metrics warn when they differ.</td></tr>
+      <tr><td>D4</td><td>Cache split and cache pricing</td><td><code>cache_read_tokens</code> and <code>cache_creation_tokens</code> on <code>TokenTotals</code>, subsets of input, default zero. Optional cache read and cache write prices per model; the input rate is the fallback.</td><td>Keep folding the split away.</td><td>It is the only way to see hot-plugging blow the cache, both providers report it, and the fallback keeps every existing price entry valid.</td></tr>
+      <tr><td>D5</td><td>Prompt version</td><td><code>prompt_version</code> on <code>turn.started</code>: a short SHA-256 of the rendered system prompt with the environment block removed.</td><td>No version; hash the whole prompt.</td><td>The environment block changes with the date and working directory. The version exists to group turns by the prompt the user wrote.</td></tr>
+      <tr><td>D6</td><td>Tracing</td><td>Local. The event log and the SQLite checkpointer are the trace. kinby ships no tracing integration.</td><td>An OpenTelemetry exporter behind a manifest flag; LangSmith.</td><td>Nothing today needs spans the log does not hold, and the map rejected hosted tracing for self-hosting. LangChain's own tracing variables are neither enabled nor documented.</td></tr>
+      <tr><td>D7</td><td>Process log</td><td>Stderr, <code>INFO</code>, <code>--verbose</code> for <code>DEBUG</code>, configured once by the CLI. No file.</td><td>A log file under <code>.state/</code>.</td><td>The container runtime collects stderr, and nothing under <code>.state/</code> should exist that the event log does not own.</td></tr>
+      <tr><td>D8</td><td>Tool duration</td><td><code>duration_ms</code> on <code>tool.result</code>.</td><td>Counts only.</td><td>A software-factory routine spends its time in bash and tests. Turn time must split between model and tools.</td></tr>
+      <tr><td>D9</td><td>Write flag in the log</td><td><code>write: bool</code> on <code>tool.call</code>, copied from the tool definition at call time.</td><td>Classify from the registry when reading.</td><td>The registry is per instance and per turn. A tool renamed or removed later must still classify correctly in old logs.</td></tr>
+      <tr><td>D10</td><td>What counts as navigation</td><td>Both: every read call in the turn, and the read calls before the first write. Memory tools and the skill tool are excluded.</td><td>Only reads before the first write; only all reads.</td><td>A turn that answers a question has no write and is all navigation. Memory tools are the thing meant to shorten navigation, and the skill tool reads the instance, not the workspace.</td></tr>
+      <tr><td>D11</td><td>Distinct paths</td><td>Count distinct <code>path</code> arguments and repeat opens. Tools without a <code>path</code> argument count as calls only.</td><td>Calls only.</td><td>Reopening the same file is the clearest sign the agent has not learned the workspace, and the argument is already in the log.</td></tr>
+      <tr><td>D12</td><td>The term</td><td><strong>Navigation</strong>.</td><td>Exploration; workspace search.</td><td>It pairs with "navigate the workspace" and does not collide with memory search.</td></tr>
+      <tr><td>D13</td><td>Where the trend shows</td><td>In turn metrics and in the <code>kinby stats</code> buckets, as means over turns that wrote. A navigation eval is fog on the map.</td><td>An eval now.</td><td>Stats already recompute from the log. The eval needs the Docker sandbox the map has parked.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="birds-eye">Bird's-eye flow <span class="mode">reference</span></h2>
+  <p>Three writers append to the event log during a turn, and three readers derive everything from it. No writer keeps a second record. <code>core.usage</code> reads the log the same way <code>core.stats</code> does and is folded into that node.</p>
+  <figure>
+    <svg viewBox="0 0 960 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-birdseye-title fig-birdseye-desc">
+      <title id="fig-birdseye-title">Observability events from the turn to the statistics</title>
+      <desc id="fig-birdseye-desc">The turn runner, the turn service and the recap writer append model, gate and closing events to the event log, which turn metrics fold into statistics for the CLI while the REPL renders the same stream live.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="var(--muted)" stroke-width="1.2"/></marker>
+        <marker id="diamond-filled" markerWidth="12" markerHeight="8" refX="0" refY="4" orient="auto"><polygon points="0 4, 6 0, 12 4, 6 8" fill="var(--ink)"/></marker>
+        <marker id="triangle-hollow" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto"><polygon points="0 0, 10 5, 0 10" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- zones -->
+      <rect x="24" y="24" width="392" height="280" rx="8" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <text x="36" y="40" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" letter-spacing="0.12em">WRITERS, ONE TURN</text>
+      <rect x="624" y="24" width="320" height="280" rx="8" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <text x="636" y="40" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" letter-spacing="0.12em">READERS</text>
+      <!-- arrows -->
+      <path d="M200,164 H212 Q220,164 220,156 V76 Q220,68 228,68 H240" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="228" y="116" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D5 prompt_version</text>
+      <path d="M400,68 H412 Q420,68 420,76 V142 Q420,150 428,150 H440" fill="none" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="428" y="112" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D1 D3 model.completed, tool.gated</text>
+      <line x1="400" y1="164" x2="440" y2="164" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="376" y="204" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="213" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D2 closing totals</text>
+      <path d="M400,260 H412 Q420,260 420,252 V186 Q420,178 428,178 H440" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="428" y="236" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D3 model.completed</text>
+      <line x1="600" y1="164" x2="640" y2="164" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="604" y="144" width="32" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="153" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">Event</text>
+      <path d="M520,136 V76 Q520,68 528,68 H824" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="640" y="48" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="680" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">thread.subscribe</text>
+      <line x1="720" y1="192" x2="720" y2="232" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="728" y="216" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D13 TurnMetrics</text>
+      <line x1="800" y1="260" x2="824" y2="260" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="776" y="216" width="72" height="12" rx="2" fill="var(--paper)"/>
+      <text x="812" y="225" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">StatsBucket</text>
+      <!-- nodes -->
+      <rect x="40" y="136" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="136" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="166" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.prompt</text>
+      <text x="120" y="182" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">prompt_version()</text>
+      <rect x="240" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="320" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">LangGraphRunner</text>
+      <text x="320" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.turn_runner</text>
+      <rect x="240" y="136" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="136" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="320" y="166" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns</text>
+      <text x="320" y="182" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.turns</text>
+      <rect x="240" y="232" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="232" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="320" y="262" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RecapWriter</text>
+      <text x="320" y="278" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">memory.recap</text>
+      <rect x="440" y="136" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="136" width="160" height="56" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <rect x="440" y="136" width="160" height="8" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <text x="520" y="166" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog</text>
+      <text x="520" y="182" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">.state/events.jsonl</text>
+      <rect x="640" y="136" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="136" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="720" y="166" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">turn_metrics</text>
+      <text x="720" y="182" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.turn_metrics</text>
+      <rect x="640" y="232" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="232" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="720" y="262" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">stats_buckets</text>
+      <text x="720" y="278" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.stats</text>
+      <rect x="824" y="232" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="824" y="232" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="884" y="262" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">cli.main</text>
+      <text x="884" y="278" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">kinby stats</text>
+      <rect x="824" y="40" width="120" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="824" y="40" width="120" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="884" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">cli.repl</text>
+      <text x="884" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">render_event</text>
+    </svg>
+    <figcaption>Figure: how model calls, gate verdicts and closing totals reach the event log, and how <code>turn_metrics</code> turns them into statistics.</figcaption>
+  </figure>
+  <ol>
+    <li><code>core.prompt</code> renders the system prompt without the environment block and hashes it. <code>Turns</code> records the hash as <code>prompt_version</code> on <code>turn.started</code> (D5).</li>
+    <li><code>LangGraphRunner</code> appends <code>model.completed</code> after each model response (D3), then <code>tool.call</code> with the write flag (D9), <code>tool.gated</code> (D1) and <code>tool.result</code> with its duration (D8) for each tool call.</li>
+    <li><code>Turns</code> tallies the <code>model.completed</code> events it appends and writes the totals on <code>turn.completed</code>, <code>turn.failed</code> or <code>turn.interrupted</code> (D2).</li>
+    <li><code>RecapWriter</code> appends <code>model.completed</code> for the recap call and the split on <code>memory.recapped</code> (D3, D4).</li>
+    <li><code>turn_metrics</code> folds every event once into one <code>TurnMetrics</code> per closed turn, with the navigation block, denies, cache totals and time split (D10, D11).</li>
+    <li><code>stats_buckets</code> averages navigation over turns that wrote (D13). <code>cli.main</code> prints the table and writes <code>stats.json</code>.</li>
+    <li><code>cli.repl</code> renders the same stream live through <code>thread.subscribe</code> and prints a deny from <code>tool.gated</code>.</li>
+  </ol>
+
+  <h2 id="module-map">Module map <span class="mode">reference</span></h2>
+  <p>No module is new. The feature changes shapes in <code>contracts</code> and reads or writes them in eleven modules. The CLI reaches <code>core.turns</code>, <code>core.usage</code> and <code>core.stats</code> through the dispatcher; the figure draws the edges the feature changes and counts fan-in over the modules shown.</p>
+  <figure>
+    <svg viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-modules-title fig-modules-desc">
+      <title id="fig-modules-title">Modules the observability events touch</title>
+      <desc id="fig-modules-desc">The CLI depends on the turn service, usage and statistics; the turn service and the recap writer append to the event log; the turn runner reads the prompt; usage and statistics read turn metrics, which reads pricing and contracts.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- arrows -->
+      <path d="M540,96 V120 Q540,128 532,128 H388 Q380,128 380,136 V160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="580" y1="96" x2="580" y2="160" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M620,96 V120 Q620,128 628,128 H772 Q780,128 780,136 V160" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="408" y1="216" x2="408" y2="280" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M352,216 V240 Q352,248 344,248 H120 Q112,248 112,256 V400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="120" y="320" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D2 closing totals</text>
+      <path d="M100,188 H24 Q16,188 16,196 V420 Q16,428 24,428 H32" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="24" y="238" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D3 model.completed</text>
+      <path d="M352,336 V368 Q352,376 344,376 H304 Q296,376 296,384 V400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="360" y="357" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D5 prompt_version</text>
+      <path d="M580,216 V240 Q580,248 588,248 H644 Q652,248 652,256 V280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M780,216 V240 Q780,248 772,248 H716 Q708,248 708,256 V280" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M652,336 V360 Q652,368 644,368 H488 Q480,368 480,376 V400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="520" y="352" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="560" y="361" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D4 cache prices</text>
+      <path d="M708,336 V360 Q708,368 716,368 H840 Q848,368 848,376 V400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="560" y1="428" x2="584" y2="428" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- rank 0 -->
+      <rect x="500" y="40" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="500" y="40" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="624" y="48" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="638" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">0 in</text>
+      <text x="580" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">cli</text>
+      <text x="580" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/cli/</text>
+      <!-- rank 1 -->
+      <rect x="100" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="100" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="224" y="168" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="238" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">0 in</text>
+      <text x="180" y="190" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">memory.recap</text>
+      <text x="180" y="206" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/memory/recap.py</text>
+      <rect x="300" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="300" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="424" y="168" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="438" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="380" y="190" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turns</text>
+      <text x="380" y="206" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turns.py</text>
+      <rect x="500" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="500" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="624" y="168" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="638" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">0 in</text>
+      <text x="580" y="190" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.usage</text>
+      <text x="580" y="206" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/usage.py</text>
+      <rect x="700" y="160" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="700" y="160" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="824" y="168" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="838" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="780" y="190" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.stats</text>
+      <text x="780" y="206" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/stats.py</text>
+      <!-- rank 2 -->
+      <rect x="300" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="300" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="424" y="288" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="438" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="380" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turn_runner</text>
+      <text x="380" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turn_runner.py</text>
+      <rect x="600" y="280" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="600" y="280" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="724" y="288" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="738" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">3 in</text>
+      <text x="680" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.turn_metrics</text>
+      <text x="680" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turn_metrics.py</text>
+      <!-- rank 3 -->
+      <rect x="32" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="32" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="156" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="170" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">3 in</text>
+      <text x="112" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.events</text>
+      <text x="112" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/events.py</text>
+      <rect x="216" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="216" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="340" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="354" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="296" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.prompt</text>
+      <text x="296" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/prompt.py</text>
+      <rect x="400" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="400" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="524" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="538" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="480" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">core.pricing</text>
+      <text x="480" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/pricing.py</text>
+      <rect x="584" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="584" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="708" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="722" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">7 in</text>
+      <text x="664" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">instance</text>
+      <text x="664" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/instance/</text>
+      <rect x="768" y="400" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="768" y="400" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="892" y="408" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="906" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">9 in</text>
+      <text x="848" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">contracts</text>
+      <text x="848" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/contracts/</text>
+      <!-- legend -->
+      <line x1="40" y1="488" x2="920" y2="488" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="500" width="24" height="12" rx="2" fill="none" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="509" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new module (none in this feature)</text>
+      <rect x="240" y="500" width="28" height="12" rx="2" fill="none" stroke="var(--muted)" stroke-opacity="0.5" stroke-width="0.8"/>
+      <text x="254" y="509" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">n in</text>
+      <text x="280" y="509" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">modules in this figure that import it</text>
+    </svg>
+    <figcaption>Figure: dependency graph of the modules the feature touches, none new; <code>contracts</code> carries the highest fan-in because every event shape lives there.</figcaption>
+  </figure>
+  <h3>Interfaces</h3>
+  <p>The calls and types other modules use after the change. Signatures use Python notation.</p>
+  <dl>
+    <dt><code>prompt_version(sections: Sequence[PromptSection]) -> str</code></dt>
+    <dd><code>core.prompt</code>, new. Renders every section except <code>ENVIRONMENT</code> and returns the first twelve hex characters of its SHA-256. <code>LangGraphRunner.prepare_for_turn</code> calls it.</dd>
+    <dt><code>TurnPreparation.prompt_version: str</code></dt>
+    <dd><code>core.turns</code>, new field. <code>prepare_for_turn</code> assembles the prompt sections once per turn and returns the version; <code>Turns._wake</code> copies it onto <code>TurnStarted</code>. The runner keeps the same sections for the turn.</dd>
+    <dt><code>TurnContext.emit(payload: Payload) -> Event</code></dt>
+    <dd><code>core.turns</code>, unchanged signature. The closure in <code>Turns._finish</code> now adds every <code>ModelCompleted</code> it appends to the running turn's tally, so the closing event can carry totals on success, failure and interrupt.</dd>
+    <dt><code>token_cost(totals: TokenTotals, price: ModelPrice) -> float</code></dt>
+    <dd><code>core.pricing</code>, changed. Takes the split instead of two ints. Cached tokens price at <code>cache_read</code> and <code>cache_write</code> when set, else at <code>input</code>.</dd>
+    <dt><code>turn_metrics(events, prices) -> TurnMetricsResult</code></dt>
+    <dd><code>core.turn_metrics</code>, unchanged signature. Each record gains cache totals, model and tool time, denies, prompt version and a <code>Navigation</code> block. The result gains <code>warnings</code> for a per-call sum that differs from the closing total.</dd>
+    <dt><code>stats_buckets(records, by) -> list[StatsBucket]</code></dt>
+    <dd><code>core.stats</code>, unchanged signature. Buckets gain cache totals, deny counts, time split and <code>NavigationMeans</code>.</dd>
+    <dt><code>render_event(event, stdout, stderr) -> None</code></dt>
+    <dd><code>cli.repl</code>, unchanged signature. Prints a <code>[tool.gated]</code> line for a deny.</dd>
+  </dl>
+
+  <h2 id="ground-level">Ground-level flows <span class="mode">reference</span></h2>
+  <p>Three flows: a tool call through the gate, a model call and the closing totals, and the statistics fold that derives navigation. Participants are the functions from the module map.</p>
+
+  <h3 id="flow-gate">Flow: a tool call through the gate</h3>
+  <figure>
+    <svg viewBox="0 0 960 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-gate-title fig-gate-desc">
+      <title id="fig-gate-title">A tool call through the gate</title>
+      <desc id="fig-gate-desc">The runner evaluates the gate, records the tool call with its write flag, asks the user when the gate says ask, records the final verdict as tool.gated, then either runs the tool and records a timed result or records an error result for a deny.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- lifelines -->
+      <line x1="120" y1="64" x2="120" y2="456" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="320" y1="64" x2="320" y2="456" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="520" y1="64" x2="520" y2="456" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="720" y1="64" x2="720" y2="456" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <!-- fragment -->
+      <rect x="108" y="176" width="624" height="104" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="108" y="176" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="128" y="188" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">OPT</text>
+      <text x="160" y="188" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[action is ask]</text>
+      <!-- activation bars -->
+      <rect x="116" y="88" width="8" height="352" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="316" y="96" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="516" y="336" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="160" width="8" height="8" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="224" width="8" height="8" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="304" width="8" height="8" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="400" width="8" height="8" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="432" width="8" height="8" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <!-- messages -->
+      <line x1="124" y1="96" x2="316" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="144" y="76" width="152" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">evaluate(policy, mode, call, tool)</text>
+      <line x1="316" y1="128" x2="124" y2="128" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="160" y="108" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">GateDecision(action, rule)</text>
+      <line x1="124" y1="160" x2="716" y2="160" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="320" y="140" width="200" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D9 emit(ToolCall(call_id, name, arguments, write))</text>
+      <line x1="124" y1="224" x2="716" y2="224" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="340" y="204" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="213" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">emit(ApprovalRequested(approval_id, rule))</text>
+      <path d="M124,248 H160 V264 H128" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="168" y="260" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">interrupt(): ApprovalDecision</text>
+      <line x1="124" y1="304" x2="716" y2="304" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="308" y="284" width="224" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="293" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D1 emit(ToolGated(call_id, action, rule, decided_by))</text>
+      <line x1="124" y1="336" x2="516" y2="336" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="264" y="316" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="320" y="325" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">[allow] ainvoke(arguments)</text>
+      <line x1="516" y1="368" x2="124" y2="368" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="232" y="348" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="320" y="357" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D8 ToolResult(output, error, duration_ms)</text>
+      <line x1="124" y1="400" x2="716" y2="400" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="372" y="380" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="389" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">emit(ToolResult)</text>
+      <line x1="124" y1="432" x2="716" y2="432" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="340" y="412" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="421" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">[deny] emit(ToolResult(error=True))</text>
+      <!-- participants -->
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_call_tools</text>
+      <text x="120" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.turn_runner</text>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="320" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">evaluate</text>
+      <text x="320" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.gate</text>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="520" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_run_tool</text>
+      <text x="520" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.turn_runner</text>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="720" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnContext.emit</text>
+      <text x="720" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.turns</text>
+    </svg>
+    <figcaption>Figure: sequence of one tool call from the gate's evaluation to its recorded verdict, with the run and the deny as the two endings.</figcaption>
+  </figure>
+  <ol>
+    <li><code>_call_tools</code> builds the <code>ToolCall</code> from the model's request and calls <code>evaluate</code>: input the gate policy, the thread's permission mode, the call and the selected tool; output <code>GateDecision(action, rule)</code>.</li>
+    <li><code>_call_tools</code> emits <code>ToolCall</code> with <code>write</code> copied from the tool definition, for every requested call (D9). A call whose tool is not in the snapshot records <code>write</code> as true.</li>
+    <li>When the action is ask, <code>_call_tools</code> emits <code>ApprovalRequested</code> and parks on <code>interrupt</code>. The user's answer resumes it as an <code>ApprovalDecision</code>.</li>
+    <li><code>_call_tools</code> emits <code>ToolGated</code> with the final action, the rule, and <code>decided_by</code> set to <code>policy</code> or <code>user</code> (D1).</li>
+    <li>On allow, <code>_run_tool</code> times <code>ainvoke</code> and returns <code>ToolResult</code> with <code>duration_ms</code> (D8). <code>_call_tools</code> emits it.</li>
+    <li>On deny, <code>_call_tools</code> emits the error <code>ToolResult</code> the model sees today, unchanged, with no duration.</li>
+  </ol>
+
+  <h3 id="flow-model">Flow: a model call and the closing totals</h3>
+  <figure>
+    <svg viewBox="0 0 960 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-model-title fig-model-desc">
+      <title id="fig-model-title">A model call and the closing totals</title>
+      <desc id="fig-model-desc">The turn service runs the runner with an emit closure; each model call streams a response, the runner emits model.completed with the cache split and duration, the closure tallies it, and the closing event carries the tally whether the run returns or raises.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- lifelines -->
+      <line x1="120" y1="64" x2="120" y2="456" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="320" y1="64" x2="320" y2="456" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="520" y1="64" x2="520" y2="456" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="720" y1="64" x2="720" y2="456" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <!-- fragment -->
+      <rect x="108" y="296" width="624" height="152" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="108" y="296" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="128" y="308" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="160" y="308" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[run returns]</text>
+      <line x1="108" y1="376" x2="732" y2="376" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="120" y="392" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[run raises]</text>
+      <!-- activation bars -->
+      <rect x="116" y="88" width="8" height="352" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="316" y="96" width="8" height="240" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="516" y="128" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="224" width="8" height="8" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="352" width="8" height="8" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="432" width="8" height="8" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <!-- messages -->
+      <line x1="124" y1="96" x2="316" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="140" y="76" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">run(turn, TurnContext(budgets, emit))</text>
+      <line x1="324" y1="128" x2="516" y2="128" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="336" y="108" width="168" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">astream(messages), once per step</text>
+      <line x1="516" y1="160" x2="324" y2="160" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="340" y="140" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">AIMessageChunk(usage_metadata)</text>
+      <line x1="316" y1="192" x2="124" y2="192" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="112" y="172" width="216" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="181" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D3 D4 emit(ModelCompleted(model, totals, duration_ms))</text>
+      <line x1="124" y1="224" x2="716" y2="224" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="360" y="204" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="213" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">append(ModelCompleted)</text>
+      <path d="M124,248 H160 V264 H128" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="168" y="260" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">tally.add(ModelCompleted)</text>
+      <line x1="316" y1="328" x2="124" y2="328" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="152" y="308" width="136" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="317" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TurnOutcome(outcome, tokens)</text>
+      <line x1="124" y1="352" x2="716" y2="352" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="336" y="332" width="168" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="341" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">append(TurnCompleted(tally))</text>
+      <line x1="316" y1="408" x2="128" y2="408" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4"/>
+      <line x1="120" y1="404" x2="128" y2="412" stroke="var(--muted)" stroke-width="1.2"/>
+      <line x1="120" y1="412" x2="128" y2="404" stroke="var(--muted)" stroke-width="1.2"/>
+      <rect x="176" y="388" width="88" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="397" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">CoreError raised</text>
+      <line x1="124" y1="432" x2="716" y2="432" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="320" y="412" width="200" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="421" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D2 append(TurnFailed(code, message, tally))</text>
+      <!-- participants -->
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Turns._finish</text>
+      <text x="120" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.turns</text>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="320" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_call_model</text>
+      <text x="320" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.turn_runner</text>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.03" stroke="var(--ink)" stroke-opacity="0.3" stroke-width="1"/>
+      <text x="520" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ChatModel</text>
+      <text x="520" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">langchain, provider:model</text>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="720" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">EventLog.append</text>
+      <text x="720" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.events</text>
+    </svg>
+    <figcaption>Figure: sequence of one model call from the stream to <code>model.completed</code>, and how the tally reaches the closing event on both endings.</figcaption>
+  </figure>
+  <ol>
+    <li><code>Turns._finish</code> calls the runner with a <code>TurnContext</code> whose <code>emit</code> closure appends to the log and keeps a <code>TokenTotals</code> tally on the running turn.</li>
+    <li>Per step, <code>_call_model</code> streams the model and folds the chunks; the last chunk carries <code>usage_metadata</code> with <code>input_token_details</code>.</li>
+    <li><code>_call_model</code> emits <code>ModelCompleted</code>: the exact model name, input and output tokens, <code>cache_read_tokens</code> and <code>cache_creation_tokens</code> from the details or zero, and the stream's duration (D3, D4). The token budget check reads the same numbers.</li>
+    <li>The closure appends the event and adds its totals to the tally.</li>
+    <li>When the run returns, <code>_finish</code> appends <code>TurnCompleted</code> with the tally. A no-work outcome still records zeros.</li>
+    <li>When the run raises, <code>_finish</code> appends <code>TurnFailed</code> with the code, the message and the tally (D2). <code>Turns.interrupt</code> does the same for <code>TurnInterrupted</code>.</li>
+    <li><code>RecapWriter._draft</code> follows step 3 for the recap call and copies the split onto <code>MemoryRecapped</code>.</li>
+  </ol>
+
+  <h3 id="flow-stats">Flow: kinby stats derives navigation</h3>
+  <figure>
+    <svg viewBox="0 0 960 384" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-stats-title fig-stats-desc">
+      <title id="fig-stats-title">kinby stats derives navigation</title>
+      <desc id="fig-stats-desc">The CLI sends stats.get to the dispatcher, which folds the event log through turn_metrics into records carrying navigation, buckets them, and returns the result the CLI prints and writes as JSON.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- lifelines -->
+      <line x1="120" y1="64" x2="120" y2="360" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="320" y1="64" x2="320" y2="360" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="520" y1="64" x2="520" y2="360" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="720" y1="64" x2="720" y2="360" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <!-- activation bars -->
+      <rect x="116" y="88" width="8" height="256" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="316" y="96" width="8" height="192" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="516" y="128" width="8" height="64" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="716" y="224" width="8" height="32" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <!-- messages -->
+      <line x1="124" y1="96" x2="316" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="148" y="76" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">StatsGetCommand(since, until, by)</text>
+      <line x1="324" y1="128" x2="516" y2="128" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="352" y="108" width="136" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">turn_metrics(all_events(), prices)</text>
+      <path d="M524,152 H560 V168 H528" fill="none" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="568" y="164" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D10 D11 fold ToolCall.write, ToolResult.duration_ms,</text>
+      <text x="568" y="176" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">ToolGated, ModelCompleted into Navigation</text>
+      <line x1="516" y1="192" x2="324" y2="192" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="316" y="172" width="208" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="181" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">TurnMetricsResult(records, unpriced, warnings)</text>
+      <line x1="324" y1="224" x2="716" y2="224" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="460" y="204" width="120" height="12" rx="2" fill="var(--paper)"/>
+      <text x="520" y="213" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">stats_buckets(records, by)</text>
+      <line x1="716" y1="256" x2="324" y2="256" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="432" y="236" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="520" y="245" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D13 list[StatsBucket] with NavigationMeans</text>
+      <line x1="316" y1="288" x2="124" y2="288" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="120" y="268" width="200" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="277" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">StatsGetResult(records, buckets, unpriced, warnings)</text>
+      <path d="M124,312 H160 V328 H128" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="168" y="324" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">print the table, write .state/stats.json</text>
+      <!-- participants -->
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="120" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_show_stats</text>
+      <text x="120" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">cli.main</text>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="320" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">get_stats</text>
+      <text x="320" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.dispatcher</text>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="520" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">turn_metrics</text>
+      <text x="520" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.turn_metrics</text>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="720" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">stats_buckets</text>
+      <text x="720" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core.stats</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for <code>kinby stats</code>, with the fold that derives navigation as the headline.</figcaption>
+  </figure>
+  <ol>
+    <li><code>_show_stats</code> sends <code>StatsGetCommand</code> through the contract client: input the optional time range and bucket size.</li>
+    <li><code>get_stats</code> calls <code>turn_metrics</code> over every stored event with the instance price map.</li>
+    <li>Per turn, the fold counts <code>ToolCall</code> events by <code>write</code>, excluding the memory tools and <code>skill</code>; sums <code>ToolResult.duration_ms</code> by read and write; counts <code>ToolGated</code> denies by <code>decided_by</code>; collects distinct <code>path</code> arguments and repeat opens; and sums the <code>ModelCompleted</code> tokens that closed before the first <code>ToolCall</code> with <code>write</code> true, or all of them when the turn never wrote (D10, D11). It also sums <code>ModelCompleted</code> totals and adds a warning when they differ from the closing event.</li>
+    <li><code>turn_metrics</code> returns <code>TurnMetricsResult</code>: the records, the unpriced models, and the warnings.</li>
+    <li><code>stats_buckets</code> totals each bucket and computes <code>NavigationMeans</code> over the records whose <code>write_calls</code> is greater than zero (D13).</li>
+    <li><code>get_stats</code> returns <code>StatsGetResult</code>. <code>_show_stats</code> prints the navigation columns and writes every field to <code>.state/stats.json</code>.</li>
+  </ol>
+
+  <h2 id="data-shapes">Data shapes <span class="mode">reference</span></h2>
+  <p>Two figures: the event payloads in <code>contracts</code>, then the derived metrics and the price entry. Fields shown are the ones the feature adds or a decision cites.</p>
+  <figure>
+    <svg viewBox="0 0 960 496" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-events-title fig-events-desc">
+      <title id="fig-events-title">Event payloads the feature adds or changes</title>
+      <desc id="fig-events-desc">TokenTotals gains the cache split and is extended by the new ModelCompleted and by TurnFailed and TurnInterrupted; TurnStarted gains a prompt version; ToolCall gains a write flag, the new ToolGated carries the verdict, and ToolResult gains a duration, all three sharing a call id.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- relations -->
+      <path d="M140,192 V168 Q140,160 148,160 H330 Q338,160 338,152 V144" fill="none" stroke="var(--ink)" stroke-width="1" marker-end="url(#triangle-hollow)"/>
+      <line x1="388" y1="192" x2="388" y2="144" stroke="var(--ink)" stroke-width="1" marker-end="url(#triangle-hollow)"/>
+      <path d="M636,192 V168 Q636,160 628,160 H446 Q438,160 438,152 V144" fill="none" stroke="var(--ink)" stroke-width="1" marker-end="url(#triangle-hollow)"/>
+      <line x1="240" y1="360" x2="288" y2="360" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="244" y="340" width="40" height="12" rx="2" fill="var(--paper)"/>
+      <text x="264" y="349" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">call_id</text>
+      <line x1="488" y1="360" x2="536" y2="360" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="492" y="340" width="40" height="12" rx="2" fill="var(--paper)"/>
+      <text x="512" y="349" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">call_id</text>
+      <!-- TurnStarted -->
+      <rect x="40" y="40" width="200" height="120" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="40" width="200" height="120" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="140" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnStarted</text>
+      <line x1="40" y1="68" x2="240" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="52" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">message: str</text>
+      <text x="52" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">model: str</text>
+      <text x="52" y="116" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">origin: Origin</text>
+      <text x="52" y="132" font-size="8" font-family="var(--font-mono)" fill="var(--new)">prompt_version: str  D5</text>
+      <text x="52" y="148" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">...</text>
+      <!-- TokenTotals -->
+      <rect x="288" y="40" width="200" height="104" rx="6" fill="var(--paper)"/>
+      <rect x="288" y="40" width="200" height="104" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <text x="388" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TokenTotals</text>
+      <line x1="288" y1="68" x2="488" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="300" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">input_tokens: int</text>
+      <text x="300" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">output_tokens: int</text>
+      <text x="300" y="116" font-size="8" font-family="var(--font-mono)" fill="var(--new)">cache_read_tokens: int = 0  D4</text>
+      <text x="300" y="132" font-size="8" font-family="var(--font-mono)" fill="var(--new)">cache_creation_tokens: int = 0</text>
+      <!-- ModelCompleted -->
+      <rect x="40" y="192" width="200" height="72" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="192" width="200" height="72" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="48" y="200" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="209" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="140" y="210" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ModelCompleted</text>
+      <line x1="40" y1="220" x2="240" y2="220" stroke="var(--rule)" stroke-width="1"/>
+      <text x="52" y="236" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">model: str</text>
+      <text x="52" y="252" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">duration_ms: int</text>
+      <!-- TurnFailed -->
+      <rect x="288" y="192" width="200" height="72" rx="6" fill="var(--paper)"/>
+      <rect x="288" y="192" width="200" height="72" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="388" y="210" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnFailed</text>
+      <line x1="288" y1="220" x2="488" y2="220" stroke="var(--rule)" stroke-width="1"/>
+      <text x="300" y="236" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">code: ErrorCode</text>
+      <text x="300" y="252" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">message: str</text>
+      <!-- TurnInterrupted -->
+      <rect x="536" y="192" width="200" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="536" y="192" width="200" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="636" y="210" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnInterrupted</text>
+      <line x1="536" y1="220" x2="736" y2="220" stroke="var(--rule)" stroke-width="1"/>
+      <text x="548" y="236" font-size="8" font-family="var(--font-mono)" fill="var(--new)">extends TokenTotals  D2</text>
+      <!-- ToolCall -->
+      <rect x="40" y="312" width="200" height="104" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="312" width="200" height="104" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="140" y="330" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ToolCall</text>
+      <line x1="40" y1="340" x2="240" y2="340" stroke="var(--rule)" stroke-width="1"/>
+      <text x="52" y="356" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">call_id: str</text>
+      <text x="52" y="372" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: str</text>
+      <text x="52" y="388" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">arguments: dict[str, JsonValue]</text>
+      <text x="52" y="404" font-size="8" font-family="var(--font-mono)" fill="var(--new)">write: bool  D9</text>
+      <!-- ToolGated -->
+      <rect x="288" y="312" width="200" height="120" rx="6" fill="var(--paper)"/>
+      <rect x="288" y="312" width="200" height="120" rx="6" fill="var(--accent-tint)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="296" y="320" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="312" y="329" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="388" y="330" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ToolGated</text>
+      <line x1="288" y1="340" x2="488" y2="340" stroke="var(--rule)" stroke-width="1"/>
+      <text x="300" y="356" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">call_id: str</text>
+      <text x="300" y="372" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: str</text>
+      <text x="300" y="388" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">action: allow | deny</text>
+      <text x="300" y="404" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">rule: str</text>
+      <text x="300" y="420" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">decided_by: policy | user  D1</text>
+      <!-- ToolResult -->
+      <rect x="536" y="312" width="200" height="120" rx="6" fill="var(--paper)"/>
+      <rect x="536" y="312" width="200" height="120" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="636" y="330" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ToolResult</text>
+      <line x1="536" y1="340" x2="736" y2="340" stroke="var(--rule)" stroke-width="1"/>
+      <text x="548" y="356" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">call_id: str</text>
+      <text x="548" y="372" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: str</text>
+      <text x="548" y="388" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">output: str</text>
+      <text x="548" y="404" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">error: bool</text>
+      <text x="548" y="420" font-size="8" font-family="var(--font-mono)" fill="var(--new)">duration_ms: int | None  D8</text>
+      <!-- legend -->
+      <line x1="40" y1="456" x2="920" y2="456" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="468" width="24" height="12" rx="2" fill="none" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="477" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new type</text>
+      <text x="200" y="477" font-size="8" font-family="var(--font-mono)" fill="var(--new)">green field</text>
+      <text x="264" y="477" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new field on an existing type</text>
+      <line x1="520" y1="474" x2="544" y2="474" stroke="var(--ink)" stroke-width="1" marker-end="url(#triangle-hollow)"/>
+      <text x="552" y="477" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">extends</text>
+    </svg>
+    <figcaption>Figure: event payloads the feature adds or changes; <code>TokenTotals</code> carries the cache split into every event that reports tokens.</figcaption>
+  </figure>
+  <p><code>TurnCompleted</code> and <code>MemoryRecapped</code> already extend <code>TokenTotals</code> and gain the split without a change of their own. <code>EventType</code> gains <code>MODEL_COMPLETED = "model.completed"</code> and <code>TOOL_GATED = "tool.gated"</code>, and <code>Payload</code> gains both classes. Events written before this change validate with zeros and <code>None</code>.</p>
+  <figure>
+    <svg viewBox="0 0 960 432" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-metrics-title fig-metrics-desc">
+      <title id="fig-metrics-title">Derived metrics and the price entry</title>
+      <desc id="fig-metrics-desc">TurnMetrics owns a Navigation block, deny counts and a tool time split; StatsSummary owns navigation means and the same deny counts; ModelPrice gains optional cache prices.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+      <!-- relations -->
+      <line x1="140" y1="176" x2="140" y2="240" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)" marker-end="url(#arrow)"/>
+      <path d="M164,176 V208 Q164,216 172,216 H356 Q364,216 364,224 V240" fill="none" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)" marker-end="url(#arrow)"/>
+      <path d="M212,176 V192 Q212,200 220,200 H552 Q560,200 560,208 V240" fill="none" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)" marker-end="url(#arrow)"/>
+      <path d="M586,160 V176 Q586,184 578,184 H408 Q400,184 400,192 a 8,8 0 0,0 0,16 V240" fill="none" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)" marker-end="url(#arrow)"/>
+      <path d="M686,160 V196 Q686,204 694,204 H804 Q812,204 812,212 V240" fill="none" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)" marker-end="url(#arrow)"/>
+      <!-- TurnMetrics -->
+      <rect x="40" y="40" width="200" height="136" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="40" width="200" height="136" rx="6" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+      <text x="140" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">TurnMetrics</text>
+      <line x1="40" y1="68" x2="240" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="52" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--new)">navigation: Navigation</text>
+      <text x="52" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--new)">denies: DenyCounts</text>
+      <text x="52" y="116" font-size="8" font-family="var(--font-mono)" fill="var(--new)">tool_duration: ToolTime</text>
+      <text x="52" y="132" font-size="8" font-family="var(--font-mono)" fill="var(--new)">prompt_version: str | None</text>
+      <text x="52" y="148" font-size="8" font-family="var(--font-mono)" fill="var(--new)">model_calls, model_duration_ms</text>
+      <text x="52" y="164" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">...</text>
+      <!-- ModelPrice -->
+      <rect x="288" y="40" width="200" height="104" rx="6" fill="var(--paper)"/>
+      <rect x="288" y="40" width="200" height="104" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="388" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ModelPrice</text>
+      <line x1="288" y1="68" x2="488" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="300" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">input: float</text>
+      <text x="300" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">output: float</text>
+      <text x="300" y="116" font-size="8" font-family="var(--font-mono)" fill="var(--new)">cache_read: float | None  D4</text>
+      <text x="300" y="132" font-size="8" font-family="var(--font-mono)" fill="var(--new)">cache_write: float | None</text>
+      <!-- StatsSummary -->
+      <rect x="536" y="40" width="200" height="120" rx="6" fill="var(--paper)"/>
+      <rect x="536" y="40" width="200" height="120" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="636" y="58" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">StatsSummary</text>
+      <line x1="536" y1="68" x2="736" y2="68" stroke="var(--rule)" stroke-width="1"/>
+      <text x="548" y="84" font-size="8" font-family="var(--font-mono)" fill="var(--new)">navigation: NavigationMeans</text>
+      <text x="548" y="100" font-size="8" font-family="var(--font-mono)" fill="var(--new)">denies: DenyCounts</text>
+      <text x="548" y="116" font-size="8" font-family="var(--font-mono)" fill="var(--new)">cache_read_tokens: int</text>
+      <text x="548" y="132" font-size="8" font-family="var(--font-mono)" fill="var(--new)">model_duration_ms, tool_duration</text>
+      <text x="548" y="148" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">...</text>
+      <!-- Navigation -->
+      <rect x="40" y="240" width="200" height="136" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="240" width="200" height="136" rx="6" fill="var(--accent-tint)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="48" y="248" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="257" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="140" y="258" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Navigation</text>
+      <line x1="40" y1="268" x2="240" y2="268" stroke="var(--rule)" stroke-width="1"/>
+      <text x="52" y="284" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">read_calls: int</text>
+      <text x="52" y="300" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">write_calls: int</text>
+      <text x="52" y="316" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">duration_ms: int</text>
+      <text x="52" y="332" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">distinct_paths, repeat_opens: int</text>
+      <text x="52" y="348" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">tokens_before_first_write: int</text>
+      <text x="52" y="364" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">D10 D11</text>
+      <!-- DenyCounts -->
+      <rect x="264" y="240" width="200" height="72" rx="6" fill="var(--paper)"/>
+      <rect x="264" y="240" width="200" height="72" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="272" y="248" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="288" y="257" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="364" y="258" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">DenyCounts</text>
+      <line x1="264" y1="268" x2="464" y2="268" stroke="var(--rule)" stroke-width="1"/>
+      <text x="276" y="284" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">policy: int</text>
+      <text x="276" y="300" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">user: int</text>
+      <!-- ToolTime -->
+      <rect x="488" y="240" width="200" height="72" rx="6" fill="var(--paper)"/>
+      <rect x="488" y="240" width="200" height="72" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="496" y="248" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="512" y="257" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="588" y="258" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ToolTime</text>
+      <line x1="488" y1="268" x2="688" y2="268" stroke="var(--rule)" stroke-width="1"/>
+      <text x="500" y="284" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">read_ms: int</text>
+      <text x="500" y="300" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">write_ms: int</text>
+      <!-- NavigationMeans -->
+      <rect x="712" y="240" width="200" height="120" rx="6" fill="var(--paper)"/>
+      <rect x="712" y="240" width="200" height="120" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="720" y="248" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="736" y="257" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="812" y="258" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">NavigationMeans</text>
+      <line x1="712" y1="268" x2="912" y2="268" stroke="var(--rule)" stroke-width="1"/>
+      <text x="724" y="284" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">turns: int  (with a write)</text>
+      <text x="724" y="300" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">read_calls: float | None</text>
+      <text x="724" y="316" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">duration_ms: float | None</text>
+      <text x="724" y="332" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">tokens_before_first_write: float | None</text>
+      <text x="724" y="348" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">repeat_opens: float | None  D13</text>
+      <!-- legend -->
+      <line x1="40" y1="400" x2="920" y2="400" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="40" y="412" width="24" height="12" rx="2" fill="none" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="421" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new type</text>
+      <line x1="200" y1="418" x2="224" y2="418" stroke="var(--ink)" stroke-width="1" marker-start="url(#diamond-filled)" marker-end="url(#arrow)"/>
+      <text x="232" y="421" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">owns (composition)</text>
+    </svg>
+    <figcaption>Figure: derived metric types the feature adds and the price entry it changes; <code>TurnMetrics</code> owns the navigation block that the statistics average.</figcaption>
+  </figure>
+  <p><code>TurnMetricsResult</code> gains <code>warnings: list[str]</code>, and <code>StatsGetResult</code> carries them next to <code>unpriced_models</code>. <code>RawModelPrice</code> in the manifest accepts <code>cache_read</code> and <code>cache_write</code>, and the JSON Schema is regenerated.</p>
+
+  <h2 id="file-map">File map <span class="mode">reference</span></h2>
+  <p>Every file the agent touches, stamped at <code>9719fef</code>. Regenerate the existence check with <code>git ls-files src/kinby tests docs</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Path</th><th>Action</th><th>What changes</th><th>Flow</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/kinby/contracts/models.py</code></td><td>modify</td><td><code>TokenTotals</code> cache fields; <code>ModelCompleted</code>, <code>ToolGated</code>, <code>GateOutcome</code> and <code>GateDecider</code> enums; <code>write</code> on <code>ToolCall</code>; <code>duration_ms</code> on <code>ToolResult</code>; <code>prompt_version</code> on <code>TurnStarted</code>; <code>TurnFailed</code> and <code>TurnInterrupted</code> extend <code>TokenTotals</code>; <code>Navigation</code>, <code>NavigationMeans</code>, <code>DenyCounts</code>, <code>ToolTime</code>; new fields on <code>TurnMetrics</code>, <code>StatsSummary</code>, <code>StatsGetResult</code>; two <code>EventType</code> members.</td><td>all</td></tr>
+      <tr><td><code>src/kinby/contracts/__init__.py</code></td><td>modify</td><td>Export the new names.</td><td>all</td></tr>
+      <tr><td><code>src/kinby/core/turn_runner.py</code></td><td>modify</td><td><code>_call_model</code> times the stream, reads <code>input_token_details</code>, emits <code>ModelCompleted</code>. <code>_call_tools</code> emits <code>ToolCall</code> for every request with <code>write</code>, then <code>ToolGated</code>. <code>_run_tool</code> times <code>ainvoke</code>. <code>prepare_for_turn</code> assembles the prompt sections and returns <code>prompt_version</code>.</td><td>gate, model</td></tr>
+      <tr><td><code>src/kinby/core/turns.py</code></td><td>modify</td><td><code>TurnPreparation.prompt_version</code>; <code>_wake</code> copies it onto <code>TurnStarted</code>; <code>RunningTurn</code> keeps a tally the <code>emit</code> closure feeds; <code>_finish</code> and <code>interrupt</code> put the tally on the closing event.</td><td>model</td></tr>
+      <tr><td><code>src/kinby/core/prompt.py</code></td><td>modify</td><td><code>prompt_version(sections)</code>: render without <code>ENVIRONMENT</code>, SHA-256, first twelve hex characters.</td><td>model</td></tr>
+      <tr><td><code>src/kinby/memory/recap.py</code></td><td>modify</td><td><code>_draft</code> times the call, reads the split, emits <code>ModelCompleted</code>; <code>_finish</code> copies the split onto <code>MemoryRecapped</code>.</td><td>model</td></tr>
+      <tr><td><code>src/kinby/core/pricing.py</code></td><td>modify</td><td><code>token_cost(totals, price)</code> with cache rates and the input-rate fallback; shipped cache rates for the two listed models.</td><td>stats</td></tr>
+      <tr><td><code>src/kinby/instance/dataclasses.py</code></td><td>modify</td><td><code>ModelPrice.cache_read</code> and <code>cache_write</code>, optional.</td><td>stats</td></tr>
+      <tr><td><code>src/kinby/instance/manifest.py</code></td><td>modify</td><td><code>RawModelPrice</code> accepts the two keys and maps them.</td><td>stats</td></tr>
+      <tr><td><code>docs/schema/kinby.schema.json</code></td><td>modify</td><td>Regenerated for the price keys.</td><td>stats</td></tr>
+      <tr><td><code>src/kinby/core/turn_metrics.py</code></td><td>modify</td><td>Fold <code>ModelCompleted</code>, <code>ToolCall.write</code>, <code>ToolGated</code>, <code>ToolResult.duration_ms</code> and <code>TurnStarted.prompt_version</code>; build <code>Navigation</code>; tally warning; cost through the new <code>token_cost</code>.</td><td>stats</td></tr>
+      <tr><td><code>src/kinby/core/stats.py</code></td><td>modify</td><td><code>_BucketTotals</code> sums the new fields and computes <code>NavigationMeans</code> over turns with writes.</td><td>stats</td></tr>
+      <tr><td><code>src/kinby/core/usage.py</code></td><td>modify</td><td><code>TurnUsage</code> and <code>ThreadUsage</code> carry the split through <code>TokenTotals</code>.</td><td>stats</td></tr>
+      <tr><td><code>src/kinby/core/dispatcher.py</code></td><td>modify</td><td><code>get_stats</code> passes <code>warnings</code> into <code>StatsGetResult</code>.</td><td>stats</td></tr>
+      <tr><td><code>src/kinby/cli/main.py</code></td><td>modify</td><td>Root logger to stderr, <code>--verbose</code> on <code>run</code> and <code>serve</code>; navigation and cache columns in <code>_stats_row</code>; cache split in <code>_turn_token_totals</code>; warnings printed with unpriced models.</td><td>stats</td></tr>
+      <tr><td><code>src/kinby/cli/repl.py</code></td><td>modify</td><td><code>render_event</code> prints <code>[tool.gated]</code> for a deny and ignores <code>ModelCompleted</code>; the post-turn line adds cached tokens and tool time.</td><td>gate</td></tr>
+      <tr><td><code>tests/test_loop.py</code></td><td>modify</td><td>Runner cases: two model calls, gate allow and deny, approval refused, cache details, failure after one call.</td><td>gate, model</td></tr>
+      <tr><td><code>tests/test_turns.py</code></td><td>modify</td><td>Closing totals on failure and interrupt; <code>prompt_version</code> on <code>turn.started</code>.</td><td>model</td></tr>
+      <tr><td><code>tests/test_gate.py</code></td><td>modify</td><td>Unchanged <code>evaluate</code> behavior; asserts stay.</td><td>gate</td></tr>
+      <tr><td><code>tests/test_recap.py</code></td><td>modify</td><td>Recap emits <code>model.completed</code> with the split.</td><td>model</td></tr>
+      <tr><td><code>tests/test_stats.py</code></td><td>modify</td><td>Navigation cases over a hand-written log; tally warning; old events without the fields; cache pricing.</td><td>stats</td></tr>
+      <tr><td><code>tests/test_usage.py</code></td><td>modify</td><td>Cache split per turn.</td><td>stats</td></tr>
+      <tr><td><code>tests/test_system_prompt.py</code></td><td>modify</td><td>Same version across dates; new version after a <code>SYSTEM.md</code> edit.</td><td>model</td></tr>
+      <tr><td><code>tests/test_schema.py</code></td><td>modify</td><td>Price keys in the schema.</td><td>stats</td></tr>
+      <tr><td><code>tests/test_cli.py</code></td><td>modify</td><td>Navigation columns, <code>stats.json</code> fields, <code>--verbose</code>, nothing new under <code>.state/</code>.</td><td>stats</td></tr>
+      <tr><td><code>tests/test_repl.py</code></td><td>modify</td><td>Deny line from the gate event.</td><td>gate</td></tr>
+      <tr><td><code>CONTEXT.md</code></td><td>done</td><td>Model call, gate decision, navigation, prompt version, token usage. Landed in PR #138.</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0026-model-calls-and-gate-decisions-are-events.md</code></td><td>done</td><td>The decision record. Landed in PR #138.</td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="testing">Testing <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Seams</dt><dd>The LangGraph runner with a scripted chat model, for everything the runner emits (D1, D3, D8, D9); <code>turn_metrics</code> over a hand-written event list, for everything derived (D10, D11, D13); the CLI through <code>main</code> and the REPL through <code>run_repl</code>, for what the user sees (D7). The event log is the seam between the first two, so neither test needs the other.</dd>
+    <dt>A good test here</dt><dd>Asserts the events a subscriber sees on the thread, the <code>TurnMetrics</code> a fold returns, or the text the CLI prints. Never the runner's tally, the fold's intermediate state, or a logger's handler list.</dd>
+    <dt>Prior art</dt><dd><code>tests/test_loop.py</code>, <code>tests/test_turns.py</code>, <code>tests/test_stats.py</code>, <code>tests/test_usage.py</code>, <code>tests/test_recap.py</code>, <code>tests/test_system_prompt.py</code>, <code>tests/test_cli.py</code>, <code>tests/test_repl.py</code>.</dd>
+  </dl>
+  <h3>Cases</h3>
+  <ol>
+    <li>A turn with two model calls and one allowed tool call yields two <code>model.completed</code> events whose tokens sum to the <code>turn.completed</code> totals, a <code>tool.call</code> with <code>write</code>, a <code>tool.gated</code> allow by policy, and a <code>tool.result</code> with a duration, flow gate and model, protects D1, D3, D8, D9.</li>
+    <li>A denylist hit yields <code>tool.call</code>, <code>tool.gated</code> deny by policy, and the error result, flow gate, protects D1.</li>
+    <li>An approval the user refuses yields <code>approval.requested</code>, <code>tool.gated</code> deny by user, and the error result, flow gate, protects D1.</li>
+    <li>A scripted usage with cache details lands on the call event and on the closing event, flow model, protects D4.</li>
+    <li>A turn that raises on its second model call closes with <code>turn.failed</code> carrying the first call's tokens; an interrupt closes with the tally so far, flow model, protects D2.</li>
+    <li>The recap call appends <code>model.completed</code> with the recap model and the split on <code>memory.recapped</code>, flow model, protects D3, D4.</li>
+    <li><code>turn.started</code> carries the same <code>prompt_version</code> on two dates under one <code>SYSTEM.md</code>, and a different one after an edit, flow model, protects D5.</li>
+    <li>A hand-written turn with three reads, one write and two reads reports read calls 5, navigation read calls 3, and tokens before first write equal to the model calls before the write, flow stats, protects D10.</li>
+    <li>A turn with reads only reports all reads as navigation and all tokens before first write, flow stats, protects D10.</li>
+    <li>A turn that opens the same path twice reports one distinct path and one repeat open; memory and skill calls are not counted, flow stats, protects D10, D11.</li>
+    <li>A per-call sum that differs from the closing total produces one warning and leaves the cost on the closing total, flow stats, protects D3.</li>
+    <li>Events without the new fields validate and fold with zeros and <code>None</code>, flow stats, protects D2, D4.</li>
+    <li>Cached tokens price at cache rates when set and at the input rate when not; the manifest accepts the keys and the schema lists them, flow stats, protects D4.</li>
+    <li>Buckets average navigation over turns with writes only, flow stats, protects D13.</li>
+    <li><code>kinby stats</code> prints the navigation columns and writes them to <code>stats.json</code>; <code>kinby usage</code> shows the split; <code>--verbose</code> raises the level and creates nothing under <code>.state/</code>, flow stats, protects D7, D13.</li>
+    <li>The REPL prints a deny from <code>tool.gated</code> and nothing for <code>model.completed</code>, flow gate, protects D1.</li>
+  </ol>
+
+  <h2 id="out-of-scope">Out of scope <span class="mode">reference</span></h2>
+  <ul>
+    <li>A navigation eval on a fixture workspace. Fog on the map next to coding-task evals; it needs the Docker sandbox.</li>
+    <li>Hosted tracing or an OpenTelemetry exporter. Rejected in D6 and ADR 0026.</li>
+    <li>A log file under <code>.state/</code>. Stderr is the process log (D7).</li>
+    <li>Bytes returned by tools or per-file read sizes. Counts, durations and paths carry the trend.</li>
+    <li>A dashboard. The JSON <code>kinby stats</code> writes is the seam, fixed in #10.</li>
+    <li>Changing <code>evaluate</code> in <code>core.gate</code>. The verdict is recorded where it is applied, in the runner.</li>
+  </ul>
+
+  <h2 id="open-questions">Open questions <span class="mode">reference</span></h2>
+  <p>Points the grilling did not settle. The agent building this stops and asks before acting on any of them.</p>
+  <ol>
+    <li>The write flag for a call whose tool is not in the snapshot. Options: record <code>true</code>; record <code>false</code>. Default: <code>true</code>, so an unknown tool never counts as navigation.</li>
+    <li>The shipped cache rates for <code>anthropic:claude-sonnet-4-6</code> and <code>openai:gpt-5</code>. Options: take the providers' published rates at build time; ship none and rely on the fallback. Default: take the published rates and cite them in the price map's docstring.</li>
+    <li>The length of <code>prompt_version</code>. Options: twelve hex characters; the full digest. Default: twelve.</li>
+    <li>The commands that take <code>--verbose</code>. Options: <code>run</code> and <code>serve</code> only; every command. Default: <code>run</code> and <code>serve</code>.</li>
+    <li>What the REPL's post-turn line shows. Options: add cached tokens and tool time to the existing line; a second line. Default: one line.</li>
+  </ol>
+
+  <h2 id="glossary">Glossary <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Event</dt><dd>One sequence-numbered record in a thread's durable history.</dd>
+    <dt>Transcript store</dt><dd>The canonical record of every conversation, persisted as the event log.</dd>
+    <dt>Turn</dt><dd>One cycle of agent work within a thread, the unit of token attribution.</dd>
+    <dt>Model call</dt><dd>One request to a model during a turn, recorded as an event with its tokens and duration.</dd>
+    <dt>Token usage</dt><dd>The input and output tokens attributed to a turn, with cached tokens recorded as a split.</dd>
+    <dt>Gate</dt><dd>The check every tool call passes through before it runs: allow, ask, or deny.</dd>
+    <dt>Gate decision</dt><dd>The gate's final verdict on one tool call, recorded as an event with the rule and who decided.</dd>
+    <dt>Approval decision</dt><dd>The normalized answer to an approval: approve or deny.</dd>
+    <dt>Navigation</dt><dd>The read-only tool calls and model reasoning a turn spends locating what it needs in the workspace before acting.</dd>
+    <dt>Prompt version</dt><dd>A hash of the rendered system prompt without the environment block, recorded when a turn starts.</dd>
+    <dt>Environment block</dt><dd>The last prompt section: instance id, persona name, workspace path, main model, date.</dd>
+    <dt>Turn metrics</dt><dd>The derived record of one closed turn.</dd>
+    <dt>Instance statistics</dt><dd>UTC day or week totals derived from the event history through turn metrics.</dd>
+    <dt>Price map</dt><dd>Input, output and cache prices per million tokens, keyed by exact model name.</dd>
+  </dl>
+
+  <footer>Blueprint for observability per instance · stamped at 9719fef · 2026-09-07</footer>
+</main>
+</body>
+</html>
