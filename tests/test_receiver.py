@@ -242,10 +242,12 @@ def test_rejected_calls_are_logged_and_never_recorded(tmp_path, monkeypatch, cap
         assert statuses == [404, 404, 404, 405, 401, 410, 413]
         assert list(EventLog(instance.manifest.state_dir).all_events()) == []
 
-    with caplog.at_level(logging.WARNING, logger="kinby.core.receiver"):
+    with caplog.at_level(logging.INFO, logger="kinby.core.receiver"):
         asyncio.run(scenario())
 
-    messages = [record.getMessage() for record in caplog.records]
+    messages = [
+        record.getMessage() for record in caplog.records if record.name == "kinby.core.receiver"
+    ]
     assert len(messages) == 7
     for path, reason in (
         ("/signals/missing", "404"),
@@ -377,6 +379,65 @@ def test_serve_listens_reports_paths_and_stops_on_process_signal(
     assert health == [(200, b'{"id": "test"}')]
     assert f"listen: 127.0.0.1:{port}" in output.out
     assert ("/signals/news" in output.out) is has_signal
+
+
+def test_serve_logs_a_rejected_signal_to_stderr_at_info(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("SIGNAL_SECRET", "secret")
+    instance = instance_at(tmp_path)
+    routine_file(instance, "description: Issues\nsignal:\n  secret: SIGNAL_SECRET")
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        port = available.getsockname()[1]
+    with (tmp_path / "kinby.toml").open("a") as manifest:
+        manifest.write(f'[serve]\nlisten = "127.0.0.1:{port}"\n')
+    monkeypatch.setattr(
+        "kinby.core.runtime.turn_config",
+        lambda *args, **kwargs: TurnConfig(
+            fixed_turn_preparation,
+            fixed_permission_ceiling,
+            ScriptedRunner(),
+        ),
+    )
+    started = ThreadEvent()
+    original_start = Receiver.start
+
+    async def start_and_report(receiver):
+        address = await original_start(receiver)
+        started.set()
+        return address
+
+    monkeypatch.setattr(Receiver, "start", start_and_report)
+    statuses: list[int] = []
+
+    def reject_and_stop() -> None:
+        if started.wait(3):
+            connection = HTTPConnection("127.0.0.1", port)
+            try:
+                connection.request(
+                    "POST",
+                    "/signals/news",
+                    headers={"Authorization": "Bearer wrong-token"},
+                )
+                response = connection.getresponse()
+                statuses.append(response.status)
+                response.read()
+            finally:
+                connection.close()
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    stopper = Thread(target=reject_and_stop, daemon=True)
+    stopper.start()
+    exit_code = main(["serve", "--instance", str(tmp_path)])
+    stopper.join(timeout=5)
+
+    output = capsys.readouterr()
+    assert exit_code == 0, (output.out, output.err)
+    assert statuses == [401]
+    assert not stopper.is_alive()
+    assert (
+        "INFO kinby.core.receiver Signal request rejected at "
+        "/signals/news: 401 authentication failed"
+    ) in output.err.splitlines()
 
 
 def test_serve_without_listen_does_not_start_a_receiver(tmp_path, monkeypatch, capsys) -> None:

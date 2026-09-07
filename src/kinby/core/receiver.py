@@ -28,7 +28,7 @@ _KEEPALIVE_TIMEOUT_SECONDS = 75
 
 def _log_rejection(request: web.Request, response: web.StreamResponse) -> None:
     if response.status in _REJECTED_STATUSES:
-        logging.getLogger(__name__).warning(
+        logging.getLogger(__name__).info(
             "Signal request rejected at %s: %s %s",
             request.path,
             response.status,

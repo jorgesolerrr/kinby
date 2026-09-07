@@ -87,6 +87,19 @@ def test_run_opens_a_repl_with_a_session_model_override_without_changing_the_man
     assert manifest_path.read_text(encoding="utf-8") == original_manifest
 
 
+def test_verbose_run_writes_no_process_log_under_state(tmp_path, capsys, monkeypatch) -> None:
+    instance = tmp_path / "alice"
+    init_instance(instance)
+    monkeypatch.setattr("sys.stdin", StringIO(""))
+
+    exit_code = main(["run", "--verbose", str(instance)])
+
+    captured = capsys.readouterr()
+    state_files = {path.name for path in (instance / ".state").iterdir()}
+    assert exit_code == 0, (captured.out, captured.err)
+    assert state_files <= {"threads.jsonl", "events.jsonl", "checkpoints.sqlite"}
+
+
 def test_run_catches_up_uncovered_turns_before_waiting_for_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
