@@ -13,6 +13,8 @@ from kinby.contracts import (
     ErrorEnvelope,
     Event,
     MemoryRecapped,
+    ModelCallMismatch,
+    ModelCompleted,
     Scope,
     StatsBucket,
     StatsBucketSize,
@@ -27,8 +29,10 @@ from kinby.contracts import (
     TurnStarted,
     TurnVerdict,
 )
+from kinby.core.budgets import daily_cost
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
+from kinby.core.pricing import price_map
 from kinby.core.turns import Emit, TurnOutcome, TurnRequest
 from kinby.instance import init_instance, load_instance
 from tests.helpers import (
@@ -196,6 +200,177 @@ def test_stats_get_uses_a_manifest_price_override(tmp_path: Path) -> None:
     assert isinstance(result, StatsGetResult)
     assert result.records[0].cost == 0.00024
     assert result.buckets[0].cost == 0.00024
+
+
+def test_stats_warns_when_model_calls_disagree_with_the_closing_total(
+    tmp_path: Path,
+) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            now,
+            TurnStarted(message="priced", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            now,
+            ModelCompleted(
+                model="openai:gpt-5",
+                input_tokens=3,
+                output_tokens=2,
+                cache_read_tokens=1,
+                cache_creation_tokens=2,
+                duration_ms=10,
+            ),
+        ),
+        _event(
+            3,
+            thread_id,
+            turn_id,
+            now,
+            TurnCompleted(
+                input_tokens=4,
+                output_tokens=2,
+                cache_read_tokens=1,
+                cache_creation_tokens=2,
+            ),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get", {}, {Scope.INSTANCE_READ}
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.records[0].cost == 0.000025
+    assert result.records[0].cache_read_tokens == 1
+    assert result.records[0].cache_creation_tokens == 2
+    assert result.buckets[0].cache_read_tokens == 1
+    assert result.buckets[0].cache_creation_tokens == 2
+    assert result.warnings == [ModelCallMismatch(thread_id=thread_id, turn_id=turn_id)]
+
+
+def test_stats_warns_only_for_missing_calls_after_model_call_events(
+    tmp_path: Path,
+) -> None:
+    thread_id = uuid4()
+    legacy_id = uuid4()
+    missing_call_id = uuid4()
+    recorded_call_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            legacy_id,
+            now,
+            TurnStarted(message="legacy", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            legacy_id,
+            now,
+            TurnCompleted(input_tokens=4, output_tokens=2),
+        ),
+        _event(
+            3,
+            thread_id,
+            recorded_call_id,
+            now,
+            TurnStarted(message="recorded", model="openai:gpt-5"),
+        ),
+        _event(
+            4,
+            thread_id,
+            recorded_call_id,
+            now,
+            ModelCompleted(
+                model="openai:gpt-5",
+                input_tokens=3,
+                output_tokens=1,
+                duration_ms=10,
+            ),
+        ),
+        _event(
+            5,
+            thread_id,
+            recorded_call_id,
+            now,
+            TurnCompleted(input_tokens=3, output_tokens=1),
+        ),
+        _event(
+            6,
+            thread_id,
+            missing_call_id,
+            now,
+            TurnStarted(message="missing", model="openai:gpt-5"),
+        ),
+        _event(
+            7,
+            thread_id,
+            missing_call_id,
+            now,
+            TurnCompleted(input_tokens=4, output_tokens=2),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get", {}, {Scope.INSTANCE_READ}
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.warnings == [ModelCallMismatch(thread_id=thread_id, turn_id=missing_call_id)]
+
+
+def test_stats_and_daily_budget_count_failed_turn_tokens(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            now,
+            TurnStarted(message="failed", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            now,
+            TurnFailed(
+                code=ErrorCode.INTERNAL,
+                message="failed",
+                input_tokens=4,
+                output_tokens=2,
+            ),
+        ),
+    ]
+    log = StaticEventLog(tmp_path, events)
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=log).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.records[0].closing_kind == "failed"
+    assert result.records[0].input_tokens == 4
+    assert result.records[0].output_tokens == 2
+    assert result.records[0].cost == 0.000025
+    assert daily_cost(log.all_events(), price_map(), now.date()).usd == 0.000025
 
 
 def test_stats_get_reports_unpriced_models_and_sums_only_priced_turns(
@@ -664,18 +839,42 @@ def test_stats_get_groups_monday_week_and_applies_inclusive_bounds(tmp_path: Pat
             2,
             thread_id,
             monday_id,
+            monday + timedelta(seconds=5),
+            ModelCompleted(
+                model="outside:model",
+                input_tokens=1,
+                output_tokens=1,
+                duration_ms=5,
+            ),
+        ),
+        _event(
+            3,
+            thread_id,
+            monday_id,
             monday + timedelta(seconds=10),
             TurnCompleted(input_tokens=2, output_tokens=1),
         ),
         _event(
-            3,
+            4,
             thread_id,
             tuesday_id,
             tuesday,
             TurnStarted(message="two", model="inside:model"),
         ),
         _event(
-            4,
+            5,
+            thread_id,
+            tuesday_id,
+            tuesday + timedelta(seconds=10),
+            ModelCompleted(
+                model="inside:model",
+                input_tokens=1,
+                output_tokens=1,
+                duration_ms=5,
+            ),
+        ),
+        _event(
+            6,
             thread_id,
             tuesday_id,
             tuesday + timedelta(seconds=20),
@@ -705,10 +904,15 @@ def test_stats_get_groups_monday_week_and_applies_inclusive_bounds(tmp_path: Pat
     assert weekly.buckets[0].output_tokens == 3
     assert weekly.buckets[0].mean_duration_seconds == 15
     assert StatsBucketSize.WEEK == "week"
+    assert weekly.warnings == [
+        ModelCallMismatch(thread_id=thread_id, turn_id=monday_id),
+        ModelCallMismatch(thread_id=thread_id, turn_id=tuesday_id),
+    ]
     assert isinstance(bounded, StatsGetResult)
     assert bounded.unpriced_models == ["inside:model"]
     assert [record.turn_id for record in bounded.records] == [tuesday_id]
     assert [bucket.start for bucket in bounded.buckets] == [tuesday.date()]
+    assert bounded.warnings == [ModelCallMismatch(thread_id=thread_id, turn_id=tuesday_id)]
 
 
 def test_stats_get_requires_instance_read_before_validating_payload(tmp_path: Path) -> None:
@@ -759,6 +963,8 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "interrupted",
         "input",
         "output",
+        "cache read",
+        "cache creation",
         "recap input",
         "recap output",
         "cost",
@@ -774,13 +980,15 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "bad",
     ]
     bucket_fields = lines[1].split("\t")
-    assert bucket_fields[:16] == [
+    assert bucket_fields[:18] == [
         closed.timestamp.date().isoformat(),
         "1",
         "0",
         "0",
         "11",
         "7",
+        "0",
+        "0",
         "0",
         "0",
         "0.00008375",
@@ -792,8 +1000,8 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "0",
         "1",
     ]
-    assert float(bucket_fields[16]) >= 0
-    assert bucket_fields[17:] == ["0", "0"]
+    assert float(bucket_fields[18]) >= 0
+    assert bucket_fields[19:] == ["0", "0"]
     total_fields = lines[2].split("\t")
     assert total_fields[0] == "total"
     assert total_fields[1:] == bucket_fields[1:]
@@ -839,6 +1047,51 @@ def test_cli_stats_warns_once_with_every_unpriced_model(
     cost_column = lines[0].split("\t").index("cost")
     assert lines[1].split("\t")[cost_column] == "unknown"
     assert lines[2].split("\t")[cost_column] == "unknown"
+
+
+def test_cli_stats_prints_a_model_call_mismatch_warning(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path)
+    instance = load_instance(instance_path)
+    event_log = EventLog(instance.manifest.state_dir)
+    thread_id = uuid4()
+    turn_id = uuid4()
+
+    async def append_turn() -> None:
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnStarted(message="mismatch", model="openai:gpt-5"),
+        )
+        await event_log.append(
+            thread_id,
+            turn_id,
+            ModelCompleted(
+                model="openai:gpt-5",
+                input_tokens=3,
+                output_tokens=2,
+                duration_ms=10,
+            ),
+        )
+        await event_log.append(
+            thread_id,
+            turn_id,
+            TurnCompleted(input_tokens=4, output_tokens=2),
+        )
+
+    asyncio.run(append_turn())
+
+    exit_code = main(["stats", str(instance_path)])
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    assert output.err == (
+        f"warning: Model call totals for turn {turn_id} on thread {thread_id} do not match "
+        "its closing totals.\n"
+    )
 
 
 def test_cli_stats_rejects_a_range_without_timezone(

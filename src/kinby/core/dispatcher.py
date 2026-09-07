@@ -263,11 +263,9 @@ def build_dispatcher(
 
     async def get_stats(command: StatsGetCommand) -> StatsGetResult:
         metrics = turn_metrics(event_log.all_events(), prices)
-        records = [
-            record
-            for record in metrics.records
-            if TimeRange(command.since, command.until).includes(record.closed_at)
-        ]
+        time_range = TimeRange(command.since, command.until)
+        records = [record for record in metrics.records if time_range.includes(record.closed_at)]
+        selected_turns = {TurnKey(record.thread_id, record.turn_id) for record in records}
         return StatsGetResult(
             records=records,
             buckets=stats_buckets(records, command.by),
@@ -281,6 +279,11 @@ def build_dispatcher(
                     )
                 }
             ),
+            warnings=[
+                mismatch
+                for mismatch in metrics.warnings
+                if TurnKey(mismatch.thread_id, mismatch.turn_id) in selected_turns
+            ],
         )
 
     async def rate_turn(command: ThreadTurnRateCommand) -> AcceptedResult:
