@@ -107,7 +107,7 @@ signal:
     signal = routines[0].signal
     assert signal is not None
     assert signal.auth is SignalAuth.TOKEN
-    assert signal.secret == "GITHUB_WEBHOOK_SECRET"
+    assert signal.secret_name == "GITHUB_WEBHOOK_SECRET"
     assert signal.signature_header is None
     assert signal.delivery_header == "X-GitHub-Delivery"
 
@@ -147,6 +147,11 @@ def fetch() -> str:
     empty_secret = write_routine(
         instance, "empty-secret", 'description: Empty\nsignal:\n  secret: ""'
     )
+    missing_shared = write_routine(
+        instance,
+        "missing-shared",
+        "description: Missing shared\nrun: missing\nsignal:\n  secret: GOOD_SECRET",
+    )
     shared = write_routine(
         instance,
         "shared-no-param",
@@ -167,6 +172,7 @@ def fetch() -> str:
     assert "environment variable" in messages[str(empty_secret)].lower()
     assert "signature" in messages[str(hmac)].lower()
     assert "signal" in messages[str(no_param)].lower()
+    assert "not available" in messages[str(missing_shared)].lower()
     assert "signal" in messages[str(shared)].lower()
 
 

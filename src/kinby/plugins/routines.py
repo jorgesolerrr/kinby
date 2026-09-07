@@ -14,7 +14,7 @@ from kinby.frontmatter import parse_frontmatter, required_string
 from kinby.instance import Budgets, Instance
 from kinby.instance.layout import ROUTINE_CODE_FILE, ROUTINE_FILE, ROUTINES_DIR
 from kinby.instance.permissions import GatePolicy, constrain_mode, load_permissions
-from kinby.plugins.registry import ToolRegistry, load_tool_file
+from kinby.plugins.registry import ToolRegistry, ToolSnapshot, load_tool_file
 from kinby.plugins.tools import Tool
 
 
@@ -51,9 +51,15 @@ class SharedCodeStep:
 @dataclass(frozen=True)
 class SignalConfig:
     auth: SignalAuth
-    secret: str
+    secret_name: str
     signature_header: str | None = None
     delivery_header: str | None = None
+
+
+def resolve_code_step(code_step: SharedCodeStep | Tool | None, tools: ToolSnapshot) -> Tool | None:
+    if isinstance(code_step, SharedCodeStep):
+        return tools.get(code_step.name)
+    return code_step
 
 
 @dataclass(frozen=True)
@@ -89,16 +95,16 @@ def load_routines(
     return tuple(routines), tuple(warnings)
 
 
-def _code_step_has_signal(code_step: SharedCodeStep | Tool | None, instance: Instance) -> bool:
-    tool = _resolved_code_step(code_step, instance)
-    return tool is None or "signal" in tool.runnable.args
-
-
-def _resolved_code_step(code_step: SharedCodeStep | Tool | None, instance: Instance) -> Tool | None:
-    if code_step is None or isinstance(code_step, Tool):
-        return code_step
-    snapshot, _ = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults).refresh()
-    return snapshot.get(code_step.name)
+def _signal_code_step(code_step: SharedCodeStep | Tool | None, instance: Instance) -> Tool | None:
+    if isinstance(code_step, SharedCodeStep):
+        snapshot, _ = ToolRegistry(
+            instance.path, defaults=instance.manifest.tools.defaults
+        ).refresh()
+        resolved = resolve_code_step(code_step, snapshot)
+        if resolved is None:
+            raise ValueError(f'Code step tool "{code_step.name}" is not available.')
+        return resolved
+    return code_step
 
 
 def _load_routine(path: Path, policy: GatePolicy, instance: Instance) -> Routine:
@@ -129,11 +135,12 @@ def _load_routine(path: Path, policy: GatePolicy, instance: Instance) -> Routine
             raise ValueError(f"Signal secret {raw.signal.secret} is unset.")
         if raw.signal.auth is SignalAuth.HMAC_SHA256 and not raw.signal.signature_header:
             raise ValueError("HMAC signal requires a signature header.")
-        if not _code_step_has_signal(code_step, instance):
+        resolved = _signal_code_step(code_step, instance)
+        if resolved is not None and "signal" not in resolved.runnable.args:
             raise ValueError("The code step has no signal parameter.")
         signal = SignalConfig(
             auth=raw.signal.auth,
-            secret=raw.signal.secret,
+            secret_name=raw.signal.secret,
             signature_header=raw.signal.signature_header,
             delivery_header=raw.signal.delivery_header,
         )

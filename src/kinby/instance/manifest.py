@@ -43,6 +43,7 @@ from kinby.instance.layout import ENV_NAME, MANIFEST_NAME, STATE_DIR, WORKSPACE_
 
 # Unlike $, this absolute-end assertion rejects a trailing newline in Python and JSON Schema.
 _MODEL_PATTERN = re.compile(r"^[^:\s]+:[^:\s]+(?![\s\S])")
+_LISTEN_HOST = re.compile(r"^[\w.-]+$")
 _MODEL_ERROR = "must use provider:model form"
 NonEmpty = Annotated[str, StringConstraints(min_length=1)]
 ModelName = Annotated[
@@ -126,12 +127,9 @@ def _parse_listen(value: object) -> Serve:
     if not isinstance(value, str) or any(character.isspace() for character in value):
         raise ValueError("must be a host:port address")
     host, separator, port_text = value.rpartition(":")
-    if not separator or not host or not port_text:
+    if not separator or _LISTEN_HOST.fullmatch(host) is None or not port_text.isdigit():
         raise ValueError("must be a host:port address")
-    try:
-        port = int(port_text)
-    except ValueError as exc:
-        raise ValueError("must be a host:port address") from exc
+    port = int(port_text)
     if not 1 <= port <= 65535:
         raise ValueError("must be a host:port address")
     return Serve(host=host, port=port)
