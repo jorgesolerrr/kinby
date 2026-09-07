@@ -533,7 +533,7 @@ def fetch(signal: dict, owner: str) -> None:
         await scheduler.drain()
 
         assert model.messages == []
-        events = log.stored(accepted.thread_id)
+        events = log.stored(accepted.accepted.thread_id)
         assert isinstance(events[0].payload, SignalReceived)
         call = next(event.payload for event in events if isinstance(event.payload, ToolCall))
         assert call.arguments == {
@@ -628,7 +628,7 @@ def fetch(signal: dict) -> str:
 
         failed = next(
             event.payload
-            for event in log.stored(accepted.thread_id)
+            for event in log.stored(accepted.accepted.thread_id)
             if isinstance(event.payload, TurnFailed)
         )
         assert failed.code is ErrorCode.INTERNAL
@@ -724,7 +724,7 @@ def test_pending_delivery_fires_after_routine_is_disabled_or_deleted(
 
         closing = next(
             event.payload
-            for event in log.stored(accepted.thread_id)
+            for event in log.stored(accepted.accepted.thread_id)
             if isinstance(event.payload, TurnCompleted | TurnFailed)
         )
         if deleted:

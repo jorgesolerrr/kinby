@@ -11,6 +11,7 @@ from kinby.instance.dataclasses import (
     ModelPrice,
     Models,
     RecapPolicy,
+    Serve,
     Tools,
     Workspace,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "ModelPrice",
     "Models",
     "RecapPolicy",
+    "Serve",
     "Tools",
     "Workspace",
     "discover_instance",

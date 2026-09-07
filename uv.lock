@@ -783,6 +783,7 @@ name = "kinby"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "cronsim" },
     { name = "langchain", extra = ["anthropic", "openai"] },
     { name = "langgraph" },
@@ -804,6 +805,7 @@ evals = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.14" },
     { name = "cronsim", specifier = "==2.7" },
     { name = "langchain", extras = ["anthropic", "openai"], specifier = ">=1.0" },
     { name = "langgraph", specifier = ">=1.0" },

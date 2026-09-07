@@ -628,16 +628,18 @@ def test_receive_records_delivery_and_drops_repeated_id(tmp_path: Path) -> None:
             RoutineName("issues"), delivery, RoutineTrigger.SIGNAL
         )
 
-        assert repeated == accepted
+        assert not accepted.repeated
+        assert repeated.repeated
+        assert repeated.accepted == accepted.accepted
         threads = await call(dispatcher, "thread.list")
         assert isinstance(threads, ThreadListResult)
         assert [(thread.id, thread.title) for thread in threads.threads] == [
-            (accepted.thread_id, "issues · delivery-1")
+            (accepted.accepted.thread_id, "issues · delivery-1")
         ]
-        events = EventLog(instance.manifest.state_dir).stored(accepted.thread_id)
+        events = EventLog(instance.manifest.state_dir).stored(accepted.accepted.thread_id)
         assert len(events) == 1
-        assert events[0].turn_id == accepted.turn_id
-        assert events[0].sequence == accepted.sequence
+        assert events[0].turn_id == accepted.accepted.turn_id
+        assert events[0].sequence == accepted.accepted.sequence
         assert events[0].payload == SignalReceived(
             origin=RoutineOrigin(
                 name=RoutineName("issues"),

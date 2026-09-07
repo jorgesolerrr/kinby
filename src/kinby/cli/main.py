@@ -47,6 +47,7 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core import Dispatcher, assemble_system_prompt, boot_instance, build_dispatcher
+from kinby.core.receiver import Receiver
 from kinby.core.stats import stats_summary
 from kinby.instance import (
     PLACEHOLDER_MODEL,
@@ -326,8 +327,17 @@ async def _serve_instance(instance: Instance) -> int:
     for shutdown_signal in shutdown_signals:
         loop.add_signal_handler(shutdown_signal, stopping.set)
     runtime = None
+    receiver = None
     try:
         runtime = await boot_instance(instance)
+        if instance.manifest.serve is not None:
+            receiver = Receiver(
+                instance.manifest.serve,
+                runtime.scheduler,
+                instance,
+            )
+            address = await receiver.start()
+            print(f"listen: {address.host}:{address.port}")
         client = _contract_client_for(runtime.dispatcher)
         status = await show_routines(client, sys.stdout, sys.stderr)
         if status:
@@ -335,6 +345,8 @@ async def _serve_instance(instance: Instance) -> int:
         await stopping.wait()
         return 0
     finally:
+        if receiver is not None:
+            await receiver.stop()
         if runtime is not None:
             await runtime.stop_interrupting_running_routine()
         for shutdown_signal in shutdown_signals:

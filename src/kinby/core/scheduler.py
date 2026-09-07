@@ -55,6 +55,12 @@ class ArmedRoutine:
     time: datetime
 
 
+@dataclass(frozen=True)
+class DeliveryReceipt:
+    accepted: AcceptedResult
+    repeated: bool
+
+
 class Scheduler:
     def __init__(
         self,
@@ -71,6 +77,7 @@ class Scheduler:
         self._turns = turns
         self._armed: dict[RoutineName, ArmedRoutine] = {}
         self._pass = asyncio.Lock()
+        self._receiving = asyncio.Lock()
         self._changed = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
         routines, _ = load_routines(self._instance)
@@ -99,7 +106,16 @@ class Scheduler:
         name: RoutineName,
         delivery: Delivery,
         trigger: RoutineTrigger,
-    ) -> AcceptedResult:
+    ) -> DeliveryReceipt:
+        async with self._receiving:
+            return await self._receive(name, delivery, trigger)
+
+    async def _receive(
+        self,
+        name: RoutineName,
+        delivery: Delivery,
+        trigger: RoutineTrigger,
+    ) -> DeliveryReceipt:
         if delivery.delivery_id is not None:
             for event in self._log.all_events():
                 payload = event.payload
@@ -108,10 +124,13 @@ class Scheduler:
                     and payload.origin.name == name
                     and payload.delivery.delivery_id == delivery.delivery_id
                 ):
-                    return AcceptedResult(
-                        thread_id=event.thread_id,
-                        turn_id=event.turn_id,
-                        sequence=event.sequence,
+                    return DeliveryReceipt(
+                        AcceptedResult(
+                            thread_id=event.thread_id,
+                            turn_id=event.turn_id,
+                            sequence=event.sequence,
+                        ),
+                        repeated=True,
                     )
         origin = RoutineOrigin(
             name=name,
@@ -126,10 +145,13 @@ class Scheduler:
             SignalReceived(origin=origin, delivery=delivery),
         )
         self.schedule()
-        return AcceptedResult(
-            thread_id=event.thread_id,
-            turn_id=event.turn_id,
-            sequence=event.sequence,
+        return DeliveryReceipt(
+            AcceptedResult(
+                thread_id=event.thread_id,
+                turn_id=event.turn_id,
+                sequence=event.sequence,
+            ),
+            repeated=False,
         )
 
     async def _work(self) -> None:
@@ -215,7 +237,7 @@ class Scheduler:
         if routine is None:
             raise RoutineNotFound(f'Routine "{command.name}" was not found.')
         if command.payload is not None:
-            accepted = await self.receive(
+            receipt = await self.receive(
                 routine.name,
                 Delivery(
                     headers={"content-type": command.payload.content_type},
@@ -226,7 +248,7 @@ class Scheduler:
                 RoutineTrigger.MANUAL,
             )
             await self.tick()
-            return accepted
+            return receipt.accepted
         return await self._fire(routine, RoutineTrigger.MANUAL)
 
     async def _fire(self, routine: Routine, trigger: RoutineTrigger) -> AcceptedResult:
