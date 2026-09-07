@@ -83,7 +83,12 @@ from kinby.instance.permissions import (
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
-from kinby.plugins.routines import Routine, load_routines, resolve_code_step
+from kinby.plugins.routines import (
+    Routine,
+    load_routines,
+    resolve_code_step,
+    strip_signal_credentials,
+)
 from kinby.plugins.skills import load_skills
 from kinby.plugins.tools import Tool, ToolContext
 
@@ -468,18 +473,8 @@ class LangGraphRunner:
     ) -> str | None:
         arguments = dict(routine.arguments)
         if delivery is not None:
-            signature_header = (
-                routine.signal.signature_header.lower()
-                if routine.signal is not None and routine.signal.signature_header is not None
-                else None
-            )
-            headers = {
-                name.lower(): value
-                for name, value in delivery.headers.items()
-                if name.lower() not in {"authorization", signature_header}
-            }
             raw_signal = delivery.model_dump(mode="json")
-            raw_signal["headers"] = headers
+            raw_signal["headers"] = strip_signal_credentials(routine.signal, delivery.headers)
             media_type = delivery.content_type.partition(";")[0].strip().lower()
             if media_type == "application/json":
                 try:

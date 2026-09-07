@@ -328,6 +328,10 @@ The part of **serve mode** that listens for **signals**, authenticates each call
 
 One authenticated inbound call the **receiver** accepted for a **routine**. Recorded the moment it arrives, before any work starts, so it survives a restart. The **scheduler** starts its **turn** when the instance is free. Two deliveries with the same provider id are one delivery.
 
+### Delivery receipt
+
+The **scheduler** result returned when the **receiver** records a **delivery**. It carries the accepted thread, turn and event sequence, plus whether the provider id matched an existing delivery.
+
 ### Budget
 
 A ceiling an **instance** sets on one **turn** (steps, tokens, seconds) or on a UTC day (cost). Reaching it closes the turn as failed. Absent means unlimited; a **routine** may lower a budget, never raise it.

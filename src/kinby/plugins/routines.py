@@ -1,10 +1,11 @@
 """Load the instance's routine instructions at turn boundaries."""
 
 import os
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from cronsim import CronSim
 from pydantic import BaseModel, ConfigDict, Field, Json, JsonValue  # noqa: TID251 - file boundary
@@ -49,11 +50,35 @@ class SharedCodeStep:
 
 
 @dataclass(frozen=True)
-class SignalConfig:
-    auth: SignalAuth
+class TokenSignalConfig:
     secret_name: str
-    signature_header: str | None = None
     delivery_header: str | None = None
+    auth: Literal[SignalAuth.TOKEN] = field(init=False, default=SignalAuth.TOKEN)
+    signature_header: None = field(init=False, default=None)
+
+
+@dataclass(frozen=True)
+class HmacSignalConfig:
+    secret_name: str
+    signature_header: str
+    delivery_header: str | None = None
+    auth: Literal[SignalAuth.HMAC_SHA256] = field(
+        init=False,
+        default=SignalAuth.HMAC_SHA256,
+    )
+
+
+SignalConfig = TokenSignalConfig | HmacSignalConfig
+
+
+def strip_signal_credentials(
+    signal: SignalConfig | None,
+    headers: Mapping[str, str],
+) -> dict[str, str]:
+    excluded = {"authorization"}
+    if signal is not None and signal.signature_header is not None:
+        excluded.add(signal.signature_header.lower())
+    return {name.lower(): value for name, value in headers.items() if name.lower() not in excluded}
 
 
 def resolve_code_step(code_step: SharedCodeStep | Tool, tools: ToolSnapshot) -> Tool:
@@ -89,13 +114,27 @@ def load_routines(
     policy = load_permissions(instance) if policy is None else policy
     routines: list[Routine] = []
     warnings: list[Warning] = []
-    for path in sorted((instance.path / ROUTINES_DIR).glob(f"*/{ROUTINE_FILE}")):
+    for path in _routine_paths(instance):
         try:
             routines.append(_load_routine(path, policy, instance))
         except Exception as exc:
             # Routine files are user code. One broken routine must not hide the rest.
             warnings.append(Warning(sources=(str(path),), message=str(exc)))
     return tuple(routines), tuple(warnings)
+
+
+def load_routine(instance: Instance, name: RoutineName) -> Routine | None:
+    path = next(
+        (path for path in _routine_paths(instance) if path.parent.name == name),
+        None,
+    )
+    if path is None:
+        return None
+    return _load_routine(path, load_permissions(instance), instance)
+
+
+def _routine_paths(instance: Instance) -> tuple[Path, ...]:
+    return tuple(sorted((instance.path / ROUTINES_DIR).glob(f"*/{ROUTINE_FILE}")))
 
 
 def _signal_code_step(code_step: SharedCodeStep | Tool | None, instance: Instance) -> Tool | None:
@@ -133,17 +172,22 @@ def _load_routine(path: Path, policy: GatePolicy, instance: Instance) -> Routine
             raise ValueError("Signal secret must name an environment variable.")
         if not os.environ.get(raw.signal.secret):
             raise ValueError(f"Signal secret {raw.signal.secret} is unset.")
-        if raw.signal.auth is SignalAuth.HMAC_SHA256 and not raw.signal.signature_header:
-            raise ValueError("HMAC signal requires a signature header.")
         resolved = _signal_code_step(code_step, instance)
         if resolved is not None and "signal" not in resolved.runnable.args:
             raise ValueError("The code step has no signal parameter.")
-        signal = SignalConfig(
-            auth=raw.signal.auth,
-            secret_name=raw.signal.secret,
-            signature_header=raw.signal.signature_header,
-            delivery_header=raw.signal.delivery_header,
-        )
+        if raw.signal.auth is SignalAuth.HMAC_SHA256:
+            if raw.signal.signature_header is None:
+                raise ValueError("HMAC signal requires a signature header.")
+            signal = HmacSignalConfig(
+                secret_name=raw.signal.secret,
+                signature_header=raw.signal.signature_header,
+                delivery_header=raw.signal.delivery_header,
+            )
+        else:
+            signal = TokenSignalConfig(
+                secret_name=raw.signal.secret,
+                delivery_header=raw.signal.delivery_header,
+            )
     return Routine(
         name=RoutineName(path.parent.name),
         description=raw.description,
