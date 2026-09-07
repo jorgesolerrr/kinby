@@ -134,14 +134,14 @@ def test_routine_list_prints_schedule_history_and_loader_warnings(tmp_path, caps
 
     output = capsys.readouterr().out
     lines = output.splitlines()
-    assert lines[0] == "name\tschedule\tenabled\tlast run\tnext run\tsignal\tauth"
+    assert lines[0] == ("name\tschedule\tenabled\tlast run\tnext run\tsignal\tauth\tpending")
     assert any(
-        line.startswith("digest\t0 18 * * *\tdisabled\tnone\tnone\tnone\tnone") for line in lines
+        line.startswith("digest\t0 18 * * *\tdisabled\tnone\tnone\tnone\tnone\t0") for line in lines
     )
     assert any(
         line.startswith("news\t0 9 * * *\tenabled\t")
         and " no-work " in line
-        and not line.endswith("\tnone\tnone\tnone")
+        and line.endswith("\tnone\tnone\t0")
         for line in lines
     )
     assert "warning:" in output and "broken" in output and "description" in output
@@ -431,7 +431,7 @@ def test_serve_interrupts_a_running_routine_and_drains_its_recap(
     assert not stopper.is_alive()
     assert not restarted_stopper.is_alive()
     assert "id: test" in output.out
-    assert "name\tschedule\tenabled\tlast run\tnext run\tsignal\tauth" in output.out
+    assert "name\tschedule\tenabled\tlast run\tnext run\tsignal\tauth\tpending" in output.out
     assert runner.cancelled.is_set()
     assert runner.runs == 1
     assert any(isinstance(event.payload, TurnInterrupted) for event in events)

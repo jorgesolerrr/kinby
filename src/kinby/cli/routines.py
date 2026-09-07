@@ -17,7 +17,7 @@ from kinby.contracts import (
 
 
 def render_routines(result: RoutineListResult, stdout: TextIO) -> None:
-    stdout.write("name\tschedule\tenabled\tlast run\tnext run\tsignal\tauth\n")
+    stdout.write("name\tschedule\tenabled\tlast run\tnext run\tsignal\tauth\tpending\n")
     for routine in result.routines:
         state = "enabled" if routine.enabled else "disabled"
         next_run = routine.next_run.isoformat() if routine.next_run else "none"
@@ -29,7 +29,7 @@ def render_routines(result: RoutineListResult, stdout: TextIO) -> None:
         auth = routine.signal.auth if routine.signal is not None else "none"
         stdout.write(
             f"{routine.name}\t{routine.schedule or 'none'}\t{state}\t"
-            f"{last_run}\t{next_run}\t{path}\t{auth}\n"
+            f"{last_run}\t{next_run}\t{path}\t{auth}\t{routine.pending}\n"
         )
         render_routine_status(routine, stdout)
     for warning in result.warnings:
@@ -40,7 +40,8 @@ def render_routines(result: RoutineListResult, stdout: TextIO) -> None:
 def render_startup_routines(result: RoutineListResult, stdout: TextIO) -> None:
     for routine in result.routines:
         if routine.last_run is None:
-            stdout.write(f'Routine "{routine.name}": never ran.\n')
+            pending = f", {routine.pending} pending" if routine.signal is not None else ""
+            stdout.write(f'Routine "{routine.name}": never ran{pending}.\n')
             continue
         last = routine.last_run
         if last.outcome is RoutineRunOutcome.PARKED:
@@ -49,6 +50,8 @@ def render_startup_routines(result: RoutineListResult, stdout: TextIO) -> None:
             details = f"{last.started_at.isoformat()}, {last.outcome}"
         if last.first_line:
             details = f"{details}, {last.first_line}"
+        if routine.signal is not None:
+            details = f"{details}, {routine.pending} pending"
         stdout.write(f'Routine "{routine.name}": {details}\n')
         render_routine_status(routine, stdout)
     stdout.flush()

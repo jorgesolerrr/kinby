@@ -463,7 +463,7 @@ class RoutineSummary(ContractModel):
     last_run: RoutineLastRun | None
     next_run: datetime | None
     signal: SignalSummary | None = None
-    pending: int = 0
+    pending: int
 
 
 class RoutineListResult(ContractModel):

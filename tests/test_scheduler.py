@@ -570,7 +570,11 @@ def test_worker_fires_and_drains(tmp_path):
     asyncio.run(scenario())
 
 
-def test_routine_list_shows_signal_path_and_auth(tmp_path, capsys, monkeypatch):
+def test_cli_routine_list_shows_signal_path_auth_and_pending(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
     instance = instance_at(tmp_path)
     routine_file(
@@ -580,19 +584,27 @@ signal:
   secret: GITHUB_WEBHOOK_SECRET""",
     )
 
-    async def scenario():
+    async def record_deliveries() -> None:
         dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)))
-        listed = await call(dispatcher, "routine.list")
-        assert listed.routines[0].signal is not None
-        assert listed.routines[0].signal.path == "/signals/news"
-        assert listed.routines[0].signal.auth == "token"
-        assert listed.routines[0].pending == 0
+        assert dispatcher.scheduler is not None
+        for body in ("opened", "labeled"):
+            await dispatcher.scheduler.receive(
+                RoutineName("news"),
+                Delivery(
+                    headers={},
+                    content_type="text/plain",
+                    body=body,
+                    received_at=datetime(2026, 9, 6, 9, tzinfo=UTC),
+                ),
+                RoutineTrigger.SIGNAL,
+            )
 
-    asyncio.run(scenario())
+    asyncio.run(record_deliveries())
     assert main(["routine", "list", "--instance", str(tmp_path)]) == 0
-    output = capsys.readouterr().out
-    assert "/signals/news" in output
-    assert "token" in output
+    assert capsys.readouterr().out == (
+        "name\tschedule\tenabled\tlast run\tnext run\tsignal\tauth\tpending\n"
+        "news\tnone\tenabled\tnone\tnone\t/signals/news\ttoken\t2\n"
+    )
 
 
 def test_receive_records_delivery_and_drops_repeated_id(tmp_path: Path) -> None:
@@ -649,18 +661,28 @@ def test_routine_list_counts_pending_deliveries(
             "description: Issues\nsignal:\n  secret: SIGNAL_SECRET",
             name="issues",
         )
+        routine_file(instance, "description: Digest", name="digest")
         clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
-        runner = BlockingRunner()
-        dispatcher = runtime(instance, clock, runner)
+        dispatcher = runtime(instance, clock)
         assert dispatcher.scheduler is not None
-        await call(dispatcher, "routine.run", name="issues")
-        receiving = await start_payload_call(dispatcher, "issues", "opened")
+        for body in ("opened", "labeled"):
+            await dispatcher.scheduler.receive(
+                RoutineName("issues"),
+                Delivery(
+                    headers={},
+                    content_type="text/plain",
+                    body=body,
+                    received_at=clock.now,
+                ),
+                RoutineTrigger.SIGNAL,
+            )
 
         listed = await call(dispatcher, "routine.list")
         assert not isinstance(listed, ErrorEnvelope)
-        assert listed.routines[0].pending == 1
-        runner.release.set()
-        await receiving
+        assert {routine.name: routine.pending for routine in listed.routines} == {
+            "digest": 0,
+            "issues": 2,
+        }
 
     asyncio.run(scenario())
 
@@ -943,10 +965,13 @@ def test_repl_waits_visibly_and_shows_routines(tmp_path):
     asyncio.run(scenario())
 
 
-def test_repl_shows_each_routine_before_the_first_prompt(tmp_path: Path) -> None:
+def test_repl_shows_pending_deliveries_only_for_signal_routines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
         instance = instance_at(tmp_path)
-        routine_file(instance, "description: News")
+        routine_file(instance, "description: News\nsignal:\n  secret: SIGNAL_SECRET")
         untouched = instance.path / "routines" / "untouched" / "ROUTINE.md"
         untouched.parent.mkdir(parents=True)
         untouched.write_text("---\ndescription: Untouched\n---\nWait.\n")
@@ -965,6 +990,18 @@ def test_repl_shows_each_routine_before_the_first_prompt(tmp_path: Path) -> None
             ),
             encoding="utf-8",
         )
+        assert dispatcher.scheduler is not None
+        for body in ("opened", "labeled"):
+            await dispatcher.scheduler.receive(
+                RoutineName("news"),
+                Delivery(
+                    headers={},
+                    content_type="text/plain",
+                    body=body,
+                    received_at=datetime(2026, 9, 6, 9, tzinfo=UTC),
+                ),
+                RoutineTrigger.SIGNAL,
+            )
         thread = await call(dispatcher, "thread.create")
         stdout = StringIO()
 
@@ -979,7 +1016,7 @@ def test_repl_shows_each_routine_before_the_first_prompt(tmp_path: Path) -> None
 
         assert exit_code == 0
         assert stdout.getvalue() == (
-            'Routine "news": 2026-09-06T09:00:00+00:00, work, News today\n'
+            'Routine "news": 2026-09-06T09:00:00+00:00, work, News today, 2 pending\n'
             'Routine "untouched": never ran.\n'
             "> "
         )
