@@ -362,6 +362,16 @@ class ThreadTurnRevertCommand(ContractModel):
     turn_id: UUID
 
 
+class ThreadTurnRevertPreviewCommand(ContractModel):
+    thread_id: UUID
+    turn_id: UUID
+
+
+class ThreadTurnRevertPreviewResult(ContractModel):
+    turn_id: UUID
+    files: list[FileChange]
+
+
 class ThreadTurnListCommand(ContractModel):
     thread_id: UUID
 

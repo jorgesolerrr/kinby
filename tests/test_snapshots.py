@@ -468,6 +468,40 @@ def test_restore_puts_the_work_tree_back_and_leaves_ignored_files_alone(tmp_path
     asyncio.run(scenario())
 
 
+def test_restore_preview_compares_the_current_workspace_with_the_target(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        workspace = tmp_path / "workspace"
+        (workspace / ".gitignore").write_text("secrets.env\n", encoding="utf-8")
+        target = await store.capture(_BEFORE)
+        (workspace / "notes.md").write_text("edited\n", encoding="utf-8")
+        (workspace / "later.md").write_text("later\n", encoding="utf-8")
+        (workspace / "secrets.env").write_text("KEY=1\n", encoding="utf-8")
+
+        difference = await store.preview_restore(target)
+
+        assert difference.files == [
+            FileChange(
+                path="later.md",
+                status=ChangeStatus.DELETED,
+                additions=0,
+                deletions=1,
+            ),
+            FileChange(
+                path="notes.md",
+                status=ChangeStatus.MODIFIED,
+                additions=1,
+                deletions=1,
+            ),
+        ]
+        assert "secrets.env" not in difference.patch
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == "edited\n"
+        assert (workspace / "later.md").read_text(encoding="utf-8") == "later\n"
+        assert (workspace / "secrets.env").read_text(encoding="utf-8") == "KEY=1\n"
+
+    asyncio.run(scenario())
+
+
 def test_restore_brings_back_a_file_deleted_since_the_target(tmp_path: Path) -> None:
     async def scenario() -> None:
         store = await _opened(tmp_path)

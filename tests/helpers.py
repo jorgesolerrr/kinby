@@ -70,8 +70,10 @@ class FakeSnapshotStore:
     def __init__(self, *, failing: bool = False) -> None:
         self.refs: list[SnapshotRef] = []
         self.diffs: list[tuple[TreeId, TreeId]] = []
+        self.restore_previews: list[TreeId] = []
         self.restored: list[TreeId] = []
         self.difference = WorkspaceDiff([], "")
+        self.restore_difference = WorkspaceDiff([], "")
         self._failing = failing
 
     async def capture(self, ref: SnapshotRef) -> TreeId:
@@ -83,6 +85,10 @@ class FakeSnapshotStore:
     async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff:
         self.diffs.append((before, after))
         return self.difference
+
+    async def preview_restore(self, tree: TreeId) -> WorkspaceDiff:
+        self.restore_previews.append(tree)
+        return self.restore_difference
 
     async def restore(self, tree: TreeId) -> None:
         self.restored.append(tree)

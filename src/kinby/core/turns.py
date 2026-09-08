@@ -33,6 +33,8 @@ from kinby.contracts import (
     ThreadTurnListCommand,
     ThreadTurnListResult,
     ThreadTurnRevertCommand,
+    ThreadTurnRevertPreviewCommand,
+    ThreadTurnRevertPreviewResult,
     ThreadTurnStartCommand,
     ThreadTurnTargetListCommand,
     ThreadTurnTargetListResult,
@@ -207,7 +209,7 @@ type RecordedSnapshots = RevertibleSnapshots | DiffableSnapshots
 
 @dataclass(frozen=True)
 class RevertClaim:
-    """Held while a revert rewrites the workspace every thread shares."""
+    """Held while a revert preview or restore accesses the shared workspace."""
 
 
 class InterruptedTurnClaim:
@@ -321,43 +323,69 @@ class Turns:
             patch=difference.patch,
         )
 
+    async def preview_revert(
+        self,
+        command: ThreadTurnRevertPreviewCommand,
+    ) -> ThreadTurnRevertPreviewResult:
+        self._require_thread(command.thread_id)
+        claim = self._claim_revert(command.thread_id)
+        try:
+            recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
+            if self._snapshots is None or recorded is None:
+                raise _snapshot_unavailable(command.turn_id)
+            try:
+                difference = await self._snapshots.preview_restore(recorded.before)
+            except SnapshotError as exc:
+                raise _snapshot_unavailable(command.turn_id) from exc
+        finally:
+            self._release_claim(command.thread_id, claim)
+        return ThreadTurnRevertPreviewResult(
+            turn_id=command.turn_id,
+            files=difference.files,
+        )
+
     async def revert(self, command: ThreadTurnRevertCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
-        # The workspace is shared by every thread, so a revert under any running
-        # turn would change the files out from under it.
-        if self.running() or self._claims:
-            raise InstanceBusy("A turn is running. Wait for it to finish before reverting.")
-        recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
-        if self._snapshots is None or recorded is None:
-            raise _snapshot_unavailable(command.turn_id)
-        revert_id = uuid4()
-        claim = RevertClaim()
-        self._claims[command.thread_id] = claim
+        claim = self._claim_revert(command.thread_id)
         try:
-            previous = await self._snapshots.capture(
-                snapshot_ref(command.thread_id, revert_id, SnapshotBoundary.BEFORE)
-            )
-            await self._snapshots.restore(recorded.before)
-        except SnapshotError as exc:
-            raise _snapshot_unavailable(command.turn_id) from exc
-        else:
+            recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
+            snapshots = self._snapshots
+            if snapshots is None or recorded is None:
+                raise _snapshot_unavailable(command.turn_id)
+            revert_id = uuid4()
+            try:
+                previous = await snapshots.capture(
+                    snapshot_ref(command.thread_id, revert_id, SnapshotBoundary.BEFORE)
+                )
+                await snapshots.restore(recorded.before)
+            except SnapshotError as exc:
+                raise _snapshot_unavailable(command.turn_id) from exc
             # The work tree now holds the target's before tree, so that is what was
             # restored even when capturing the after ref fails. The revert stays
             # recorded either way, or it could not itself be reverted.
             captured = await self._capture(command.thread_id, revert_id, SnapshotBoundary.AFTER)
             restored = recorded.before if captured is None else captured
+            event = await self._log.append(
+                command.thread_id,
+                revert_id,
+                WorkspaceReverted(
+                    target_turn_id=command.turn_id,
+                    previous=previous,
+                    restored=restored,
+                ),
+            )
+            return accepted(event)
         finally:
             self._release_claim(command.thread_id, claim)
-        event = await self._log.append(
-            command.thread_id,
-            revert_id,
-            WorkspaceReverted(
-                target_turn_id=command.turn_id,
-                previous=previous,
-                restored=restored,
-            ),
-        )
-        return accepted(event)
+
+    def _claim_revert(self, thread_id: UUID) -> RevertClaim:
+        # The workspace is shared by every thread, so a revert under any running
+        # turn would change the files out from under it.
+        if self.running() or self._claims:
+            raise InstanceBusy("A turn is running. Wait for it to finish before reverting.")
+        claim = RevertClaim()
+        self._claims[thread_id] = claim
+        return claim
 
     def _recorded_snapshots(self, thread_id: UUID, turn_id: UUID) -> RecordedSnapshots | None:
         """The snapshots recorded for a turn or a revert, or None if it started without one."""

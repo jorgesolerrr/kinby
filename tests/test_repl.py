@@ -383,7 +383,7 @@ async def _thread_after_one_turn(
 def test_revert_prints_the_file_list_and_does_nothing_without_a_y(tmp_path: Path) -> None:
     async def scenario() -> None:
         snapshots = FakeSnapshotStore()
-        snapshots.difference = _one_file_diff()
+        snapshots.restore_difference = _one_file_diff()
         client, thread_id, turn_id = await _thread_after_one_turn(tmp_path, snapshots)
         stdout = StringIO()
         stderr = StringIO()
@@ -407,12 +407,58 @@ def test_revert_prints_the_file_list_and_does_nothing_without_a_y(tmp_path: Path
     asyncio.run(scenario())
 
 
+def test_revert_previews_every_change_from_the_current_workspace(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        snapshots.restore_difference = WorkspaceDiff(
+            [
+                FileChange(
+                    path="notes.md",
+                    status=ChangeStatus.MODIFIED,
+                    additions=1,
+                    deletions=1,
+                ),
+                FileChange(
+                    path="later.md",
+                    status=ChangeStatus.DELETED,
+                    additions=0,
+                    deletions=1,
+                ),
+            ],
+            "",
+        )
+        client, thread_id, turn_id = await _thread_after_one_turn(tmp_path, snapshots)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            thread_id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("/revert\nn\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert stdout.getvalue() == (
+            "> modified notes.md +1 -1\n"
+            "deleted later.md +0 -1\n"
+            f"Revert 2 files to before {turn_id}? [y/N] > "
+        )
+        assert stderr.getvalue() == ""
+        assert snapshots.restore_previews == [TreeId(f"{1:040d}")]
+        assert snapshots.restored == []
+
+    asyncio.run(scenario())
+
+
 def test_revert_sends_the_command_on_y_and_then_targets_the_revert_by_default(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
         snapshots = FakeSnapshotStore()
-        snapshots.difference = _one_file_diff()
+        snapshots.restore_difference = _one_file_diff()
         client, thread_id, turn_id = await _thread_after_one_turn(tmp_path, snapshots)
         stdout = StringIO()
         stderr = StringIO()

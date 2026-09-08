@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import signal
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing, suppress
 from dataclasses import dataclass
 from threading import Thread
@@ -23,6 +23,7 @@ from kinby.contracts import (
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_RATE,
     THREAD_TURN_REVERT,
+    THREAD_TURN_REVERT_PREVIEW,
     THREAD_TURN_START,
     THREAD_TURN_TARGET_LIST,
     AcceptedResult,
@@ -30,6 +31,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Event,
+    FileChange,
     GateOutcome,
     MemoryRecapped,
     MessageDelta,
@@ -44,6 +46,7 @@ from kinby.contracts import (
     ThreadTurnInterruptCommand,
     ThreadTurnRateCommand,
     ThreadTurnRevertCommand,
+    ThreadTurnRevertPreviewCommand,
     ThreadTurnStartCommand,
     ThreadTurnTargetListCommand,
     ToolCall,
@@ -347,31 +350,36 @@ async def _revert_turn(
     argument: str,
     repl_io: _ReplIO,
 ) -> None:
-    difference = await _diff_turn(client, thread_id, argument)
-    if isinstance(difference, ErrorEnvelope):
-        _render_error(difference, repl_io.stderr)
+    target = await _resolve_turn_id(client, thread_id, argument)
+    if isinstance(target, ErrorEnvelope):
+        _render_error(target, repl_io.stderr)
         return
-    _render_files(difference, repl_io.stdout)
-    repl_io.stdout.write(
-        f"Revert {len(difference.files)} files to before {difference.turn_id}? [y/N] "
+    preview = await client.call(
+        THREAD_TURN_REVERT_PREVIEW,
+        ThreadTurnRevertPreviewCommand(thread_id=thread_id, turn_id=target),
     )
+    if isinstance(preview, ErrorEnvelope):
+        _render_error(preview, repl_io.stderr)
+        return
+    _render_files(preview.files, repl_io.stdout)
+    repl_io.stdout.write(f"Revert {len(preview.files)} files to before {preview.turn_id}? [y/N] ")
     repl_io.stdout.flush()
     answer = (await repl_io.stdin.readline()).rstrip("\r\n")
     if answer != "y":
         return
     result = await client.call(
         THREAD_TURN_REVERT,
-        ThreadTurnRevertCommand(thread_id=thread_id, turn_id=difference.turn_id),
+        ThreadTurnRevertCommand(thread_id=thread_id, turn_id=preview.turn_id),
     )
     if isinstance(result, ErrorEnvelope):
         _render_error(result, repl_io.stderr)
         return
-    repl_io.stdout.write(f"Workspace reverted to before {difference.turn_id}.\n")
+    repl_io.stdout.write(f"Workspace reverted to before {preview.turn_id}.\n")
     repl_io.stdout.flush()
 
 
-def _render_files(difference: ThreadTurnDiffResult, stdout: TextIO) -> None:
-    for change in difference.files:
+def _render_files(files: Sequence[FileChange], stdout: TextIO) -> None:
+    for change in files:
         stdout.write(
             f"{change.status.value} {change.path} +{change.additions} -{change.deletions}\n"
         )
@@ -379,7 +387,7 @@ def _render_files(difference: ThreadTurnDiffResult, stdout: TextIO) -> None:
 
 
 def _render_diff(difference: ThreadTurnDiffResult, stdout: TextIO) -> None:
-    _render_files(difference, stdout)
+    _render_files(difference.files, stdout)
     if difference.patch:
         stdout.write(difference.patch)
         if not difference.patch.endswith("\n"):

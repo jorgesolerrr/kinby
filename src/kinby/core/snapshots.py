@@ -44,6 +44,8 @@ class SnapshotStore(Protocol):
 
     async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff: ...
 
+    async def preview_restore(self, tree: TreeId) -> WorkspaceDiff: ...
+
     async def restore(self, tree: TreeId) -> None: ...
 
 
@@ -104,6 +106,13 @@ class WorkspaceSnapshots:
             await self._stage_work_tree()
             await self._git("read-tree", "--reset", "-u", tree)
 
+    async def preview_restore(self, tree: TreeId) -> WorkspaceDiff:
+        """Describe the changes that restoring *tree* would make."""
+        async with self._rebuilding_the_index:
+            await self._stage_work_tree()
+            current = TreeId(await self._git("write-tree"))
+            return await self._diff(current, tree)
+
     async def _stage_work_tree(self) -> None:
         # The index outlives a capture, so a file staged before a .gitignore rule
         # matched it would stay staged. Rebuild from the work tree every time.
@@ -112,6 +121,9 @@ class WorkspaceSnapshots:
 
     async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff:
         """Describe the paths and line changes between two workspace snapshots."""
+        return await self._diff(before, after)
+
+    async def _diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff:
         statuses = _parse_statuses(
             await self._git("diff", "--name-status", "-z", "-M", before, after)
         )
