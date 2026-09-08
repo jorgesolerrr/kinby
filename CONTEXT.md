@@ -316,6 +316,11 @@ A markdown instruction set the model reads on demand. Skills are listed to the m
 
 The core, read-only **tool** that returns an available **skill** body by name. It is present on every **turn**.
 
+### Instance tool
+
+A core write **tool** through which the agent changes its own **instance**, such as a **routine** or a **skill**, under the **gate** like any other write. Workspace file tools never reach the instance.
+_Avoid_: self-modification tool, config tool
+
 ### Behavior prompt
 
 The instance's own instructions to the model (`SYSTEM.md`). One of the sources assembled into the system prompt, alongside the **profile**, workspace **conventions**, the skill list, and the harness-owned environment block.
