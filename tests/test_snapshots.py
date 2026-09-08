@@ -95,6 +95,20 @@ def test_diff_reports_a_modified_file_with_counts_and_patch(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
+def test_diff_preserves_trailing_whitespace_in_the_patch(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        before = await store.capture(_BEFORE)
+        (tmp_path / "workspace" / "notes.md").write_text("second  \n", encoding="utf-8")
+        after = await store.capture(_AFTER)
+
+        difference = await store.diff(before, after)
+
+        assert difference.patch.endswith("+second  \n")
+
+    asyncio.run(scenario())
+
+
 def test_diff_reports_added_and_deleted_files(tmp_path: Path) -> None:
     async def scenario() -> None:
         store = await _opened(tmp_path)

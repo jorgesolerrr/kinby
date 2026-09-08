@@ -22,6 +22,7 @@ from kinby.contracts import (
     THREAD_SUBSCRIBE,
     THREAD_TURN_DIFF,
     THREAD_TURN_INTERRUPT,
+    THREAD_TURN_LIST,
     THREAD_TURN_RATE,
     THREAD_TURN_START,
     AcceptedResult,
@@ -42,6 +43,7 @@ from kinby.contracts import (
     ThreadTurnDiffCommand,
     ThreadTurnDiffResult,
     ThreadTurnInterruptCommand,
+    ThreadTurnListCommand,
     ThreadTurnRateCommand,
     ThreadTurnStartCommand,
     ToolCall,
@@ -206,11 +208,7 @@ async def _run_repl(
                 await show_routines(client, stdout, stderr)
                 continue
             if command == "/diff":
-                turn_ids = await _closed_turn_ids(client, thread_id)
-                if isinstance(turn_ids, ErrorEnvelope):
-                    _render_error(turn_ids, stderr)
-                    continue
-                target = _resolve_turn_id(argument.strip(), turn_ids)
+                target = await _resolve_turn_id(client, thread_id, argument.strip())
                 if isinstance(target, ErrorEnvelope):
                     _render_error(target, stderr)
                     continue
@@ -294,11 +292,15 @@ async def _closed_turn_ids(
     return [record.turn_id for record in result.records if record.thread_id == thread_id]
 
 
-def _resolve_turn_id(
+async def _resolve_turn_id(
+    client: ContractClient,
+    thread_id: UUID,
     argument: str,
-    turn_ids: list[UUID],
 ) -> UUID | ErrorEnvelope:
     if not argument:
+        turn_ids = await _closed_turn_ids(client, thread_id)
+        if isinstance(turn_ids, ErrorEnvelope):
+            return turn_ids
         if turn_ids:
             return turn_ids[-1]
         return ErrorEnvelope(
@@ -316,6 +318,13 @@ def _resolve_turn_id(
             message="A turn id prefix must contain at least eight characters.",
             retryable=False,
         )
+    result = await client.call(
+        THREAD_TURN_LIST,
+        ThreadTurnListCommand(thread_id=thread_id),
+    )
+    if isinstance(result, ErrorEnvelope):
+        return result
+    turn_ids = result.turn_ids
     matches = [turn_id for turn_id in turn_ids if str(turn_id).startswith(argument)]
     if not matches:
         return ErrorEnvelope(

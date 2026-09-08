@@ -5,10 +5,15 @@ from pathlib import Path
 from queue import Queue
 from uuid import UUID
 
+import pytest
+
 from kinby.cli.client import ContractClient
 from kinby.cli.repl import run_repl
 from kinby.contracts import (
     THREAD_CREATE,
+    THREAD_TURN_INTERRUPT,
+    THREAD_TURN_START,
+    AcceptedResult,
     ApprovalRequested,
     ChangeStatus,
     FileChange,
@@ -21,15 +26,17 @@ from kinby.contracts import (
     Scope,
     ThreadCreateCommand,
     ThreadCreateResult,
+    ThreadTurnInterruptCommand,
+    ThreadTurnStartCommand,
     ToolCall,
     ToolGated,
     ToolResult,
-    TurnCompleted,
     TurnRated,
     TurnStarted,
     TurnVerdict,
     Warning,
 )
+from kinby.core import turns
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.snapshots import WorkspaceDiff
@@ -156,7 +163,10 @@ def test_diff_accepts_a_full_id_and_a_unique_eight_character_prefix(tmp_path: Pa
     asyncio.run(scenario())
 
 
-def test_diff_rejects_an_ambiguous_turn_id_prefix(tmp_path: Path) -> None:
+def test_diff_rejects_an_ambiguous_turn_id_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def scenario() -> None:
         turn_ids = [
             UUID("aaaaaaaa-1111-1111-1111-111111111111"),
@@ -175,18 +185,16 @@ def test_diff_rejects_an_ambiguous_turn_id_prefix(tmp_path: Path) -> None:
         client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
         created = await client.call(THREAD_CREATE, ThreadCreateCommand())
         assert isinstance(created, ThreadCreateResult)
-        event_log = EventLog(tmp_path)
-        for turn_id in turn_ids:
-            await event_log.append(
-                created.id,
-                turn_id,
-                TurnStarted(message="Hello", model="openai:gpt-5"),
-            )
-            await event_log.append(
-                created.id,
-                turn_id,
-                TurnCompleted(input_tokens=0, output_tokens=0),
-            )
+        ids = iter(turn_ids)
+        monkeypatch.setattr(turns, "uuid4", lambda: next(ids))
+        await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("First\nSecond\n"),
+            stdout=StringIO(),
+            stderr=StringIO(),
+        )
         stdout = StringIO()
         stderr = StringIO()
 
@@ -205,6 +213,56 @@ def test_diff_rejects_an_ambiguous_turn_id_prefix(tmp_path: Path) -> None:
             'INVALID_ARGUMENT: Turn id prefix "aaaaaaaa" matches more than one turn.\n'
         )
         assert snapshots.diffs == []
+
+    asyncio.run(scenario())
+
+
+def test_diff_prefix_for_a_running_turn_reports_thread_busy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        turn_id = UUID("aaaaaaaa-1111-1111-1111-111111111111")
+        monkeypatch.setattr(turns, "uuid4", lambda: turn_id)
+        runner = InterruptibleReplRunner()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                runner,
+                snapshots=FakeSnapshotStore(),
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        started = await client.call(
+            THREAD_TURN_START,
+            ThreadTurnStartCommand(thread_id=created.id, message="Hello"),
+        )
+        assert isinstance(started, AcceptedResult)
+        await runner.first_turn_started.wait()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("/diff aaaaaaaa\n"),
+            stdout=StringIO(),
+            stderr=stderr,
+        )
+        interrupted = await client.call(
+            THREAD_TURN_INTERRUPT,
+            ThreadTurnInterruptCommand(thread_id=created.id),
+        )
+
+        assert exit_code == 0
+        assert isinstance(interrupted, AcceptedResult)
+        assert stderr.getvalue() == (
+            f'THREAD_BUSY: Thread "{created.id}" already has a running turn.\n'
+        )
 
     asyncio.run(scenario())
 

@@ -30,6 +30,8 @@ from kinby.contracts import (
     ThreadTurnDiffCommand,
     ThreadTurnDiffResult,
     ThreadTurnInterruptCommand,
+    ThreadTurnListCommand,
+    ThreadTurnListResult,
     ThreadTurnStartCommand,
     TokenTotals,
     TreeId,
@@ -300,13 +302,30 @@ class Turns:
             raise SnapshotUnavailable(
                 f'Workspace snapshots are unavailable for turn "{command.turn_id}".'
             )
-        difference = await self._snapshots.diff(started.snapshot, closed.snapshot)
+        try:
+            difference = await self._snapshots.diff(started.snapshot, closed.snapshot)
+        except SnapshotError as exc:
+            raise SnapshotUnavailable(
+                f'Workspace snapshots are unavailable for turn "{command.turn_id}".'
+            ) from exc
         return ThreadTurnDiffResult(
             turn_id=command.turn_id,
             before=started.snapshot,
             after=closed.snapshot,
             files=difference.files,
             patch=difference.patch,
+        )
+
+    async def list_turns(self, command: ThreadTurnListCommand) -> ThreadTurnListResult:
+        self._require_thread(command.thread_id)
+        return ThreadTurnListResult(
+            turn_ids=list(
+                dict.fromkeys(
+                    event.turn_id
+                    for event in self._log.stored(command.thread_id)
+                    if isinstance(event.payload, TurnStarted)
+                )
+            )
         )
 
     async def wake(

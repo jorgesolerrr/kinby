@@ -27,8 +27,7 @@ from kinby.contracts import (
 )
 from kinby.core import turns
 from kinby.core.dispatcher import AcceptedResult, Dispatcher, TurnConfig, build_dispatcher
-from kinby.core.events import EventLog
-from kinby.core.snapshots import SnapshotStore, WorkspaceDiff
+from kinby.core.snapshots import SnapshotError, SnapshotRef, SnapshotStore, WorkspaceDiff
 from kinby.core.turns import Emit, PreparedTurnRequest, TurnOutcome, TurnRunner
 from tests.helpers import (
     FakeSnapshotStore,
@@ -82,24 +81,32 @@ async def _thread_on(
     return dispatcher, created.id
 
 
+class SelectivelyFailingSnapshotStore(FakeSnapshotStore):
+    def __init__(self, failed_capture: int) -> None:
+        super().__init__()
+        self._failed_capture = failed_capture
+
+    async def capture(self, ref: SnapshotRef) -> TreeId:
+        self.refs.append(ref)
+        if len(self.refs) == self._failed_capture:
+            raise SnapshotError("git write-tree failed")
+        return TreeId(f"{len(self.refs):040d}")
+
+
+class FailingDiffSnapshotStore(FakeSnapshotStore):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff:
+        self.diffs.append((before, after))
+        raise self._error
+
+
 def test_a_closed_turn_diff_returns_its_snapshots_and_the_store_result(tmp_path: Path) -> None:
     async def scenario() -> None:
         snapshots = FakeSnapshotStore()
         dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
-        event_log = EventLog(tmp_path)
-        turn_id = UUID("11111111-1111-1111-1111-111111111111")
-        before = TreeId("1" * 40)
-        after = TreeId("2" * 40)
-        await event_log.append(
-            thread_id,
-            turn_id,
-            TurnStarted(message="Hello", model="openai:gpt-5", snapshot=before),
-        )
-        await event_log.append(
-            thread_id,
-            turn_id,
-            TurnCompleted(input_tokens=0, output_tokens=0, snapshot=after),
-        )
         snapshots.difference = WorkspaceDiff(
             files=[
                 FileChange(
@@ -111,21 +118,28 @@ def test_a_closed_turn_diff_returns_its_snapshots_and_the_store_result(tmp_path:
             ],
             patch="diff --git a/notes.md b/notes.md",
         )
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await _closed_turn_events(dispatcher, thread_id, count=4)
 
         result = await dispatcher.dispatch(
             "thread.turn.diff",
-            {"thread_id": thread_id, "turn_id": turn_id},
+            {"thread_id": thread_id, "turn_id": started.turn_id},
             {Scope.THREAD_READ},
         )
 
         assert result == ThreadTurnDiffResult(
-            turn_id=turn_id,
-            before=before,
-            after=after,
+            turn_id=started.turn_id,
+            before=TreeId(f"{1:040d}"),
+            after=TreeId(f"{2:040d}"),
             files=snapshots.difference.files,
             patch=snapshots.difference.patch,
         )
-        assert snapshots.diffs == [(before, after)]
+        assert snapshots.diffs == [(TreeId(f"{1:040d}"), TreeId(f"{2:040d}"))]
 
     asyncio.run(scenario())
 
@@ -133,28 +147,22 @@ def test_a_closed_turn_diff_returns_its_snapshots_and_the_store_result(tmp_path:
 @pytest.mark.parametrize("missing", ["before", "after"])
 def test_a_turn_diff_requires_both_snapshot_ids(tmp_path: Path, missing: str) -> None:
     async def scenario() -> None:
+        failed_capture = 1 if missing == "before" else 2
         dispatcher, thread_id = await _thread_on(
             tmp_path,
             ScriptedRunner(),
-            FakeSnapshotStore(),
+            SelectivelyFailingSnapshotStore(failed_capture),
         )
-        event_log = EventLog(tmp_path)
-        turn_id = UUID("11111111-1111-1111-1111-111111111111")
-        before = None if missing == "before" else TreeId("1" * 40)
-        after = None if missing == "after" else TreeId("2" * 40)
-        await event_log.append(
-            thread_id,
-            turn_id,
-            TurnStarted(message="Hello", model="openai:gpt-5", snapshot=before),
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
         )
-        await event_log.append(
-            thread_id,
-            turn_id,
-            TurnCompleted(input_tokens=0, output_tokens=0, snapshot=after),
-        )
+        assert isinstance(started, AcceptedResult)
+        await _closed_turn_events(dispatcher, thread_id, count=4)
         result = await dispatcher.dispatch(
             "thread.turn.diff",
-            {"thread_id": thread_id, "turn_id": turn_id},
+            {"thread_id": thread_id, "turn_id": started.turn_id},
             {Scope.THREAD_READ},
         )
 
@@ -167,25 +175,16 @@ def test_a_turn_diff_requires_both_snapshot_ids(tmp_path: Path, missing: str) ->
 def test_a_turn_diff_requires_an_open_snapshot_store(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), None)
-        event_log = EventLog(tmp_path)
-        turn_id = UUID("11111111-1111-1111-1111-111111111111")
-        await event_log.append(
-            thread_id,
-            turn_id,
-            TurnStarted(message="Hello", model="openai:gpt-5", snapshot=TreeId("1" * 40)),
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
         )
-        await event_log.append(
-            thread_id,
-            turn_id,
-            TurnCompleted(
-                input_tokens=0,
-                output_tokens=0,
-                snapshot=TreeId("2" * 40),
-            ),
-        )
+        assert isinstance(started, AcceptedResult)
+        await _closed_turn_events(dispatcher, thread_id, count=4)
         result = await dispatcher.dispatch(
             "thread.turn.diff",
-            {"thread_id": thread_id, "turn_id": turn_id},
+            {"thread_id": thread_id, "turn_id": started.turn_id},
             {Scope.THREAD_READ},
         )
 
@@ -197,26 +196,67 @@ def test_a_turn_diff_requires_an_open_snapshot_store(tmp_path: Path) -> None:
 
 def test_a_running_turn_cannot_be_diffed(tmp_path: Path) -> None:
     async def scenario() -> None:
+        runner = WaitingRunner()
         dispatcher, thread_id = await _thread_on(
             tmp_path,
-            ScriptedRunner(),
+            runner,
             FakeSnapshotStore(),
         )
-        event_log = EventLog(tmp_path)
-        turn_id = UUID("11111111-1111-1111-1111-111111111111")
-        await event_log.append(
-            thread_id,
-            turn_id,
-            TurnStarted(message="Hello", model="openai:gpt-5", snapshot=TreeId("1" * 40)),
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
         )
+        assert isinstance(started, AcceptedResult)
+        await runner.started.wait()
         result = await dispatcher.dispatch(
             "thread.turn.diff",
-            {"thread_id": thread_id, "turn_id": turn_id},
+            {"thread_id": thread_id, "turn_id": started.turn_id},
             {Scope.THREAD_READ},
+        )
+        await dispatcher.dispatch(
+            "thread.turn.interrupt",
+            {"thread_id": thread_id},
+            {Scope.THREAD_OPERATE},
         )
 
         assert isinstance(result, ErrorEnvelope)
         assert result.code is ErrorCode.THREAD_BUSY
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (SnapshotError("git diff failed"), ErrorCode.SNAPSHOT_UNAVAILABLE),
+        (RuntimeError("parser failed"), ErrorCode.INTERNAL),
+    ],
+)
+def test_a_turn_diff_classifies_store_failures(
+    tmp_path: Path,
+    failure: Exception,
+    expected: ErrorCode,
+) -> None:
+    async def scenario() -> None:
+        snapshots = FailingDiffSnapshotStore(failure)
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await _closed_turn_events(dispatcher, thread_id, count=4)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.diff",
+            {"thread_id": thread_id, "turn_id": started.turn_id},
+            {Scope.THREAD_READ},
+        )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is expected
 
     asyncio.run(scenario())
 

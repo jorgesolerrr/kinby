@@ -111,7 +111,7 @@ class WorkspaceSnapshots:
             )
             for path, status in statuses
         ]
-        patch = await self._git("diff", "-p", "-M", before, after)
+        patch = await self._git_output("diff", "-p", "-M", before, after)
         return WorkspaceDiff(files, patch)
 
     async def _create(self) -> None:
@@ -138,7 +138,10 @@ class WorkspaceSnapshots:
             await _run_git(f"--git-dir={self._git_dir}", "config", name, value, cwd=None)
 
     async def _git(self, *arguments: str) -> str:
-        return await _run_git(
+        return (await self._git_output(*arguments)).strip()
+
+    async def _git_output(self, *arguments: str) -> str:
+        return await _run_git_output(
             f"--git-dir={self._git_dir}",
             f"--work-tree={self._work_tree}",
             *arguments,
@@ -155,6 +158,10 @@ async def _git_is_installed() -> bool:
 
 
 async def _run_git(*arguments: str, cwd: Path | None) -> str:
+    return (await _run_git_output(*arguments, cwd=cwd)).strip()
+
+
+async def _run_git_output(*arguments: str, cwd: Path | None) -> str:
     try:
         process = await asyncio.create_subprocess_exec(
             "git",
@@ -184,7 +191,7 @@ async def _run_git(*arguments: str, cwd: Path | None) -> str:
     if process.returncode != 0:
         reason = stderr.decode(errors="replace").strip()
         raise SnapshotError(f"git {_subcommand(arguments)} failed: {reason}")
-    return stdout.decode().strip()
+    return stdout.decode()
 
 
 def _subcommand(arguments: tuple[str, ...]) -> str:

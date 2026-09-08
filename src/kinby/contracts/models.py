@@ -346,6 +346,14 @@ class ThreadTurnDiffCommand(ContractModel):
     turn_id: UUID
 
 
+class ThreadTurnListCommand(ContractModel):
+    thread_id: UUID
+
+
+class ThreadTurnListResult(ContractModel):
+    turn_ids: list[UUID]
+
+
 class ThreadTurnDiffResult(ContractModel):
     turn_id: UUID
     before: TreeId
