@@ -357,8 +357,16 @@ class Turns:
                 previous = await snapshots.capture(
                     snapshot_ref(command.thread_id, revert_id, SnapshotBoundary.BEFORE)
                 )
+            except SnapshotError as exc:
+                raise _snapshot_unavailable(command.turn_id) from exc
+            try:
                 await snapshots.restore(recorded.before)
             except SnapshotError as exc:
+                logger.warning(
+                    "The workspace restore failed. The pre-revert tree is %s.",
+                    previous,
+                    exc_info=True,
+                )
                 raise _snapshot_unavailable(command.turn_id) from exc
             # The work tree now holds the target's before tree, so that is what was
             # restored even when capturing the after ref fails. The revert stays

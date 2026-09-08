@@ -20,6 +20,7 @@ from kinby.contracts import (
     ThreadCreateResult,
     ThreadTurnDiffResult,
     ThreadTurnListResult,
+    ThreadTurnRevertPreviewResult,
     ThreadTurnTargetListResult,
     TreeId,
     TurnCompleted,
@@ -893,6 +894,31 @@ def test_a_revert_that_cannot_restore_reports_snapshots_unavailable(tmp_path: Pa
     asyncio.run(scenario())
 
 
+def test_a_revert_that_cannot_restore_logs_its_recovery_tree(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def scenario() -> None:
+        snapshots = FailingRestoreSnapshotStore()
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+
+        with caplog.at_level(logging.WARNING, logger="kinby.core.turns"):
+            result = await dispatcher.dispatch(
+                "thread.turn.revert",
+                {"thread_id": thread_id, "turn_id": turn_id},
+                {Scope.THREAD_OPERATE},
+            )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is ErrorCode.SNAPSHOT_UNAVAILABLE
+        assert [record.getMessage() for record in caplog.records] == [
+            f"The workspace restore failed. The pre-revert tree is {3:040d}."
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_a_turn_on_another_thread_is_refused_while_a_revert_runs(tmp_path: Path) -> None:
     async def scenario() -> None:
         snapshots = BlockingRestoreSnapshotStore()
@@ -940,6 +966,26 @@ def test_a_revert_needs_only_the_target_before_snapshot(tmp_path: Path) -> None:
 
         assert isinstance(result, AcceptedResult)
         assert snapshots.restored == [TreeId(f"{1:040d}")]
+
+    asyncio.run(scenario())
+
+
+def test_a_revert_preview_needs_only_the_target_before_snapshot(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = SelectivelyFailingSnapshotStore(failed_capture=2)
+        snapshots.restore_difference = WorkspaceDiff([], "")
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.revert.preview",
+            {"thread_id": thread_id, "turn_id": turn_id},
+            {Scope.THREAD_READ},
+        )
+
+        assert isinstance(result, ThreadTurnRevertPreviewResult)
+        assert result.turn_id == turn_id
+        assert snapshots.restore_previews == [TreeId(f"{1:040d}")]
 
     asyncio.run(scenario())
 
