@@ -44,6 +44,8 @@ class SnapshotStore(Protocol):
 
     async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff: ...
 
+    async def restore(self, tree: TreeId) -> None: ...
+
 
 @dataclass(frozen=True)
 class WorkspaceDiff:
@@ -57,8 +59,9 @@ class WorkspaceSnapshots:
     def __init__(self, git_dir: Path, work_tree: Path) -> None:
         self._git_dir = git_dir
         self._work_tree = work_tree
-        # Turns on different threads share one workspace, one index and one lock file.
-        self._capturing = asyncio.Lock()
+        # Turns on different threads share one workspace, one index and one lock file,
+        # so every command that rebuilds the index waits its turn here.
+        self._rebuilding_the_index = asyncio.Lock()
 
     @staticmethod
     async def open(
@@ -86,15 +89,26 @@ class WorkspaceSnapshots:
 
     async def capture(self, ref: SnapshotRef) -> TreeId:
         """Stage the whole work tree, commit it, point *ref* at the commit."""
-        async with self._capturing:
-            # The index outlives the capture, so a file staged before a .gitignore rule
-            # matched it would stay staged. Rebuild from the work tree every time.
-            await self._git("read-tree", "--empty")
-            await self._git("add", "--all")
+        async with self._rebuilding_the_index:
+            await self._stage_work_tree()
             tree = TreeId(await self._git("write-tree"))
             commit = await self._git("commit-tree", tree, "-m", ref)
             await self._git("update-ref", ref, commit)
         return tree
+
+    async def restore(self, tree: TreeId) -> None:
+        """Make the work tree match *tree*, leaving ignored files where they are."""
+        async with self._rebuilding_the_index:
+            # read-tree only removes what the index knows, so a file added since the
+            # last capture has to be staged first or it would survive the restore.
+            await self._stage_work_tree()
+            await self._git("read-tree", "--reset", "-u", tree)
+
+    async def _stage_work_tree(self) -> None:
+        # The index outlives a capture, so a file staged before a .gitignore rule
+        # matched it would stay staged. Rebuild from the work tree every time.
+        await self._git("read-tree", "--empty")
+        await self._git("add", "--all")
 
     async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff:
         """Describe the paths and line changes between two workspace snapshots."""

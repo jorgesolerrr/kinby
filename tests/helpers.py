@@ -70,6 +70,7 @@ class FakeSnapshotStore:
     def __init__(self, *, failing: bool = False) -> None:
         self.refs: list[SnapshotRef] = []
         self.diffs: list[tuple[TreeId, TreeId]] = []
+        self.restored: list[TreeId] = []
         self.difference = WorkspaceDiff([], "")
         self._failing = failing
 
@@ -82,6 +83,9 @@ class FakeSnapshotStore:
     async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff:
         self.diffs.append((before, after))
         return self.difference
+
+    async def restore(self, tree: TreeId) -> None:
+        self.restored.append(tree)
 
 
 def turn_config_stub(build: Callable[[], TurnConfig]) -> Callable[..., Awaitable[TurnConfig]]:

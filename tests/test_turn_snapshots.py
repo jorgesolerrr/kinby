@@ -23,12 +23,22 @@ from kinby.contracts import (
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
+    TurnRated,
     TurnStarted,
+    WorkspaceReverted,
+    is_turn_closing,
 )
 from kinby.core import turns
 from kinby.core.dispatcher import AcceptedResult, Dispatcher, TurnConfig, build_dispatcher
+from kinby.core.events import EventLog
 from kinby.core.snapshots import SnapshotError, SnapshotRef, SnapshotStore, WorkspaceDiff
-from kinby.core.turns import Emit, PreparedTurnRequest, TurnOutcome, TurnRunner
+from kinby.core.turns import (
+    Emit,
+    PreparedTurnRequest,
+    TurnOutcome,
+    TurnResult,
+    TurnRunner,
+)
 from tests.helpers import (
     FakeSnapshotStore,
     cannot_restore,
@@ -91,6 +101,43 @@ class SelectivelyFailingSnapshotStore(FakeSnapshotStore):
         if len(self.refs) == self._failed_capture:
             raise SnapshotError("git write-tree failed")
         return TreeId(f"{len(self.refs):040d}")
+
+
+class ParksTheSecondTurnRunner:
+    """Close the first turn, park the second, so the thread carries a rating and a park."""
+
+    def __init__(self) -> None:
+        self._parking = ParkingRunner()
+        self.closed = False
+
+    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnResult:
+        if not self.closed:
+            self.closed = True
+            return TurnOutcome(input_tokens=4, output_tokens=2)
+        return await self._parking.run(turn, emit)
+
+    resume = does_not_park
+    restore = cannot_restore
+
+
+class FailingRestoreSnapshotStore(FakeSnapshotStore):
+    async def restore(self, tree: TreeId) -> None:
+        self.restored.append(tree)
+        raise SnapshotError("git read-tree failed")
+
+
+class BlockingRestoreSnapshotStore(FakeSnapshotStore):
+    """Hold the work tree mid-restore so a caller can try to start a turn against it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def restore(self, tree: TreeId) -> None:
+        self.restored.append(tree)
+        self.entered.set()
+        await self.release.wait()
 
 
 class FailingDiffSnapshotStore(FakeSnapshotStore):
@@ -606,5 +653,340 @@ def test_an_interrupt_owns_completion_when_the_runner_stops_during_the_wait(
             f"refs/kinby/snapshots/{thread_id}/{started.turn_id}/after",
         ]
         assert failures == []
+
+    asyncio.run(scenario())
+
+
+async def _closed_turn(dispatcher: Dispatcher, thread_id: UUID) -> UUID:
+    """Run one scripted turn on *thread_id* to completion and return its id."""
+    started = await dispatcher.dispatch(
+        "thread.turn.start",
+        {"thread_id": thread_id, "message": "Hello"},
+        {Scope.THREAD_OPERATE},
+    )
+    assert isinstance(started, AcceptedResult)
+    subscription = dispatcher.subscribe(
+        "thread.subscribe",
+        {"thread_id": thread_id},
+        {Scope.THREAD_READ},
+    )
+    while True:
+        event = cast(Event, await asyncio.wait_for(anext(subscription), timeout=1))
+        if event.turn_id == started.turn_id and is_turn_closing(event.payload):
+            break
+    await subscription.aclose()
+    return started.turn_id
+
+
+def test_a_revert_snapshots_around_the_restore_and_records_it(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(result, AcceptedResult)
+        assert result.thread_id == thread_id
+        assert result.turn_id != turn_id
+        assert snapshots.restored == [TreeId(f"{1:040d}")]
+        assert snapshots.refs[2:] == [
+            SnapshotRef(f"refs/kinby/snapshots/{thread_id}/{result.turn_id}/before"),
+            SnapshotRef(f"refs/kinby/snapshots/{thread_id}/{result.turn_id}/after"),
+        ]
+        events = EventLog(tmp_path).stored(thread_id)
+        assert events[-1].turn_id == result.turn_id
+        assert events[-1].sequence == result.sequence
+        assert events[-1].payload == WorkspaceReverted(
+            target_turn_id=turn_id,
+            previous=TreeId(f"{3:040d}"),
+            restored=TreeId(f"{4:040d}"),
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_revert_is_refused_while_a_turn_runs_on_another_thread(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        runner = WaitingRunner()
+        dispatcher, thread_id = await _thread_on(tmp_path, runner, snapshots)
+        other = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(other, ThreadCreateResult)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": other.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await runner.started.wait()
+        captures = len(snapshots.refs)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": started.turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+        runner.release.set()
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is ErrorCode.INSTANCE_BUSY
+        assert snapshots.restored == []
+        assert len(snapshots.refs) == captures
+
+    asyncio.run(scenario())
+
+
+def test_a_revert_is_refused_while_an_approval_is_parked(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        dispatcher, thread_id = await _thread_on(tmp_path, ParkingRunner(), snapshots)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        events = await _closed_turn_events(dispatcher, thread_id, count=2)
+        assert isinstance(events[-1].payload, ApprovalRequested)
+        captures = len(snapshots.refs)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": started.turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is ErrorCode.INSTANCE_BUSY
+        assert snapshots.restored == []
+        assert len(snapshots.refs) == captures
+
+    asyncio.run(scenario())
+
+
+def test_a_revert_can_be_diffed_and_reverted_like_a_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+        reverted = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(reverted, AcceptedResult)
+
+        difference = await dispatcher.dispatch(
+            "thread.turn.diff",
+            {"thread_id": thread_id, "turn_id": reverted.turn_id},
+            {Scope.THREAD_READ},
+        )
+        reverted_again = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": reverted.turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(difference, ThreadTurnDiffResult)
+        assert (difference.before, difference.after) == (TreeId(f"{3:040d}"), TreeId(f"{4:040d}"))
+        assert isinstance(reverted_again, AcceptedResult)
+        assert snapshots.restored == [TreeId(f"{1:040d}"), TreeId(f"{3:040d}")]
+
+    asyncio.run(scenario())
+
+
+def test_a_revert_needs_the_target_before_snapshot(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = SelectivelyFailingSnapshotStore(failed_capture=1)
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is ErrorCode.SNAPSHOT_UNAVAILABLE
+        assert snapshots.restored == []
+
+    asyncio.run(scenario())
+
+
+def test_a_revert_needs_an_open_snapshot_store(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), None)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is ErrorCode.SNAPSHOT_UNAVAILABLE
+
+    asyncio.run(scenario())
+
+
+def test_a_revert_that_cannot_restore_reports_snapshots_unavailable(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FailingRestoreSnapshotStore()
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+        events = len(EventLog(tmp_path).stored(thread_id))
+
+        result = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is ErrorCode.SNAPSHOT_UNAVAILABLE
+        assert len(EventLog(tmp_path).stored(thread_id)) == events
+
+    asyncio.run(scenario())
+
+
+def test_a_turn_on_another_thread_is_refused_while_a_revert_runs(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = BlockingRestoreSnapshotStore()
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+        other = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(other, ThreadCreateResult)
+        reverting = asyncio.create_task(
+            dispatcher.dispatch(
+                "thread.turn.revert",
+                {"thread_id": thread_id, "turn_id": turn_id},
+                {Scope.THREAD_OPERATE},
+            )
+        )
+        await asyncio.wait_for(snapshots.entered.wait(), timeout=1)
+        captures = len(snapshots.refs)
+
+        refused = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": other.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        snapshots.release.set()
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INSTANCE_BUSY
+        assert len(snapshots.refs) == captures
+        assert isinstance(await asyncio.wait_for(reverting, timeout=1), AcceptedResult)
+
+    asyncio.run(scenario())
+
+
+def test_a_revert_needs_only_the_target_before_snapshot(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = SelectivelyFailingSnapshotStore(failed_capture=2)
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+        assert isinstance(EventLog(tmp_path).stored(thread_id)[-1].payload, TurnCompleted)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(result, AcceptedResult)
+        assert snapshots.restored == [TreeId(f"{1:040d}")]
+
+    asyncio.run(scenario())
+
+
+def test_a_revert_is_refused_while_an_approval_parks_behind_a_later_event(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        runner = ParksTheSecondTurnRunner()
+        dispatcher, thread_id = await _thread_on(tmp_path, runner, snapshots)
+        rated = await _closed_turn(dispatcher, thread_id)
+        parked = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(parked, AcceptedResult)
+        events = await _closed_turn_events(dispatcher, thread_id, count=4)
+        assert isinstance(events[-1].payload, ApprovalRequested)
+        # The rating lands after the approval, so the park is no longer the last event.
+        await dispatcher.dispatch(
+            "thread.turn.rate",
+            {"thread_id": thread_id, "turn_id": rated, "verdict": "good", "reason": None},
+            {Scope.THREAD_RATE},
+        )
+        assert isinstance(EventLog(tmp_path).stored(thread_id)[-1].payload, TurnRated)
+        captures = len(snapshots.refs)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": rated},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is ErrorCode.INSTANCE_BUSY
+        assert snapshots.restored == []
+        assert len(snapshots.refs) == captures
+
+    asyncio.run(scenario())
+
+
+def test_a_revert_is_recorded_even_when_its_after_capture_fails(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        # Captures 1 and 2 bracket the turn, 3 is the revert's before, 4 its after.
+        snapshots = SelectivelyFailingSnapshotStore(failed_capture=4)
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(result, AcceptedResult)
+        assert snapshots.restored == [TreeId(f"{1:040d}")]
+        assert EventLog(tmp_path).stored(thread_id)[-1].payload == WorkspaceReverted(
+            target_turn_id=turn_id,
+            previous=TreeId(f"{3:040d}"),
+            restored=TreeId(f"{1:040d}"),
+        )
+
+    asyncio.run(scenario())
+
+
+def test_thread_turn_revert_is_dispatched_under_thread_operate(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+
+        denied = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": turn_id},
+            {Scope.THREAD_READ},
+        )
+
+        assert denied == ErrorEnvelope(
+            code=ErrorCode.PERMISSION_DENIED,
+            message='Missing required scope "thread:operate".',
+            retryable=False,
+        )
+        assert snapshots.restored == []
 
     asyncio.run(scenario())

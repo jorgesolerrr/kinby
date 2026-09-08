@@ -29,6 +29,7 @@ from kinby.contracts import (
     RoutineTrigger,
     SignalReceived,
     SignalSummary,
+    accepted,
 )
 from kinby.core.errors import BudgetExceeded, InstanceBusy, ModelUnpriced, RoutineNotFound
 from kinby.core.events import EventLog
@@ -124,14 +125,7 @@ class Scheduler:
                     and payload.origin.name == name
                     and payload.delivery.delivery_id == delivery.delivery_id
                 ):
-                    return DeliveryReceipt(
-                        AcceptedResult(
-                            thread_id=event.thread_id,
-                            turn_id=event.turn_id,
-                            sequence=event.sequence,
-                        ),
-                        repeated=True,
-                    )
+                    return DeliveryReceipt(accepted(event), repeated=True)
         origin = RoutineOrigin(
             name=name,
             trigger=trigger,
@@ -145,14 +139,7 @@ class Scheduler:
             SignalReceived(origin=origin, delivery=delivery),
         )
         self.schedule()
-        return DeliveryReceipt(
-            AcceptedResult(
-                thread_id=event.thread_id,
-                turn_id=event.turn_id,
-                sequence=event.sequence,
-            ),
-            repeated=False,
-        )
+        return DeliveryReceipt(accepted(event), repeated=False)
 
     async def _work(self) -> None:
         while True:

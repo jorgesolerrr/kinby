@@ -16,7 +16,6 @@ from uuid import UUID
 from kinby.cli.client import ContractClient, format_error
 from kinby.cli.routines import show_routines, show_startup_routines, watch_routine_notices
 from kinby.contracts import (
-    STATS_GET,
     THREAD_APPROVAL_RESPOND,
     THREAD_MODE_SET,
     THREAD_SUBSCRIBE,
@@ -24,6 +23,7 @@ from kinby.contracts import (
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_LIST,
     THREAD_TURN_RATE,
+    THREAD_TURN_REVERT,
     THREAD_TURN_START,
     AcceptedResult,
     ApprovalRequested,
@@ -36,7 +36,6 @@ from kinby.contracts import (
     PermissionMode,
     RoutineListResult,
     RoutineRunOutcome,
-    StatsGetCommand,
     ThreadApprovalRespondCommand,
     ThreadModeSetCommand,
     ThreadSubscribeCommand,
@@ -45,6 +44,7 @@ from kinby.contracts import (
     ThreadTurnInterruptCommand,
     ThreadTurnListCommand,
     ThreadTurnRateCommand,
+    ThreadTurnRevertCommand,
     ThreadTurnStartCommand,
     ToolCall,
     ToolGated,
@@ -208,18 +208,14 @@ async def _run_repl(
                 await show_routines(client, stdout, stderr)
                 continue
             if command == "/diff":
-                target = await _resolve_turn_id(client, thread_id, argument.strip())
-                if isinstance(target, ErrorEnvelope):
-                    _render_error(target, stderr)
-                    continue
-                difference = await client.call(
-                    THREAD_TURN_DIFF,
-                    ThreadTurnDiffCommand(thread_id=thread_id, turn_id=target),
-                )
+                difference = await _diff_turn(client, thread_id, argument.strip())
                 if isinstance(difference, ErrorEnvelope):
                     _render_error(difference, stderr)
                     continue
                 _render_diff(difference, stdout)
+                continue
+            if command == "/revert":
+                await _revert_turn(client, thread_id, argument.strip(), repl_io)
                 continue
             if command == "/mode":
                 try:
@@ -282,50 +278,35 @@ async def _run_repl(
                 await _rate_turn(client, thread_id, accepted.turn_id, repl_io)
 
 
-async def _closed_turn_ids(
-    client: ContractClient,
-    thread_id: UUID,
-) -> list[UUID] | ErrorEnvelope:
-    result = await client.call(STATS_GET, StatsGetCommand())
-    if isinstance(result, ErrorEnvelope):
-        return result
-    return [record.turn_id for record in result.records if record.thread_id == thread_id]
-
-
 async def _resolve_turn_id(
     client: ContractClient,
     thread_id: UUID,
     argument: str,
 ) -> UUID | ErrorEnvelope:
+    if argument:
+        try:
+            return UUID(argument)
+        except ValueError:
+            pass
+        if len(argument) < 8:
+            return ErrorEnvelope(
+                code=ErrorCode.INVALID_ARGUMENT,
+                message="A turn id prefix must contain at least eight characters.",
+                retryable=False,
+            )
+    listed = await client.call(THREAD_TURN_LIST, ThreadTurnListCommand(thread_id=thread_id))
+    if isinstance(listed, ErrorEnvelope):
+        return listed
     if not argument:
-        turn_ids = await _closed_turn_ids(client, thread_id)
-        if isinstance(turn_ids, ErrorEnvelope):
-            return turn_ids
-        if turn_ids:
-            return turn_ids[-1]
+        closed = [turn.turn_id for turn in listed.turns if turn.closed]
+        if closed:
+            return closed[-1]
         return ErrorEnvelope(
             code=ErrorCode.NOT_FOUND,
             message="No closed turn was found on this thread.",
             retryable=False,
         )
-    try:
-        return UUID(argument)
-    except ValueError:
-        pass
-    if len(argument) < 8:
-        return ErrorEnvelope(
-            code=ErrorCode.INVALID_ARGUMENT,
-            message="A turn id prefix must contain at least eight characters.",
-            retryable=False,
-        )
-    result = await client.call(
-        THREAD_TURN_LIST,
-        ThreadTurnListCommand(thread_id=thread_id),
-    )
-    if isinstance(result, ErrorEnvelope):
-        return result
-    turn_ids = result.turn_ids
-    matches = [turn_id for turn_id in turn_ids if str(turn_id).startswith(argument)]
+    matches = [turn.turn_id for turn in listed.turns if str(turn.turn_id).startswith(argument)]
     if not matches:
         return ErrorEnvelope(
             code=ErrorCode.NOT_FOUND,
@@ -341,11 +322,59 @@ async def _resolve_turn_id(
     return matches[0]
 
 
-def _render_diff(difference: ThreadTurnDiffResult, stdout: TextIO) -> None:
+async def _diff_turn(
+    client: ContractClient,
+    thread_id: UUID,
+    argument: str,
+) -> ThreadTurnDiffResult | ErrorEnvelope:
+    target = await _resolve_turn_id(client, thread_id, argument)
+    if isinstance(target, ErrorEnvelope):
+        return target
+    return await client.call(
+        THREAD_TURN_DIFF,
+        ThreadTurnDiffCommand(thread_id=thread_id, turn_id=target),
+    )
+
+
+async def _revert_turn(
+    client: ContractClient,
+    thread_id: UUID,
+    argument: str,
+    repl_io: _ReplIO,
+) -> None:
+    difference = await _diff_turn(client, thread_id, argument)
+    if isinstance(difference, ErrorEnvelope):
+        _render_error(difference, repl_io.stderr)
+        return
+    _render_files(difference, repl_io.stdout)
+    repl_io.stdout.write(
+        f"Revert {len(difference.files)} files to before {difference.turn_id}? [y/N] "
+    )
+    repl_io.stdout.flush()
+    answer = (await repl_io.stdin.readline()).rstrip("\r\n")
+    if answer != "y":
+        return
+    result = await client.call(
+        THREAD_TURN_REVERT,
+        ThreadTurnRevertCommand(thread_id=thread_id, turn_id=difference.turn_id),
+    )
+    if isinstance(result, ErrorEnvelope):
+        _render_error(result, repl_io.stderr)
+        return
+    repl_io.stdout.write(f"Workspace reverted to before {difference.turn_id}.\n")
+    repl_io.stdout.flush()
+
+
+def _render_files(difference: ThreadTurnDiffResult, stdout: TextIO) -> None:
     for change in difference.files:
         stdout.write(
             f"{change.status.value} {change.path} +{change.additions} -{change.deletions}\n"
         )
+    stdout.flush()
+
+
+def _render_diff(difference: ThreadTurnDiffResult, stdout: TextIO) -> None:
+    _render_files(difference, stdout)
     if difference.patch:
         stdout.write(difference.patch)
         if not difference.patch.endswith("\n"):

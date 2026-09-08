@@ -446,3 +446,38 @@ def test_captures_asked_for_at_once_do_not_fight_over_the_index(tmp_path: Path) 
         assert len(set(trees)) == 1
 
     asyncio.run(scenario())
+
+
+def test_restore_puts_the_work_tree_back_and_leaves_ignored_files_alone(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        workspace = tmp_path / "workspace"
+        (workspace / ".gitignore").write_text("secrets.env\n", encoding="utf-8")
+        target = await store.capture(_BEFORE)
+        (workspace / "notes.md").write_text("edited\n", encoding="utf-8")
+        (workspace / "added.md").write_text("new\n", encoding="utf-8")
+        (workspace / "secrets.env").write_text("KEY=1\n", encoding="utf-8")
+
+        await store.restore(target)
+
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == "first\n"
+        assert not (workspace / "added.md").exists()
+        assert (workspace / "secrets.env").read_text(encoding="utf-8") == "KEY=1\n"
+        assert await store.capture(_AFTER) == target
+
+    asyncio.run(scenario())
+
+
+def test_restore_brings_back_a_file_deleted_since_the_target(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        workspace = tmp_path / "workspace"
+        target = await store.capture(_BEFORE)
+        (workspace / "notes.md").unlink()
+        await store.capture(_AFTER)
+
+        await store.restore(target)
+
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == "first\n"
+
+    asyncio.run(scenario())
