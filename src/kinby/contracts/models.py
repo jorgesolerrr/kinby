@@ -419,6 +419,24 @@ class ToolTime(ContractModel):
     write_ms: int = 0
 
 
+class Navigation(ContractModel):
+    read_calls: int = 0
+    reads_before_first_write: int = 0
+    write_calls: int = 0
+    duration_ms: int = 0
+    distinct_paths: int = 0
+    repeat_opens: int = 0
+    tokens_before_first_write: int = 0
+
+
+class NavigationMeans(ContractModel):
+    turns: int = 0
+    read_calls: float | None = None
+    duration_ms: float | None = None
+    tokens_before_first_write: float | None = None
+    repeat_opens: float | None = None
+
+
 class TurnMetrics(TokenTotals):
     thread_id: UUID
     turn_id: UUID
@@ -439,6 +457,7 @@ class TurnMetrics(TokenTotals):
     tool_duration: ToolTime = Field(default_factory=ToolTime)
     memory_tokens: float
     rating: TurnRated | None
+    navigation: Navigation = Field(default_factory=Navigation)
 
 
 class StatsSummary(TokenTotals):
@@ -457,6 +476,7 @@ class StatsSummary(TokenTotals):
     mean_duration_seconds: float | None
     good_ratings: int
     bad_ratings: int
+    navigation: NavigationMeans = Field(default_factory=NavigationMeans)
 
 
 class StatsBucket(StatsSummary):

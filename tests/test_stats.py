@@ -19,6 +19,8 @@ from kinby.contracts import (
     MemoryRecapped,
     ModelCallMismatch,
     ModelCompleted,
+    Navigation,
+    NavigationMeans,
     Scope,
     StatsBucket,
     StatsBucketSize,
@@ -851,6 +853,209 @@ def test_turn_metrics_reports_denies_and_read_write_tool_time() -> None:
     assert record.tool_duration == ToolTime(read_ms=7, write_ms=11)
 
 
+def test_turn_metrics_counts_reads_after_a_write_and_tokens_before_it() -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    started_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = _turn_events(
+        thread_id,
+        turn_id,
+        started_at,
+        TurnStarted(message="navigate then edit", model="openai:gpt-5"),
+        ModelCompleted(model="openai:gpt-5", input_tokens=10, output_tokens=5, duration_ms=40),
+        ToolCall(call_id="r1", name="read", arguments={"path": "a.py"}, write=False),
+        ToolResult(call_id="r1", name="read", output="a", error=False, duration_ms=4),
+        ToolCall(call_id="r2", name="read", arguments={"path": "b.py"}, write=False),
+        ToolResult(call_id="r2", name="read", output="b", error=False, duration_ms=6),
+        ToolCall(call_id="r3", name="read", arguments={"path": "c.py"}, write=False),
+        ToolResult(call_id="r3", name="read", output="c", error=False, duration_ms=8),
+        ModelCompleted(model="openai:gpt-5", input_tokens=20, output_tokens=10, duration_ms=50),
+        ToolCall(call_id="w1", name="edit", arguments={"path": "a.py"}, write=True),
+        ToolResult(call_id="w1", name="edit", output="edited", error=False, duration_ms=11),
+        ToolCall(call_id="r4", name="read", arguments={"path": "a.py"}, write=False),
+        ToolResult(call_id="r4", name="read", output="a again", error=False, duration_ms=2),
+        ToolCall(call_id="r5", name="read", arguments={"path": "e.py"}, write=False),
+        ToolResult(call_id="r5", name="read", output="e", error=False, duration_ms=3),
+        ModelCompleted(model="openai:gpt-5", input_tokens=7, output_tokens=3, duration_ms=12),
+        TurnCompleted(input_tokens=37, output_tokens=18),
+    )
+
+    record = turn_metrics(events).records[0]
+
+    assert record.tool_calls == {"read": 5, "edit": 1}
+    assert record.navigation == Navigation(
+        read_calls=5,
+        reads_before_first_write=3,
+        write_calls=1,
+        duration_ms=23,
+        distinct_paths=4,
+        repeat_opens=1,
+        tokens_before_first_write=45,
+    )
+
+
+def test_turn_metrics_treats_a_read_only_turn_as_all_navigation() -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    started_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = _turn_events(
+        thread_id,
+        turn_id,
+        started_at,
+        TurnStarted(message="just look", model="openai:gpt-5"),
+        ModelCompleted(model="openai:gpt-5", input_tokens=8, output_tokens=2, duration_ms=20),
+        ToolCall(call_id="r1", name="read", arguments={"path": "notes.md"}, write=False),
+        ToolResult(call_id="r1", name="read", output="notes", error=False, duration_ms=9),
+        ToolCall(call_id="g1", name="grep", arguments={"pattern": "TODO"}, write=False),
+        ToolResult(call_id="g1", name="grep", output="none", error=False, duration_ms=5),
+        ModelCompleted(model="openai:gpt-5", input_tokens=12, output_tokens=4, duration_ms=30),
+        TurnCompleted(input_tokens=20, output_tokens=6),
+    )
+
+    record = turn_metrics(events).records[0]
+
+    assert record.navigation == Navigation(
+        read_calls=2,
+        reads_before_first_write=2,
+        write_calls=0,
+        duration_ms=14,
+        distinct_paths=1,
+        repeat_opens=0,
+        tokens_before_first_write=26,
+    )
+
+
+def test_turn_metrics_counts_a_repeated_path_as_one_distinct_and_one_repeat() -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    started_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = _turn_events(
+        thread_id,
+        turn_id,
+        started_at,
+        TurnStarted(message="reopen", model="openai:gpt-5"),
+        ToolCall(call_id="r1", name="read", arguments={"path": "src/main.py"}, write=False),
+        ToolResult(call_id="r1", name="read", output="first", error=False, duration_ms=3),
+        ToolCall(call_id="r2", name="read", arguments={"path": "src/main.py"}, write=False),
+        ToolResult(call_id="r2", name="read", output="again", error=False, duration_ms=3),
+        TurnCompleted(input_tokens=0, output_tokens=0),
+    )
+
+    record = turn_metrics(events).records[0]
+
+    assert record.navigation.distinct_paths == 1
+    assert record.navigation.repeat_opens == 1
+    assert record.navigation.read_calls == 2
+
+
+def test_turn_metrics_excludes_memory_and_skill_calls_from_navigation() -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    started_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = _turn_events(
+        thread_id,
+        turn_id,
+        started_at,
+        TurnStarted(message="memory first", model="openai:gpt-5"),
+        ModelCompleted(model="openai:gpt-5", input_tokens=4, output_tokens=1, duration_ms=10),
+        ToolCall(call_id="s1", name="skill", arguments={"name": "review"}, write=False),
+        ToolResult(call_id="s1", name="skill", output="body", error=False, duration_ms=1),
+        ToolCall(call_id="m1", name="memory_search", arguments={}, write=False),
+        ToolResult(call_id="m1", name="memory_search", output="hit", error=False, duration_ms=2),
+        ToolCall(call_id="m2", name="memory_open", arguments={}, write=False),
+        ToolResult(call_id="m2", name="memory_open", output="node", error=False, duration_ms=2),
+        ToolCall(call_id="r1", name="read", arguments={"path": "app.py"}, write=False),
+        ToolResult(call_id="r1", name="read", output="app", error=False, duration_ms=7),
+        ToolCall(call_id="memw", name="remember", arguments={"text": "fact"}, write=True),
+        ToolResult(call_id="memw", name="remember", output="ok", error=False, duration_ms=4),
+        ModelCompleted(model="openai:gpt-5", input_tokens=6, output_tokens=2, duration_ms=15),
+        ToolCall(call_id="w1", name="edit", arguments={"path": "app.py"}, write=True),
+        ToolResult(call_id="w1", name="edit", output="edited", error=False, duration_ms=8),
+        TurnCompleted(input_tokens=10, output_tokens=3),
+    )
+
+    record = turn_metrics(events).records[0]
+
+    assert record.navigation == Navigation(
+        read_calls=1,
+        reads_before_first_write=1,
+        write_calls=1,
+        duration_ms=7,
+        distinct_paths=1,
+        repeat_opens=0,
+        tokens_before_first_write=13,
+    )
+
+
+def test_stats_get_averages_navigation_over_turns_that_wrote(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    wrote_a = uuid4()
+    wrote_b = uuid4()
+    read_only = uuid4()
+    closed_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        *_turn_events(
+            thread_id,
+            wrote_a,
+            closed_at,
+            TurnStarted(message="edit a", model="openai:gpt-5"),
+            ModelCompleted(model="openai:gpt-5", input_tokens=10, output_tokens=6, duration_ms=20),
+            ToolCall(call_id="r1", name="read", arguments={"path": "a.py"}, write=False),
+            ToolResult(call_id="r1", name="read", output="a", error=False, duration_ms=4),
+            ToolCall(call_id="r2", name="read", arguments={"path": "a.py"}, write=False),
+            ToolResult(call_id="r2", name="read", output="a", error=False, duration_ms=4),
+            ToolCall(call_id="w1", name="edit", arguments={"path": "a.py"}, write=True),
+            ToolResult(call_id="w1", name="edit", output="ok", error=False, duration_ms=5),
+            TurnCompleted(input_tokens=10, output_tokens=6),
+        ),
+        *_turn_events(
+            thread_id,
+            wrote_b,
+            closed_at,
+            TurnStarted(message="edit b", model="openai:gpt-5"),
+            ModelCompleted(model="openai:gpt-5", input_tokens=20, output_tokens=10, duration_ms=30),
+            ToolCall(call_id="r1", name="read", arguments={"path": "b.py"}, write=False),
+            ToolResult(call_id="r1", name="read", output="b", error=False, duration_ms=8),
+            ToolCall(call_id="w1", name="edit", arguments={"path": "b.py"}, write=True),
+            ToolResult(call_id="w1", name="edit", output="ok", error=False, duration_ms=5),
+            ToolCall(call_id="r2", name="read", arguments={"path": "c.py"}, write=False),
+            ToolResult(call_id="r2", name="read", output="c", error=False, duration_ms=6),
+            TurnCompleted(input_tokens=20, output_tokens=10),
+        ),
+        *_turn_events(
+            thread_id,
+            read_only,
+            closed_at,
+            TurnStarted(message="look only", model="openai:gpt-5"),
+            ModelCompleted(model="openai:gpt-5", input_tokens=50, output_tokens=20, duration_ms=40),
+            ToolCall(call_id="r1", name="read", arguments={"path": "c.py"}, write=False),
+            ToolResult(call_id="r1", name="read", output="c", error=False, duration_ms=40),
+            ToolCall(call_id="r2", name="read", arguments={"path": "d.py"}, write=False),
+            ToolResult(call_id="r2", name="read", output="d", error=False, duration_ms=40),
+            ToolCall(call_id="r3", name="read", arguments={"path": "e.py"}, write=False),
+            ToolResult(call_id="r3", name="read", output="e", error=False, duration_ms=40),
+            TurnCompleted(input_tokens=50, output_tokens=20),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get",
+            {},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.buckets[0].navigation == NavigationMeans(
+        turns=2,
+        read_calls=2.0,
+        duration_ms=11.0,
+        tokens_before_first_write=23.0,
+        repeat_opens=0.5,
+    )
+
+
 def _event(
     sequence: int,
     thread_id: UUID,
@@ -865,6 +1070,18 @@ def _event(
         timestamp=timestamp,
         payload=payload,
     )
+
+
+def _turn_events(
+    thread_id: UUID,
+    turn_id: UUID,
+    started_at: datetime,
+    *payloads: object,
+) -> list[Event]:
+    return [
+        _event(sequence, thread_id, turn_id, started_at, payload)
+        for sequence, payload in enumerate(payloads, start=1)
+    ]
 
 
 def test_stats_get_marks_missing_start_metadata_as_unknown(tmp_path: Path) -> None:
@@ -1328,6 +1545,11 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "mean seconds",
         "good",
         "bad",
+        "nav turns",
+        "nav reads",
+        "nav ms",
+        "nav tokens",
+        "nav repeats",
     ]
     bucket_fields = lines[1].split("\t")
     assert bucket_fields[:22] == [
@@ -1355,7 +1577,7 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "10",
     ]
     assert float(bucket_fields[22]) >= 0
-    assert bucket_fields[23:] == ["0", "0"]
+    assert bucket_fields[23:] == ["0", "0", "1", "0.000", "0.000", "0.000", "0.000"]
     total_fields = lines[2].split("\t")
     assert total_fields[0] == "total"
     assert total_fields[1:] == bucket_fields[1:]
@@ -1363,7 +1585,96 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
     assert len(report.records) == 1
     assert report.records[0].turn_id == closed.turn_id
     assert report.records[0].prompt_version == "123456789abc"
+    assert report.records[0].navigation == Navigation(
+        read_calls=0,
+        write_calls=2,
+        duration_ms=0,
+        distinct_paths=0,
+        repeat_opens=0,
+        tokens_before_first_write=0,
+    )
     assert report.buckets[0].start == closed.timestamp.date()
+    assert report.buckets[0].navigation == NavigationMeans(
+        turns=1,
+        read_calls=0.0,
+        duration_ms=0.0,
+        tokens_before_first_write=0.0,
+        repeat_opens=0.0,
+    )
+
+
+def test_cli_stats_prints_navigation_from_a_hand_written_log(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path)
+    instance = load_instance(instance_path)
+    event_log = EventLog(instance.manifest.state_dir)
+    thread_id = uuid4()
+    wrote_id = uuid4()
+    read_only_id = uuid4()
+
+    async def append_turns() -> None:
+        for payload in (
+            TurnStarted(message="edit", model="openai:gpt-5"),
+            ModelCompleted(model="openai:gpt-5", input_tokens=10, output_tokens=5, duration_ms=20),
+            ToolCall(call_id="r1", name="read", arguments={"path": "a.py"}, write=False),
+            ToolResult(call_id="r1", name="read", output="a", error=False, duration_ms=4),
+            ToolCall(call_id="r2", name="read", arguments={"path": "a.py"}, write=False),
+            ToolResult(call_id="r2", name="read", output="a", error=False, duration_ms=6),
+            ToolCall(call_id="w1", name="edit", arguments={"path": "a.py"}, write=True),
+            ToolResult(call_id="w1", name="edit", output="ok", error=False, duration_ms=8),
+            TurnCompleted(input_tokens=10, output_tokens=5),
+        ):
+            await event_log.append(thread_id, wrote_id, payload)
+        for payload in (
+            TurnStarted(message="look", model="openai:gpt-5"),
+            ModelCompleted(model="openai:gpt-5", input_tokens=40, output_tokens=10, duration_ms=20),
+            ToolCall(call_id="r1", name="read", arguments={"path": "b.py"}, write=False),
+            ToolResult(call_id="r1", name="read", output="b", error=False, duration_ms=50),
+            TurnCompleted(input_tokens=40, output_tokens=10),
+        ):
+            await event_log.append(thread_id, read_only_id, payload)
+
+    asyncio.run(append_turns())
+
+    exit_code = main(["stats", str(instance_path)])
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    header = output.out.splitlines()[0].split("\t")
+    bucket = output.out.splitlines()[1].split("\t")
+    assert header[-5:] == ["nav turns", "nav reads", "nav ms", "nav tokens", "nav repeats"]
+    assert bucket[-5:] == ["1", "2.000", "10.000", "15.000", "1.000"]
+    report = StatsGetResult.model_validate_json(
+        (instance.manifest.state_dir / "stats.json").read_text()
+    )
+    assert report.records[0].navigation == Navigation(
+        read_calls=2,
+        reads_before_first_write=2,
+        write_calls=1,
+        duration_ms=10,
+        distinct_paths=1,
+        repeat_opens=1,
+        tokens_before_first_write=15,
+    )
+    assert report.records[1].navigation == Navigation(
+        read_calls=1,
+        reads_before_first_write=1,
+        write_calls=0,
+        duration_ms=50,
+        distinct_paths=1,
+        repeat_opens=0,
+        tokens_before_first_write=50,
+    )
+    assert report.buckets[0].navigation == NavigationMeans(
+        turns=1,
+        read_calls=2.0,
+        duration_ms=10.0,
+        tokens_before_first_write=15.0,
+        repeat_opens=1.0,
+    )
 
 
 def test_cli_stats_warns_once_with_every_unpriced_model(

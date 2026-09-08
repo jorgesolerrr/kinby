@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from kinby.contracts import (
     DenyCounts,
     MemoryCallCounts,
+    NavigationMeans,
     StatsBucket,
     StatsBucketSize,
     StatsSummary,
@@ -43,6 +44,11 @@ class _BucketTotals:
     durations: int = 0
     good_ratings: int = 0
     bad_ratings: int = 0
+    navigation_turns: int = 0
+    read_calls: int = 0
+    navigation_duration_ms: int = 0
+    tokens_before_first_write: int = 0
+    navigation_repeat_opens: int = 0
 
     def add(self, record: TurnMetrics) -> None:
         match record.closing_kind:
@@ -73,6 +79,12 @@ class _BucketTotals:
             self.good_ratings += 1
         elif record.rating is not None and record.rating.verdict is TurnVerdict.BAD:
             self.bad_ratings += 1
+        if record.navigation.write_calls > 0:
+            self.navigation_turns += 1
+            self.read_calls += record.navigation.read_calls
+            self.navigation_duration_ms += record.navigation.duration_ms
+            self.tokens_before_first_write += record.navigation.tokens_before_first_write
+            self.navigation_repeat_opens += record.navigation.repeat_opens
 
 
 def stats_buckets(
@@ -103,6 +115,19 @@ def _stats_bucket(start: date, totals: _BucketTotals) -> StatsBucket:
     return StatsBucket(start=start, **summary.model_dump())
 
 
+def _navigation_means(totals: _BucketTotals) -> NavigationMeans:
+    if totals.navigation_turns == 0:
+        return NavigationMeans()
+    counted = totals.navigation_turns
+    return NavigationMeans(
+        turns=counted,
+        read_calls=totals.read_calls / counted,
+        duration_ms=totals.navigation_duration_ms / counted,
+        tokens_before_first_write=totals.tokens_before_first_write / counted,
+        repeat_opens=totals.navigation_repeat_opens / counted,
+    )
+
+
 def _stats_summary(totals: _BucketTotals) -> StatsSummary:
     return StatsSummary(
         completed=totals.completed,
@@ -126,4 +151,5 @@ def _stats_summary(totals: _BucketTotals) -> StatsSummary:
         ),
         good_ratings=totals.good_ratings,
         bad_ratings=totals.bad_ratings,
+        navigation=_navigation_means(totals),
     )
