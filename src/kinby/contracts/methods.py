@@ -27,7 +27,12 @@ from kinby.contracts.models import (
     ThreadTurnListCommand,
     ThreadTurnListResult,
     ThreadTurnRateCommand,
+    ThreadTurnRevertCommand,
+    ThreadTurnRevertPreviewCommand,
+    ThreadTurnRevertPreviewResult,
     ThreadTurnStartCommand,
+    ThreadTurnTargetListCommand,
+    ThreadTurnTargetListResult,
     UsageGetCommand,
     UsageGetResult,
 )
@@ -66,8 +71,23 @@ THREAD_TURN_START = Method(
 THREAD_TURN_DIFF = Method(
     "thread.turn.diff", Scope.THREAD_READ, ThreadTurnDiffCommand, ThreadTurnDiffResult
 )
+THREAD_TURN_REVERT = Method(
+    "thread.turn.revert", Scope.THREAD_OPERATE, ThreadTurnRevertCommand, AcceptedResult
+)
+THREAD_TURN_REVERT_PREVIEW = Method(
+    "thread.turn.revert.preview",
+    Scope.THREAD_READ,
+    ThreadTurnRevertPreviewCommand,
+    ThreadTurnRevertPreviewResult,
+)
 THREAD_TURN_LIST = Method(
     "thread.turn.list", Scope.THREAD_READ, ThreadTurnListCommand, ThreadTurnListResult
+)
+THREAD_TURN_TARGET_LIST = Method(
+    "thread.turn.target.list",
+    Scope.THREAD_READ,
+    ThreadTurnTargetListCommand,
+    ThreadTurnTargetListResult,
 )
 THREAD_TURN_INTERRUPT = Method(
     "thread.turn.interrupt",

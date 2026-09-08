@@ -328,10 +328,18 @@ def test_a_capture_cancelled_while_git_runs_leaves_no_git_behind(
             program: str,
             *arguments: str,
             cwd: Path | None = None,
+            stdin: int | None = None,
             stdout: int | None = None,
             stderr: int | None = None,
         ) -> asyncio.subprocess.Process:
-            process = await spawn(program, *arguments, cwd=cwd, stdout=stdout, stderr=stderr)
+            process = await spawn(
+                program,
+                *arguments,
+                cwd=cwd,
+                stdin=stdin,
+                stdout=stdout,
+                stderr=stderr,
+            )
             started.append(process)
             running.set()
             return process
@@ -359,7 +367,7 @@ def test_a_cancelled_capture_kills_a_git_process_that_does_not_exit(
             self.started = asyncio.Event()
             self.killed = asyncio.Event()
 
-        async def communicate(self) -> tuple[bytes, bytes]:
+        async def communicate(self, stdin: bytes | None = None) -> tuple[bytes, bytes]:
             self.started.set()
             await asyncio.Event().wait()
             raise AssertionError("the stalled process should be cancelled")
@@ -444,5 +452,97 @@ def test_captures_asked_for_at_once_do_not_fight_over_the_index(tmp_path: Path) 
         )
 
         assert len(set(trees)) == 1
+
+    asyncio.run(scenario())
+
+
+def test_restore_puts_the_work_tree_back_and_leaves_ignored_files_alone(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        workspace = tmp_path / "workspace"
+        (workspace / ".gitignore").write_text("secrets.env\n", encoding="utf-8")
+        target = await store.capture(_BEFORE)
+        (workspace / "notes.md").write_text("edited\n", encoding="utf-8")
+        (workspace / "added.md").write_text("new\n", encoding="utf-8")
+        (workspace / "secrets.env").write_text("KEY=1\n", encoding="utf-8")
+
+        await store.restore(target)
+
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == "first\n"
+        assert not (workspace / "added.md").exists()
+        assert (workspace / "secrets.env").read_text(encoding="utf-8") == "KEY=1\n"
+        assert await store.capture(_AFTER) == target
+
+    asyncio.run(scenario())
+
+
+def test_restore_preserves_a_file_that_became_ignored_after_the_target(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        workspace = tmp_path / "workspace"
+        (workspace / ".gitignore").write_text("", encoding="utf-8")
+        secret = workspace / "secrets.env"
+        secret.write_text("OLD=1\n", encoding="utf-8")
+        target = await store.capture(_BEFORE)
+        (workspace / ".gitignore").write_text("secrets.env\n", encoding="utf-8")
+        secret.write_text("LIVE=1\n", encoding="utf-8")
+
+        difference = await store.preview_restore(target)
+        await store.restore(target)
+
+        assert all(change.path != "secrets.env" for change in difference.files)
+        assert "diff --git a/secrets.env b/secrets.env" not in difference.patch
+        assert secret.read_text(encoding="utf-8") == "LIVE=1\n"
+
+    asyncio.run(scenario())
+
+
+def test_restore_preview_compares_the_current_workspace_with_the_target(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        workspace = tmp_path / "workspace"
+        (workspace / ".gitignore").write_text("secrets.env\n", encoding="utf-8")
+        target = await store.capture(_BEFORE)
+        (workspace / "notes.md").write_text("edited\n", encoding="utf-8")
+        (workspace / "later.md").write_text("later\n", encoding="utf-8")
+        (workspace / "secrets.env").write_text("KEY=1\n", encoding="utf-8")
+
+        difference = await store.preview_restore(target)
+
+        assert difference.files == [
+            FileChange(
+                path="later.md",
+                status=ChangeStatus.DELETED,
+                additions=0,
+                deletions=1,
+            ),
+            FileChange(
+                path="notes.md",
+                status=ChangeStatus.MODIFIED,
+                additions=1,
+                deletions=1,
+            ),
+        ]
+        assert "secrets.env" not in difference.patch
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == "edited\n"
+        assert (workspace / "later.md").read_text(encoding="utf-8") == "later\n"
+        assert (workspace / "secrets.env").read_text(encoding="utf-8") == "KEY=1\n"
+
+    asyncio.run(scenario())
+
+
+def test_restore_brings_back_a_file_deleted_since_the_target(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        workspace = tmp_path / "workspace"
+        target = await store.capture(_BEFORE)
+        (workspace / "notes.md").unlink()
+        await store.capture(_AFTER)
+
+        await store.restore(target)
+
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == "first\n"
 
     asyncio.run(scenario())

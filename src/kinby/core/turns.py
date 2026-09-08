@@ -32,14 +32,22 @@ from kinby.contracts import (
     ThreadTurnInterruptCommand,
     ThreadTurnListCommand,
     ThreadTurnListResult,
+    ThreadTurnRevertCommand,
+    ThreadTurnRevertPreviewCommand,
+    ThreadTurnRevertPreviewResult,
     ThreadTurnStartCommand,
+    ThreadTurnTargetListCommand,
+    ThreadTurnTargetListResult,
     TokenTotals,
     TreeId,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
     TurnStarted,
+    TurnTarget,
     UserOrigin,
+    WorkspaceReverted,
+    accepted,
     is_turn_closing,
 )
 from kinby.core.budgets import DailyBudget, check_daily_budget
@@ -181,6 +189,29 @@ class TurnClaim:
     origin: Origin = field(default_factory=UserOrigin)
 
 
+@dataclass(frozen=True)
+class RevertibleSnapshots:
+    """A recorded starting snapshot that can be restored."""
+
+    before: TreeId
+
+
+@dataclass(frozen=True)
+class DiffableSnapshots:
+    """Recorded starting and closing snapshots that can be compared."""
+
+    before: TreeId
+    after: TreeId
+
+
+type RecordedSnapshots = RevertibleSnapshots | DiffableSnapshots
+
+
+@dataclass(frozen=True)
+class RevertClaim:
+    """Held while a revert preview or restore accesses the shared workspace."""
+
+
 class InterruptedTurnClaim:
     pass
 
@@ -205,7 +236,7 @@ class Turns:
         self._snapshots = snapshots
         self._changed = asyncio.Event()
         self._running: dict[UUID, RunningTurn] = {}
-        self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim] = {}
+        self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim | RevertClaim] = {}
 
     def running(self) -> tuple[Origin, ...]:
         origins = {
@@ -229,6 +260,8 @@ class Turns:
         return tuple(origins.values())
 
     def require_available(self, origin: Origin) -> None:
+        if any(isinstance(claim, RevertClaim) for claim in self._claims.values()):
+            raise InstanceBusy("A revert is running. Wait for it to finish before starting a turn.")
         running = self.running()
         routine = next((item for item in running if isinstance(item, RoutineOrigin)), None)
         if routine is not None:
@@ -268,55 +301,128 @@ class Turns:
                 f'"{ceiling.value}".'
             )
         event = await self._log.append(command.thread_id, uuid4(), ModePinned(mode=command.mode))
-        return AcceptedResult(
-            thread_id=event.thread_id,
-            turn_id=event.turn_id,
-            sequence=event.sequence,
-        )
+        return accepted(event)
 
     async def start(self, command: ThreadTurnStartCommand) -> AcceptedResult:
         return await self.wake(command.thread_id, command.message, UserOrigin())
 
     async def diff(self, command: ThreadTurnDiffCommand) -> ThreadTurnDiffResult:
         self._require_thread(command.thread_id)
-        events = [
-            event
-            for event in self._log.stored(command.thread_id)
-            if event.turn_id == command.turn_id
-        ]
-        started = next(
-            (event.payload for event in events if isinstance(event.payload, TurnStarted)),
-            None,
-        )
-        if started is None:
-            raise TurnNotFound(
-                f'Turn "{command.turn_id}" was not found on thread "{command.thread_id}".'
-            )
-        closed = next(
-            (event.payload for event in events if is_turn_closing(event.payload)),
-            None,
-        )
-        if closed is None:
-            raise _thread_busy(command.thread_id)
-        if self._snapshots is None or started.snapshot is None or closed.snapshot is None:
-            raise SnapshotUnavailable(
-                f'Workspace snapshots are unavailable for turn "{command.turn_id}".'
-            )
+        recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
+        if self._snapshots is None or not isinstance(recorded, DiffableSnapshots):
+            raise _snapshot_unavailable(command.turn_id)
         try:
-            difference = await self._snapshots.diff(started.snapshot, closed.snapshot)
+            difference = await self._snapshots.diff(recorded.before, recorded.after)
         except SnapshotError as exc:
-            raise SnapshotUnavailable(
-                f'Workspace snapshots are unavailable for turn "{command.turn_id}".'
-            ) from exc
+            raise _snapshot_unavailable(command.turn_id) from exc
         return ThreadTurnDiffResult(
             turn_id=command.turn_id,
-            before=started.snapshot,
-            after=closed.snapshot,
+            before=recorded.before,
+            after=recorded.after,
             files=difference.files,
             patch=difference.patch,
         )
 
+    async def preview_revert(
+        self,
+        command: ThreadTurnRevertPreviewCommand,
+    ) -> ThreadTurnRevertPreviewResult:
+        self._require_thread(command.thread_id)
+        claim = self._claim_revert(command.thread_id)
+        try:
+            recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
+            if self._snapshots is None or recorded is None:
+                raise _snapshot_unavailable(command.turn_id)
+            try:
+                difference = await self._snapshots.preview_restore(recorded.before)
+            except SnapshotError as exc:
+                raise _snapshot_unavailable(command.turn_id) from exc
+        finally:
+            self._release_claim(command.thread_id, claim)
+        return ThreadTurnRevertPreviewResult(
+            turn_id=command.turn_id,
+            files=difference.files,
+        )
+
+    async def revert(self, command: ThreadTurnRevertCommand) -> AcceptedResult:
+        self._require_thread(command.thread_id)
+        claim = self._claim_revert(command.thread_id)
+        try:
+            recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
+            snapshots = self._snapshots
+            if snapshots is None or recorded is None:
+                raise _snapshot_unavailable(command.turn_id)
+            revert_id = uuid4()
+            try:
+                previous = await snapshots.capture(
+                    snapshot_ref(command.thread_id, revert_id, SnapshotBoundary.BEFORE)
+                )
+            except SnapshotError as exc:
+                raise _snapshot_unavailable(command.turn_id) from exc
+            try:
+                await snapshots.restore(recorded.before)
+            except SnapshotError as exc:
+                logger.warning(
+                    "The workspace restore failed. The pre-revert tree is %s.",
+                    previous,
+                    exc_info=True,
+                )
+                raise _snapshot_unavailable(command.turn_id) from exc
+            # The work tree now holds the target's before tree, so that is what was
+            # restored even when capturing the after ref fails. The revert stays
+            # recorded either way, or it could not itself be reverted.
+            captured = await self._capture(command.thread_id, revert_id, SnapshotBoundary.AFTER)
+            restored = recorded.before if captured is None else captured
+            event = await self._log.append(
+                command.thread_id,
+                revert_id,
+                WorkspaceReverted(
+                    target_turn_id=command.turn_id,
+                    previous=previous,
+                    restored=restored,
+                ),
+            )
+            return accepted(event)
+        finally:
+            self._release_claim(command.thread_id, claim)
+
+    def _claim_revert(self, thread_id: UUID) -> RevertClaim:
+        # The workspace is shared by every thread, so a revert under any running
+        # turn would change the files out from under it.
+        if self.running() or self._claims:
+            raise InstanceBusy("A turn is running. Wait for it to finish before reverting.")
+        claim = RevertClaim()
+        self._claims[thread_id] = claim
+        return claim
+
+    def _recorded_snapshots(self, thread_id: UUID, turn_id: UUID) -> RecordedSnapshots | None:
+        """The snapshots recorded for a turn or a revert, or None if it started without one."""
+        payloads = [
+            event.payload for event in self._log.stored(thread_id) if event.turn_id == turn_id
+        ]
+        reverted = next(
+            (payload for payload in payloads if isinstance(payload, WorkspaceReverted)),
+            None,
+        )
+        if reverted is not None:
+            return DiffableSnapshots(reverted.previous, reverted.restored)
+        started = next(
+            (payload for payload in payloads if isinstance(payload, TurnStarted)),
+            None,
+        )
+        if started is None:
+            raise TurnNotFound(f'Turn "{turn_id}" was not found on thread "{thread_id}".')
+        closed = next((payload for payload in payloads if is_turn_closing(payload)), None)
+        if closed is None:
+            raise _thread_busy(thread_id)
+        if started.snapshot is None:
+            return None
+        if closed.snapshot is None:
+            return RevertibleSnapshots(started.snapshot)
+        return DiffableSnapshots(started.snapshot, closed.snapshot)
+
     async def list_turns(self, command: ThreadTurnListCommand) -> ThreadTurnListResult:
+        """Every turn on the thread, in order."""
         self._require_thread(command.thread_id)
         return ThreadTurnListResult(
             turn_ids=list(
@@ -326,6 +432,22 @@ class Turns:
                     if isinstance(event.payload, TurnStarted)
                 )
             )
+        )
+
+    async def list_targets(
+        self,
+        command: ThreadTurnTargetListCommand,
+    ) -> ThreadTurnTargetListResult:
+        """Every turn target on the thread, in order, and whether each has closed."""
+        self._require_thread(command.thread_id)
+        closed: dict[UUID, bool] = {}
+        for event in self._log.stored(command.thread_id):
+            if isinstance(event.payload, TurnStarted):
+                closed.setdefault(event.turn_id, False)
+            elif isinstance(event.payload, WorkspaceReverted) or is_turn_closing(event.payload):
+                closed[event.turn_id] = True
+        return ThreadTurnTargetListResult(
+            targets=[TurnTarget(turn_id=turn_id, closed=done) for turn_id, done in closed.items()]
         )
 
     async def wake(
@@ -462,11 +584,7 @@ class Turns:
             self._release_claim(command.thread_id, claim)
         if running is not None and self._running.get(command.thread_id) is running:
             del self._running[command.thread_id]
-        return AcceptedResult(
-            thread_id=interrupted.thread_id,
-            turn_id=interrupted.turn_id,
-            sequence=interrupted.sequence,
-        )
+        return accepted(interrupted)
 
     async def respond(self, command: ThreadApprovalRespondCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
@@ -522,7 +640,7 @@ class Turns:
     def _release_claim(
         self,
         thread_id: UUID,
-        claim: TurnClaim | InterruptedTurnClaim,
+        claim: TurnClaim | InterruptedTurnClaim | RevertClaim,
     ) -> None:
         if self._claims.get(thread_id) is claim:
             del self._claims[thread_id]
@@ -698,9 +816,16 @@ def _recorded_model_usage(events: Sequence[Event], turn_id: UUID) -> TokenTotals
 
 
 def _pending_approval(events: Sequence[Event]) -> PendingApproval | None:
-    if not events or not isinstance(events[-1].payload, ApprovalRequested):
-        return None
-    return PendingApproval(events[-1], events[-1].payload)
+    # Answering an approval appends nothing, so the resumed turn's own next event is
+    # what ends the park. Events on any other turn leave it standing.
+    for index, event in reversed(list(enumerate(events))):
+        payload = event.payload
+        if not isinstance(payload, ApprovalRequested):
+            continue
+        if any(later.turn_id == event.turn_id for later in events[index + 1 :]):
+            return None
+        return PendingApproval(event, payload)
+    return None
 
 
 def _permission_mode(
@@ -717,6 +842,10 @@ def _permission_mode(
 
 def _thread_busy(thread_id: UUID) -> ThreadBusy:
     return ThreadBusy(f'Thread "{thread_id}" already has a running turn.')
+
+
+def _snapshot_unavailable(turn_id: UUID) -> SnapshotUnavailable:
+    return SnapshotUnavailable(f'Workspace snapshots are unavailable for turn "{turn_id}".')
 
 
 def _no_active_turn(thread_id: UUID) -> NoActiveTurn:

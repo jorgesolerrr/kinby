@@ -83,6 +83,7 @@ class EventType(StrEnum):
     MEMORY_RECAPPED = "memory.recapped"
     ROUTINE_FAILURE_HANDLED = "routine.failure.handled"
     SIGNAL_RECEIVED = "signal.received"
+    WORKSPACE_REVERTED = "workspace.reverted"
 
 
 class UserOrigin(ContractModel):
@@ -245,6 +246,15 @@ class TurnInterrupted(TokenTotals):
 type TurnClosingPayload = TurnCompleted | TurnFailed | TurnInterrupted
 
 
+class WorkspaceReverted(ContractModel):
+    """The workspace went from ``previous`` back to ``restored``, the target's before tree."""
+
+    type: Literal[EventType.WORKSPACE_REVERTED] = EventType.WORKSPACE_REVERTED
+    target_turn_id: UUID
+    previous: TreeId
+    restored: TreeId
+
+
 class TurnVerdict(StrEnum):
     GOOD = "good"
     BAD = "bad"
@@ -310,7 +320,8 @@ Payload = Annotated[
     | TurnRated
     | MemoryRecapped
     | RoutineFailureHandled
-    | SignalReceived,
+    | SignalReceived
+    | WorkspaceReverted,
     Field(discriminator="type"),
 ]
 
@@ -346,12 +357,42 @@ class ThreadTurnDiffCommand(ContractModel):
     turn_id: UUID
 
 
+class ThreadTurnRevertCommand(ContractModel):
+    thread_id: UUID
+    turn_id: UUID
+
+
+class ThreadTurnRevertPreviewCommand(ContractModel):
+    thread_id: UUID
+    turn_id: UUID
+
+
+class ThreadTurnRevertPreviewResult(ContractModel):
+    turn_id: UUID
+    files: list[FileChange]
+
+
 class ThreadTurnListCommand(ContractModel):
     thread_id: UUID
 
 
 class ThreadTurnListResult(ContractModel):
     turn_ids: list[UUID]
+
+
+class ThreadTurnTargetListCommand(ContractModel):
+    thread_id: UUID
+
+
+class TurnTarget(ContractModel):
+    """One turn or workspace revert that a workspace operation can target."""
+
+    turn_id: UUID
+    closed: bool
+
+
+class ThreadTurnTargetListResult(ContractModel):
+    targets: list[TurnTarget]
 
 
 class ThreadTurnDiffResult(ContractModel):
@@ -388,6 +429,15 @@ class AcceptedResult(ContractModel):
     thread_id: UUID
     turn_id: UUID
     sequence: int
+
+
+def accepted(event: Event) -> AcceptedResult:
+    """The result a command returns for the event it appended."""
+    return AcceptedResult(
+        thread_id=event.thread_id,
+        turn_id=event.turn_id,
+        sequence=event.sequence,
+    )
 
 
 class ThreadCreateCommand(ContractModel):

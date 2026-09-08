@@ -44,6 +44,10 @@ class SnapshotStore(Protocol):
 
     async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff: ...
 
+    async def preview_restore(self, tree: TreeId) -> WorkspaceDiff: ...
+
+    async def restore(self, tree: TreeId) -> None: ...
+
 
 @dataclass(frozen=True)
 class WorkspaceDiff:
@@ -57,8 +61,9 @@ class WorkspaceSnapshots:
     def __init__(self, git_dir: Path, work_tree: Path) -> None:
         self._git_dir = git_dir
         self._work_tree = work_tree
-        # Turns on different threads share one workspace, one index and one lock file.
-        self._capturing = asyncio.Lock()
+        # Turns on different threads share one workspace, one index and one lock file,
+        # so every command that rebuilds the index waits its turn here.
+        self._rebuilding_the_index = asyncio.Lock()
 
     @staticmethod
     async def open(
@@ -86,18 +91,64 @@ class WorkspaceSnapshots:
 
     async def capture(self, ref: SnapshotRef) -> TreeId:
         """Stage the whole work tree, commit it, point *ref* at the commit."""
-        async with self._capturing:
-            # The index outlives the capture, so a file staged before a .gitignore rule
-            # matched it would stay staged. Rebuild from the work tree every time.
-            await self._git("read-tree", "--empty")
-            await self._git("add", "--all")
+        async with self._rebuilding_the_index:
+            await self._stage_work_tree()
             tree = TreeId(await self._git("write-tree"))
             commit = await self._git("commit-tree", tree, "-m", ref)
             await self._git("update-ref", ref, commit)
         return tree
 
+    async def restore(self, tree: TreeId) -> None:
+        """Make the work tree match *tree*, leaving ignored files where they are."""
+        async with self._rebuilding_the_index:
+            target = await self._restorable_tree(tree)
+            # read-tree only removes what the index knows, so a file added since the
+            # last capture has to be staged first or it would survive the restore.
+            await self._stage_work_tree()
+            await self._git("read-tree", "--reset", "-u", target)
+
+    async def preview_restore(self, tree: TreeId) -> WorkspaceDiff:
+        """Describe the changes that restoring *tree* would make."""
+        async with self._rebuilding_the_index:
+            target = await self._restorable_tree(tree)
+            await self._stage_work_tree()
+            current = TreeId(await self._git("write-tree"))
+            return await self._diff(current, target)
+
+    async def _restorable_tree(self, tree: TreeId) -> TreeId:
+        """Remove paths ignored by the live workspace from a historical tree."""
+        paths = await self._git_output("ls-tree", "-r", "--name-only", "-z", tree)
+        ignored = await self._git_output(
+            "check-ignore",
+            "--no-index",
+            "--stdin",
+            "-z",
+            stdin=paths,
+            allowed_returncodes=(0, 1),
+        )
+        if not ignored:
+            return tree
+        await self._git("read-tree", "--reset", tree)
+        await self._git_output(
+            "update-index",
+            "--force-remove",
+            "-z",
+            "--stdin",
+            stdin=ignored,
+        )
+        return TreeId(await self._git("write-tree"))
+
+    async def _stage_work_tree(self) -> None:
+        # The index outlives a capture, so a file staged before a .gitignore rule
+        # matched it would stay staged. Rebuild from the work tree every time.
+        await self._git("read-tree", "--empty")
+        await self._git("add", "--all")
+
     async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff:
         """Describe the paths and line changes between two workspace snapshots."""
+        return await self._diff(before, after)
+
+    async def _diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff:
         statuses = _parse_statuses(
             await self._git("diff", "--name-status", "-z", "-M", before, after)
         )
@@ -140,12 +191,19 @@ class WorkspaceSnapshots:
     async def _git(self, *arguments: str) -> str:
         return (await self._git_output(*arguments)).strip()
 
-    async def _git_output(self, *arguments: str) -> str:
+    async def _git_output(
+        self,
+        *arguments: str,
+        stdin: str | None = None,
+        allowed_returncodes: tuple[int, ...] = (0,),
+    ) -> str:
         return await _run_git_output(
             f"--git-dir={self._git_dir}",
             f"--work-tree={self._work_tree}",
             *arguments,
             cwd=self._work_tree,
+            stdin=stdin,
+            allowed_returncodes=allowed_returncodes,
         )
 
 
@@ -161,19 +219,25 @@ async def _run_git(*arguments: str, cwd: Path | None) -> str:
     return (await _run_git_output(*arguments, cwd=cwd)).strip()
 
 
-async def _run_git_output(*arguments: str, cwd: Path | None) -> str:
+async def _run_git_output(
+    *arguments: str,
+    cwd: Path | None,
+    stdin: str | None = None,
+    allowed_returncodes: tuple[int, ...] = (0,),
+) -> str:
     try:
         process = await asyncio.create_subprocess_exec(
             "git",
             *arguments,
             cwd=cwd,
+            stdin=asyncio.subprocess.PIPE if stdin is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
     except OSError as exc:
         raise SnapshotError(f"git {_subcommand(arguments)} could not run: {exc}") from exc
     try:
-        stdout, stderr = await process.communicate()
+        stdout, stderr = await process.communicate(None if stdin is None else stdin.encode())
     except asyncio.CancelledError:
         # An interrupt cancels the turn mid-capture. Let git finish and release
         # index.lock, or the capture that closes the turn finds the lock taken.
@@ -188,7 +252,7 @@ async def _run_git_output(*arguments: str, cwd: Path | None) -> str:
         raise
     except OSError as exc:
         raise SnapshotError(f"git {_subcommand(arguments)} could not run: {exc}") from exc
-    if process.returncode != 0:
+    if process.returncode not in allowed_returncodes:
         reason = stderr.decode(errors="replace").strip()
         raise SnapshotError(f"git {_subcommand(arguments)} failed: {reason}")
     return stdout.decode()

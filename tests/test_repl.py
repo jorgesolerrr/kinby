@@ -31,10 +31,12 @@ from kinby.contracts import (
     ToolCall,
     ToolGated,
     ToolResult,
+    TreeId,
     TurnRated,
     TurnStarted,
     TurnVerdict,
     Warning,
+    WorkspaceReverted,
 )
 from kinby.core import turns
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
@@ -333,6 +335,189 @@ def test_diff_reports_an_unmatched_turn_id_prefix_as_not_found(tmp_path: Path) -
             'NOT_FOUND: Turn id prefix "deadbeef" was not found on this thread.\n'
         )
         assert snapshots.diffs == []
+
+    asyncio.run(scenario())
+
+
+def _one_file_diff() -> WorkspaceDiff:
+    return WorkspaceDiff(
+        [FileChange(path="notes.md", status=ChangeStatus.MODIFIED, additions=1, deletions=1)],
+        "diff --git a/notes.md b/notes.md\n-old\n+new\n",
+    )
+
+
+async def _thread_after_one_turn(
+    tmp_path: Path,
+    snapshots: FakeSnapshotStore | None,
+) -> tuple[ContractClient, UUID, UUID]:
+    """A client on a thread whose one scripted turn has closed, plus that turn's id."""
+    dispatcher = build_dispatcher(
+        tmp_path,
+        turns=TurnConfig(
+            fixed_turn_preparation,
+            fixed_permission_ceiling,
+            ReplRunner(),
+            snapshots=snapshots,
+        ),
+    )
+    client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+    created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+    assert isinstance(created, ThreadCreateResult)
+    exit_code = await run_repl(
+        client,
+        created.id,
+        feedback=FeedbackPolicy.OFF,
+        stdin=StringIO("Hello\n"),
+        stdout=StringIO(),
+        stderr=StringIO(),
+    )
+    assert exit_code == 0
+    turn_id = next(
+        event.turn_id
+        for event in EventLog(tmp_path).stored(created.id)
+        if isinstance(event.payload, TurnStarted)
+    )
+    return client, created.id, turn_id
+
+
+def test_revert_prints_the_file_list_and_does_nothing_without_a_y(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        snapshots.restore_difference = _one_file_diff()
+        client, thread_id, turn_id = await _thread_after_one_turn(tmp_path, snapshots)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            thread_id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("/revert\nn\n/revert\n\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        prompt = f"modified notes.md +1 -1\nRevert 1 files to before {turn_id}? [y/N] "
+        assert stdout.getvalue() == f"> {prompt}> {prompt}> "
+        assert stderr.getvalue() == ""
+        assert snapshots.restored == []
+        assert len(snapshots.refs) == 2
+
+    asyncio.run(scenario())
+
+
+def test_revert_previews_every_change_from_the_current_workspace(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        snapshots.restore_difference = WorkspaceDiff(
+            [
+                FileChange(
+                    path="notes.md",
+                    status=ChangeStatus.MODIFIED,
+                    additions=1,
+                    deletions=1,
+                ),
+                FileChange(
+                    path="later.md",
+                    status=ChangeStatus.DELETED,
+                    additions=0,
+                    deletions=1,
+                ),
+            ],
+            "",
+        )
+        client, thread_id, turn_id = await _thread_after_one_turn(tmp_path, snapshots)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            thread_id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("/revert\nn\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert stdout.getvalue() == (
+            "> modified notes.md +1 -1\n"
+            "deleted later.md +0 -1\n"
+            f"Revert 2 files to before {turn_id}? [y/N] > "
+        )
+        assert stderr.getvalue() == ""
+        assert snapshots.restore_previews == [TreeId(f"{1:040d}")]
+        assert snapshots.restored == []
+
+    asyncio.run(scenario())
+
+
+def test_revert_sends_the_command_on_y_and_then_targets_the_revert_by_default(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        snapshots.restore_difference = _one_file_diff()
+        client, thread_id, turn_id = await _thread_after_one_turn(tmp_path, snapshots)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            thread_id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("/revert\ny\n/revert\ny\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        reverted = [
+            event.payload
+            for event in EventLog(tmp_path).stored(thread_id)
+            if isinstance(event.payload, WorkspaceReverted)
+        ]
+        assert len(reverted) == 2
+        revert_id = next(
+            event.turn_id
+            for event in EventLog(tmp_path).stored(thread_id)
+            if isinstance(event.payload, WorkspaceReverted)
+        )
+        assert reverted[1].target_turn_id == revert_id
+        assert snapshots.restored == [TreeId(f"{1:040d}"), TreeId(f"{3:040d}")]
+        assert stdout.getvalue() == (
+            f"> modified notes.md +1 -1\nRevert 1 files to before {turn_id}? [y/N] "
+            f"Workspace reverted to before {turn_id}.\n"
+            f"> modified notes.md +1 -1\nRevert 1 files to before {revert_id}? [y/N] "
+            f"Workspace reverted to before {revert_id}.\n"
+            "> "
+        )
+        assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())
+
+
+def test_revert_renders_a_refusal_through_the_error_envelope(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        client, thread_id, turn_id = await _thread_after_one_turn(tmp_path, None)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            thread_id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("/revert\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert stdout.getvalue() == "> > "
+        assert stderr.getvalue() == (
+            f'SNAPSHOT_UNAVAILABLE: Workspace snapshots are unavailable for turn "{turn_id}".\n'
+        )
 
     asyncio.run(scenario())
 
