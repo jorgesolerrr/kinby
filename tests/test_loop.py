@@ -55,6 +55,9 @@ class CoreSkillModel:
             "memory_open",
             "memory_search",
             "remember",
+            "routine_list",
+            "routine_read",
+            "routine_write",
             "skill",
         ]
         return self

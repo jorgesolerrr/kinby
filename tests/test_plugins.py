@@ -238,6 +238,9 @@ def test_fresh_instance_binds_the_default_tools(tmp_path: Path) -> None:
             "memory_search",
             "read",
             "remember",
+            "routine_list",
+            "routine_read",
+            "routine_write",
             "skill",
             "write",
         ]
@@ -297,8 +300,28 @@ def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypa
 
         assert groups == ["kinby.tools"]
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
-            ["forget", "memory_open", "memory_search", "packaged", "remember", "skill"],
-            ["forget", "memory_open", "memory_search", "packaged", "remember", "skill"],
+            [
+                "forget",
+                "memory_open",
+                "memory_search",
+                "packaged",
+                "remember",
+                "routine_list",
+                "routine_read",
+                "routine_write",
+                "skill",
+            ],
+            [
+                "forget",
+                "memory_open",
+                "memory_search",
+                "packaged",
+                "remember",
+                "routine_list",
+                "routine_read",
+                "routine_write",
+                "skill",
+            ],
         ]
 
     asyncio.run(scenario())
@@ -368,8 +391,28 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
         )
         assert warnings_again == warnings
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
-            ["available", "forget", "memory_open", "memory_search", "remember", "skill"],
-            ["available", "forget", "memory_open", "memory_search", "remember", "skill"],
+            [
+                "available",
+                "forget",
+                "memory_open",
+                "memory_search",
+                "remember",
+                "routine_list",
+                "routine_read",
+                "routine_write",
+                "skill",
+            ],
+            [
+                "available",
+                "forget",
+                "memory_open",
+                "memory_search",
+                "remember",
+                "routine_list",
+                "routine_read",
+                "routine_write",
+                "skill",
+            ],
         ]
 
     asyncio.run(scenario())
@@ -410,6 +453,9 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
             "memory_search",
             "packaged",
             "remember",
+            "routine_list",
+            "routine_read",
+            "routine_write",
             "skill",
         ]
 
@@ -433,7 +479,16 @@ def test_manifest_can_disable_default_tools(tmp_path: Path) -> None:
 
         assert asdict(instance.manifest)["tools"] == {"defaults": False}
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
-            ["forget", "memory_open", "memory_search", "remember", "skill"]
+            [
+                "forget",
+                "memory_open",
+                "memory_search",
+                "remember",
+                "routine_list",
+                "routine_read",
+                "routine_write",
+                "skill",
+            ]
         ]
 
     asyncio.run(scenario())
@@ -460,6 +515,9 @@ def test_broken_instance_tool_keeps_default_tools_on_the_first_turn(tmp_path: Pa
             "memory_search",
             "read",
             "remember",
+            "routine_list",
+            "routine_read",
+            "routine_write",
             "skill",
             "write",
         ]
@@ -849,6 +907,9 @@ def greet(name: str) -> str:
             "memory_open",
             "memory_search",
             "remember",
+            "routine_list",
+            "routine_read",
+            "routine_write",
             "skill",
         ]
         bound = next(tool for tool in model.bound_tools[0] if tool.name == "greet")
@@ -1250,6 +1311,9 @@ def {tool_name}() -> str:
             "memory_open",
             "memory_search",
             "remember",
+            "routine_list",
+            "routine_read",
+            "routine_write",
             "skill",
             "zulu",
         ]
@@ -1300,6 +1364,9 @@ def test_instance_skill_is_catalogued_and_skill_tool_is_bound(tmp_path: Path) ->
             "memory_open",
             "memory_search",
             "remember",
+            "routine_list",
+            "routine_read",
+            "routine_write",
             "skill",
         ]
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
@@ -1773,6 +1840,9 @@ def version() -> str:
             "memory_open",
             "memory_search",
             "remember",
+            "routine_list",
+            "routine_read",
+            "routine_write",
             "skill",
             "version",
         ]
@@ -1781,6 +1851,9 @@ def version() -> str:
             "memory_open",
             "memory_search",
             "remember",
+            "routine_list",
+            "routine_read",
+            "routine_write",
             "skill",
             "version",
         ]
@@ -1789,6 +1862,9 @@ def version() -> str:
             "memory_open",
             "memory_search",
             "remember",
+            "routine_list",
+            "routine_read",
+            "routine_write",
             "skill",
         ]
         assert not any(isinstance(event.payload, ToolCall) for event in third)
@@ -1864,6 +1940,9 @@ def fresh() -> str:
             "memory_open",
             "memory_search",
             "remember",
+            "routine_list",
+            "routine_read",
+            "routine_write",
             "skill",
             "stable",
         ]
