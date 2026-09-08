@@ -109,8 +109,8 @@ class RawBudgets(_Section):
 class RawModelPrice(_Section):
     input: Annotated[float, Field(ge=0)]
     output: Annotated[float, Field(ge=0)]
-    cache_read: Annotated[float, Field(ge=0)] | None = None
-    cache_write: Annotated[float, Field(ge=0)] | None = None
+    cache_read: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    cache_write: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
 
 
 class RawRoutines(_Section):

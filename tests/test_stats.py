@@ -704,8 +704,8 @@ def test_turn_metrics_prices_main_tokens_from_the_closing_totals_after_two_recap
 
     assert record.input_tokens == 160
     assert record.output_tokens == 16
-    assert record.cache_read_tokens == 170
-    assert record.cache_creation_tokens == 10
+    assert record.cache_read_tokens == 130
+    assert record.cache_creation_tokens == 5
     assert record.cost == 0.00027375
 
 

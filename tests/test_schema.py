@@ -6,7 +6,7 @@ import pytest
 from jsonschema import validate
 from jsonschema.exceptions import ValidationError
 
-from kinby.instance import ModelPrice, init_instance, load_instance
+from kinby.instance import ManifestError, ModelPrice, init_instance, load_instance
 from kinby.instance.schema import checkout_schema_path, main, manifest_schema
 
 EXAMPLE_INSTANCES = Path(__file__).parents[1] / "examples" / "instances"
@@ -235,6 +235,17 @@ def test_manifest_loads_cache_prices(tmp_path: Path) -> None:
         cache_read=0.125,
         cache_write=1.5625,
     )
+
+
+@pytest.mark.parametrize("field", ["cache_read", "cache_write"])
+def test_manifest_rejects_non_finite_cache_prices(tmp_path: Path, field: str) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path, model="openai:gpt-5")
+    with (instance_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+        manifest.write(f'\n[prices."openai:gpt-5"]\ninput = 1\noutput = 1\n{field} = inf\n')
+
+    with pytest.raises(ManifestError, match=rf"prices\.openai:gpt-5\.{field}.*finite"):
+        load_instance(instance_path)
 
 
 def test_manifest_schema_rejects_an_invalid_price_model_name() -> None:

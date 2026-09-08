@@ -227,8 +227,10 @@ def turn_metrics(
                 unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(payload.model))
             record.input_tokens += payload.input_tokens - record.recap_input_tokens
             record.output_tokens += payload.output_tokens - record.recap_output_tokens
-            record.cache_read_tokens += payload.cache_read_tokens
-            record.cache_creation_tokens += payload.cache_creation_tokens
+            record.cache_read_tokens = main_totals.cache_read_tokens + payload.cache_read_tokens
+            record.cache_creation_tokens = (
+                main_totals.cache_creation_tokens + payload.cache_creation_tokens
+            )
             record.recap_input_tokens = payload.input_tokens
             record.recap_output_tokens = payload.output_tokens
             record.cost = (
