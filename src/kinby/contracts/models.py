@@ -105,6 +105,8 @@ CronSchedule = NewType("CronSchedule", str)
 DeliveryId = NewType("DeliveryId", str)
 PromptVersion = NewType("PromptVersion", str)
 SystemPrompt = NewType("SystemPrompt", str)
+# The forty-character hex id of a git tree: one workspace snapshot.
+TreeId = NewType("TreeId", str)
 
 
 class RoutineOrigin(ContractModel):
@@ -124,6 +126,7 @@ class TurnStarted(ContractModel):
     permission_mode: PermissionMode | None = None
     origin: Origin = Field(default_factory=UserOrigin)
     prompt_version: PromptVersion | None = None
+    snapshot: TreeId | None = None
 
 
 class ModePinned(ContractModel):
@@ -199,6 +202,7 @@ class CompletionOutcome(StrEnum):
 class TurnCompleted(TokenTotals):
     type: Literal[EventType.TURN_COMPLETED] = EventType.TURN_COMPLETED
     outcome: CompletionOutcome = CompletionOutcome.WORK
+    snapshot: TreeId | None = None
 
 
 class ModelCompleted(TokenTotals):
@@ -213,12 +217,14 @@ class TurnFailed(TokenTotals):
     output_tokens: int = 0
     code: ErrorCode
     message: str
+    snapshot: TreeId | None = None
 
 
 class TurnInterrupted(TokenTotals):
     type: Literal[EventType.TURN_INTERRUPTED] = EventType.TURN_INTERRUPTED
     input_tokens: int = 0
     output_tokens: int = 0
+    snapshot: TreeId | None = None
 
 
 type TurnClosingPayload = TurnCompleted | TurnFailed | TurnInterrupted

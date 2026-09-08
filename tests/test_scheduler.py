@@ -47,6 +47,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    turn_config_stub,
 )
 from tests.test_routines import instance_at, routine_file
 
@@ -882,8 +883,10 @@ def test_cli_parked_routine_reports_non_success(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(
         import_module("kinby.core.runtime"),
         "turn_config",
-        lambda *args, **kwargs: TurnConfig(
-            fixed_turn_preparation, fixed_permission_ceiling, ApprovalReplRunner()
+        turn_config_stub(
+            lambda: TurnConfig(
+                fixed_turn_preparation, fixed_permission_ceiling, ApprovalReplRunner()
+            )
         ),
     )
     assert main(["routine", "run", "news", "--instance", str(instance_path)]) == 1

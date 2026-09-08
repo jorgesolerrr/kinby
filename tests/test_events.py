@@ -309,6 +309,38 @@ def test_old_closing_events_read_with_zero_new_token_fields(tmp_path: Path) -> N
     assert failed == TurnFailed(code="INTERNAL", message="failed")
 
 
+def test_old_boundary_events_read_with_no_workspace_snapshot(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    records = [
+        {
+            "sequence": 1,
+            "thread_id": str(thread_id),
+            "turn_id": str(turn_id),
+            "timestamp": "2026-09-06T09:00:00+00:00",
+            "payload": {"type": "turn.started", "message": "Hello", "model": "openai:gpt-5"},
+        },
+        {
+            "sequence": 2,
+            "thread_id": str(thread_id),
+            "turn_id": str(turn_id),
+            "timestamp": "2026-09-06T09:00:01+00:00",
+            "payload": {"type": "turn.completed", "input_tokens": 4, "output_tokens": 2},
+        },
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "".join(f"{json.dumps(record)}\n" for record in records),
+        encoding="utf-8",
+    )
+
+    started, completed = [event.payload for event in EventLog(tmp_path).all_events()]
+
+    assert isinstance(started, TurnStarted)
+    assert started.snapshot is None
+    assert isinstance(completed, TurnCompleted)
+    assert completed.snapshot is None
+
+
 def test_signal_received_and_manual_payload_shapes() -> None:
     received = datetime(2026, 9, 6, 9, tzinfo=UTC)
     delivery = Delivery(

@@ -19,7 +19,11 @@ from kinby.core.dispatcher import TurnConfig
 from kinby.core.events import EventLog
 from kinby.core.receiver import Receiver
 from kinby.instance import Serve
-from tests.helpers import fixed_permission_ceiling, fixed_turn_preparation
+from tests.helpers import (
+    fixed_permission_ceiling,
+    fixed_turn_preparation,
+    turn_config_stub,
+)
 from tests.test_routines import instance_at, routine_file
 from tests.test_scheduler import FakeClock, ScriptedRunner, runtime
 
@@ -339,10 +343,12 @@ def test_serve_listens_reports_paths_and_stops_on_process_signal(
         manifest.write(f'[serve]\nlisten = "127.0.0.1:{port}"\n')
     monkeypatch.setattr(
         "kinby.core.runtime.turn_config",
-        lambda *args, **kwargs: TurnConfig(
-            fixed_turn_preparation,
-            fixed_permission_ceiling,
-            ScriptedRunner(),
+        turn_config_stub(
+            lambda: TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            )
         ),
     )
     started = ThreadEvent()
@@ -392,10 +398,12 @@ def test_serve_logs_a_rejected_signal_to_stderr_at_info(tmp_path, monkeypatch, c
         manifest.write(f'[serve]\nlisten = "127.0.0.1:{port}"\n')
     monkeypatch.setattr(
         "kinby.core.runtime.turn_config",
-        lambda *args, **kwargs: TurnConfig(
-            fixed_turn_preparation,
-            fixed_permission_ceiling,
-            ScriptedRunner(),
+        turn_config_stub(
+            lambda: TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            )
         ),
     )
     started = ThreadEvent()
@@ -444,10 +452,12 @@ def test_serve_without_listen_does_not_start_a_receiver(tmp_path, monkeypatch, c
     instance_at(tmp_path)
     monkeypatch.setattr(
         "kinby.core.runtime.turn_config",
-        lambda *args, **kwargs: TurnConfig(
-            fixed_turn_preparation,
-            fixed_permission_ceiling,
-            ScriptedRunner(),
+        turn_config_stub(
+            lambda: TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ScriptedRunner(),
+            )
         ),
     )
     cli = import_module("kinby.cli.main")

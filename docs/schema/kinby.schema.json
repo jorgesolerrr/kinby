@@ -275,6 +275,11 @@
           "title": "Path",
           "type": "string"
         },
+        "snapshots": {
+          "default": true,
+          "title": "Snapshots",
+          "type": "boolean"
+        },
         "source": {
           "anyOf": [
             {
@@ -398,6 +403,7 @@
           ]
         },
         "path": "workspace",
+        "snapshots": true,
         "source": null
       }
     }

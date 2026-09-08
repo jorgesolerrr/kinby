@@ -56,6 +56,7 @@ from kinby.instance import Budgets, Instance, load_instance
 from kinby.memory import Episode, GraphStore, RecapWriter
 from kinby.memory.recap import RecapModel
 from kinby.plugins.routines import SharedCodeStep, SignalAuth, load_routines
+from tests.helpers import turn_config_stub
 
 
 def instance_at(path: Path) -> Instance:
@@ -369,10 +370,12 @@ def use_routine_model(
     runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
     monkeypatch.setattr(
         "kinby.core.runtime.turn_config",
-        lambda *args, **kwargs: TurnConfig(
-            runner.prepare_for_turn,
-            runner.permission_ceiling,
-            runner,
+        turn_config_stub(
+            lambda: TurnConfig(
+                runner.prepare_for_turn,
+                runner.permission_ceiling,
+                runner,
+            )
         ),
     )
 

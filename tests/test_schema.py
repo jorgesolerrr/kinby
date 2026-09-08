@@ -275,3 +275,38 @@ def test_manifest_schema_rejects_invalid_model_prices(price: dict[str, object]) 
 
     with pytest.raises(ValidationError):
         validate(instance=manifest, schema=manifest_schema())
+
+
+def test_manifest_schema_names_and_accepts_the_workspace_snapshots_switch() -> None:
+    schema = manifest_schema()
+    manifest = {
+        "id": "alice",
+        "models": {"main": "openai:gpt-5"},
+        "workspace": {"snapshots": False},
+    }
+
+    validate(instance=manifest, schema=schema)
+
+    definitions = schema["$defs"]
+    assert isinstance(definitions, dict)
+    workspace = definitions["RawWorkspace"]
+    assert isinstance(workspace, dict)
+    properties = workspace["properties"]
+    assert isinstance(properties, dict)
+    assert properties["snapshots"] == {
+        "default": True,
+        "title": "Snapshots",
+        "type": "boolean",
+    }
+
+
+def test_workspace_snapshots_default_on_and_load_from_the_manifest(tmp_path: Path) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path, model="openai:gpt-5")
+
+    assert load_instance(instance_path).manifest.workspace.snapshots is True
+
+    with (instance_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+        manifest.write("\n[workspace]\nsnapshots = false\n")
+
+    assert load_instance(instance_path).manifest.workspace.snapshots is False

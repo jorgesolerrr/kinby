@@ -84,6 +84,7 @@ class RawConventions(_Section):
 class RawWorkspace(_Section):
     path: NonEmpty = WORKSPACE_DIR
     source: NonEmpty | None = None
+    snapshots: bool = True
     conventions: RawConventions = RawConventions()
 
 
@@ -225,6 +226,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
             path=workspace_path,
             source=raw.workspace.source,
             conventions=_conventions(workspace_path, raw.workspace.conventions),
+            snapshots=raw.workspace.snapshots,
         ),
         memory=Memory(recap=raw.memory.recap),
         feedback=Feedback(ask=raw.feedback.ask),

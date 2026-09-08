@@ -51,6 +51,7 @@ from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
 from kinby.core.pricing import price_map
 from kinby.core.scheduler import Scheduler, SchedulerConfig
+from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
 from kinby.core.stats import stats_buckets
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_metrics import TurnKey, turn_metrics
@@ -77,6 +78,7 @@ class TurnConfig:
     permission_ceiling: Callable[[], PermissionMode]
     runner: TurnRunner
     recap: RecapWriter | None = None
+    snapshots: SnapshotStore | None = None
 
 
 @dataclass(frozen=True)
@@ -244,6 +246,7 @@ def build_dispatcher(
             turn_settings.prepare_for_turn,
             turn_settings.permission_ceiling,
             after_turn,
+            turn_settings.snapshots,
         )
         if isinstance(turns, ScheduledTurnConfig):
             scheduler = Scheduler(turns.scheduler, event_log, store, turn_service)
@@ -329,7 +332,7 @@ def build_dispatcher(
     return dispatcher
 
 
-def turn_config(
+async def turn_config(
     instance: Instance,
     *,
     event_log: EventLog,
@@ -347,4 +350,15 @@ def turn_config(
         instance,
         model_override=model_override,
     )
-    return TurnConfig(runner.prepare_for_turn, runner.permission_ceiling, runner, recap)
+    snapshots = await WorkspaceSnapshots.open(
+        instance.manifest.state_dir,
+        instance.manifest.workspace.path,
+        enabled=instance.manifest.workspace.snapshots,
+    )
+    return TurnConfig(
+        runner.prepare_for_turn,
+        runner.permission_ceiling,
+        runner,
+        recap,
+        snapshots,
+    )
