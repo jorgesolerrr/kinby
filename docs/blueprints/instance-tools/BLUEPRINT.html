@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blueprint: Instance tools</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f5f5f5;
+      --ink: #2d3142;
+      --muted: #4f5d75;
+      --soft: #7a8399;
+      --rule: rgba(45, 49, 66, 0.16);
+      --accent: #eb6c36;
+      --accent-tint: rgba(235, 108, 54, 0.08);
+      --link: #2e5aa8;
+      --new: #2e7d32;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', Georgia, serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #2d3142;
+        --ink: #f5f5f5;
+        --muted: #bfc0c0;
+        --soft: #8e98ac;
+        --rule: rgba(245, 245, 245, 0.16);
+        --accent: #f08a59;
+        --accent-tint: rgba(240, 138, 89, 0.10);
+        --link: #6a95d8;
+        --new: #66bb6a;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; padding: 3rem 2rem 4rem; font-family: var(--font-sans); font-size: 15px; line-height: 1.55; background: var(--paper); color: var(--ink); }
+    main { max-width: 960px; margin: 0 auto; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.5rem; }
+    h1 { font-family: var(--font-serif); font-weight: 400; font-size: 2.25rem; line-height: 1.1; margin: 0 0 0.5rem; }
+    h2 { font-family: var(--font-serif); font-weight: 400; font-size: 1.6rem; margin: 3rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+    h3 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+    .mode { font-family: var(--font-mono); font-size: 0.7rem; color: var(--soft); margin-left: 0.5rem; letter-spacing: 0.08em; }
+    .stamp { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+    code, pre { font-family: var(--font-mono); font-size: 0.85em; }
+    code { background: rgba(127, 127, 127, 0.12); padding: 0.05em 0.3em; border-radius: 3px; }
+    pre { padding: 0.75rem 1rem; border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+    th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--rule); }
+    th { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+    figure { margin: 1.5rem 0; }
+    figure svg { display: block; width: 100%; height: auto; }
+    figcaption { font-family: var(--font-serif); font-style: italic; font-size: 0.95rem; color: var(--muted); margin-top: 0.5rem; }
+    .overflow { overflow-x: auto; }
+    ol, ul { padding-left: 1.4rem; }
+    li { margin: 0.25rem 0; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1.25rem; }
+    dt { font-family: var(--font-mono); font-size: 0.85rem; }
+    dd { margin: 0; }
+    footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--rule); font-family: var(--font-mono); font-size: 0.75rem; color: var(--soft); }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Blueprint</p>
+  <h1>Instance tools</h1>
+  <p class="stamp">Stamped at <code>e0afd95</code>: paths and symbols are true at this commit.</p>
+
+  <h2 id="at-a-glance">At a glance <span class="mode">explanation</span></h2>
+  <p>You ask your kinby for a routine or a skill in conversation and it installs the file, under the gate, in that turn. Seven core write tools, the instance tools, take whole <code>ROUTINE.md</code> and <code>SKILL.md</code> files, validate them with the loaders the scheduler and the skills catalogue already run, and replace the target directory in one rename. The decision that constrains the rest is that these are ordinary write tools under the existing presets: the user's <code>permissions.toml</code> and the thread's mode decide, and no second permission system appears.</p>
+
+  <h2 id="problem">Problem <span class="mode">explanation</span></h2>
+  <p>You ask your kinby to check the team calendar every morning and summarize it. The model knows the routine format from the write-routine skill, drafts a good <code>ROUTINE.md</code>, and stops. The workspace file tools in <code>plugins/defaults/files.py</code> resolve every path under the workspace and refuse anything outside it, so <code>routines/</code> is unreachable. <code>bash</code> can reach it and asks in every mode below <code>full-access</code>, which makes a shell command the only door. You copy the draft into the directory by hand. The same wall stands in front of "turn that routine off for the week", "turn it back on", "delete it", and "save what we worked out as a skill". The README promises an agent that proposes routines itself. Today it proposes and cannot install.</p>
+
+  <h2 id="solution">Solution <span class="mode">explanation</span></h2>
+  <p>You say "every morning at nine, summarize my calendar". The model reads the write-routine skill, calls <code>routine_write</code> with the complete file, and the REPL shows you that file as an indented block and asks. You say yes. The file lands in <code>routines/calendar/</code>, the scheduler arms it on its next tick, and the model tells you when it fires next. "Turn it off" is <code>routine_set_enabled</code>, which flips one line and leaves the rest of your file untouched. "Turn it back on" after the failure policy disabled it is the same call, and it starts a fresh failure streak. "Delete it" refuses while deliveries are waiting for that routine and says how many. "Save that as a skill" is <code>skill_write</code>, and the result tells you when the new skill shadows a packaged one. Under <code>full-access</code> none of this asks, because that is what <code>full-access</code> means. I think the whole-file shape is the part that will age best: the model writes the file a person would write, and every future frontmatter key is a file matter, not a tool parameter.</p>
+
+  <h2 id="decision-log">Decision log <span class="mode">explanation</span></h2>
+  <p>One row per decision settled in the grilling of Agent modifies its own instance (#61) on September 8. Later sections cite them as <code>D3</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>#</th><th>Decision</th><th>Chosen</th><th>Rejected</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>How the agent reaches the operations</td><td>Core write tools built per instance in the core tool assembly, present on every turn</td><td>Contract methods like <code>routine.run</code> with a model-to-contract bridge</td><td>Tool snapshot, gate, approval and the <code>tool.call</code> events exist end to end. The model has no path to the contract, and a bridge would be machinery nothing else uses.</td></tr>
+      <tr><td>D2</td><td>What the agent may modify in v1</td><td>Routines and skills</td><td>Routines only; routines, skills and tools; all four including the model</td><td>Both are markdown kinby validates and never executes. A tool file is executed at the next turn start and its write flag is self-declared, so agent-authored tools get their own ticket, Agent authors its own tools (#161). The manifest stays the user's: <code>--model</code> exists and kinby has no style-preserving TOML writer.</td></tr>
+      <tr><td>D3</td><td>Verb shapes</td><td>Whole-file: <code>routine_list</code>, <code>routine_read</code>, <code>routine_write(name, content, code)</code>, <code>routine_set_enabled(name, enabled)</code>, <code>routine_delete</code>; <code>skill_write(name, content)</code>, <code>skill_delete</code></td><td>Structured verbs such as <code>routine_create(description, schedule, prompt, ...)</code></td><td>The file stays authoritative and the write-routine skill keeps teaching the one format. Every new frontmatter key would otherwise become a tool parameter.</td></tr>
+      <tr><td>D4</td><td>Approval tier and what the user sees</td><td>Ordinary write tools under the presets; the REPL renders a multi-line argument as an indented block</td><td>Ask in every mode including <code>full-access</code>; a rendered diff carried on the approval event</td><td>The presets encode the user's trust, and <code>full-access</code> means silent writes. The whole new file on screen is the change; a diff preview goes to the fog as "approval previews".</td></tr>
+      <tr><td>D5</td><td>Validation and failed edits</td><td>Stage the new files, run the real loader on the staged copy, return its message on failure and touch nothing, replace the target with one rename; names are letters, digits, hyphens and underscores</td><td>Write then load; validate with a second parser</td><td>"Valid" means one thing across the scheduler, the catalogue and the tools. Validating <code>run.py</code> executes its module, which the registry does at the next turn anyway.</td></tr>
+      <tr><td>D6</td><td>Availability on routine and signal wakes</td><td>Always present; the firing cue and the routine's own <code>mode</code> govern</td><td>Drop from non-user origins; drop unless a frontmatter key opts in</td><td>The gate is the mechanism kinby trusts and a routine's <code>mode</code> is the author's explicit statement. An opt-in key is a second permission system for one tool family.</td></tr>
+      <tr><td>D7</td><td>Re-enabling after the failure policy</td><td>An approved enable starts a fresh failure streak</td><td>Enable leaves the streak, so a manual run must succeed first; refuse to enable a policy-disabled routine</td><td>A user approving an enable is a stronger statement than a manual run. ADR 0022 left the door open for exactly this operation.</td></tr>
+      <tr><td>D8</td><td>History of instance edits</td><td>Nothing new; the <code>tool.call</code> event holds the new content</td><td>Extend workspace snapshots to the instance directory; put the previous text in the tool result</td><td>Instance edits are rare, approved and small. A user who wants before-images keeps the instance directory in git, which <code>kinby init</code> prepares a <code>.gitignore</code> for. Fog: "instance directory history".</td></tr>
+      <tr><td>D9</td><td>The term</td><td>Instance tool in <code>CONTEXT.md</code></td><td>Per-artifact verb names with no family term</td><td>One term lets the gate docs, the cue and the skill say "instance tools" instead of listing seven verbs.</td></tr>
+      <tr><td>D10</td><td>How the enable enters the streak</td><td>The routine history fold treats a non-error <code>tool.result</code> of <code>routine_set_enabled</code> with <code>enabled</code> true as a reset</td><td>A new <code>routine.enabled</code> event emitted by the runner; a way for tools to record events</td><td>The call is already on the log with its arguments. One more match arm, and nothing in the runner learns about routines.</td></tr>
+      <tr><td>D11</td><td>Skill name and shadowing</td><td>Frontmatter <code>name</code> must equal the directory name; shadowing a packaged or workspace skill is allowed and named in the result</td><td>Derive the directory from the frontmatter; let them differ; refuse to shadow</td><td>The verbs mirror the routine verbs and <code>skill_delete</code> addresses what <code>skill_write</code> created. Shadowing is the override path ADR 0024 intends, and the approval shows it.</td></tr>
+      <tr><td>D12</td><td>Delete with deliveries waiting</td><td><code>routine_delete</code> refuses while deliveries are pending and says how many</td><td>Delete and teach the scheduler to mark orphan deliveries handled; let each stuck delivery fail as a turn</td><td>No scheduler change, and the queue drains within seconds on an idle instance. Today a delivery for a deleted routine fires and fails as not found.</td></tr>
+      <tr><td>D13</td><td>Teaching the model</td><td>The write-routine skill ends by calling <code>routine_write</code>; the <code>skill_write</code> docstring states the two-key format</td><td>A packaged write-skill skill; guidance in the preamble</td><td>The docstrings are the contract. A write-skill skill can come when someone writes a bad skill.</td></tr>
+      <tr><td>D14</td><td>What the write result says</td><td>File written, next firing time in the instance zone, signal path when <code>[serve] listen</code> is set, <code>disabled</code> when off, the skill shadowed</td><td>The file written only</td><td>The scheduler already computes the next time, and it saves the model a <code>routine_list</code> call to answer "when does it run".</td></tr>
+      <tr><td>D15</td><td>Recording and slicing</td><td>ADR 0028, the term, this blueprint; four build tickets under one spec</td><td>One build ticket</td><td>The REPL rendering, the routine verbs, the skill verbs and the skill text are independently shippable and testable.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="birds-eye">Bird's-eye flow <span class="mode">reference</span></h2>
+  <p>One figure of the feature end to end for a routine write under <code>ask</code>. Boxes are functions and stores. Arrows carry the data that crosses. Decision ids lead the label where a decision picked the route.</p>
+  <figure>
+    <svg viewBox="0 0 960 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-birdseye-title fig-birdseye-desc">
+      <title id="fig-birdseye-title">A routine write from the model's tool call to the scheduler arming it</title>
+      <desc id="fig-birdseye-desc">The turn runner gates the call, the REPL approves it, routine_write validates a staged copy through the routine loader and renames it into the instance directory, the scheduler reads the file on its next tick, and the event log folds the call into the routine history.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--accent)"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--link)"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="var(--muted)" stroke-width="1.2"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- zone: CLI client -->
+      <rect x="224" y="184" width="192" height="96" rx="8" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <text x="236" y="200" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" letter-spacing="0.12em">CLI CLIENT</text>
+
+      <!-- arrows -->
+      <line x1="200" y1="92" x2="240" y2="92" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="196" y="72" width="48" height="12" rx="2" fill="var(--paper)"/>
+      <text x="220" y="81" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ToolCall</text>
+
+      <line x1="400" y1="92" x2="440" y2="92" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="392" y="72" width="56" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="81" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D4 allow</text>
+
+      <line x1="600" y1="92" x2="640" y2="92" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="580" y="72" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="620" y="81" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D5 staged copy</text>
+
+      <line x1="300" y1="120" x2="300" y2="208" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="180" y="132" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="288" y="141" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="end">ApprovalRequested</text>
+
+      <line x1="340" y1="208" x2="340" y2="120" stroke="var(--link)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow-link)"/>
+      <rect x="348" y="132" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="352" y="141" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">ApprovalDecision</text>
+
+      <path d="M 520,120 V 228 Q 520,236 528,236 H 640" fill="none" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="552" y="216" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="584" y="225" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D5 rename</text>
+
+      <line x1="120" y1="120" x2="120" y2="208" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="128" y="172" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="132" y="181" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">ToolCall, ToolGated, ToolResult</text>
+
+      <line x1="120" y1="264" x2="120" y2="352" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="128" y="300" width="40" height="12" rx="2" fill="var(--paper)"/>
+      <text x="132" y="309" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">Event</text>
+
+      <line x1="720" y1="264" x2="720" y2="352" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="728" y="300" width="48" height="12" rx="2" fill="var(--paper)"/>
+      <text x="732" y="309" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">Routine</text>
+
+      <line x1="200" y1="380" x2="640" y2="380" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="352" y="360" width="136" height="12" rx="2" fill="var(--paper)"/>
+      <text x="420" y="369" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D10 failure_count reset</text>
+
+      <!-- nodes -->
+      <rect x="40" y="64" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="64" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="48" y="72" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="81" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">FN</text>
+      <text x="120" y="94" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_call_tools</text>
+      <text x="120" y="110" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turn_runner.py</text>
+
+      <rect x="240" y="64" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="64" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="248" y="72" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="264" y="81" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">FN</text>
+      <text x="320" y="94" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">evaluate</text>
+      <text x="320" y="110" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/gate.py</text>
+
+      <rect x="440" y="64" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="440" y="64" width="160" height="56" rx="6" fill="var(--accent-tint)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="448" y="72" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="464" y="81" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="520" y="94" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">routine_write</text>
+      <text x="520" y="110" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">plugins/instance_tools.py</text>
+
+      <rect x="640" y="64" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="64" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="648" y="72" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="664" y="81" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">FN</text>
+      <text x="720" y="94" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_load_routine</text>
+      <text x="720" y="110" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">plugins/routines.py</text>
+
+      <rect x="240" y="208" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="240" y="208" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="248" y="216" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="264" y="225" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">FN</text>
+      <text x="320" y="238" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_answer_approval</text>
+      <text x="320" y="254" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">cli/repl.py</text>
+
+      <rect x="640" y="208" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="208" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="640" y="208" width="160" height="8" rx="6" fill="none" stroke="var(--muted)" stroke-width="1"/>
+      <text x="720" y="238" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">routines/&lt;name&gt;/</text>
+      <text x="720" y="254" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">ROUTINE.md, run.py</text>
+
+      <rect x="40" y="208" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="208" width="160" height="56" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <rect x="40" y="208" width="160" height="8" rx="6" fill="none" stroke="var(--muted)" stroke-width="1"/>
+      <text x="120" y="238" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.core.events</text>
+      <text x="120" y="254" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">event log</text>
+
+      <rect x="640" y="352" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="640" y="352" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="648" y="360" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="664" y="369" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">FN</text>
+      <text x="720" y="382" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Scheduler.tick</text>
+      <text x="720" y="398" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/scheduler.py</text>
+
+      <rect x="40" y="352" width="160" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="352" width="160" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="48" y="360" width="32" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="369" font-size="8" font-family="var(--font-mono)" fill="var(--ink)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">FN</text>
+      <text x="120" y="382" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">routine_history</text>
+      <text x="120" y="398" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/routine_history.py</text>
+
+      <!-- legend -->
+      <line x1="40" y1="432" x2="920" y2="432" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="40" y1="452" x2="64" y2="452" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="455" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new in this feature</text>
+      <line x1="200" y1="452" x2="224" y2="452" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="232" y="455" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">crosses the contract to the REPL</text>
+      <line x1="400" y1="452" x2="424" y2="452" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="432" y="455" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">the write</text>
+    </svg>
+    <figcaption>Figure: data flow of a routine write from the model's tool call to the scheduler arming the routine and the history fold reading the call.</figcaption>
+  </figure>
+  <ol>
+    <li><code>_call_tools</code> builds a <code>ToolCall</code> for <code>routine_write</code> and hands it to <code>evaluate</code> with the policy, the thread's mode and the tool.</li>
+    <li>Under <code>ask</code>, <code>evaluate</code> answers <code>ASK</code> with rule <code>mode.ask.write</code>. The runner interrupts with an <code>ApprovalRequested</code> carrying the whole file as an argument (D4).</li>
+    <li><code>_answer_approval</code> prints the arguments as a block, because one spans lines, and sends the answer back as an <code>ApprovalDecision</code>.</li>
+    <li>On approve, the runner invokes <code>routine_write</code> with the arguments and the <code>ToolContext</code> (D1).</li>
+    <li><code>routine_write</code> stages <code>ROUTINE.md</code> and an optional <code>run.py</code> in a temporary directory and runs <code>_load_routine</code> on the staged copy (D5). A failure returns the loader's message and stops here.</li>
+    <li>On success it renames the staged directory over <code>routines/&lt;name&gt;/</code> (D5) and returns the result text with the next firing time (D14).</li>
+    <li>The runner emits <code>ToolCall</code>, <code>ToolGated</code> and <code>ToolResult</code> to the event log, as for any tool.</li>
+    <li><code>Scheduler.tick</code> reads every routine file on its next pass and arms the new <code>Routine</code>.</li>
+    <li><code>routine_history</code> folds the log; a non-error <code>ToolResult</code> for <code>routine_set_enabled</code> resets that routine's failure count (D10), which the scheduler reads on the same tick.</li>
+  </ol>
+
+  <h2 id="module-map">Module map <span class="mode">reference</span></h2>
+  <p>Modules the feature touches and how they depend on each other after the change. Edges outside the feature, such as the turn runner importing the routine loader, are omitted. Fan-in counts the drawn edges.</p>
+  <figure>
+    <svg viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-modules-title fig-modules-desc">
+      <title id="fig-modules-title">Modules instance tools touch</title>
+      <desc id="fig-modules-desc">The turn runner reaches the new instance_tools module through the core tool assembly; instance_tools depends on the routine loader, the skill loader, the tool decorator and the routine history fold; the scheduler depends on the routine loader and the fold.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- arrows -->
+      <line x1="320" y1="96" x2="320" y2="160" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="328" y="116" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="332" y="125" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">core_tools</text>
+
+      <line x1="320" y1="216" x2="320" y2="280" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="328" y="236" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="332" y="245" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D1 instance_tools(instance)</text>
+
+      <path d="M 260,336 V 340 Q 260,348 252,348 H 152 Q 144,348 144,356 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="160" y="352" width="80" height="12" rx="2" fill="var(--paper)"/>
+      <text x="200" y="361" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">_load_routine</text>
+
+      <line x1="300" y1="336" x2="300" y2="400" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="308" y="352" width="64" height="12" rx="2" fill="var(--paper)"/>
+      <text x="312" y="361" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">_load_skill</text>
+
+      <path d="M 340,336 V 368 Q 340,376 348,376 H 592 Q 600,376 600,384 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="420" y="380" width="100" height="12" rx="2" fill="var(--paper)"/>
+      <text x="470" y="389" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">tool, ToolContext</text>
+
+      <path d="M 380,336 V 344 Q 380,352 388,352 H 792 Q 800,352 800,360 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="536" y="356" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="600" y="365" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D12 routine_history(events)</text>
+
+      <path d="M 608,96 V 124 Q 608,132 600,132 H 328 a 8,8 0 0,0 -16,0 H 104 Q 96,132 96,140 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="412" y="116" width="96" height="12" rx="2" fill="var(--paper)"/>
+      <text x="460" y="125" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">load_routines</text>
+
+      <path d="M 672,96 V 116 Q 672,124 680,124 H 832 Q 840,124 840,132 V 400" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="704" y="252" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="828" y="261" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="end">D10 routine_history(events)</text>
+
+      <!-- rank 0 -->
+      <rect x="220" y="40" width="200" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="220" y="40" width="200" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="376" y="48" width="36" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="394" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">0 in</text>
+      <text x="320" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.core.turn_runner</text>
+      <text x="320" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/turn_runner.py</text>
+
+      <rect x="540" y="40" width="200" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="540" y="40" width="200" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="696" y="48" width="36" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="714" y="57" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">0 in</text>
+      <text x="640" y="70" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.core.scheduler</text>
+      <text x="640" y="86" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/scheduler.py</text>
+
+      <!-- rank 1 -->
+      <rect x="220" y="160" width="200" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="220" y="160" width="200" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="376" y="168" width="36" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="394" y="177" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="320" y="190" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.plugins.core</text>
+      <text x="320" y="206" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/plugins/core.py</text>
+
+      <!-- rank 2 -->
+      <rect x="220" y="280" width="200" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="220" y="280" width="200" height="56" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="228" y="288" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="244" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <rect x="376" y="288" width="36" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="394" y="297" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="320" y="310" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.plugins.instance_tools</text>
+      <text x="320" y="326" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/plugins/instance_tools.py</text>
+
+      <!-- rank 3 -->
+      <rect x="20" y="400" width="200" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="20" y="400" width="200" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="176" y="408" width="36" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="194" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="120" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.plugins.routines</text>
+      <text x="120" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/plugins/routines.py</text>
+
+      <rect x="260" y="400" width="200" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="260" y="400" width="200" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="416" y="408" width="36" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="434" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="360" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.plugins.skills</text>
+      <text x="360" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/plugins/skills.py</text>
+
+      <rect x="500" y="400" width="200" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="500" y="400" width="200" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="656" y="408" width="36" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="674" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">1 in</text>
+      <text x="600" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.plugins.tools</text>
+      <text x="600" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/plugins/tools.py</text>
+
+      <rect x="740" y="400" width="200" height="56" rx="6" fill="var(--paper)"/>
+      <rect x="740" y="400" width="200" height="56" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <rect x="896" y="408" width="36" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="914" y="417" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">2 in</text>
+      <text x="840" y="430" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">kinby.core.routine_history</text>
+      <text x="840" y="446" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">src/kinby/core/routine_history.py</text>
+
+      <!-- legend -->
+      <line x1="40" y1="472" x2="920" y2="472" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="40" y1="492" x2="64" y2="492" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="495" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new module</text>
+      <rect x="200" y="486" width="36" height="12" rx="2" fill="none" stroke="var(--ink)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="218" y="495" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">n in</text>
+      <text x="244" y="495" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">modules depending on it, drawn edges only</text>
+    </svg>
+    <figcaption>Figure: dependency graph of the modules instance tools touch, the new module marked, with the routine loader and the history fold as the shared leaves.</figcaption>
+  </figure>
+  <h3>Interfaces</h3>
+  <p>The functions other modules call, with their signatures.</p>
+  <dl>
+    <dt><code>instance_tools(instance: Instance) -> tuple[Tool, ...]</code></dt>
+    <dd>Builds the seven instance tools for one instance. Called by <code>core_tools</code> next to <code>skill_tool</code> and <code>memory_tools</code>. New.</dd>
+    <dt><code>core_tools(instance: Instance, skills: Sequence[Skill]) -> tuple[Tool, ...]</code></dt>
+    <dd>Unchanged signature. Returns the instance tools as well. Called by <code>LangGraphRunner._invoke</code> every turn.</dd>
+    <dt><code>load_routine_file(path: Path, policy: GatePolicy, instance: Instance) -> Routine</code></dt>
+    <dd>The routine loader for one <code>ROUTINE.md</code>, today <code>_load_routine</code>, made reachable so <code>routine_write</code> validates a staged copy (D5). Raises on any invalid file.</dd>
+    <dt><code>set_routine_enabled(routine: Routine, enabled: bool) -> None</code></dt>
+    <dd>Rewrites only the <code>enabled</code> line, generalizing <code>disable_routine</code>. Called by <code>routine_set_enabled</code>; the scheduler keeps calling <code>disable_routine</code>, which delegates to it.</dd>
+    <dt><code>load_skill_file(path: Path) -> Skill</code></dt>
+    <dd>The skill loader for one <code>SKILL.md</code>, today <code>_load_skill</code>, made reachable so <code>skill_write</code> validates a staged copy (D5, D11).</dd>
+    <dt><code>routine_history(events: Iterable[Event]) -> RoutineHistories</code></dt>
+    <dd>Unchanged signature. Resets a routine's <code>failure_count</code> on a non-error <code>ToolResult</code> of <code>routine_set_enabled</code> with <code>enabled</code> true (D10). Called by the scheduler and by <code>routine_delete</code> for the pending count (D12).</dd>
+    <dt><code>_answer_approval(client, event, interrupted, repl_io) -> bool</code></dt>
+    <dd>Unchanged signature. Prints the block form when any string argument contains a newline (D4).</dd>
+  </dl>
+
+  <h2 id="ground-level">Ground-level flows <span class="mode">reference</span></h2>
+  <p>One subsection per flow. Each has a sequence whose participants are the functions from the module map, then a numbered step list naming the data shape at each hop.</p>
+
+  <h3 id="flow-write-a-routine">Flow: write a routine</h3>
+  <figure>
+    <svg viewBox="0 0 960 552" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-write-title fig-write-desc">
+      <title id="fig-write-title">Write a routine under ask</title>
+      <desc id="fig-write-desc">The turn runner asks the gate, the REPL shows the file and approves, routine_write stages and validates the file, and either renames it into place and returns the result or returns the loader's error.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- lifelines -->
+      <line x1="80" y1="64" x2="80" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="280" y1="64" x2="280" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="480" y1="64" x2="480" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="680" y1="64" x2="680" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="880" y1="64" x2="880" y2="504" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <!-- activation bars -->
+      <rect x="76" y="88" width="8" height="408" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="476" y="152" width="8" height="88" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="676" y="256" width="8" height="200" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <!-- ALT frame -->
+      <rect x="68" y="344" width="824" height="112" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="68" y="344" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="88" y="356" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="116" y="356" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[valid]</text>
+      <line x1="68" y1="420" x2="892" y2="420" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="80" y="436" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[invalid]</text>
+
+      <!-- messages -->
+      <line x1="84" y1="96" x2="280" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="96" y="76" width="168" height="12" rx="2" fill="var(--paper)"/>
+      <text x="180" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">evaluate(policy, mode, call, tool)</text>
+
+      <line x1="280" y1="128" x2="84" y2="128" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="92" y="108" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="180" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">GateDecision(ASK, mode.ask.write)</text>
+
+      <line x1="84" y1="160" x2="476" y2="160" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="180" y="140" width="200" height="12" rx="2" fill="var(--paper)"/>
+      <text x="280" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ApprovalRequested(name, arguments, rule)</text>
+
+      <path d="M 484,192 H 508 V 208 H 488" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="516" y="204" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D4 print arguments as a block</text>
+
+      <line x1="476" y1="232" x2="84" y2="232" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="164" y="212" width="232" height="12" rx="2" fill="var(--paper)"/>
+      <text x="280" y="221" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ThreadApprovalRespondCommand(answer="yes")</text>
+
+      <line x1="84" y1="264" x2="676" y2="264" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="292" y="244" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="253" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D1 ainvoke(arguments, ToolContext)</text>
+
+      <path d="M 684,296 H 708 V 312 H 688" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="716" y="308" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">stage content and code</text>
+
+      <path d="M 684,328 H 708 V 344 H 688" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="716" y="340" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">D5 load_routine_file(staged)</text>
+
+      <line x1="684" y1="384" x2="880" y2="384" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="716" y="364" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="780" y="373" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D5 rename staged dir</text>
+
+      <line x1="676" y1="408" x2="84" y2="408" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="252" y="388" width="256" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="397" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D14 "Wrote routines/&lt;name&gt;/ROUTINE.md. Next firing ..."</text>
+
+      <line x1="676" y1="448" x2="84" y2="448" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="292" y="428" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="437" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">error result: the loader's message</text>
+
+      <path d="M 84,480 H 108 V 496 H 88" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="116" y="492" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">emit ToolGated, ToolResult</text>
+
+      <!-- participants -->
+      <rect x="0" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="80" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_call_tools</text>
+      <text x="80" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turn_runner.py</text>
+
+      <rect x="200" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="280" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">evaluate</text>
+      <text x="280" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/gate.py</text>
+
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="480" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_answer_approval</text>
+      <text x="480" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">cli/repl.py</text>
+
+      <rect x="600" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="680" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">routine_write</text>
+      <text x="680" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">plugins/instance_tools.py</text>
+
+      <rect x="800" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="880" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">routines/&lt;name&gt;/</text>
+      <text x="880" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">instance directory</text>
+
+      <!-- legend -->
+      <line x1="40" y1="520" x2="920" y2="520" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="40" y1="540" x2="64" y2="540" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="543" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new participant</text>
+      <line x1="200" y1="540" x2="224" y2="540" stroke="var(--link)" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="232" y="543" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">crosses the contract to the REPL</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for a routine write under ask, from the gate decision to the rename or the loader's error.</figcaption>
+  </figure>
+  <ol>
+    <li><code>_call_tools</code> calls <code>evaluate</code>: input <code>GatePolicy</code>, <code>PermissionMode</code>, <code>ToolCall</code>, <code>Tool</code>; output <code>GateDecision(ASK, GateRule("mode.ask.write"))</code>. A <code>tools.routine_write</code> line in <code>permissions.toml</code> overrides this.</li>
+    <li>The runner interrupts: input <code>ApprovalRequested(approval_id, name, arguments, rule)</code>; the REPL receives it on the thread subscription.</li>
+    <li><code>_answer_approval</code> prints the block form because <code>arguments["content"]</code> spans lines (D4), reads the answer, and calls <code>thread.approval.respond</code>: input <code>ThreadApprovalRespondCommand(thread_id, approval_id, answer)</code>.</li>
+    <li>On approve, the runner calls <code>Tool.ainvoke</code> on <code>routine_write</code>: input <code>arguments</code> (<code>name: str</code>, <code>content: str</code>, <code>code: str | None</code>) and <code>ToolContext(instance, thread_id)</code>.</li>
+    <li><code>routine_write</code> checks the name (D5), stages <code>ROUTINE.md</code> and, when given, <code>run.py</code> in a temporary directory beside <code>routines/</code>, copies an existing <code>run.py</code> when <code>code</code> is omitted, and calls <code>load_routine_file</code> on the staged copy: output <code>Routine</code>, or an exception with the loader's message.</li>
+    <li>Valid: the staged directory replaces <code>routines/&lt;name&gt;/</code> in one rename; output the result text with the next firing time in the instance zone and the signal path (D14).</li>
+    <li>Invalid: output an error <code>ToolResult</code> with the loader's message; the target is untouched.</li>
+    <li>The runner emits <code>ToolGated(action, rule, decided_by=USER)</code> and <code>ToolResult(output, error)</code> as for any tool.</li>
+  </ol>
+
+  <h3 id="flow-enable-after-the-failure-policy">Flow: enable after the failure policy</h3>
+  <figure>
+    <svg viewBox="0 0 960 408" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-enable-title fig-enable-desc">
+      <title id="fig-enable-title">Enable a routine the failure policy disabled</title>
+      <desc id="fig-enable-desc">routine_set_enabled rewrites one line of the routine file and the runner records the result; on its next tick the scheduler folds the event log and the fold resets the routine's failure count when it sees that result.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <line x1="80" y1="64" x2="80" y2="360" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="280" y1="64" x2="280" y2="360" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="480" y1="64" x2="480" y2="360" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="680" y1="64" x2="680" y2="360" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="880" y1="64" x2="880" y2="360" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <rect x="276" y="88" width="8" height="80" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+      <rect x="876" y="224" width="8" height="80" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <line x1="84" y1="96" x2="276" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="92" y="76" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="180" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ainvoke({name, enabled: true}, ctx)</text>
+
+      <line x1="284" y1="128" x2="480" y2="128" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="308" y="108" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">set_routine_enabled(routine, True)</text>
+
+      <line x1="276" y1="160" x2="84" y2="160" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="92" y="140" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="180" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D14 "Enabled &lt;name&gt;. Next firing ..."</text>
+
+      <path d="M 84,192 H 108 V 208 H 88" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="116" y="204" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">emit ToolResult(error=False)</text>
+
+      <line x1="684" y1="232" x2="876" y2="232" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="704" y="212" width="152" height="12" rx="2" fill="var(--paper)"/>
+      <text x="780" y="221" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">routine_history(log.all_events())</text>
+
+      <path d="M 884,264 H 908 V 280 H 888" fill="none" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="868" y="276" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="end">D10 failure_count = 0 on that ToolResult</text>
+
+      <line x1="876" y1="296" x2="684" y2="296" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="700" y="276" width="160" height="12" rx="2" fill="var(--paper)"/>
+      <text x="780" y="285" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">RoutineHistories(failure_count=0)</text>
+
+      <path d="M 684,328 H 708 V 344 H 688" fill="none" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="716" y="340" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">_arm(routines, history)</text>
+
+      <rect x="0" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="80" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_call_tools</text>
+      <text x="80" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turn_runner.py</text>
+
+      <rect x="200" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="280" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">routine_set_enabled</text>
+      <text x="280" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">plugins/instance_tools.py</text>
+
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="480" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ROUTINE.md</text>
+      <text x="480" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">routines/&lt;name&gt;/</text>
+
+      <rect x="600" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="680" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Scheduler.tick</text>
+      <text x="680" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/scheduler.py</text>
+
+      <rect x="800" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="880" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">routine_history</text>
+      <text x="880" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/routine_history.py</text>
+
+      <line x1="40" y1="376" x2="920" y2="376" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="40" y1="396" x2="64" y2="396" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="399" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new participant</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for an approved enable and the scheduler tick that folds it into a fresh failure streak.</figcaption>
+  </figure>
+  <ol>
+    <li>After the gate and approval, the runner calls <code>routine_set_enabled</code>: input <code>{name: str, enabled: bool}</code> and <code>ToolContext</code>.</li>
+    <li>The tool loads the routine by name, output <code>Routine</code> or a not-found error, and calls <code>set_routine_enabled(routine, True)</code>, which rewrites only the <code>enabled</code> line and keeps the file's other bytes and line endings.</li>
+    <li>Output the result text: the routine name, the next firing time when scheduled, and <code>disabled</code> when the call disabled it (D14).</li>
+    <li>The runner emits <code>ToolResult(call_id, name="routine_set_enabled", error=False)</code>; the earlier <code>ToolCall</code> carries the arguments.</li>
+    <li>On its next pass, <code>Scheduler.tick</code> calls <code>routine_history</code> over every event.</li>
+    <li>The fold remembers <code>ToolCall</code> events named <code>routine_set_enabled</code> with <code>enabled</code> true by call id, and on the matching non-error <code>ToolResult</code> sets that routine's <code>failure_count</code> to zero and drops its unhandled failures (D10). An error result resets nothing.</li>
+    <li>Output <code>RoutineHistories</code>; <code>_arm</code> arms the enabled routine, and its next failure counts from one (D7).</li>
+  </ol>
+
+  <h3 id="flow-delete-with-the-queue-checked">Flow: delete with the queue checked</h3>
+  <figure>
+    <svg viewBox="0 0 960 376" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-delete-title fig-delete-desc">
+      <title id="fig-delete-title">Delete a routine unless deliveries are pending</title>
+      <desc id="fig-delete-desc">routine_delete folds the routine history first; with no pending delivery it removes the routine directory and returns, otherwise it returns an error naming the pending count.</desc>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <line x1="80" y1="64" x2="80" y2="328" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="280" y1="64" x2="280" y2="328" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="480" y1="64" x2="480" y2="328" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="680" y1="64" x2="680" y2="328" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <rect x="276" y="88" width="8" height="216" fill="var(--ink)" fill-opacity="0.06" stroke="var(--muted)" stroke-width="0.8"/>
+
+      <rect x="68" y="176" width="624" height="128" rx="4" fill="var(--ink)" fill-opacity="0.02" stroke="var(--rule)" stroke-width="1"/>
+      <rect x="68" y="176" width="40" height="16" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+      <text x="88" y="188" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+      <text x="116" y="188" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[no pending delivery]</text>
+      <line x1="68" y1="260" x2="692" y2="260" stroke="var(--rule)" stroke-width="1" stroke-dasharray="5 4"/>
+      <text x="80" y="272" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">[pending &gt; 0]</text>
+
+      <line x1="84" y1="96" x2="276" y2="96" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="124" y="76" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="180" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">ainvoke({name}, ctx)</text>
+
+      <line x1="284" y1="128" x2="480" y2="128" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="292" y="108" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="117" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D12 routine_history(log.all_events())</text>
+
+      <line x1="480" y1="160" x2="284" y2="160" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="316" y="140" width="128" height="12" rx="2" fill="var(--paper)"/>
+      <text x="380" y="149" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">RoutineHistory(pending=[...])</text>
+
+      <line x1="284" y1="216" x2="680" y2="216" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="408" y="196" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="205" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">remove routines/&lt;name&gt;/</text>
+
+      <line x1="276" y1="248" x2="84" y2="248" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="108" y="228" width="144" height="12" rx="2" fill="var(--paper)"/>
+      <text x="180" y="237" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">"Deleted routines/&lt;name&gt;/."</text>
+
+      <line x1="276" y1="296" x2="84" y2="296" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      <rect x="164" y="276" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="252" y="285" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">error result: "N deliveries pending"</text>
+
+      <rect x="0" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="80" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">_call_tools</text>
+      <text x="80" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/turn_runner.py</text>
+
+      <rect x="200" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="280" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">routine_delete</text>
+      <text x="280" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">plugins/instance_tools.py</text>
+
+      <rect x="400" y="24" width="160" height="40" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="480" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">routine_history</text>
+      <text x="480" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">core/routine_history.py</text>
+
+      <rect x="600" y="24" width="160" height="40" rx="6" fill="var(--ink)" fill-opacity="0.05" stroke="var(--muted)" stroke-width="1"/>
+      <text x="680" y="42" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">routines/&lt;name&gt;/</text>
+      <text x="680" y="56" font-size="8" font-family="var(--font-mono)" fill="var(--muted)" text-anchor="middle">instance directory</text>
+
+      <line x1="40" y1="344" x2="920" y2="344" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="40" y1="364" x2="64" y2="364" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="367" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new participant</text>
+    </svg>
+    <figcaption>Figure: sequence of calls for a delete, removing the directory only when no delivery waits for the routine.</figcaption>
+  </figure>
+  <ol>
+    <li>After the gate and approval, the runner calls <code>routine_delete</code>: input <code>{name: str}</code> and <code>ToolContext</code>. A name with no directory is a not-found error result.</li>
+    <li>The tool folds the event log with <code>routine_history</code>: output <code>RoutineHistories</code>, and reads <code>RoutineHistory.pending</code> for that name.</li>
+    <li>No pending delivery: the tool removes <code>routines/&lt;name&gt;/</code> with its <code>run.py</code>; output <code>"Deleted routines/&lt;name&gt;/."</code>. The scheduler drops the routine on its next pass.</li>
+    <li>Pending deliveries: output an error <code>ToolResult</code> naming the count (D12); the directory is untouched. Disabling stays available, and the deliveries still fire.</li>
+  </ol>
+
+  <h3 id="flow-write-a-skill">Flow: write a skill</h3>
+  <p>The same shape as the routine write with three differences, so it has no figure of its own. The staged file is <code>skills/&lt;name&gt;/SKILL.md</code> and the loader is <code>load_skill_file</code>. The tool refuses when the frontmatter <code>name</code> differs from the directory name (D11). The result names the packaged or workspace skill the new one shadows, found by loading the skill tiers the way <code>load_skills</code> does (D11, D14). <code>skill_delete</code> removes the directory and never touches a packaged or workspace skill.</p>
+
+  <h2 id="data-shapes">Data shapes <span class="mode">reference</span></h2>
+  <p>The new module's surface and the existing types it reads or changes. No contract type changes; the manifest and its schema are untouched.</p>
+  <figure>
+    <svg viewBox="0 0 960 496" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fig-shapes-title fig-shapes-desc">
+      <title id="fig-shapes-title">Types instance tools add or read</title>
+      <desc id="fig-shapes-desc">The new instance_tools module exposes seven verbs that return Tool values, take a ToolContext, validate through Routine, and read RoutineHistory; ApprovalRequested is unchanged but rendered as a block.</desc>
+      <defs>
+        <marker id="arrow-uses" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--muted)"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="var(--paper)"/>
+
+      <!-- relations -->
+      <line x1="240" y1="96" x2="360" y2="96" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arrow-uses)"/>
+      <rect x="244" y="76" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="300" y="85" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">returns tuple[Tool, ...]</text>
+
+      <path d="M 240,80 H 292 Q 300,80 300,72 V 48 Q 300,40 308,40 H 652 Q 660,40 660,48 V 104 Q 660,112 668,112 H 680" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arrow-uses)"/>
+      <rect x="392" y="20" width="176" height="12" rx="2" fill="var(--paper)"/>
+      <text x="480" y="29" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D5 load_routine_file(staged) -> Routine</text>
+
+      <path d="M 140,216 V 252 Q 140,260 148,260 H 360" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arrow-uses)"/>
+      <rect x="196" y="240" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="252" y="249" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">context: ToolContext</text>
+
+      <path d="M 240,200 H 612 Q 620,200 620,208 V 252 Q 620,260 628,260 H 680" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arrow-uses)"/>
+      <rect x="372" y="180" width="112" height="12" rx="2" fill="var(--paper)"/>
+      <text x="428" y="189" font-size="8" font-family="var(--font-mono)" fill="var(--soft)" text-anchor="middle">D12 pending count</text>
+
+      <!-- instance_tools -->
+      <rect x="40" y="64" width="200" height="152" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="64" width="200" height="152" rx="6" fill="var(--accent-tint)" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <rect x="48" y="72" width="32" height="12" rx="2" fill="none" stroke="var(--new)" stroke-opacity="0.4" stroke-width="0.8"/>
+      <text x="64" y="81" font-size="8" font-family="var(--font-mono)" fill="var(--new)" fill-opacity="0.8" text-anchor="middle" letter-spacing="0.08em">NEW</text>
+      <text x="140" y="88" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">instance_tools</text>
+      <line x1="40" y1="96" x2="240" y2="96" stroke="var(--rule)" stroke-width="1"/>
+      <text x="52" y="108" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">routine_list(): str</text>
+      <text x="52" y="124" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">routine_read(name): str</text>
+      <text x="52" y="140" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">routine_write(name, content, code): str</text>
+      <text x="52" y="156" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">routine_set_enabled(name, enabled): str</text>
+      <text x="52" y="172" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">routine_delete(name): str</text>
+      <text x="52" y="188" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">skill_write(name, content): str</text>
+      <text x="52" y="204" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">skill_delete(name): str</text>
+
+      <!-- Tool -->
+      <rect x="360" y="64" width="200" height="104" rx="6" fill="var(--paper)"/>
+      <rect x="360" y="64" width="200" height="104" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="460" y="84" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Tool</text>
+      <line x1="360" y1="96" x2="560" y2="96" stroke="var(--rule)" stroke-width="1"/>
+      <text x="372" y="108" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: str</text>
+      <text x="372" y="124" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">write: bool</text>
+      <text x="372" y="140" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">paths: tuple[str, ...] = ()</text>
+      <text x="372" y="156" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">context_parameter: str | None</text>
+
+      <!-- ToolContext -->
+      <rect x="360" y="224" width="200" height="72" rx="6" fill="var(--paper)"/>
+      <rect x="360" y="224" width="200" height="72" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="460" y="244" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ToolContext</text>
+      <line x1="360" y1="256" x2="560" y2="256" stroke="var(--rule)" stroke-width="1"/>
+      <text x="372" y="268" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">instance: Instance</text>
+      <text x="372" y="284" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">thread_id: UUID</text>
+
+      <!-- Routine -->
+      <rect x="680" y="64" width="240" height="120" rx="6" fill="var(--paper)"/>
+      <rect x="680" y="64" width="240" height="120" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="800" y="84" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">Routine</text>
+      <line x1="680" y1="96" x2="920" y2="96" stroke="var(--rule)" stroke-width="1"/>
+      <text x="692" y="108" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: RoutineName</text>
+      <text x="692" y="124" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">schedule: CronSchedule | None</text>
+      <text x="692" y="140" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">enabled: bool</text>
+      <text x="692" y="156" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">code_step: SharedCodeStep | Tool | None</text>
+      <text x="692" y="172" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">signal: SignalConfig | None</text>
+
+      <!-- RoutineHistory -->
+      <rect x="680" y="224" width="240" height="120" rx="6" fill="var(--paper)"/>
+      <rect x="680" y="224" width="240" height="120" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="800" y="244" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">RoutineHistory</text>
+      <line x1="680" y1="256" x2="920" y2="256" stroke="var(--rule)" stroke-width="1"/>
+      <text x="692" y="268" font-size="8" font-family="var(--font-mono)" fill="var(--new)">failure_count: int  (D10 reset)</text>
+      <text x="692" y="284" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">last_failure: str | None</text>
+      <text x="692" y="300" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">notices: list[RoutineNotice]</text>
+      <text x="692" y="316" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">pending: list[PendingDelivery]</text>
+      <text x="692" y="332" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">last_run: RoutineLastRun | None</text>
+
+      <!-- ApprovalRequested -->
+      <rect x="40" y="320" width="200" height="104" rx="6" fill="var(--paper)"/>
+      <rect x="40" y="320" width="200" height="104" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1"/>
+      <text x="140" y="340" font-size="12" font-weight="600" font-family="var(--font-sans)" fill="var(--ink)" text-anchor="middle">ApprovalRequested</text>
+      <line x1="40" y1="352" x2="240" y2="352" stroke="var(--rule)" stroke-width="1"/>
+      <text x="52" y="364" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">name: str</text>
+      <text x="52" y="380" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">arguments: dict[str, JsonValue]</text>
+      <text x="52" y="396" font-size="8" font-family="var(--font-mono)" fill="var(--ink)">rule: GateRule</text>
+      <text x="52" y="412" font-size="8" font-family="var(--font-mono)" fill="var(--muted)">D4 rendered as a block by the REPL</text>
+
+      <!-- legend -->
+      <line x1="40" y1="456" x2="920" y2="456" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="40" y1="476" x2="64" y2="476" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 3"/>
+      <text x="72" y="479" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">new module; a green field changes behavior</text>
+      <line x1="320" y1="476" x2="344" y2="476" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arrow-uses)"/>
+      <text x="352" y="479" font-size="8" font-family="var(--font-mono)" fill="var(--soft)">uses</text>
+    </svg>
+    <figcaption>Figure: the new module's seven verbs and the existing types they return, take, validate through, and read.</figcaption>
+  </figure>
+  <p>Every verb returns a string for the model. Arguments: <code>name</code> is a routine or skill name; <code>content</code> is the complete markdown file; <code>code</code> is the complete <code>run.py</code> text or absent; <code>enabled</code> is a boolean. The result strings are the D14 texts. No event, contract, manifest, or schema type changes.</p>
+
+  <h2 id="file-map">File map <span class="mode">reference</span></h2>
+  <p>Every file the agent touches. Stamped at the commit in the header; regenerate the existence check with <code>git ls-files [paths]</code>.</p>
+  <div class="overflow">
+  <table>
+    <thead><tr><th>Path</th><th>Action</th><th>What changes</th><th>Flow</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/kinby/plugins/instance_tools.py</code></td><td>new</td><td><code>instance_tools(instance)</code> building the seven verbs; name check, staging, loader validation, rename, result texts, pending-delivery guard, shadow lookup.</td><td>all</td></tr>
+      <tr><td><code>src/kinby/plugins/core.py</code></td><td>modify</td><td><code>core_tools</code> returns the instance tools next to <code>skill_tool</code> and <code>memory_tools</code>.</td><td>all</td></tr>
+      <tr><td><code>src/kinby/plugins/routines.py</code></td><td>modify</td><td><code>load_routine_file</code> reachable for a staged path; <code>set_routine_enabled(routine, enabled)</code> with <code>disable_routine</code> delegating to it.</td><td>write a routine, enable</td></tr>
+      <tr><td><code>src/kinby/plugins/skills.py</code></td><td>modify</td><td><code>load_skill_file</code> reachable for a staged path.</td><td>write a skill</td></tr>
+      <tr><td><code>src/kinby/core/routine_history.py</code></td><td>modify</td><td>Fold remembers <code>routine_set_enabled</code> calls by call id and resets <code>failure_count</code> on the matching non-error result.</td><td>enable</td></tr>
+      <tr><td><code>src/kinby/cli/repl.py</code></td><td>modify</td><td><code>_answer_approval</code> prints the block form when a string argument spans lines.</td><td>write a routine</td></tr>
+      <tr><td><code>src/kinby/plugins/defaults/skills/write-routine/SKILL.md</code></td><td>modify</td><td>Ends by calling <code>routine_write</code> and reading the result; no longer names #61 or "for the user to install".</td><td>write a routine</td></tr>
+      <tr><td><code>tests/test_instance_tools.py</code></td><td>new</td><td>Instance tool seam and runner seam cases.</td><td>all</td></tr>
+      <tr><td><code>tests/test_scheduler.py</code></td><td>modify</td><td>Fresh streak after an approved enable; errored enable resets nothing.</td><td>enable</td></tr>
+      <tr><td><code>tests/test_repl.py</code></td><td>modify</td><td>Block form for a multi-line argument; one-line form kept otherwise.</td><td>write a routine</td></tr>
+      <tr><td><code>tests/test_packaged_skills.py</code></td><td>modify</td><td>The write-routine skill names <code>routine_write</code>.</td><td>write a routine</td></tr>
+      <tr><td><code>CONTEXT.md</code></td><td>modify</td><td>Instance tool.</td><td>—</td></tr>
+      <tr><td><code>docs/adr/0028-instance-tools-are-gated-core-write-tools-over-whole-files.md</code></td><td>new</td><td>The decision and its rejected options.</td><td>—</td></tr>
+      <tr><td><code>docs/blueprints/instance-tools/BLUEPRINT.html</code></td><td>new</td><td>This document.</td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="testing">Testing <span class="mode">reference</span></h2>
+  <dl>
+    <dt>Seams</dt><dd>The instance tools invoked with a <code>ToolContext</code> against a temporary instance, because every decision from D3 to D14 is visible in a file or a result string there. <code>LangGraphRunner</code> with a scripted model for the gate and approval path (D1, D4, D6). The routine history fold and the scheduler for the streak (D7, D10). <code>run_repl</code> for the rendering (D4). The packaged skill text (D13).</dd>
+    <dt>A good test here</dt><dd>Asserts the files in the instance directory, the events a subscriber sees, the string a tool returns, or the text the REPL prints. Never the staging directory, the rename call, the loader's internals, or the fold's bookkeeping.</dd>
+    <dt>Prior art</dt><dd><code>tests/test_memory_tools.py</code> for core tools through the runner with a scripted model; <code>tests/test_routines.py</code> for routine files in a temporary instance and firings; <code>tests/test_scheduler.py</code> for the failure policy; <code>tests/test_repl.py</code> for approval prompts; <code>tests/test_packaged_skills.py</code> for the shipped skill.</dd>
+  </dl>
+  <h3>Cases</h3>
+  <ol>
+    <li><code>routine_write</code> with a valid file creates <code>routines/&lt;name&gt;/ROUTINE.md</code>, the scheduler lists it armed, and the result carries the next firing time in the instance zone, flow write a routine, protects D3, D5, D14.</li>
+    <li>An invalid cron, a missing description, a <code>run.py</code> defining two tools, and a name with a slash each return the loader's message and leave the directory as it was, flow write a routine, protects D5.</li>
+    <li>A rewrite without <code>code</code> keeps the existing <code>run.py</code>; one with <code>code</code> replaces it, flow write a routine, protects D3.</li>
+    <li>Under <code>ask</code>, a model call to <code>routine_write</code> raises an approval whose arguments carry the file; approve writes it and emits <code>ToolGated</code> and <code>ToolResult</code>; deny leaves the directory untouched; under <code>full-access</code> no approval appears, flow write a routine, protects D1, D4.</li>
+    <li>Every verb is in the tool snapshot of a user turn and of a routine turn, flow all, protects D6.</li>
+    <li><code>routine_set_enabled</code> flips only the <code>enabled</code> line and preserves the rest of the file byte for byte, including line endings, flow enable, protects D3.</li>
+    <li>A routine disabled at ten failures, enabled through an approved <code>routine_set_enabled</code>, fails once and stays enabled with a failure count of one; an errored enable result resets nothing, flow enable, protects D7, D10.</li>
+    <li><code>routine_delete</code> removes the directory when nothing is pending and refuses with the count when a delivery waits, flow delete, protects D12.</li>
+    <li><code>skill_write</code> refuses a frontmatter name that differs from the directory, reports the packaged skill it shadows, and the catalogue lists the new skill; <code>skill_delete</code> removes it, flow write a skill, protects D11, D14.</li>
+    <li>An approval whose argument spans lines prints the block form; one whose arguments do not keeps the one-line form, flow write a routine, protects D4.</li>
+    <li>The write-routine skill names <code>routine_write</code> and no longer names #61, flow write a routine, protects D13.</li>
+  </ol>
+
+  <h2 id="out-of-scope">Out of scope <span class="mode">reference</span></h2>
+  <ul>
+    <li>Agent-authored tools in <code>tools/</code>. Agent authors its own tools (#161) on the map.</li>
+    <li>A <code>set_model</code> verb or any write to <code>kinby.toml</code>. Ruled out of the v1 map.</li>
+    <li>Writes to <code>permissions.toml</code>, <code>SYSTEM.md</code>, <code>RECAP.md</code>, or the profile through instance tools.</li>
+    <li>History or revert for the instance directory. Fog on the map as "instance directory history".</li>
+    <li>A rendered diff on the approval event. Fog on the map as "approval previews".</li>
+    <li>Contract methods or CLI commands for creating and editing routines.</li>
+    <li>Excluding instance tools from routine or signal turns.</li>
+    <li>Workspace convention skills. The workspace file tools already reach them.</li>
+  </ul>
+
+  <h2 id="open-questions">Open questions <span class="mode">reference</span></h2>
+  <p>Points the grilling did not settle. Each with the options on the table and the recommended default. The agent building this stops and asks before acting on any of them.</p>
+  <ol>
+    <li>The exact name rule. Options: letters, digits, hyphens and underscores starting with a letter or digit; any name that is a single path segment without a leading dot. Default: the first, so a name is always a valid signal path.</li>
+    <li>What <code>routine_list</code> includes. Options: the <code>RoutineSummary</code> fields the contract already returns; name, description, schedule, enabled, mode, signal and pending count only. Default: the second, enough for the model to talk about state without turning the tool into <code>routine.list</code>.</li>
+    <li>Whether <code>routine_read</code> also returns the next firing time. Options: file text only; file text plus the D14 facts. Default: file text only, since <code>routine_list</code> carries state.</li>
+  </ol>
+
+  <h2 id="glossary">Glossary <span class="mode">reference</span></h2>
+  <dl>
+    <dt>instance tool</dt><dd>A core write tool through which the agent changes its own instance, such as a routine or a skill, under the gate like any other write. Workspace file tools never reach the instance.</dd>
+    <dt>instance</dt><dd>One kinby deployment: a directory that owns its behavior configuration, memory and transcripts.</dd>
+    <dt>routine</dt><dd>A wake an instance owns: a prompt, and optionally the instance's own code step that runs first. Lives as a directory in the instance; its file is the source of truth.</dd>
+    <dt>code step</dt><dd>A routine's own deterministic code, a tool never offered to the model, that runs before the model.</dd>
+    <dt>skill</dt><dd>A markdown instruction set the model reads on demand, listed by name and description.</dd>
+    <dt>tool snapshot</dt><dd>The fixed, name-sorted set of tools for one turn.</dd>
+    <dt>gate</dt><dd>The check every tool call passes through before it runs: allow, ask, or deny from the tool's write flag and the instance's policy.</dd>
+    <dt>permission mode</dt><dd>A named preset of gate rules a thread runs under: read-only, ask, auto, or full-access.</dd>
+    <dt>approval</dt><dd>A user decision a live turn waits on before it continues. Requested as an event; answered through the contract.</dd>
+    <dt>failure policy</dt><dd>The rule that counts consecutive failed firings, reports the first failure, and disables a routine at ten failures.</dd>
+    <dt>delivery</dt><dd>One authenticated inbound call the receiver accepted for a routine, recorded at receipt and fired by the scheduler.</dd>
+    <dt>event</dt><dd>One sequence-numbered record in a thread's durable history.</dd>
+  </dl>
+
+  <footer>Blueprint for instance tools · stamped at e0afd95 · 2026-09-08</footer>
+</main>
+</body>
+</html>
