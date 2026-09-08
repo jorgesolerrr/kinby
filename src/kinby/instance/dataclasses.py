@@ -51,6 +51,7 @@ class Workspace:
     path: Path
     source: str | None
     conventions: Conventions
+    snapshots: bool = True
 
 
 class RecapPolicy(StrEnum):

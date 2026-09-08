@@ -50,7 +50,7 @@ async def boot_instance(
 ) -> InstanceRuntime:
     """Start one runtime that owns an instance's turns and routine fires."""
     event_log = EventLog(instance.manifest.state_dir)
-    turns = turn_config(instance, event_log=event_log, model_override=model_override)
+    turns = await turn_config(instance, event_log=event_log, model_override=model_override)
     if turns.recap is not None:
         await turns.recap.catch_up()
     dispatcher = build_dispatcher(

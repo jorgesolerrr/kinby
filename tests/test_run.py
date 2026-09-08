@@ -97,7 +97,12 @@ def test_verbose_run_writes_no_process_log_under_state(tmp_path, capsys, monkeyp
     captured = capsys.readouterr()
     state_files = {path.name for path in (instance / ".state").iterdir()}
     assert exit_code == 0, (captured.out, captured.err)
-    assert state_files <= {"threads.jsonl", "events.jsonl", "checkpoints.sqlite"}
+    assert state_files <= {
+        "threads.jsonl",
+        "events.jsonl",
+        "checkpoints.sqlite",
+        "snapshots.git",
+    }
 
 
 def test_run_catches_up_uncovered_turns_before_waiting_for_input(

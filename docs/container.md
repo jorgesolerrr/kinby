@@ -8,7 +8,8 @@ The root `Dockerfile` builds one image for every kinby instance. Instance identi
 - `KINBY_INSTANCE` is set to `/instance`, so commands use the mounted instance unless an explicit path overrides it.
 - Pass provider API keys and other secrets as environment variables at runtime. Do not add them to the image or `kinby.toml`.
 - The image entrypoint is `kinby`. Its default command is `run`.
-- Runtime data written under the instance's `.state/` directory persists with the mounted instance.
+- Runtime data written under the instance's `.state/` directory persists with the mounted instance, including the shadow repository at `.state/snapshots.git` that holds the workspace snapshots.
+- The image ships git, which workspace snapshots run as a subprocess. Without it kinby boots with snapshots off and one warning.
 
 Build the image and inspect the minimal example:
 

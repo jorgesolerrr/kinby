@@ -29,6 +29,7 @@ from kinby.contracts import (
 )
 from kinby.core import Dispatcher, LangGraphRunner, TurnConfig, build_dispatcher, turn_config
 from kinby.core.events import EventLog
+from kinby.core.snapshots import SNAPSHOTS_DIR
 from kinby.core.turn_runner import ChatModel
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome, TurnRequest
 from kinby.instance import Budgets, Instance, load_instance
@@ -727,24 +728,27 @@ def test_runner_reloads_the_instance_model_between_turns(
 
 
 def test_turn_config_reapplies_the_session_model_override(tmp_path: Path) -> None:
-    instance = _load_test_instance(tmp_path)
-    configured = turn_config(
-        instance,
-        event_log=EventLog(instance.manifest.state_dir),
-        model_override="anthropic:claude-sonnet-4-6",
-    )
-    manifest_path = instance.path / "kinby.toml"
+    async def scenario() -> None:
+        instance = _load_test_instance(tmp_path)
+        configured = await turn_config(
+            instance,
+            event_log=EventLog(instance.manifest.state_dir),
+            model_override="anthropic:claude-sonnet-4-6",
+        )
+        manifest_path = instance.path / "kinby.toml"
 
-    manifest_path.write_text(
-        'id = "test"\n\n[models]\nmain = "google:gemini-2.5-pro"\n',
-        encoding="utf-8",
-    )
+        manifest_path.write_text(
+            'id = "test"\n\n[models]\nmain = "google:gemini-2.5-pro"\n',
+            encoding="utf-8",
+        )
 
-    preparation = configured.prepare_for_turn()
+        preparation = configured.prepare_for_turn()
 
-    assert preparation.model == "anthropic:claude-sonnet-4-6"
-    assert preparation.default_mode is PermissionMode.ASK
-    assert preparation.ceiling is PermissionMode.FULL_ACCESS
+        assert preparation.model == "anthropic:claude-sonnet-4-6"
+        assert preparation.default_mode is PermissionMode.ASK
+        assert preparation.ceiling is PermissionMode.FULL_ACCESS
+
+    asyncio.run(scenario())
 
 
 def test_langgraph_runner_streams_one_model_turn(tmp_path: Path) -> None:
@@ -920,5 +924,44 @@ def test_runner_keeps_thread_messages_after_restart(tmp_path: Path) -> None:
             ["First"],
             ["First", "First reply", "Second"],
         ]
+
+    asyncio.run(scenario())
+
+
+def test_turn_config_opens_a_snapshot_store_from_the_manifest(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _load_test_instance(tmp_path)
+        (instance.path / "workspace").mkdir()
+
+        configured = await turn_config(
+            instance,
+            event_log=EventLog(instance.manifest.state_dir),
+        )
+
+        assert configured.snapshots is not None
+        assert (instance.manifest.state_dir / SNAPSHOTS_DIR).is_dir()
+
+    asyncio.run(scenario())
+
+
+def test_turn_config_opens_no_snapshot_store_when_the_manifest_turns_them_off(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance_path = tmp_path / "instance"
+        instance_path.mkdir()
+        (instance_path / "kinby.toml").write_text(
+            f'id = "test"\n\n[models]\nmain = "{_MODEL}"\n\n[workspace]\nsnapshots = false\n',
+            encoding="utf-8",
+        )
+        instance = load_instance(instance_path)
+
+        configured = await turn_config(
+            instance,
+            event_log=EventLog(instance.manifest.state_dir),
+        )
+
+        assert configured.snapshots is None
+        assert not (instance.manifest.state_dir / SNAPSHOTS_DIR).exists()
 
     asyncio.run(scenario())

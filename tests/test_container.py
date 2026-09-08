@@ -67,3 +67,18 @@ def test_image_runs_a_mounted_instance_with_the_container_contract() -> None:
         assert result.stderr == ""
     finally:
         _docker("image", "rm", "--force", image, check=False)
+
+
+@pytest.mark.skipif(not _docker_is_available(), reason="Docker daemon is not available")
+def test_image_ships_git_for_workspace_snapshots() -> None:
+    image = f"kinby-container-test-{uuid.uuid4().hex}"
+
+    try:
+        _docker("build", "--quiet", "--tag", image, ".")
+
+        result = _docker("run", "--rm", "--entrypoint", "git", image, "--version", check=False)
+
+        assert result.returncode == 0
+        assert result.stdout.startswith("git version ")
+    finally:
+        _docker("image", "rm", "--force", image, check=False)

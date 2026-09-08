@@ -35,7 +35,11 @@ from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 from kinby.core.turns import TurnOutcome
 from kinby.memory import GraphStore, RecapWriter
-from tests.helpers import fixed_permission_ceiling, fixed_turn_preparation
+from tests.helpers import (
+    fixed_permission_ceiling,
+    fixed_turn_preparation,
+    turn_config_stub,
+)
 from tests.test_routines import instance_at, routine_file
 from tests.test_run import BlockingInput
 from tests.test_scheduler import FakeClock, ScriptedRunner
@@ -85,10 +89,12 @@ def test_boot_instance_starts_the_scheduler(tmp_path, monkeypatch) -> None:
         clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
         monkeypatch.setattr(
             "kinby.core.runtime.turn_config",
-            lambda *args, **kwargs: TurnConfig(
-                fixed_turn_preparation,
-                fixed_permission_ceiling,
-                ScriptedRunner(),
+            turn_config_stub(
+                lambda: TurnConfig(
+                    fixed_turn_preparation,
+                    fixed_permission_ceiling,
+                    ScriptedRunner(),
+                )
             ),
         )
 
@@ -152,10 +158,12 @@ def test_routine_run_renders_the_turn_event_stream(tmp_path, capsys, monkeypatch
     routine_file(instance, "description: News")
     monkeypatch.setattr(
         "kinby.core.runtime.turn_config",
-        lambda *args, **kwargs: TurnConfig(
-            fixed_turn_preparation,
-            fixed_permission_ceiling,
-            EventRunner(),
+        turn_config_stub(
+            lambda: TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                EventRunner(),
+            )
         ),
     )
 
@@ -190,10 +198,12 @@ def test_routine_run_payload_records_and_streams_delivery(
     payload.write_text(body)
     monkeypatch.setattr(
         "kinby.core.runtime.turn_config",
-        lambda *args, **kwargs: TurnConfig(
-            fixed_turn_preparation,
-            fixed_permission_ceiling,
-            EventRunner(),
+        turn_config_stub(
+            lambda: TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                EventRunner(),
+            )
         ),
     )
 
@@ -347,10 +357,12 @@ def test_run_fires_pending_delivery_on_boot(
     asyncio.run(seed())
     monkeypatch.setattr(
         "kinby.core.runtime.turn_config",
-        lambda *args, **kwargs: TurnConfig(
-            fixed_turn_preparation,
-            fixed_permission_ceiling,
-            EventRunner(),
+        turn_config_stub(
+            lambda: TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                EventRunner(),
+            )
         ),
     )
     monkeypatch.setattr("sys.stdin", StringIO())
@@ -373,7 +385,7 @@ def test_serve_interrupts_a_running_routine_and_drains_its_recap(
     clock = FakeClock(datetime.now(UTC) - timedelta(minutes=1))
     booted = ThreadEvent()
 
-    def scripted_turns(instance, *, event_log, model_override=None):
+    async def scripted_turns(instance, *, event_log, model_override=None):
         recap = RecapWriter(
             event_log,
             GraphStore(instance.path),

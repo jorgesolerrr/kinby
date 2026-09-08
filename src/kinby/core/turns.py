@@ -30,6 +30,7 @@ from kinby.contracts import (
     ThreadTurnInterruptCommand,
     ThreadTurnStartCommand,
     TokenTotals,
+    TreeId,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
@@ -49,11 +50,20 @@ from kinby.core.errors import (
     TurnInterruptedError,
 )
 from kinby.core.events import EventLog
+from kinby.core.snapshots import (
+    SnapshotBoundary,
+    SnapshotError,
+    SnapshotStore,
+    snapshot_ref,
+)
 from kinby.core.threads import ThreadStore
 from kinby.instance import Budgets
 from kinby.instance.permissions import constrain_mode, exceeds_ceiling
 
 logger = logging.getLogger(__name__)
+
+# How long an interrupt lets a cancelled runner finish writing before it snapshots.
+_SETTLE_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -177,6 +187,7 @@ class Turns:
         prepare_for_turn: Callable[[], TurnPreparation],
         permission_ceiling: Callable[[], PermissionMode],
         after_turn: ClosedTurnHook,
+        snapshots: SnapshotStore | None = None,
     ) -> None:
         self._store = store
         self._log = log
@@ -184,6 +195,7 @@ class Turns:
         self._prepare_for_turn = prepare_for_turn
         self._permission_ceiling = permission_ceiling
         self._after_turn = after_turn
+        self._snapshots = snapshots
         self._changed = asyncio.Event()
         self._running: dict[UUID, RunningTurn] = {}
         self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim] = {}
@@ -317,6 +329,11 @@ class Turns:
                 ),
                 system_prompt=preparation.system_prompt,
             )
+            snapshot = await self._capture(
+                turn.thread_id,
+                turn.turn_id,
+                SnapshotBoundary.BEFORE,
+            )
             started = await self._log.append(
                 turn.thread_id,
                 turn.turn_id,
@@ -326,6 +343,7 @@ class Turns:
                     model=turn.model,
                     permission_mode=turn.permission_mode,
                     prompt_version=preparation.prompt_version,
+                    snapshot=snapshot,
                 ),
             )
         finally:
@@ -358,6 +376,12 @@ class Turns:
             self._claims[command.thread_id] = claim
 
         try:
+            if running is not None:
+                # The workspace only stops changing once the cancelled task is done,
+                # but ADR 0008 keeps an interrupt from waiting on a runner that
+                # suppresses cancellation, so the snapshot gives up its accuracy
+                # rather than the command's return.
+                await asyncio.wait((running.task,), timeout=_SETTLE_SECONDS)
             usage = (
                 running.usage
                 if running is not None
@@ -366,7 +390,14 @@ class Turns:
             interrupted = await self._log.append(
                 command.thread_id,
                 turn_id,
-                TurnInterrupted(**usage.model_dump()),
+                TurnInterrupted(
+                    snapshot=await self._capture(
+                        command.thread_id,
+                        turn_id,
+                        SnapshotBoundary.AFTER,
+                    ),
+                    **usage.model_dump(),
+                ),
             )
             self._schedule_after_turn(command.thread_id, turn_id)
         finally:
@@ -506,6 +537,11 @@ class Turns:
             await emit(
                 TurnCompleted(
                     outcome=outcome.outcome,
+                    snapshot=await self._capture(
+                        turn.thread_id,
+                        turn.turn_id,
+                        SnapshotBoundary.AFTER,
+                    ),
                     **usage.model_dump(),
                 )
             )
@@ -517,10 +553,30 @@ class Turns:
             TurnFailed(
                 code=code,
                 message=message,
+                snapshot=await self._capture(
+                    turn.thread_id,
+                    turn.turn_id,
+                    SnapshotBoundary.AFTER,
+                ),
                 **usage.model_dump(),
             )
         )
         self._schedule_after_turn(turn.thread_id, turn.turn_id)
+
+    async def _capture(
+        self,
+        thread_id: UUID,
+        turn_id: UUID,
+        boundary: SnapshotBoundary,
+    ) -> TreeId | None:
+        """Snapshot the workspace, or record nothing when the snapshot cannot be taken."""
+        if self._snapshots is None:
+            return None
+        try:
+            return await self._snapshots.capture(snapshot_ref(thread_id, turn_id, boundary))
+        except SnapshotError:
+            logger.warning("The workspace snapshot could not be taken.", exc_info=True)
+            return None
 
     def _schedule_after_turn(self, thread_id: UUID, turn_id: UUID) -> None:
         try:
