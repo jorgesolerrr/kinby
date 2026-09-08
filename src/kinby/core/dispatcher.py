@@ -20,7 +20,9 @@ from kinby.contracts import (
     THREAD_LIST,
     THREAD_MODE_SET,
     THREAD_SUBSCRIBE,
+    THREAD_TURN_DIFF,
     THREAD_TURN_INTERRUPT,
+    THREAD_TURN_LIST,
     THREAD_TURN_RATE,
     THREAD_TURN_START,
     USAGE_GET,
@@ -326,6 +328,8 @@ def build_dispatcher(
         dispatcher.register(ROUTINE_RUN, scheduler.run)
     if turn_service is not None:
         dispatcher.register(THREAD_TURN_START, turn_service.start)
+        dispatcher.register(THREAD_TURN_DIFF, turn_service.diff)
+        dispatcher.register(THREAD_TURN_LIST, turn_service.list_turns)
         dispatcher.register(THREAD_MODE_SET, turn_service.set_mode)
         dispatcher.register(THREAD_TURN_INTERRUPT, turn_service.interrupt)
         dispatcher.register(THREAD_APPROVAL_RESPOND, turn_service.respond)

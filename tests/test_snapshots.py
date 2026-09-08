@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 
-from kinby.contracts import TreeId
+from kinby.contracts import ChangeStatus, FileChange, TreeId
 from kinby.core.snapshots import (
     SNAPSHOTS_DIR,
     SnapshotError,
@@ -69,6 +69,116 @@ def test_a_capture_after_an_edit_returns_a_different_tree(tmp_path: Path) -> Non
         after = await store.capture(_AFTER)
 
         assert before != after
+
+    asyncio.run(scenario())
+
+
+def test_diff_reports_a_modified_file_with_counts_and_patch(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        before = await store.capture(_BEFORE)
+        (tmp_path / "workspace" / "notes.md").write_text("second\n", encoding="utf-8")
+        after = await store.capture(_AFTER)
+
+        difference = await store.diff(before, after)
+
+        assert difference.files == [
+            FileChange(
+                path="notes.md",
+                status=ChangeStatus.MODIFIED,
+                additions=1,
+                deletions=1,
+            )
+        ]
+        assert "diff --git a/notes.md b/notes.md" in difference.patch
+
+    asyncio.run(scenario())
+
+
+def test_diff_preserves_trailing_whitespace_in_the_patch(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        before = await store.capture(_BEFORE)
+        (tmp_path / "workspace" / "notes.md").write_text("second  \n", encoding="utf-8")
+        after = await store.capture(_AFTER)
+
+        difference = await store.diff(before, after)
+
+        assert difference.patch.endswith("+second  \n")
+
+    asyncio.run(scenario())
+
+
+def test_diff_reports_added_and_deleted_files(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        before = await store.capture(_BEFORE)
+        workspace = tmp_path / "workspace"
+        (workspace / "notes.md").unlink()
+        (workspace / "new.md").write_text("one\ntwo\n", encoding="utf-8")
+        after = await store.capture(_AFTER)
+
+        difference = await store.diff(before, after)
+
+        assert difference.files == [
+            FileChange(
+                path="new.md",
+                status=ChangeStatus.ADDED,
+                additions=2,
+                deletions=0,
+            ),
+            FileChange(
+                path="notes.md",
+                status=ChangeStatus.DELETED,
+                additions=0,
+                deletions=1,
+            ),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_diff_reports_a_renamed_file_under_its_new_path(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        before = await store.capture(_BEFORE)
+        workspace = tmp_path / "workspace"
+        (workspace / "notes.md").rename(workspace / "renamed.md")
+        after = await store.capture(_AFTER)
+
+        difference = await store.diff(before, after)
+
+        assert difference.files == [
+            FileChange(
+                path="renamed.md",
+                status=ChangeStatus.RENAMED,
+                additions=0,
+                deletions=0,
+            )
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_diff_reports_a_file_replaced_by_a_symlink_as_modified(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = await _opened(tmp_path)
+        before = await store.capture(_BEFORE)
+        path = tmp_path / "workspace" / "notes.md"
+        path.unlink()
+        path.symlink_to("target.md")
+        after = await store.capture(_AFTER)
+
+        difference = await store.diff(before, after)
+
+        assert difference.files == [
+            FileChange(
+                path="notes.md",
+                status=ChangeStatus.MODIFIED,
+                additions=1,
+                deletions=1,
+            )
+        ]
 
     asyncio.run(scenario())
 

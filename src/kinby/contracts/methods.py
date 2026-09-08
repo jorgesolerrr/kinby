@@ -21,7 +21,11 @@ from kinby.contracts.models import (
     ThreadListResult,
     ThreadModeSetCommand,
     ThreadSubscribeCommand,
+    ThreadTurnDiffCommand,
+    ThreadTurnDiffResult,
     ThreadTurnInterruptCommand,
+    ThreadTurnListCommand,
+    ThreadTurnListResult,
     ThreadTurnRateCommand,
     ThreadTurnStartCommand,
     UsageGetCommand,
@@ -58,6 +62,12 @@ THREAD_MODE_SET = Method(
 )
 THREAD_TURN_START = Method(
     "thread.turn.start", Scope.THREAD_OPERATE, ThreadTurnStartCommand, AcceptedResult
+)
+THREAD_TURN_DIFF = Method(
+    "thread.turn.diff", Scope.THREAD_READ, ThreadTurnDiffCommand, ThreadTurnDiffResult
+)
+THREAD_TURN_LIST = Method(
+    "thread.turn.list", Scope.THREAD_READ, ThreadTurnListCommand, ThreadTurnListResult
 )
 THREAD_TURN_INTERRUPT = Method(
     "thread.turn.interrupt",

@@ -53,6 +53,10 @@ class TurnNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class SnapshotUnavailable(CoreError):
+    code = ErrorCode.SNAPSHOT_UNAVAILABLE
+
+
 class PermissionDenied(CoreError):
     code = ErrorCode.PERMISSION_DENIED
 

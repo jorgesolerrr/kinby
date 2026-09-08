@@ -113,6 +113,11 @@ The workspace's own instruction files and skill directories an **instance** may 
 The recorded state of every file in the **workspace** at one **turn** boundary, ignored files excluded. Every turn has one from before it started and one from when it closed, so the difference between them is exactly what the turn changed.
 _Avoid_: checkpoint (that is the **graph checkpoint**), commit
 
+### Workspace diff
+
+The file changes and unified patch between two **workspace snapshots**. A turn's workspace diff compares its starting snapshot with its closing snapshot, so it contains only that turn's changes.
+_Avoid_: git diff (the workspace may not be a Git repository), changes (when the snapshot comparison matters)
+
 ### Workspace revert
 
 A user's request to put the workspace back to the **workspace snapshot** taken before a chosen **turn**, discarding that turn's changes and every later turn's. Recorded on the thread like a turn, with its own snapshots, so a revert can itself be reverted.

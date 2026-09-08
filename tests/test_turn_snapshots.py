@@ -10,10 +10,16 @@ import pytest
 
 from kinby.contracts import (
     ApprovalRequested,
+    ChangeStatus,
     CompletionOutcome,
+    ErrorCode,
+    ErrorEnvelope,
     Event,
+    FileChange,
     Scope,
     ThreadCreateResult,
+    ThreadTurnDiffResult,
+    TreeId,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
@@ -21,7 +27,7 @@ from kinby.contracts import (
 )
 from kinby.core import turns
 from kinby.core.dispatcher import AcceptedResult, Dispatcher, TurnConfig, build_dispatcher
-from kinby.core.snapshots import SnapshotStore
+from kinby.core.snapshots import SnapshotError, SnapshotRef, SnapshotStore, WorkspaceDiff
 from kinby.core.turns import Emit, PreparedTurnRequest, TurnOutcome, TurnRunner
 from tests.helpers import (
     FakeSnapshotStore,
@@ -73,6 +79,246 @@ async def _thread_on(
     created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
     assert isinstance(created, ThreadCreateResult)
     return dispatcher, created.id
+
+
+class SelectivelyFailingSnapshotStore(FakeSnapshotStore):
+    def __init__(self, failed_capture: int) -> None:
+        super().__init__()
+        self._failed_capture = failed_capture
+
+    async def capture(self, ref: SnapshotRef) -> TreeId:
+        self.refs.append(ref)
+        if len(self.refs) == self._failed_capture:
+            raise SnapshotError("git write-tree failed")
+        return TreeId(f"{len(self.refs):040d}")
+
+
+class FailingDiffSnapshotStore(FakeSnapshotStore):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff:
+        self.diffs.append((before, after))
+        raise self._error
+
+
+def test_a_closed_turn_diff_returns_its_snapshots_and_the_store_result(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        snapshots.difference = WorkspaceDiff(
+            files=[
+                FileChange(
+                    path="notes.md",
+                    status=ChangeStatus.MODIFIED,
+                    additions=1,
+                    deletions=1,
+                )
+            ],
+            patch="diff --git a/notes.md b/notes.md",
+        )
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await _closed_turn_events(dispatcher, thread_id, count=4)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.diff",
+            {"thread_id": thread_id, "turn_id": started.turn_id},
+            {Scope.THREAD_READ},
+        )
+
+        assert result == ThreadTurnDiffResult(
+            turn_id=started.turn_id,
+            before=TreeId(f"{1:040d}"),
+            after=TreeId(f"{2:040d}"),
+            files=snapshots.difference.files,
+            patch=snapshots.difference.patch,
+        )
+        assert snapshots.diffs == [(TreeId(f"{1:040d}"), TreeId(f"{2:040d}"))]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("missing", ["before", "after"])
+def test_a_turn_diff_requires_both_snapshot_ids(tmp_path: Path, missing: str) -> None:
+    async def scenario() -> None:
+        failed_capture = 1 if missing == "before" else 2
+        dispatcher, thread_id = await _thread_on(
+            tmp_path,
+            ScriptedRunner(),
+            SelectivelyFailingSnapshotStore(failed_capture),
+        )
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await _closed_turn_events(dispatcher, thread_id, count=4)
+        result = await dispatcher.dispatch(
+            "thread.turn.diff",
+            {"thread_id": thread_id, "turn_id": started.turn_id},
+            {Scope.THREAD_READ},
+        )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is ErrorCode.SNAPSHOT_UNAVAILABLE
+
+    asyncio.run(scenario())
+
+
+def test_a_turn_diff_requires_an_open_snapshot_store(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), None)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await _closed_turn_events(dispatcher, thread_id, count=4)
+        result = await dispatcher.dispatch(
+            "thread.turn.diff",
+            {"thread_id": thread_id, "turn_id": started.turn_id},
+            {Scope.THREAD_READ},
+        )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is ErrorCode.SNAPSHOT_UNAVAILABLE
+
+    asyncio.run(scenario())
+
+
+def test_a_running_turn_cannot_be_diffed(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runner = WaitingRunner()
+        dispatcher, thread_id = await _thread_on(
+            tmp_path,
+            runner,
+            FakeSnapshotStore(),
+        )
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await runner.started.wait()
+        result = await dispatcher.dispatch(
+            "thread.turn.diff",
+            {"thread_id": thread_id, "turn_id": started.turn_id},
+            {Scope.THREAD_READ},
+        )
+        await dispatcher.dispatch(
+            "thread.turn.interrupt",
+            {"thread_id": thread_id},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is ErrorCode.THREAD_BUSY
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (SnapshotError("git diff failed"), ErrorCode.SNAPSHOT_UNAVAILABLE),
+        (RuntimeError("parser failed"), ErrorCode.INTERNAL),
+    ],
+)
+def test_a_turn_diff_classifies_store_failures(
+    tmp_path: Path,
+    failure: Exception,
+    expected: ErrorCode,
+) -> None:
+    async def scenario() -> None:
+        snapshots = FailingDiffSnapshotStore(failure)
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await _closed_turn_events(dispatcher, thread_id, count=4)
+
+        result = await dispatcher.dispatch(
+            "thread.turn.diff",
+            {"thread_id": thread_id, "turn_id": started.turn_id},
+            {Scope.THREAD_READ},
+        )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is expected
+
+    asyncio.run(scenario())
+
+
+def test_an_unknown_turn_cannot_be_diffed(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher, thread_id = await _thread_on(
+            tmp_path,
+            ScriptedRunner(),
+            FakeSnapshotStore(),
+        )
+        turn_id = UUID("11111111-1111-1111-1111-111111111111")
+        result = await dispatcher.dispatch(
+            "thread.turn.diff",
+            {"thread_id": thread_id, "turn_id": turn_id},
+            {Scope.THREAD_READ},
+        )
+
+        assert isinstance(result, ErrorEnvelope)
+        assert result.code is ErrorCode.NOT_FOUND
+
+    asyncio.run(scenario())
+
+
+def test_thread_turn_diff_is_dispatched_under_thread_read(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        snapshots.difference = WorkspaceDiff([], "")
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await _closed_turn_events(dispatcher, thread_id, count=4)
+
+        denied = await dispatcher.dispatch(
+            "thread.turn.diff",
+            {"thread_id": thread_id, "turn_id": started.turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+        result = await dispatcher.dispatch(
+            "thread.turn.diff",
+            {"thread_id": thread_id, "turn_id": started.turn_id},
+            {Scope.THREAD_READ},
+        )
+
+        assert denied == ErrorEnvelope(
+            code=ErrorCode.PERMISSION_DENIED,
+            message='Missing required scope "thread:read".',
+            retryable=False,
+        )
+        assert result == ThreadTurnDiffResult(
+            turn_id=started.turn_id,
+            before=TreeId(f"{1:040d}"),
+            after=TreeId(f"{2:040d}"),
+            files=[],
+            patch="",
+        )
+
+    asyncio.run(scenario())
 
 
 def test_a_completed_turn_carries_the_snapshots_taken_around_it(tmp_path: Path) -> None:

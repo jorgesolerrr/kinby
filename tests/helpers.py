@@ -4,7 +4,7 @@ from uuid import UUID
 from kinby.contracts import PermissionMode, PromptVersion, SystemPrompt, TreeId
 from kinby.core.budgets import DailyBudget, DailyCost
 from kinby.core.dispatcher import TurnConfig
-from kinby.core.snapshots import SnapshotError, SnapshotRef
+from kinby.core.snapshots import SnapshotError, SnapshotRef, WorkspaceDiff
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
     ApprovalDecision,
@@ -69,6 +69,8 @@ class FakeSnapshotStore:
 
     def __init__(self, *, failing: bool = False) -> None:
         self.refs: list[SnapshotRef] = []
+        self.diffs: list[tuple[TreeId, TreeId]] = []
+        self.difference = WorkspaceDiff([], "")
         self._failing = failing
 
     async def capture(self, ref: SnapshotRef) -> TreeId:
@@ -76,6 +78,10 @@ class FakeSnapshotStore:
         if self._failing:
             raise SnapshotError("git add --all failed")
         return TreeId(f"{len(self.refs):040d}")
+
+    async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff:
+        self.diffs.append((before, after))
+        return self.difference
 
 
 def turn_config_stub(build: Callable[[], TurnConfig]) -> Callable[..., Awaitable[TurnConfig]]:

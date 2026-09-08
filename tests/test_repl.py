@@ -5,11 +5,18 @@ from pathlib import Path
 from queue import Queue
 from uuid import UUID
 
+import pytest
+
 from kinby.cli.client import ContractClient
 from kinby.cli.repl import run_repl
 from kinby.contracts import (
     THREAD_CREATE,
+    THREAD_TURN_INTERRUPT,
+    THREAD_TURN_START,
+    AcceptedResult,
     ApprovalRequested,
+    ChangeStatus,
+    FileChange,
     GateDecider,
     GateOutcome,
     MemoryRecapped,
@@ -19,24 +26,315 @@ from kinby.contracts import (
     Scope,
     ThreadCreateCommand,
     ThreadCreateResult,
+    ThreadTurnInterruptCommand,
+    ThreadTurnStartCommand,
     ToolCall,
     ToolGated,
     ToolResult,
     TurnRated,
+    TurnStarted,
     TurnVerdict,
     Warning,
 )
+from kinby.core import turns
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
+from kinby.core.snapshots import WorkspaceDiff
 from kinby.core.turns import ApprovalDecision, Emit, ParkedTurn, PreparedTurnRequest, TurnOutcome
 from kinby.instance import FeedbackPolicy, load_instance
 from kinby.memory import GraphStore, RecapWriter
 from tests.helpers import (
+    FakeSnapshotStore,
     cannot_restore,
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
 )
+
+
+def test_diff_without_an_id_prints_the_last_closed_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        snapshots.difference = WorkspaceDiff(
+            [
+                FileChange(
+                    path="notes.md",
+                    status=ChangeStatus.MODIFIED,
+                    additions=1,
+                    deletions=1,
+                )
+            ],
+            "diff --git a/notes.md b/notes.md\n-old\n+new",
+        )
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ReplRunner(),
+                snapshots=snapshots,
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        first_exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("Hello\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("/diff\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert first_exit_code == 0
+        assert exit_code == 0
+        assert stdout.getvalue() == (
+            "> Hi there\n"
+            "> "
+            "> modified notes.md +1 -1\n"
+            "diff --git a/notes.md b/notes.md\n"
+            "-old\n"
+            "+new\n"
+            "> "
+        )
+        assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())
+
+
+def test_diff_accepts_a_full_id_and_a_unique_eight_character_prefix(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        snapshots.difference = WorkspaceDiff([], "the patch")
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ReplRunner(),
+                snapshots=snapshots,
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        first_exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("Hello\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+        turn_id = next(
+            event.turn_id
+            for event in EventLog(tmp_path).stored(created.id)
+            if isinstance(event.payload, TurnStarted)
+        )
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO(f"/diff {str(turn_id)[:8]}\n/diff {turn_id}\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert first_exit_code == 0
+        assert exit_code == 0
+        assert stdout.getvalue() == "> Hi there\n> > the patch\n> the patch\n> "
+        assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())
+
+
+def test_diff_rejects_an_ambiguous_turn_id_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        turn_ids = [
+            UUID("aaaaaaaa-1111-1111-1111-111111111111"),
+            UUID("aaaaaaaa-2222-2222-2222-222222222222"),
+        ]
+        snapshots = FakeSnapshotStore()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ReplRunner(),
+                snapshots=snapshots,
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        ids = iter(turn_ids)
+        monkeypatch.setattr(turns, "uuid4", lambda: next(ids))
+        await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("First\nSecond\n"),
+            stdout=StringIO(),
+            stderr=StringIO(),
+        )
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("/diff aaaaaaaa\n"),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert stdout.getvalue() == "> > "
+        assert stderr.getvalue() == (
+            'INVALID_ARGUMENT: Turn id prefix "aaaaaaaa" matches more than one turn.\n'
+        )
+        assert snapshots.diffs == []
+
+    asyncio.run(scenario())
+
+
+def test_diff_prefix_for_a_running_turn_reports_thread_busy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        turn_id = UUID("aaaaaaaa-1111-1111-1111-111111111111")
+        monkeypatch.setattr(turns, "uuid4", lambda: turn_id)
+        runner = InterruptibleReplRunner()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                runner,
+                snapshots=FakeSnapshotStore(),
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        started = await client.call(
+            THREAD_TURN_START,
+            ThreadTurnStartCommand(thread_id=created.id, message="Hello"),
+        )
+        assert isinstance(started, AcceptedResult)
+        await runner.first_turn_started.wait()
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("/diff aaaaaaaa\n"),
+            stdout=StringIO(),
+            stderr=stderr,
+        )
+        interrupted = await client.call(
+            THREAD_TURN_INTERRUPT,
+            ThreadTurnInterruptCommand(thread_id=created.id),
+        )
+
+        assert exit_code == 0
+        assert isinstance(interrupted, AcceptedResult)
+        assert stderr.getvalue() == (
+            f'THREAD_BUSY: Thread "{created.id}" already has a running turn.\n'
+        )
+
+    asyncio.run(scenario())
+
+
+def test_diff_rejects_a_short_turn_id_prefix(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ReplRunner(),
+                snapshots=snapshots,
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("Hello\n/diff 1111111\n"),
+            stdout=StringIO(),
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert stderr.getvalue() == (
+            "INVALID_ARGUMENT: A turn id prefix must contain at least eight characters.\n"
+        )
+        assert snapshots.diffs == []
+
+    asyncio.run(scenario())
+
+
+def test_diff_reports_an_unmatched_turn_id_prefix_as_not_found(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ReplRunner(),
+                snapshots=snapshots,
+            ),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stderr = StringIO()
+
+        exit_code = await run_repl(
+            client,
+            created.id,
+            feedback=FeedbackPolicy.OFF,
+            stdin=StringIO("Hello\n/diff deadbeef\n"),
+            stdout=StringIO(),
+            stderr=stderr,
+        )
+
+        assert exit_code == 0
+        assert stderr.getvalue() == (
+            'NOT_FOUND: Turn id prefix "deadbeef" was not found on this thread.\n'
+        )
+        assert snapshots.diffs == []
+
+    asyncio.run(scenario())
 
 
 class ReplRunner:
