@@ -257,14 +257,18 @@ class StubbornRunner:
 
     def __init__(self) -> None:
         self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
         self.release = asyncio.Event()
+        self.finished = asyncio.Event()
 
     async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
         self.started.set()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
+            self.cancelled.set()
             await self.release.wait()
+        self.finished.set()
         return TurnOutcome()
 
     resume = does_not_park
@@ -277,6 +281,10 @@ def test_an_interrupt_does_not_wait_forever_on_a_runner_that_swallows_cancellati
 ) -> None:
     async def scenario() -> None:
         monkeypatch.setattr(turns, "_SETTLE_SECONDS", 0.01)
+        failures: list[dict[str, object]] = []
+        asyncio.get_running_loop().set_exception_handler(
+            lambda loop, context: failures.append(context)
+        )
         runner = StubbornRunner()
         snapshots = FakeSnapshotStore()
         dispatcher, thread_id = await _thread_on(tmp_path, runner, snapshots)
@@ -300,5 +308,57 @@ def test_an_interrupt_does_not_wait_forever_on_a_runner_that_swallows_cancellati
         assert isinstance(interrupted, AcceptedResult)
         assert snapshots.refs[-1] == f"refs/kinby/snapshots/{thread_id}/{started.turn_id}/after"
         runner.release.set()
+        await runner.finished.wait()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert snapshots.refs == [
+            f"refs/kinby/snapshots/{thread_id}/{started.turn_id}/before",
+            f"refs/kinby/snapshots/{thread_id}/{started.turn_id}/after",
+        ]
+        assert failures == []
+
+    asyncio.run(scenario())
+
+
+def test_an_interrupt_owns_completion_when_the_runner_stops_during_the_wait(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        failures: list[dict[str, object]] = []
+        asyncio.get_running_loop().set_exception_handler(
+            lambda loop, context: failures.append(context)
+        )
+        runner = StubbornRunner()
+        snapshots = FakeSnapshotStore()
+        dispatcher, thread_id = await _thread_on(tmp_path, runner, snapshots)
+        started = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": thread_id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(started, AcceptedResult)
+        await runner.started.wait()
+
+        interrupting = asyncio.create_task(
+            dispatcher.dispatch(
+                "thread.turn.interrupt",
+                {"thread_id": thread_id},
+                {Scope.THREAD_OPERATE},
+            )
+        )
+        await runner.cancelled.wait()
+        runner.release.set()
+        interrupted = await asyncio.wait_for(interrupting, timeout=1)
+        await runner.finished.wait()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert isinstance(interrupted, AcceptedResult)
+        assert snapshots.refs == [
+            f"refs/kinby/snapshots/{thread_id}/{started.turn_id}/before",
+            f"refs/kinby/snapshots/{thread_id}/{started.turn_id}/after",
+        ]
+        assert failures == []
 
     asyncio.run(scenario())

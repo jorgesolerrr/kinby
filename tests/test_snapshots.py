@@ -3,6 +3,7 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -134,6 +135,30 @@ def test_a_missing_git_binary_opens_no_store_and_warns_once(
     asyncio.run(scenario())
 
 
+def test_a_git_setup_failure_opens_no_store_and_warns(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def scenario() -> None:
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        (state_dir / SNAPSHOTS_DIR).write_text("not a repository\n", encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING, logger="kinby.core.snapshots"):
+            store = await WorkspaceSnapshots.open(
+                state_dir,
+                tmp_path / "workspace",
+                enabled=True,
+            )
+
+        assert store is None
+        assert [record.message for record in caplog.records] == [
+            "The workspace snapshot store could not be opened."
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_a_capture_of_a_missing_workspace_raises_a_snapshot_error(tmp_path: Path) -> None:
     async def scenario() -> None:
         store = await _opened(tmp_path)
@@ -210,6 +235,54 @@ def test_a_capture_cancelled_while_git_runs_leaves_no_git_behind(
 
         assert started
         assert all(process.returncode is not None for process in started)
+
+    asyncio.run(scenario())
+
+
+def test_a_cancelled_capture_kills_a_git_process_that_does_not_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StalledProcess:
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+            self.started = asyncio.Event()
+            self.killed = asyncio.Event()
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            self.started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("the stalled process should be cancelled")
+
+        async def wait(self) -> int:
+            await self.killed.wait()
+            assert self.returncode is not None
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+            self.killed.set()
+
+    async def scenario() -> None:
+        from kinby.core import snapshots
+
+        monkeypatch.setattr(snapshots, "_CANCEL_WAIT_SECONDS", 0.01)
+        process = StalledProcess()
+
+        async def stalled_git(*arguments: str, **options: object) -> asyncio.subprocess.Process:
+            return cast(asyncio.subprocess.Process, process)
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", stalled_git)
+        store = WorkspaceSnapshots(tmp_path / "snapshots.git", tmp_path)
+        capturing = asyncio.create_task(store.capture(_BEFORE))
+        await process.started.wait()
+
+        capturing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await capturing
+
+        assert process.killed.is_set()
+        assert process.returncode == -9
 
     asyncio.run(scenario())
 

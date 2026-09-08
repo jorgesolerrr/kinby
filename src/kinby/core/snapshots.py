@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
 from typing import NewType, Protocol
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 SNAPSHOTS_DIR = "snapshots.git"
 _AUTHOR_NAME = "kinby"
 _AUTHOR_EMAIL = "kinby@localhost"
+_CANCEL_WAIT_SECONDS = 5.0
 
 SnapshotRef = NewType("SnapshotRef", str)
 
@@ -63,7 +65,14 @@ class WorkspaceSnapshots:
             logger.warning("Git is not installed, so kinby records no workspace snapshots.")
             return None
         snapshots = WorkspaceSnapshots(state_dir / SNAPSHOTS_DIR, workspace)
-        await snapshots._create()
+        try:
+            await snapshots._create()
+        except SnapshotError:
+            logger.warning(
+                "The workspace snapshot store could not be opened.",
+                exc_info=True,
+            )
+            return None
         return snapshots
 
     async def capture(self, ref: SnapshotRef) -> TreeId:
@@ -135,7 +144,13 @@ async def _run_git(*arguments: str, cwd: Path | None) -> str:
         # An interrupt cancels the turn mid-capture. Let git finish and release
         # index.lock, or the capture that closes the turn finds the lock taken.
         # These commands write at most a hex id, so no pipe fills while we wait.
-        await process.wait()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=_CANCEL_WAIT_SECONDS)
+        except TimeoutError:
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    process.kill()
+            await process.wait()
         raise
     except OSError as exc:
         raise SnapshotError(f"git {_subcommand(arguments)} could not run: {exc}") from exc

@@ -481,6 +481,12 @@ class Turns:
         )
         task.add_done_callback(partial(self._forget_task, turn.thread_id))
 
+    def _owned_running_turn(self, turn: PreparedTurnRequest) -> RunningTurn | None:
+        running = self._running.get(turn.thread_id)
+        if running is None or running.request.turn_id != turn.turn_id or running.interrupted:
+            return None
+        return running
+
     async def _run(self, turn: PreparedTurnRequest, budgets: Budgets) -> None:
         await self._finish(turn, budgets, lambda context: self._runner.run(turn, context))
 
@@ -503,8 +509,8 @@ class Turns:
         run: Callable[[TurnContext], Awaitable[TurnResult]],
     ) -> None:
         async def emit(payload: Payload) -> Event:
-            running = self._running.get(turn.thread_id)
-            if running is None or running.request.turn_id != turn.turn_id or running.interrupted:
+            running = self._owned_running_turn(turn)
+            if running is None:
                 raise TurnInterruptedError
             event = await self._log.append(turn.thread_id, turn.turn_id, payload)
             if isinstance(payload, ModelCompleted):
@@ -524,7 +530,9 @@ class Turns:
         else:
             if isinstance(outcome, ParkedTurn):
                 return
-            running = self._running[turn.thread_id]
+            running = self._owned_running_turn(turn)
+            if running is None:
+                return
             if outcome.outcome is CompletionOutcome.NO_WORK:
                 usage = _no_token_usage()
             elif running.has_model_calls:
@@ -548,7 +556,10 @@ class Turns:
             self._schedule_after_turn(turn.thread_id, turn.turn_id)
             return
 
-        usage = _running_usage(self._running.get(turn.thread_id))
+        running = self._owned_running_turn(turn)
+        if running is None:
+            return
+        usage = running.usage
         await emit(
             TurnFailed(
                 code=code,
@@ -626,10 +637,6 @@ def _recorded_model_calls(events: Sequence[Event], turn_id: UUID) -> list[ModelC
 
 def _recorded_model_usage(events: Sequence[Event], turn_id: UUID) -> TokenTotals:
     return _sum_model_calls(_recorded_model_calls(events, turn_id))
-
-
-def _running_usage(running: RunningTurn | None) -> TokenTotals:
-    return running.usage if running is not None else _no_token_usage()
 
 
 def _pending_approval(events: Sequence[Event]) -> PendingApproval | None:
