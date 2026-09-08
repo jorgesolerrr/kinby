@@ -19,12 +19,15 @@ from kinby.contracts import (
     Scope,
     ThreadCreateResult,
     ThreadTurnDiffResult,
+    ThreadTurnListResult,
+    ThreadTurnTargetListResult,
     TreeId,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
     TurnRated,
     TurnStarted,
+    TurnTarget,
     WorkspaceReverted,
     is_turn_closing,
 )
@@ -676,6 +679,40 @@ async def _closed_turn(dispatcher: Dispatcher, thread_id: UUID) -> UUID:
             break
     await subscription.aclose()
     return started.turn_id
+
+
+def test_turn_list_stays_stable_while_target_list_includes_reverts(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        snapshots = FakeSnapshotStore()
+        dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
+        turn_id = await _closed_turn(dispatcher, thread_id)
+        reverted = await dispatcher.dispatch(
+            "thread.turn.revert",
+            {"thread_id": thread_id, "turn_id": turn_id},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(reverted, AcceptedResult)
+
+        turns = await dispatcher.dispatch(
+            "thread.turn.list",
+            {"thread_id": thread_id},
+            {Scope.THREAD_READ},
+        )
+        targets = await dispatcher.dispatch(
+            "thread.turn.target.list",
+            {"thread_id": thread_id},
+            {Scope.THREAD_READ},
+        )
+
+        assert turns == ThreadTurnListResult(turn_ids=[turn_id])
+        assert targets == ThreadTurnTargetListResult(
+            targets=[
+                TurnTarget(turn_id=turn_id, closed=True),
+                TurnTarget(turn_id=reverted.turn_id, closed=True),
+            ]
+        )
+
+    asyncio.run(scenario())
 
 
 def test_a_revert_snapshots_around_the_restore_and_records_it(tmp_path: Path) -> None:

@@ -26,6 +26,7 @@ from kinby.contracts import (
     THREAD_TURN_RATE,
     THREAD_TURN_REVERT,
     THREAD_TURN_START,
+    THREAD_TURN_TARGET_LIST,
     USAGE_GET,
     AcceptedResult,
     ContractModel,
@@ -329,6 +330,7 @@ def build_dispatcher(
         dispatcher.register(THREAD_TURN_DIFF, turn_service.diff)
         dispatcher.register(THREAD_TURN_REVERT, turn_service.revert)
         dispatcher.register(THREAD_TURN_LIST, turn_service.list_turns)
+        dispatcher.register(THREAD_TURN_TARGET_LIST, turn_service.list_targets)
         dispatcher.register(THREAD_MODE_SET, turn_service.set_mode)
         dispatcher.register(THREAD_TURN_INTERRUPT, turn_service.interrupt)
         dispatcher.register(THREAD_APPROVAL_RESPOND, turn_service.respond)

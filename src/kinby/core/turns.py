@@ -34,13 +34,15 @@ from kinby.contracts import (
     ThreadTurnListResult,
     ThreadTurnRevertCommand,
     ThreadTurnStartCommand,
+    ThreadTurnTargetListCommand,
+    ThreadTurnTargetListResult,
     TokenTotals,
     TreeId,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
     TurnStarted,
-    TurnSummary,
+    TurnTarget,
     UserOrigin,
     WorkspaceReverted,
     accepted,
@@ -186,11 +188,21 @@ class TurnClaim:
 
 
 @dataclass(frozen=True)
-class RecordedSnapshots:
-    """The workspace snapshots a turn or a revert moved between, once it started from one."""
+class RevertibleSnapshots:
+    """A recorded starting snapshot that can be restored."""
 
     before: TreeId
-    after: TreeId | None
+
+
+@dataclass(frozen=True)
+class DiffableSnapshots:
+    """Recorded starting and closing snapshots that can be compared."""
+
+    before: TreeId
+    after: TreeId
+
+
+type RecordedSnapshots = RevertibleSnapshots | DiffableSnapshots
 
 
 @dataclass(frozen=True)
@@ -295,7 +307,7 @@ class Turns:
     async def diff(self, command: ThreadTurnDiffCommand) -> ThreadTurnDiffResult:
         self._require_thread(command.thread_id)
         recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
-        if self._snapshots is None or recorded is None or recorded.after is None:
+        if self._snapshots is None or not isinstance(recorded, DiffableSnapshots):
             raise _snapshot_unavailable(command.turn_id)
         try:
             difference = await self._snapshots.diff(recorded.before, recorded.after)
@@ -357,7 +369,7 @@ class Turns:
             None,
         )
         if reverted is not None:
-            return RecordedSnapshots(reverted.previous, reverted.restored)
+            return DiffableSnapshots(reverted.previous, reverted.restored)
         started = next(
             (payload for payload in payloads if isinstance(payload, TurnStarted)),
             None,
@@ -369,10 +381,28 @@ class Turns:
             raise _thread_busy(thread_id)
         if started.snapshot is None:
             return None
-        return RecordedSnapshots(started.snapshot, closed.snapshot)
+        if closed.snapshot is None:
+            return RevertibleSnapshots(started.snapshot)
+        return DiffableSnapshots(started.snapshot, closed.snapshot)
 
     async def list_turns(self, command: ThreadTurnListCommand) -> ThreadTurnListResult:
-        """Every turn and revert on the thread, in order, and whether each has closed."""
+        """Every turn on the thread, in order."""
+        self._require_thread(command.thread_id)
+        return ThreadTurnListResult(
+            turn_ids=list(
+                dict.fromkeys(
+                    event.turn_id
+                    for event in self._log.stored(command.thread_id)
+                    if isinstance(event.payload, TurnStarted)
+                )
+            )
+        )
+
+    async def list_targets(
+        self,
+        command: ThreadTurnTargetListCommand,
+    ) -> ThreadTurnTargetListResult:
+        """Every turn target on the thread, in order, and whether each has closed."""
         self._require_thread(command.thread_id)
         closed: dict[UUID, bool] = {}
         for event in self._log.stored(command.thread_id):
@@ -380,8 +410,8 @@ class Turns:
                 closed.setdefault(event.turn_id, False)
             elif isinstance(event.payload, WorkspaceReverted) or is_turn_closing(event.payload):
                 closed[event.turn_id] = True
-        return ThreadTurnListResult(
-            turns=[TurnSummary(turn_id=turn_id, closed=done) for turn_id, done in closed.items()]
+        return ThreadTurnTargetListResult(
+            targets=[TurnTarget(turn_id=turn_id, closed=done) for turn_id, done in closed.items()]
         )
 
     async def wake(

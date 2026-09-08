@@ -123,6 +123,10 @@ _Avoid_: git diff (the workspace may not be a Git repository), changes (when the
 A user's request to put the workspace back to the **workspace snapshot** taken before a chosen **turn**, discarding that turn's changes and every later turn's. Recorded on the thread like a turn, with its own snapshots, so a revert can itself be reverted.
 _Avoid_: rollback, undo
 
+### Turn target
+
+A **turn** or recorded **workspace revert** selected for a **workspace diff** or **workspace revert**.
+
 ### Thread
 
 One conversation with its own durable history. Survives across sessions; can be resumed later. What memory distills from and what **instance statistics** are derived from.

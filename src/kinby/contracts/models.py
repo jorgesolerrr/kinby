@@ -366,15 +366,23 @@ class ThreadTurnListCommand(ContractModel):
     thread_id: UUID
 
 
-class TurnSummary(ContractModel):
-    """One id a diff or a revert can target: a turn, or a revert already made."""
+class ThreadTurnListResult(ContractModel):
+    turn_ids: list[UUID]
+
+
+class ThreadTurnTargetListCommand(ContractModel):
+    thread_id: UUID
+
+
+class TurnTarget(ContractModel):
+    """One turn or workspace revert that a workspace operation can target."""
 
     turn_id: UUID
     closed: bool
 
 
-class ThreadTurnListResult(ContractModel):
-    turns: list[TurnSummary]
+class ThreadTurnTargetListResult(ContractModel):
+    targets: list[TurnTarget]
 
 
 class ThreadTurnDiffResult(ContractModel):

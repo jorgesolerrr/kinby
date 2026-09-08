@@ -21,10 +21,10 @@ from kinby.contracts import (
     THREAD_SUBSCRIBE,
     THREAD_TURN_DIFF,
     THREAD_TURN_INTERRUPT,
-    THREAD_TURN_LIST,
     THREAD_TURN_RATE,
     THREAD_TURN_REVERT,
     THREAD_TURN_START,
+    THREAD_TURN_TARGET_LIST,
     AcceptedResult,
     ApprovalRequested,
     ErrorCode,
@@ -42,10 +42,10 @@ from kinby.contracts import (
     ThreadTurnDiffCommand,
     ThreadTurnDiffResult,
     ThreadTurnInterruptCommand,
-    ThreadTurnListCommand,
     ThreadTurnRateCommand,
     ThreadTurnRevertCommand,
     ThreadTurnStartCommand,
+    ThreadTurnTargetListCommand,
     ToolCall,
     ToolGated,
     ToolResult,
@@ -294,11 +294,14 @@ async def _resolve_turn_id(
                 message="A turn id prefix must contain at least eight characters.",
                 retryable=False,
             )
-    listed = await client.call(THREAD_TURN_LIST, ThreadTurnListCommand(thread_id=thread_id))
+    listed = await client.call(
+        THREAD_TURN_TARGET_LIST,
+        ThreadTurnTargetListCommand(thread_id=thread_id),
+    )
     if isinstance(listed, ErrorEnvelope):
         return listed
     if not argument:
-        closed = [turn.turn_id for turn in listed.turns if turn.closed]
+        closed = [target.turn_id for target in listed.targets if target.closed]
         if closed:
             return closed[-1]
         return ErrorEnvelope(
@@ -306,7 +309,9 @@ async def _resolve_turn_id(
             message="No closed turn was found on this thread.",
             retryable=False,
         )
-    matches = [turn.turn_id for turn in listed.turns if str(turn.turn_id).startswith(argument)]
+    matches = [
+        target.turn_id for target in listed.targets if str(target.turn_id).startswith(argument)
+    ]
     if not matches:
         return ErrorEnvelope(
             code=ErrorCode.NOT_FOUND,
