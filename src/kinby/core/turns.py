@@ -27,6 +27,8 @@ from kinby.contracts import (
     SystemPrompt,
     ThreadApprovalRespondCommand,
     ThreadModeSetCommand,
+    ThreadTurnDiffCommand,
+    ThreadTurnDiffResult,
     ThreadTurnInterruptCommand,
     ThreadTurnStartCommand,
     TokenTotals,
@@ -36,6 +38,7 @@ from kinby.contracts import (
     TurnInterrupted,
     TurnStarted,
     UserOrigin,
+    is_turn_closing,
 )
 from kinby.core.budgets import DailyBudget, check_daily_budget
 from kinby.core.errors import (
@@ -45,9 +48,11 @@ from kinby.core.errors import (
     InvalidParkedTurn,
     NoActiveTurn,
     PermissionDenied,
+    SnapshotUnavailable,
     ThreadBusy,
     ThreadNotFound,
     TurnInterruptedError,
+    TurnNotFound,
 )
 from kinby.core.events import EventLog
 from kinby.core.snapshots import (
@@ -269,6 +274,40 @@ class Turns:
 
     async def start(self, command: ThreadTurnStartCommand) -> AcceptedResult:
         return await self.wake(command.thread_id, command.message, UserOrigin())
+
+    async def diff(self, command: ThreadTurnDiffCommand) -> ThreadTurnDiffResult:
+        self._require_thread(command.thread_id)
+        events = [
+            event
+            for event in self._log.stored(command.thread_id)
+            if event.turn_id == command.turn_id
+        ]
+        started = next(
+            (event.payload for event in events if isinstance(event.payload, TurnStarted)),
+            None,
+        )
+        if started is None:
+            raise TurnNotFound(
+                f'Turn "{command.turn_id}" was not found on thread "{command.thread_id}".'
+            )
+        closed = next(
+            (event.payload for event in events if is_turn_closing(event.payload)),
+            None,
+        )
+        if closed is None:
+            raise _thread_busy(command.thread_id)
+        if self._snapshots is None or started.snapshot is None or closed.snapshot is None:
+            raise SnapshotUnavailable(
+                f'Workspace snapshots are unavailable for turn "{command.turn_id}".'
+            )
+        difference = await self._snapshots.diff(started.snapshot, closed.snapshot)
+        return ThreadTurnDiffResult(
+            turn_id=command.turn_id,
+            before=started.snapshot,
+            after=closed.snapshot,
+            files=difference.files,
+            patch=difference.patch,
+        )
 
     async def wake(
         self,

@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import NewType, Protocol
 from uuid import UUID
 
-from kinby.contracts import TreeId
+from kinby.contracts import ChangeStatus, FileChange, TreeId
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,14 @@ class SnapshotError(Exception):
 
 class SnapshotStore(Protocol):
     async def capture(self, ref: SnapshotRef) -> TreeId: ...
+
+    async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff: ...
+
+
+@dataclass(frozen=True)
+class WorkspaceDiff:
+    files: list[FileChange]
+    patch: str
 
 
 class WorkspaceSnapshots:
@@ -86,6 +95,24 @@ class WorkspaceSnapshots:
             commit = await self._git("commit-tree", tree, "-m", ref)
             await self._git("update-ref", ref, commit)
         return tree
+
+    async def diff(self, before: TreeId, after: TreeId) -> WorkspaceDiff:
+        """Describe the paths and line changes between two workspace snapshots."""
+        statuses = _parse_statuses(
+            await self._git("diff", "--name-status", "-z", "-M", before, after)
+        )
+        counts = _parse_numstat(await self._git("diff", "--numstat", "-z", "-M", before, after))
+        files = [
+            FileChange(
+                path=path,
+                status=status,
+                additions=counts[path][0],
+                deletions=counts[path][1],
+            )
+            for path, status in statuses
+        ]
+        patch = await self._git("diff", "-p", "-M", before, after)
+        return WorkspaceDiff(files, patch)
 
     async def _create(self) -> None:
         if self._git_dir.is_dir():
@@ -163,3 +190,47 @@ async def _run_git(*arguments: str, cwd: Path | None) -> str:
 def _subcommand(arguments: tuple[str, ...]) -> str:
     """The verb in a git call, past the --git-dir and --work-tree flags it carries."""
     return next((argument for argument in arguments if not argument.startswith("-")), "git")
+
+
+def _parse_statuses(output: str) -> list[tuple[str, ChangeStatus]]:
+    tokens = output.split("\0")
+    changes: list[tuple[str, ChangeStatus]] = []
+    index = 0
+    while index < len(tokens) and tokens[index]:
+        code = tokens[index]
+        path = tokens[index + 1]
+        index += 2
+        if code.startswith("R"):
+            path = tokens[index]
+            index += 1
+        changes.append((path, _change_status(code)))
+    return changes
+
+
+def _parse_numstat(output: str) -> dict[str, tuple[int, int]]:
+    tokens = output.split("\0")
+    counts: dict[str, tuple[int, int]] = {}
+    index = 0
+    while index < len(tokens) and tokens[index]:
+        additions, deletions, path = tokens[index].split("\t", 2)
+        index += 1
+        if not path:
+            index += 1
+            path = tokens[index]
+            index += 1
+        counts[path] = (_line_count(additions), _line_count(deletions))
+    return counts
+
+
+def _change_status(code: str) -> ChangeStatus:
+    return {
+        "A": ChangeStatus.ADDED,
+        "M": ChangeStatus.MODIFIED,
+        "D": ChangeStatus.DELETED,
+        "R": ChangeStatus.RENAMED,
+        "T": ChangeStatus.MODIFIED,
+    }[code[0]]
+
+
+def _line_count(value: str) -> int:
+    return 0 if value == "-" else int(value)

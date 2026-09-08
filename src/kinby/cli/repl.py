@@ -16,9 +16,11 @@ from uuid import UUID
 from kinby.cli.client import ContractClient, format_error
 from kinby.cli.routines import show_routines, show_startup_routines, watch_routine_notices
 from kinby.contracts import (
+    STATS_GET,
     THREAD_APPROVAL_RESPOND,
     THREAD_MODE_SET,
     THREAD_SUBSCRIBE,
+    THREAD_TURN_DIFF,
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_RATE,
     THREAD_TURN_START,
@@ -33,9 +35,12 @@ from kinby.contracts import (
     PermissionMode,
     RoutineListResult,
     RoutineRunOutcome,
+    StatsGetCommand,
     ThreadApprovalRespondCommand,
     ThreadModeSetCommand,
     ThreadSubscribeCommand,
+    ThreadTurnDiffCommand,
+    ThreadTurnDiffResult,
     ThreadTurnInterruptCommand,
     ThreadTurnRateCommand,
     ThreadTurnStartCommand,
@@ -200,6 +205,24 @@ async def _run_repl(
             if command == "/routines":
                 await show_routines(client, stdout, stderr)
                 continue
+            if command == "/diff":
+                turn_ids = await _closed_turn_ids(client, thread_id)
+                if isinstance(turn_ids, ErrorEnvelope):
+                    _render_error(turn_ids, stderr)
+                    continue
+                target = _resolve_turn_id(argument.strip(), turn_ids)
+                if isinstance(target, ErrorEnvelope):
+                    _render_error(target, stderr)
+                    continue
+                difference = await client.call(
+                    THREAD_TURN_DIFF,
+                    ThreadTurnDiffCommand(thread_id=thread_id, turn_id=target),
+                )
+                if isinstance(difference, ErrorEnvelope):
+                    _render_error(difference, stderr)
+                    continue
+                _render_diff(difference, stdout)
+                continue
             if command == "/mode":
                 try:
                     mode = PermissionMode(argument)
@@ -259,6 +282,66 @@ async def _run_repl(
                 return 1
             if isinstance(closing, TurnCompleted) and feedback is FeedbackPolicy.EVERY_TURN:
                 await _rate_turn(client, thread_id, accepted.turn_id, repl_io)
+
+
+async def _closed_turn_ids(
+    client: ContractClient,
+    thread_id: UUID,
+) -> list[UUID] | ErrorEnvelope:
+    result = await client.call(STATS_GET, StatsGetCommand())
+    if isinstance(result, ErrorEnvelope):
+        return result
+    return [record.turn_id for record in result.records if record.thread_id == thread_id]
+
+
+def _resolve_turn_id(
+    argument: str,
+    turn_ids: list[UUID],
+) -> UUID | ErrorEnvelope:
+    if not argument:
+        if turn_ids:
+            return turn_ids[-1]
+        return ErrorEnvelope(
+            code=ErrorCode.NOT_FOUND,
+            message="No closed turn was found on this thread.",
+            retryable=False,
+        )
+    try:
+        return UUID(argument)
+    except ValueError:
+        pass
+    if len(argument) < 8:
+        return ErrorEnvelope(
+            code=ErrorCode.INVALID_ARGUMENT,
+            message="A turn id prefix must contain at least eight characters.",
+            retryable=False,
+        )
+    matches = [turn_id for turn_id in turn_ids if str(turn_id).startswith(argument)]
+    if not matches:
+        return ErrorEnvelope(
+            code=ErrorCode.NOT_FOUND,
+            message=f'Turn id prefix "{argument}" was not found on this thread.',
+            retryable=False,
+        )
+    if len(matches) > 1:
+        return ErrorEnvelope(
+            code=ErrorCode.INVALID_ARGUMENT,
+            message=f'Turn id prefix "{argument}" matches more than one turn.',
+            retryable=False,
+        )
+    return matches[0]
+
+
+def _render_diff(difference: ThreadTurnDiffResult, stdout: TextIO) -> None:
+    for change in difference.files:
+        stdout.write(
+            f"{change.status.value} {change.path} +{change.additions} -{change.deletions}\n"
+        )
+    if difference.patch:
+        stdout.write(difference.patch)
+        if not difference.patch.endswith("\n"):
+            stdout.write("\n")
+    stdout.flush()
 
 
 def _parked_routine_turn(routines: RoutineListResult | None, thread_id: UUID) -> UUID | None:

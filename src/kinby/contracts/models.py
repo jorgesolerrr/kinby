@@ -38,6 +38,7 @@ class ErrorCode(StrEnum):
     PERMISSION_DENIED = "PERMISSION_DENIED"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
     MODEL_UNPRICED = "MODEL_UNPRICED"
+    SNAPSHOT_UNAVAILABLE = "SNAPSHOT_UNAVAILABLE"
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
     INTERNAL = "INTERNAL"
 
@@ -107,6 +108,20 @@ PromptVersion = NewType("PromptVersion", str)
 SystemPrompt = NewType("SystemPrompt", str)
 # The forty-character hex id of a git tree: one workspace snapshot.
 TreeId = NewType("TreeId", str)
+
+
+class ChangeStatus(StrEnum):
+    ADDED = "added"
+    MODIFIED = "modified"
+    DELETED = "deleted"
+    RENAMED = "renamed"
+
+
+class FileChange(ContractModel):
+    path: str
+    status: ChangeStatus
+    additions: Annotated[int, Field(ge=0)]
+    deletions: Annotated[int, Field(ge=0)]
 
 
 class RoutineOrigin(ContractModel):
@@ -324,6 +339,19 @@ class ThreadSubscribeCommand(ContractModel):
 class ThreadTurnStartCommand(ContractModel):
     thread_id: UUID
     message: str
+
+
+class ThreadTurnDiffCommand(ContractModel):
+    thread_id: UUID
+    turn_id: UUID
+
+
+class ThreadTurnDiffResult(ContractModel):
+    turn_id: UUID
+    before: TreeId
+    after: TreeId
+    files: list[FileChange]
+    patch: str
 
 
 class ThreadModeSetCommand(ContractModel):
