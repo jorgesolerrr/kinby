@@ -6,6 +6,7 @@ from queue import Queue
 from uuid import UUID
 
 import pytest
+from pydantic import JsonValue
 
 from kinby.cli.client import ContractClient
 from kinby.cli.repl import run_repl
@@ -620,10 +621,11 @@ class FailingReplRunner:
 
 
 class ApprovalReplRunner:
-    def __init__(self) -> None:
+    def __init__(self, arguments: dict[str, JsonValue] | None = None) -> None:
         self.decisions: list[ApprovalDecision] = []
         self.parked = asyncio.Event()
         self.parked_turn: PreparedTurnRequest | None = None
+        self.arguments = arguments if arguments is not None else {"note": "remember me"}
 
     async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None:
         if (
@@ -640,7 +642,7 @@ class ApprovalReplRunner:
             ApprovalRequested(
                 approval_id=UUID("11111111-1111-1111-1111-111111111111"),
                 name="write_note",
-                arguments={"note": "remember me"},
+                arguments=self.arguments,
                 rule="mode.ask.write",
             )
         )
@@ -658,7 +660,7 @@ class ApprovalReplRunner:
             ToolCall(
                 call_id="write-1",
                 name="write_note",
-                arguments={"note": "remember me"},
+                arguments=self.arguments,
             )
         )
         await emit(
@@ -1119,6 +1121,98 @@ def test_repl_answers_a_parked_approval(tmp_path: Path) -> None:
             '> Approve write_note {"note": "remember me"} under rule "mode.ask.write"? '
             "[yes/no] "
             '[tool.call] write_note {"note": "remember me"}\n'
+            "[tool.result] write_note (ok): remember me\nDone\n> "
+        )
+        assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())
+
+
+def test_repl_renders_a_multiline_approval_argument_as_a_block(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runner = ApprovalReplRunner({"content": "first line\nsecond line\nthird line"})
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await asyncio.wait_for(
+            run_repl(
+                client,
+                created.id,
+                feedback=FeedbackPolicy.OFF,
+                stdin=StringIO("Write this\nyes\n"),
+                stdout=stdout,
+                stderr=stderr,
+            ),
+            timeout=1,
+        )
+
+        assert exit_code == 0
+        assert runner.decisions == [ApprovalDecision.APPROVE]
+        assert stdout.getvalue() == (
+            '> Approve write_note under rule "mode.ask.write":\n'
+            "content:\n"
+            "  first line\n"
+            "  second line\n"
+            "  third line\n"
+            "[yes/no] "
+            '[tool.call] write_note {"content": "first line\\nsecond line\\nthird line"}\n'
+            "[tool.result] write_note (ok): remember me\nDone\n> "
+        )
+        assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())
+
+
+def test_repl_renders_mixed_approval_arguments_in_key_order(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runner = ApprovalReplRunner(
+            {
+                "name": "morning",
+                "enabled": False,
+                "content": "first line\nsecond line",
+            }
+        )
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await asyncio.wait_for(
+            run_repl(
+                client,
+                created.id,
+                feedback=FeedbackPolicy.OFF,
+                stdin=StringIO("Write this\nyes\n"),
+                stdout=stdout,
+                stderr=stderr,
+            ),
+            timeout=1,
+        )
+
+        assert exit_code == 0
+        assert runner.decisions == [ApprovalDecision.APPROVE]
+        assert stdout.getvalue() == (
+            '> Approve write_note under rule "mode.ask.write":\n'
+            "content:\n"
+            "  first line\n"
+            "  second line\n"
+            "enabled: false\n"
+            "name: morning\n"
+            "[yes/no] "
+            '[tool.call] write_note {"content": "first line\\nsecond line", '
+            '"enabled": false, "name": "morning"}\n'
             "[tool.result] write_note (ok): remember me\nDone\n> "
         )
         assert stderr.getvalue() == ""

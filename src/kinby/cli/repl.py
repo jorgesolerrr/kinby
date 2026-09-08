@@ -511,10 +511,7 @@ async def _answer_approval(
     approval = event.payload
     if not isinstance(approval, ApprovalRequested):
         return False
-    arguments = json.dumps(approval.arguments, sort_keys=True)
-    repl_io.stdout.write(
-        f'Approve {approval.name} {arguments} under rule "{approval.rule}"? [yes/no] '
-    )
+    repl_io.stdout.write(_approval_prompt(approval))
     repl_io.stdout.flush()
     answer = asyncio.create_task(repl_io.stdin.readline())
     interruption = asyncio.create_task(interrupted.wait())
@@ -539,6 +536,25 @@ async def _answer_approval(
         _render_error(result, repl_io.stderr)
         return False
     return True
+
+
+def _approval_prompt(approval: ApprovalRequested) -> str:
+    if not any(isinstance(value, str) and "\n" in value for value in approval.arguments.values()):
+        arguments = json.dumps(approval.arguments, sort_keys=True)
+        return f'Approve {approval.name} {arguments} under rule "{approval.rule}"? [yes/no] '
+
+    lines = [f'Approve {approval.name} under rule "{approval.rule}":\n']
+    for key, value in sorted(approval.arguments.items()):
+        if isinstance(value, str):
+            if "\n" in value:
+                lines.append(f"{key}:\n")
+                lines.extend(f"  {line}\n" for line in value.splitlines())
+            else:
+                lines.append(f"{key}: {value}\n")
+        else:
+            lines.append(f"{key}: {json.dumps(value, sort_keys=True)}\n")
+    lines.append("[yes/no] ")
+    return "".join(lines)
 
 
 def render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
