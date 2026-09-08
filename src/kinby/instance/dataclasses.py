@@ -28,10 +28,12 @@ class Models:
 
 @dataclass(frozen=True)
 class ModelPrice:
-    """Input and output prices per million tokens for one model."""
+    """Prices per million tokens for one model."""
 
     input: float
     output: float
+    cache_read: float | None = None
+    cache_write: float | None = None
 
 
 @dataclass(frozen=True)

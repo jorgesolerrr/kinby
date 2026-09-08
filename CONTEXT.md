@@ -144,7 +144,7 @@ The input and output tokens attributed to a turn, with totals rolled up for its 
 
 ### Price map
 
-The table of input and output prices per million tokens, keyed by exact `provider:model` names.
+The table of input, output, cache read, and cache write prices per million tokens, keyed by exact `provider:model` names.
 
 ### Daily cost
 

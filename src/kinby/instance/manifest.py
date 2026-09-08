@@ -109,6 +109,8 @@ class RawBudgets(_Section):
 class RawModelPrice(_Section):
     input: Annotated[float, Field(ge=0)]
     output: Annotated[float, Field(ge=0)]
+    cache_read: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    cache_write: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
 
 
 class RawRoutines(_Section):
@@ -236,7 +238,12 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
             usd_per_day=raw.budgets.usd_per_day,
         ),
         prices={
-            model: ModelPrice(input=price.input, output=price.output)
+            model: ModelPrice(
+                input=price.input,
+                output=price.output,
+                cache_read=price.cache_read,
+                cache_write=price.cache_write,
+            )
             for model, price in raw.prices.items()
         },
     )

@@ -923,6 +923,66 @@ def test_turn_preparation_uses_the_event_log_and_manifest_price_override(
     asyncio.run(scenario())
 
 
+def test_daily_cost_budget_uses_cache_rates(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance_path = tmp_path / "cached"
+        init_instance(instance_path, model="other:model")
+        with (instance_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+            manifest.write(
+                "\n[budgets]\nusd_per_day = 0.5\n"
+                '\n[prices."other:model"]\ninput = 1\noutput = 1\ncache_read = 0.1\n'
+            )
+        instance = load_instance(instance_path)
+        thread_id = uuid4()
+        turn_id = uuid4()
+        closed_at = datetime.now(UTC)
+        event_log = HistoricalEventLog(
+            instance.manifest.state_dir,
+            [
+                Event(
+                    sequence=1,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    timestamp=closed_at - timedelta(seconds=1),
+                    payload=TurnStarted(message="Earlier", model="other:model"),
+                ),
+                Event(
+                    sequence=2,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    timestamp=closed_at,
+                    payload=TurnCompleted(
+                        input_tokens=1_000_000,
+                        output_tokens=0,
+                        cache_read_tokens=1_000_000,
+                    ),
+                ),
+            ],
+        )
+        runner = LangGraphRunner(instance, event_log=event_log)
+        dispatcher = build_dispatcher(
+            instance.manifest.state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                runner.prepare_for_turn,
+                runner.permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+
+        accepted = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(accepted, AcceptedResult)
+
+    asyncio.run(scenario())
+
+
 def test_completed_turn_can_be_rated_through_the_dispatcher(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(

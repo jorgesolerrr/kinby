@@ -96,6 +96,7 @@ def turn_metrics(
     """Read event history once and return its closed turns in closing order."""
     open_turns: dict[TurnKey, _TurnEvents] = {}
     closed_turns: dict[TurnKey, TurnMetrics] = {}
+    closing_totals: dict[TurnKey, TokenTotals] = {}
     records: list[TurnMetrics] = []
     no_work: set[TurnKey] = set()
     unpriced_models_by_turn: dict[TurnKey, set[UnpricedModel]] = {}
@@ -195,7 +196,7 @@ def turn_metrics(
                 cost=(
                     0
                     if key in no_work
-                    else token_cost(input_tokens, output_tokens, price)
+                    else token_cost(payload, price)
                     if price is not None
                     else None
                 ),
@@ -210,6 +211,7 @@ def turn_metrics(
             )
             records.append(record)
             closed_turns[key] = record
+            closing_totals[key] = payload
             continue
 
         record = closed_turns.get(key)
@@ -218,21 +220,21 @@ def turn_metrics(
         if isinstance(payload, MemoryRecapped):
             if key in no_work:
                 continue
-            main_input_tokens = record.input_tokens - record.recap_input_tokens
-            main_output_tokens = record.output_tokens - record.recap_output_tokens
+            main_totals = closing_totals[key]
             main_price = prices.get(record.model) if record.model is not None else None
             recap_price = prices.get(payload.model) if payload.model is not None else None
             if payload.model is not None and recap_price is None:
                 unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(payload.model))
             record.input_tokens += payload.input_tokens - record.recap_input_tokens
             record.output_tokens += payload.output_tokens - record.recap_output_tokens
-            record.cache_read_tokens += payload.cache_read_tokens
-            record.cache_creation_tokens += payload.cache_creation_tokens
+            record.cache_read_tokens = main_totals.cache_read_tokens + payload.cache_read_tokens
+            record.cache_creation_tokens = (
+                main_totals.cache_creation_tokens + payload.cache_creation_tokens
+            )
             record.recap_input_tokens = payload.input_tokens
             record.recap_output_tokens = payload.output_tokens
             record.cost = (
-                token_cost(main_input_tokens, main_output_tokens, main_price)
-                + token_cost(payload.input_tokens, payload.output_tokens, recap_price)
+                token_cost(main_totals, main_price) + token_cost(payload, recap_price)
                 if main_price is not None and recap_price is not None
                 else None
             )

@@ -41,7 +41,7 @@ from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.pricing import price_map
 from kinby.core.turns import Emit, PreparedTurnRequest, TurnOutcome
-from kinby.instance import init_instance, load_instance
+from kinby.instance import ModelPrice, init_instance, load_instance
 from tests.helpers import (
     cannot_restore,
     does_not_park,
@@ -233,6 +233,78 @@ def test_stats_get_uses_a_manifest_price_override(tmp_path: Path) -> None:
     assert result.buckets[0].cost == 0.00024
 
 
+def test_turn_metrics_prices_cached_tokens_at_cache_rates() -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    prices = {"openai:gpt-5": ModelPrice(input=1.25, output=10, cache_read=0.125)}
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            now,
+            TurnStarted(message="cached", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            now,
+            TurnCompleted(
+                input_tokens=1000,
+                output_tokens=0,
+                cache_read_tokens=800,
+            ),
+        ),
+    ]
+
+    record = turn_metrics(events, prices).records[0]
+    input_rate = {"openai:gpt-5": ModelPrice(input=1.25, output=10)}
+
+    assert record.cost == 0.00035
+    assert daily_cost(events, prices, now.date()).usd == 0.00035
+    assert daily_cost(events, input_rate, now.date()).usd == 0.00125
+
+
+def test_stats_get_cost_uses_cache_rates(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            now,
+            TurnStarted(message="cached", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            now,
+            TurnCompleted(
+                input_tokens=1000,
+                output_tokens=0,
+                cache_read_tokens=800,
+            ),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(
+            tmp_path,
+            event_log=StaticEventLog(tmp_path, events),
+            price_overrides={"openai:gpt-5": ModelPrice(input=1.25, output=10, cache_read=0.125)},
+        ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.records[0].cost == 0.00035
+    assert result.buckets[0].cost == 0.00035
+
+
 def test_stats_warns_when_model_calls_disagree_with_the_closing_total(
     tmp_path: Path,
 ) -> None:
@@ -282,7 +354,7 @@ def test_stats_warns_when_model_calls_disagree_with_the_closing_total(
     )
 
     assert isinstance(result, StatsGetResult)
-    assert result.records[0].cost == 0.000025
+    assert result.records[0].cost == 0.000023875
     assert result.records[0].cache_read_tokens == 1
     assert result.records[0].cache_creation_tokens == 2
     assert result.buckets[0].cache_read_tokens == 1
@@ -573,6 +645,68 @@ def test_stats_get_prices_recap_tokens_at_their_model_and_keeps_old_markers_unkn
     assert result.records[1].cost is None
     assert result.records[1].prompt_version is None
     assert result.buckets[0].cost == 0.00045
+
+
+def test_turn_metrics_prices_main_tokens_from_the_closing_totals_after_two_recaps() -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        _event(
+            1,
+            thread_id,
+            turn_id,
+            now,
+            TurnStarted(message="recapped twice", model="openai:gpt-5"),
+        ),
+        _event(
+            2,
+            thread_id,
+            turn_id,
+            now,
+            TurnCompleted(
+                input_tokens=100,
+                output_tokens=10,
+                cache_read_tokens=80,
+            ),
+        ),
+        _event(
+            3,
+            thread_id,
+            turn_id,
+            now,
+            MemoryRecapped(
+                node=None,
+                model="anthropic:claude-sonnet-4-6",
+                input_tokens=50,
+                output_tokens=5,
+                cache_read_tokens=40,
+                cache_creation_tokens=5,
+            ),
+        ),
+        _event(
+            4,
+            thread_id,
+            turn_id,
+            now,
+            MemoryRecapped(
+                node=None,
+                model="anthropic:claude-sonnet-4-6",
+                input_tokens=60,
+                output_tokens=6,
+                cache_read_tokens=50,
+                cache_creation_tokens=5,
+            ),
+        ),
+    ]
+
+    record = turn_metrics(events).records[0]
+
+    assert record.input_tokens == 160
+    assert record.output_tokens == 16
+    assert record.cache_read_tokens == 130
+    assert record.cache_creation_tokens == 5
+    assert record.cost == 0.00027375
 
 
 class StaticEventLog(EventLog):
