@@ -108,6 +108,16 @@ The directory holding the user's *own* work that an instance acts on — a repos
 
 The workspace's own instruction files and skill directories an **instance** may read as extra behavior sources. Named explicitly in the **manifest**. The instance never loads tools from the workspace.
 
+### Workspace snapshot
+
+The recorded state of every file in the **workspace** at one **turn** boundary, ignored files excluded. Every turn has one from before it started and one from when it closed, so the difference between them is exactly what the turn changed.
+_Avoid_: checkpoint (that is the **graph checkpoint**), commit
+
+### Workspace revert
+
+A user's request to put the workspace back to the **workspace snapshot** taken before a chosen **turn**, discarding that turn's changes and every later turn's. Recorded on the thread like a turn, with its own snapshots, so a revert can itself be reverted.
+_Avoid_: rollback, undo
+
 ### Thread
 
 One conversation with its own durable history. Survives across sessions; can be resumed later. What memory distills from and what **instance statistics** are derived from.
