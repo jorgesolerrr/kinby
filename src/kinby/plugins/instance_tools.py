@@ -10,18 +10,25 @@ from tempfile import TemporaryDirectory
 from cronsim import CronSim
 
 from kinby.instance import Instance
-from kinby.instance.layout import ROUTINE_CODE_FILE, ROUTINE_FILE, ROUTINES_DIR
+from kinby.instance.layout import (
+    ROUTINE_CODE_FILE,
+    ROUTINE_FILE,
+    ROUTINES_DIR,
+    SKILL_FILE,
+    SKILLS_DIR,
+)
 from kinby.instance.permissions import load_permissions
 from kinby.plugins.routines import load_routine_file, load_routines
+from kinby.plugins.skills import SkillName, describe_skill_shadow, load_skill_file
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 _INSTANCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
-def _validate_routine_name(name: str) -> None:
+def _validate_name(name: str) -> None:
     if _INSTANCE_NAME.fullmatch(name) is None:
         raise ValueError(
-            "A routine name must contain only letters, digits, hyphens, and underscores, "
+            "A name must contain only letters, digits, hyphens, and underscores, "
             "and start with a letter or digit."
         )
 
@@ -62,7 +69,7 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
     @tool(write=False)
     def routine_read(name: str, context: ToolContext) -> str:
         """Read a routine's complete ROUTINE.md and optional run.py."""
-        _validate_routine_name(name)
+        _validate_name(name)
         directory = context.instance.path / ROUTINES_DIR / name
         routine_path = directory / ROUTINE_FILE
         if not routine_path.is_file():
@@ -81,7 +88,7 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         code: str | None = None,
     ) -> str:
         """Create or replace a routine from its complete ROUTINE.md and optional run.py."""
-        _validate_routine_name(name)
+        _validate_name(name)
         routines = context.instance.path / ROUTINES_DIR
         routines.mkdir(parents=True, exist_ok=True)
         target = routines / name
@@ -121,4 +128,58 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
             result = f"{result} Status: disabled."
         return result
 
-    return routine_list, routine_read, routine_write
+    @tool(write=True)
+    def skill_write(name: str, content: str, context: ToolContext) -> str:
+        """Write a SKILL.md with required name and description frontmatter keys.
+
+        Its body is the instructions.
+        """
+        _validate_name(name)
+        shadow = describe_skill_shadow(context.instance, SkillName(name))
+        skills = context.instance.path / SKILLS_DIR
+        skills.mkdir(parents=True, exist_ok=True)
+        target = skills / name
+        with TemporaryDirectory(prefix=".skill-", dir=context.instance.path) as temporary:
+            staged = Path(temporary) / name
+            if target.is_dir():
+                shutil.copytree(target, staged)
+            else:
+                staged.mkdir()
+            skill_path = staged / SKILL_FILE
+            skill_path.write_text(content, encoding="utf-8")
+            skill = load_skill_file(skill_path)
+            if skill.name != name:
+                raise ValueError(
+                    f'Skill frontmatter name "{skill.name}" must match directory name "{name}".'
+                )
+            previous = Path(temporary) / ".previous"
+            if target.exists():
+                target.rename(previous)
+            try:
+                staged.rename(target)
+            except Exception:
+                if previous.exists():
+                    previous.rename(target)
+                raise
+        result = f"Wrote skills/{name}/SKILL.md."
+        if shadow is not None:
+            result = f"{result} Shadows {shadow}."
+        return result
+
+    @tool(write=True)
+    def skill_delete(name: str, context: ToolContext) -> str:
+        """Delete a skill from the instance tier."""
+        _validate_name(name)
+        target = context.instance.path / SKILLS_DIR / name
+        if not target.is_dir():
+            shadow = describe_skill_shadow(context.instance, SkillName(name))
+            if shadow is not None:
+                raise LookupError(
+                    f'Skill "{name}" exists only as a {shadow}; '
+                    "skill_delete removes instance skills only."
+                )
+            raise LookupError(f'Skill "{name}" was not found in the instance.')
+        shutil.rmtree(target)
+        return f"Deleted skills/{name}/."
+
+    return routine_list, routine_read, routine_write, skill_write, skill_delete

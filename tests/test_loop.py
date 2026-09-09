@@ -59,6 +59,8 @@ class CoreSkillModel:
             "routine_read",
             "routine_write",
             "skill",
+            "skill_delete",
+            "skill_write",
         ]
         return self
 
