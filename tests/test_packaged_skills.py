@@ -347,7 +347,7 @@ def test_write_routine_daily_example_loads_with_documented_defaults(tmp_path):
     assert routine.budgets.seconds is None
 
 
-def test_write_routine_teaches_execution_and_recovery_without_future_operations(tmp_path):
+def test_write_routine_teaches_installation_changes_and_recovery(tmp_path):
     path = init_instance(tmp_path / "instance")
     skills, _ = load_skills(load_instance(path))
     body = " ".join(skills[0].body.split())
@@ -364,9 +364,19 @@ def test_write_routine_teaches_execution_and_recovery_without_future_operations(
         "ten consecutive failed firings",
         "successful manual run resets the failure count",
         "manual run never re-enables",
-        "explicitly set `enabled: true`",
-        "Validated, gated create, edit, enable, disable, and delete operations belong to #61",
+        "call `routine_write` with the routine name and the complete file text",
+        "pass the code step as `code`",
+        "next firing time or the signal path",
+        "call `routine_read` first",
+        "call `routine_write` with the whole file",
+        "Use `routine_set_enabled` to pause or resume",
+        "Use `routine_delete` to remove",
+        "Delete is refused while deliveries are pending",
+        "call `routine_set_enabled(name, true)`",
+        "approved enable starts a fresh failure streak",
         "One-shot reminders belong to #119",
         "Do not approximate a one-shot reminder with repeating cron",
     ):
         assert guidance in body
+    assert "for the user to install" not in body
+    assert "#61" not in body
