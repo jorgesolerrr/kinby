@@ -78,7 +78,10 @@ def tool(*, write: bool, paths: tuple[str, ...] = ()) -> Callable[[ToolFunction]
 
     def decorate(function: ToolFunction) -> Tool:
         context_parameter = _mark_context_parameter(function)
-        runnable = StructuredTool.from_function(func=function)
+        if inspect.iscoroutinefunction(function):
+            runnable = StructuredTool.from_function(coroutine=function)
+        else:
+            runnable = StructuredTool.from_function(func=function)
         unknown_path = next(
             (parameter for parameter in paths if parameter not in runnable.args),
             None,

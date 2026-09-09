@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from aiohttp import web
 
 from kinby.contracts import Delivery, DeliveryId, RoutineName, RoutineTrigger
+from kinby.core.errors import RoutineNotFound
 from kinby.core.scheduler import Scheduler, utc_now
 from kinby.instance import Instance, Serve
 from kinby.plugins.routines import (
@@ -126,17 +127,20 @@ class Receiver:
         headers = strip_signal_credentials(signal, request.headers)
         delivery_header = signal.delivery_header
         delivery_id = request.headers.get(delivery_header) if delivery_header is not None else None
-        receipt = await self._scheduler.receive(
-            routine.name,
-            Delivery(
-                headers=headers,
-                content_type=request.headers.get("Content-Type", request.content_type),
-                body=body.decode(),
-                delivery_id=DeliveryId(delivery_id) if delivery_id is not None else None,
-                received_at=utc_now(),
-            ),
-            RoutineTrigger.SIGNAL,
-        )
+        try:
+            receipt = await self._scheduler.receive(
+                routine.name,
+                Delivery(
+                    headers=headers,
+                    content_type=request.headers.get("Content-Type", request.content_type),
+                    body=body.decode(),
+                    delivery_id=DeliveryId(delivery_id) if delivery_id is not None else None,
+                    received_at=utc_now(),
+                ),
+                RoutineTrigger.SIGNAL,
+            )
+        except RoutineNotFound as exc:
+            raise web.HTTPNotFound(reason="unknown routine") from exc
         accepted = receipt.accepted
         return web.json_response(
             {"thread_id": str(accepted.thread_id), "sequence": accepted.sequence},

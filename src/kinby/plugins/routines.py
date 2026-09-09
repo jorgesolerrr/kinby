@@ -205,17 +205,23 @@ def load_routine_file(path: Path, policy: GatePolicy, instance: Instance) -> Rou
     )
 
 
-def disable_routine(routine: Routine) -> None:
+def set_routine_enabled(routine: Routine, *, enabled: bool) -> None:
     """Change only the enabled field, retaining the author's other file content."""
     lines = routine.source.read_bytes().decode("utf-8").splitlines(keepends=True)
     closing = next(i for i, line in enumerate(lines[1:], 1) if line.strip() == "---")
     newline = "\r\n" if lines[0].endswith("\r\n") else "\n"
+    value = str(enabled).lower()
     found = False
     for i in range(1, closing):
         key, separator, _ = lines[i].partition(":")
         if separator and key.strip() == "enabled":
-            lines[i] = f"{key}: false{newline}"
+            lines[i] = f"{key}: {value}{newline}"
             found = True
     if not found:
-        lines.insert(closing, f"enabled: false{newline}")
+        lines.insert(closing, f"enabled: {value}{newline}")
     routine.source.write_bytes("".join(lines).encode("utf-8"))
+
+
+def disable_routine(routine: Routine) -> None:
+    """Disable a routine under the scheduler's failure policy."""
+    set_routine_enabled(routine, enabled=False)

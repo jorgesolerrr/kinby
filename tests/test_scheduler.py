@@ -611,6 +611,7 @@ signal:
 def test_receive_records_delivery_and_drops_repeated_id(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)
+        routine_file(instance, "description: Issues", name="issues")
         clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
         dispatcher = runtime(instance, clock)
         assert dispatcher.scheduler is not None
@@ -1275,27 +1276,115 @@ def test_many_frequent_routines_have_no_artificial_limit(tmp_path):
 
 def test_reenable_with_failed_history_is_not_undone(tmp_path):
     async def scenario():
+        from uuid import uuid4
+
+        from kinby.contracts import ToolCall, ToolResult
+        from kinby.plugins import ToolContext
+        from kinby.plugins.instance_tools import instance_tools
+
         instance = instance_at(tmp_path)
         path = routine_file(
             instance, "description: News\nschedule: * * * * *\nenabled: true\ncatch_up: false"
         )
-        original = path.read_text()
         clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
         dispatcher = runtime(instance, clock, FailingRunner())
         for _ in range(10):
             await call(dispatcher, "routine.run", name="news")
             await dispatcher.scheduler.drain()
-        path.write_text(original)
-        dispatcher = runtime(instance, clock)
+        set_enabled = next(
+            tool for tool in instance_tools(instance) if tool.name == "routine_set_enabled"
+        )
+        thread_id = uuid4()
+        turn_id = uuid4()
+        arguments = {"name": "news", "enabled": True}
+        log = EventLog(instance.manifest.state_dir)
+        await log.append(
+            thread_id,
+            turn_id,
+            ToolCall(
+                call_id="enable-1",
+                name="routine_set_enabled",
+                arguments=arguments,
+                write=True,
+            ),
+        )
+        result = await set_enabled.ainvoke(
+            arguments,
+            ToolContext(instance=instance, thread_id=thread_id),
+        )
+        await log.append(
+            thread_id,
+            turn_id,
+            ToolResult(
+                call_id="enable-1",
+                name="routine_set_enabled",
+                output=result,
+                error=False,
+            ),
+        )
+
         await dispatcher.scheduler.tick()
-        await dispatcher.scheduler.tick()
-        assert path.read_text() == original
-        routine = (await call(dispatcher, "routine.list")).routines[0]
-        assert routine.failure_count == 10 and len(routine.notices) == 2
         clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
         await dispatcher.scheduler.tick()
         routine = (await call(dispatcher, "routine.list")).routines[0]
-        assert routine.enabled and routine.failure_count == 0
+        assert routine.enabled and routine.failure_count == 1
+        assert "enabled: true" in path.read_text()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("enabled", "error", "failure_count"),
+    [(True, False, 0), (True, True, 1), (False, False, 1)],
+)
+def test_routine_enable_result_controls_failure_history(
+    tmp_path: Path,
+    enabled: bool,
+    error: bool,
+    failure_count: int,
+) -> None:
+    async def scenario() -> None:
+        from uuid import uuid4
+
+        from kinby.contracts import ToolCall, ToolResult
+        from kinby.core.routine_history import routine_history
+
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        dispatcher = runtime(
+            instance,
+            FakeClock(datetime(2026, 9, 6, tzinfo=UTC)),
+            FailingRunner(),
+        )
+        accepted = await call(dispatcher, "routine.run", name="news")
+        await events_for(dispatcher, accepted.thread_id)
+        thread_id = uuid4()
+        turn_id = uuid4()
+        log = EventLog(instance.manifest.state_dir)
+        await log.append(
+            thread_id,
+            turn_id,
+            ToolCall(
+                call_id="change-1",
+                name="routine_set_enabled",
+                arguments={"name": "news", "enabled": enabled},
+                write=True,
+            ),
+        )
+        await log.append(
+            thread_id,
+            turn_id,
+            ToolResult(
+                call_id="change-1",
+                name="routine_set_enabled",
+                output="failed" if error else "disabled",
+                error=error,
+            ),
+        )
+
+        histories = routine_history(log.all_events())
+        assert histories.routines[RoutineName("news")].failure_count == failure_count
+        assert len(histories.failures) == failure_count
 
     asyncio.run(scenario())
 
