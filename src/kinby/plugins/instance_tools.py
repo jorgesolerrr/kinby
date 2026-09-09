@@ -1,5 +1,6 @@
 """Expose routine and skill files as gated core tools."""
 
+import asyncio
 import json
 import re
 import shutil
@@ -91,8 +92,7 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
             files[ROUTINE_CODE_FILE] = code_path.read_text(encoding="utf-8")
         return json.dumps(files, ensure_ascii=False)
 
-    @tool(write=True)
-    def routine_write(
+    def _write_routine(
         name: str,
         content: str,
         context: ToolContext,
@@ -139,8 +139,22 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         return result
 
     @tool(write=True)
-    def routine_set_enabled(name: str, *, enabled: bool, context: ToolContext) -> str:
-        """Enable or disable a routine."""
+    async def routine_write(
+        name: str,
+        content: str,
+        context: ToolContext,
+        code: str | None = None,
+    ) -> str:
+        """Create or replace a routine from its complete ROUTINE.md and optional run.py."""
+        async with context.instance.routine_lock:
+            return await asyncio.to_thread(_write_routine, name, content, context, code)
+
+    def _set_routine_enabled(
+        name: str,
+        *,
+        enabled: bool,
+        context: ToolContext,
+    ) -> str:
         _validate_name(name)
         routine = load_routine(context.instance, RoutineName(name))
         if routine is None:
@@ -155,12 +169,26 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         return result
 
     @tool(write=True)
-    def routine_delete(name: str, context: ToolContext) -> str:
-        """Delete a routine when it has no pending deliveries."""
+    async def routine_set_enabled(
+        name: str,
+        *,
+        enabled: bool,
+        context: ToolContext,
+    ) -> str:
+        """Enable or disable a routine."""
+        async with context.instance.routine_lock:
+            return await asyncio.to_thread(
+                _set_routine_enabled,
+                name,
+                enabled=enabled,
+                context=context,
+            )
+
+    def _delete_routine(name: str, context: ToolContext) -> str:
+        _validate_name(name)
         from kinby.core.events import EventLog
         from kinby.core.routine_history import routine_history
 
-        _validate_name(name)
         target = context.instance.path / ROUTINES_DIR / name
         if not target.is_dir():
             raise LookupError(f'Routine "{name}" was not found.')
@@ -176,6 +204,12 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
             )
         shutil.rmtree(target)
         return f"Deleted routines/{name}/."
+
+    @tool(write=True)
+    async def routine_delete(name: str, context: ToolContext) -> str:
+        """Delete a routine when it has no pending deliveries."""
+        async with context.instance.routine_lock:
+            return await asyncio.to_thread(_delete_routine, name, context)
 
     @tool(write=True)
     def skill_write(name: str, content: str, context: ToolContext) -> str:

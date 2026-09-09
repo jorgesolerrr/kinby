@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -133,3 +134,8 @@ class Instance:
     path: Path
     manifest: Manifest
     matching_rule: MatchingRule
+    routine_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock,
+        repr=False,
+        compare=False,
+    )

@@ -37,7 +37,7 @@ from kinby.core.routine_history import RoutineHistory, routine_history
 from kinby.core.threads import ThreadStore
 from kinby.core.turns import Turns
 from kinby.instance import Instance
-from kinby.plugins.routines import Routine, disable_routine, load_routines
+from kinby.plugins.routines import Routine, disable_routine, load_routine, load_routines
 
 
 def utc_now() -> datetime:
@@ -78,7 +78,6 @@ class Scheduler:
         self._turns = turns
         self._armed: dict[RoutineName, ArmedRoutine] = {}
         self._pass = asyncio.Lock()
-        self._receiving = asyncio.Lock()
         self._changed = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
         routines, _ = load_routines(self._instance)
@@ -108,7 +107,9 @@ class Scheduler:
         delivery: Delivery,
         trigger: RoutineTrigger,
     ) -> DeliveryReceipt:
-        async with self._receiving:
+        async with self._instance.routine_lock:
+            if load_routine(self._instance, name) is None:
+                raise RoutineNotFound(f'Routine "{name}" was not found.')
             return await self._receive(name, delivery, trigger)
 
     async def _receive(

@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
@@ -28,6 +29,7 @@ from kinby.contracts import (
     ToolResult,
 )
 from kinby.core import LangGraphRunner
+from kinby.core.errors import RoutineNotFound
 from kinby.core.turns import (
     ApprovalDecision,
     ParkedTurn,
@@ -131,6 +133,64 @@ def test_routine_set_enabled_changes_only_the_enabled_line(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
+def test_routine_enable_does_not_get_lost_behind_a_concurrent_write(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        target = tmp_path / "routines" / "news" / "ROUTINE.md"
+        target.parent.mkdir(parents=True)
+        target.write_text(
+            "---\ndescription: Old news\nenabled: false\n---\nOld.\n",
+            encoding="utf-8",
+        )
+        importing = tmp_path / "importing"
+        release = tmp_path / "release"
+        code = (
+            "from pathlib import Path\n"
+            "from time import sleep\n"
+            "from kinby.plugins import tool\n"
+            f"Path({str(importing)!r}).touch()\n"
+            f"while not Path({str(release)!r}).exists():\n"
+            "    sleep(0.001)\n"
+            "@tool(write=False)\n"
+            "def fetch() -> str:\n"
+            '    """Fetch the news."""\n'
+            '    return "news"\n'
+        )
+        tools = {tool.name: tool for tool in instance_tools(instance)}
+        context = ToolContext(instance=instance, thread_id=uuid4())
+        write = asyncio.create_task(
+            tools["routine_write"].ainvoke(
+                {
+                    "name": "news",
+                    "content": ("---\ndescription: New news\nenabled: false\n---\nNew.\n"),
+                    "code": code,
+                },
+                context,
+            )
+        )
+        while not importing.exists():
+            await asyncio.sleep(0.001)
+
+        enable = asyncio.create_task(
+            tools["routine_set_enabled"].ainvoke(
+                {"name": "news", "enabled": True},
+                context,
+            )
+        )
+        with suppress(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(enable), timeout=0.1)
+        release.touch()
+        await asyncio.gather(write, enable)
+
+        assert target.read_text(encoding="utf-8") == (
+            "---\ndescription: New news\nenabled: true\n---\nNew.\n"
+        )
+
+    asyncio.run(scenario())
+
+
 def test_routine_delete_removes_the_directory_and_scheduler_drops_it(
     tmp_path: Path,
 ) -> None:
@@ -168,6 +228,40 @@ def fetch() -> str:
         assert not target.exists()
         assert (await call(dispatcher, "routine.list")).routines == []
         assert (await call(dispatcher, "thread.list")).threads == []
+
+    asyncio.run(scenario())
+
+
+def test_signal_validated_before_delete_is_not_persisted_after_delete(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        target = tmp_path / "routines" / "issues"
+        target.mkdir(parents=True)
+        (target / "ROUTINE.md").write_text(
+            "---\ndescription: Issues\n---\nHandle the issue.\n",
+            encoding="utf-8",
+        )
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 8, 8, tzinfo=UTC)))
+        assert dispatcher.scheduler is not None
+        delete = next(tool for tool in instance_tools(instance) if tool.name == "routine_delete")
+        context = ToolContext(instance=instance, thread_id=uuid4())
+        delivery = Delivery(
+            headers={},
+            content_type="text/plain",
+            body="opened",
+            received_at=datetime(2026, 9, 8, 8, tzinfo=UTC),
+        )
+
+        await delete.ainvoke({"name": "issues"}, context)
+
+        with pytest.raises(RoutineNotFound, match='Routine "issues" was not found'):
+            await dispatcher.scheduler.receive(
+                RoutineName("issues"),
+                delivery,
+                RoutineTrigger.SIGNAL,
+            )
 
     asyncio.run(scenario())
 

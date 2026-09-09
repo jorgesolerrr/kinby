@@ -611,6 +611,7 @@ signal:
 def test_receive_records_delivery_and_drops_repeated_id(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)
+        routine_file(instance, "description: Issues", name="issues")
         clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
         dispatcher = runtime(instance, clock)
         assert dispatcher.scheduler is not None
