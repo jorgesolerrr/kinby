@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.tools import StructuredTool
+from pydantic import JsonValue
 
 from kinby.contracts import (
     ApprovalRequested,
@@ -86,6 +87,156 @@ def test_routine_write_installs_an_armed_routine(tmp_path: Path) -> None:
         listed = await call(dispatcher, "routine.list")
         assert listed.routines[0].name == "morning-news"
         assert listed.routines[0].next_run is not None
+
+    asyncio.run(scenario())
+
+
+def test_routine_set_enabled_changes_only_the_enabled_line(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        existing = tmp_path / "routines" / "news" / "ROUTINE.md"
+        existing.parent.mkdir(parents=True)
+        existing.write_bytes(
+            b"---\r\ndescription: News\r\nschedule: 0 9 * * *\r\n"
+            b"enabled: false\r\n---\r\nRead the news.\r\n"
+        )
+        missing = tmp_path / "routines" / "digest" / "ROUTINE.md"
+        missing.parent.mkdir(parents=True)
+        missing.write_bytes(b"---\ndescription: Digest\n---\nMake a digest.\n")
+        set_enabled = next(
+            tool for tool in instance_tools(instance) if tool.name == "routine_set_enabled"
+        )
+        context = ToolContext(instance=instance, thread_id=uuid4())
+
+        enabled = await set_enabled.ainvoke(
+            {"name": "news", "enabled": True},
+            context,
+        )
+        disabled = await set_enabled.ainvoke(
+            {"name": "digest", "enabled": False},
+            context,
+        )
+
+        assert existing.read_bytes() == (
+            b"---\r\ndescription: News\r\nschedule: 0 9 * * *\r\n"
+            b"enabled: true\r\n---\r\nRead the news.\r\n"
+        )
+        assert missing.read_bytes() == (
+            b"---\ndescription: Digest\nenabled: false\n---\nMake a digest.\n"
+        )
+        assert enabled.startswith("Enabled routine news. Next firing: ")
+        assert enabled.endswith("+00:00.")
+        assert disabled == "Routine digest disabled."
+
+    asyncio.run(scenario())
+
+
+def test_routine_delete_removes_the_directory_and_scheduler_drops_it(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        target = tmp_path / "routines" / "news"
+        target.mkdir(parents=True)
+        (target / "ROUTINE.md").write_text(
+            "---\ndescription: News\nschedule: * * * * *\n---\nRead the news.\n",
+            encoding="utf-8",
+        )
+        (target / "run.py").write_text(
+            '''from kinby.plugins import tool
+@tool(write=False)
+def fetch() -> str:
+    """Fetch the news."""
+    return "news"
+''',
+            encoding="utf-8",
+        )
+        clock = FakeClock(datetime(2026, 9, 8, 8, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        assert dispatcher.scheduler is not None
+        await dispatcher.scheduler.tick()
+        delete = next(tool for tool in instance_tools(instance) if tool.name == "routine_delete")
+
+        result = await delete.ainvoke(
+            {"name": "news"},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+        clock.now = datetime(2026, 9, 8, 8, 1, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+
+        assert result == "Deleted routines/news/."
+        assert not target.exists()
+        assert (await call(dispatcher, "routine.list")).routines == []
+        assert (await call(dispatcher, "thread.list")).threads == []
+
+    asyncio.run(scenario())
+
+
+def test_routine_delete_refuses_pending_deliveries_and_they_still_fire(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        target = tmp_path / "routines" / "issues"
+        target.mkdir(parents=True)
+        (target / "ROUTINE.md").write_text(
+            "---\ndescription: Issues\nsignal:\n  secret: SIGNAL_SECRET\n---\nHandle the issue.\n",
+            encoding="utf-8",
+        )
+        clock = FakeClock(datetime(2026, 9, 8, 8, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        assert dispatcher.scheduler is not None
+        for body in ("opened", "labeled"):
+            await dispatcher.scheduler.receive(
+                RoutineName("issues"),
+                Delivery(
+                    headers={},
+                    content_type="text/plain",
+                    body=body,
+                    received_at=clock.now,
+                ),
+                RoutineTrigger.SIGNAL,
+            )
+        delete = next(tool for tool in instance_tools(instance) if tool.name == "routine_delete")
+
+        with pytest.raises(ValueError, match="2 pending deliveries"):
+            await delete.ainvoke(
+                {"name": "issues"},
+                ToolContext(instance=instance, thread_id=uuid4()),
+            )
+
+        assert target.is_dir()
+        await dispatcher.scheduler.tick()
+        await dispatcher.scheduler.tick()
+        assert (await call(dispatcher, "routine.list")).routines[0].pending == 0
+        assert len((await call(dispatcher, "thread.list")).threads) == 2
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("routine_set_enabled", {"name": "missing", "enabled": True}),
+        ("routine_delete", {"name": "missing"}),
+    ],
+)
+def test_routine_change_tools_reject_an_unknown_name(
+    tmp_path: Path,
+    tool_name: str,
+    arguments: dict[str, JsonValue],
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        selected = next(tool for tool in instance_tools(instance) if tool.name == tool_name)
+
+        with pytest.raises(LookupError, match='Routine "missing" was not found'):
+            await selected.ainvoke(
+                arguments,
+                ToolContext(instance=instance, thread_id=uuid4()),
+            )
 
     asyncio.run(scenario())
 
@@ -334,8 +485,10 @@ def test_approved_routine_write_runs_through_the_gate(tmp_path: Path) -> None:
 
         assert isinstance(parked, ParkedTurn)
         assert {tool.name for tool in model.bound_tools[0]} >= {
+            "routine_delete",
             "routine_list",
             "routine_read",
+            "routine_set_enabled",
             "routine_write",
         }
         approval = next(payload for payload in payloads if isinstance(payload, ApprovalRequested))
@@ -373,6 +526,76 @@ def test_approved_routine_write_runs_through_the_gate(tmp_path: Path) -> None:
         assert isinstance(result, ToolResult)
         assert not result.error
         assert result.output == "Wrote routines/morning-news/ROUTINE.md."
+
+    asyncio.run(scenario())
+
+
+def test_approved_routine_enable_changes_the_file(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        target = tmp_path / "routines" / "news" / "ROUTINE.md"
+        target.parent.mkdir(parents=True)
+        target.write_text(
+            "---\ndescription: News\nenabled: false\n---\nRead the news.\n",
+            encoding="utf-8",
+        )
+        arguments = {"name": "news", "enabled": True}
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "routine_set_enabled",
+                            "args": arguments,
+                            "id": "enable-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessageChunk(content="The routine is enabled."),
+            ]
+        )
+        runner = LangGraphRunner(instance, model_factory=lambda _: model)
+        preparation = runner.prepare_for_turn()
+        thread_id = uuid4()
+        turn_id = uuid4()
+        payloads: list[Payload] = []
+
+        async def emit(payload: Payload) -> Event:
+            payloads.append(payload)
+            return Event(
+                sequence=len(payloads),
+                thread_id=thread_id,
+                turn_id=turn_id,
+                payload=payload,
+                timestamp=datetime.now(UTC),
+            )
+
+        turn = PreparedTurnRequest(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            message="Enable the news routine.",
+            model=preparation.model,
+            permission_mode=PermissionMode.ASK,
+            system_prompt=SystemPrompt("System prompt"),
+        )
+        context = TurnContext(preparation.budgets, emit)
+
+        assert isinstance(await runner.run(turn, context), ParkedTurn)
+        approval = next(payload for payload in payloads if isinstance(payload, ApprovalRequested))
+        assert approval.name == "routine_set_enabled"
+        assert approval.arguments == arguments
+        assert "enabled: false" in target.read_text(encoding="utf-8")
+        assert isinstance(
+            await runner.resume(turn, ApprovalDecision.APPROVE, context),
+            TurnOutcome,
+        )
+
+        assert "enabled: true" in target.read_text(encoding="utf-8")
+        result = next(payload for payload in payloads if isinstance(payload, ToolResult))
+        assert not result.error
+        assert result.output == "Enabled routine news."
 
     asyncio.run(scenario())
 
@@ -544,8 +767,10 @@ def test_routine_and_signal_turns_have_every_routine_instance_tool(
         )
 
         assert {tool.name for tool in model.bound_tools[0]} >= {
+            "routine_delete",
             "routine_list",
             "routine_read",
+            "routine_set_enabled",
             "routine_write",
         }
 
@@ -1032,14 +1257,18 @@ def test_instance_tool_metadata(tmp_path: Path) -> None:
     tools = {tool.name: tool for tool in instance_tools(instance)}
 
     assert set(tools) == {
+        "routine_delete",
         "routine_list",
         "routine_read",
+        "routine_set_enabled",
         "routine_write",
         "skill_delete",
         "skill_write",
     }
     assert not tools["routine_list"].write
     assert not tools["routine_read"].write
+    assert tools["routine_delete"].write
+    assert tools["routine_set_enabled"].write
     assert tools["routine_write"].write
     assert tools["skill_delete"].write
     assert tools["skill_write"].write

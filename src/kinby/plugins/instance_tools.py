@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 
 from cronsim import CronSim
 
+from kinby.contracts import CronSchedule, RoutineName
 from kinby.instance import Instance
 from kinby.instance.layout import (
     ROUTINE_CODE_FILE,
@@ -18,7 +19,12 @@ from kinby.instance.layout import (
     SKILLS_DIR,
 )
 from kinby.instance.permissions import load_permissions
-from kinby.plugins.routines import load_routine_file, load_routines
+from kinby.plugins.routines import (
+    load_routine,
+    load_routine_file,
+    load_routines,
+    set_routine_enabled,
+)
 from kinby.plugins.skills import SkillName, describe_skill_shadow, load_skill_file
 from kinby.plugins.tools import Tool, ToolContext, tool
 
@@ -31,6 +37,11 @@ def _validate_name(name: str) -> None:
             "A name must contain only letters, digits, hyphens, and underscores, "
             "and start with a letter or digit."
         )
+
+
+def _next_firing(schedule: CronSchedule, instance: Instance) -> datetime:
+    zone = instance.manifest.routines.timezone
+    return next(CronSim(schedule, datetime.now(zone)))
 
 
 def instance_tools(instance: Instance) -> tuple[Tool, ...]:
@@ -119,14 +130,52 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
 
         result = f"Wrote routines/{name}/ROUTINE.md."
         if routine.enabled and routine.schedule is not None:
-            zone = context.instance.manifest.routines.timezone
-            next_firing = next(CronSim(routine.schedule, datetime.now(zone)))
+            next_firing = _next_firing(routine.schedule, context.instance)
             result = f"{result} Next firing: {next_firing.isoformat()}."
         if routine.signal is not None and context.instance.manifest.serve is not None:
             result = f"{result} Signal path: /signals/{name}."
         if not routine.enabled:
             result = f"{result} Status: disabled."
         return result
+
+    @tool(write=True)
+    def routine_set_enabled(name: str, *, enabled: bool, context: ToolContext) -> str:
+        """Enable or disable a routine."""
+        _validate_name(name)
+        routine = load_routine(context.instance, RoutineName(name))
+        if routine is None:
+            raise LookupError(f'Routine "{name}" was not found.')
+        set_routine_enabled(routine, enabled=enabled)
+        if not enabled:
+            return f"Routine {name} disabled."
+        result = f"Enabled routine {name}."
+        if routine.schedule is not None:
+            next_firing = _next_firing(routine.schedule, context.instance)
+            result = f"{result} Next firing: {next_firing.isoformat()}."
+        return result
+
+    @tool(write=True)
+    def routine_delete(name: str, context: ToolContext) -> str:
+        """Delete a routine when it has no pending deliveries."""
+        from kinby.core.events import EventLog
+        from kinby.core.routine_history import routine_history
+
+        _validate_name(name)
+        target = context.instance.path / ROUTINES_DIR / name
+        if not target.is_dir():
+            raise LookupError(f'Routine "{name}" was not found.')
+        histories = routine_history(
+            EventLog(context.instance.manifest.state_dir).all_events()
+        ).routines
+        history = histories.get(RoutineName(name))
+        pending = len(history.pending) if history is not None else 0
+        if pending:
+            noun = "delivery" if pending == 1 else "deliveries"
+            raise ValueError(
+                f'Routine "{name}" has {pending} pending {noun} and cannot be deleted.'
+            )
+        shutil.rmtree(target)
+        return f"Deleted routines/{name}/."
 
     @tool(write=True)
     def skill_write(name: str, content: str, context: ToolContext) -> str:
@@ -182,4 +231,12 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         shutil.rmtree(target)
         return f"Deleted skills/{name}/."
 
-    return routine_list, routine_read, routine_write, skill_write, skill_delete
+    return (
+        routine_list,
+        routine_read,
+        routine_write,
+        routine_set_enabled,
+        routine_delete,
+        skill_write,
+        skill_delete,
+    )

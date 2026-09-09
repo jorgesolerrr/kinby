@@ -18,6 +18,7 @@ from kinby.contracts import (
     RoutineRunOutcome,
     SignalReceived,
     ToolCall,
+    ToolResult,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
@@ -61,6 +62,7 @@ class RoutineHistories:
 
 def routine_history(events: Iterable[Event]) -> RoutineHistories:
     histories: dict[RoutineName, RoutineHistory] = {}
+    enable_calls: dict[tuple[TurnKey, str], RoutineName] = {}
     runs: dict[TurnKey, tuple[RoutineName, RoutineLastRun]] = {}
     texts: dict[TurnKey, str] = {}
     closed: set[TurnKey] = set()
@@ -70,6 +72,18 @@ def routine_history(events: Iterable[Event]) -> RoutineHistories:
     for receipt_order, event in enumerate(events):
         key = TurnKey(event.thread_id, event.turn_id)
         payload = event.payload
+        if isinstance(payload, ToolCall) and payload.name == "routine_set_enabled":
+            name = payload.arguments.get("name")
+            if payload.arguments.get("enabled") is True and isinstance(name, str):
+                enable_calls[(key, payload.call_id)] = RoutineName(name)
+        elif isinstance(payload, ToolResult):
+            name = enable_calls.pop((key, payload.call_id), None)
+            if name is not None and payload.name == "routine_set_enabled" and not payload.error:
+                history = histories.setdefault(name, RoutineHistory())
+                history.failure_count = 0
+                failures = {
+                    key: failure for key, failure in failures.items() if failure.name != name
+                }
         if isinstance(payload, SignalReceived):
             if key in pending:
                 continue
