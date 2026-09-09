@@ -116,7 +116,7 @@ def load_routines(
     warnings: list[Warning] = []
     for path in _routine_paths(instance):
         try:
-            routines.append(_load_routine(path, policy, instance))
+            routines.append(load_routine_file(path, policy, instance))
         except Exception as exc:
             # Routine files are user code. One broken routine must not hide the rest.
             warnings.append(Warning(sources=(str(path),), message=str(exc)))
@@ -130,7 +130,7 @@ def load_routine(instance: Instance, name: RoutineName) -> Routine | None:
     )
     if path is None:
         return None
-    return _load_routine(path, load_permissions(instance), instance)
+    return load_routine_file(path, load_permissions(instance), instance)
 
 
 def _routine_paths(instance: Instance) -> tuple[Path, ...]:
@@ -146,7 +146,8 @@ def _signal_code_step(code_step: SharedCodeStep | Tool | None, instance: Instanc
     return resolve_code_step(code_step, snapshot)
 
 
-def _load_routine(path: Path, policy: GatePolicy, instance: Instance) -> Routine:
+def load_routine_file(path: Path, policy: GatePolicy, instance: Instance) -> Routine:
+    """Load and validate one routine file."""
     values, body = parse_frontmatter(path.read_text(encoding="utf-8"))
     required_string(values, "description")
     raw = _RawRoutine.model_validate(values)
