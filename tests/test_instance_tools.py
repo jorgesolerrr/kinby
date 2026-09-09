@@ -165,6 +165,9 @@ def fetch() -> str:
     return "news"
 '''
         (target / "run.py").write_text(code, encoding="utf-8")
+        assets = target / "assets"
+        assets.mkdir()
+        (assets / "prompt.txt").write_text("supporting prompt", encoding="utf-8")
         write = next(tool for tool in instance_tools(instance) if tool.name == "routine_write")
 
         await write.ainvoke(
@@ -177,6 +180,7 @@ def fetch() -> str:
 
         assert (target / "ROUTINE.md").read_text(encoding="utf-8").endswith("Read new news.\n")
         assert (target / "run.py").read_text(encoding="utf-8") == code
+        assert (target / "assets" / "prompt.txt").read_text(encoding="utf-8") == "supporting prompt"
 
     asyncio.run(scenario())
 

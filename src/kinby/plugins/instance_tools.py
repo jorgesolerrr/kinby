@@ -87,13 +87,14 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         target = routines / name
         with TemporaryDirectory(prefix=".routine-", dir=context.instance.path) as temporary:
             staged = Path(temporary) / name
-            staged.mkdir()
+            if target.is_dir():
+                shutil.copytree(target, staged)
+            else:
+                staged.mkdir()
             routine_path = staged / ROUTINE_FILE
             routine_path.write_text(content, encoding="utf-8")
             if code is not None:
                 (staged / ROUTINE_CODE_FILE).write_text(code, encoding="utf-8")
-            elif (target / ROUTINE_CODE_FILE).is_file():
-                shutil.copy2(target / ROUTINE_CODE_FILE, staged / ROUTINE_CODE_FILE)
             routine = load_routine_file(
                 routine_path,
                 load_permissions(context.instance),
