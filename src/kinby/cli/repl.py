@@ -511,10 +511,7 @@ async def _answer_approval(
     approval = event.payload
     if not isinstance(approval, ApprovalRequested):
         return False
-    arguments = json.dumps(approval.arguments, sort_keys=True)
-    repl_io.stdout.write(
-        f'Approve {approval.name} {arguments} under rule "{approval.rule}"? [yes/no] '
-    )
+    repl_io.stdout.write(_approval_prompt(approval))
     repl_io.stdout.flush()
     answer = asyncio.create_task(repl_io.stdin.readline())
     interruption = asyncio.create_task(interrupted.wait())
@@ -539,6 +536,33 @@ async def _answer_approval(
         _render_error(result, repl_io.stderr)
         return False
     return True
+
+
+def _approval_prompt(approval: ApprovalRequested) -> str:
+    if not any(isinstance(value, str) and "\n" in value for value in approval.arguments.values()):
+        arguments = json.dumps(approval.arguments, sort_keys=True)
+        return f'Approve {approval.name} {arguments} under rule "{approval.rule}"? [yes/no] '
+
+    lines = [f'Approve {approval.name} under rule "{approval.rule}":\n']
+    for key, value in sorted(approval.arguments.items()):
+        escaped_key = _escape_terminal_text(key)
+        if isinstance(value, str):
+            if "\n" in value:
+                value_lines = value.split("\n")
+                lines.append(f"{escaped_key}:\n")
+                lines.extend(f"  {_escape_terminal_text(line)}\\n\n" for line in value_lines[:-1])
+                if value_lines[-1]:
+                    lines.append(f"  {_escape_terminal_text(value_lines[-1])}\n")
+            else:
+                lines.append(f"{escaped_key}: {_escape_terminal_text(value)}\n")
+        else:
+            lines.append(f"{escaped_key}: {json.dumps(value, sort_keys=True)}\n")
+    lines.append("[yes/no] ")
+    return "".join(lines)
+
+
+def _escape_terminal_text(text: str) -> str:
+    return json.dumps(text)[1:-1]
 
 
 def render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
