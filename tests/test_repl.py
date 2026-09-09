@@ -1128,9 +1128,14 @@ def test_repl_answers_a_parked_approval(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_repl_renders_a_multiline_approval_argument_as_a_block(tmp_path: Path) -> None:
+def test_repl_renders_and_escapes_a_multiline_approval_argument(tmp_path: Path) -> None:
     async def scenario() -> None:
-        runner = ApprovalReplRunner({"content": "first line\nsecond line\nthird line"})
+        runner = ApprovalReplRunner(
+            {
+                "z\x1b[2J": "one\x1b[2J line",
+                "content": "first line\r\nsecond line\nthird line\n",
+            }
+        )
         dispatcher = build_dispatcher(
             tmp_path,
             turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
@@ -1158,11 +1163,13 @@ def test_repl_renders_a_multiline_approval_argument_as_a_block(tmp_path: Path) -
         assert stdout.getvalue() == (
             '> Approve write_note under rule "mode.ask.write":\n'
             "content:\n"
-            "  first line\n"
-            "  second line\n"
-            "  third line\n"
+            "  first line\\r\\n\n"
+            "  second line\\n\n"
+            "  third line\\n\n"
+            "z\\u001b[2J: one\\u001b[2J line\n"
             "[yes/no] "
-            '[tool.call] write_note {"content": "first line\\nsecond line\\nthird line"}\n'
+            '[tool.call] write_note {"content": "first line\\r\\nsecond line\\nthird line\\n", '
+            '"z\\u001b[2J": "one\\u001b[2J line"}\n'
             "[tool.result] write_note (ok): remember me\nDone\n> "
         )
         assert stderr.getvalue() == ""
@@ -1206,7 +1213,7 @@ def test_repl_renders_mixed_approval_arguments_in_key_order(tmp_path: Path) -> N
         assert stdout.getvalue() == (
             '> Approve write_note under rule "mode.ask.write":\n'
             "content:\n"
-            "  first line\n"
+            "  first line\\n\n"
             "  second line\n"
             "enabled: false\n"
             "name: morning\n"

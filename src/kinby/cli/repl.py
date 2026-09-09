@@ -545,16 +545,24 @@ def _approval_prompt(approval: ApprovalRequested) -> str:
 
     lines = [f'Approve {approval.name} under rule "{approval.rule}":\n']
     for key, value in sorted(approval.arguments.items()):
+        escaped_key = _escape_terminal_text(key)
         if isinstance(value, str):
             if "\n" in value:
-                lines.append(f"{key}:\n")
-                lines.extend(f"  {line}\n" for line in value.splitlines())
+                value_lines = value.split("\n")
+                lines.append(f"{escaped_key}:\n")
+                lines.extend(f"  {_escape_terminal_text(line)}\\n\n" for line in value_lines[:-1])
+                if value_lines[-1]:
+                    lines.append(f"  {_escape_terminal_text(value_lines[-1])}\n")
             else:
-                lines.append(f"{key}: {value}\n")
+                lines.append(f"{escaped_key}: {_escape_terminal_text(value)}\n")
         else:
-            lines.append(f"{key}: {json.dumps(value, sort_keys=True)}\n")
+            lines.append(f"{escaped_key}: {json.dumps(value, sort_keys=True)}\n")
     lines.append("[yes/no] ")
     return "".join(lines)
+
+
+def _escape_terminal_text(text: str) -> str:
+    return json.dumps(text)[1:-1]
 
 
 def render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
