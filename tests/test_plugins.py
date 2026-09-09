@@ -7,7 +7,7 @@ from importlib.metadata import entry_points as installed_entry_points
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage, ToolMessage
@@ -30,7 +30,8 @@ from kinby.contracts import (
 )
 from kinby.core import Dispatcher, LangGraphRunner, TurnConfig, build_dispatcher
 from kinby.instance import Instance, load_instance
-from kinby.plugins import Tool, tool
+from kinby.plugins import Tool, ToolContext, tool
+from kinby.plugins.defaults.shell import bash
 from tests.helpers import GRAPH_EVENT_TIMEOUT
 
 _MODEL = "openai:gpt-5"
@@ -110,12 +111,20 @@ def test_tool_decorator_rejects_an_unknown_path_parameter() -> None:
             return note
 
 
-def _instance(tmp_path: Path, *, defaults: bool = True) -> Instance:
+def _instance(
+    tmp_path: Path,
+    *,
+    defaults: bool = True,
+    bash_timeout_seconds: int | None = None,
+) -> Instance:
     instance_path = tmp_path / "instance"
     instance_path.mkdir()
     (instance_path / "tools").mkdir()
     (instance_path / "workspace").mkdir()
-    tools = "" if defaults else "\n[tools]\ndefaults = false\n"
+    settings = [] if defaults else ["defaults = false"]
+    if bash_timeout_seconds is not None:
+        settings.append(f"bash_timeout_seconds = {bash_timeout_seconds}")
+    tools = "\n[tools]\n" + "".join(f"{setting}\n" for setting in settings) if settings else ""
     (instance_path / "kinby.toml").write_text(
         f'id = "test"\n\n[models]\nmain = "{_MODEL}"\n{tools}',
         encoding="utf-8",
@@ -501,7 +510,10 @@ def test_manifest_can_disable_default_tools(tmp_path: Path) -> None:
 
         await _start_turn(instance, model)
 
-        assert asdict(instance.manifest)["tools"] == {"defaults": False}
+        assert asdict(instance.manifest)["tools"] == {
+            "defaults": False,
+            "bash_timeout_seconds": 120,
+        }
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
             [
                 "forget",
@@ -755,6 +767,19 @@ def test_default_bash_uses_the_workspace_timeout_and_output_cap(
         assert process.wait_timeouts == [120.0]
         assert result.output == "x" * 30_000
         assert not result.error
+
+    asyncio.run(scenario())
+
+
+def test_default_bash_times_out_at_the_manifest_timeout(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, bash_timeout_seconds=1)
+
+        with pytest.raises(TimeoutError, match=r"^Bash timed out after 1 seconds\.$"):
+            await bash.ainvoke(
+                {"command": "sleep 5"},
+                ToolContext(instance=instance, thread_id=uuid4()),
+            )
 
     asyncio.run(scenario())
 

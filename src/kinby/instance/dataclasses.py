@@ -85,9 +85,10 @@ class Feedback:
 
 @dataclass(frozen=True)
 class Tools:
-    """Whether the manifest enables kinby's default tools."""
+    """How the manifest configures kinby's tools."""
 
     defaults: bool = True
+    bash_timeout_seconds: int = 120
 
 
 @dataclass(frozen=True)

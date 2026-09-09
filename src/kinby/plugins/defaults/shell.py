@@ -6,13 +6,13 @@ from typing import BinaryIO
 
 from kinby.plugins import ToolContext, tool
 
-_TIMEOUT_SECONDS = 120
 _OUTPUT_CAP = 30_000
 
 
 @tool(write=True)
 def bash(command: str, context: ToolContext) -> str:
     """Run a Bash command in the workspace."""
+    timeout_seconds = context.instance.manifest.tools.bash_timeout_seconds
     process = subprocess.Popen(
         ("bash", "-c", command),
         cwd=context.workspace,
@@ -32,7 +32,7 @@ def bash(command: str, context: ToolContext) -> str:
     for reader in readers:
         reader.start()
     try:
-        return_code = process.wait(timeout=_TIMEOUT_SECONDS)
+        return_code = process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
@@ -40,7 +40,7 @@ def bash(command: str, context: ToolContext) -> str:
             reader.join()
         output = _capped(_render_output(stdout, stderr))
         detail = f"\n{output}" if output else ""
-        raise TimeoutError(f"Bash timed out after {_TIMEOUT_SECONDS} seconds.{detail}") from None
+        raise TimeoutError(f"Bash timed out after {timeout_seconds} seconds.{detail}") from None
     for reader in readers:
         reader.join()
     output = _render_output(stdout, stderr)
