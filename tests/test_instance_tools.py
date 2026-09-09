@@ -37,6 +37,7 @@ from kinby.core.turns import (
 from kinby.instance import load_instance
 from kinby.plugins import ToolContext
 from kinby.plugins.instance_tools import instance_tools
+from kinby.plugins.skills import load_skills
 from tests.test_routines import instance_at
 from tests.test_scheduler import FakeClock, call, runtime
 
@@ -747,12 +748,303 @@ def test_routine_read_rejects_an_unknown_name(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_routine_instance_tool_metadata(tmp_path: Path) -> None:
+def test_skill_write_installs_a_skill_for_the_next_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        content = (
+            "---\n"
+            "name: planning\n"
+            "description: Plan work before changing files.\n"
+            "---\n"
+            "Write the plan first.\n"
+        )
+        write = next(tool for tool in instance_tools(instance) if tool.name == "skill_write")
+
+        result = await write.ainvoke(
+            {"name": "planning", "content": content},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert result == "Wrote skills/planning/SKILL.md."
+        assert (tmp_path / "skills" / "planning" / "SKILL.md").read_text(
+            encoding="utf-8"
+        ) == content
+        skills, warnings = load_skills(instance)
+        assert not warnings
+        planning = next(skill for skill in skills if skill.name == "planning")
+        assert planning.body == "Write the plan first."
+
+    asyncio.run(scenario())
+
+
+def test_skill_write_keeps_existing_supporting_files(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        target = tmp_path / "skills" / "planning"
+        references = target / "references"
+        references.mkdir(parents=True)
+        (target / "SKILL.md").write_text(
+            "---\nname: planning\ndescription: Old plan.\n---\nOld instructions.\n",
+            encoding="utf-8",
+        )
+        (references / "format.md").write_text("Plan format.", encoding="utf-8")
+        write = next(tool for tool in instance_tools(instance) if tool.name == "skill_write")
+
+        await write.ainvoke(
+            {
+                "name": "planning",
+                "content": (
+                    "---\nname: planning\ndescription: New plan.\n---\nNew instructions.\n"
+                ),
+            },
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert (references / "format.md").read_text(encoding="utf-8") == "Plan format."
+
+    asyncio.run(scenario())
+
+
+def test_skill_write_rejects_a_different_frontmatter_name_without_changes(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        target = tmp_path / "skills" / "planning" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+        original = "---\nname: planning\ndescription: Original planning skill.\n---\nOriginal.\n"
+        target.write_text(original, encoding="utf-8")
+        write = next(tool for tool in instance_tools(instance) if tool.name == "skill_write")
+
+        with pytest.raises(
+            ValueError,
+            match='frontmatter name "other" must match directory name "planning"',
+        ):
+            await write.ainvoke(
+                {
+                    "name": "planning",
+                    "content": (
+                        "---\n"
+                        "name: other\n"
+                        "description: Replacement planning skill.\n"
+                        "---\n"
+                        "Replacement.\n"
+                    ),
+                },
+                ToolContext(instance=instance, thread_id=uuid4()),
+            )
+
+        assert target.read_text(encoding="utf-8") == original
+
+    asyncio.run(scenario())
+
+
+def test_skill_write_rejects_a_missing_description_without_changes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        target = tmp_path / "skills" / "planning" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+        original = "---\nname: planning\ndescription: Original planning skill.\n---\nOriginal.\n"
+        target.write_text(original, encoding="utf-8")
+        write = next(tool for tool in instance_tools(instance) if tool.name == "skill_write")
+
+        with pytest.raises(ValueError, match='must contain "description"'):
+            await write.ainvoke(
+                {
+                    "name": "planning",
+                    "content": "---\nname: planning\n---\nReplacement.\n",
+                },
+                ToolContext(instance=instance, thread_id=uuid4()),
+            )
+
+        assert target.read_text(encoding="utf-8") == original
+
+    asyncio.run(scenario())
+
+
+def test_skill_write_rejects_a_name_with_a_slash_without_changes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        marker = tmp_path / "skills" / "planning" / "SKILL.md"
+        marker.parent.mkdir(parents=True)
+        marker.write_text("original", encoding="utf-8")
+        write = next(tool for tool in instance_tools(instance) if tool.name == "skill_write")
+
+        with pytest.raises(ValueError, match="letters, digits, hyphens, and underscores"):
+            await write.ainvoke(
+                {
+                    "name": "planning/other",
+                    "content": (
+                        "---\n"
+                        "name: planning/other\n"
+                        "description: Invalid planning skill.\n"
+                        "---\n"
+                        "Invalid.\n"
+                    ),
+                },
+                ToolContext(instance=instance, thread_id=uuid4()),
+            )
+
+        assert marker.read_text(encoding="utf-8") == "original"
+        assert not (tmp_path / "skills" / "planning" / "other").exists()
+
+    asyncio.run(scenario())
+
+
+def test_skill_write_reports_and_shadows_a_packaged_skill(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance_at(tmp_path)
+        (tmp_path / "kinby.toml").write_text(
+            'id = "test"\n[models]\nmain = "openai:gpt-5"\n',
+            encoding="utf-8",
+        )
+        instance = load_instance(tmp_path)
+        packaged = next(
+            skill for skill in load_skills(instance)[0] if skill.name == "write-routine"
+        )
+        content = (
+            "---\n"
+            "name: write-routine\n"
+            "description: Instance routine instructions.\n"
+            "---\n"
+            "Use the instance version.\n"
+        )
+        write = next(tool for tool in instance_tools(instance) if tool.name == "skill_write")
+
+        result = await write.ainvoke(
+            {"name": "write-routine", "content": content},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert result == (
+            f"Wrote skills/write-routine/SKILL.md. Shadows packaged skill at {packaged.source}."
+        )
+        selected = next(
+            skill for skill in load_skills(instance)[0] if skill.name == "write-routine"
+        )
+        assert selected.source == tmp_path / "skills" / "write-routine" / "SKILL.md"
+        assert selected.body == "Use the instance version."
+
+    asyncio.run(scenario())
+
+
+def test_skill_tools_report_and_preserve_a_workspace_skill(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance_at(tmp_path)
+        with (tmp_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+            manifest.write("[workspace.conventions]\nenabled = true\n")
+        workspace_skill = tmp_path / "workspace" / ".agents" / "skills" / "planning" / "SKILL.md"
+        workspace_skill.parent.mkdir(parents=True)
+        workspace_skill.write_text(
+            "---\nname: planning\ndescription: Workspace plan.\n---\nWorkspace instructions.\n",
+            encoding="utf-8",
+        )
+        instance = load_instance(tmp_path)
+        tools = {tool.name: tool for tool in instance_tools(instance)}
+        context = ToolContext(instance=instance, thread_id=uuid4())
+
+        result = await tools["skill_write"].ainvoke(
+            {
+                "name": "planning",
+                "content": (
+                    "---\nname: planning\ndescription: Instance plan.\n---\n"
+                    "Instance instructions.\n"
+                ),
+            },
+            context,
+        )
+
+        assert result == (
+            f"Wrote skills/planning/SKILL.md. Shadows workspace skill at {workspace_skill}."
+        )
+        selected = next(skill for skill in load_skills(instance)[0] if skill.name == "planning")
+        assert selected.body == "Instance instructions."
+
+        assert await tools["skill_delete"].ainvoke({"name": "planning"}, context) == (
+            "Deleted skills/planning/."
+        )
+        selected = next(skill for skill in load_skills(instance)[0] if skill.name == "planning")
+        assert selected.source == workspace_skill
+        with pytest.raises(LookupError, match="exists only as a workspace skill"):
+            await tools["skill_delete"].ainvoke({"name": "planning"}, context)
+        assert workspace_skill.is_file()
+
+    asyncio.run(scenario())
+
+
+def test_skill_delete_removes_an_instance_skill(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        target = tmp_path / "skills" / "planning"
+        target.mkdir(parents=True)
+        (target / "SKILL.md").write_text(
+            "---\nname: planning\ndescription: Plan work.\n---\nWrite a plan.\n",
+            encoding="utf-8",
+        )
+        delete = next(tool for tool in instance_tools(instance) if tool.name == "skill_delete")
+
+        result = await delete.ainvoke(
+            {"name": "planning"},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert result == "Deleted skills/planning/."
+        assert not target.exists()
+        assert all(skill.name != "planning" for skill in load_skills(instance)[0])
+
+    asyncio.run(scenario())
+
+
+def test_skill_delete_refuses_to_remove_a_packaged_skill(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance_at(tmp_path)
+        (tmp_path / "kinby.toml").write_text(
+            'id = "test"\n[models]\nmain = "openai:gpt-5"\n',
+            encoding="utf-8",
+        )
+        instance = load_instance(tmp_path)
+        packaged = next(
+            skill for skill in load_skills(instance)[0] if skill.name == "write-routine"
+        )
+        delete = next(tool for tool in instance_tools(instance) if tool.name == "skill_delete")
+
+        with pytest.raises(LookupError) as error:
+            await delete.ainvoke(
+                {"name": "write-routine"},
+                ToolContext(instance=instance, thread_id=uuid4()),
+            )
+
+        assert str(error.value) == (
+            'Skill "write-routine" exists only as a packaged skill at '
+            f"{packaged.source}; skill_delete removes instance skills only."
+        )
+        selected = next(
+            skill for skill in load_skills(instance)[0] if skill.name == "write-routine"
+        )
+        assert selected == packaged
+        assert not (tmp_path / "skills" / "write-routine").exists()
+
+    asyncio.run(scenario())
+
+
+def test_instance_tool_metadata(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     tools = {tool.name: tool for tool in instance_tools(instance)}
 
-    assert set(tools) == {"routine_list", "routine_read", "routine_write"}
+    assert set(tools) == {
+        "routine_list",
+        "routine_read",
+        "routine_write",
+        "skill_delete",
+        "skill_write",
+    }
     assert not tools["routine_list"].write
     assert not tools["routine_read"].write
     assert tools["routine_write"].write
+    assert tools["skill_delete"].write
+    assert tools["skill_write"].write
     assert all(not tool.paths for tool in tools.values())
+    assert tools["skill_write"].runnable.description == (
+        "Write a SKILL.md with required name and description frontmatter keys.\n\n"
+        "Its body is the instructions."
+    )

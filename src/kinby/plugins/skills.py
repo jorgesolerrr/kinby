@@ -44,6 +44,27 @@ class Skill:
 def load_skills(instance: Instance) -> tuple[tuple[Skill, ...], tuple[Warning, ...]]:
     """Load instance, packaged, then workspace convention skills."""
     instance_skills, instance_warnings = _load_skill_roots((instance.path / SKILLS_DIR,))
+    packaged_skills, workspace_skills, other_warnings = _load_other_skill_tiers(instance)
+    skills: dict[SkillName, Skill] = {}
+    for tier in (instance_skills, packaged_skills, workspace_skills):
+        for name, skill in tier.items():
+            skills.setdefault(name, skill)
+    return tuple(skills.values()), (*instance_warnings, *other_warnings)
+
+
+def describe_skill_shadow(instance: Instance, name: SkillName) -> str | None:
+    """Describe the packaged or workspace skill hidden by an instance skill."""
+    packaged, workspace, _ = _load_other_skill_tiers(instance)
+    if skill := packaged.get(name):
+        return f"packaged skill at {skill.source}"
+    if skill := workspace.get(name):
+        return f"workspace skill at {skill.source}"
+    return None
+
+
+def _load_other_skill_tiers(
+    instance: Instance,
+) -> tuple[dict[SkillName, Skill], dict[SkillName, Skill], tuple[Warning, ...]]:
     packaged_roots, package_warnings = _packaged_skill_roots(
         defaults=instance.manifest.tools.defaults
     )
@@ -51,15 +72,14 @@ def load_skills(instance: Instance) -> tuple[tuple[Skill, ...], tuple[Warning, .
     workspace_skills, workspace_warnings = _load_skill_roots(
         instance.manifest.workspace.conventions.skills,
     )
-    skills: dict[SkillName, Skill] = {}
-    for tier in (instance_skills, packaged_skills, workspace_skills):
-        for name, skill in tier.items():
-            skills.setdefault(name, skill)
-    return tuple(skills.values()), (
-        *instance_warnings,
-        *package_warnings,
-        *packaged_warnings,
-        *workspace_warnings,
+    return (
+        packaged_skills,
+        workspace_skills,
+        (
+            *package_warnings,
+            *packaged_warnings,
+            *workspace_warnings,
+        ),
     )
 
 
@@ -93,7 +113,7 @@ def _load_skill_roots(
             continue
         for path in sorted(root.glob(f"*/{SKILL_FILE}"), key=lambda item: item.parent.name):
             try:
-                candidate = _load_skill(path)
+                candidate = load_skill_file(path)
             except (SkillFrontmatterError, OSError, UnicodeDecodeError) as exc:
                 warnings.append(Warning(sources=(str(path),), message=str(exc)))
                 continue
@@ -110,7 +130,7 @@ def _load_skill_roots(
     return loaded, tuple(warnings)
 
 
-def _load_skill(path: Path) -> Skill:
+def load_skill_file(path: Path) -> Skill:
     """Read unquoted `key: value` frontmatter and the body from one skill file."""
     try:
         values, body = parse_frontmatter(path.read_text(encoding="utf-8"))

@@ -242,6 +242,8 @@ def test_fresh_instance_binds_the_default_tools(tmp_path: Path) -> None:
             "routine_read",
             "routine_write",
             "skill",
+            "skill_delete",
+            "skill_write",
             "write",
         ]
 
@@ -310,6 +312,8 @@ def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypa
                 "routine_read",
                 "routine_write",
                 "skill",
+                "skill_delete",
+                "skill_write",
             ],
             [
                 "forget",
@@ -321,6 +325,8 @@ def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypa
                 "routine_read",
                 "routine_write",
                 "skill",
+                "skill_delete",
+                "skill_write",
             ],
         ]
 
@@ -401,6 +407,8 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
                 "routine_read",
                 "routine_write",
                 "skill",
+                "skill_delete",
+                "skill_write",
             ],
             [
                 "available",
@@ -412,6 +420,8 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
                 "routine_read",
                 "routine_write",
                 "skill",
+                "skill_delete",
+                "skill_write",
             ],
         ]
 
@@ -457,6 +467,8 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
             "routine_read",
             "routine_write",
             "skill",
+            "skill_delete",
+            "skill_write",
         ]
 
     asyncio.run(scenario())
@@ -488,6 +500,8 @@ def test_manifest_can_disable_default_tools(tmp_path: Path) -> None:
                 "routine_read",
                 "routine_write",
                 "skill",
+                "skill_delete",
+                "skill_write",
             ]
         ]
 
@@ -519,6 +533,8 @@ def test_broken_instance_tool_keeps_default_tools_on_the_first_turn(tmp_path: Pa
             "routine_read",
             "routine_write",
             "skill",
+            "skill_delete",
+            "skill_write",
             "write",
         ]
 
@@ -911,6 +927,8 @@ def greet(name: str) -> str:
             "routine_read",
             "routine_write",
             "skill",
+            "skill_delete",
+            "skill_write",
         ]
         bound = next(tool for tool in model.bound_tools[0] if tool.name == "greet")
         assert bound.description == "Greet someone by name."
@@ -1315,6 +1333,8 @@ def {tool_name}() -> str:
             "routine_read",
             "routine_write",
             "skill",
+            "skill_delete",
+            "skill_write",
             "zulu",
         ]
 
@@ -1368,6 +1388,8 @@ def test_instance_skill_is_catalogued_and_skill_tool_is_bound(tmp_path: Path) ->
             "routine_read",
             "routine_write",
             "skill",
+            "skill_delete",
+            "skill_write",
         ]
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert _without_duration(result) == ToolResult(
@@ -1844,6 +1866,8 @@ def version() -> str:
             "routine_read",
             "routine_write",
             "skill",
+            "skill_delete",
+            "skill_write",
             "version",
         ]
         assert [tool.name for tool in model.bound_tools[1]] == [
@@ -1855,6 +1879,8 @@ def version() -> str:
             "routine_read",
             "routine_write",
             "skill",
+            "skill_delete",
+            "skill_write",
             "version",
         ]
         assert [tool.name for tool in model.bound_tools[2]] == [
@@ -1866,6 +1892,8 @@ def version() -> str:
             "routine_read",
             "routine_write",
             "skill",
+            "skill_delete",
+            "skill_write",
         ]
         assert not any(isinstance(event.payload, ToolCall) for event in third)
 
@@ -1944,6 +1972,8 @@ def fresh() -> str:
             "routine_read",
             "routine_write",
             "skill",
+            "skill_delete",
+            "skill_write",
             "stable",
         ]
         repeated = [event.payload for event in again if isinstance(event.payload, Warning)]
