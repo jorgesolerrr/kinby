@@ -172,9 +172,12 @@ after lunch. Omit `schedule` for work the user runs only by hand.
 ## Change or remove a routine
 
 To change an existing routine, call `routine_read` first. Edit the text, then call
-`routine_write` with the whole file. Use `routine_set_enabled` to pause or resume
-the routine. Use `routine_delete` to remove it. Delete is refused while deliveries
-are pending.
+`routine_write` with the whole file. When `routine_read` returns `run.py`, pass its
+complete text as `code` to keep or replace the code step. `routine_write` cannot
+remove `run.py`, so tell the user when an edit would change a code-backed routine
+to a shared tool or a prompt-only routine. Use `routine_set_enabled` to pause or
+resume the routine. Use `routine_delete` to remove it. Delete is refused while
+deliveries are pending.
 
 ## Inspect failures and recover
 
