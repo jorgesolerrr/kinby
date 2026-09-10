@@ -41,7 +41,12 @@ def test_coder_instance_loads_its_routine_and_skills(monkeypatch: pytest.MonkeyP
 
     assert routine_warnings == ()
     assert skill_warnings == ()
+    assert instance.manifest.models.main == "anthropic:claude-sonnet-5"
+    assert instance.manifest.models.recap == "anthropic:claude-sonnet-5"
+    assert instance.manifest.models.main in instance.manifest.prices
+    assert instance.manifest.budgets.seconds == 7200
     assert [routine.name for routine in routines] == ["implement-ready-issue"]
+    assert routines[0].enabled is False
     assert {path.name for path in (CODER / "skills").iterdir()} == {"unslop"}
     assert {skill.name for skill in skills} == {"unslop", "write-routine"}
 
