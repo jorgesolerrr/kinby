@@ -1,0 +1,5 @@
+interface:
+  display_name: "Implement Ticket"
+  short_description: "Build a ticket test-first and commit it (session 1 of 3)"
+policy:
+  allow_implicit_invocation: false

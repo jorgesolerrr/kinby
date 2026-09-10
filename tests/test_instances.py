@@ -42,7 +42,8 @@ def test_coder_instance_loads_its_routine_and_skills(monkeypatch: pytest.MonkeyP
     assert routine_warnings == ()
     assert skill_warnings == ()
     assert [routine.name for routine in routines] == ["implement-ready-issue"]
-    assert {"implement-ticket", "open-pr", "tdd", "unslop"} <= {skill.name for skill in skills}
+    assert {path.name for path in (CODER / "skills").iterdir()} == {"unslop"}
+    assert {skill.name for skill in skills} == {"unslop", "write-routine"}
 
 
 @pytest.mark.parametrize(
