@@ -54,11 +54,11 @@ One source of memory behind the **memory facade**, such as the **profile**, the 
 
 ### Eval
 
-An offline, scored run of one or more **turns** against reference answers, under a named model. Paid for and run on demand; never part of ordinary use. The check on the harness itself, as opposed to **instance statistics**, which observe real use.
+An offline run of fixed cases that measures an **instance** or one of its parts against reference answers under a named model. Paid for and run on demand; never part of ordinary use.
 
 ### Feed gate
 
-The **eval** thresholds a **feed** must pass before kinby builds the next one.
+The correctness and memory-token thresholds a **feed** must pass before kinby builds the next one.
 
 ### Memory tool
 
@@ -142,7 +142,7 @@ _Avoid_: task
 
 ### Budget
 
-A ceiling on the work or spend available to a **turn** or **instance**.
+A ceiling an **instance** sets on one **turn** (steps, tokens, seconds) or on a UTC day (cost). Reaching it closes the turn as failed. Absent means unlimited; a **routine** may lower a budget, never raise it.
 
 ### Turn interruption
 
@@ -150,7 +150,7 @@ A user's request to stop the active turn before it completes.
 
 ### Turn rating
 
-The user's good or bad verdict on a closed **turn**, with an optional reason. A later rating becomes the current verdict while earlier ratings remain part of the thread's history.
+The user's good or bad verdict on one **turn**, with an optional reason. A later rating becomes the current verdict while earlier ratings remain part of the thread's history.
 
 ### Feedback policy
 
@@ -179,8 +179,7 @@ The derived record of one closed **turn**. It describes the outcome, duration, t
 
 ### Instance statistics
 
-UTC day or week totals derived from an **instance** event history through **turn metrics**. `kinby stats` recomputes these totals and writes `stats.json`.
-
+Per-turn measures of one **instance** aggregated by UTC day or week. Derived from the **transcript store** through **turn metrics**, `kinby stats` recomputes the totals and writes `stats.json`.
 
 ### Model call
 
@@ -199,25 +198,9 @@ _Avoid_: exploration, workspace search
 
 A hash of the rendered **system prompt** without the **environment block**, recorded when a turn starts. Groups turns by the prompt the user wrote.
 
-### Eval
-
-An offline run of fixed cases that measures an **instance** or one of its parts. Evals do not run in the shipped agent or its regular test suite.
-
 ### Eval arm
 
 One way of preparing the same **eval** case for comparison. The memory eval has a graph arm, which uses the case's **knowledge graph**, and a stuffing arm, which puts the case's raw transcript in the **profile** and removes the graph.
-
-### Feed gate
-
-The correctness and memory-token thresholds a **feed** must pass before kinby adds the next feed.
-
-### Turn rating
-
-The user's verdict on one **turn**: good or bad, with an optional reason. Recorded on the thread next to the turn it rates, whether given right after the turn or later. The live signal of whether an **instance** is improving.
-
-### Instance statistics
-
-Per-turn measures of one **instance** (tokens, cost, tool calls, memory calls, approvals, duration, **turn rating**) aggregated over a time window, with trends. Derived from the **transcript store**, never recorded separately.
 
 ### Turn runner
 
@@ -362,6 +345,37 @@ _Avoid_: cron job, automation, job
 
 A **routine**'s own deterministic code, a **tool** never offered to the model, that runs before the model and may report "nothing new", completing the **turn** with **no work**.
 
+### Coding client
+
+A command-line agent that implements or reviews repository changes for a coding **instance** under a separate model subscription.
+_Avoid_: model, subagent
+
+### Delegated pipeline
+
+The issue-to-PR process that assigns implementation and review to **coding clients**, then gives the coding **instance** a **pipeline report**.
+
+### Review round
+
+One independent review of the current change against both the repository's standards and its ticket, followed by fixes when the review has hard findings.
+
+### Agent PR
+
+A pull request that a **delegated pipeline** opens for one **eligible issue**. Its branch name starts with `agent/`.
+_Avoid_: automated PR, bot PR
+
+### Stack
+
+A parent issue's ordered series of **agent PRs**, each based on the PR below it. A top-level issue forms a stack of one.
+_Avoid_: issue tree, branch chain
+
+### Eligible issue
+
+An open issue marked `ready-for-agent` that has no **agent PR** and whose open blockers already have an agent PR in the same **stack**.
+
+### Pipeline report
+
+The structured result of one **delegated pipeline** run. It identifies the issue and outcome, the PR when opened, review findings, checks, client usage, durations, and any failure.
+
 ### No work
 
 A completed **turn** whose **code step** found nothing for the model to do. Neither the main model nor the **recap** model runs.
@@ -382,10 +396,6 @@ One authenticated inbound call the **receiver** accepted for a **routine**. Reco
 ### Delivery receipt
 
 The **scheduler** result returned when the **receiver** records a **delivery**. It carries the accepted thread, turn and event sequence, plus whether the provider id matched an existing delivery.
-
-### Budget
-
-A ceiling an **instance** sets on one **turn** (steps, tokens, seconds) or on a UTC day (cost). Reaching it closes the turn as failed. Absent means unlimited; a **routine** may lower a budget, never raise it.
 
 ### Scheduler
 
