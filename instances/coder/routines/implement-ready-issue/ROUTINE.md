@@ -1,5 +1,6 @@
 ---
 description: Implement a GitHub issue labeled ready-for-agent and open a pull request.
+enabled: false
 mode: full-access
 signal:
   auth: hmac-sha256

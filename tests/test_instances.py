@@ -46,6 +46,7 @@ def test_coder_instance_loads_its_routine_and_skills(monkeypatch: pytest.MonkeyP
     assert instance.manifest.models.main in instance.manifest.prices
     assert instance.manifest.budgets.seconds == 7200
     assert [routine.name for routine in routines] == ["implement-ready-issue"]
+    assert routines[0].enabled is False
     assert {"implement-ticket", "open-pr", "tdd", "unslop"} <= {skill.name for skill in skills}
 
 
