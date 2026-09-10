@@ -245,6 +245,12 @@
     "RawTools": {
       "additionalProperties": false,
       "properties": {
+        "bash_timeout_seconds": {
+          "default": 120,
+          "exclusiveMinimum": 0,
+          "title": "Bash Timeout Seconds",
+          "type": "integer"
+        },
         "defaults": {
           "default": true,
           "title": "Defaults",
@@ -387,6 +393,7 @@
     "tools": {
       "$ref": "#/$defs/RawTools",
       "default": {
+        "bash_timeout_seconds": 120,
         "defaults": true
       }
     },

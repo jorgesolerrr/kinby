@@ -98,6 +98,7 @@ class RawFeedback(_Section):
 
 class RawTools(_Section):
     defaults: bool = True
+    bash_timeout_seconds: Annotated[int, Field(gt=0)] = 120
 
 
 class RawBudgets(_Section):
@@ -230,7 +231,10 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         ),
         memory=Memory(recap=raw.memory.recap),
         feedback=Feedback(ask=raw.feedback.ask),
-        tools=Tools(defaults=raw.tools.defaults),
+        tools=Tools(
+            defaults=raw.tools.defaults,
+            bash_timeout_seconds=raw.tools.bash_timeout_seconds,
+        ),
         routines=Routines(timezone=ZoneInfo(raw.routines.timezone)),
         serve=raw.serve.listen if raw.serve is not None else None,
         budgets=Budgets(

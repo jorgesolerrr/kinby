@@ -59,7 +59,7 @@ def test_manifest_schema_accepts_the_tools_table() -> None:
     manifest = {
         "id": "locked-down",
         "models": {"main": "openai:gpt-5"},
-        "tools": {"defaults": False},
+        "tools": {"defaults": False, "bash_timeout_seconds": 300},
     }
 
     validate(instance=manifest, schema=manifest_schema())
@@ -310,3 +310,26 @@ def test_workspace_snapshots_default_on_and_load_from_the_manifest(tmp_path: Pat
         manifest.write("\n[workspace]\nsnapshots = false\n")
 
     assert load_instance(instance_path).manifest.workspace.snapshots is False
+
+
+def test_bash_timeout_defaults_to_120_and_loads_from_the_manifest(tmp_path: Path) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path, model="openai:gpt-5")
+
+    assert load_instance(instance_path).manifest.tools.bash_timeout_seconds == 120
+
+    with (instance_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+        manifest.write("\n[tools]\nbash_timeout_seconds = 5\n")
+
+    assert load_instance(instance_path).manifest.tools.bash_timeout_seconds == 5
+
+
+@pytest.mark.parametrize("value", ["0", "-1", '"long"'])
+def test_manifest_rejects_an_invalid_bash_timeout(tmp_path: Path, value: str) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path, model="openai:gpt-5")
+    with (instance_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+        manifest.write(f"\n[tools]\nbash_timeout_seconds = {value}\n")
+
+    with pytest.raises(ManifestError, match=r"tools\.bash_timeout_seconds"):
+        load_instance(instance_path)
