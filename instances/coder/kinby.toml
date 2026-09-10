@@ -12,6 +12,7 @@ source = "https://github.com/jorgesolerrr/kinby.git"
 [workspace.conventions]
 enabled = true
 instructions = ["AGENTS.md"]
+skills = [".claude/skills"]
 
 [memory]
 recap = "every-turn"
