@@ -19,6 +19,10 @@ The package scaffold is in place. Clone the repo, run `uv sync`, then `uv run ki
 
 Instance init, manifest parsing, and discovery are in place. The agent loop comes later.
 
+## Run an instance
+
+The reference deployment is Docker Compose: `compose.yaml` runs the instances under `instances/`, one container each. [`docs/container.md`](docs/container.md) has the container contract, the entrypoint, and the webhook setup for a coding instance.
+
 ## Validate `kinby.toml` in an editor
 
 Add this Taplo schema directive as the first line of `kinby.toml`:

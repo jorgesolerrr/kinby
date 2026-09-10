@@ -1,0 +1,2 @@
+# The container entrypoint must keep LF endings on every checkout.
+docker/entrypoint.sh text eol=lf

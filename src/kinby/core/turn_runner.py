@@ -11,7 +11,6 @@ from datetime import UTC, date, datetime
 from typing import Annotated, Protocol, cast
 from uuid import UUID, uuid4, uuid5
 
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -65,6 +64,7 @@ from kinby.core.errors import (
 from kinby.core.events import EventLog
 from kinby.core.gate import evaluate
 from kinby.core.model_calls import completed_model_call
+from kinby.core.models import init_model
 from kinby.core.pricing import price_map
 from kinby.core.prompt import (
     PromptSection,
@@ -201,7 +201,7 @@ class _PreparedTurn:
 
 
 def _init_model(model: str) -> ChatModel:
-    return cast(ChatModel, init_chat_model(model))
+    return cast(ChatModel, init_model(model))
 
 
 class LangGraphRunner:

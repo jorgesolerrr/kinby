@@ -11,7 +11,6 @@ from datetime import date
 from typing import TYPE_CHECKING, Protocol, cast
 from uuid import UUID
 
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field  # noqa: TID251 - model output boundary
 
@@ -31,6 +30,7 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.model_calls import completed_model_call
+from kinby.core.models import init_model
 from kinby.instance import Instance, RecapPolicy, reload_manifest
 from kinby.instance.recap import load_recap_lens
 from kinby.memory.facade import Episode, Memory, new_node_id
@@ -77,7 +77,7 @@ type RecapModelFactory = Callable[[str], RecapModel]
 
 
 def _init_model(model: str) -> RecapModel:
-    return cast(RecapModel, init_chat_model(model))
+    return cast(RecapModel, init_model(model))
 
 
 @dataclass(frozen=True)

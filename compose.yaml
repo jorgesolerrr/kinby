@@ -1,0 +1,21 @@
+# One service per instance directory under instances/.
+services:
+  coder:
+    build: .
+    command: serve
+    env_file: instances/coder/.env
+    volumes:
+      - ./instances/coder:/instance
+      # The workspace is a clone the entrypoint makes; a named volume keeps it at
+      # native speed instead of crossing the host bind mount on every file access.
+      - coder-workspace:/instance/workspace
+      # The `ant auth login` profile, so the Anthropic SDK needs no API key. The entrypoint
+      # copies it with the 0600 mode the SDK requires, which a Windows bind mount cannot carry.
+      # Windows keeps it in %APPDATA%\Anthropic; Linux and macOS in ~/.config/anthropic.
+      - ${ANTHROPIC_CONFIG_DIR:-${APPDATA:-~/.config}/Anthropic}:/anthropic-profile:ro
+    ports:
+      - "127.0.0.1:8787:8787"
+    restart: unless-stopped
+
+volumes:
+  coder-workspace:
