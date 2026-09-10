@@ -9,6 +9,8 @@ services:
       # The workspace is a clone the entrypoint makes; a named volume keeps it at
       # native speed instead of crossing the host bind mount on every file access.
       - coder-workspace:/instance/workspace
+      # Keep the container's Codex login separate from the host login.
+      - coder-codex:/root/.codex
       # The `ant auth login` profile, so the Anthropic SDK needs no API key. The entrypoint
       # copies it with the 0600 mode the SDK requires, which a Windows bind mount cannot carry.
       # Windows keeps it in %APPDATA%\Anthropic; Linux and macOS in ~/.config/anthropic.
@@ -18,4 +20,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  coder-codex:
   coder-workspace:
