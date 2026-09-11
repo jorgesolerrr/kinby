@@ -3,6 +3,7 @@
 import os
 import signal
 import subprocess
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +58,7 @@ def run_command(
     cwd: Path,
     timeout_seconds: float,
     stdin: str | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> CommandResult:
     """Run one command, killing its process group when its limit expires."""
     started_at = monotonic()
@@ -64,6 +66,7 @@ def run_command(
         process = subprocess.Popen(
             command,
             cwd=cwd,
+            env=env,
             stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
