@@ -197,7 +197,7 @@ banner "kinby coder: always-on deploy"
 stage "DNS: point a name at this box"
 public_ip=$(curl -fsS4 https://ifconfig.me 2>/dev/null || echo "<this box's IPv4>")
 say "Caddy needs a DNS name that resolves to this box before it can get a certificate."
-ENV_FILE=".env" ask KINBY_DOMAIN "Name for the coder (e.g. kinby.jorgesoler.dev):"
+ENV_FILE=".env" ask KINBY_DOMAIN "Name for the coder (e.g. kinby.jorgesolerrr.dev):"
 step "At your DNS provider, add an A record: ${KINBY_DOMAIN} -> ${public_ip}"
 note "The registrar for the domain is yours to open; the wizard cannot guess its URL."
 pause "Press Enter once the record is saved."
