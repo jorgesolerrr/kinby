@@ -46,4 +46,42 @@ if [ -n "${workspace_source:-}" ] && [ -z "$(ls -A "$workspace_path" 2>/dev/null
     git clone "$workspace_source" "$workspace_path"
 fi
 
+# Share the workspace's Claude skills with Codex. Codex config addresses one skill
+# directory at a time, while repository discovery uses .agents/skills.
+codex_home="${CODEX_HOME:-/root/.codex}"
+if [ -n "${workspace_path:-}" ]; then
+    python - "$workspace_path" "$codex_home" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+workspace = Path(sys.argv[1])
+codex_home = Path(sys.argv[2])
+shared_skills = workspace / ".claude" / "skills"
+if not shared_skills.is_dir():
+    sys.exit(0)
+
+config = codex_home / "config.toml"
+if not config.exists():
+    skill_directories = sorted(
+        skill_file.parent
+        for skill_file in shared_skills.glob("*/SKILL.md")
+        if skill_file.is_file()
+    )
+    entries = [
+        "[[skills.config]]\n"
+        f"path = {json.dumps(str(skill_directory))}\n"
+        "enabled = true"
+        for skill_directory in skill_directories
+    ]
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("\n\n".join(entries) + "\n", encoding="utf-8")
+
+codex_skills = workspace / ".agents" / "skills"
+if not codex_skills.exists() and not codex_skills.is_symlink():
+    codex_skills.parent.mkdir(parents=True, exist_ok=True)
+    codex_skills.symlink_to(Path("../.claude/skills"), target_is_directory=True)
+PY
+fi
+
 exec kinby "$@"

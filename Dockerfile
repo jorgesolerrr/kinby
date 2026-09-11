@@ -1,15 +1,20 @@
 FROM python:3.14-slim
 
 ARG GH_VERSION=2.82.1
+ARG CLAUDE_CODE_VERSION=2.1.268
+ARG CODEX_VERSION=0.154.0
 
 # Workspace snapshots run git against a shadow repository under the instance.
 # A coding workspace also needs gh (issues, pull requests) and uv (its own checks).
 RUN apt-get update \
-    && apt-get install --no-install-recommends --yes ca-certificates curl git \
+    && apt-get install --no-install-recommends --yes ca-certificates curl git nodejs npm \
     && rm -rf /var/lib/apt/lists/* \
     && arch="$(dpkg --print-architecture)" \
     && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz" \
-        | tar -xz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_${arch}/bin/gh"
+        | tar -xz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_${arch}/bin/gh" \
+    && npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+        "@openai/codex@${CODEX_VERSION}" \
+    && npm cache clean --force
 COPY --from=ghcr.io/astral-sh/uv:0.8.17 /uv /usr/local/bin/uv
 # uv uses the image's Python instead of downloading one.
 ENV UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy
@@ -22,7 +27,7 @@ RUN pip install --no-cache-dir .
 COPY docker/entrypoint.sh /usr/local/bin/kinby-entrypoint
 RUN chmod +x /usr/local/bin/kinby-entrypoint
 
-ENV KINBY_INSTANCE=/instance
+ENV DISABLE_AUTOUPDATER=1 KINBY_INSTANCE=/instance
 VOLUME ["/instance"]
 
 ENTRYPOINT ["kinby-entrypoint"]
