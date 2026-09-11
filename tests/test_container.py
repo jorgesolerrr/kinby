@@ -84,6 +84,12 @@ def test_image_runs_a_mounted_instance_with_the_container_contract() -> None:
         assert "path: /instance" in result.stdout
         assert "matching rule: KINBY_INSTANCE" in result.stdout
         assert result.stderr == ""
+
+        without_manifest = _docker("run", "--rm", image, "--version", check=False)
+
+        assert without_manifest.returncode == 0
+        assert without_manifest.stdout.startswith("kinby ")
+        assert without_manifest.stderr == ""
     finally:
         _docker("image", "rm", "--force", image, check=False)
 

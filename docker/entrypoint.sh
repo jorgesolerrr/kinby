@@ -49,7 +49,8 @@ fi
 # Share the workspace's Claude skills with Codex. Codex config addresses one skill
 # directory at a time, while repository discovery uses .agents/skills.
 codex_home="${CODEX_HOME:-/root/.codex}"
-python - "$workspace_path" "$codex_home" <<'PY'
+if [ -n "${workspace_path:-}" ]; then
+    python - "$workspace_path" "$codex_home" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -81,5 +82,6 @@ if not codex_skills.exists() and not codex_skills.is_symlink():
     codex_skills.parent.mkdir(parents=True, exist_ok=True)
     codex_skills.symlink_to(Path("../.claude/skills"), target_is_directory=True)
 PY
+fi
 
 exec kinby "$@"
