@@ -170,7 +170,20 @@ print(path.read_text(encoding="utf-8"))
             common
             + """with Path(os.environ["FACTORY_COMMAND_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(record) + "\\n")
-if " ".join(arguments).startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failure configured")):
+joined = " ".join(arguments)
+fail_once = os.environ.get("FAKE_COMMAND_FAIL_ONCE", "no one-shot failure configured")
+records = [
+    json.loads(line)
+    for line in Path(os.environ["FACTORY_COMMAND_LOG"]).read_text(encoding="utf-8").splitlines()
+]
+matching_calls = sum(
+    item["command"] == record["command"]
+    and " ".join(item["arguments"]).startswith(fail_once)
+    for item in records
+)
+if joined.startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failure configured")) or (
+    joined.startswith(fail_once) and matching_calls == 1
+):
     print(f"{record['command']} exploded", file=sys.stderr)
     raise SystemExit(7)
 """,
@@ -785,6 +798,61 @@ def test_failing_check_reports_output_and_relabels_issue(
         "--add-label",
         "ready-for-human",
     ]
+
+
+def test_check_fix_is_reviewed_before_the_pull_request_opens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_COMMAND_FAIL_ONCE", "run ruff check .")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "opened"
+    assert report["check_fix"] is not None
+    rounds = _mapping(report["review"])["rounds"]
+    assert isinstance(rounds, list)
+    assert len(rounds) == 2
+    records = _records(log)
+    assert len([record for record in records if record["command"] == "claude"]) == 4
+    last_check = max(index for index, record in enumerate(records) if record["command"] == "uv")
+    final_reviews = [
+        index
+        for index, record in enumerate(records)
+        if record["command"] == "claude" and index > last_check
+    ]
+    assert len(final_reviews) == 2
+    create_index = next(
+        index
+        for index, record in enumerate(records)
+        if record["command"] == "gh" and _arguments(record)[:2] == ["pr", "create"]
+    )
+    assert max(final_reviews) < create_index
 
 
 @pytest.mark.parametrize(

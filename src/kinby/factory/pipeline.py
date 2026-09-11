@@ -14,6 +14,7 @@ from kinby.factory.clients import (
     Findings,
     ReasoningEffort,
     fix_with_codex,
+    review_with_claude,
     run_codex,
 )
 from kinby.factory.process import CommandError
@@ -35,7 +36,7 @@ from kinby.factory.repository import (
     PullRequestUrl,
     RepositoryResponseError,
 )
-from kinby.factory.review import ReviewLoop, run_review_loop
+from kinby.factory.review import ReviewLoop, ReviewRound, run_review_loop
 from kinby.factory.scan import oldest_eligible_issue, payload_can_change_eligibility
 from kinby.plugins import ToolContext, tool
 
@@ -174,6 +175,17 @@ def implement_ready_issue(
             except RepositoryCheckFailed as retry_error:
                 checks = ChecksFailed(failed=" ".join(retry_error.command))
                 raise
+            final_review = review_with_claude(
+                context.workspace,
+                base_branch=base_branch,
+                ticket_body=repository.issue_body(issue.number),
+                model=reviewer_model,
+                timeout_seconds=review_timeout_seconds,
+            )
+            review = ReviewLoop(
+                (*review.rounds, ReviewRound(len(review.rounds) + 1, final_review, None)),
+                final_review.findings,
+            )
         pull_request_url = open_pull_request(
             repository,
             context.workspace,
