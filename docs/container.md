@@ -70,9 +70,33 @@ The `coder` instance listens on `127.0.0.1:8787`. Its `implement-ready-issue` ro
 A local box has no public URL for GitHub to call. Forward the repository's webhook deliveries with the gh webhook extension (`gh extension install cli/gh-webhook`), using the same secret as the instance:
 
 ```sh
-gh webhook forward --repo jorgesolerrr/kinby --events issues,pull_request \
-  --url http://localhost:8787/signals/implement-ready-issue \
-  --secret "$GITHUB_WEBHOOK_SECRET"
+gh webhook forward --repo jorgesolerrr/kinby --events issues,pull_request   --url http://localhost:8787/signals/implement-ready-issue   --secret "$GITHUB_WEBHOOK_SECRET"
 ```
 
-The forwarder registers a temporary webhook and relays deliveries while it runs. An always-on box registers a permanent repository webhook for both `issues` and `pull_request` events. Point that webhook at the instance's public address.
+The forwarder registers a temporary webhook and relays deliveries while it runs. An always-on box registers a permanent webhook instead, as described next.
+
+## Always-on box
+
+`compose.public.yaml` adds Caddy in front of the coder. Caddy obtains a certificate for `KINBY_DOMAIN`, read from a `.env` next to `compose.yaml`, and proxies to the receiver. The box needs a public IPv4 address, a DNS `A` record for that name, and ports 80 and 443 open. [ADR 0030](adr/0030-the-coder-runs-on-a-public-box-behind-caddy.md) records the deploy decisions.
+
+```sh
+echo KINBY_DOMAIN=kinby.example.com > .env
+docker compose -f compose.yaml -f compose.public.yaml up --build --detach
+curl -fsS "https://$KINBY_DOMAIN/health"
+```
+
+On a box without an `ant auth login` profile, set `ANTHROPIC_API_KEY` in the instance `.env`; the profile mount then stays empty and the entrypoint leaves it alone. The instance `.env` also needs `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `GITHUB_WEBHOOK_SECRET`, and the commit identity. `scripts/deploy-wizard.sh` walks through every value, starts the stack, registers the permanent webhook, and signs Codex in. Run it on the box from the repository root.
+
+Register the permanent webhook by hand with the same secret as the instance:
+
+```sh
+gh api --method POST repos/jorgesolerrr/kinby/hooks   -f name=web -F active=true -f 'events[]=issues' -f 'events[]=pull_request'   -f "config[url]=https://$KINBY_DOMAIN/signals/implement-ready-issue"   -f config[content_type]=json -f "config[secret]=$GITHUB_WEBHOOK_SECRET"
+```
+
+`docker/update.sh` keeps the box on main. It fetches, exits when nothing changed, defers while a coding client is running inside the coder, and otherwise fast-forwards and rebuilds. Run it from cron:
+
+```
+30 * * * * /home/jorge/dev/kinby/docker/update.sh >> /home/jorge/kinby-update.log 2>&1
+```
+
+A restart, whether from the update script or from the box rebooting, starts the hourly catch-up scan a few seconds later. Any stale `ready-for-agent` label becomes a run, so the label means what it says.
