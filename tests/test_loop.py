@@ -32,7 +32,7 @@ from kinby.core.events import EventLog
 from kinby.core.snapshots import SNAPSHOTS_DIR
 from kinby.core.turn_runner import ChatModel
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome, TurnRequest
-from kinby.instance import Budgets, Instance, load_instance
+from kinby.instance import Budgets, Instance, ModelName, load_instance
 from tests.helpers import GRAPH_EVENT_TIMEOUT
 
 _MODEL = "openai:gpt-5"
@@ -317,7 +317,7 @@ async def _budget_session(
 
 async def _capture_two_call_turn(
     tmp_path: Path,
-    model_name: str,
+    model_name: ModelName,
 ) -> CapturingTwoCallChatModel:
     model = CapturingTwoCallChatModel()
     runner = LangGraphRunner(_load_test_instance(tmp_path), model_factory=lambda _: model)

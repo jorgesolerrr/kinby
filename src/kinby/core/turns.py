@@ -72,7 +72,7 @@ from kinby.core.snapshots import (
     snapshot_ref,
 )
 from kinby.core.threads import ThreadStore
-from kinby.instance import Budgets
+from kinby.instance import Budgets, ModelName
 from kinby.instance.permissions import constrain_mode, exceeds_ceiling
 
 logger = logging.getLogger(__name__)
@@ -86,7 +86,7 @@ class TurnRequest:
     thread_id: UUID
     turn_id: UUID
     message: str
-    model: str
+    model: ModelName
     permission_mode: PermissionMode
     origin: Origin = field(default_factory=UserOrigin)
 
@@ -109,7 +109,7 @@ class PreparedTurnRequest(TurnRequest):
 
 @dataclass(frozen=True)
 class TurnPreparation:
-    model: str
+    model: ModelName
     default_mode: PermissionMode
     ceiling: PermissionMode
     prompt_version: PromptVersion
