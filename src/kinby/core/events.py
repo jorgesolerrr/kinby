@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, Callable, Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -33,12 +33,15 @@ class EventLog:
         payload: Payload,
     ) -> Event:
         async with self._lock:
+            timestamp = self._clock()
+            if timestamp.utcoffset() is None:
+                raise ValueError("Event clock must return a timezone-aware timestamp")
             event = Event(
                 sequence=len(self.stored(thread_id)) + 1,
                 thread_id=thread_id,
                 turn_id=turn_id,
                 payload=payload,
-                timestamp=self._clock(),
+                timestamp=timestamp.astimezone(UTC),
             )
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8") as records:
