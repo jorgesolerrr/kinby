@@ -568,9 +568,9 @@ def test_agent_pull_request_wake_stacks_a_sub_issue_on_its_sibling(
         "-H",
         "X-GitHub-Api-Version: 2026-03-10",
         "repos/{owner}/{repo}/stacks",
-        "-f",
+        "-F",
         "pull_requests[]=20",
-        "-f",
+        "-F",
         "pull_requests[]=24",
     ]
 
@@ -725,7 +725,7 @@ def test_sub_issue_extends_the_stack_from_its_most_recent_sibling(
         "-H",
         "X-GitHub-Api-Version: 2026-03-10",
         "repos/{owner}/{repo}/stacks/42/add",
-        "-f",
+        "-F",
         "pull_requests[]=24",
     ]
 
