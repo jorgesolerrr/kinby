@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import get_ident
@@ -888,8 +889,9 @@ def test_catch_up_queues_oldest_turns_before_a_newly_closed_turn(tmp_path: Path)
 
 def test_completed_tool_turn_writes_trace_episode_and_marker(tmp_path: Path) -> None:
     async def scenario() -> None:
+        event_time = datetime(2026, 9, 10, 23, 30, tzinfo=UTC)
         state_dir = tmp_path / ".state"
-        event_log = EventLog(state_dir)
+        event_log = EventLog(state_dir, clock=lambda: event_time)
         recap = _trace_only_writer(tmp_path, event_log, GraphStore(tmp_path))
         dispatcher = build_dispatcher(
             state_dir,
@@ -930,10 +932,14 @@ def test_completed_tool_turn_writes_trace_episode_and_marker(tmp_path: Path) -> 
             model="openai:main",
         )
         assert marker_event.payload.node is not None
+        first_event = events[0]
+        assert isinstance(first_event, Event)
+        assert isinstance(first_event.payload, TurnStarted)
+        assert first_event.timestamp == event_time
         episode_path = tmp_path / "memory" / "graph" / f"{marker_event.payload.node}.md"
         assert episode_path.read_text(encoding="utf-8") == (
             "---\n"
-            f"date: {marker_event.timestamp.date().isoformat()}\n"
+            f"date: {event_time.date().isoformat()}\n"
             f"thread: {created.id}\n"
             f"turn: {accepted.turn_id}\n"
             'description: "Check the trip weather"\n'

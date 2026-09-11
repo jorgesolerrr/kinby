@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import AsyncGenerator, Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
 from kinby.contracts import Event, Payload
+from kinby.core.clock import utc_now
 
 _EVENTS_NAME = "events.jsonl"
 
 
 class EventLog:
-    def __init__(self, state_dir: Path) -> None:
+    def __init__(
+        self,
+        state_dir: Path,
+        *,
+        clock: Callable[[], datetime] = utc_now,
+    ) -> None:
         self._path = state_dir / _EVENTS_NAME
+        self._clock = clock
         self._lock = asyncio.Lock()
         self._subscribers: dict[UUID, set[asyncio.Queue[Event]]] = {}
 
@@ -26,12 +33,15 @@ class EventLog:
         payload: Payload,
     ) -> Event:
         async with self._lock:
+            timestamp = self._clock()
+            if timestamp.utcoffset() is None:
+                raise ValueError("Event clock must return a timezone-aware timestamp")
             event = Event(
                 sequence=len(self.stored(thread_id)) + 1,
                 thread_id=thread_id,
                 turn_id=turn_id,
                 payload=payload,
-                timestamp=datetime.now(UTC),
+                timestamp=timestamp.astimezone(UTC),
             )
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8") as records:

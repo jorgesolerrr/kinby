@@ -1,8 +1,10 @@
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
+
+import pytest
 
 from kinby.contracts import (
     Delivery,
@@ -29,6 +31,38 @@ STARTED = TurnStarted(
     model="openai:gpt-5",
     permission_mode=PermissionMode.ASK,
 )
+
+
+def test_event_clock_rejects_naive_timestamps_before_persisting(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        event_log = EventLog(tmp_path, clock=lambda: datetime(2026, 9, 11))
+
+        with pytest.raises(ValueError, match="timezone-aware"):
+            await event_log.append(thread_id, uuid4(), STARTED)
+
+        assert event_log.stored(thread_id) == []
+        assert not (tmp_path / "events.jsonl").exists()
+
+    asyncio.run(scenario())
+
+
+def test_event_clock_normalizes_aware_timestamps_to_utc(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        local_time = datetime(2026, 9, 10, 23, 30, tzinfo=timezone(timedelta(hours=-5)))
+        event_log = EventLog(tmp_path, clock=lambda: local_time)
+
+        event = await event_log.append(thread_id, uuid4(), STARTED)
+
+        expected = datetime(2026, 9, 11, 4, 30, tzinfo=UTC)
+        assert event.timestamp == expected
+        assert event.timestamp.tzinfo is UTC
+        stored = EventLog(tmp_path).stored(thread_id)
+        assert stored == [event]
+        assert stored[0].timestamp.isoformat() == "2026-09-11T04:30:00+00:00"
+
+    asyncio.run(scenario())
 
 
 def test_tool_and_warning_events_round_trip_through_the_event_log(tmp_path: Path) -> None:

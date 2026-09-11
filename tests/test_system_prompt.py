@@ -22,6 +22,12 @@ from kinby.instance import load_instance
 from kinby.plugins.skills import load_skills
 from tests.helpers import GRAPH_EVENT_TIMEOUT
 
+_FIXED_TODAY = date(2026, 8, 28)
+
+
+def _fixed_today() -> date:
+    return _FIXED_TODAY
+
 
 class MutableDate:
     current = date(2026, 8, 28)
@@ -96,7 +102,11 @@ def test_model_receives_prompt_sections_in_order_with_environment_last(
     async def scenario() -> None:
         instance = load_instance(_instance_with_prompt_files(tmp_path))
         model = ScriptedModel()
-        runner = LangGraphRunner(instance, model_factory=lambda _: model)
+        runner = LangGraphRunner(
+            instance,
+            model_factory=lambda _: model,
+            today=_fixed_today,
+        )
         dispatcher = build_dispatcher(
             instance.manifest.state_dir,
             turns=TurnConfig(
@@ -132,7 +142,7 @@ def test_model_receives_prompt_sections_in_order_with_environment_last(
             "persona name: Ada\n"
             f"workspace path: {instance.manifest.workspace.path}\n"
             "main model: openai:gpt-5\n"
-            f"date: {date.today().isoformat()}"
+            "date: 2026-08-28"
         )
 
     asyncio.run(scenario())
@@ -268,6 +278,7 @@ def test_prepared_prompt_does_not_drift_before_the_model_runs(tmp_path: Path) ->
             instance,
             event_log=event_log,
             model_factory=lambda _: model,
+            today=_fixed_today,
         )
 
         def prepare_for_turn() -> TurnPreparation:
@@ -285,7 +296,7 @@ def test_prepared_prompt_does_not_drift_before_the_model_runs(tmp_path: Path) ->
             ),
         )
         skills, _ = load_skills(instance)
-        expected_version = prompt_version(assemble_system_prompt(instance, skills, date.today()))
+        expected_version = prompt_version(assemble_system_prompt(instance, skills, _FIXED_TODAY))
 
         await _start_turn(dispatcher, "Hello")
 
@@ -316,7 +327,11 @@ def test_missing_optional_files_leave_core_sections(
         )
         instance = load_instance(instance_path)
         model = ScriptedModel()
-        runner = LangGraphRunner(instance, model_factory=lambda _: model)
+        runner = LangGraphRunner(
+            instance,
+            model_factory=lambda _: model,
+            today=_fixed_today,
+        )
         dispatcher = build_dispatcher(
             instance.manifest.state_dir,
             turns=TurnConfig(
@@ -340,7 +355,7 @@ def test_missing_optional_files_leave_core_sections(
             "instance id: bare\n"
             f"workspace path: {instance.manifest.workspace.path}\n"
             "main model: openai:gpt-5\n"
-            f"date: {date.today().isoformat()}"
+            "date: 2026-08-28"
         )
 
     asyncio.run(scenario())

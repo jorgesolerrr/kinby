@@ -31,6 +31,7 @@ from kinby.contracts import (
     SignalSummary,
     accepted,
 )
+from kinby.core.clock import utc_now
 from kinby.core.errors import BudgetExceeded, InstanceBusy, ModelUnpriced, RoutineNotFound
 from kinby.core.events import EventLog
 from kinby.core.routine_history import RoutineHistory, routine_history
@@ -38,10 +39,6 @@ from kinby.core.threads import ThreadStore
 from kinby.core.turns import Turns
 from kinby.instance import Instance
 from kinby.plugins.routines import Routine, disable_routine, load_routine, load_routines
-
-
-def utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 @dataclass(frozen=True)

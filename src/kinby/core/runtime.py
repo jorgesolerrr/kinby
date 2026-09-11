@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
+from kinby.core.clock import utc_now
 from kinby.core.dispatcher import (
     ScheduledDispatcher,
     ScheduledTurnConfig,
@@ -13,7 +14,7 @@ from kinby.core.dispatcher import (
     turn_config,
 )
 from kinby.core.events import EventLog
-from kinby.core.scheduler import Scheduler, SchedulerConfig, utc_now
+from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.instance import Instance
 from kinby.memory import RecapWriter
 

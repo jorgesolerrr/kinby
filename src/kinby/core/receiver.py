@@ -10,8 +10,9 @@ from collections.abc import Awaitable, Callable, Mapping
 from aiohttp import web
 
 from kinby.contracts import Delivery, DeliveryId, RoutineName, RoutineTrigger
+from kinby.core.clock import utc_now
 from kinby.core.errors import RoutineNotFound
-from kinby.core.scheduler import Scheduler, utc_now
+from kinby.core.scheduler import Scheduler
 from kinby.instance import Instance, Serve
 from kinby.plugins.routines import (
     Routine,

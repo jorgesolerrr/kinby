@@ -51,6 +51,7 @@ from kinby.contracts import (
     gate_denial_source,
 )
 from kinby.core.budgets import DailyBudget, daily_cost
+from kinby.core.clock import utc_today
 from kinby.core.errors import (
     BudgetExceeded,
     CodeStepFailed,
@@ -213,7 +214,7 @@ class LangGraphRunner:
         model_factory: ModelFactory = _init_model,
         model_override: str | None = None,
         gate_policy: GatePolicy | None = None,
-        today: Callable[[], date] = date.today,
+        today: Callable[[], date] = utc_today,
     ) -> None:
         self._instance = instance
         self._event_log = (
@@ -253,7 +254,7 @@ class LangGraphRunner:
                 cost=daily_cost(
                     self._event_log.all_events(),
                     prices,
-                    datetime.now(UTC).date(),
+                    self._today(),
                 ),
                 unpriced_model=(
                     UnpricedModel(manifest.models.main)
@@ -356,7 +357,9 @@ class LangGraphRunner:
         emit = context.emit
         skills, skill_warnings = load_skills(self._instance)
         discovered_tools, tool_warnings = self._tools.refresh()
-        tools, core_tool_warnings = discovered_tools.with_core(*core_tools(self._instance, skills))
+        tools, core_tool_warnings = discovered_tools.with_core(
+            *core_tools(self._instance, skills, today=self._today)
+        )
         for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
             await emit(warning)
         prepared = await self._prepare_turn(turn, graph_input, tools, progress, emit)
