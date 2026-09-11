@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import date
 
 from kinby.contracts import NodeId
+from kinby.core.clock import utc_today
 from kinby.memory.facade import Episode, Fact, Memory, MemoryNode, new_node_id
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 
-def memory_tools(memory: Memory) -> tuple[Tool, ...]:
+def memory_tools(
+    memory: Memory,
+    *,
+    today: Callable[[], date] = utc_today,
+) -> tuple[Tool, ...]:
     """Build the core tools for one memory facade."""
 
     @tool(write=False)
@@ -45,7 +51,7 @@ def memory_tools(memory: Memory) -> tuple[Tool, ...]:
         context: ToolContext,
     ) -> str:
         """Remember one fact learned in this thread."""
-        learned_on = date.today()
+        learned_on = today()
         node = new_node_id(learned_on, description)
         return memory.remember(
             Fact(

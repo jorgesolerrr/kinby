@@ -11,7 +11,6 @@ import signal
 import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import date
 from importlib.metadata import version
 from pathlib import Path
 from uuid import UUID
@@ -49,6 +48,7 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core import Dispatcher, assemble_system_prompt, boot_instance, build_dispatcher
+from kinby.core.clock import utc_today
 from kinby.core.receiver import Receiver
 from kinby.core.stats import stats_summary
 from kinby.instance import (
@@ -120,7 +120,7 @@ def _print_instance(instance: Instance) -> None:
 
 def _print_turn_inputs(instance: Instance) -> None:
     skills, skill_warnings = load_skills(instance)
-    sections = assemble_system_prompt(instance, skills, date.today())
+    sections = assemble_system_prompt(instance, skills, utc_today())
     registry = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults)
     discovered_tools, tool_warnings = registry.refresh()
     tools, core_tool_warnings = discovered_tools.with_core(*core_tools(instance, skills))

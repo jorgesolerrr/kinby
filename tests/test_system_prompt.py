@@ -15,6 +15,7 @@ from kinby.core import (
     build_dispatcher,
     prompt_version,
 )
+from kinby.core.clock import utc_today
 from kinby.core.dispatcher import Dispatcher
 from kinby.core.events import EventLog
 from kinby.core.turns import TurnPreparation
@@ -132,7 +133,7 @@ def test_model_receives_prompt_sections_in_order_with_environment_last(
             "persona name: Ada\n"
             f"workspace path: {instance.manifest.workspace.path}\n"
             "main model: openai:gpt-5\n"
-            f"date: {date.today().isoformat()}"
+            f"date: {utc_today().isoformat()}"
         )
 
     asyncio.run(scenario())
@@ -285,7 +286,7 @@ def test_prepared_prompt_does_not_drift_before_the_model_runs(tmp_path: Path) ->
             ),
         )
         skills, _ = load_skills(instance)
-        expected_version = prompt_version(assemble_system_prompt(instance, skills, date.today()))
+        expected_version = prompt_version(assemble_system_prompt(instance, skills, utc_today()))
 
         await _start_turn(dispatcher, "Hello")
 
@@ -340,7 +341,7 @@ def test_missing_optional_files_leave_core_sections(
             "instance id: bare\n"
             f"workspace path: {instance.manifest.workspace.path}\n"
             "main model: openai:gpt-5\n"
-            f"date: {date.today().isoformat()}"
+            f"date: {utc_today().isoformat()}"
         )
 
     asyncio.run(scenario())

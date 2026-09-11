@@ -207,6 +207,7 @@ def test_model_walks_search_then_open_without_approval(
 
 def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None:
     async def scenario() -> None:
+        learned_on = date(2026, 9, 10)
         instance = _empty_instance(tmp_path)
         events_path = instance.manifest.state_dir / "events.jsonl"
         events_path.write_bytes(b"canonical transcript\n")
@@ -242,7 +243,11 @@ def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None
                 AIMessageChunk(content="You prefer small modules."),
             ]
         )
-        runner = LangGraphRunner(instance, model_factory=lambda _: model)
+        runner = LangGraphRunner(
+            instance,
+            model_factory=lambda _: model,
+            today=lambda: learned_on,
+        )
         preparation = runner.prepare_for_turn()
         thread_id = uuid4()
         turn_id = uuid4()
@@ -280,7 +285,7 @@ def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None
         assert len(hits) == 1
         remembered = GraphStore(instance.path).open(hits[0].node)
         assert isinstance(remembered, Fact)
-        assert remembered.date == date.today()
+        assert remembered.date == learned_on
         assert remembered.thread == thread_id
         assert remembered.description == "Jorge prefers small modules"
         assert remembered.subjects == ("Jorge", "coding preferences")
