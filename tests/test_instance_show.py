@@ -1,4 +1,5 @@
 import os
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -772,6 +773,30 @@ def remember(note: str) -> str:
     assert "  environment: runtime (" in captured.out
     assert "warnings:\n" in captured.out
     assert f"  {broken_tool}: SyntaxError:" in captured.out
+    assert captured.err == ""
+
+
+def test_instance_show_uses_the_supplied_date_for_turn_inputs(tmp_path, capsys):
+    formatted_dates: list[date] = []
+
+    class ObservedDate(date):
+        def isoformat(self) -> str:
+            formatted_dates.append(self)
+            return super().isoformat()
+
+    instance = tmp_path / "alice"
+    _write_instance(instance, "alice")
+    fixed_today = ObservedDate(2026, 8, 28)
+
+    def today() -> date:
+        return fixed_today
+
+    exit_code = main(["instance", "show", str(instance)], today=today)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert formatted_dates == [fixed_today]
+    assert "  environment: runtime (" in captured.out
     assert captured.err == ""
 
 

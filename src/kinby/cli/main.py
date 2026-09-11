@@ -11,6 +11,7 @@ import signal
 import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from datetime import date
 from importlib.metadata import version
 from pathlib import Path
 from uuid import UUID
@@ -118,9 +119,9 @@ def _print_instance(instance: Instance) -> None:
     print(f"state dir: {manifest.state_dir}")
 
 
-def _print_turn_inputs(instance: Instance) -> None:
+def _print_turn_inputs(instance: Instance, today: date) -> None:
     skills, skill_warnings = load_skills(instance)
-    sections = assemble_system_prompt(instance, skills, utc_today())
+    sections = assemble_system_prompt(instance, skills, today)
     registry = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults)
     discovered_tools, tool_warnings = registry.refresh()
     tools, core_tool_warnings = discovered_tools.with_core(*core_tools(instance, skills))
@@ -513,7 +514,11 @@ def _read_routine_payload(path: Path) -> RoutinePayload:
     return RoutinePayload(body=body, content_type=content_type)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    today: Callable[[], date] = utc_today,
+) -> int:
     parser = argparse.ArgumentParser(prog="kinby")
     parser.set_defaults(verbose=False)
     parser.add_argument(
@@ -649,7 +654,7 @@ def main(argv: list[str] | None = None) -> int:
             case "instance" if args.instance_command == "show":
                 instance = _load_selected_instance(args)
                 _print_instance(instance)
-                _print_turn_inputs(instance)
+                _print_turn_inputs(instance, today())
                 return 0
             case "run":
                 instance = _load_selected_instance(args, model_override=args.model)
