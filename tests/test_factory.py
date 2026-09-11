@@ -1396,3 +1396,145 @@ def test_fix_run_uses_the_fix_limit(
     codex_runs = [record for record in _records(log) if record["command"] == "codex"]
     assert len(codex_runs) == 2
     assert "resume" in _arguments(codex_runs[1])
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "**No findings**\n\n**Reviewer**: Claude, origin/main, 0 hard / 0 suggestion. Clean\n",
+        "No findings.\n",
+    ],
+)
+def test_decorated_no_findings_answer_opens_a_clean_pull_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    answer: str,
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    (tmp_path / "canned" / "review-standards.md").write_text(answer, encoding="utf-8")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "opened"
+    assert _mapping(_mapping(report["review"])["open_findings"])["hard"] == []
+    codex_runs = [record for record in _records(log) if record["command"] == "codex"]
+    assert len(codex_runs) == 1
+    prompts = [_text(record, "stdin") for record in _records(log) if record["command"] == "claude"]
+    assert len(prompts) == 2
+    assert all(
+        "Do not add headings, a summary, or a Reviewer line." in prompt for prompt in prompts
+    )
+
+
+def test_bold_review_tag_resumes_codex_like_a_plain_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    canned = tmp_path / "canned"
+    (canned / "review-standards-0.md").write_text(
+        "## Standards\n\n- **[hard]** src/example.py:12 violates CODING-STANDARD.md\n\n"
+        "**Reviewer**: Claude, 1 hard / 0 suggestion. Not clean\n",
+        encoding="utf-8",
+    )
+    (canned / "review-standards-1.md").write_text("No findings", encoding="utf-8")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "opened"
+    rounds = _mapping(report["review"])["rounds"]
+    assert isinstance(rounds, list)
+    assert _mapping(rounds[0])["hard_count"] == 1
+    codex_runs = [record for record in _records(log) if record["command"] == "codex"]
+    assert len(codex_runs) == 2
+    assert "src/example.py:12 violates CODING-STANDARD.md" in _text(codex_runs[1], "stdin")
+
+
+def test_untagged_review_answer_fails_with_an_excerpt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    _fake_clients(tmp_path, monkeypatch)
+    (tmp_path / "canned" / "review-standards.md").write_text(
+        "I could not resolve the fixed point,\nso the review did not run.\n",
+        encoding="utf-8",
+    )
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "failed"
+    assert str(report["failure_reason"]).startswith(
+        "Claude review returned no tagged findings: I could not resolve the fixed point, so"
+    )

@@ -16,7 +16,17 @@ TICKET_BODY = Path(".scratch/factory-ticket.md")
 CodexModel = NewType("CodexModel", str)
 ClaudeModel = NewType("ClaudeModel", str)
 CodexThreadId = NewType("CodexThreadId", str)
-_FINDING = re.compile(r"^\s*(?:[-*]\s*)?\[(hard|suggestion)\]\s*(.+)$", re.IGNORECASE)
+_EMPHASIS = r"(?:\*\*|__|`)?"
+_FINDING = re.compile(
+    rf"^\s*(?:[-*+]\s*)?{_EMPHASIS}\[(hard|suggestion)\]{_EMPHASIS}\s*(.+)$",
+    re.IGNORECASE,
+)
+_NO_FINDINGS = re.compile(r"^[\s*_`]*no findings[\s*_`.!]*$", re.IGNORECASE)
+_REVIEW_EXCERPT_CHARACTERS = 400
+_ANSWER_SHAPE = (
+    "Answer with the findings only, one per line, plain tags without Markdown emphasis. "
+    "Do not add headings, a summary, or a Reviewer line.\n"
+)
 
 
 class ReasoningEffort(StrEnum):
@@ -240,6 +250,7 @@ def _standards_prompt(workspace: Path, base_branch: str) -> str:
         "baseline smell as [suggestion]. Start every finding with its tag and path:line. "
         "Skip anything tooling enforces. Keep the answer under 400 words. If there are "
         "no findings, answer exactly: No findings\n"
+        f"{_ANSWER_SHAPE}"
     )
 
 
@@ -256,13 +267,12 @@ def _spec_prompt(workspace: Path, base_branch: str, ticket_path: Path) -> str:
         "Report missing, extra, or wrongly implemented requirements. Tag every finding "
         "[hard] and start it with path:line. Quote the ticket requirement. Keep the answer "
         "under 400 words. If there are no findings, answer exactly: No findings\n"
+        f"{_ANSWER_SHAPE}"
     )
 
 
 def _findings(source: str) -> Findings:
     body = source.strip()
-    if body == "No findings":
-        return Findings((), (), body)
     hard: list[str] = []
     suggestions: list[str] = []
     for line in body.splitlines():
@@ -271,9 +281,12 @@ def _findings(source: str) -> Findings:
             continue
         target = hard if match.group(1).lower() == "hard" else suggestions
         target.append(match.group(2).strip())
-    if not hard and not suggestions:
-        raise CodingClientError("Claude review returned no tagged findings")
-    return Findings(tuple(hard), tuple(suggestions), body)
+    if hard or suggestions:
+        return Findings(tuple(hard), tuple(suggestions), body)
+    if any(_NO_FINDINGS.match(line) for line in body.splitlines()):
+        return Findings((), (), body)
+    excerpt = " ".join(body.split())[:_REVIEW_EXCERPT_CHARACTERS] or "empty output"
+    raise CodingClientError(f"Claude review returned no tagged findings: {excerpt}")
 
 
 def _clear_pr_body(workspace: Path) -> None:
