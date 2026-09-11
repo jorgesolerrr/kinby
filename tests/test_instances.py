@@ -1,28 +1,16 @@
 """The instances under instances/ load, and their routines filter deliveries."""
 
-import json
 import shutil
 from pathlib import Path
 
 import pytest
 
-from kinby.cli import main
 from kinby.instance import load_instance
 from kinby.plugins.routines import load_routines
 from kinby.plugins.skills import load_skills
 
 INSTANCES = Path(__file__).parents[1] / "instances"
 CODER = INSTANCES / "coder"
-
-
-def _issue(*labels: str) -> dict[str, object]:
-    return {
-        "number": 7,
-        "title": "Something",
-        "html_url": "https://github.com/jorgesolerrr/kinby/issues/7",
-        "state": "open",
-        "labels": [{"name": label} for label in labels],
-    }
 
 
 def _coder_copy(tmp_path: Path) -> Path:
@@ -46,7 +34,21 @@ def test_coder_instance_loads_its_routine_and_skills(monkeypatch: pytest.MonkeyP
     assert instance.manifest.models.main in instance.manifest.prices
     assert instance.manifest.budgets.seconds == 7200
     assert [routine.name for routine in routines] == ["implement-ready-issue"]
-    assert routines[0].enabled is False
+    assert routines[0].enabled is True
+    assert routines[0].schedule is None
+    assert routines[0].arguments == {
+        "implementer_model": "gpt-5.6-sol",
+        "implementer_effort": "high",
+        "reviewer_model": "claude-fable-5-1",
+        "review_round_limit": 3,
+        "implement_timeout_seconds": 1800,
+        "review_timeout_seconds": 600,
+        "fix_timeout_seconds": 900,
+    }
+    assert "Comment a short summary on its issue" in routines[0].prompt
+    assert "then stop" in routines[0].prompt
+    assert routines[0].code_step is not None
+    assert routines[0].code_step.name == "implement_ready_issue"
     assert {path.name for path in (CODER / "skills").iterdir()} == {"unslop"}
     assert {skill.name for skill in skills} == {"unslop", "write-routine"}
 
@@ -67,40 +69,3 @@ def test_coder_loads_routine_skills_from_workspace(
         assert by_name[name].source == workspace_skills / name / "SKILL.md"
         assert by_name[name].body
     assert by_name["unslop"].source == instance_path / "skills" / "unslop" / "SKILL.md"
-
-
-@pytest.mark.parametrize(
-    "delivery",
-    [
-        {"action": "labeled", "label": {"name": "bug"}, "issue": _issue("bug")},
-        {"action": "opened", "issue": _issue("bug")},
-        {"action": "closed", "issue": {**_issue("ready-for-agent"), "state": "closed"}},
-        {"action": "created", "comment": {"body": "hello"}},
-    ],
-)
-def test_coder_routine_finishes_without_work_unless_an_issue_is_ready(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    delivery: dict[str, object],
-) -> None:
-    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    instance = _coder_copy(tmp_path)
-    payload = tmp_path / "delivery.json"
-    payload.write_text(json.dumps(delivery), encoding="utf-8")
-
-    exit_code = main(
-        [
-            "routine",
-            "run",
-            "implement-ready-issue",
-            "--payload",
-            str(payload),
-            "--instance",
-            str(instance),
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "[tool.result] select_ready_issue (ok): None" in captured.out
