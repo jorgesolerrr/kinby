@@ -358,6 +358,10 @@ The issue-to-PR process that assigns implementation and review to **coding clien
 
 The coding **instance** process that turns **eligible issues** into **agent PRs** through a **delegated pipeline**.
 
+### Scan
+
+The **factory**'s search for the oldest **eligible issue** after a **wake**. A **delivery** can determine that no scan is needed, but never selects the issue.
+
 ### Review round
 
 One independent review of the current change against both the repository's standards and its ticket, followed by fixes when the review has hard findings.

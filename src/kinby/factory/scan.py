@@ -10,7 +10,7 @@ def payload_can_change_eligibility(signal: dict[str, object]) -> bool:
         return True
     if "comment" in body:
         return False
-    if body.get("action") == "labeled":
+    if body.get("action") in {"labeled", "unlabeled"}:
         label = body.get("label")
         return isinstance(label, dict) and label.get("name") == READY_LABEL
     pull_request = body.get("pull_request")

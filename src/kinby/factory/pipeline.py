@@ -40,12 +40,16 @@ DEFAULT_REVIEWER_MODEL = ClaudeModel("claude-fable-5-1")
 
 
 class PipelineOutcome(StrEnum):
+    """The outcome of a delegated pipeline run."""
+
     OPENED = "opened"
     FAILED = "failed"
 
 
 @dataclass(frozen=True)
 class PullRequestReport:
+    """The pull request opened by a delegated pipeline run."""
+
     url: PullRequestUrl
     branch: BranchName
     base_branch: BranchName
@@ -53,6 +57,8 @@ class PullRequestReport:
 
 @dataclass(frozen=True)
 class OpenedPipelineReport:
+    """A delegated pipeline run that opened a pull request."""
+
     issue: Issue
     pull_request: PullRequestReport
     checks: ChecksPassed
@@ -64,6 +70,8 @@ class OpenedPipelineReport:
 
 @dataclass(frozen=True)
 class FailedPipelineReport:
+    """A delegated pipeline run that failed before opening a pull request."""
+
     issue: Issue | None
     checks: ChecksFailed | None
     codex: CodexRun | None
@@ -150,7 +158,7 @@ def implement_ready_issue(
         failure = str(exc)
         if issue is not None:
             try:
-                repository.mark_needs_human(issue.number)
+                repository.mark_ready_for_human(issue.number)
             except CommandError as label_error:
                 failure = f"{failure}; label update failed: {label_error}"
         report = FailedPipelineReport(

@@ -123,7 +123,7 @@ class GitHubRepository:
             ).strip()
         )
 
-    def mark_needs_human(self, issue: IssueNumber) -> None:
+    def mark_ready_for_human(self, issue: IssueNumber) -> None:
         self._gh(
             "issue",
             "edit",

@@ -236,6 +236,7 @@ def _report(output: str) -> dict[str, object]:
     "delivery",
     [
         {"action": "labeled", "label": {"name": "bug"}},
+        {"action": "unlabeled", "label": {"name": "bug"}},
         {"action": "created", "comment": {"body": "hello"}},
         {
             "action": "opened",
@@ -278,6 +279,7 @@ def test_irrelevant_payload_returns_no_work_without_github(
     "delivery",
     [
         {"action": "opened", "issue": {"state": "open", "labels": [{"name": "bug"}]}},
+        {"action": "unlabeled", "label": {"name": "ready-for-agent"}},
         {
             "action": "closed",
             "issue": {"state": "closed", "labels": [{"name": "ready-for-agent"}]},
