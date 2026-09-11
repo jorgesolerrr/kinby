@@ -170,7 +170,7 @@ class GitHubRepository:
             "repos/{owner}/{repo}/stacks",
         ]
         for pull_request in pull_requests:
-            arguments.extend(("-f", f"pull_requests[]={pull_request}"))
+            arguments.extend(("-F", f"pull_requests[]={pull_request}"))
         self._gh(*arguments)
 
     def extend_stack(
@@ -186,7 +186,7 @@ class GitHubRepository:
             "-H",
             f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
             f"repos/{{owner}}/{{repo}}/stacks/{stack}/add",
-            "-f",
+            "-F",
             f"pull_requests[]={pull_request}",
         )
 
