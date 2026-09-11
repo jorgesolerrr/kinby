@@ -1,6 +1,7 @@
 ---
 description: Implement a GitHub issue labeled ready-for-agent and open a pull request.
 enabled: true
+schedule: 0 * * * *
 mode: full-access
 arguments: {"implementer_model":"gpt-5.6-sol","implementer_effort":"high","reviewer_model":"claude-fable-5-1","review_round_limit":3,"implement_timeout_seconds":1800,"review_timeout_seconds":600,"fix_timeout_seconds":900}
 signal:

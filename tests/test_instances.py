@@ -35,7 +35,7 @@ def test_coder_instance_loads_its_routine_and_skills(monkeypatch: pytest.MonkeyP
     assert instance.manifest.budgets.seconds == 7200
     assert [routine.name for routine in routines] == ["implement-ready-issue"]
     assert routines[0].enabled is True
-    assert routines[0].schedule is None
+    assert routines[0].schedule == "0 * * * *"
     assert routines[0].arguments == {
         "implementer_model": "gpt-5.6-sol",
         "implementer_effort": "high",

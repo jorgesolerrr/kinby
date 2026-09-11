@@ -12,7 +12,7 @@ from kinby.factory.repository import (
     BranchName,
     GitHubRepository,
     Issue,
-    PullRequestUrl,
+    OpenedPullRequest,
     RepositoryMetadata,
     closed_issue_number,
 )
@@ -105,8 +105,9 @@ def open_pull_request(
     issue: Issue,
     metadata: RepositoryMetadata,
     branch: BranchName,
+    base_branch: BranchName,
     open_findings: Findings,
-) -> PullRequestUrl:
+) -> OpenedPullRequest:
     """Push the checked branch and open its pull request."""
     _git(workspace, "push", "-u", "origin", branch)
     body_file = workspace / PR_BODY
@@ -126,7 +127,7 @@ def open_pull_request(
         raise PullRequestBodyError(f"could not update pull request body: {exc}") from exc
     return repository.open_pull_request(
         branch=branch,
-        base_branch=metadata.default_branch,
+        base_branch=base_branch,
         title=issue.title,
         body_file=body_file,
         reviewer=metadata.maintainer,

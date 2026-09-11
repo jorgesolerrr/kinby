@@ -65,7 +65,7 @@ docker compose exec coder codex exec "Reply with one word: ready"
 docker compose exec coder claude -p "Reply with one word: ready"
 ```
 
-The `coder` instance listens on `127.0.0.1:8787`. Its `implement-ready-issue` routine accepts GitHub webhook deliveries at `/signals/implement-ready-issue`, signed with `GITHUB_WEBHOOK_SECRET`, and starts a turn only when an open issue receives the `ready-for-agent` label.
+The `coder` instance listens on `127.0.0.1:8787`. Its `implement-ready-issue` routine accepts GitHub `issues` and `pull_request` webhook deliveries at `/signals/implement-ready-issue`, signed with `GITHUB_WEBHOOK_SECRET`. Relevant deliveries start a scan through that one signal path, and the hourly schedule catches missed deliveries.
 
 A local box has no public URL for GitHub to call. Forward the repository's webhook deliveries with the gh webhook extension (`gh extension install cli/gh-webhook`), using the same secret as the instance:
 
