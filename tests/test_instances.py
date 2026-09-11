@@ -47,7 +47,26 @@ def test_coder_instance_loads_its_routine_and_skills(monkeypatch: pytest.MonkeyP
     assert instance.manifest.budgets.seconds == 7200
     assert [routine.name for routine in routines] == ["implement-ready-issue"]
     assert routines[0].enabled is False
-    assert {"implement-ticket", "open-pr", "tdd", "unslop"} <= {skill.name for skill in skills}
+    assert {path.name for path in (CODER / "skills").iterdir()} == {"unslop"}
+    assert {skill.name for skill in skills} == {"unslop", "write-routine"}
+
+
+def test_coder_loads_routine_skills_from_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    workspace_skills = instance_path / "workspace" / ".claude" / "skills"
+    shutil.copytree(INSTANCES.parent / ".claude" / "skills", workspace_skills)
+
+    skills, warnings = load_skills(load_instance(instance_path))
+    by_name = {str(skill.name): skill for skill in skills}
+
+    assert warnings == ()
+    for name in ("implement-ticket", "open-pr"):
+        assert by_name[name].source == workspace_skills / name / "SKILL.md"
+        assert by_name[name].body
+    assert by_name["unslop"].source == instance_path / "skills" / "unslop" / "SKILL.md"
 
 
 @pytest.mark.parametrize(
