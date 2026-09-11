@@ -65,7 +65,7 @@ from kinby.core.errors import (
 from kinby.core.events import EventLog
 from kinby.core.gate import evaluate
 from kinby.core.model_calls import completed_model_call
-from kinby.core.models import init_model
+from kinby.core.models import init_model, is_anthropic_model
 from kinby.core.pricing import price_map
 from kinby.core.prompt import (
     PromptSection,
@@ -86,7 +86,7 @@ from kinby.core.turns import (
     TurnRequest,
     TurnResult,
 )
-from kinby.instance import Budgets, Instance, reload_manifest
+from kinby.instance import Budgets, Instance, ModelName, reload_manifest
 from kinby.instance.permissions import (
     SHIPPED_POLICY,
     GateAction,
@@ -137,7 +137,7 @@ class ChatModel(Protocol):
     def bind_tools(self, tools: Sequence[StructuredTool]) -> ChatModel: ...
 
 
-ModelFactory = Callable[[str], ChatModel]
+ModelFactory = Callable[[ModelName], ChatModel]
 
 
 @dataclass
@@ -201,8 +201,44 @@ class _PreparedTurn:
     payload: str | None
 
 
-def _init_model(model: str) -> ChatModel:
+_EPHEMERAL = {"type": "ephemeral"}
+
+
+def _init_model(model: ModelName) -> ChatModel:
     return cast(ChatModel, init_model(model))
+
+
+def _cacheable_text_block(text: str) -> dict[str, object]:
+    return {"type": "text", "text": text, "cache_control": _EPHEMERAL}
+
+
+def _with_cache_control(message: BaseMessage) -> BaseMessage:
+    content = message.content
+    marked_content = [content] if isinstance(content, str) else list(content)
+    if not marked_content:
+        return message
+    last_block = marked_content[-1]
+    marked_content[-1] = (
+        _cacheable_text_block(last_block)
+        if isinstance(last_block, str)
+        else {**last_block, "cache_control": _EPHEMERAL}
+    )
+    return message.model_copy(update={"content": marked_content})
+
+
+def _mark_cache_prefix(
+    model: ModelName,
+    messages: Sequence[BaseMessage],
+) -> Sequence[BaseMessage]:
+    if not is_anthropic_model(model):
+        return messages
+    # Anthropic caches everything before each marker. The first covers tools and the
+    # stable system prompt; the last advances the cached conversation without storing
+    # provider metadata in checkpointed messages.
+    marked_messages = list(messages)
+    marked_messages[0] = _with_cache_control(marked_messages[0])
+    marked_messages[-1] = _with_cache_control(marked_messages[-1])
+    return marked_messages
 
 
 class LangGraphRunner:
@@ -649,8 +685,9 @@ class LangGraphRunner:
         )
         response: AIMessageChunk | None = None
         started_at = asyncio.get_running_loop().time()
+        request_messages = [runtime.context.system_message, *messages]
         async for chunk in runtime.context.model.astream(
-            [runtime.context.system_message, *messages]
+            _mark_cache_prefix(state.turn.model, request_messages)
         ):
             response = chunk if response is None else response + chunk
             if chunk.text:

@@ -32,7 +32,7 @@ from kinby.core.events import EventLog
 from kinby.core.snapshots import SNAPSHOTS_DIR
 from kinby.core.turn_runner import ChatModel
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome, TurnRequest
-from kinby.instance import Budgets, Instance, load_instance
+from kinby.instance import Budgets, Instance, ModelName, load_instance
 from tests.helpers import GRAPH_EVENT_TIMEOUT
 
 _MODEL = "openai:gpt-5"
@@ -193,6 +193,17 @@ class TwoCallChatModel(CoreSkillModel):
         )
 
 
+class CapturingTwoCallChatModel(TwoCallChatModel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[tuple[BaseMessage, ...]] = []
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        self.requests.append(tuple(messages))
+        async for chunk in super().astream(messages):
+            yield chunk
+
+
 class FailingSecondCallChatModel(TwoCallChatModel):
     async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
         if self.calls == 1:
@@ -302,6 +313,46 @@ async def _budget_session(
     created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
     assert isinstance(created, ThreadCreateResult)
     return dispatcher, created.id
+
+
+async def _capture_two_call_turn(
+    tmp_path: Path,
+    model_name: ModelName,
+) -> CapturingTwoCallChatModel:
+    model = CapturingTwoCallChatModel()
+    runner = LangGraphRunner(_load_test_instance(tmp_path), model_factory=lambda _: model)
+
+    async def emit(payload: Payload) -> Event:
+        return Event(
+            sequence=1,
+            thread_id=uuid4(),
+            turn_id=uuid4(),
+            payload=payload,
+            timestamp=datetime.now(UTC),
+        )
+
+    await runner.run(
+        PreparedTurnRequest(
+            thread_id=uuid4(),
+            turn_id=uuid4(),
+            message="Hello",
+            model=model_name,
+            permission_mode=PermissionMode.ASK,
+            system_prompt=SystemPrompt("System prompt"),
+        ),
+        TurnContext(Budgets(), emit),
+    )
+    return model
+
+
+def _cache_controls(message: BaseMessage) -> list[object]:
+    if isinstance(message.content, str):
+        return []
+    return [
+        block["cache_control"]
+        for block in message.content
+        if isinstance(block, dict) and "cache_control" in block
+    ]
 
 
 async def _park_budget_turn(dispatcher: Dispatcher, thread_id: UUID) -> Event:
@@ -796,6 +847,31 @@ def test_langgraph_runner_streams_one_model_turn(tmp_path: Path) -> None:
         assert isinstance(events[2], ModelCompleted)
         assert outcome.input_tokens == 4
         assert outcome.output_tokens == 2
+
+    asyncio.run(scenario())
+
+
+def test_anthropic_requests_mark_the_stable_prefix_for_caching(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        model = await _capture_two_call_turn(tmp_path, "anthropic:claude-opus-5")
+
+        assert len(model.requests) == 2
+        for request in model.requests:
+            assert isinstance(request[0], SystemMessage)
+            assert _cache_controls(request[0]) == [{"type": "ephemeral"}]
+            assert _cache_controls(request[-1]) == [{"type": "ephemeral"}]
+
+    asyncio.run(scenario())
+
+
+def test_non_anthropic_requests_have_no_cache_control(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        model = await _capture_two_call_turn(tmp_path, "openai:gpt-5")
+
+        assert len(model.requests) == 2
+        assert all(
+            not _cache_controls(message) for request in model.requests for message in request
+        )
 
     asyncio.run(scenario())
 
