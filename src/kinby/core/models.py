@@ -8,6 +8,20 @@ from langchain.chat_models import init_chat_model
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 
+from kinby.instance import ModelName
+
+_ANTHROPIC_PROVIDER = "anthropic"
+
+
+def _split_model_name(name: ModelName) -> tuple[str, str]:
+    provider, _, model = name.partition(":")
+    return provider, model
+
+
+def is_anthropic_model(name: ModelName) -> bool:
+    provider, _ = _split_model_name(name)
+    return provider == _ANTHROPIC_PROVIDER
+
 
 class _ProfileChatAnthropic(ChatAnthropic):
     """Let the Anthropic SDK find an ``ant auth login`` profile when no API key is set.
@@ -23,8 +37,8 @@ class _ProfileChatAnthropic(ChatAnthropic):
         return params
 
 
-def init_model(name: str) -> BaseChatModel:
-    provider, _, model = name.partition(":")
-    if provider == "anthropic":
+def init_model(name: ModelName) -> BaseChatModel:
+    provider, model = _split_model_name(name)
+    if provider == _ANTHROPIC_PROVIDER:
         return _ProfileChatAnthropic(model=model)
     return init_chat_model(name)
