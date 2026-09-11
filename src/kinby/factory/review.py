@@ -12,6 +12,7 @@ from kinby.factory.clients import (
     Findings,
     ReasoningEffort,
     ReviewRun,
+    TokenUsage,
     fix_with_codex,
     review_with_claude,
 )
@@ -25,6 +26,9 @@ class ReviewRound:
     number: int
     review: ReviewRun
     fix: CodexRun | None
+    hard_count: int
+    suggestion_count: int
+    fix_usage: TokenUsage | None
 
 
 @dataclass(frozen=True)
@@ -63,7 +67,16 @@ def run_review_loop(
         findings = review.findings
         should_fix = bool(findings.hard) or bool(findings.suggestions and not rounds)
         if not should_fix or number == round_limit:
-            rounds.append(ReviewRound(number, review, None))
+            rounds.append(
+                ReviewRound(
+                    number=number,
+                    review=review,
+                    fix=None,
+                    hard_count=len(findings.hard),
+                    suggestion_count=len(findings.suggestions),
+                    fix_usage=None,
+                )
+            )
             return ReviewLoop(tuple(rounds), findings)
         fix_findings = Findings(
             findings.hard,
@@ -78,5 +91,14 @@ def run_review_loop(
             effort=implementer_effort,
             timeout_seconds=fix_timeout_seconds,
         )
-        rounds.append(ReviewRound(number, review, fix))
+        rounds.append(
+            ReviewRound(
+                number=number,
+                review=review,
+                fix=fix,
+                hard_count=len(findings.hard),
+                suggestion_count=len(findings.suggestions),
+                fix_usage=fix.usage,
+            )
+        )
     raise AssertionError("review loop exhausted without returning")

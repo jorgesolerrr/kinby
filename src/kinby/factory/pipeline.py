@@ -183,7 +183,17 @@ def implement_ready_issue(
                 timeout_seconds=review_timeout_seconds,
             )
             review = ReviewLoop(
-                (*review.rounds, ReviewRound(len(review.rounds) + 1, final_review, None)),
+                (
+                    *review.rounds,
+                    ReviewRound(
+                        number=len(review.rounds) + 1,
+                        review=final_review,
+                        fix=None,
+                        hard_count=len(final_review.findings.hard),
+                        suggestion_count=len(final_review.findings.suggestions),
+                        fix_usage=None,
+                    ),
+                ),
                 final_review.findings,
             )
         pull_request_url = open_pull_request(
