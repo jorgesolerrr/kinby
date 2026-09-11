@@ -1,6 +1,14 @@
 """Decide whether a routine wake can change issue eligibility."""
 
-from kinby.factory.repository import AGENT_BRANCH_PREFIX, READY_LABEL, AgentPullRequest, Issue
+from kinby.factory.repository import (
+    AGENT_BRANCH_PREFIX,
+    READY_LABEL,
+    AgentPullRequest,
+    GitHubRepository,
+    Issue,
+    IssueNumber,
+    OpenBlocker,
+)
 
 
 def payload_can_change_eligibility(signal: dict[str, object]) -> bool:
@@ -24,17 +32,35 @@ def payload_can_change_eligibility(signal: dict[str, object]) -> bool:
     )
 
 
-def oldest_issue_without_agent_pr(
+def oldest_eligible_issue(
+    repository: GitHubRepository,
     issues: tuple[Issue, ...],
     pull_requests: tuple[AgentPullRequest, ...],
 ) -> Issue | None:
-    """Return the lowest-numbered issue without an open agent pull request."""
+    """Return the lowest-numbered issue whose blockers are covered in its stack."""
     covered = {
         pull_request.closed_issue
         for pull_request in pull_requests
         if pull_request.closed_issue is not None
     }
-    return next(
-        (issue for issue in issues if issue.number not in covered),
-        None,
+    for issue in issues:
+        if issue.number in covered:
+            continue
+        blockers = repository.open_blockers(issue.number)
+        if all(_covered_in_same_stack(issue, blocker, covered) for blocker in blockers):
+            return issue
+    return None
+
+
+def _covered_in_same_stack(
+    issue: Issue,
+    blocker: OpenBlocker,
+    covered: set[IssueNumber],
+) -> bool:
+    return blocker.number in covered and _stack(issue.number, issue.parent) == _stack(
+        blocker.number, blocker.parent
     )
+
+
+def _stack(issue: IssueNumber, parent: IssueNumber | None) -> IssueNumber:
+    return parent if parent is not None else issue

@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from kinby.factory.clients import PR_BODY
-from kinby.factory.process import CommandError, run_command
+from kinby.factory.clients import PR_BODY, Findings
+from kinby.factory.process import CommandError, CommandResult, run_command
 from kinby.factory.repository import (
     AGENT_BRANCH_PREFIX,
     BranchName,
@@ -59,9 +59,34 @@ def branch_name(issue: Issue) -> BranchName:
 
 
 def prepare_branch(workspace: Path, branch: BranchName, base_branch: BranchName) -> None:
-    """Create an agent branch from the latest remote base."""
-    _git(workspace, "fetch", "origin", base_branch)
-    _git(workspace, "switch", "-c", branch, f"origin/{base_branch}")
+    """Start or resume an agent branch from a clean persistent workspace."""
+    _clean_workspace(workspace)
+    _git(workspace, "fetch", "origin")
+    remote_branch = f"origin/{branch}"
+    remote_exists = bool(
+        _git(workspace, "branch", "--remotes", "--list", remote_branch).stdout.strip()
+    )
+    start = remote_branch if remote_exists else f"origin/{base_branch}"
+    _git(workspace, "switch", "--discard-changes", "-C", branch, start)
+    _clean_workspace(workspace)
+
+
+def clean_failed_branch(
+    workspace: Path,
+    branch: BranchName,
+    base_branch: BranchName,
+) -> None:
+    """Remove failed-run edits and return the persistent workspace to its base."""
+    _clean_workspace(workspace)
+    _git(
+        workspace,
+        "switch",
+        "--discard-changes",
+        "-C",
+        base_branch,
+        f"origin/{base_branch}",
+    )
+    _git(workspace, "branch", "-D", branch)
 
 
 def run_checks(workspace: Path) -> ChecksPassed:
@@ -80,6 +105,7 @@ def open_pull_request(
     issue: Issue,
     metadata: RepositoryMetadata,
     branch: BranchName,
+    open_findings: Findings,
 ) -> PullRequestUrl:
     """Push the checked branch and open its pull request."""
     _git(workspace, "push", "-u", "origin", branch)
@@ -90,8 +116,12 @@ def open_pull_request(
         raise PullRequestBodyError(f"could not read pull request body: {exc}") from exc
     if closed_issue_number(body.partition("\n")[0]) == issue.number:
         body = body.partition("\n")[2].lstrip()
+    findings = _open_findings(open_findings)
     try:
-        body_file.write_text(f"Closes #{issue.number}\n\n{body}\n", encoding="utf-8")
+        body_file.write_text(
+            f"Closes #{issue.number}\n\n{body.rstrip()}{findings}\n",
+            encoding="utf-8",
+        )
     except OSError as exc:
         raise PullRequestBodyError(f"could not update pull request body: {exc}") from exc
     return repository.open_pull_request(
@@ -103,8 +133,26 @@ def open_pull_request(
     )
 
 
-def _git(workspace: Path, *arguments: str) -> None:
-    run_command(
+def _open_findings(findings: Findings) -> str:
+    items = tuple(f"- [hard] {item}" for item in findings.hard) + tuple(
+        f"- [suggestion] {item}" for item in findings.suggestions
+    )
+    if not items:
+        return ""
+    return "\n\n## Open review findings\n\n" + "\n".join(items)
+
+
+def _clean_workspace(workspace: Path) -> None:
+    _git(workspace, "reset", "--hard")
+    _git(workspace, "clean", "-fd")
+    try:
+        (workspace / PR_BODY).unlink(missing_ok=True)
+    except OSError as exc:
+        raise PullRequestBodyError(f"could not clear pull request body: {exc}") from exc
+
+
+def _git(workspace: Path, *arguments: str) -> CommandResult:
+    return run_command(
         ("git", *arguments),
         cwd=workspace,
         timeout_seconds=GIT_TIMEOUT_SECONDS,
