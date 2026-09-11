@@ -1,6 +1,7 @@
 """Run coding clients and parse their machine-readable results."""
 
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ TICKET_BODY = Path(".scratch/factory-ticket.md")
 CodexModel = NewType("CodexModel", str)
 ClaudeModel = NewType("ClaudeModel", str)
 CodexThreadId = NewType("CodexThreadId", str)
+# Claude Code bills an API key over the subscription token when both are set.
+_API_KEY = "ANTHROPIC_API_KEY"
 _EMPHASIS = r"(?:\*\*|__|`)?"
 _FINDING = re.compile(
     rf"^\s*(?:[-*+]\s*)?{_EMPHASIS}\[(hard|suggestion)\]{_EMPHASIS}\s*(.+)$",
@@ -169,6 +172,7 @@ def review_with_claude(
         _standards_prompt(workspace, base_branch),
         _spec_prompt(workspace, base_branch, ticket_path),
     )
+    subscription_env = {name: value for name, value in os.environ.items() if name != _API_KEY}
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
             executor.submit(
@@ -189,6 +193,7 @@ def review_with_claude(
                 cwd=workspace,
                 timeout_seconds=timeout_seconds,
                 stdin=prompt,
+                env=subscription_env,
             )
             for prompt in prompts
         ]

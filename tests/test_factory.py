@@ -151,6 +151,7 @@ print((responses / "codex-events.jsonl").read_text(encoding="utf-8"))
 
 prompt = sys.stdin.read()
 record["stdin"] = prompt
+record["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
 with Path(os.environ["FACTORY_COMMAND_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(record) + "\\n")
 if os.environ.get("FAKE_CLAUDE_REQUIRE_PARALLEL") == "1":
@@ -203,6 +204,8 @@ if joined.startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failure configured"
     monkeypatch.setenv("PATH", f"{binaries}:{os.environ['PATH']}")
     monkeypatch.setenv("FACTORY_COMMAND_LOG", str(log))
     monkeypatch.setenv("FACTORY_CANNED_RESPONSES", str(canned))
+    # The instance's own key must never reach the reviewer's subscription login.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-instance-key")
     (canned / "issues.json").write_text(
         json.dumps(
             [
@@ -812,6 +815,7 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     assert all("plan" in _arguments(record) for record in reviews)
     assert all("none" in _arguments(record) for record in reviews)
     assert all("--no-session-persistence" in _arguments(record) for record in reviews)
+    assert all(record["api_key"] is None for record in reviews)
     assert {"standards", "spec"} == {
         "standards" if "Review axis: standards" in _text(record, "stdin") else "spec"
         for record in reviews
