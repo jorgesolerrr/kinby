@@ -1,11 +1,13 @@
 import asyncio
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import get_ident
 from typing import Self
 from uuid import UUID, uuid4
 
+import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
 from kinby.contracts import (
@@ -886,8 +888,17 @@ def test_catch_up_queues_oldest_turns_before_a_newly_closed_turn(tmp_path: Path)
     asyncio.run(scenario())
 
 
-def test_completed_tool_turn_writes_trace_episode_and_marker(tmp_path: Path) -> None:
+def test_completed_tool_turn_writes_trace_episode_and_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LocalDate(date):
+        @classmethod
+        def today(cls) -> date:
+            return cls(2000, 1, 1)
+
     async def scenario() -> None:
+        monkeypatch.setattr("kinby.memory.recap.date", LocalDate)
         state_dir = tmp_path / ".state"
         event_log = EventLog(state_dir)
         recap = _trace_only_writer(tmp_path, event_log, GraphStore(tmp_path))
@@ -930,10 +941,13 @@ def test_completed_tool_turn_writes_trace_episode_and_marker(tmp_path: Path) -> 
             model="openai:main",
         )
         assert marker_event.payload.node is not None
+        turn_started_event = events[0]
+        assert isinstance(turn_started_event, Event)
+        turn_date = turn_started_event.timestamp.date()
         episode_path = tmp_path / "memory" / "graph" / f"{marker_event.payload.node}.md"
         assert episode_path.read_text(encoding="utf-8") == (
             "---\n"
-            f"date: {marker_event.timestamp.date().isoformat()}\n"
+            f"date: {turn_date.isoformat()}\n"
             f"thread: {created.id}\n"
             f"turn: {accepted.turn_id}\n"
             'description: "Check the trip weather"\n'

@@ -194,6 +194,7 @@ class RecapWriter:
                 subjects=draft.subjects,
                 body=_episode_body(draft, calls),
                 calls=calls,
+                recorded_on=events[0].timestamp.date(),
             )
             if draft.keep
             else None
@@ -209,6 +210,9 @@ class RecapWriter:
     ) -> None:
         episode: Episode | None = None
         if calls:
+            recorded_on = (
+                recap.recorded_on if isinstance(recap, _NoWorkTrace) else events[0].timestamp.date()
+            )
             started = next(
                 event.payload for event in events if isinstance(event.payload, TurnStarted)
             )
@@ -219,13 +223,12 @@ class RecapWriter:
                 subjects=(),
                 body=_path_taken(calls),
                 calls=calls,
+                recorded_on=recorded_on,
             )
             if isinstance(recap, _NoWorkTrace):
-                recorded_on = recap.recorded_on
                 episode = replace(
                     episode,
                     node=NodeId(f"{recorded_on.isoformat()}-{request.turn_id.hex}-trace"),
-                    date=recorded_on,
                 )
         await self._finish(
             request,
@@ -313,8 +316,8 @@ def _episode(
     subjects: tuple[str, ...],
     body: str,
     calls: list[ToolCall],
+    recorded_on: date,
 ) -> Episode:
-    recorded_on = date.today()
     return Episode(
         node=new_node_id(recorded_on, description),
         date=recorded_on,
