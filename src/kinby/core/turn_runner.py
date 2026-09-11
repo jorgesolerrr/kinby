@@ -205,6 +205,45 @@ def _init_model(model: str) -> ChatModel:
     return cast(ChatModel, init_model(model))
 
 
+def _with_cache_control(message: BaseMessage) -> BaseMessage:
+    content = message.content
+    if isinstance(content, str):
+        marked_content = [
+            {
+                "type": "text",
+                "text": content,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    elif content:
+        marked_content = list(content)
+        last_block = marked_content[-1]
+        marked_content[-1] = (
+            {
+                "type": "text",
+                "text": last_block,
+                "cache_control": {"type": "ephemeral"},
+            }
+            if isinstance(last_block, str)
+            else {**last_block, "cache_control": {"type": "ephemeral"}}
+        )
+    else:
+        return message
+    return message.model_copy(update={"content": marked_content})
+
+
+def _messages_for_model(
+    model: str,
+    messages: Sequence[BaseMessage],
+) -> Sequence[BaseMessage]:
+    if model.partition(":")[0] != "anthropic":
+        return messages
+    marked_messages = list(messages)
+    marked_messages[0] = _with_cache_control(marked_messages[0])
+    marked_messages[-1] = _with_cache_control(marked_messages[-1])
+    return marked_messages
+
+
 class LangGraphRunner:
     def __init__(
         self,
@@ -649,8 +688,9 @@ class LangGraphRunner:
         )
         response: AIMessageChunk | None = None
         started_at = asyncio.get_running_loop().time()
+        request_messages = [runtime.context.system_message, *messages]
         async for chunk in runtime.context.model.astream(
-            [runtime.context.system_message, *messages]
+            _messages_for_model(state.turn.model, request_messages)
         ):
             response = chunk if response is None else response + chunk
             if chunk.text:
