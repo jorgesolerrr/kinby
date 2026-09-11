@@ -128,7 +128,10 @@ record["stdin"] = sys.stdin.read()
 record["pid"] = os.getpid()
 with Path(os.environ["FACTORY_COMMAND_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(record) + "\\n")
-time.sleep(float(os.environ.get("FAKE_CODEX_SLEEP", "0")))
+sleep_variable = (
+    "FAKE_CODEX_RESUME_SLEEP" if "resume" in arguments else "FAKE_CODEX_SLEEP"
+)
+time.sleep(float(os.environ.get(sleep_variable, "0")))
 if exit_code := int(os.environ.get("FAKE_CODEX_EXIT", "0")):
     print("Codex exploded", file=sys.stderr)
     raise SystemExit(exit_code)
@@ -150,6 +153,15 @@ prompt = sys.stdin.read()
 record["stdin"] = prompt
 with Path(os.environ["FACTORY_COMMAND_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(record) + "\\n")
+if os.environ.get("FAKE_CLAUDE_REQUIRE_PARALLEL") == "1":
+    axis = "standards" if "Review axis: standards" in prompt else "spec"
+    peer = "spec" if axis == "standards" else "standards"
+    (responses / f"started-{axis}").touch()
+    deadline = time.monotonic() + 1
+    while not (responses / f"started-{peer}").exists():
+        if time.monotonic() >= deadline:
+            raise SystemExit(8)
+        time.sleep(0.01)
 time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))
 axis = "standards" if "Review axis: standards" in prompt else "spec"
 records = [
@@ -493,6 +505,7 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     model = _RoutineModel()
     _use_routine_model(monkeypatch, instance, model)
     log = _fake_clients(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CLAUDE_REQUIRE_PARALLEL", "1")
     payload = tmp_path / "delivery.json"
     payload.write_text(
         json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
@@ -559,10 +572,25 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     assert len(reviews) == 2
     assert all("--permission-mode" in _arguments(record) for record in reviews)
     assert all("--allowedTools" in _arguments(record) for record in reviews)
+    assert all("claude-fable-5-1" in _arguments(record) for record in reviews)
+    assert all("plan" in _arguments(record) for record in reviews)
+    assert all("none" in _arguments(record) for record in reviews)
+    assert all("--no-session-persistence" in _arguments(record) for record in reviews)
     assert {"standards", "spec"} == {
         "standards" if "Review axis: standards" in _text(record, "stdin") else "spec"
         for record in reviews
     }
+    standards = next(
+        record for record in reviews if "Review axis: standards" in _text(record, "stdin")
+    )
+    assert "AGENTS.md" in _text(standards, "stdin")
+    assert "CODING-STANDARD.md" in _text(standards, "stdin")
+    assert "references/smells.md" in _text(standards, "stdin")
+    spec = next(record for record in reviews if "Review axis: spec" in _text(record, "stdin"))
+    assert ".scratch/factory-ticket.md" in _text(spec, "stdin")
+    assert (instance_path / "workspace" / ".scratch" / "factory-ticket.md").read_text(
+        encoding="utf-8"
+    ) == "Build the fourth ticket and cover it with tests."
 
     checks = [_arguments(record) for record in records if record["command"] == "uv"]
     assert checks == [
@@ -633,6 +661,14 @@ def test_hard_review_finding_resumes_codex_and_reviews_the_fix(
     rounds = _mapping(report["review"])["rounds"]
     assert isinstance(rounds, list)
     assert len(rounds) == 2
+    first_round = _mapping(rounds[0])
+    assert first_round["hard_count"] == 1
+    assert first_round["suggestion_count"] == 0
+    assert first_round["fix_usage"] == {
+        "input_tokens": 120,
+        "cached_input_tokens": 80,
+        "output_tokens": 35,
+    }
     codex_runs = [record for record in _records(log) if record["command"] == "codex"]
     assert len(codex_runs) == 2
     assert "resume" in _arguments(codex_runs[1])
@@ -687,6 +723,61 @@ def test_open_review_findings_are_reported_after_the_round_cap(
         if record["command"] == "gh" and _arguments(record)[:2] == ["pr", "create"]
     )
     assert "## Open review findings" in _text(create, "body")
+
+
+def test_suggestions_get_one_fix_then_remain_for_the_pull_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    canned = tmp_path / "canned"
+    for fix in (0, 1):
+        (canned / f"review-standards-{fix}.md").write_text(
+            "[suggestion] src/example.py:12 possible Mysterious Name\n",
+            encoding="utf-8",
+        )
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "opened_with_findings"
+    review = _mapping(report["review"])
+    rounds = review["rounds"]
+    assert isinstance(rounds, list)
+    assert len(rounds) == 2
+    assert _mapping(rounds[0])["suggestion_count"] == 1
+    assert _mapping(rounds[0])["fix_usage"] is not None
+    assert _mapping(rounds[1])["suggestion_count"] == 1
+    assert _mapping(rounds[1])["fix_usage"] is None
+    assert _mapping(review["open_findings"])["suggestions"] == [
+        "src/example.py:12 possible Mysterious Name"
+    ]
+    records = _records(log)
+    assert len([record for record in records if record["command"] == "codex"]) == 2
+    assert len([record for record in records if record["command"] == "claude"]) == 4
 
 
 def test_codex_must_replace_a_stale_pull_request_body(
@@ -784,6 +875,10 @@ def test_failing_check_reports_output_and_relabels_issue(
         record["command"] == "gh" and _arguments(record)[:2] == ["pr", "create"]
         for record in records
     )
+    codex_runs = [record for record in records if record["command"] == "codex"]
+    assert len(codex_runs) == 2
+    assert "resume" in _arguments(codex_runs[1])
+    assert "uv exploded" in _text(codex_runs[1], "stdin")
     relabel = next(
         record
         for record in records
@@ -964,3 +1059,100 @@ def test_client_overrun_is_killed_and_relabels_issue(
         record["command"] == "gh" and _arguments(record)[:2] == ["issue", "edit"]
         for record in records
     )
+
+
+def test_review_run_uses_the_review_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    routine = instance_path / "routines" / "implement-ready-issue" / "ROUTINE.md"
+    routine.write_text(
+        routine.read_text(encoding="utf-8").replace(
+            '"review_timeout_seconds":600',
+            '"review_timeout_seconds":0.05',
+        ),
+        encoding="utf-8",
+    )
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    _fake_clients(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "10")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "failed"
+    assert "claude exceeded its 0.05-second limit" in str(report["failure_reason"])
+
+
+def test_fix_run_uses_the_fix_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    routine = instance_path / "routines" / "implement-ready-issue" / "ROUTINE.md"
+    routine.write_text(
+        routine.read_text(encoding="utf-8").replace(
+            '"fix_timeout_seconds":900',
+            '"fix_timeout_seconds":0.05',
+        ),
+        encoding="utf-8",
+    )
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    (tmp_path / "canned" / "review-standards.md").write_text(
+        "[hard] src/example.py:12 remains broken\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FAKE_CODEX_RESUME_SLEEP", "10")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "failed"
+    assert "codex exceeded its 0.05-second limit" in str(report["failure_reason"])
+    codex_runs = [record for record in _records(log) if record["command"] == "codex"]
+    assert len(codex_runs) == 2
+    assert "resume" in _arguments(codex_runs[1])
