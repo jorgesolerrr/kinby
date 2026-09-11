@@ -11,7 +11,10 @@ from kinby.factory.clients import (
     CodexModel,
     CodexRun,
     CodingClientError,
+    Findings,
     ReasoningEffort,
+    fix_with_codex,
+    review_with_claude,
     run_codex,
 )
 from kinby.factory.process import CommandError
@@ -21,6 +24,7 @@ from kinby.factory.pull_request import (
     PullRequestBodyError,
     RepositoryCheckFailed,
     branch_name,
+    clean_failed_branch,
     open_pull_request,
     prepare_branch,
     run_checks,
@@ -32,7 +36,8 @@ from kinby.factory.repository import (
     PullRequestUrl,
     RepositoryResponseError,
 )
-from kinby.factory.scan import oldest_issue_without_agent_pr, payload_can_change_eligibility
+from kinby.factory.review import ReviewLoop, ReviewRound, run_review_loop
+from kinby.factory.scan import oldest_eligible_issue, payload_can_change_eligibility
 from kinby.plugins import ToolContext, tool
 
 DEFAULT_IMPLEMENTER_MODEL = CodexModel("gpt-5.6-sol")
@@ -43,6 +48,7 @@ class PipelineOutcome(StrEnum):
     """The outcome of a delegated pipeline run."""
 
     OPENED = "opened"
+    OPENED_WITH_FINDINGS = "opened_with_findings"
     FAILED = "failed"
 
 
@@ -63,8 +69,13 @@ class OpenedPipelineReport:
     pull_request: PullRequestReport
     checks: ChecksPassed
     codex: CodexRun
+    review: ReviewLoop
+    check_fix: CodexRun | None
     duration_seconds: float
-    outcome: Literal[PipelineOutcome.OPENED] = PipelineOutcome.OPENED
+    outcome: Literal[
+        PipelineOutcome.OPENED,
+        PipelineOutcome.OPENED_WITH_FINDINGS,
+    ] = PipelineOutcome.OPENED
     failure_reason: None = None
 
 
@@ -75,6 +86,8 @@ class FailedPipelineReport:
     issue: Issue | None
     checks: ChecksFailed | None
     codex: CodexRun | None
+    review: ReviewLoop | None
+    check_fix: CodexRun | None
     duration_seconds: float
     failure_reason: str
     outcome: Literal[PipelineOutcome.FAILED] = PipelineOutcome.FAILED
@@ -107,18 +120,23 @@ def implement_ready_issue(
     repository = GitHubRepository(context.workspace)
     issue: Issue | None = None
     codex: CodexRun | None = None
+    review: ReviewLoop | None = None
+    check_fix: CodexRun | None = None
     checks: ChecksFailed | None = None
+    branch: BranchName | None = None
+    base_branch: BranchName | None = None
     report: PipelineReport
     try:
         issues = repository.ready_issues()
         pull_requests = repository.agent_pull_requests()
-        selected = oldest_issue_without_agent_pr(issues, pull_requests)
+        selected = oldest_eligible_issue(repository, issues, pull_requests)
         if selected is None:
             return None
         issue = selected
         metadata = repository.metadata()
+        base_branch = metadata.default_branch
         branch = branch_name(issue)
-        prepare_branch(context.workspace, branch, metadata.default_branch)
+        prepare_branch(context.workspace, branch, base_branch)
         codex = run_codex(
             context.workspace,
             issue_number=issue.number,
@@ -128,24 +146,66 @@ def implement_ready_issue(
             effort=implementer_effort,
             timeout_seconds=implement_timeout_seconds,
         )
+        review = run_review_loop(
+            context.workspace,
+            base_branch=base_branch,
+            ticket_body=repository.issue_body(issue.number),
+            thread_id=codex.thread_id,
+            implementer_model=implementer_model,
+            implementer_effort=implementer_effort,
+            reviewer_model=reviewer_model,
+            round_limit=review_round_limit,
+            review_timeout_seconds=review_timeout_seconds,
+            fix_timeout_seconds=fix_timeout_seconds,
+        )
         try:
             passed_checks = run_checks(context.workspace)
         except RepositoryCheckFailed as exc:
             checks = ChecksFailed(failed=" ".join(exc.command))
-            raise
+            check_fix = fix_with_codex(
+                context.workspace,
+                thread_id=codex.thread_id,
+                findings=Findings((str(exc),), (), str(exc)),
+                model=implementer_model,
+                effort=implementer_effort,
+                timeout_seconds=fix_timeout_seconds,
+            )
+            try:
+                passed_checks = run_checks(context.workspace)
+            except RepositoryCheckFailed as retry_error:
+                checks = ChecksFailed(failed=" ".join(retry_error.command))
+                raise
+            final_review = review_with_claude(
+                context.workspace,
+                base_branch=base_branch,
+                ticket_body=repository.issue_body(issue.number),
+                model=reviewer_model,
+                timeout_seconds=review_timeout_seconds,
+            )
+            review = ReviewLoop(
+                (*review.rounds, ReviewRound(len(review.rounds) + 1, final_review, None)),
+                final_review.findings,
+            )
         pull_request_url = open_pull_request(
             repository,
             context.workspace,
             issue,
             metadata,
             branch,
+            review.open_findings,
         )
+        has_findings = bool(review.open_findings.hard or review.open_findings.suggestions)
         report = OpenedPipelineReport(
             issue=issue,
             pull_request=PullRequestReport(pull_request_url, branch, metadata.default_branch),
             checks=passed_checks,
             codex=codex,
+            review=review,
+            check_fix=check_fix,
             duration_seconds=monotonic() - started_at,
+            outcome=(
+                PipelineOutcome.OPENED_WITH_FINDINGS if has_findings else PipelineOutcome.OPENED
+            ),
         )
     except (
         CommandError,
@@ -156,6 +216,11 @@ def implement_ready_issue(
         RepositoryResponseError,
     ) as exc:
         failure = str(exc)
+        if branch is not None and base_branch is not None:
+            try:
+                clean_failed_branch(context.workspace, branch, base_branch)
+            except (CommandError, PullRequestBodyError) as cleanup_error:
+                failure = f"{failure}; workspace cleanup failed: {cleanup_error}"
         if issue is not None:
             try:
                 repository.mark_ready_for_human(issue.number)
@@ -165,6 +230,8 @@ def implement_ready_issue(
             issue=issue,
             checks=checks,
             codex=codex,
+            review=review,
+            check_fix=check_fix,
             duration_seconds=monotonic() - started_at,
             failure_reason=failure,
         )

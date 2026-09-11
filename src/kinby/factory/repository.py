@@ -9,9 +9,11 @@ from typing import NewType
 from kinby.factory.process import run_command
 
 GITHUB_TIMEOUT_SECONDS = 60.0
+GITHUB_API_VERSION = "2026-03-10"
 READY_LABEL = "ready-for-agent"
 AGENT_BRANCH_PREFIX = "agent/"
 _CLOSES_ISSUE = re.compile(r"(?im)^Closes #(\d+)\s*$")
+_ISSUE_URL_NUMBER = re.compile(r"/issues/(\d+)$")
 IssueTitle = NewType("IssueTitle", str)
 IssueUrl = NewType("IssueUrl", str)
 IssueNumber = NewType("IssueNumber", int)
@@ -32,6 +34,15 @@ class Issue:
     number: IssueNumber
     title: IssueTitle
     url: IssueUrl
+    parent: IssueNumber | None = None
+
+
+@dataclass(frozen=True)
+class OpenBlocker:
+    """An open issue that blocks another issue."""
+
+    number: IssueNumber
+    parent: IssueNumber | None
 
 
 @dataclass(frozen=True)
@@ -63,36 +74,41 @@ class GitHubRepository:
         self._workspace = workspace
 
     def ready_issues(self) -> tuple[Issue, ...]:
-        result = self._gh(
-            "issue",
-            "list",
-            "--state",
-            "open",
-            "--label",
-            READY_LABEL,
-            "--limit",
-            "100",
-            "--json",
-            "number,title,url",
+        result = self._paginated_api(
+            "repos/{owner}/{repo}/issues",
+            "state=open",
+            f"labels={READY_LABEL}",
         )
         return tuple(sorted(_issues(result), key=lambda issue: issue.number))
 
     def agent_pull_requests(self) -> tuple[AgentPullRequest, ...]:
-        result = self._gh(
-            "pr",
-            "list",
-            "--state",
-            "open",
-            "--limit",
-            "100",
-            "--json",
-            "number,url,headRefName,body",
-        )
+        result = self._paginated_api("repos/{owner}/{repo}/pulls", "state=open")
         return tuple(
             pull_request
             for pull_request in _pull_requests(result)
             if pull_request.branch.startswith(AGENT_BRANCH_PREFIX)
         )
+
+    def open_blockers(self, issue: IssueNumber) -> tuple[OpenBlocker, ...]:
+        """Return every open issue that blocks an issue."""
+        result = self._paginated_api(
+            f"repos/{{owner}}/{{repo}}/issues/{issue}/dependencies/blocked_by"
+        )
+        return tuple(_open_blockers(result))
+
+    def issue_body(self, issue: IssueNumber) -> str:
+        """Return the source Markdown for an issue."""
+        source = self._gh(
+            "api",
+            "--method",
+            "GET",
+            "-H",
+            f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+            f"repos/{{owner}}/{{repo}}/issues/{issue}",
+            "--jq",
+            '.body // ""',
+        )
+        return source.rstrip("\n")
 
     def metadata(self) -> RepositoryMetadata:
         return _metadata(self._gh("repo", "view", "--json", "owner,defaultBranchRef"))
@@ -141,6 +157,23 @@ class GitHubRepository:
             timeout_seconds=GITHUB_TIMEOUT_SECONDS,
         ).stdout
 
+    def _paginated_api(self, endpoint: str, *fields: str) -> str:
+        arguments = [
+            "api",
+            "--method",
+            "GET",
+            "-H",
+            f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+            "--paginate",
+            "--slurp",
+            endpoint,
+            "-f",
+            "per_page=100",
+        ]
+        for field in fields:
+            arguments.extend(("-f", field))
+        return self._gh(*arguments)
+
 
 def closed_issue_number(body: str) -> IssueNumber | None:
     """Return the issue closed by a pull request body."""
@@ -149,31 +182,41 @@ def closed_issue_number(body: str) -> IssueNumber | None:
 
 
 def _issues(source: str) -> list[Issue]:
-    values = json.loads(source)
-    if not isinstance(values, list):
-        raise RepositoryResponseError("gh issue list returned a non-list JSON value")
+    values = _page_items(source, "issue list")
     issues: list[Issue] = []
     for value in values:
         if not isinstance(value, dict):
             raise RepositoryResponseError("gh issue list returned a non-object issue")
-        number, title, url = value.get("number"), value.get("title"), value.get("url")
+        if "pull_request" in value:
+            continue
+        number = value.get("number")
+        title = value.get("title")
+        url = value.get("html_url", value.get("url"))
         if not isinstance(number, int) or not isinstance(title, str) or not isinstance(url, str):
             raise RepositoryResponseError("gh issue list returned an invalid issue")
-        issues.append(Issue(IssueNumber(number), IssueTitle(title), IssueUrl(url)))
+        issues.append(
+            Issue(
+                IssueNumber(number),
+                IssueTitle(title),
+                IssueUrl(url),
+                _parent_number(value.get("parent_issue_url")),
+            )
+        )
     return issues
 
 
 def _pull_requests(source: str) -> list[AgentPullRequest]:
-    values = json.loads(source)
-    if not isinstance(values, list):
-        raise RepositoryResponseError("gh pr list returned a non-list JSON value")
+    values = _page_items(source, "pull request list")
     pull_requests: list[AgentPullRequest] = []
     for value in values:
         if not isinstance(value, dict):
             raise RepositoryResponseError("gh pr list returned a non-object pull request")
         number = value.get("number")
-        url = value.get("url")
+        url = value.get("html_url", value.get("url"))
+        head = value.get("head")
         branch = value.get("headRefName")
+        if isinstance(head, dict):
+            branch = head.get("ref")
         body = value.get("body")
         if (
             not isinstance(number, int)
@@ -188,6 +231,42 @@ def _pull_requests(source: str) -> list[AgentPullRequest]:
             )
         )
     return pull_requests
+
+
+def _open_blockers(source: str) -> list[OpenBlocker]:
+    blockers: list[OpenBlocker] = []
+    for value in _page_items(source, "blocked-by list"):
+        if not isinstance(value, dict):
+            raise RepositoryResponseError("gh blocked-by list returned a non-object issue")
+        number = value.get("number")
+        state = value.get("state")
+        if not isinstance(number, int) or not isinstance(state, str):
+            raise RepositoryResponseError("gh blocked-by list returned an invalid issue")
+        if state == "open":
+            blockers.append(
+                OpenBlocker(
+                    IssueNumber(number),
+                    _parent_number(value.get("parent_issue_url")),
+                )
+            )
+    return blockers
+
+
+def _page_items(source: str, operation: str) -> list[object]:
+    values = json.loads(source)
+    if not isinstance(values, list):
+        raise RepositoryResponseError(f"gh {operation} returned a non-list JSON value")
+    if not values or not all(isinstance(page, list) for page in values):
+        return values
+    return [item for page in values for item in page]
+
+
+def _parent_number(value: object) -> IssueNumber | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or (match := _ISSUE_URL_NUMBER.search(value)) is None:
+        raise RepositoryResponseError("gh returned an invalid parent issue URL")
+    return IssueNumber(int(match.group(1)))
 
 
 def _metadata(source: str) -> RepositoryMetadata:

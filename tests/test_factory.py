@@ -29,7 +29,7 @@ def _coder_copy(tmp_path: Path) -> Path:
     workspace = instance / "workspace"
     workspace.mkdir()
     source_skills = INSTANCES.parent / ".claude" / "skills"
-    for name in ("implement-ticket", "open-pr"):
+    for name in ("adversarial-review", "implement-ticket", "open-pr"):
         shutil.copytree(source_skills / name, workspace / ".claude" / "skills" / name)
     return instance
 
@@ -91,10 +91,18 @@ responses = Path(os.environ["FACTORY_CANNED_RESPONSES"])
     _write_executable(
         binaries / "gh",
         common
-        + """if arguments[:2] == ["issue", "list"]:
-    output = (responses / "issues.json").read_text(encoding="utf-8")
-elif arguments[:2] == ["pr", "list"]:
-    output = (responses / "pull-requests.json").read_text(encoding="utf-8")
+        + """if arguments[:1] == ["api"]:
+    endpoint = next((argument for argument in arguments if argument.startswith("repos/")), "")
+    if endpoint.endswith("/issues"):
+        output = (responses / "issues.json").read_text(encoding="utf-8")
+    elif endpoint.endswith("/pulls"):
+        output = (responses / "pull-requests.json").read_text(encoding="utf-8")
+    elif endpoint.endswith("/dependencies/blocked_by"):
+        issue = endpoint.split("/")[-3]
+        path = responses / f"blockers-{issue}.json"
+        output = path.read_text(encoding="utf-8") if path.exists() else "[]"
+    else:
+        output = (responses / "issue-body.md").read_text(encoding="utf-8")
 elif arguments[:2] == ["repo", "view"]:
     output = (responses / "repository.json").read_text(encoding="utf-8")
 elif arguments[:2] == ["pr", "create"]:
@@ -124,21 +132,58 @@ time.sleep(float(os.environ.get("FAKE_CODEX_SLEEP", "0")))
 if exit_code := int(os.environ.get("FAKE_CODEX_EXIT", "0")):
     print("Codex exploded", file=sys.stderr)
     raise SystemExit(exit_code)
-scratch = Path.cwd() / ".scratch"
-scratch.mkdir(exist_ok=True)
-(scratch / "pr-body.md").write_text(
-    (responses / "pr-body.md").read_text(encoding="utf-8"), encoding="utf-8"
-)
+if os.environ.get("FAKE_CODEX_WRITE_BODY", "1") == "1":
+    scratch = Path.cwd() / ".scratch"
+    scratch.mkdir(exist_ok=True)
+    (scratch / "pr-body.md").write_text(
+        (responses / "pr-body.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
 print((responses / "codex-events.jsonl").read_text(encoding="utf-8"))
 """,
     )
-    for command in ("claude", "git", "uv"):
+    _write_executable(
+        binaries / "claude",
+        common
+        + """import time
+
+prompt = sys.stdin.read()
+record["stdin"] = prompt
+with Path(os.environ["FACTORY_COMMAND_LOG"]).open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(record) + "\\n")
+time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))
+axis = "standards" if "Review axis: standards" in prompt else "spec"
+records = [
+    json.loads(line)
+    for line in Path(os.environ["FACTORY_COMMAND_LOG"]).read_text(encoding="utf-8").splitlines()
+]
+fixes = sum(
+    item["command"] == "codex" and "resume" in item["arguments"] for item in records
+)
+numbered = responses / f"review-{axis}-{fixes}.md"
+path = numbered if numbered.exists() else responses / f"review-{axis}.md"
+print(path.read_text(encoding="utf-8"))
+""",
+    )
+    for command in ("git", "uv"):
         _write_executable(
             binaries / command,
             common
             + """with Path(os.environ["FACTORY_COMMAND_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(record) + "\\n")
-if " ".join(arguments).startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failure configured")):
+joined = " ".join(arguments)
+fail_once = os.environ.get("FAKE_COMMAND_FAIL_ONCE", "no one-shot failure configured")
+records = [
+    json.loads(line)
+    for line in Path(os.environ["FACTORY_COMMAND_LOG"]).read_text(encoding="utf-8").splitlines()
+]
+matching_calls = sum(
+    item["command"] == record["command"]
+    and " ".join(item["arguments"]).startswith(fail_once)
+    for item in records
+)
+if joined.startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failure configured")) or (
+    joined.startswith(fail_once) and matching_calls == 1
+):
     print(f"{record['command']} exploded", file=sys.stderr)
     raise SystemExit(7)
 """,
@@ -185,6 +230,11 @@ if " ".join(arguments).startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failur
         "## Checks\n\nAll repository checks pass.\n",
         encoding="utf-8",
     )
+    (canned / "issue-body.md").write_text(
+        "Build the fourth ticket and cover it with tests.\n", encoding="utf-8"
+    )
+    for axis in ("standards", "spec"):
+        (canned / f"review-{axis}.md").write_text("No findings", encoding="utf-8")
     (canned / "codex-events.jsonl").write_text(
         '{"type":"thread.started","thread_id":"thread-184"}\n'
         '{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":80,'
@@ -314,11 +364,122 @@ def test_issue_event_scans_github_and_returns_no_work(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "[tool.result] implement_ready_issue (ok): None" in captured.out
-    github_calls = [_arguments(record)[:2] for record in _records(log) if record["command"] == "gh"]
+    github_calls = [_arguments(record)[:1] for record in _records(log) if record["command"] == "gh"]
     assert github_calls == [
-        ["issue", "list"],
-        ["pr", "list"],
+        ["api"],
+        ["api"],
     ]
+
+
+def test_scan_paginates_all_results_and_skips_an_uncovered_blocker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    (tmp_path / "canned" / "blockers-4.json").write_text(
+        json.dumps(
+            [
+                {
+                    "number": 7,
+                    "state": "open",
+                    "parent_issue_url": "https://api.example.test/issues/180",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    assert _mapping(_report(capsys.readouterr().out)["issue"])["number"] == 9
+    list_calls = [
+        _arguments(record)
+        for record in _records(log)
+        if record["command"] == "gh"
+        and "api" in _arguments(record)
+        and any(argument.endswith(("/issues", "/pulls")) for argument in _arguments(record))
+    ]
+    assert len(list_calls) == 2
+    assert all("--paginate" in arguments for arguments in list_calls)
+    assert all("--slurp" in arguments for arguments in list_calls)
+
+
+def test_blocker_with_an_agent_pr_counts_only_inside_the_same_stack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    _fake_clients(tmp_path, monkeypatch)
+    canned = tmp_path / "canned"
+    issues = json.loads((canned / "issues.json").read_text(encoding="utf-8"))
+    assert isinstance(issues, list)
+    for issue in issues:
+        if isinstance(issue, dict) and issue.get("number") == 4:
+            issue["parent_issue_url"] = "https://api.example.test/issues/180"
+    (canned / "issues.json").write_text(json.dumps(issues), encoding="utf-8")
+    (canned / "blockers-4.json").write_text(
+        json.dumps(
+            [
+                {
+                    "number": 2,
+                    "state": "open",
+                    "parent_issue_url": "https://api.example.test/issues/180",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    issue = _mapping(_report(capsys.readouterr().out)["issue"])
+    assert issue["number"] == 4
+    assert issue["parent"] == 180
 
 
 def test_ready_issue_runs_codex_checks_and_opens_pull_request(
@@ -357,6 +518,7 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
         "number": 4,
         "title": "Fourth ticket",
         "url": "https://example.test/issues/4",
+        "parent": None,
     }
     assert report["outcome"] == "opened"
     assert report["pull_request"] == {
@@ -375,6 +537,11 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     codex_duration = _number(codex_report["duration_seconds"])
     assert codex_duration >= 0
     assert _number(report["duration_seconds"]) >= codex_duration
+    review = _mapping(report["review"])
+    rounds = review["rounds"]
+    assert isinstance(rounds, list)
+    assert len(rounds) == 1
+    assert _mapping(review["open_findings"])["hard"] == []
 
     records = _records(log)
     codex = next(record for record in records if record["command"] == "codex")
@@ -387,6 +554,15 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     assert "#4" in _text(codex, "stdin")
     assert "Build test-first" in _text(codex, "stdin")
     assert ".scratch/pr-body.md" in _text(codex, "stdin")
+
+    reviews = [record for record in records if record["command"] == "claude"]
+    assert len(reviews) == 2
+    assert all("--permission-mode" in _arguments(record) for record in reviews)
+    assert all("--allowedTools" in _arguments(record) for record in reviews)
+    assert {"standards", "spec"} == {
+        "standards" if "Review axis: standards" in _text(record, "stdin") else "spec"
+        for record in reviews
+    }
 
     checks = [_arguments(record) for record in records if record["command"] == "uv"]
     assert checks == [
@@ -414,6 +590,152 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     create_arguments = _arguments(create)
     assert create_arguments[create_arguments.index("--reviewer") + 1] == "jorgesolerrr"
     assert len(model.messages) == 1
+
+
+def test_hard_review_finding_resumes_codex_and_reviews_the_fix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    canned = tmp_path / "canned"
+    (canned / "review-standards-0.md").write_text(
+        "[hard] src/example.py:12 violates CODING-STANDARD.md\n",
+        encoding="utf-8",
+    )
+    (canned / "review-standards-1.md").write_text("No findings", encoding="utf-8")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    rounds = _mapping(report["review"])["rounds"]
+    assert isinstance(rounds, list)
+    assert len(rounds) == 2
+    codex_runs = [record for record in _records(log) if record["command"] == "codex"]
+    assert len(codex_runs) == 2
+    assert "resume" in _arguments(codex_runs[1])
+    assert "src/example.py:12" in _text(codex_runs[1], "stdin")
+
+
+def test_open_review_findings_are_reported_after_the_round_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    (tmp_path / "canned" / "review-standards.md").write_text(
+        "[hard] src/example.py:12 remains broken\n",
+        encoding="utf-8",
+    )
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "opened_with_findings"
+    review = _mapping(report["review"])
+    rounds = review["rounds"]
+    assert isinstance(rounds, list)
+    assert len(rounds) == 3
+    assert _mapping(review["open_findings"])["hard"] == ["src/example.py:12 remains broken"]
+    create = next(
+        record
+        for record in _records(log)
+        if record["command"] == "gh" and _arguments(record)[:2] == ["pr", "create"]
+    )
+    assert "## Open review findings" in _text(create, "body")
+
+
+def test_codex_must_replace_a_stale_pull_request_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    stale_body = instance_path / "workspace" / ".scratch" / "pr-body.md"
+    stale_body.parent.mkdir()
+    stale_body.write_text("Stale body from another issue\n", encoding="utf-8")
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CODEX_WRITE_BODY", "0")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "failed"
+    assert "could not read pull request body" in str(report["failure_reason"])
+    records = _records(log)
+    assert not any(
+        record["command"] == "gh" and _arguments(record)[:2] == ["pr", "create"]
+        for record in records
+    )
+    assert any(
+        record["command"] == "git" and _arguments(record)[:2] == ["branch", "-D"]
+        for record in records
+    )
 
 
 def test_failing_check_reports_output_and_relabels_issue(
@@ -476,6 +798,61 @@ def test_failing_check_reports_output_and_relabels_issue(
         "--add-label",
         "ready-for-human",
     ]
+
+
+def test_check_fix_is_reviewed_before_the_pull_request_opens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_COMMAND_FAIL_ONCE", "run ruff check .")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps({"action": "labeled", "label": {"name": "ready-for-agent"}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "opened"
+    assert report["check_fix"] is not None
+    rounds = _mapping(report["review"])["rounds"]
+    assert isinstance(rounds, list)
+    assert len(rounds) == 2
+    records = _records(log)
+    assert len([record for record in records if record["command"] == "claude"]) == 4
+    last_check = max(index for index, record in enumerate(records) if record["command"] == "uv")
+    final_reviews = [
+        index
+        for index, record in enumerate(records)
+        if record["command"] == "claude" and index > last_check
+    ]
+    assert len(final_reviews) == 2
+    create_index = next(
+        index
+        for index, record in enumerate(records)
+        if record["command"] == "gh" and _arguments(record)[:2] == ["pr", "create"]
+    )
+    assert max(final_reviews) < create_index
 
 
 @pytest.mark.parametrize(
