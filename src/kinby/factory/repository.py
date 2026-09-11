@@ -14,12 +14,14 @@ READY_LABEL = "ready-for-agent"
 AGENT_BRANCH_PREFIX = "agent/"
 _CLOSES_ISSUE = re.compile(r"(?im)^Closes #(\d+)\s*$")
 _ISSUE_URL_NUMBER = re.compile(r"/issues/(\d+)$")
+_PULL_REQUEST_URL_NUMBER = re.compile(r"/pull/(\d+)$")
 IssueTitle = NewType("IssueTitle", str)
 IssueUrl = NewType("IssueUrl", str)
 IssueNumber = NewType("IssueNumber", int)
 BranchName = NewType("BranchName", str)
 PullRequestUrl = NewType("PullRequestUrl", str)
 PullRequestNumber = NewType("PullRequestNumber", int)
+StackNumber = NewType("StackNumber", int)
 GitHubLogin = NewType("GitHubLogin", str)
 
 
@@ -53,10 +55,19 @@ class AgentPullRequest:
     url: PullRequestUrl
     branch: BranchName
     body: str
+    stack: StackNumber | None
 
     @property
     def closed_issue(self) -> IssueNumber | None:
         return closed_issue_number(self.body)
+
+
+@dataclass(frozen=True)
+class OpenedPullRequest:
+    """A pull request created by the delegated pipeline."""
+
+    number: PullRequestNumber
+    url: PullRequestUrl
 
 
 @dataclass(frozen=True)
@@ -82,7 +93,12 @@ class GitHubRepository:
         return tuple(sorted(_issues(result), key=lambda issue: issue.number))
 
     def agent_pull_requests(self) -> tuple[AgentPullRequest, ...]:
-        result = self._paginated_api("repos/{owner}/{repo}/pulls", "state=open")
+        result = self._paginated_api(
+            "repos/{owner}/{repo}/pulls",
+            "state=open",
+            "sort=created",
+            "direction=desc",
+        )
         return tuple(
             pull_request
             for pull_request in _pull_requests(result)
@@ -121,8 +137,8 @@ class GitHubRepository:
         title: IssueTitle,
         body_file: Path,
         reviewer: GitHubLogin,
-    ) -> PullRequestUrl:
-        return PullRequestUrl(
+    ) -> OpenedPullRequest:
+        url = PullRequestUrl(
             self._gh(
                 "pr",
                 "create",
@@ -137,6 +153,41 @@ class GitHubRepository:
                 "--reviewer",
                 reviewer,
             ).strip()
+        )
+        match = _PULL_REQUEST_URL_NUMBER.search(url)
+        if match is None:
+            raise RepositoryResponseError("gh pr create returned an invalid pull request URL")
+        return OpenedPullRequest(PullRequestNumber(int(match.group(1))), url)
+
+    def create_stack(self, pull_requests: tuple[PullRequestNumber, ...]) -> None:
+        """Create a stack from pull requests ordered bottom to top."""
+        arguments = [
+            "api",
+            "--method",
+            "POST",
+            "-H",
+            f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+            "repos/{owner}/{repo}/stacks",
+        ]
+        for pull_request in pull_requests:
+            arguments.extend(("-f", f"pull_requests[]={pull_request}"))
+        self._gh(*arguments)
+
+    def extend_stack(
+        self,
+        stack: StackNumber,
+        pull_request: PullRequestNumber,
+    ) -> None:
+        """Append one pull request to the top of an existing stack."""
+        self._gh(
+            "api",
+            "--method",
+            "POST",
+            "-H",
+            f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+            f"repos/{{owner}}/{{repo}}/stacks/{stack}/add",
+            "-f",
+            f"pull_requests[]={pull_request}",
         )
 
     def mark_ready_for_human(self, issue: IssueNumber) -> None:
@@ -227,7 +278,11 @@ def _pull_requests(source: str) -> list[AgentPullRequest]:
             raise RepositoryResponseError("gh pr list returned an invalid pull request")
         pull_requests.append(
             AgentPullRequest(
-                PullRequestNumber(number), PullRequestUrl(url), BranchName(branch), body
+                PullRequestNumber(number),
+                PullRequestUrl(url),
+                BranchName(branch),
+                body,
+                _stack_number(value.get("stack")),
             )
         )
     return pull_requests
@@ -267,6 +322,14 @@ def _parent_number(value: object) -> IssueNumber | None:
     if not isinstance(value, str) or (match := _ISSUE_URL_NUMBER.search(value)) is None:
         raise RepositoryResponseError("gh returned an invalid parent issue URL")
     return IssueNumber(int(match.group(1)))
+
+
+def _stack_number(value: object) -> StackNumber | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not isinstance(number := value.get("number"), int):
+        raise RepositoryResponseError("gh returned an invalid pull request stack")
+    return StackNumber(number)
 
 
 def _metadata(source: str) -> RepositoryMetadata:

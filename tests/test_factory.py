@@ -494,6 +494,242 @@ def test_blocker_with_an_agent_pr_counts_only_inside_the_same_stack(
     assert issue["parent"] == 180
 
 
+def test_agent_pull_request_wake_stacks_a_sub_issue_on_its_sibling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    canned = tmp_path / "canned"
+    issues = json.loads((canned / "issues.json").read_text(encoding="utf-8"))
+    assert isinstance(issues, list)
+    for issue in issues:
+        if isinstance(issue, dict) and issue.get("number") in {2, 4}:
+            issue["parent_issue_url"] = "https://api.example.test/issues/180"
+    (canned / "issues.json").write_text(json.dumps(issues), encoding="utf-8")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "action": "opened",
+                "pull_request": {"head": {"ref": "agent/2-second-ticket"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert _mapping(report["pull_request"])["base_branch"] == "agent/2-second-ticket"
+    records = _records(log)
+    git_calls = [_arguments(record) for record in records if record["command"] == "git"]
+    assert ["fetch", "origin"] in git_calls
+    assert [
+        "switch",
+        "--discard-changes",
+        "-C",
+        "agent/4-fourth-ticket",
+        "origin/agent/2-second-ticket",
+    ] in git_calls
+    create = next(
+        record
+        for record in records
+        if record["command"] == "gh" and _arguments(record)[:2] == ["pr", "create"]
+    )
+    create_arguments = _arguments(create)
+    assert create_arguments[create_arguments.index("--base") + 1] == "agent/2-second-ticket"
+    stack = next(
+        record
+        for record in records
+        if record["command"] == "gh" and "repos/{owner}/{repo}/stacks" in _arguments(record)
+    )
+    assert _arguments(stack) == [
+        "api",
+        "--method",
+        "POST",
+        "-H",
+        "X-GitHub-Api-Version: 2026-03-10",
+        "repos/{owner}/{repo}/stacks",
+        "-f",
+        "pull_requests[]=20",
+        "-f",
+        "pull_requests[]=24",
+    ]
+
+
+def test_stack_registration_failure_warns_after_the_pull_request_opens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    canned = tmp_path / "canned"
+    issues = json.loads((canned / "issues.json").read_text(encoding="utf-8"))
+    assert isinstance(issues, list)
+    for issue in issues:
+        if isinstance(issue, dict) and issue.get("number") in {2, 4}:
+            issue["parent_issue_url"] = "https://api.example.test/issues/180"
+    (canned / "issues.json").write_text(json.dumps(issues), encoding="utf-8")
+    monkeypatch.setenv("FAKE_GH_FAIL", "api --method POST")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "action": "opened",
+                "pull_request": {"head": {"ref": "agent/2-second-ticket"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert report["outcome"] == "opened"
+    warnings = report["warnings"]
+    assert isinstance(warnings, list)
+    assert len(warnings) == 1
+    assert "GitHub exploded" in str(warnings[0])
+    assert not any(
+        record["command"] == "gh" and _arguments(record)[:2] == ["issue", "edit"]
+        for record in _records(log)
+    )
+
+
+def test_sub_issue_extends_the_stack_from_its_most_recent_sibling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    canned = tmp_path / "canned"
+    issues = json.loads((canned / "issues.json").read_text(encoding="utf-8"))
+    assert isinstance(issues, list)
+    issues.append(
+        {
+            "number": 3,
+            "title": "Third ticket",
+            "url": "https://example.test/issues/3",
+            "parent_issue_url": "https://api.example.test/issues/180",
+        }
+    )
+    for issue in issues:
+        if isinstance(issue, dict) and issue.get("number") in {2, 4}:
+            issue["parent_issue_url"] = "https://api.example.test/issues/180"
+    (canned / "issues.json").write_text(json.dumps(issues), encoding="utf-8")
+    (canned / "pull-requests.json").write_text(
+        json.dumps(
+            [
+                {
+                    "number": 22,
+                    "url": "https://example.test/pull/22",
+                    "headRefName": "agent/3-third-ticket",
+                    "body": "Closes #3\n",
+                    "stack": {"number": 42},
+                },
+                {
+                    "number": 20,
+                    "url": "https://example.test/pull/20",
+                    "headRefName": "agent/2-second-ticket",
+                    "body": "Closes #2\n",
+                    "stack": {"number": 42},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "action": "opened",
+                "pull_request": {"head": {"ref": "agent/3-third-ticket"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "routine",
+                "run",
+                "implement-ready-issue",
+                "--payload",
+                str(payload),
+                "--instance",
+                str(instance_path),
+            ]
+        )
+        == 0
+    )
+
+    report = _report(capsys.readouterr().out)
+    assert _mapping(report["pull_request"])["base_branch"] == "agent/3-third-ticket"
+    pull_list = next(
+        record
+        for record in _records(log)
+        if record["command"] == "gh"
+        and any(argument.endswith("/pulls") for argument in _arguments(record))
+    )
+    assert "sort=created" in _arguments(pull_list)
+    assert "direction=desc" in _arguments(pull_list)
+    stack = next(
+        record
+        for record in _records(log)
+        if record["command"] == "gh" and "/stacks/42/add" in " ".join(_arguments(record))
+    )
+    assert _arguments(stack) == [
+        "api",
+        "--method",
+        "POST",
+        "-H",
+        "X-GitHub-Api-Version: 2026-03-10",
+        "repos/{owner}/{repo}/stacks/42/add",
+        "-f",
+        "pull_requests[]=24",
+    ]
+
+
 def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -617,6 +853,10 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     assert _text(create, "body").startswith("Closes #4\n")
     create_arguments = _arguments(create)
     assert create_arguments[create_arguments.index("--reviewer") + 1] == "jorgesolerrr"
+    assert not any(
+        record["command"] == "gh" and "repos/{owner}/{repo}/stacks" in _arguments(record)
+        for record in records
+    )
     assert len(model.messages) == 1
 
 

@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from time import monotonic
-from typing import Literal
+from typing import Literal, NewType
 
 from kinby.factory.clients import (
     ClaudeModel,
@@ -37,11 +37,16 @@ from kinby.factory.repository import (
     RepositoryResponseError,
 )
 from kinby.factory.review import ReviewLoop, ReviewRound, run_review_loop
-from kinby.factory.scan import oldest_eligible_issue, payload_can_change_eligibility
+from kinby.factory.scan import (
+    oldest_eligible_issue,
+    payload_can_change_eligibility,
+    sibling_pull_requests,
+)
 from kinby.plugins import ToolContext, tool
 
 DEFAULT_IMPLEMENTER_MODEL = CodexModel("gpt-5.6-sol")
 DEFAULT_REVIEWER_MODEL = ClaudeModel("claude-fable-5-1")
+PipelineWarning = NewType("PipelineWarning", str)
 
 
 class PipelineOutcome(StrEnum):
@@ -71,6 +76,7 @@ class OpenedPipelineReport:
     codex: CodexRun
     review: ReviewLoop
     check_fix: CodexRun | None
+    warnings: tuple[PipelineWarning, ...]
     duration_seconds: float
     outcome: Literal[
         PipelineOutcome.OPENED,
@@ -125,6 +131,7 @@ def implement_ready_issue(
     checks: ChecksFailed | None = None
     branch: BranchName | None = None
     base_branch: BranchName | None = None
+    warnings: tuple[PipelineWarning, ...] = ()
     report: PipelineReport
     try:
         issues = repository.ready_issues()
@@ -133,8 +140,9 @@ def implement_ready_issue(
         if selected is None:
             return None
         issue = selected
+        siblings = sibling_pull_requests(issue, issues, pull_requests)
         metadata = repository.metadata()
-        base_branch = metadata.default_branch
+        base_branch = siblings[-1].branch if siblings else metadata.default_branch
         branch = branch_name(issue)
         prepare_branch(context.workspace, branch, base_branch)
         codex = run_codex(
@@ -196,22 +204,33 @@ def implement_ready_issue(
                 ),
                 final_review.findings,
             )
-        pull_request_url = open_pull_request(
+        pull_request = open_pull_request(
             repository,
             context.workspace,
             issue,
             metadata,
             branch,
+            base_branch,
             review.open_findings,
         )
+        if siblings:
+            try:
+                if (stack := siblings[-1].stack) is None:
+                    previous_pull_requests = tuple(sibling.number for sibling in siblings)
+                    repository.create_stack((*previous_pull_requests, pull_request.number))
+                else:
+                    repository.extend_stack(stack, pull_request.number)
+            except CommandError as exc:
+                warnings = (PipelineWarning(f"stack registration failed: {exc}"),)
         has_findings = bool(review.open_findings.hard or review.open_findings.suggestions)
         report = OpenedPipelineReport(
             issue=issue,
-            pull_request=PullRequestReport(pull_request_url, branch, metadata.default_branch),
+            pull_request=PullRequestReport(pull_request.url, branch, base_branch),
             checks=passed_checks,
             codex=codex,
             review=review,
             check_fix=check_fix,
+            warnings=warnings,
             duration_seconds=monotonic() - started_at,
             outcome=(
                 PipelineOutcome.OPENED_WITH_FINDINGS if has_findings else PipelineOutcome.OPENED

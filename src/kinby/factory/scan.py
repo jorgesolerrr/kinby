@@ -52,6 +52,23 @@ def oldest_eligible_issue(
     return None
 
 
+def sibling_pull_requests(
+    issue: Issue,
+    issues: tuple[Issue, ...],
+    pull_requests: tuple[AgentPullRequest, ...],
+) -> tuple[AgentPullRequest, ...]:
+    """Return a sub-issue's sibling pull requests from oldest to newest."""
+    if issue.parent is None:
+        return ()
+    sibling_numbers = {sibling.number for sibling in issues if sibling.parent == issue.parent}
+    newest_first = tuple(
+        pull_request
+        for pull_request in pull_requests
+        if pull_request.closed_issue in sibling_numbers
+    )
+    return tuple(reversed(newest_first))
+
+
 def _covered_in_same_stack(
     issue: Issue,
     blocker: OpenBlocker,
