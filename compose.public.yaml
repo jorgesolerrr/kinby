@@ -1,0 +1,23 @@
+# Public ingress for an always-on box. Caddy terminates TLS for KINBY_DOMAIN and proxies
+# to the coder's receiver. KINBY_DOMAIN comes from a .env next to this file.
+#   docker compose -f compose.yaml -f compose.public.yaml up --build --detach
+services:
+  caddy:
+    image: caddy:2.10
+    environment:
+      KINBY_DOMAIN: ${KINBY_DOMAIN:?set KINBY_DOMAIN in .env next to compose.yaml}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      # The daemon may bind published ports to 127.0.0.1 by default; ingress is public.
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    depends_on:
+      - coder
+    restart: unless-stopped
+
+volumes:
+  caddy-config:
+  caddy-data:

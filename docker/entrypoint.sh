@@ -19,7 +19,8 @@ fi
 
 # An `ant auth login` profile mounted read-only becomes the SDK's profile, with the
 # owner-only mode the SDK enforces on credentials. An existing copy keeps its refreshed token.
-if [ -d /anthropic-profile ] && [ ! -d /root/.config/anthropic ]; then
+# A box without a host profile mounts an empty directory and authenticates with an API key.
+if [ -d /anthropic-profile ] && [ -n "$(ls -A /anthropic-profile 2>/dev/null)" ]     && [ ! -d /root/.config/anthropic ]; then
     mkdir -p /root/.config
     cp -r /anthropic-profile /root/.config/anthropic
     chmod -R go-rwx /root/.config/anthropic

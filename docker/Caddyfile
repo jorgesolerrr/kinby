@@ -1,0 +1,4 @@
+# One public name in front of the coder's receiver. Caddy obtains and renews the certificate.
+{$KINBY_DOMAIN} {
+    reverse_proxy coder:8787
+}
