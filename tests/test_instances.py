@@ -42,7 +42,7 @@ def test_coder_instance_loads_its_routine_and_skills(monkeypatch: pytest.MonkeyP
         "reviewer_model": "claude-fable-5-1",
         "review_round_limit": 3,
         "implement_timeout_seconds": 1800,
-        "review_timeout_seconds": 600,
+        "review_timeout_seconds": 900,
         "fix_timeout_seconds": 900,
     }
     assert "Comment a short summary on its issue" in routines[0].prompt

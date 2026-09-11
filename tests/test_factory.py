@@ -1311,7 +1311,7 @@ def test_review_run_uses_the_review_limit(
     routine = instance_path / "routines" / "implement-ready-issue" / "ROUTINE.md"
     routine.write_text(
         routine.read_text(encoding="utf-8").replace(
-            '"review_timeout_seconds":600',
+            '"review_timeout_seconds":900',
             '"review_timeout_seconds":0.05',
         ),
         encoding="utf-8",
