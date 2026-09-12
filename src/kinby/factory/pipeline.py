@@ -29,6 +29,7 @@ from kinby.factory.pull_request import (
     prepare_branch,
     run_checks,
 )
+from kinby.factory.report import report_json
 from kinby.factory.repository import (
     BranchName,
     GitHubRepository,
@@ -101,10 +102,6 @@ class FailedPipelineReport:
 
 
 type PipelineReport = OpenedPipelineReport | FailedPipelineReport
-
-
-def _report_json(report: PipelineReport) -> str:
-    return json.dumps(asdict(report), separators=(",", ":"))
 
 
 @tool(write=True)
@@ -264,4 +261,4 @@ def implement_ready_issue(
             duration_seconds=monotonic() - started_at,
             failure_reason=failure,
         )
-    return _report_json(report)
+    return report_json(asdict(report))

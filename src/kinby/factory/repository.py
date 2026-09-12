@@ -135,6 +135,19 @@ class PullRequestReview:
 
 
 @dataclass(frozen=True)
+class ListedBabysitPullRequest:
+    """An agent pull request before its review state is fetched."""
+
+    number: PullRequestNumber
+    url: PullRequestUrl
+    branch: BranchName
+    head: CommitSha
+    body: str
+    author: GitHubLogin
+    labels: tuple[LabelName, ...]
+
+
+@dataclass(frozen=True)
 class BabysitPullRequest:
     """An agent pull request with all state needed by the babysitter."""
 
@@ -148,7 +161,7 @@ class BabysitPullRequest:
     checks: tuple[CheckRun, ...]
     threads: tuple[ReviewThread, ...]
     reviews: tuple[PullRequestReview, ...]
-    round_comments: tuple[str, ...]
+    round_count: int
 
     @property
     def closed_issue(self) -> IssueNumber | None:
@@ -254,16 +267,19 @@ class GitHubRepository:
             raise RepositoryResponseError("gh pr view returned an empty head branch")
         return BranchName(branch)
 
-    def babysit_pull_requests(self, coder: GitHubLogin) -> tuple[BabysitPullRequest, ...]:
+    def babysit_pull_requests(
+        self,
+        coder: GitHubLogin,
+        coordinates: RepositoryCoordinates,
+    ) -> tuple[BabysitPullRequest, ...]:
         """Return open agent pull requests oldest first with their review state."""
-        coordinates = self.coordinates()
         source = self._paginated_api(
             "repos/{owner}/{repo}/pulls",
             "state=open",
             "sort=created",
             "direction=asc",
         )
-        pull_requests = _babysit_pull_request_stubs(source)
+        pull_requests = _listed_babysit_pull_requests(source)
         return tuple(
             self._complete_babysit_pull_request(pull_request, coder, coordinates)
             for pull_request in pull_requests
@@ -360,7 +376,7 @@ class GitHubRepository:
 
     def _complete_babysit_pull_request(
         self,
-        pull_request: BabysitPullRequest,
+        pull_request: ListedBabysitPullRequest,
         coder: GitHubLogin,
         coordinates: RepositoryCoordinates,
     ) -> BabysitPullRequest:
@@ -397,7 +413,7 @@ class GitHubRepository:
         reviews = _reviews(
             self._paginated_api(f"repos/{{owner}}/{{repo}}/pulls/{pull_request.number}/reviews")
         )
-        round_comments = _round_comments(
+        round_count = _round_count(
             self._paginated_api(f"repos/{{owner}}/{{repo}}/issues/{pull_request.number}/comments"),
             coder,
         )
@@ -412,7 +428,7 @@ class GitHubRepository:
             checks=checks,
             threads=threads,
             reviews=reviews,
-            round_comments=round_comments,
+            round_count=round_count,
         )
 
     def _gh(self, *arguments: str) -> str:
@@ -530,6 +546,17 @@ def _page_items(source: str, operation: str) -> list[object]:
     return [item for page in values for item in page]
 
 
+def _object_pages(source: str, operation: str) -> list[dict[str, object]]:
+    values = json.loads(source)
+    pages = values if isinstance(values, list) else [values]
+    objects: list[dict[str, object]] = []
+    for page in pages:
+        if not isinstance(page, dict):
+            raise RepositoryResponseError(f"gh {operation} returned a non-object page")
+        objects.append(page)
+    return objects
+
+
 def _parent_number(value: object) -> IssueNumber | None:
     if value is None:
         return None
@@ -573,8 +600,8 @@ def _coordinates(source: str) -> RepositoryCoordinates:
     return RepositoryCoordinates(GitHubLogin(owner), RepositoryName(name))
 
 
-def _babysit_pull_request_stubs(source: str) -> list[BabysitPullRequest]:
-    pull_requests: list[BabysitPullRequest] = []
+def _listed_babysit_pull_requests(source: str) -> list[ListedBabysitPullRequest]:
+    pull_requests: list[ListedBabysitPullRequest] = []
     for value in _page_items(source, "pull request list"):
         if not isinstance(value, dict):
             raise RepositoryResponseError("gh pr list returned a non-object pull request")
@@ -597,7 +624,7 @@ def _babysit_pull_request_stubs(source: str) -> list[BabysitPullRequest]:
         ):
             raise RepositoryResponseError("gh pr list returned an invalid pull request")
         pull_requests.append(
-            BabysitPullRequest(
+            ListedBabysitPullRequest(
                 number=PullRequestNumber(number),
                 url=PullRequestUrl(url),
                 branch=BranchName(branch),
@@ -605,10 +632,6 @@ def _babysit_pull_request_stubs(source: str) -> list[BabysitPullRequest]:
                 body=body,
                 author=GitHubLogin(login),
                 labels=tuple(_label_names(labels)),
-                checks=(),
-                threads=(),
-                reviews=(),
-                round_comments=(),
             )
         )
     return pull_requests
@@ -624,11 +647,9 @@ def _label_names(values: list[object]) -> list[LabelName]:
 
 
 def _check_runs(source: str) -> tuple[CheckRun, ...]:
-    values = json.loads(source)
-    pages = values if isinstance(values, list) else [values]
     checks: list[CheckRun] = []
-    for page in pages:
-        if not isinstance(page, dict) or not isinstance(runs := page.get("check_runs"), list):
+    for page in _object_pages(source, "check run list"):
+        if not isinstance(runs := page.get("check_runs"), list):
             raise RepositoryResponseError("gh check run list returned an invalid response")
         for run in runs:
             if not isinstance(run, dict) or not isinstance(status := run.get("status"), str):
@@ -644,18 +665,14 @@ def _check_runs(source: str) -> tuple[CheckRun, ...]:
 
 
 def _review_threads(source: str) -> tuple[ReviewThread, ...]:
-    values = json.loads(source)
-    pages = values if isinstance(values, list) else [values]
     threads: list[ReviewThread] = []
-    for page in pages:
+    for page in _object_pages(source, "review thread list"):
         nodes = _review_thread_nodes(page)
         threads.extend(_review_thread(node) for node in nodes)
     return tuple(threads)
 
 
-def _review_thread_nodes(page: object) -> list[object]:
-    if not isinstance(page, dict):
-        raise RepositoryResponseError("gh review thread list returned a non-object page")
+def _review_thread_nodes(page: dict[str, object]) -> list[object]:
     data = page.get("data")
     repository = data.get("repository") if isinstance(data, dict) else None
     pull_request = repository.get("pullRequest") if isinstance(repository, dict) else None
@@ -722,8 +739,8 @@ def _reviews(source: str) -> tuple[PullRequestReview, ...]:
     return tuple(reviews)
 
 
-def _round_comments(source: str, coder: GitHubLogin) -> tuple[str, ...]:
-    comments: list[str] = []
+def _round_count(source: str, coder: GitHubLogin) -> int:
+    count = 0
     for value in _page_items(source, "issue comment list"):
         if not isinstance(value, dict):
             raise RepositoryResponseError("gh issue comment list returned a non-object comment")
@@ -733,5 +750,5 @@ def _round_comments(source: str, coder: GitHubLogin) -> tuple[str, ...]:
         if not isinstance(author, str) or not isinstance(body, str):
             raise RepositoryResponseError("gh issue comment list returned an invalid comment")
         if author == coder and body.startswith(_BABYSIT_ROUND_PREFIX):
-            comments.append(body)
-    return tuple(comments)
+            count += 1
+    return count

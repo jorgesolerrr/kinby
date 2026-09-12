@@ -7,29 +7,6 @@ from pathlib import Path
 import pytest
 
 from kinby.cli import main
-from kinby.factory.babysit import (
-    actionable_threads,
-    answered_threads,
-    is_merge_ready,
-    is_waiting,
-    resolved_threads,
-    select_pull_request,
-)
-from kinby.factory.repository import (
-    BabysitPullRequest,
-    BranchName,
-    CheckRun,
-    CheckRunStatus,
-    CommitSha,
-    GitHubLogin,
-    LabelName,
-    PullRequestNumber,
-    PullRequestReview,
-    PullRequestUrl,
-    ReviewComment,
-    ReviewThread,
-    ReviewThreadId,
-)
 from kinby.instance import load_instance
 from tests.test_factory import (
     _arguments,
@@ -39,110 +16,6 @@ from tests.test_factory import (
     _use_routine_model,
     _write_executable,
 )
-
-
-def _comment(
-    author: str,
-    *,
-    body: str = "review comment",
-    commit: str | None = "head-24",
-) -> ReviewComment:
-    return ReviewComment(
-        GitHubLogin(author),
-        body,
-        CommitSha(commit) if commit is not None else None,
-    )
-
-
-def _thread(
-    *comments: ReviewComment,
-    resolved: bool = False,
-    thread_id: str = "thread-1",
-) -> ReviewThread:
-    return ReviewThread(ReviewThreadId(thread_id), resolved, "src/example.py", 12, comments)
-
-
-def _pull_request(
-    *,
-    threads: tuple[ReviewThread, ...] = (),
-    checks: tuple[CheckRun, ...] = (),
-    reviews: tuple[PullRequestReview, ...] = (),
-    rounds: tuple[str, ...] = (),
-    labels: tuple[LabelName, ...] = (),
-) -> BabysitPullRequest:
-    return BabysitPullRequest(
-        number=PullRequestNumber(24),
-        url=PullRequestUrl("https://example.test/pull/24"),
-        branch=BranchName("agent/225-babysit"),
-        head=CommitSha("head-24"),
-        body="Closes #225\n",
-        author=GitHubLogin("kinby-coder"),
-        labels=labels,
-        checks=checks,
-        threads=threads,
-        reviews=reviews,
-        round_comments=rounds,
-    )
-
-
-def test_thread_classification_uses_resolution_and_the_last_author() -> None:
-    coder = GitHubLogin("kinby-coder")
-    actionable = _thread(_comment("reviewer"), thread_id="actionable")
-    answered = _thread(
-        _comment("reviewer"),
-        _comment("kinby-coder", body="handled"),
-        thread_id="answered",
-    )
-    resolved = _thread(_comment("reviewer"), resolved=True, thread_id="resolved")
-
-    threads = (actionable, answered, resolved)
-
-    assert actionable_threads(threads, coder) == (actionable,)
-    assert answered_threads(threads, coder) == (answered,)
-    assert resolved_threads(threads) == (resolved,)
-
-
-def test_waiting_and_merge_ready_are_derived_from_the_current_head() -> None:
-    coder = GitHubLogin("kinby-coder")
-    answered = _thread(
-        _comment("reviewer", commit="old-head"),
-        _comment("kinby-coder", commit="old-head"),
-    )
-    completed = CheckRun(CheckRunStatus.COMPLETED)
-    running = CheckRun(CheckRunStatus.IN_PROGRESS)
-    reviewed = PullRequestReview(CommitSha("head-24"))
-
-    assert not is_waiting((completed,))
-    assert is_waiting((completed, running))
-    assert is_merge_ready(
-        _pull_request(threads=(answered,), checks=(completed,), reviews=(reviewed,)), coder
-    )
-    assert not is_merge_ready(
-        _pull_request(threads=(answered,), checks=(running,), reviews=(reviewed,)), coder
-    )
-    assert not is_merge_ready(_pull_request(threads=(answered,), checks=(completed,)), coder)
-
-
-def test_review_comment_on_the_head_is_enough_for_merge_ready() -> None:
-    coder = GitHubLogin("kinby-coder")
-    answered = _thread(_comment("reviewer"), _comment("kinby-coder"))
-
-    assert is_merge_ready(_pull_request(threads=(answered,)), coder)
-
-
-def test_selection_takes_the_first_actionable_non_waiting_pr_below_the_limit() -> None:
-    coder = GitHubLogin("kinby-coder")
-    waiting = _pull_request(
-        threads=(_thread(_comment("reviewer")),),
-        checks=(CheckRun(CheckRunStatus.QUEUED),),
-    )
-    at_limit = _pull_request(
-        threads=(_thread(_comment("reviewer")),),
-        rounds=("one", "two", "three"),
-    )
-    selected = _pull_request(threads=(_thread(_comment("reviewer")),))
-
-    assert select_pull_request((waiting, at_limit, selected), coder, round_limit=3) is selected
 
 
 def _fake_github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
@@ -215,24 +88,51 @@ def _write_scan(
     author: str = "kinby-coder",
 ) -> None:
     canned.joinpath("pull-requests.json").write_text(
-        json.dumps(
-            [
-                {
-                    "number": 24,
-                    "html_url": "https://example.test/pull/24",
-                    "head": {"ref": "agent/225-babysit", "sha": "head-24"},
-                    "body": "Closes #225\n",
-                    "user": {"login": author},
-                    "labels": labels or [],
-                }
-            ]
-        ),
+        json.dumps([_pull_request(number=24, issue=225, author=author, labels=labels)]),
         encoding="utf-8",
     )
-    canned.joinpath("check-runs-head-24.json").write_text(
+    _write_review_state(
+        canned,
+        number=24,
+        head="head-24",
+        threads=threads,
+        checks=checks,
+        reviews=reviews,
+        comments=comments,
+    )
+
+
+def _pull_request(
+    *,
+    number: int,
+    issue: int,
+    author: str = "kinby-coder",
+    labels: list[dict[str, str]] | None = None,
+) -> dict[str, object]:
+    return {
+        "number": number,
+        "html_url": f"https://example.test/pull/{number}",
+        "head": {"ref": f"agent/{issue}-babysit", "sha": f"head-{number}"},
+        "body": f"Closes #{issue}\n",
+        "user": {"login": author},
+        "labels": labels or [],
+    }
+
+
+def _write_review_state(
+    canned: Path,
+    *,
+    number: int,
+    head: str,
+    threads: list[dict[str, object]],
+    checks: list[dict[str, object]],
+    reviews: list[dict[str, object]],
+    comments: list[dict[str, object]],
+) -> None:
+    canned.joinpath(f"check-runs-{head}.json").write_text(
         json.dumps({"check_runs": checks}), encoding="utf-8"
     )
-    canned.joinpath("review-threads-24.json").write_text(
+    canned.joinpath(f"review-threads-{number}.json").write_text(
         json.dumps(
             {
                 "data": {
@@ -246,14 +146,21 @@ def _write_scan(
         ),
         encoding="utf-8",
     )
-    canned.joinpath("reviews-24.json").write_text(json.dumps(reviews), encoding="utf-8")
-    canned.joinpath("issue-comments-24.json").write_text(json.dumps(comments), encoding="utf-8")
+    canned.joinpath(f"reviews-{number}.json").write_text(json.dumps(reviews), encoding="utf-8")
+    canned.joinpath(f"issue-comments-{number}.json").write_text(
+        json.dumps(comments), encoding="utf-8"
+    )
 
 
-def _review_thread(*authors: str) -> dict[str, object]:
+def _review_thread(
+    *authors: str,
+    resolved: bool = False,
+    thread_id: str = "PRRT_thread",
+    head: str = "head-24",
+) -> dict[str, object]:
     return {
-        "id": "PRRT_thread",
-        "isResolved": False,
+        "id": thread_id,
+        "isResolved": resolved,
         "path": "src/example.py",
         "line": 12,
         "comments": {
@@ -261,7 +168,7 @@ def _review_thread(*authors: str) -> dict[str, object]:
                 {
                     "author": {"login": author},
                     "body": "review comment",
-                    "commit": {"oid": "head-24"},
+                    "commit": {"oid": head},
                 }
                 for author in authors
             ]
@@ -366,7 +273,10 @@ def test_answered_review_labels_the_pull_request_merge_ready(
     canned, log = _fake_github(tmp_path, monkeypatch)
     _write_scan(
         canned,
-        threads=[_review_thread("reviewer", "kinby-coder")],
+        threads=[
+            _review_thread("reviewer", "kinby-coder"),
+            _review_thread("reviewer", resolved=True, thread_id="PRRT_resolved"),
+        ],
         checks=[{"status": "completed"}],
         reviews=[{"commit_id": "head-24"}],
         comments=[],
@@ -391,12 +301,6 @@ def test_answered_review_labels_the_pull_request_merge_ready(
         "issue_number": 225,
         "outcome": "merge_ready",
         "round_number": 0,
-        "threads_fixed": 0,
-        "threads_answered": 0,
-        "codex": None,
-        "checks": None,
-        "warnings": [],
-        "failure_reason": None,
     }
     calls = [_arguments(record) for record in _records(log)]
     assert ["pr", "edit", "24", "--add-label", "merge-ready"] in calls
@@ -445,6 +349,66 @@ def test_round_limit_labels_the_pull_request_ready_for_human(
     assert ["pr", "edit", "24", "--add-label", "ready-for-human"] in [
         _arguments(record) for record in _records(log)
     ]
+
+
+def test_one_scan_labels_every_completed_pull_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    canned.joinpath("pull-requests.json").write_text(
+        json.dumps(
+            [
+                _pull_request(number=24, issue=225, author="implementing-agent"),
+                _pull_request(number=25, issue=226),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _write_review_state(
+        canned,
+        number=24,
+        head="head-24",
+        threads=[_review_thread("reviewer", "kinby-coder")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+    )
+    _write_review_state(
+        canned,
+        number=25,
+        head="head-25",
+        threads=[_review_thread("reviewer", head="head-25")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "head-25"}],
+        comments=[
+            {
+                "user": {"login": "kinby-coder"},
+                "body": f"Babysit round {number} of 3: fixed 1, answered 0.",
+            }
+            for number in range(1, 4)
+        ],
+    )
+
+    output = _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    calls = [_arguments(record) for record in _records(log)]
+    assert ["pr", "edit", "24", "--add-label", "merge-ready"] in calls
+    assert ["pr", "edit", "24", "--add-reviewer", "jorgesolerrr"] in calls
+    assert ["pr", "edit", "25", "--add-label", "ready-for-human"] in calls
+    assert sum(arguments[:2] == ["repo", "view"] for arguments in calls) == 1
+    result_line = next(
+        line
+        for line in output.splitlines()
+        if line.startswith("[tool.result] babysit_pull_request (ok): ")
+    )
+    assert json.loads(result_line.partition(": ")[2])["pull_request_number"] == 24
 
 
 def test_actionable_review_waits_for_a_running_check(
