@@ -27,6 +27,7 @@ PullRequestUrl = NewType("PullRequestUrl", str)
 PullRequestNumber = NewType("PullRequestNumber", int)
 StackNumber = NewType("StackNumber", int)
 GitHubLogin = NewType("GitHubLogin", str)
+ReviewThreadId = NewType("ReviewThreadId", str)
 READY_LABEL = LabelName("ready-for-agent")
 READY_FOR_HUMAN_LABEL = LabelName("ready-for-human")
 
@@ -76,6 +77,7 @@ class AgentPullRequest:
     stack: StackNumber | None
     author: GitHubLogin
     labels: tuple[LabelName, ...]
+    requested_reviewers: tuple[GitHubLogin, ...] = ()
 
     @property
     def closed_issue(self) -> IssueNumber | None:
@@ -119,7 +121,10 @@ class ReviewComment:
 class ReviewThread:
     """One GitHub pull request review thread."""
 
+    id: ReviewThreadId
     resolved: bool
+    path: str
+    line: int | None
     comments: tuple[ReviewComment, ...]
 
 
@@ -128,6 +133,7 @@ class PullRequestReview:
     """One submitted review and the commit it reviewed."""
 
     commit: CommitSha | None
+    author: GitHubLogin | None = None
 
 
 @dataclass(frozen=True)
@@ -148,7 +154,10 @@ _REVIEW_THREADS_QUERY = """query BabysitReviewThreads(
     pullRequest(number: $number) {
       reviewThreads(first: 100, after: $endCursor) {
         nodes {
+          id
           isResolved
+          path
+          line
           comments(last: 100) {
             nodes { author { login } body commit { oid } }
           }
@@ -173,6 +182,18 @@ class GitHubRepository:
             f"labels={READY_LABEL}",
         )
         return tuple(sorted(_issues(result), key=lambda issue: issue.number))
+
+    def ready_issue(self, issue: IssueNumber) -> Issue | None:
+        """Return an issue when it is currently open and ready for an agent."""
+        result = self._gh(
+            "api",
+            "--method",
+            "GET",
+            "-H",
+            f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+            f"repos/{{owner}}/{{repo}}/issues/{issue}",
+        )
+        return _ready_issue(result)
 
     def agent_pull_requests(self) -> tuple[AgentPullRequest, ...]:
         result = self._paginated_api(
@@ -254,6 +275,14 @@ class GitHubRepository:
     ) -> None:
         """Add one repository label to a pull request."""
         self._gh("pr", "edit", str(pull_request), "--add-label", label)
+
+    def remove_pull_request_label(
+        self,
+        pull_request: PullRequestNumber,
+        label: LabelName,
+    ) -> None:
+        """Remove one repository label from a pull request."""
+        self._gh("pr", "edit", str(pull_request), "--remove-label", label)
 
     def request_review(
         self,
@@ -421,24 +450,42 @@ def _issues(source: str) -> list[Issue]:
     values = _page_items(source, "issue list")
     issues: list[Issue] = []
     for value in values:
-        if not isinstance(value, dict):
-            raise RepositoryResponseError("gh issue list returned a non-object issue")
-        if "pull_request" in value:
-            continue
-        number = value.get("number")
-        title = value.get("title")
-        url = value.get("html_url", value.get("url"))
-        if not isinstance(number, int) or not isinstance(title, str) or not isinstance(url, str):
-            raise RepositoryResponseError("gh issue list returned an invalid issue")
-        issues.append(
-            Issue(
-                IssueNumber(number),
-                IssueTitle(title),
-                IssueUrl(url),
-                _parent_number(value.get("parent_issue_url")),
-            )
-        )
+        if issue := _issue(value, "issue list"):
+            issues.append(issue)
     return issues
+
+
+def _ready_issue(source: str) -> Issue | None:
+    value = json.loads(source)
+    if not isinstance(value, dict):
+        raise RepositoryResponseError("gh api issue returned a non-object issue")
+    state = value.get("state")
+    labels = value.get("labels")
+    if not isinstance(state, str) or not isinstance(labels, list):
+        raise RepositoryResponseError("gh api issue returned invalid state or labels")
+    if state != "open" or not any(
+        isinstance(label, dict) and label.get("name") == READY_LABEL for label in labels
+    ):
+        return None
+    return _issue(value, "api issue")
+
+
+def _issue(value: object, operation: str) -> Issue | None:
+    if not isinstance(value, dict):
+        raise RepositoryResponseError(f"gh {operation} returned a non-object issue")
+    if "pull_request" in value:
+        return None
+    number = value.get("number")
+    title = value.get("title")
+    url = value.get("html_url", value.get("url"))
+    if not isinstance(number, int) or not isinstance(title, str) or not isinstance(url, str):
+        raise RepositoryResponseError(f"gh {operation} returned an invalid issue")
+    return Issue(
+        IssueNumber(number),
+        IssueTitle(title),
+        IssueUrl(url),
+        _parent_number(value.get("parent_issue_url")),
+    )
 
 
 def _pull_requests(source: str) -> list[AgentPullRequest]:
@@ -453,6 +500,7 @@ def _pull_requests(source: str) -> list[AgentPullRequest]:
         body = value.get("body")
         author = value.get("user")
         labels = value.get("labels")
+        requested_reviewers = value.get("requested_reviewers", [])
         if (
             not isinstance(number, int)
             or not isinstance(url, str)
@@ -463,6 +511,7 @@ def _pull_requests(source: str) -> list[AgentPullRequest]:
             or not isinstance(author, dict)
             or not isinstance(login := author.get("login"), str)
             or not isinstance(labels, list)
+            or not isinstance(requested_reviewers, list)
         ):
             raise RepositoryResponseError("gh pr list returned an invalid pull request")
         pull_requests.append(
@@ -475,6 +524,7 @@ def _pull_requests(source: str) -> list[AgentPullRequest]:
                 stack=_stack_number(value.get("stack")),
                 author=GitHubLogin(login),
                 labels=tuple(_label_names(labels)),
+                requested_reviewers=tuple(_reviewer_logins(requested_reviewers)),
             )
         )
     return pull_requests
@@ -564,6 +614,15 @@ def _label_names(values: list[object]) -> list[LabelName]:
     return labels
 
 
+def _reviewer_logins(values: list[object]) -> list[GitHubLogin]:
+    reviewers: list[GitHubLogin] = []
+    for value in values:
+        if not isinstance(value, dict) or not isinstance(login := value.get("login"), str):
+            raise RepositoryResponseError("gh pr list returned an invalid requested reviewer")
+        reviewers.append(GitHubLogin(login))
+    return reviewers
+
+
 def _check_runs(source: str) -> tuple[CheckRun, ...]:
     checks: list[CheckRun] = []
     for page in _object_pages(source, "check run list"):
@@ -604,13 +663,25 @@ def _review_thread_nodes(page: dict[str, object]) -> list[object]:
 def _review_thread(value: object) -> ReviewThread:
     if not isinstance(value, dict):
         raise RepositoryResponseError("gh review thread list returned a non-object thread")
+    thread_id = value.get("id")
     resolved = value.get("isResolved")
+    path = value.get("path")
+    line = value.get("line")
     comments_value = value.get("comments")
     comments = comments_value.get("nodes") if isinstance(comments_value, dict) else None
-    if not isinstance(resolved, bool) or not isinstance(comments, list):
+    if (
+        not isinstance(thread_id, str)
+        or not isinstance(resolved, bool)
+        or not isinstance(path, str)
+        or not (line is None or isinstance(line, int))
+        or not isinstance(comments, list)
+    ):
         raise RepositoryResponseError("gh review thread list returned an invalid thread")
     return ReviewThread(
+        ReviewThreadId(thread_id),
         resolved,
+        path,
+        line,
         tuple(_review_comment(comment) for comment in comments),
     )
 
@@ -639,9 +710,18 @@ def _reviews(source: str) -> tuple[PullRequestReview, ...]:
         if not isinstance(value, dict):
             raise RepositoryResponseError("gh review list returned a non-object review")
         commit = value.get("commit_id")
-        if not (commit is None or isinstance(commit, str)):
+        user = value.get("user")
+        author = user.get("login") if isinstance(user, dict) else None
+        if not (commit is None or isinstance(commit, str)) or not (
+            author is None or isinstance(author, str)
+        ):
             raise RepositoryResponseError("gh review list returned an invalid review")
-        reviews.append(PullRequestReview(CommitSha(commit) if commit is not None else None))
+        reviews.append(
+            PullRequestReview(
+                CommitSha(commit) if commit is not None else None,
+                GitHubLogin(author) if author is not None else None,
+            )
+        )
     return tuple(reviews)
 
 

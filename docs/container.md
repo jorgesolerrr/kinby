@@ -96,7 +96,7 @@ docker compose -f compose.yaml -f compose.public.yaml up --build --detach
 curl -fsS "https://$KINBY_DOMAIN/health"
 ```
 
-On a box without an `ant auth login` profile, set `ANTHROPIC_API_KEY` in the instance `.env`; the profile mount then stays empty and the entrypoint leaves it alone. The instance `.env` also needs `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `GITHUB_WEBHOOK_SECRET`, and the commit identity. `scripts/deploy-wizard.sh` walks through every value, starts the stack, registers the permanent webhook, and signs Codex in. Run it on the box from the repository root.
+On a box without an `ant auth login` profile, set `ANTHROPIC_API_KEY` in the instance `.env`; the profile mount then stays empty and the entrypoint leaves it alone. The instance `.env` also needs `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `GITHUB_WEBHOOK_SECRET`, and the commit identity. `scripts/deploy-wizard.sh` walks through every value, starts the stack, registers the permanent webhooks, and signs Codex in. Run it on the box from the repository root.
 
 Register the permanent webhooks by hand with the same secret as the instance. The `merge-ready` label must also exist:
 

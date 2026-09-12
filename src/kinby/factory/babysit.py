@@ -40,7 +40,7 @@ class BabysitOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class BabysitReport:
-    """The result of one babysitting action."""
+    """A babysitting result that changed a pull request label."""
 
     pull_request_number: PullRequestNumber
     pull_request_url: PullRequestUrl
@@ -56,49 +56,18 @@ class BabysitReport:
 
 
 @dataclass(frozen=True)
-class _ScheduledWake:
-    """An hourly wake that always scans agent pull requests."""
-
-
-@dataclass(frozen=True)
-class _PullRequestWake:
-    """A pull request signal that carries its head branch."""
-
-    branch: BranchName
-
-
-@dataclass(frozen=True)
-class _PullRequestCommentWake:
-    """A pull request comment signal whose branch GitHub must resolve."""
-
-    pull_request: PullRequestNumber
-
-
-@dataclass(frozen=True)
-class _IgnoredWake:
-    """A signal unrelated to an agent pull request."""
-
-
-type _BabysitWake = _ScheduledWake | _PullRequestWake | _PullRequestCommentWake | _IgnoredWake
-
-
-@dataclass(frozen=True)
 class _BabysitAction:
-    """One pull request label change selected by a scan."""
+    """A completed outcome with the GitHub changes it still needs."""
 
     pull_request: BabysitPullRequest
     issue: IssueNumber
-    outcome: BabysitOutcome
+    outcome: Literal[BabysitOutcome.MERGE_READY, BabysitOutcome.ROUND_LIMIT]
     label: LabelName
+    add_label: bool
+    request_review: bool
 
 
-_OUTCOME_LABEL = {
-    BabysitOutcome.MERGE_READY: MERGE_READY_LABEL,
-    BabysitOutcome.ROUND_LIMIT: READY_FOR_HUMAN_LABEL,
-}
-
-
-def _actionable_threads(
+def actionable_threads(
     threads: tuple[ReviewThread, ...],
     coder: GitHubLogin,
 ) -> tuple[ReviewThread, ...]:
@@ -110,14 +79,14 @@ def _actionable_threads(
     )
 
 
-def _is_waiting(checks: tuple[CheckRun, ...]) -> bool:
+def is_waiting(checks: tuple[CheckRun, ...]) -> bool:
     """Return whether any check run is queued or in progress."""
     return any(
         check.status in {CheckRunStatus.QUEUED, CheckRunStatus.IN_PROGRESS} for check in checks
     )
 
 
-def _is_merge_ready(pull_request: BabysitPullRequest, coder: GitHubLogin) -> bool:
+def is_merge_ready(pull_request: BabysitPullRequest, coder: GitHubLogin) -> bool:
     """Return whether a reviewed pull request has nothing left to answer."""
     head = pull_request.listed.head
     reviewed_head = any(review.commit == head for review in pull_request.reviews) or any(
@@ -125,8 +94,8 @@ def _is_merge_ready(pull_request: BabysitPullRequest, coder: GitHubLogin) -> boo
     )
     return (
         reviewed_head
-        and not _actionable_threads(pull_request.threads, coder)
-        and not _is_waiting(pull_request.checks)
+        and not actionable_threads(pull_request.threads, coder)
+        and not is_waiting(pull_request.checks)
     )
 
 
@@ -140,90 +109,86 @@ def babysit_pull_request(
     fix_timeout_seconds: float = 900,
     checks_fix_timeout_seconds: float = 900,
 ) -> str | None:
-    """Scan agent pull requests and label every completed outcome."""
+    """Scan agent pull requests and label a completed babysitting outcome."""
     repository = GitHubRepository(context.workspace)
-    if not _wake_warrants_scan(_parse_babysit_signal(signal), repository):
+    signaled_pull_request = signal_pull_request_number(signal)
+    signaled_branch = (
+        repository.pull_request_branch(signaled_pull_request)
+        if signaled_pull_request is not None
+        else None
+    )
+    if not signal_warrants_scan(signal, signaled_branch):
         return None
     coder = repository.current_login()
     metadata = repository.metadata()
-    actions = _select_babysit_actions(
-        repository.babysit_pull_requests(coder, metadata),
-        coder,
-        round_limit,
-    )
-    if not actions:
-        return None
-    for action in actions:
-        listed = action.pull_request.listed
-        repository.label_pull_request(listed.number, action.label)
-        if action.outcome is BabysitOutcome.MERGE_READY and coder != listed.author:
+    pull_requests = repository.babysit_pull_requests(coder, metadata)
+    actions = _select_babysit_actions(pull_requests, coder, metadata.maintainer, round_limit)
+    actions_by_pull_request = {action.pull_request.listed.number: action for action in actions}
+    reports: list[BabysitReport] = []
+    for pull_request in pull_requests:
+        listed = pull_request.listed
+        outcome = _label_outcome(pull_request, coder, round_limit)
+        action = actions_by_pull_request.get(listed.number)
+        if action is not None and action.request_review:
             repository.request_review(listed.number, metadata.maintainer)
-    return report_json(tuple(_label_report(action) for action in actions))
+        if outcome is not BabysitOutcome.MERGE_READY and MERGE_READY_LABEL in listed.labels:
+            repository.remove_pull_request_label(listed.number, MERGE_READY_LABEL)
+        if outcome is BabysitOutcome.MERGE_READY and READY_FOR_HUMAN_LABEL in listed.labels:
+            repository.remove_pull_request_label(listed.number, READY_FOR_HUMAN_LABEL)
+        if action is None:
+            continue
+        if action.add_label:
+            repository.label_pull_request(listed.number, action.label)
+        reports.append(_label_report(action))
+    return _reports_json(reports)
 
 
-def _parse_babysit_signal(signal: dict[str, object]) -> _BabysitWake:
-    """Parse raw routine input into one babysitting wake."""
+def signal_warrants_scan(
+    signal: dict[str, object],
+    abbreviated_pull_request_branch: BranchName | None = None,
+) -> bool:
+    """Return whether a schedule or self-contained signal warrants a scan."""
     if not signal:
-        return _ScheduledWake()
+        return True
     body = signal.get("body")
     if not isinstance(body, dict):
-        return _IgnoredWake()
+        return False
     pull_request = body.get("pull_request")
     if isinstance(pull_request, dict):
-        branch = _pull_request_branch(pull_request)
-        return _PullRequestWake(branch) if branch is not None else _IgnoredWake()
+        return _pull_request_is_agent(pull_request)
     issue = body.get("issue")
     if not isinstance(issue, dict) or not isinstance(
         nested_pull_request := issue.get("pull_request"), dict
     ):
-        return _IgnoredWake()
+        return False
     if "head" in nested_pull_request:
-        branch = _pull_request_branch(nested_pull_request)
-        return _PullRequestWake(branch) if branch is not None else _IgnoredWake()
-    number = issue.get("number")
+        return _pull_request_is_agent(nested_pull_request)
     return (
-        _PullRequestCommentWake(PullRequestNumber(number))
-        if isinstance(number, int)
-        else _IgnoredWake()
+        abbreviated_pull_request_branch is not None
+        and abbreviated_pull_request_branch.startswith(AGENT_BRANCH_PREFIX)
     )
 
 
-def _pull_request_branch(value: dict[object, object]) -> BranchName | None:
+def signal_pull_request_number(signal: dict[str, object]) -> PullRequestNumber | None:
+    """Return the PR number from an abbreviated pull request comment signal."""
+    body = signal.get("body")
+    issue = body.get("issue") if isinstance(body, dict) else None
+    if (
+        not isinstance(issue, dict)
+        or not isinstance(issue.get("pull_request"), dict)
+        or not isinstance(number := issue.get("number"), int)
+    ):
+        return None
+    return PullRequestNumber(number)
+
+
+def _pull_request_is_agent(value: dict[object, object]) -> bool:
     head = value.get("head")
-    branch = head.get("ref") if isinstance(head, dict) else None
-    return BranchName(branch) if isinstance(branch, str) else None
-
-
-def _wake_warrants_scan(wake: _BabysitWake, repository: GitHubRepository) -> bool:
-    match wake:
-        case _ScheduledWake():
-            return True
-        case _PullRequestWake(branch):
-            return branch.startswith(AGENT_BRANCH_PREFIX)
-        case _PullRequestCommentWake(pull_request):
-            return repository.pull_request_branch(pull_request).startswith(AGENT_BRANCH_PREFIX)
-        case _IgnoredWake():
-            return False
-
-
-def _select_babysit_actions(
-    pull_requests: tuple[BabysitPullRequest, ...],
-    coder: GitHubLogin,
-    round_limit: int,
-) -> tuple[_BabysitAction, ...]:
-    """Return every pull request whose completed outcome needs a label."""
-    actions: list[_BabysitAction] = []
-    for pull_request in pull_requests:
-        outcome = _label_outcome(pull_request, coder, round_limit)
-        if outcome is None:
-            continue
-        label = _OUTCOME_LABEL[outcome]
-        if label not in pull_request.listed.labels:
-            issue = pull_request.listed.closed_issue
-            if issue is None:
-                raise ValueError("agent pull request body does not close an issue")
-            actions.append(_BabysitAction(pull_request, issue, outcome, label))
-    return tuple(actions)
+    return (
+        isinstance(head, dict)
+        and isinstance(branch := head.get("ref"), str)
+        and branch.startswith(AGENT_BRANCH_PREFIX)
+    )
 
 
 def _label_outcome(
@@ -231,11 +196,57 @@ def _label_outcome(
     coder: GitHubLogin,
     round_limit: int,
 ) -> Literal[BabysitOutcome.MERGE_READY, BabysitOutcome.ROUND_LIMIT] | None:
-    if _is_merge_ready(pull_request, coder):
+    if is_merge_ready(pull_request, coder):
         return BabysitOutcome.MERGE_READY
-    if pull_request.round_count >= round_limit and _actionable_threads(pull_request.threads, coder):
+    if pull_request.round_count >= round_limit and actionable_threads(pull_request.threads, coder):
         return BabysitOutcome.ROUND_LIMIT
     return None
+
+
+def _select_babysit_actions(
+    pull_requests: tuple[BabysitPullRequest, ...],
+    coder: GitHubLogin,
+    maintainer: GitHubLogin,
+    round_limit: int,
+) -> tuple[_BabysitAction, ...]:
+    """Return completed outcomes that still need a label or review request."""
+    actions: list[_BabysitAction] = []
+    for pull_request in pull_requests:
+        outcome = _label_outcome(pull_request, coder, round_limit)
+        if outcome is None:
+            continue
+        label = (
+            MERGE_READY_LABEL if outcome is BabysitOutcome.MERGE_READY else READY_FOR_HUMAN_LABEL
+        )
+        add_label = label not in pull_request.listed.labels
+        request_review = (
+            outcome is BabysitOutcome.MERGE_READY
+            and coder != pull_request.listed.author
+            and maintainer not in pull_request.listed.requested_reviewers
+            and not any(review.author == maintainer for review in pull_request.reviews)
+        )
+        if not add_label and not request_review:
+            continue
+        issue = pull_request.listed.closed_issue
+        if issue is None:
+            raise ValueError("agent pull request body does not close an issue")
+        actions.append(
+            _BabysitAction(
+                pull_request,
+                issue,
+                outcome,
+                label,
+                add_label,
+                request_review,
+            )
+        )
+    return tuple(actions)
+
+
+def _reports_json(reports: list[BabysitReport]) -> str | None:
+    if not reports:
+        return None
+    return report_json(tuple(reports))
 
 
 def _label_report(action: _BabysitAction) -> BabysitReport:

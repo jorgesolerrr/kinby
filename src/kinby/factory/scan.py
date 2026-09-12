@@ -19,8 +19,7 @@ def payload_can_change_eligibility(signal: dict[str, object]) -> bool:
     if "comment" in body:
         return False
     if body.get("action") in {"labeled", "unlabeled"}:
-        label = body.get("label")
-        return isinstance(label, dict) and label.get("name") == READY_LABEL
+        return _names_ready_label(body)
     pull_request = body.get("pull_request")
     if not isinstance(pull_request, dict):
         return True
@@ -30,6 +29,22 @@ def payload_can_change_eligibility(signal: dict[str, object]) -> bool:
         and isinstance(branch := head.get("ref"), str)
         and branch.startswith(AGENT_BRANCH_PREFIX)
     )
+
+
+def labeled_issue_number(signal: dict[str, object]) -> IssueNumber | None:
+    """Return the issue named by a ready-label delivery."""
+    body = signal.get("body")
+    if (
+        not isinstance(body, dict)
+        or body.get("action") != "labeled"
+        or not _names_ready_label(body)
+    ):
+        return None
+    issue = body.get("issue")
+    if not isinstance(issue, dict) or "pull_request" in issue:
+        return None
+    number = issue.get("number")
+    return IssueNumber(number) if isinstance(number, int) else None
 
 
 def oldest_eligible_issue(
@@ -81,3 +96,8 @@ def _covered_in_same_stack(
 
 def _stack(issue: IssueNumber, parent: IssueNumber | None) -> IssueNumber:
     return parent if parent is not None else issue
+
+
+def _names_ready_label(body: dict[str, object]) -> bool:
+    label = body.get("label")
+    return isinstance(label, dict) and label.get("name") == READY_LABEL
