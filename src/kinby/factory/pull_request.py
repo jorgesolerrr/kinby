@@ -1,15 +1,14 @@
 """Prepare, check, push, and open an agent pull request."""
 
 import re
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
-from kinby.factory.clients import PR_BODY, Findings
+from kinby.factory.clients import PR_BODY, REVIEW_REPLIES, Findings
 from kinby.factory.process import CommandError, CommandResult, run_command
 from kinby.factory.repository import (
     AGENT_BRANCH_PREFIX,
     BranchName,
+    CommitSha,
     GitHubRepository,
     Issue,
     OpenedPullRequest,
@@ -17,38 +16,11 @@ from kinby.factory.repository import (
     closed_issue_number,
 )
 
-CHECKS = (
-    ("uv", "run", "ruff", "check", "."),
-    ("uv", "run", "ruff", "format", "--check", "."),
-    ("uv", "run", "ty", "check"),
-    ("uv", "run", "pytest"),
-)
-CHECK_TIMEOUT_SECONDS = 900.0
 GIT_TIMEOUT_SECONDS = 900.0
 
 
-@dataclass(frozen=True)
-class ChecksPassed:
-    passed: Literal[True] = True
-    failed: None = None
-
-
-@dataclass(frozen=True)
-class ChecksFailed:
-    failed: str
-    passed: Literal[False] = False
-
-
-class RepositoryCheckFailed(RuntimeError):
-    """One required repository check failed."""
-
-    def __init__(self, command: tuple[str, ...], reason: str) -> None:
-        self.command = command
-        super().__init__(reason)
-
-
-class PullRequestBodyError(RuntimeError):
-    """The pipeline could not read or update the pull request body."""
+class WorkspaceFileError(RuntimeError):
+    """The pipeline could not read, update, or clear a workspace file."""
 
 
 def branch_name(issue: Issue) -> BranchName:
@@ -71,12 +43,40 @@ def prepare_branch(workspace: Path, branch: BranchName, base_branch: BranchName)
     _clean_workspace(workspace)
 
 
-def clean_failed_branch(
+def checkout_branch(workspace: Path, branch: BranchName) -> None:
+    """Check out an existing agent pull request branch without rebasing it."""
+    _clean_workspace(workspace)
+    _git(workspace, "fetch", "origin")
+    _git(
+        workspace,
+        "switch",
+        "--discard-changes",
+        "-C",
+        branch,
+        f"origin/{branch}",
+    )
+    _clean_workspace(workspace)
+
+
+def current_commit(workspace: Path) -> CommitSha:
+    """Return the checked-out commit."""
+    commit = _git(workspace, "rev-parse", "HEAD").stdout.strip()
+    if not commit:
+        raise CommandError("git rev-parse returned an empty commit")
+    return CommitSha(commit)
+
+
+def push_checked_out_branch(workspace: Path) -> None:
+    """Push the checked-out pull request branch without rewriting history."""
+    _git(workspace, "push")
+
+
+def discard_branch(
     workspace: Path,
     branch: BranchName,
     base_branch: BranchName,
 ) -> None:
-    """Remove failed-run edits and return the persistent workspace to its base."""
+    """Discard a local branch and return the clean workspace to its base."""
     _clean_workspace(workspace)
     _git(
         workspace,
@@ -89,14 +89,18 @@ def clean_failed_branch(
     _git(workspace, "branch", "-D", branch)
 
 
-def run_checks(workspace: Path) -> ChecksPassed:
-    """Run all repository checks in their required order."""
-    for command in CHECKS:
-        try:
-            run_command(command, cwd=workspace, timeout_seconds=CHECK_TIMEOUT_SECONDS)
-        except CommandError as exc:
-            raise RepositoryCheckFailed(command, str(exc)) from exc
-    return ChecksPassed()
+def discard_branch_for_report(
+    workspace: Path,
+    branch: BranchName,
+    base_branch: BranchName,
+    failure_reason: str,
+) -> str:
+    """Discard a branch and include any cleanup error in its report reason."""
+    try:
+        discard_branch(workspace, branch, base_branch)
+    except (CommandError, WorkspaceFileError) as cleanup_error:
+        return f"{failure_reason}; workspace cleanup failed: {cleanup_error}"
+    return failure_reason
 
 
 def open_pull_request(
@@ -114,7 +118,7 @@ def open_pull_request(
     try:
         body = body_file.read_text(encoding="utf-8").strip()
     except OSError as exc:
-        raise PullRequestBodyError(f"could not read pull request body: {exc}") from exc
+        raise WorkspaceFileError(f"could not read pull request body: {exc}") from exc
     if closed_issue_number(body.partition("\n")[0]) == issue.number:
         body = body.partition("\n")[2].lstrip()
     findings = _open_findings(open_findings)
@@ -124,7 +128,7 @@ def open_pull_request(
             encoding="utf-8",
         )
     except OSError as exc:
-        raise PullRequestBodyError(f"could not update pull request body: {exc}") from exc
+        raise WorkspaceFileError(f"could not update pull request body: {exc}") from exc
     return repository.open_pull_request(
         branch=branch,
         base_branch=base_branch,
@@ -146,10 +150,11 @@ def _open_findings(findings: Findings) -> str:
 def _clean_workspace(workspace: Path) -> None:
     _git(workspace, "reset", "--hard")
     _git(workspace, "clean", "-fd")
-    try:
-        (workspace / PR_BODY).unlink(missing_ok=True)
-    except OSError as exc:
-        raise PullRequestBodyError(f"could not clear pull request body: {exc}") from exc
+    for path in (PR_BODY, REVIEW_REPLIES):
+        try:
+            (workspace / path).unlink(missing_ok=True)
+        except OSError as exc:
+            raise WorkspaceFileError(f"could not clear {path}: {exc}") from exc
 
 
 def _git(workspace: Path, *arguments: str) -> CommandResult:

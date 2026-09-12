@@ -95,12 +95,16 @@ elif arguments[:2] == ["pr", "view"]:
 elif arguments[:1] == ["api"] and "user" in arguments:
     output = (responses / "user.txt").read_text(encoding="utf-8")
 elif arguments[:2] == ["api", "graphql"]:
-    number = next(
-        argument.split("=", 1)[1]
-        for argument in arguments
-        if argument.startswith("number=")
-    )
-    output = (responses / f"review-threads-{number}.json").read_text(encoding="utf-8")
+    query = next(argument for argument in arguments if argument.startswith("query="))
+    if "query BabysitReviewThreads" in query:
+        number = next(
+            argument.split("=", 1)[1]
+            for argument in arguments
+            if argument.startswith("number=")
+        )
+        output = (responses / f"review-threads-{number}.json").read_text(encoding="utf-8")
+    else:
+        output = ""
 elif endpoint.endswith("/hooks") and "--method" in arguments:
     url = next(
         value.split("=", 1)[1]
@@ -1516,7 +1520,7 @@ def test_client_overrun_is_killed_and_relabels_issue(
     routine.write_text(
         routine.read_text(encoding="utf-8").replace(
             '"implement_timeout_seconds":1800',
-            '"implement_timeout_seconds":0.05',
+            '"implement_timeout_seconds":0.5',
         ),
         encoding="utf-8",
     )
@@ -1549,7 +1553,7 @@ def test_client_overrun_is_killed_and_relabels_issue(
     assert report["outcome"] == "failed"
     reason = report["failure_reason"]
     assert isinstance(reason, str)
-    assert "0.05-second limit and was killed" in reason
+    assert "0.5-second limit and was killed" in reason
     records = _records(log)
     codex = next(record for record in records if record["command"] == "codex")
     pid = codex["pid"]
@@ -1573,7 +1577,7 @@ def test_review_run_uses_the_review_limit(
     routine.write_text(
         routine.read_text(encoding="utf-8").replace(
             '"review_timeout_seconds":900',
-            '"review_timeout_seconds":0.05',
+            '"review_timeout_seconds":0.5',
         ),
         encoding="utf-8",
     )
@@ -1604,7 +1608,7 @@ def test_review_run_uses_the_review_limit(
 
     report = _report(capsys.readouterr().out)
     assert report["outcome"] == "failed"
-    assert "claude exceeded its 0.05-second limit" in str(report["failure_reason"])
+    assert "claude exceeded its 0.5-second limit" in str(report["failure_reason"])
 
 
 def test_fix_run_uses_the_fix_limit(
@@ -1618,7 +1622,7 @@ def test_fix_run_uses_the_fix_limit(
     routine.write_text(
         routine.read_text(encoding="utf-8").replace(
             '"fix_timeout_seconds":900',
-            '"fix_timeout_seconds":0.05',
+            '"fix_timeout_seconds":0.5',
         ),
         encoding="utf-8",
     )
@@ -1653,7 +1657,7 @@ def test_fix_run_uses_the_fix_limit(
 
     report = _report(capsys.readouterr().out)
     assert report["outcome"] == "failed"
-    assert "codex exceeded its 0.05-second limit" in str(report["failure_reason"])
+    assert "codex exceeded its 0.5-second limit" in str(report["failure_reason"])
     codex_runs = [record for record in _records(log) if record["command"] == "codex"]
     assert len(codex_runs) == 2
     assert "resume" in _arguments(codex_runs[1])

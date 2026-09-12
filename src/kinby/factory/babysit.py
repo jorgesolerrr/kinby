@@ -1,11 +1,34 @@
-"""Classify review state and label agent pull requests."""
+"""Babysit reviews on agent pull requests."""
 
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Literal, NewType
 
-from kinby.factory.clients import CodexModel, CodexRun, ReasoningEffort
-from kinby.factory.pull_request import ChecksFailed, ChecksPassed
+from kinby.factory.checks import (
+    ChecksFailed,
+    ChecksFixFailed,
+    ChecksPassed,
+    run_checks_with_fix,
+)
+from kinby.factory.clients import (
+    CodexModel,
+    CodexRun,
+    CodingClientError,
+    ReasoningEffort,
+    ReviewReply,
+    TokenUsage,
+    fix_review_threads_with_codex,
+)
+from kinby.factory.process import CommandError
+from kinby.factory.pull_request import (
+    WorkspaceFileError,
+    checkout_branch,
+    current_commit,
+    discard_branch,
+    discard_branch_for_report,
+    push_checked_out_branch,
+)
 from kinby.factory.report import report_json
 from kinby.factory.repository import (
     AGENT_BRANCH_PREFIX,
@@ -14,12 +37,14 @@ from kinby.factory.repository import (
     BranchName,
     CheckRun,
     CheckRunStatus,
+    CommitSha,
     GitHubLogin,
     GitHubRepository,
     IssueNumber,
     LabelName,
     PullRequestNumber,
     PullRequestUrl,
+    RepositoryResponseError,
     ReviewThread,
 )
 from kinby.plugins import ToolContext, tool
@@ -40,7 +65,7 @@ class BabysitOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class BabysitReport:
-    """A babysitting result that changed a pull request label."""
+    """One babysitting result."""
 
     pull_request_number: PullRequestNumber
     pull_request_url: PullRequestUrl
@@ -150,6 +175,22 @@ def babysit_pull_request(
         if action.add_label:
             repository.label_pull_request(listed.number, action.label)
         reports.append(_label_report(action))
+    selected = _fix_candidate(pull_requests, coder, round_limit)
+    if selected is not None:
+        reports.append(
+            _run_fix_round(
+                repository,
+                context.workspace,
+                selected,
+                coder,
+                metadata.default_branch,
+                fix_model,
+                fix_effort,
+                round_limit,
+                fix_timeout_seconds,
+                checks_fix_timeout_seconds,
+            )
+        )
     return _reports_json(reports)
 
 
@@ -211,6 +252,148 @@ def _label_outcome(
     if pull_request.round_count >= round_limit and actionable_threads(pull_request.threads, coder):
         return BabysitOutcome.ROUND_LIMIT
     return None
+
+
+def _fix_candidate(
+    pull_requests: tuple[BabysitPullRequest, ...],
+    coder: GitHubLogin,
+    round_limit: int,
+) -> BabysitPullRequest | None:
+    return next(
+        (
+            pull_request
+            for pull_request in pull_requests
+            if pull_request.round_count < round_limit
+            and actionable_threads(pull_request.threads, coder)
+            and not is_waiting(pull_request.checks)
+        ),
+        None,
+    )
+
+
+def _run_fix_round(
+    repository: GitHubRepository,
+    workspace: Path,
+    pull_request: BabysitPullRequest,
+    coder: GitHubLogin,
+    default_branch: BranchName,
+    fix_model: CodexModel,
+    fix_effort: ReasoningEffort,
+    round_limit: int,
+    fix_timeout_seconds: float,
+    checks_fix_timeout_seconds: float,
+) -> BabysitReport:
+    listed = pull_request.listed
+    issue = _closed_issue(pull_request)
+    round_number = pull_request.round_count + 1
+    codex: CodexRun | None = None
+    checks: ChecksPassed | ChecksFailed | None = None
+    try:
+        checkout_branch(workspace, listed.branch)
+        fix = fix_review_threads_with_codex(
+            workspace,
+            threads=actionable_threads(pull_request.threads, coder),
+            model=fix_model,
+            effort=fix_effort,
+            timeout_seconds=fix_timeout_seconds,
+        )
+        codex = fix.codex
+        try:
+            checks, check_fix = run_checks_with_fix(
+                workspace,
+                thread_id=codex.thread_id,
+                model=fix_model,
+                effort=fix_effort,
+                timeout_seconds=checks_fix_timeout_seconds,
+            )
+        except ChecksFixFailed as exc:
+            checks = exc.checks
+            if exc.codex is not None:
+                codex = _combined_codex_run(codex, exc.codex)
+            raise
+        if check_fix is not None:
+            codex = _combined_codex_run(codex, check_fix)
+        commit = current_commit(workspace)
+        push_checked_out_branch(workspace)
+        _publish_replies(repository, fix.replies, commit)
+        fixed = sum(reply.fixed for reply in fix.replies)
+        answered = len(fix.replies) - fixed
+        repository.comment_on_pull_request(
+            listed.number,
+            f"Babysit round {round_number} of {round_limit}: fixed {fixed}, answered {answered}.",
+        )
+        discard_branch(workspace, listed.branch, default_branch)
+        return BabysitReport(
+            pull_request_number=listed.number,
+            pull_request_url=listed.url,
+            issue_number=issue,
+            outcome=BabysitOutcome.FIXED,
+            round_number=round_number,
+            threads_fixed=fixed,
+            threads_answered=answered,
+            codex=codex,
+            checks=checks,
+            warnings=(),
+            failure_reason=None,
+        )
+    except (
+        CommandError,
+        ChecksFixFailed,
+        CodingClientError,
+        WorkspaceFileError,
+        RepositoryResponseError,
+    ) as exc:
+        failure = str(exc)
+        failure = discard_branch_for_report(
+            workspace,
+            listed.branch,
+            default_branch,
+            failure,
+        )
+        try:
+            repository.label_pull_request(listed.number, READY_FOR_HUMAN_LABEL)
+        except CommandError as label_error:
+            failure = f"{failure}; label update failed: {label_error}"
+        return BabysitReport(
+            pull_request_number=listed.number,
+            pull_request_url=listed.url,
+            issue_number=issue,
+            outcome=BabysitOutcome.FAILED,
+            round_number=round_number,
+            threads_fixed=0,
+            threads_answered=0,
+            codex=codex,
+            checks=checks,
+            warnings=(),
+            failure_reason=failure,
+        )
+
+
+def _publish_replies(
+    repository: GitHubRepository,
+    replies: tuple[ReviewReply, ...],
+    commit: CommitSha,
+) -> None:
+    for reply in replies:
+        body = f"{commit}: {reply.reply}" if reply.fixed else reply.reply
+        repository.reply_to_review_thread(reply.thread, body)
+    for reply in replies:
+        if reply.fixed:
+            repository.resolve_review_thread(reply.thread)
+
+
+def _combined_codex_run(first: CodexRun, second: CodexRun) -> CodexRun:
+    return CodexRun(
+        first.thread_id,
+        TokenUsage(
+            input_tokens=first.usage.input_tokens + second.usage.input_tokens,
+            cached_input_tokens=(
+                first.usage.cached_input_tokens + second.usage.cached_input_tokens
+            ),
+            output_tokens=first.usage.output_tokens + second.usage.output_tokens,
+        ),
+        first.duration_seconds + second.duration_seconds,
+    )
 
 
 def _select_babysit_actions(

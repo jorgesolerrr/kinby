@@ -366,6 +366,10 @@ The **factory**'s search for the oldest **eligible issue** after a **wake**. A *
 
 One independent review of the current change against both the repository's standards and its ticket, followed by fixes when the review has hard findings.
 
+### Fix round
+
+One **babysitting** pass that asks the **coding client** to address every **actionable thread**, runs the repository checks, pushes the commit, and posts each **review reply**.
+
 ### Babysitting
 
 The **factory** watching its **agent PRs** after they open, answering review feedback and stopping when each pull request is **merge-ready** or needs a human.
@@ -373,6 +377,10 @@ The **factory** watching its **agent PRs** after they open, answering review fee
 ### Review thread
 
 One conversation attached to a pull request diff. It may be resolved, or remain open for more replies.
+
+### Review reply
+
+The coding **instance**'s answer on a **review thread**. A reply records whether the feedback was fixed and explains what changed or why it stayed unchanged.
 
 ### Actionable thread
 
