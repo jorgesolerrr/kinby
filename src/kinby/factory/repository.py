@@ -42,6 +42,9 @@ class CheckRunStatus(StrEnum):
     QUEUED = "queued"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+    WAITING = "waiting"
+    REQUESTED = "requested"
+    PENDING = "pending"
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,7 @@ class AgentPullRequest:
     stack: StackNumber | None
     author: GitHubLogin
     labels: tuple[LabelName, ...]
+    requested_reviewers: tuple[GitHubLogin, ...] = ()
 
     @property
     def closed_issue(self) -> IssueNumber | None:
@@ -90,18 +94,11 @@ class OpenedPullRequest:
 
 @dataclass(frozen=True)
 class RepositoryMetadata:
-    """GitHub values needed to open an agent pull request."""
+    """The identity and default branch of a GitHub repository."""
 
     maintainer: GitHubLogin
-    default_branch: BranchName
-
-
-@dataclass(frozen=True)
-class RepositoryCoordinates:
-    """The owner and name needed by GitHub's GraphQL API."""
-
-    owner: GitHubLogin
     name: RepositoryName
+    default_branch: BranchName
 
 
 @dataclass(frozen=True)
@@ -136,6 +133,7 @@ class PullRequestReview:
     """One submitted review and the commit it reviewed."""
 
     commit: CommitSha | None
+    author: GitHubLogin | None = None
 
 
 @dataclass(frozen=True)
@@ -228,7 +226,7 @@ class GitHubRepository:
         return source.rstrip("\n")
 
     def metadata(self) -> RepositoryMetadata:
-        return _metadata(self._gh("repo", "view", "--json", "owner,defaultBranchRef"))
+        return _metadata(self._gh("repo", "view", "--json", "name,owner,defaultBranchRef"))
 
     def current_login(self) -> GitHubLogin:
         """Return the login used by the GitHub CLI."""
@@ -236,10 +234,6 @@ class GitHubRepository:
         if not login:
             raise RepositoryResponseError("gh api user returned an empty login")
         return GitHubLogin(login)
-
-    def coordinates(self) -> RepositoryCoordinates:
-        """Return the repository owner and name."""
-        return _coordinates(self._gh("repo", "view", "--json", "nameWithOwner"))
 
     def pull_request_branch(self, pull_request: PullRequestNumber) -> BranchName:
         """Return a pull request's head branch."""
@@ -259,7 +253,7 @@ class GitHubRepository:
     def babysit_pull_requests(
         self,
         coder: GitHubLogin,
-        coordinates: RepositoryCoordinates,
+        metadata: RepositoryMetadata,
     ) -> tuple[BabysitPullRequest, ...]:
         """Return open agent pull requests oldest first with their review state."""
         source = self._paginated_api(
@@ -270,7 +264,7 @@ class GitHubRepository:
         )
         pull_requests = select_agent_pull_requests(tuple(_pull_requests(source)))
         return tuple(
-            self._complete_babysit_pull_request(pull_request, coder, coordinates)
+            self._complete_babysit_pull_request(pull_request, coder, metadata)
             for pull_request in pull_requests
         )
 
@@ -374,7 +368,7 @@ class GitHubRepository:
         self,
         pull_request: AgentPullRequest,
         coder: GitHubLogin,
-        coordinates: RepositoryCoordinates,
+        metadata: RepositoryMetadata,
     ) -> BabysitPullRequest:
         checks = _check_runs(
             self._paginated_api(f"repos/{{owner}}/{{repo}}/commits/{pull_request.head}/check-runs")
@@ -388,9 +382,9 @@ class GitHubRepository:
                 "-f",
                 f"query={_REVIEW_THREADS_QUERY}",
                 "-F",
-                f"owner={coordinates.owner}",
+                f"owner={metadata.maintainer}",
                 "-F",
-                f"name={coordinates.name}",
+                f"name={metadata.name}",
                 "-F",
                 f"number={pull_request.number}",
             )
@@ -506,6 +500,7 @@ def _pull_requests(source: str) -> list[AgentPullRequest]:
         body = value.get("body")
         author = value.get("user")
         labels = value.get("labels")
+        requested_reviewers = value.get("requested_reviewers", [])
         if (
             not isinstance(number, int)
             or not isinstance(url, str)
@@ -516,6 +511,7 @@ def _pull_requests(source: str) -> list[AgentPullRequest]:
             or not isinstance(author, dict)
             or not isinstance(login := author.get("login"), str)
             or not isinstance(labels, list)
+            or not isinstance(requested_reviewers, list)
         ):
             raise RepositoryResponseError("gh pr list returned an invalid pull request")
         pull_requests.append(
@@ -528,6 +524,7 @@ def _pull_requests(source: str) -> list[AgentPullRequest]:
                 stack=_stack_number(value.get("stack")),
                 author=GitHubLogin(login),
                 labels=tuple(_label_names(labels)),
+                requested_reviewers=tuple(_reviewer_logins(requested_reviewers)),
             )
         )
     return pull_requests
@@ -593,26 +590,19 @@ def _metadata(source: str) -> RepositoryMetadata:
     if not isinstance(value, dict):
         raise RepositoryResponseError("gh repo view returned a non-object JSON value")
     owner = value.get("owner")
+    name = value.get("name")
     default_branch = value.get("defaultBranchRef")
     if not isinstance(owner, dict) or not isinstance(default_branch, dict):
         raise RepositoryResponseError("gh repo view returned invalid repository metadata")
     maintainer = owner.get("login")
     branch = default_branch.get("name")
-    if not isinstance(maintainer, str) or not isinstance(branch, str):
+    if not isinstance(maintainer, str) or not isinstance(name, str) or not isinstance(branch, str):
         raise RepositoryResponseError("gh repo view returned invalid repository metadata")
-    return RepositoryMetadata(GitHubLogin(maintainer), BranchName(branch))
-
-
-def _coordinates(source: str) -> RepositoryCoordinates:
-    value = json.loads(source)
-    if not isinstance(value, dict) or not isinstance(
-        name_with_owner := value.get("nameWithOwner"), str
-    ):
-        raise RepositoryResponseError("gh repo view returned invalid repository coordinates")
-    owner, separator, name = name_with_owner.partition("/")
-    if not separator or not owner or not name:
-        raise RepositoryResponseError("gh repo view returned invalid repository coordinates")
-    return RepositoryCoordinates(GitHubLogin(owner), RepositoryName(name))
+    return RepositoryMetadata(
+        GitHubLogin(maintainer),
+        RepositoryName(name),
+        BranchName(branch),
+    )
 
 
 def _label_names(values: list[object]) -> list[LabelName]:
@@ -622,6 +612,15 @@ def _label_names(values: list[object]) -> list[LabelName]:
             raise RepositoryResponseError("gh pr list returned an invalid label")
         labels.append(LabelName(name))
     return labels
+
+
+def _reviewer_logins(values: list[object]) -> list[GitHubLogin]:
+    reviewers: list[GitHubLogin] = []
+    for value in values:
+        if not isinstance(value, dict) or not isinstance(login := value.get("login"), str):
+            raise RepositoryResponseError("gh pr list returned an invalid requested reviewer")
+        reviewers.append(GitHubLogin(login))
+    return reviewers
 
 
 def _check_runs(source: str) -> tuple[CheckRun, ...]:
@@ -711,9 +710,18 @@ def _reviews(source: str) -> tuple[PullRequestReview, ...]:
         if not isinstance(value, dict):
             raise RepositoryResponseError("gh review list returned a non-object review")
         commit = value.get("commit_id")
-        if not (commit is None or isinstance(commit, str)):
+        user = value.get("user")
+        author = user.get("login") if isinstance(user, dict) else None
+        if not (commit is None or isinstance(commit, str)) or not (
+            author is None or isinstance(author, str)
+        ):
             raise RepositoryResponseError("gh review list returned an invalid review")
-        reviews.append(PullRequestReview(CommitSha(commit) if commit is not None else None))
+        reviews.append(
+            PullRequestReview(
+                CommitSha(commit) if commit is not None else None,
+                GitHubLogin(author) if author is not None else None,
+            )
+        )
     return tuple(reviews)
 
 

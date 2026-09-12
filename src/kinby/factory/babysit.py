@@ -1,6 +1,6 @@
 """Classify review state and label agent pull requests."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal, NewType
 
@@ -53,6 +53,18 @@ class BabysitReport:
     checks: ChecksPassed | ChecksFailed | None
     warnings: tuple[BabysitWarning, ...]
     failure_reason: str | None
+
+
+@dataclass(frozen=True)
+class _BabysitAction:
+    """A completed outcome with the GitHub changes it still needs."""
+
+    pull_request: BabysitPullRequest
+    issue: IssueNumber
+    outcome: Literal[BabysitOutcome.MERGE_READY, BabysitOutcome.ROUND_LIMIT]
+    label: LabelName
+    add_label: bool
+    request_review: bool
 
 
 def actionable_threads(
@@ -108,27 +120,36 @@ def babysit_pull_request(
     if not signal_warrants_scan(signal, signaled_branch):
         return None
     coder = repository.current_login()
-    coordinates = repository.coordinates()
-    pull_requests = repository.babysit_pull_requests(coder, coordinates)
+    metadata = repository.metadata()
+    pull_requests = repository.babysit_pull_requests(coder, metadata)
+    actions = _select_babysit_actions(pull_requests, coder, metadata.maintainer, round_limit)
+    actions_by_pull_request = {action.pull_request.listed.number: action for action in actions}
+    outcomes = {
+        pull_request.listed.number: _label_outcome(pull_request, coder, round_limit)
+        for pull_request in pull_requests
+    }
+    for pull_request in pull_requests:
+        if _has_stale_readiness_label(
+            pull_request,
+            outcomes[pull_request.listed.number],
+        ):
+            _closed_issue(pull_request)
     reports: list[BabysitReport] = []
     for pull_request in pull_requests:
         listed = pull_request.listed
-        outcome = _label_outcome(pull_request, coder, round_limit)
+        outcome = outcomes[listed.number]
+        action = actions_by_pull_request.get(listed.number)
+        if action is not None and action.request_review:
+            repository.request_review(listed.number, metadata.maintainer)
         if outcome is not BabysitOutcome.MERGE_READY and MERGE_READY_LABEL in listed.labels:
             repository.remove_pull_request_label(listed.number, MERGE_READY_LABEL)
         if outcome is BabysitOutcome.MERGE_READY and READY_FOR_HUMAN_LABEL in listed.labels:
             repository.remove_pull_request_label(listed.number, READY_FOR_HUMAN_LABEL)
-        if outcome is None:
+        if action is None:
             continue
-        label = (
-            MERGE_READY_LABEL if outcome is BabysitOutcome.MERGE_READY else READY_FOR_HUMAN_LABEL
-        )
-        if label in listed.labels:
-            continue
-        repository.label_pull_request(listed.number, label)
-        if outcome is BabysitOutcome.MERGE_READY and coder != listed.author:
-            repository.request_review(listed.number, coordinates.owner)
-        reports.append(_label_report(pull_request, outcome))
+        if action.add_label:
+            repository.label_pull_request(listed.number, action.label)
+        reports.append(_label_report(action))
     return _reports_json(reports)
 
 
@@ -192,27 +213,78 @@ def _label_outcome(
     return None
 
 
+def _select_babysit_actions(
+    pull_requests: tuple[BabysitPullRequest, ...],
+    coder: GitHubLogin,
+    maintainer: GitHubLogin,
+    round_limit: int,
+) -> tuple[_BabysitAction, ...]:
+    """Return completed outcomes that still need a label or review request."""
+    actions: list[_BabysitAction] = []
+    for pull_request in pull_requests:
+        outcome = _label_outcome(pull_request, coder, round_limit)
+        if outcome is None:
+            continue
+        label = (
+            MERGE_READY_LABEL if outcome is BabysitOutcome.MERGE_READY else READY_FOR_HUMAN_LABEL
+        )
+        add_label = label not in pull_request.listed.labels
+        request_review = (
+            outcome is BabysitOutcome.MERGE_READY
+            and coder != pull_request.listed.author
+            and maintainer not in pull_request.listed.requested_reviewers
+            and not any(
+                review.author == maintainer and review.commit == pull_request.listed.head
+                for review in pull_request.reviews
+            )
+        )
+        if not add_label and not request_review:
+            continue
+        issue = _closed_issue(pull_request)
+        actions.append(
+            _BabysitAction(
+                pull_request,
+                issue,
+                outcome,
+                label,
+                add_label,
+                request_review,
+            )
+        )
+    return tuple(actions)
+
+
+def _has_stale_readiness_label(
+    pull_request: BabysitPullRequest,
+    outcome: Literal[BabysitOutcome.MERGE_READY, BabysitOutcome.ROUND_LIMIT] | None,
+) -> bool:
+    labels = pull_request.listed.labels
+    return (outcome is not BabysitOutcome.MERGE_READY and MERGE_READY_LABEL in labels) or (
+        outcome is BabysitOutcome.MERGE_READY and READY_FOR_HUMAN_LABEL in labels
+    )
+
+
+def _closed_issue(pull_request: BabysitPullRequest) -> IssueNumber:
+    issue = pull_request.listed.closed_issue
+    if issue is None:
+        raise ValueError("agent pull request body does not close an issue")
+    return issue
+
+
 def _reports_json(reports: list[BabysitReport]) -> str | None:
     if not reports:
         return None
-    values = [asdict(report) for report in reports]
-    return report_json(values[0] if len(values) == 1 else values)
+    return report_json(tuple(reports))
 
 
-def _label_report(
-    pull_request: BabysitPullRequest,
-    outcome: Literal[BabysitOutcome.MERGE_READY, BabysitOutcome.ROUND_LIMIT],
-) -> BabysitReport:
-    listed = pull_request.listed
-    issue = listed.closed_issue
-    if issue is None:
-        raise ValueError("agent pull request body does not close an issue")
+def _label_report(action: _BabysitAction) -> BabysitReport:
+    listed = action.pull_request.listed
     return BabysitReport(
         pull_request_number=listed.number,
         pull_request_url=listed.url,
-        issue_number=issue,
-        outcome=outcome,
-        round_number=pull_request.round_count,
+        issue_number=action.issue,
+        outcome=action.outcome,
+        round_number=action.pull_request.round_count,
         threads_fixed=0,
         threads_answered=0,
         codex=None,

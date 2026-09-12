@@ -26,7 +26,7 @@ from kinby.factory.repository import (
     PullRequestNumber,
     PullRequestReview,
     PullRequestUrl,
-    RepositoryCoordinates,
+    RepositoryMetadata,
     RepositoryName,
     ReviewComment,
     ReviewThread,
@@ -149,7 +149,8 @@ def _fake_github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     monkeypatch.setenv("FAKE_GITHUB_LOG", str(log))
     monkeypatch.setenv("FAKE_GITHUB_RESPONSES", str(canned))
     (canned / "repository.txt").write_text(
-        '{"nameWithOwner":"jorgesolerrr/kinby"}\n', encoding="utf-8"
+        '{"name":"kinby","owner":{"login":"jorgesolerrr"},"defaultBranchRef":{"name":"main"}}\n',
+        encoding="utf-8",
     )
     (canned / "user.txt").write_text("kinby-coder\n", encoding="utf-8")
     (canned / "signal-head.txt").write_text("agent/225-babysit\n", encoding="utf-8")
@@ -165,10 +166,21 @@ def _write_scan(
     reviews: list[dict[str, object]],
     comments: list[dict[str, object]],
     labels: list[dict[str, str]] | None = None,
+    requested_reviewers: list[dict[str, str]] | None = None,
     author: str = "kinby-coder",
 ) -> None:
     canned.joinpath("pull-requests.json").write_text(
-        json.dumps([_pull_request(number=24, issue=225, author=author, labels=labels)]),
+        json.dumps(
+            [
+                _pull_request(
+                    number=24,
+                    issue=225,
+                    author=author,
+                    labels=labels,
+                    requested_reviewers=requested_reviewers,
+                )
+            ]
+        ),
         encoding="utf-8",
     )
     _write_review_state(
@@ -188,14 +200,17 @@ def _pull_request(
     issue: int,
     author: str = "kinby-coder",
     labels: list[dict[str, str]] | None = None,
+    requested_reviewers: list[dict[str, str]] | None = None,
+    body: str | None = None,
 ) -> dict[str, object]:
     return {
         "number": number,
         "html_url": f"https://example.test/pull/{number}",
         "head": {"ref": f"agent/{issue}-babysit", "sha": f"head-{number}"},
-        "body": f"Closes #{issue}\n",
+        "body": body if body is not None else f"Closes #{issue}\n",
         "user": {"login": author},
         "labels": labels or [],
+        "requested_reviewers": requested_reviewers or [],
     }
 
 
@@ -261,6 +276,7 @@ def _run_babysit(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     delivery: dict[str, object] | None,
+    expected_exit_code: int = 0,
 ) -> str:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
     instance_path = _coder_copy(tmp_path)
@@ -278,7 +294,7 @@ def _run_babysit(
         payload.write_text(json.dumps(delivery), encoding="utf-8")
         arguments[3:3] = ["--payload", str(payload)]
 
-    assert main(arguments) == 0
+    assert main(arguments) == expected_exit_code
     return capsys.readouterr().out
 
 
@@ -361,7 +377,11 @@ def test_scan_reads_review_thread_location_and_comment_body(
     repository = GitHubRepository(tmp_path)
     (pull_request,) = repository.babysit_pull_requests(
         GitHubLogin("kinby-coder"),
-        RepositoryCoordinates(GitHubLogin("jorgesolerrr"), RepositoryName("kinby")),
+        RepositoryMetadata(
+            GitHubLogin("jorgesolerrr"),
+            RepositoryName("kinby"),
+            BranchName("main"),
+        ),
     )
     (thread,) = pull_request.threads
     (comment,) = thread.comments
@@ -402,25 +422,142 @@ def test_answered_review_labels_the_pull_request_merge_ready(
         for line in output.splitlines()
         if line.startswith("[tool.result] babysit_pull_request (ok): ")
     )
-    assert json.loads(result_line.partition(": ")[2]) == {
-        "pull_request_number": 24,
-        "pull_request_url": "https://example.test/pull/24",
-        "issue_number": 225,
-        "outcome": "merge_ready",
-        "round_number": 0,
-        "threads_fixed": 0,
-        "threads_answered": 0,
-        "codex": None,
-        "checks": None,
-        "warnings": [],
-        "failure_reason": None,
-    }
+    assert json.loads(result_line.partition(": ")[2]) == [
+        {
+            "pull_request_number": 24,
+            "pull_request_url": "https://example.test/pull/24",
+            "issue_number": 225,
+            "outcome": "merge_ready",
+            "round_number": 0,
+            "threads_fixed": 0,
+            "threads_answered": 0,
+            "codex": None,
+            "checks": None,
+            "warnings": [],
+            "failure_reason": None,
+        }
+    ]
     calls = [_arguments(record) for record in _records(log)]
     assert ["pr", "edit", "24", "--add-label", "merge-ready"] in calls
     assert ["pr", "edit", "24", "--add-reviewer", "jorgesolerrr"] in calls
+    assert calls.index(["pr", "edit", "24", "--add-reviewer", "jorgesolerrr"]) < calls.index(
+        ["pr", "edit", "24", "--add-label", "merge-ready"]
+    )
     graphql = next(arguments for arguments in calls if arguments[:2] == ["api", "graphql"])
     query = next(item.removeprefix("query=") for item in graphql if item.startswith("query="))
     assert "query BabysitReviewThreads" in query
+
+
+def test_existing_merge_ready_label_does_not_hide_a_missing_review_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("reviewer", "kinby-coder")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+        labels=[{"name": "merge-ready"}],
+        author="implementing-agent",
+    )
+
+    output = _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    assert '"outcome":"merge_ready"' in output
+    calls = [_arguments(record) for record in _records(log)]
+    assert ["pr", "edit", "24", "--add-reviewer", "jorgesolerrr"] in calls
+    assert ["pr", "edit", "24", "--add-label", "merge-ready"] not in calls
+
+
+def test_existing_review_request_and_merge_ready_label_need_no_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("reviewer", "kinby-coder")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+        labels=[{"name": "merge-ready"}],
+        requested_reviewers=[{"login": "jorgesolerrr"}],
+        author="implementing-agent",
+    )
+
+    output = _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    assert "[tool.result] babysit_pull_request (ok): None" in output
+    assert not any(_arguments(record)[:2] == ["pr", "edit"] for record in _records(log))
+
+
+def test_completed_maintainer_review_is_not_requested_again(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("jorgesolerrr", "kinby-coder")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "head-24", "user": {"login": "jorgesolerrr"}}],
+        comments=[],
+        labels=[{"name": "merge-ready"}],
+        author="implementing-agent",
+    )
+
+    output = _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    assert "[tool.result] babysit_pull_request (ok): None" in output
+    assert not any(_arguments(record)[:2] == ["pr", "edit"] for record in _records(log))
+
+
+def test_maintainer_review_on_an_old_head_does_not_suppress_a_new_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("jorgesolerrr", "kinby-coder")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "old-head", "user": {"login": "jorgesolerrr"}}],
+        comments=[],
+        labels=[{"name": "merge-ready"}],
+        author="implementing-agent",
+    )
+
+    _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    assert ["pr", "edit", "24", "--add-reviewer", "jorgesolerrr"] in [
+        _arguments(record) for record in _records(log)
+    ]
 
 
 def test_round_limit_labels_the_pull_request_ready_for_human(
@@ -455,7 +592,7 @@ def test_round_limit_labels_the_pull_request_ready_for_human(
         for line in output.splitlines()
         if line.startswith("[tool.result] babysit_pull_request (ok): ")
     )
-    report = json.loads(result_line.partition(": ")[2])
+    (report,) = json.loads(result_line.partition(": ")[2])
     assert report["outcome"] == "round_limit"
     assert report["round_number"] == 3
     assert report["issue_number"] == 225
@@ -554,6 +691,49 @@ def test_scan_removes_merge_ready_when_the_pull_request_is_no_longer_ready(
     ]
 
 
+def test_stale_label_is_not_removed_before_the_closing_issue_is_validated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    canned.joinpath("pull-requests.json").write_text(
+        json.dumps(
+            [
+                _pull_request(
+                    number=24,
+                    issue=225,
+                    labels=[{"name": "merge-ready"}],
+                    body="No closing reference",
+                )
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _write_review_state(
+        canned,
+        number=24,
+        head="head-24",
+        threads=[_review_thread("reviewer")],
+        checks=[{"status": "in_progress"}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+    )
+
+    output = _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+        expected_exit_code=1,
+    )
+
+    assert "agent pull request body does not close an issue" in output
+    assert ["pr", "edit", "24", "--remove-label", "merge-ready"] not in [
+        _arguments(record) for record in _records(log)
+    ]
+
+
 def test_scan_replaces_ready_for_human_when_the_pull_request_becomes_ready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -604,6 +784,35 @@ def test_actionable_review_waits_for_a_running_check(
 
     assert "[tool.result] babysit_pull_request (ok): None" in output
     assert not any(_arguments(record)[:2] == ["pr", "edit"] for record in _records(log))
+
+
+@pytest.mark.parametrize("status", ["waiting", "requested", "pending"])
+def test_non_running_github_check_status_does_not_block_merge_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    status: str,
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("reviewer", "kinby-coder")],
+        checks=[{"status": status}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+    )
+
+    output = _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    assert '"outcome":"merge_ready"' in output
+    assert ["pr", "edit", "24", "--add-label", "merge-ready"] in [
+        _arguments(record) for record in _records(log)
+    ]
 
 
 def test_actionable_review_below_the_round_limit_is_left_for_the_fix_slice(

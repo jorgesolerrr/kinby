@@ -308,7 +308,13 @@ if joined.startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failure configured"
         encoding="utf-8",
     )
     (canned / "repository.json").write_text(
-        json.dumps({"owner": {"login": "jorgesolerrr"}, "defaultBranchRef": {"name": "main"}}),
+        json.dumps(
+            {
+                "name": "kinby",
+                "owner": {"login": "jorgesolerrr"},
+                "defaultBranchRef": {"name": "main"},
+            }
+        ),
         encoding="utf-8",
     )
     (canned / "pull-request-url.txt").write_text("https://example.test/pull/24", encoding="utf-8")
