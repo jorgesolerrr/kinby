@@ -39,6 +39,7 @@ from kinby.factory.repository import (
 )
 from kinby.factory.review import ReviewLoop, ReviewRound, run_review_loop
 from kinby.factory.scan import (
+    labeled_issue_number,
     oldest_eligible_issue,
     payload_can_change_eligibility,
     sibling_pull_requests,
@@ -119,6 +120,7 @@ def implement_ready_issue(
     """Implement the oldest ready issue and open its pull request."""
     if not payload_can_change_eligibility(signal):
         return None
+    labeled_issue = labeled_issue_number(signal)
     started_at = monotonic()
     repository = GitHubRepository(context.workspace)
     issue: Issue | None = None
@@ -132,6 +134,12 @@ def implement_ready_issue(
     report: PipelineReport
     try:
         issues = repository.ready_issues()
+        if labeled_issue is not None and all(issue.number != labeled_issue for issue in issues):
+            fetched_issue = repository.ready_issue(labeled_issue)
+        else:
+            fetched_issue = None
+        if fetched_issue is not None:
+            issues = tuple(sorted((*issues, fetched_issue), key=lambda issue: issue.number))
         pull_requests = repository.agent_pull_requests()
         selected = oldest_eligible_issue(repository, issues, pull_requests)
         if selected is None:

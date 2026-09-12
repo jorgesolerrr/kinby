@@ -185,6 +185,18 @@ class GitHubRepository:
         )
         return tuple(sorted(_issues(result), key=lambda issue: issue.number))
 
+    def ready_issue(self, issue: IssueNumber) -> Issue | None:
+        """Return an issue when it is currently open and ready for an agent."""
+        result = self._gh(
+            "api",
+            "--method",
+            "GET",
+            "-H",
+            f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+            f"repos/{{owner}}/{{repo}}/issues/{issue}",
+        )
+        return _ready_issue(result)
+
     def agent_pull_requests(self) -> tuple[AgentPullRequest, ...]:
         result = self._paginated_api(
             "repos/{owner}/{repo}/pulls",
@@ -444,24 +456,42 @@ def _issues(source: str) -> list[Issue]:
     values = _page_items(source, "issue list")
     issues: list[Issue] = []
     for value in values:
-        if not isinstance(value, dict):
-            raise RepositoryResponseError("gh issue list returned a non-object issue")
-        if "pull_request" in value:
-            continue
-        number = value.get("number")
-        title = value.get("title")
-        url = value.get("html_url", value.get("url"))
-        if not isinstance(number, int) or not isinstance(title, str) or not isinstance(url, str):
-            raise RepositoryResponseError("gh issue list returned an invalid issue")
-        issues.append(
-            Issue(
-                IssueNumber(number),
-                IssueTitle(title),
-                IssueUrl(url),
-                _parent_number(value.get("parent_issue_url")),
-            )
-        )
+        if issue := _issue(value, "issue list"):
+            issues.append(issue)
     return issues
+
+
+def _ready_issue(source: str) -> Issue | None:
+    value = json.loads(source)
+    if not isinstance(value, dict):
+        raise RepositoryResponseError("gh api issue returned a non-object issue")
+    state = value.get("state")
+    labels = value.get("labels")
+    if not isinstance(state, str) or not isinstance(labels, list):
+        raise RepositoryResponseError("gh api issue returned invalid state or labels")
+    if state != "open" or not any(
+        isinstance(label, dict) and label.get("name") == READY_LABEL for label in labels
+    ):
+        return None
+    return _issue(value, "api issue")
+
+
+def _issue(value: object, operation: str) -> Issue | None:
+    if not isinstance(value, dict):
+        raise RepositoryResponseError(f"gh {operation} returned a non-object issue")
+    if "pull_request" in value:
+        return None
+    number = value.get("number")
+    title = value.get("title")
+    url = value.get("html_url", value.get("url"))
+    if not isinstance(number, int) or not isinstance(title, str) or not isinstance(url, str):
+        raise RepositoryResponseError(f"gh {operation} returned an invalid issue")
+    return Issue(
+        IssueNumber(number),
+        IssueTitle(title),
+        IssueUrl(url),
+        _parent_number(value.get("parent_issue_url")),
+    )
 
 
 def _pull_requests(source: str) -> list[AgentPullRequest]:

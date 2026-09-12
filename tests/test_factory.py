@@ -16,6 +16,7 @@ from kinby.cli import main
 from kinby.core.dispatcher import TurnConfig
 from kinby.core.events import EventLog
 from kinby.core.turn_runner import LangGraphRunner
+from kinby.factory.scan import labeled_issue_number
 from kinby.instance import Instance, load_instance
 from tests.helpers import turn_config_stub
 
@@ -165,6 +166,9 @@ responses = Path(os.environ["FACTORY_CANNED_RESPONSES"])
         issue = endpoint.split("/")[-3]
         path = responses / f"blockers-{issue}.json"
         output = path.read_text(encoding="utf-8") if path.exists() else "[]"
+    elif "/issues/" in endpoint and "--jq" not in arguments:
+        issue = endpoint.rsplit("/", 1)[-1]
+        output = (responses / f"issue-{issue}.json").read_text(encoding="utf-8")
     else:
         output = (responses / "issue-body.md").read_text(encoding="utf-8")
 elif arguments[:2] == ["repo", "view"]:
@@ -365,6 +369,108 @@ def _report(output: str) -> dict[str, object]:
     return value
 
 
+def _run_labeled_delivery(instance: Path, tmp_path: Path, issue: int) -> int:
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "action": "labeled",
+                "label": {"name": "ready-for-agent"},
+                "issue": {"number": issue},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return main(
+        [
+            "routine",
+            "run",
+            "implement-ready-issue",
+            "--payload",
+            str(payload),
+            "--instance",
+            str(instance),
+        ]
+    )
+
+
+def _canned_issue(canned: Path, number: int, labels: tuple[str, ...]) -> None:
+    (canned / f"issue-{number}.json").write_text(
+        json.dumps(
+            {
+                "number": number,
+                "title": f"Issue {number}",
+                "html_url": f"https://example.test/issues/{number}",
+                "state": "open",
+                "labels": [{"name": label} for label in labels],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _single_issue_reads(log: Path, number: int) -> list[list[str]]:
+    return [
+        _arguments(record)
+        for record in _records(log)
+        if record["command"] == "gh"
+        and any(argument.endswith(f"/issues/{number}") for argument in _arguments(record))
+        and "--jq" not in _arguments(record)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("delivery", "expected"),
+    [
+        (
+            {
+                "body": {
+                    "action": "labeled",
+                    "label": {"name": "ready-for-agent"},
+                    "issue": {"number": 4},
+                }
+            },
+            4,
+        ),
+        (
+            {
+                "body": {
+                    "action": "unlabeled",
+                    "label": {"name": "ready-for-agent"},
+                    "issue": {"number": 4},
+                }
+            },
+            None,
+        ),
+        (
+            {
+                "body": {
+                    "action": "labeled",
+                    "label": {"name": "bug"},
+                    "issue": {"number": 4},
+                }
+            },
+            None,
+        ),
+        (
+            {
+                "body": {
+                    "action": "labeled",
+                    "label": {"name": "ready-for-agent"},
+                    "issue": {"number": 4, "pull_request": {}},
+                }
+            },
+            None,
+        ),
+    ],
+)
+def test_labeled_issue_number(
+    delivery: dict[str, object],
+    expected: int | None,
+) -> None:
+    assert labeled_issue_number(delivery) == expected
+
+
 @pytest.mark.parametrize(
     "delivery",
     [
@@ -452,6 +558,79 @@ def test_issue_event_scans_github_and_returns_no_work(
         ["api"],
         ["api"],
     ]
+
+
+def test_labeled_issue_missing_from_list_runs_pipeline_after_single_issue_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    canned = tmp_path / "canned"
+    (canned / "issues.json").write_text("[]", encoding="utf-8")
+    _canned_issue(canned, 4, ("ready-for-agent",))
+
+    assert _run_labeled_delivery(instance_path, tmp_path, 4) == 0
+
+    assert _mapping(_report(capsys.readouterr().out)["issue"])["number"] == 4
+    assert len(_single_issue_reads(log, 4)) == 1
+
+
+def test_labeled_issue_with_removed_label_returns_no_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    log = _fake_clients(tmp_path, monkeypatch)
+    canned = tmp_path / "canned"
+    (canned / "issues.json").write_text("[]", encoding="utf-8")
+    _canned_issue(canned, 4, ())
+
+    assert _run_labeled_delivery(instance_path, tmp_path, 4) == 0
+
+    assert "[tool.result] implement_ready_issue (ok): None" in capsys.readouterr().out
+    assert len(_single_issue_reads(log, 4)) == 1
+
+
+def test_labeled_issue_already_in_list_is_not_read_again_or_duplicated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+
+    assert _run_labeled_delivery(instance_path, tmp_path, 4) == 0
+
+    assert _mapping(_report(capsys.readouterr().out)["issue"])["number"] == 4
+    assert _single_issue_reads(log, 4) == []
+
+
+def test_lower_labeled_issue_missing_from_list_wins_over_listed_issue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    _fake_clients(tmp_path, monkeypatch)
+    canned = tmp_path / "canned"
+    _canned_issue(canned, 1, ("ready-for-agent",))
+
+    assert _run_labeled_delivery(instance_path, tmp_path, 1) == 0
+
+    assert _mapping(_report(capsys.readouterr().out)["issue"])["number"] == 1
 
 
 def test_scan_paginates_all_results_and_skips_an_uncovered_blocker(
