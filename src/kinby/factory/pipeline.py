@@ -38,6 +38,7 @@ from kinby.factory.repository import (
 )
 from kinby.factory.review import ReviewLoop, ReviewRound, run_review_loop
 from kinby.factory.scan import (
+    labeled_issue_number,
     oldest_eligible_issue,
     payload_can_change_eligibility,
     sibling_pull_requests,
@@ -135,6 +136,11 @@ def implement_ready_issue(
     report: PipelineReport
     try:
         issues = repository.ready_issues()
+        labeled_number = labeled_issue_number(signal)
+        if labeled_number is not None and all(issue.number != labeled_number for issue in issues):
+            labeled_issue = repository.ready_issue(labeled_number)
+            if labeled_issue is not None:
+                issues = tuple(sorted((*issues, labeled_issue), key=lambda issue: issue.number))
         pull_requests = repository.agent_pull_requests()
         selected = oldest_eligible_issue(repository, issues, pull_requests)
         if selected is None:

@@ -32,6 +32,24 @@ def payload_can_change_eligibility(signal: dict[str, object]) -> bool:
     )
 
 
+def labeled_issue_number(signal: dict[str, object]) -> IssueNumber | None:
+    """Return the issue named by a ready-label delivery."""
+    body = signal.get("body")
+    if not isinstance(body, dict) or body.get("action") != "labeled":
+        return None
+    label = body.get("label")
+    issue = body.get("issue")
+    if (
+        not isinstance(label, dict)
+        or label.get("name") != READY_LABEL
+        or not isinstance(issue, dict)
+        or "pull_request" in issue
+        or not isinstance(number := issue.get("number"), int)
+    ):
+        return None
+    return IssueNumber(number)
+
+
 def oldest_eligible_issue(
     repository: GitHubRepository,
     issues: tuple[Issue, ...],
