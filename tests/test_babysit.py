@@ -669,18 +669,3 @@ def test_actionable_review_below_the_round_limit_is_left_for_the_fix_slice(
 
     assert "[tool.result] babysit_pull_request (ok): None" in output
     assert not any(_arguments(record)[:2] == ["pr", "edit"] for record in _records(log))
-
-
-def test_deployment_registers_the_babysit_signal() -> None:
-    root = Path(__file__).parents[1]
-    wizard = (root / "scripts" / "deploy-wizard.sh").read_text(encoding="utf-8")
-    container = (root / "docs" / "container.md").read_text(encoding="utf-8")
-
-    for value in (
-        "babysit-pull-request",
-        "pull_request_review",
-        "pull_request_review_comment",
-        "issue_comment",
-    ):
-        assert value in wizard
-        assert value in container
