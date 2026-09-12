@@ -366,6 +366,22 @@ The **factory**'s search for the oldest **eligible issue** after a **wake**. A *
 
 One independent review of the current change against both the repository's standards and its ticket, followed by fixes when the review has hard findings.
 
+### Babysitting
+
+The **factory** watching its **agent PRs** after they open, answering review feedback and stopping when each pull request is **merge-ready** or needs a human.
+
+### Review thread
+
+One conversation attached to a pull request diff. It may be resolved, or remain open for more replies.
+
+### Actionable thread
+
+An unresolved **review thread** whose latest reply is not from the coding **instance**. The factory has feedback to handle there.
+
+### Merge-ready
+
+An **agent PR** reviewed on its current head, with no **actionable threads** and no check still running. The label reports readiness; the factory never merges it.
+
 ### Agent PR
 
 A pull request that a **delegated pipeline** opens for one **eligible issue**. Its branch name starts with `agent/`.

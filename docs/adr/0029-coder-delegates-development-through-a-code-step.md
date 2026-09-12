@@ -10,6 +10,8 @@ Ticket #181 makes the coder instance an orchestrator. Its routine's **code step*
 
 The code step creates branches named `agent/<issue>-<slug>` from the issue's stack base. It never pushes to the default branch, never force-pushes, and does not rebase until a later babysitting process can repair the rest of a stack. These rules live in the pipeline code because its Git calls do not pass through the model tool gate or its denylist.
 
+Babysitting uses a second code-step routine. GitHub review deliveries wake it, while an hourly scan catches missed deliveries. Review threads, labels, and the coder's round comments keep all progress on the pull request; no parallel state is stored in the instance. The babysitter follows the same git rules and never merges.
+
 ## Rejected options
 
 - **D2, keep coding in the kinby model.** Rejected because the first run spent most of its API cost on repository work that the user's coding subscriptions already cover.

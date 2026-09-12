@@ -65,12 +65,23 @@ docker compose exec coder codex exec "Reply with one word: ready"
 docker compose exec coder claude -p "Reply with one word: ready"
 ```
 
-The `coder` instance listens on `127.0.0.1:8787`. Its `implement-ready-issue` routine accepts GitHub `issues` and `pull_request` webhook deliveries at `/signals/implement-ready-issue`, signed with `GITHUB_WEBHOOK_SECRET`. Relevant deliveries start a scan through that one signal path, and the hourly schedule catches missed deliveries.
+The `coder` instance listens on `127.0.0.1:8787`. Its two GitHub routines use separate signal paths, both signed with `GITHUB_WEBHOOK_SECRET`:
 
-A local box has no public URL for GitHub to call. Forward the repository's webhook deliveries with the gh webhook extension (`gh extension install cli/gh-webhook`), using the same secret as the instance:
+- `/signals/implement-ready-issue` accepts `issues` and `pull_request` deliveries.
+- `/signals/babysit-pull-request` accepts `pull_request_review`, `pull_request_review_comment`, and `issue_comment` deliveries.
+
+Relevant deliveries start a scan, and each routine's hourly schedule catches missed deliveries.
+
+A local box has no public URL for GitHub to call. Forward the repository's webhook deliveries with the gh webhook extension (`gh extension install cli/gh-webhook`), using the same secret as the instance. Run each forwarder in its own terminal:
 
 ```sh
-gh webhook forward --repo jorgesolerrr/kinby --events issues,pull_request   --url http://localhost:8787/signals/implement-ready-issue   --secret "$GITHUB_WEBHOOK_SECRET"
+gh webhook forward --repo jorgesolerrr/kinby --events issues,pull_request \
+  --url http://localhost:8787/signals/implement-ready-issue \
+  --secret "$GITHUB_WEBHOOK_SECRET"
+gh webhook forward --repo jorgesolerrr/kinby \
+  --events pull_request_review,pull_request_review_comment,issue_comment \
+  --url http://localhost:8787/signals/babysit-pull-request \
+  --secret "$GITHUB_WEBHOOK_SECRET"
 ```
 
 The forwarder registers a temporary webhook and relays deliveries while it runs. An always-on box registers a permanent webhook instead, as described next.
@@ -87,10 +98,20 @@ curl -fsS "https://$KINBY_DOMAIN/health"
 
 On a box without an `ant auth login` profile, set `ANTHROPIC_API_KEY` in the instance `.env`; the profile mount then stays empty and the entrypoint leaves it alone. The instance `.env` also needs `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `GITHUB_WEBHOOK_SECRET`, and the commit identity. `scripts/deploy-wizard.sh` walks through every value, starts the stack, registers the permanent webhook, and signs Codex in. Run it on the box from the repository root.
 
-Register the permanent webhook by hand with the same secret as the instance:
+Register the permanent webhooks by hand with the same secret as the instance. The `merge-ready` label must also exist:
 
 ```sh
-gh api --method POST repos/jorgesolerrr/kinby/hooks   -f name=web -F active=true -f 'events[]=issues' -f 'events[]=pull_request'   -f "config[url]=https://$KINBY_DOMAIN/signals/implement-ready-issue"   -f config[content_type]=json -f "config[secret]=$GITHUB_WEBHOOK_SECRET"
+gh api --method POST repos/jorgesolerrr/kinby/hooks \
+  -f name=web -F active=true -f 'events[]=issues' -f 'events[]=pull_request' \
+  -f "config[url]=https://$KINBY_DOMAIN/signals/implement-ready-issue" \
+  -f config[content_type]=json -f "config[secret]=$GITHUB_WEBHOOK_SECRET"
+gh api --method POST repos/jorgesolerrr/kinby/hooks \
+  -f name=web -F active=true -f 'events[]=pull_request_review' \
+  -f 'events[]=pull_request_review_comment' -f 'events[]=issue_comment' \
+  -f "config[url]=https://$KINBY_DOMAIN/signals/babysit-pull-request" \
+  -f config[content_type]=json -f "config[secret]=$GITHUB_WEBHOOK_SECRET"
+gh label create merge-ready --color 0E8A16 \
+  --description "Agent pull request is reviewed and ready to merge"
 ```
 
 `docker/update.sh` keeps the box on main. It fetches, exits when nothing changed, defers while a coding client is running inside the coder, and otherwise fast-forwards and rebuilds. Run it from cron:
