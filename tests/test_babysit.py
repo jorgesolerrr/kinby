@@ -22,11 +22,15 @@ from kinby.factory.repository import (
     CheckRunStatus,
     CommitSha,
     GitHubLogin,
+    GitHubRepository,
     PullRequestNumber,
     PullRequestReview,
     PullRequestUrl,
+    RepositoryCoordinates,
+    RepositoryName,
     ReviewComment,
     ReviewThread,
+    ReviewThreadId,
     select_agent_pull_requests,
 )
 from kinby.instance import load_instance
@@ -70,18 +74,27 @@ def _babysit_pull_request(
 
 def test_thread_classification_is_pure_and_ignores_empty_and_resolved_threads() -> None:
     coder = GitHubLogin("kinby-coder")
-    empty = ReviewThread(False, ())
+    empty = ReviewThread(ReviewThreadId("empty"), False, "src/example.py", None, ())
     actionable = ReviewThread(
+        ReviewThreadId("actionable"),
         False,
-        (ReviewComment(GitHubLogin("reviewer"), CommitSha("head-24")),),
+        "src/example.py",
+        12,
+        (ReviewComment(GitHubLogin("reviewer"), "please fix", CommitSha("head-24")),),
     )
     answered = ReviewThread(
+        ReviewThreadId("answered"),
         False,
-        (ReviewComment(coder, CommitSha("head-24")),),
+        "src/example.py",
+        12,
+        (ReviewComment(coder, "fixed", CommitSha("head-24")),),
     )
     resolved = ReviewThread(
+        ReviewThreadId("resolved"),
         True,
-        (ReviewComment(GitHubLogin("reviewer"), CommitSha("head-24")),),
+        "src/example.py",
+        12,
+        (ReviewComment(GitHubLogin("reviewer"), "please fix", CommitSha("head-24")),),
     )
 
     assert actionable_threads((empty, actionable, answered, resolved), coder) == (actionable,)
@@ -262,14 +275,19 @@ def _write_review_state(
 def _review_thread(
     *authors: str,
     resolved: bool = False,
+    thread_id: str = "PRRT_thread",
     head: str = "head-24",
 ) -> dict[str, object]:
     return {
+        "id": thread_id,
         "isResolved": resolved,
+        "path": "src/example.py",
+        "line": 12,
         "comments": {
             "nodes": [
                 {
                     "author": {"login": author},
+                    "body": "review comment",
                     "commit": {"oid": head},
                 }
                 for author in authors
@@ -365,6 +383,33 @@ def test_schedule_wake_always_scans(
     assert any(
         any(item.endswith("/pulls") for item in _arguments(record)) for record in _records(log)
     )
+
+
+def test_scan_reads_review_thread_location_and_comment_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canned, _ = _fake_github(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("reviewer", thread_id="PRRT_review")],
+        checks=[{"status": "completed"}],
+        reviews=[],
+        comments=[],
+    )
+
+    repository = GitHubRepository(tmp_path)
+    (pull_request,) = repository.babysit_pull_requests(
+        GitHubLogin("kinby-coder"),
+        RepositoryCoordinates(GitHubLogin("jorgesolerrr"), RepositoryName("kinby")),
+    )
+    (thread,) = pull_request.threads
+    (comment,) = thread.comments
+
+    assert thread.id == ReviewThreadId("PRRT_review")
+    assert thread.path == "src/example.py"
+    assert thread.line == 12
+    assert comment.body == "review comment"
 
 
 def test_answered_review_labels_the_pull_request_merge_ready(
@@ -516,7 +561,64 @@ def test_one_scan_labels_every_completed_pull_request(
         for line in output.splitlines()
         if line.startswith("[tool.result] babysit_pull_request (ok): ")
     )
-    assert json.loads(result_line.partition(": ")[2])["pull_request_number"] == 24
+    reports = json.loads(result_line.partition(": ")[2])
+    assert [report["pull_request_number"] for report in reports] == [24, 25]
+    assert [report["outcome"] for report in reports] == ["merge_ready", "round_limit"]
+
+
+def test_scan_removes_merge_ready_when_the_pull_request_is_no_longer_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("reviewer")],
+        checks=[{"status": "in_progress"}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+        labels=[{"name": "merge-ready"}],
+    )
+
+    output = _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    assert "[tool.result] babysit_pull_request (ok): None" in output
+    assert ["pr", "edit", "24", "--remove-label", "merge-ready"] in [
+        _arguments(record) for record in _records(log)
+    ]
+
+
+def test_scan_replaces_ready_for_human_when_the_pull_request_becomes_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("reviewer", "kinby-coder")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+        labels=[{"name": "ready-for-human"}],
+    )
+
+    _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    calls = [_arguments(record) for record in _records(log)]
+    assert ["pr", "edit", "24", "--remove-label", "ready-for-human"] in calls
+    assert ["pr", "edit", "24", "--add-label", "merge-ready"] in calls
 
 
 def test_actionable_review_waits_for_a_running_check(

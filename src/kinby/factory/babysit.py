@@ -45,12 +45,7 @@ class BabysitReport:
     pull_request_number: PullRequestNumber
     pull_request_url: PullRequestUrl
     issue_number: IssueNumber
-    outcome: Literal[
-        BabysitOutcome.FIXED,
-        BabysitOutcome.MERGE_READY,
-        BabysitOutcome.ROUND_LIMIT,
-        BabysitOutcome.FAILED,
-    ]
+    outcome: BabysitOutcome
     round_number: int
     threads_fixed: int
     threads_answered: int
@@ -115,26 +110,26 @@ def babysit_pull_request(
     coder = repository.current_login()
     coordinates = repository.coordinates()
     pull_requests = repository.babysit_pull_requests(coder, coordinates)
-    first_report: BabysitReport | None = None
+    reports: list[BabysitReport] = []
     for pull_request in pull_requests:
         listed = pull_request.listed
-        if is_merge_ready(pull_request, coder) and MERGE_READY_LABEL not in listed.labels:
-            report = _label_report(pull_request, BabysitOutcome.MERGE_READY)
-            repository.label_pull_request(listed.number, MERGE_READY_LABEL)
-            if coder != listed.author:
-                repository.request_review(listed.number, coordinates.owner)
-            if first_report is None:
-                first_report = report
-        if (
-            pull_request.round_count >= round_limit
-            and actionable_threads(pull_request.threads, coder)
-            and READY_FOR_HUMAN_LABEL not in listed.labels
-        ):
-            report = _label_report(pull_request, BabysitOutcome.ROUND_LIMIT)
-            repository.label_pull_request(listed.number, READY_FOR_HUMAN_LABEL)
-            if first_report is None:
-                first_report = report
-    return report_json(asdict(first_report)) if first_report is not None else None
+        outcome = _label_outcome(pull_request, coder, round_limit)
+        if outcome is not BabysitOutcome.MERGE_READY and MERGE_READY_LABEL in listed.labels:
+            repository.remove_pull_request_label(listed.number, MERGE_READY_LABEL)
+        if outcome is BabysitOutcome.MERGE_READY and READY_FOR_HUMAN_LABEL in listed.labels:
+            repository.remove_pull_request_label(listed.number, READY_FOR_HUMAN_LABEL)
+        if outcome is None:
+            continue
+        label = (
+            MERGE_READY_LABEL if outcome is BabysitOutcome.MERGE_READY else READY_FOR_HUMAN_LABEL
+        )
+        if label in listed.labels:
+            continue
+        repository.label_pull_request(listed.number, label)
+        if outcome is BabysitOutcome.MERGE_READY and coder != listed.author:
+            repository.request_review(listed.number, coordinates.owner)
+        reports.append(_label_report(pull_request, outcome))
+    return _reports_json(reports)
 
 
 def signal_warrants_scan(
@@ -183,6 +178,25 @@ def _pull_request_is_agent(value: dict[object, object]) -> bool:
         and isinstance(branch := head.get("ref"), str)
         and branch.startswith(AGENT_BRANCH_PREFIX)
     )
+
+
+def _label_outcome(
+    pull_request: BabysitPullRequest,
+    coder: GitHubLogin,
+    round_limit: int,
+) -> Literal[BabysitOutcome.MERGE_READY, BabysitOutcome.ROUND_LIMIT] | None:
+    if is_merge_ready(pull_request, coder):
+        return BabysitOutcome.MERGE_READY
+    if pull_request.round_count >= round_limit and actionable_threads(pull_request.threads, coder):
+        return BabysitOutcome.ROUND_LIMIT
+    return None
+
+
+def _reports_json(reports: list[BabysitReport]) -> str | None:
+    if not reports:
+        return None
+    values = [asdict(report) for report in reports]
+    return report_json(values[0] if len(values) == 1 else values)
 
 
 def _label_report(

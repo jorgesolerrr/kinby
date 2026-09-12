@@ -27,6 +27,7 @@ PullRequestUrl = NewType("PullRequestUrl", str)
 PullRequestNumber = NewType("PullRequestNumber", int)
 StackNumber = NewType("StackNumber", int)
 GitHubLogin = NewType("GitHubLogin", str)
+ReviewThreadId = NewType("ReviewThreadId", str)
 READY_LABEL = LabelName("ready-for-agent")
 READY_FOR_HUMAN_LABEL = LabelName("ready-for-human")
 
@@ -115,6 +116,7 @@ class ReviewComment:
     """One comment in a pull request review thread."""
 
     author: GitHubLogin | None
+    body: str
     commit: CommitSha | None
 
 
@@ -122,7 +124,10 @@ class ReviewComment:
 class ReviewThread:
     """One GitHub pull request review thread."""
 
+    id: ReviewThreadId
     resolved: bool
+    path: str
+    line: int | None
     comments: tuple[ReviewComment, ...]
 
 
@@ -151,9 +156,12 @@ _REVIEW_THREADS_QUERY = """query BabysitReviewThreads(
     pullRequest(number: $number) {
       reviewThreads(first: 100, after: $endCursor) {
         nodes {
+          id
           isResolved
+          path
+          line
           comments(last: 100) {
-            nodes { author { login } commit { oid } }
+            nodes { author { login } body commit { oid } }
           }
         }
         pageInfo { hasNextPage endCursor }
@@ -262,6 +270,14 @@ class GitHubRepository:
         """Add one repository label to a pull request."""
         self._gh("pr", "edit", str(pull_request), "--add-label", label)
 
+    def remove_pull_request_label(
+        self,
+        pull_request: PullRequestNumber,
+        label: LabelName,
+    ) -> None:
+        """Remove one repository label from a pull request."""
+        self._gh("pr", "edit", str(pull_request), "--remove-label", label)
+
     def request_review(
         self,
         pull_request: PullRequestNumber,
@@ -349,18 +365,7 @@ class GitHubRepository:
         coordinates: RepositoryCoordinates,
     ) -> BabysitPullRequest:
         checks = _check_runs(
-            self._gh(
-                "api",
-                "--method",
-                "GET",
-                "-H",
-                f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
-                "--paginate",
-                "--slurp",
-                f"repos/{{owner}}/{{repo}}/commits/{pull_request.head}/check-runs",
-                "-f",
-                "per_page=100",
-            )
+            self._paginated_api(f"repos/{{owner}}/{{repo}}/commits/{pull_request.head}/check-runs")
         )
         threads = _review_threads(
             self._gh(
@@ -629,19 +634,31 @@ def _review_thread_nodes(page: dict[str, object]) -> list[object]:
 def _review_thread(value: object) -> ReviewThread:
     if not isinstance(value, dict):
         raise RepositoryResponseError("gh review thread list returned a non-object thread")
+    thread_id = value.get("id")
     resolved = value.get("isResolved")
+    path = value.get("path")
+    line = value.get("line")
     comments_value = value.get("comments")
     comments = comments_value.get("nodes") if isinstance(comments_value, dict) else None
-    if not isinstance(resolved, bool) or not isinstance(comments, list):
+    if (
+        not isinstance(thread_id, str)
+        or not isinstance(resolved, bool)
+        or not isinstance(path, str)
+        or not (line is None or isinstance(line, int))
+        or not isinstance(comments, list)
+    ):
         raise RepositoryResponseError("gh review thread list returned an invalid thread")
     return ReviewThread(
+        ReviewThreadId(thread_id),
         resolved,
+        path,
+        line,
         tuple(_review_comment(comment) for comment in comments),
     )
 
 
 def _review_comment(value: object) -> ReviewComment:
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or not isinstance(body := value.get("body"), str):
         raise RepositoryResponseError("gh review thread list returned an invalid comment")
     author_value = value.get("author")
     login = author_value.get("login") if isinstance(author_value, dict) else None
@@ -653,6 +670,7 @@ def _review_comment(value: object) -> ReviewComment:
         raise RepositoryResponseError("gh review thread list returned an invalid comment")
     return ReviewComment(
         GitHubLogin(login) if login is not None else None,
+        body,
         CommitSha(commit) if commit is not None else None,
     )
 
