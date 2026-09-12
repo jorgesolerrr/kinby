@@ -3,6 +3,7 @@
 import json
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import NewType
 
@@ -15,18 +16,31 @@ AGENT_BRANCH_PREFIX = "agent/"
 _CLOSES_ISSUE = re.compile(r"(?im)^Closes #(\d+)\s*$")
 _ISSUE_URL_NUMBER = re.compile(r"/issues/(\d+)$")
 _PULL_REQUEST_URL_NUMBER = re.compile(r"/pull/(\d+)$")
+_BABYSIT_ROUND_PREFIX = "Babysit round "
 IssueTitle = NewType("IssueTitle", str)
 IssueUrl = NewType("IssueUrl", str)
 IssueNumber = NewType("IssueNumber", int)
 BranchName = NewType("BranchName", str)
+CommitSha = NewType("CommitSha", str)
+LabelName = NewType("LabelName", str)
+RepositoryName = NewType("RepositoryName", str)
 PullRequestUrl = NewType("PullRequestUrl", str)
 PullRequestNumber = NewType("PullRequestNumber", int)
 StackNumber = NewType("StackNumber", int)
 GitHubLogin = NewType("GitHubLogin", str)
+ReviewThreadId = NewType("ReviewThreadId", str)
 
 
 class RepositoryResponseError(ValueError):
     """A GitHub CLI response does not match the requested shape."""
+
+
+class CheckRunStatus(StrEnum):
+    """A lifecycle status reported for a GitHub check run."""
+
+    QUEUED = "queued"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
 
 
 @dataclass(frozen=True)
@@ -76,6 +90,91 @@ class RepositoryMetadata:
 
     maintainer: GitHubLogin
     default_branch: BranchName
+
+
+@dataclass(frozen=True)
+class RepositoryCoordinates:
+    """The owner and name needed by GitHub's GraphQL API."""
+
+    owner: GitHubLogin
+    name: RepositoryName
+
+
+@dataclass(frozen=True)
+class CheckRun:
+    """One check run on a pull request head."""
+
+    status: CheckRunStatus
+
+
+@dataclass(frozen=True)
+class ReviewComment:
+    """One comment in a pull request review thread."""
+
+    author: GitHubLogin | None
+    body: str
+    commit: CommitSha | None
+
+
+@dataclass(frozen=True)
+class ReviewThread:
+    """One GitHub pull request review thread."""
+
+    id: ReviewThreadId
+    resolved: bool
+    path: str
+    line: int | None
+    comments: tuple[ReviewComment, ...]
+
+
+@dataclass(frozen=True)
+class PullRequestReview:
+    """One submitted review and the commit it reviewed."""
+
+    commit: CommitSha | None
+
+
+@dataclass(frozen=True)
+class BabysitPullRequest:
+    """An agent pull request with all state needed by the babysitter."""
+
+    number: PullRequestNumber
+    url: PullRequestUrl
+    branch: BranchName
+    head: CommitSha
+    body: str
+    author: GitHubLogin
+    labels: tuple[LabelName, ...]
+    checks: tuple[CheckRun, ...]
+    threads: tuple[ReviewThread, ...]
+    reviews: tuple[PullRequestReview, ...]
+    round_comments: tuple[str, ...]
+
+    @property
+    def closed_issue(self) -> IssueNumber | None:
+        return closed_issue_number(self.body)
+
+
+_REVIEW_THREADS_QUERY = """query BabysitReviewThreads(
+  $owner: String!, $name: String!, $number: Int!, $endCursor: String
+) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $endCursor) {
+        nodes {
+          id
+          isResolved
+          path
+          line
+          comments(last: 100) {
+            nodes { author { login } body commit { oid } }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}"""
 
 
 class GitHubRepository:
@@ -128,6 +227,64 @@ class GitHubRepository:
 
     def metadata(self) -> RepositoryMetadata:
         return _metadata(self._gh("repo", "view", "--json", "owner,defaultBranchRef"))
+
+    def current_login(self) -> GitHubLogin:
+        """Return the login used by the GitHub CLI."""
+        login = self._gh("api", "user", "--jq", ".login").strip()
+        if not login:
+            raise RepositoryResponseError("gh api user returned an empty login")
+        return GitHubLogin(login)
+
+    def coordinates(self) -> RepositoryCoordinates:
+        """Return the repository owner and name."""
+        return _coordinates(self._gh("repo", "view", "--json", "nameWithOwner"))
+
+    def pull_request_branch(self, pull_request: PullRequestNumber) -> BranchName:
+        """Return a pull request's head branch."""
+        branch = self._gh(
+            "pr",
+            "view",
+            str(pull_request),
+            "--json",
+            "headRefName",
+            "--jq",
+            ".headRefName",
+        ).strip()
+        if not branch:
+            raise RepositoryResponseError("gh pr view returned an empty head branch")
+        return BranchName(branch)
+
+    def babysit_pull_requests(self, coder: GitHubLogin) -> tuple[BabysitPullRequest, ...]:
+        """Return open agent pull requests oldest first with their review state."""
+        coordinates = self.coordinates()
+        source = self._paginated_api(
+            "repos/{owner}/{repo}/pulls",
+            "state=open",
+            "sort=created",
+            "direction=asc",
+        )
+        pull_requests = _babysit_pull_request_stubs(source)
+        return tuple(
+            self._complete_babysit_pull_request(pull_request, coder, coordinates)
+            for pull_request in pull_requests
+            if pull_request.branch.startswith(AGENT_BRANCH_PREFIX)
+        )
+
+    def label_pull_request(
+        self,
+        pull_request: PullRequestNumber,
+        label: LabelName,
+    ) -> None:
+        """Add one repository label to a pull request."""
+        self._gh("pr", "edit", str(pull_request), "--add-label", label)
+
+    def request_review(
+        self,
+        pull_request: PullRequestNumber,
+        reviewer: GitHubLogin,
+    ) -> None:
+        """Request a pull request review from one login."""
+        self._gh("pr", "edit", str(pull_request), "--add-reviewer", reviewer)
 
     def open_pull_request(
         self,
@@ -199,6 +356,63 @@ class GitHubRepository:
             READY_LABEL,
             "--add-label",
             "ready-for-human",
+        )
+
+    def _complete_babysit_pull_request(
+        self,
+        pull_request: BabysitPullRequest,
+        coder: GitHubLogin,
+        coordinates: RepositoryCoordinates,
+    ) -> BabysitPullRequest:
+        checks = _check_runs(
+            self._gh(
+                "api",
+                "--method",
+                "GET",
+                "-H",
+                f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+                "--paginate",
+                "--slurp",
+                f"repos/{{owner}}/{{repo}}/commits/{pull_request.head}/check-runs",
+                "-f",
+                "per_page=100",
+            )
+        )
+        threads = _review_threads(
+            self._gh(
+                "api",
+                "graphql",
+                "--paginate",
+                "--slurp",
+                "-f",
+                f"query={_REVIEW_THREADS_QUERY}",
+                "-F",
+                f"owner={coordinates.owner}",
+                "-F",
+                f"name={coordinates.name}",
+                "-F",
+                f"number={pull_request.number}",
+            )
+        )
+        reviews = _reviews(
+            self._paginated_api(f"repos/{{owner}}/{{repo}}/pulls/{pull_request.number}/reviews")
+        )
+        round_comments = _round_comments(
+            self._paginated_api(f"repos/{{owner}}/{{repo}}/issues/{pull_request.number}/comments"),
+            coder,
+        )
+        return BabysitPullRequest(
+            number=pull_request.number,
+            url=pull_request.url,
+            branch=pull_request.branch,
+            head=pull_request.head,
+            body=pull_request.body,
+            author=pull_request.author,
+            labels=pull_request.labels,
+            checks=checks,
+            threads=threads,
+            reviews=reviews,
+            round_comments=round_comments,
         )
 
     def _gh(self, *arguments: str) -> str:
@@ -345,3 +559,179 @@ def _metadata(source: str) -> RepositoryMetadata:
     if not isinstance(maintainer, str) or not isinstance(branch, str):
         raise RepositoryResponseError("gh repo view returned invalid repository metadata")
     return RepositoryMetadata(GitHubLogin(maintainer), BranchName(branch))
+
+
+def _coordinates(source: str) -> RepositoryCoordinates:
+    value = json.loads(source)
+    if not isinstance(value, dict) or not isinstance(
+        name_with_owner := value.get("nameWithOwner"), str
+    ):
+        raise RepositoryResponseError("gh repo view returned invalid repository coordinates")
+    owner, separator, name = name_with_owner.partition("/")
+    if not separator or not owner or not name:
+        raise RepositoryResponseError("gh repo view returned invalid repository coordinates")
+    return RepositoryCoordinates(GitHubLogin(owner), RepositoryName(name))
+
+
+def _babysit_pull_request_stubs(source: str) -> list[BabysitPullRequest]:
+    pull_requests: list[BabysitPullRequest] = []
+    for value in _page_items(source, "pull request list"):
+        if not isinstance(value, dict):
+            raise RepositoryResponseError("gh pr list returned a non-object pull request")
+        number = value.get("number")
+        url = value.get("html_url", value.get("url"))
+        head = value.get("head")
+        body = value.get("body")
+        author = value.get("user")
+        labels = value.get("labels")
+        if (
+            not isinstance(number, int)
+            or not isinstance(url, str)
+            or not isinstance(head, dict)
+            or not isinstance(branch := head.get("ref"), str)
+            or not isinstance(sha := head.get("sha"), str)
+            or not isinstance(body, str)
+            or not isinstance(author, dict)
+            or not isinstance(login := author.get("login"), str)
+            or not isinstance(labels, list)
+        ):
+            raise RepositoryResponseError("gh pr list returned an invalid pull request")
+        pull_requests.append(
+            BabysitPullRequest(
+                number=PullRequestNumber(number),
+                url=PullRequestUrl(url),
+                branch=BranchName(branch),
+                head=CommitSha(sha),
+                body=body,
+                author=GitHubLogin(login),
+                labels=tuple(_label_names(labels)),
+                checks=(),
+                threads=(),
+                reviews=(),
+                round_comments=(),
+            )
+        )
+    return pull_requests
+
+
+def _label_names(values: list[object]) -> list[LabelName]:
+    labels: list[LabelName] = []
+    for value in values:
+        if not isinstance(value, dict) or not isinstance(name := value.get("name"), str):
+            raise RepositoryResponseError("gh pr list returned an invalid label")
+        labels.append(LabelName(name))
+    return labels
+
+
+def _check_runs(source: str) -> tuple[CheckRun, ...]:
+    values = json.loads(source)
+    pages = values if isinstance(values, list) else [values]
+    checks: list[CheckRun] = []
+    for page in pages:
+        if not isinstance(page, dict) or not isinstance(runs := page.get("check_runs"), list):
+            raise RepositoryResponseError("gh check run list returned an invalid response")
+        for run in runs:
+            if not isinstance(run, dict) or not isinstance(status := run.get("status"), str):
+                raise RepositoryResponseError("gh check run list returned an invalid check run")
+            try:
+                parsed_status = CheckRunStatus(status)
+            except ValueError as exc:
+                raise RepositoryResponseError(
+                    f"gh check run list returned unknown status {status!r}"
+                ) from exc
+            checks.append(CheckRun(parsed_status))
+    return tuple(checks)
+
+
+def _review_threads(source: str) -> tuple[ReviewThread, ...]:
+    values = json.loads(source)
+    pages = values if isinstance(values, list) else [values]
+    threads: list[ReviewThread] = []
+    for page in pages:
+        nodes = _review_thread_nodes(page)
+        threads.extend(_review_thread(node) for node in nodes)
+    return tuple(threads)
+
+
+def _review_thread_nodes(page: object) -> list[object]:
+    if not isinstance(page, dict):
+        raise RepositoryResponseError("gh review thread list returned a non-object page")
+    data = page.get("data")
+    repository = data.get("repository") if isinstance(data, dict) else None
+    pull_request = repository.get("pullRequest") if isinstance(repository, dict) else None
+    review_threads = pull_request.get("reviewThreads") if isinstance(pull_request, dict) else None
+    nodes = review_threads.get("nodes") if isinstance(review_threads, dict) else None
+    if not isinstance(nodes, list):
+        raise RepositoryResponseError("gh review thread list returned an invalid response")
+    return nodes
+
+
+def _review_thread(value: object) -> ReviewThread:
+    if not isinstance(value, dict):
+        raise RepositoryResponseError("gh review thread list returned a non-object thread")
+    thread_id = value.get("id")
+    resolved = value.get("isResolved")
+    path = value.get("path")
+    line = value.get("line")
+    comments_value = value.get("comments")
+    comments = comments_value.get("nodes") if isinstance(comments_value, dict) else None
+    if (
+        not isinstance(thread_id, str)
+        or not isinstance(resolved, bool)
+        or not isinstance(path, str)
+        or not (line is None or isinstance(line, int))
+        or not isinstance(comments, list)
+    ):
+        raise RepositoryResponseError("gh review thread list returned an invalid thread")
+    return ReviewThread(
+        ReviewThreadId(thread_id),
+        resolved,
+        path,
+        line,
+        tuple(_review_comment(comment) for comment in comments),
+    )
+
+
+def _review_comment(value: object) -> ReviewComment:
+    if not isinstance(value, dict) or not isinstance(body := value.get("body"), str):
+        raise RepositoryResponseError("gh review thread list returned an invalid comment")
+    author_value = value.get("author")
+    login = author_value.get("login") if isinstance(author_value, dict) else None
+    commit_value = value.get("commit")
+    commit = commit_value.get("oid") if isinstance(commit_value, dict) else None
+    if not (login is None or isinstance(login, str)) or not (
+        commit is None or isinstance(commit, str)
+    ):
+        raise RepositoryResponseError("gh review thread list returned an invalid comment")
+    return ReviewComment(
+        GitHubLogin(login) if login is not None else None,
+        body,
+        CommitSha(commit) if commit is not None else None,
+    )
+
+
+def _reviews(source: str) -> tuple[PullRequestReview, ...]:
+    reviews: list[PullRequestReview] = []
+    for value in _page_items(source, "review list"):
+        if not isinstance(value, dict):
+            raise RepositoryResponseError("gh review list returned a non-object review")
+        commit = value.get("commit_id")
+        if not (commit is None or isinstance(commit, str)):
+            raise RepositoryResponseError("gh review list returned an invalid review")
+        reviews.append(PullRequestReview(CommitSha(commit) if commit is not None else None))
+    return tuple(reviews)
+
+
+def _round_comments(source: str, coder: GitHubLogin) -> tuple[str, ...]:
+    comments: list[str] = []
+    for value in _page_items(source, "issue comment list"):
+        if not isinstance(value, dict):
+            raise RepositoryResponseError("gh issue comment list returned a non-object comment")
+        user = value.get("user")
+        author = user.get("login") if isinstance(user, dict) else None
+        body = value.get("body")
+        if not isinstance(author, str) or not isinstance(body, str):
+            raise RepositoryResponseError("gh issue comment list returned an invalid comment")
+        if author == coder and body.startswith(_BABYSIT_ROUND_PREFIX):
+            comments.append(body)
+    return tuple(comments)

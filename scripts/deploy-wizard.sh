@@ -188,7 +188,6 @@ cd "$(dirname "$0")/.."
 ENV_FILE="instances/coder/.env"
 COMPOSE="docker compose -f compose.yaml -f compose.public.yaml"
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-ROUTINE="implement-ready-issue"
 TOTAL_STAGES=6
 
 banner "kinby coder: always-on deploy"
@@ -266,15 +265,31 @@ until curl -fsS "https://${KINBY_DOMAIN}/health" >/dev/null 2>&1; do
   sleep 10
 done
 say "https://${KINBY_DOMAIN}/health answers."
-hook_url="https://${KINBY_DOMAIN}/signals/${ROUTINE}"
-if gh api "repos/${REPO}/hooks" -q '.[].config.url' | grep -qx "$hook_url"; then
-  say "Webhook for ${hook_url} already registered."
-else
+register_webhook() {
+  local routine="$1" hook_url event
+  shift
+  hook_url="https://${KINBY_DOMAIN}/signals/${routine}"
+  if gh api "repos/${REPO}/hooks" -q '.[].config.url' | grep -qx "$hook_url"; then
+    say "Webhook for ${hook_url} already registered."
+    return
+  fi
+  local -a event_fields=()
+  for event in "$@"; do event_fields+=(-f "events[]=${event}"); done
   gh api --method POST "repos/${REPO}/hooks" \
-    -f name=web -F active=true -f 'events[]=issues' -f 'events[]=pull_request' \
+    -f name=web -F active=true "${event_fields[@]}" \
     -f "config[url]=${hook_url}" -f config[content_type]=json \
     -f "config[secret]=${GITHUB_WEBHOOK_SECRET}" -f config[insecure_ssl]=0 >/dev/null
-  say "Registered the repository webhook for issues and pull_request at ${hook_url}."
+  say "Registered the repository webhook at ${hook_url}."
+}
+
+register_webhook "implement-ready-issue" issues pull_request
+register_webhook "babysit-pull-request" \
+  pull_request_review pull_request_review_comment issue_comment
+
+if ! gh api "repos/${REPO}/labels/merge-ready" >/dev/null 2>&1; then
+  gh label create merge-ready --color 0E8A16 \
+    --description "Agent pull request is reviewed and ready to merge"
+  say "Created the merge-ready repository label."
 fi
 
 # ── 6. Codex login and smoke tests ────────────────────────────────────────
