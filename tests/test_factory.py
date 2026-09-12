@@ -16,6 +16,7 @@ from kinby.cli import main
 from kinby.core.dispatcher import TurnConfig
 from kinby.core.events import EventLog
 from kinby.core.turn_runner import LangGraphRunner
+from kinby.factory.scan import labeled_issue_number
 from kinby.instance import Instance, load_instance
 from tests.helpers import turn_config_stub
 
@@ -348,6 +349,58 @@ def _single_issue_reads(log: Path, number: int) -> list[list[str]]:
         and any(argument.endswith(f"/issues/{number}") for argument in _arguments(record))
         and "--jq" not in _arguments(record)
     ]
+
+
+@pytest.mark.parametrize(
+    ("delivery", "expected"),
+    [
+        (
+            {
+                "body": {
+                    "action": "labeled",
+                    "label": {"name": "ready-for-agent"},
+                    "issue": {"number": 4},
+                }
+            },
+            4,
+        ),
+        (
+            {
+                "body": {
+                    "action": "unlabeled",
+                    "label": {"name": "ready-for-agent"},
+                    "issue": {"number": 4},
+                }
+            },
+            None,
+        ),
+        (
+            {
+                "body": {
+                    "action": "labeled",
+                    "label": {"name": "bug"},
+                    "issue": {"number": 4},
+                }
+            },
+            None,
+        ),
+        (
+            {
+                "body": {
+                    "action": "labeled",
+                    "label": {"name": "ready-for-agent"},
+                    "issue": {"number": 4, "pull_request": {}},
+                }
+            },
+            None,
+        ),
+    ],
+)
+def test_labeled_issue_number(
+    delivery: dict[str, object],
+    expected: int | None,
+) -> None:
+    assert labeled_issue_number(delivery) == expected
 
 
 @pytest.mark.parametrize(

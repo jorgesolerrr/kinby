@@ -248,23 +248,8 @@ def _issues(source: str) -> list[Issue]:
     values = _page_items(source, "issue list")
     issues: list[Issue] = []
     for value in values:
-        if not isinstance(value, dict):
-            raise RepositoryResponseError("gh issue list returned a non-object issue")
-        if "pull_request" in value:
-            continue
-        number = value.get("number")
-        title = value.get("title")
-        url = value.get("html_url", value.get("url"))
-        if not isinstance(number, int) or not isinstance(title, str) or not isinstance(url, str):
-            raise RepositoryResponseError("gh issue list returned an invalid issue")
-        issues.append(
-            Issue(
-                IssueNumber(number),
-                IssueTitle(title),
-                IssueUrl(url),
-                _parent_number(value.get("parent_issue_url")),
-            )
-        )
+        if issue := _issue(value, "issue list"):
+            issues.append(issue)
     return issues
 
 
@@ -275,18 +260,24 @@ def _ready_issue(source: str) -> Issue | None:
     state = value.get("state")
     labels = value.get("labels")
     if not isinstance(state, str) or not isinstance(labels, list):
-        raise RepositoryResponseError("gh api issue returned an invalid issue")
+        raise RepositoryResponseError("gh api issue returned invalid state or labels")
     if state != "open" or not any(
         isinstance(label, dict) and label.get("name") == READY_LABEL for label in labels
     ):
         return None
+    return _issue(value, "api issue")
+
+
+def _issue(value: object, operation: str) -> Issue | None:
+    if not isinstance(value, dict):
+        raise RepositoryResponseError(f"gh {operation} returned a non-object issue")
     if "pull_request" in value:
         return None
     number = value.get("number")
     title = value.get("title")
     url = value.get("html_url", value.get("url"))
     if not isinstance(number, int) or not isinstance(title, str) or not isinstance(url, str):
-        raise RepositoryResponseError("gh api issue returned an invalid issue")
+        raise RepositoryResponseError(f"gh {operation} returned an invalid issue")
     return Issue(
         IssueNumber(number),
         IssueTitle(title),

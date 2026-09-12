@@ -1,7 +1,5 @@
 """Decide whether a routine wake can change issue eligibility."""
 
-from dataclasses import dataclass
-
 from kinby.factory.repository import (
     AGENT_BRANCH_PREFIX,
     READY_LABEL,
@@ -13,57 +11,40 @@ from kinby.factory.repository import (
 )
 
 
-@dataclass(frozen=True)
-class ScanRequest:
-    """A wake that warrants a scan, with its labeled issue when known."""
-
-    labeled_issue: IssueNumber | None
-
-
-@dataclass(frozen=True)
-class SkipScan:
-    """A wake that cannot change issue eligibility."""
-
-
-def scan_request(signal: dict[str, object]) -> ScanRequest | SkipScan:
-    """Parse a wake into the scan it warrants."""
+def payload_can_change_eligibility(signal: dict[str, object]) -> bool:
+    """Return whether a wake warrants a GitHub scan."""
     body = signal.get("body")
     if not isinstance(body, dict):
-        return ScanRequest(None)
+        return True
     if "comment" in body:
-        return SkipScan()
-    action = body.get("action")
-    if action in {"labeled", "unlabeled"}:
-        if not _names_ready_label(body):
-            return SkipScan()
-        labeled_issue = _labeled_issue_number(body) if action == "labeled" else None
-        return ScanRequest(labeled_issue)
+        return False
+    if body.get("action") in {"labeled", "unlabeled"}:
+        return _names_ready_label(body)
     pull_request = body.get("pull_request")
     if not isinstance(pull_request, dict):
-        return ScanRequest(None)
+        return True
     head = pull_request.get("head")
-    if (
+    return (
         isinstance(head, dict)
         and isinstance(branch := head.get("ref"), str)
         and branch.startswith(AGENT_BRANCH_PREFIX)
-    ):
-        return ScanRequest(None)
-    return SkipScan()
+    )
 
 
-def ready_issues(
-    repository: GitHubRepository,
-    labeled_number: IssueNumber | None,
-) -> tuple[Issue, ...]:
-    """Return the sorted candidates for a wake."""
-    issues = repository.ready_issues()
+def labeled_issue_number(signal: dict[str, object]) -> IssueNumber | None:
+    """Return the issue named by a ready-label delivery."""
+    body = signal.get("body")
     if (
-        labeled_number is not None
-        and all(issue.number != labeled_number for issue in issues)
-        and (labeled_issue := repository.ready_issue(labeled_number)) is not None
+        not isinstance(body, dict)
+        or body.get("action") != "labeled"
+        or not _names_ready_label(body)
     ):
-        return tuple(sorted((*issues, labeled_issue), key=lambda issue: issue.number))
-    return issues
+        return None
+    issue = body.get("issue")
+    if not isinstance(issue, dict) or "pull_request" in issue:
+        return None
+    number = issue.get("number")
+    return IssueNumber(number) if isinstance(number, int) else None
 
 
 def oldest_eligible_issue(
@@ -120,11 +101,3 @@ def _stack(issue: IssueNumber, parent: IssueNumber | None) -> IssueNumber:
 def _names_ready_label(body: dict[str, object]) -> bool:
     label = body.get("label")
     return isinstance(label, dict) and label.get("name") == READY_LABEL
-
-
-def _labeled_issue_number(body: dict[str, object]) -> IssueNumber | None:
-    issue = body.get("issue")
-    if not isinstance(issue, dict) or "pull_request" in issue:
-        return None
-    number = issue.get("number")
-    return IssueNumber(number) if isinstance(number, int) else None
