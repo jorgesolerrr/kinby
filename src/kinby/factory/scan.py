@@ -18,7 +18,9 @@ def payload_can_change_eligibility(signal: dict[str, object]) -> bool:
         return True
     if "comment" in body:
         return False
-    if body.get("action") in {"labeled", "unlabeled"}:
+    if body.get("action") == "labeled":
+        return _ready_label_event(body) is not None
+    if body.get("action") == "unlabeled":
         label = body.get("label")
         return isinstance(label, dict) and label.get("name") == READY_LABEL
     pull_request = body.get("pull_request")
@@ -35,19 +37,32 @@ def payload_can_change_eligibility(signal: dict[str, object]) -> bool:
 def labeled_issue_number(signal: dict[str, object]) -> IssueNumber | None:
     """Return the issue named by a ready-label delivery."""
     body = signal.get("body")
-    if not isinstance(body, dict) or body.get("action") != "labeled":
+    if not isinstance(body, dict) or (delivery := _ready_label_event(body)) is None:
         return None
-    label = body.get("label")
-    issue = body.get("issue")
+    issue = delivery.get("issue")
     if (
-        not isinstance(label, dict)
-        or label.get("name") != READY_LABEL
-        or not isinstance(issue, dict)
+        not isinstance(issue, dict)
         or "pull_request" in issue
         or not isinstance(number := issue.get("number"), int)
     ):
         return None
     return IssueNumber(number)
+
+
+def ready_issues(
+    repository: GitHubRepository,
+    signal: dict[str, object],
+) -> tuple[Issue, ...]:
+    """Return the sorted candidates for a wake."""
+    issues = repository.ready_issues()
+    labeled_number = labeled_issue_number(signal)
+    if (
+        labeled_number is not None
+        and all(issue.number != labeled_number for issue in issues)
+        and (labeled_issue := repository.ready_issue(labeled_number)) is not None
+    ):
+        issues = (*issues, labeled_issue)
+    return tuple(sorted(issues, key=lambda issue: issue.number))
 
 
 def oldest_eligible_issue(
@@ -99,3 +114,14 @@ def _covered_in_same_stack(
 
 def _stack(issue: IssueNumber, parent: IssueNumber | None) -> IssueNumber:
     return parent if parent is not None else issue
+
+
+def _ready_label_event(body: dict[str, object]) -> dict[str, object] | None:
+    label = body.get("label")
+    if (
+        body.get("action") != "labeled"
+        or not isinstance(label, dict)
+        or label.get("name") != READY_LABEL
+    ):
+        return None
+    return body

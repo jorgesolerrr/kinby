@@ -325,6 +325,31 @@ def _run_labeled_delivery(instance: Path, tmp_path: Path, issue: int) -> int:
     )
 
 
+def _canned_issue(canned: Path, number: int, labels: tuple[str, ...]) -> None:
+    (canned / f"issue-{number}.json").write_text(
+        json.dumps(
+            {
+                "number": number,
+                "title": f"Issue {number}",
+                "html_url": f"https://example.test/issues/{number}",
+                "state": "open",
+                "labels": [{"name": label} for label in labels],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _single_issue_reads(log: Path, number: int) -> list[list[str]]:
+    return [
+        _arguments(record)
+        for record in _records(log)
+        if record["command"] == "gh"
+        and any(argument.endswith(f"/issues/{number}") for argument in _arguments(record))
+        and "--jq" not in _arguments(record)
+    ]
+
+
 @pytest.mark.parametrize(
     "delivery",
     [
@@ -426,30 +451,12 @@ def test_labeled_issue_missing_from_list_runs_pipeline_after_single_issue_read(
     log = _fake_clients(tmp_path, monkeypatch)
     canned = tmp_path / "canned"
     (canned / "issues.json").write_text("[]", encoding="utf-8")
-    (canned / "issue-4.json").write_text(
-        json.dumps(
-            {
-                "number": 4,
-                "title": "Fourth ticket",
-                "html_url": "https://example.test/issues/4",
-                "state": "open",
-                "labels": [{"name": "ready-for-agent"}],
-            }
-        ),
-        encoding="utf-8",
-    )
+    _canned_issue(canned, 4, ("ready-for-agent",))
 
     assert _run_labeled_delivery(instance_path, tmp_path, 4) == 0
 
     assert _mapping(_report(capsys.readouterr().out)["issue"])["number"] == 4
-    single_issue_reads = [
-        _arguments(record)
-        for record in _records(log)
-        if record["command"] == "gh"
-        and any(argument.endswith("/issues/4") for argument in _arguments(record))
-        and "--jq" not in _arguments(record)
-    ]
-    assert len(single_issue_reads) == 1
+    assert len(_single_issue_reads(log, 4)) == 1
 
 
 def test_labeled_issue_with_removed_label_returns_no_work(
@@ -462,28 +469,12 @@ def test_labeled_issue_with_removed_label_returns_no_work(
     log = _fake_clients(tmp_path, monkeypatch)
     canned = tmp_path / "canned"
     (canned / "issues.json").write_text("[]", encoding="utf-8")
-    (canned / "issue-4.json").write_text(
-        json.dumps(
-            {
-                "number": 4,
-                "title": "Fourth ticket",
-                "html_url": "https://example.test/issues/4",
-                "state": "open",
-                "labels": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    _canned_issue(canned, 4, ())
 
     assert _run_labeled_delivery(instance_path, tmp_path, 4) == 0
 
     assert "[tool.result] implement_ready_issue (ok): None" in capsys.readouterr().out
-    assert any(
-        argument.endswith("/issues/4")
-        for record in _records(log)
-        if record["command"] == "gh"
-        for argument in _arguments(record)
-    )
+    assert len(_single_issue_reads(log, 4)) == 1
 
 
 def test_labeled_issue_already_in_list_is_not_read_again_or_duplicated(
@@ -500,14 +491,7 @@ def test_labeled_issue_already_in_list_is_not_read_again_or_duplicated(
     assert _run_labeled_delivery(instance_path, tmp_path, 4) == 0
 
     assert _mapping(_report(capsys.readouterr().out)["issue"])["number"] == 4
-    single_issue_reads = [
-        _arguments(record)
-        for record in _records(log)
-        if record["command"] == "gh"
-        and any(argument.endswith("/issues/4") for argument in _arguments(record))
-        and "--jq" not in _arguments(record)
-    ]
-    assert single_issue_reads == []
+    assert _single_issue_reads(log, 4) == []
 
 
 def test_lower_labeled_issue_missing_from_list_wins_over_listed_issue(
@@ -521,18 +505,7 @@ def test_lower_labeled_issue_missing_from_list_wins_over_listed_issue(
     _use_routine_model(monkeypatch, instance, _RoutineModel())
     _fake_clients(tmp_path, monkeypatch)
     canned = tmp_path / "canned"
-    (canned / "issue-1.json").write_text(
-        json.dumps(
-            {
-                "number": 1,
-                "title": "First ticket",
-                "html_url": "https://example.test/issues/1",
-                "state": "open",
-                "labels": [{"name": "ready-for-agent"}],
-            }
-        ),
-        encoding="utf-8",
-    )
+    _canned_issue(canned, 1, ("ready-for-agent",))
 
     assert _run_labeled_delivery(instance_path, tmp_path, 1) == 0
 

@@ -90,18 +90,11 @@ class GitHubRepository:
             "state=open",
             f"labels={READY_LABEL}",
         )
-        return tuple(sorted(_issues(result), key=lambda issue: issue.number))
+        return tuple(_issues(result))
 
     def ready_issue(self, issue: IssueNumber) -> Issue | None:
         """Return an issue when it is currently open and ready for an agent."""
-        result = self._gh(
-            "api",
-            "--method",
-            "GET",
-            "-H",
-            f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
-            f"repos/{{owner}}/{{repo}}/issues/{issue}",
-        )
+        result = self._api(f"repos/{{owner}}/{{repo}}/issues/{issue}")
         return _ready_issue(result)
 
     def agent_pull_requests(self) -> tuple[AgentPullRequest, ...]:
@@ -126,12 +119,7 @@ class GitHubRepository:
 
     def issue_body(self, issue: IssueNumber) -> str:
         """Return the source Markdown for an issue."""
-        source = self._gh(
-            "api",
-            "--method",
-            "GET",
-            "-H",
-            f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+        source = self._api(
             f"repos/{{owner}}/{{repo}}/issues/{issue}",
             "--jq",
             '.body // ""',
@@ -222,20 +210,25 @@ class GitHubRepository:
 
     def _paginated_api(self, endpoint: str, *fields: str) -> str:
         arguments = [
-            "api",
-            "--method",
-            "GET",
-            "-H",
-            f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
             "--paginate",
             "--slurp",
-            endpoint,
             "-f",
             "per_page=100",
         ]
         for field in fields:
             arguments.extend(("-f", field))
-        return self._gh(*arguments)
+        return self._api(endpoint, *arguments)
+
+    def _api(self, endpoint: str, *arguments: str) -> str:
+        return self._gh(
+            "api",
+            "--method",
+            "GET",
+            "-H",
+            f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+            endpoint,
+            *arguments,
+        )
 
 
 def closed_issue_number(body: str) -> IssueNumber | None:
@@ -248,6 +241,8 @@ def _issues(source: str) -> list[Issue]:
     values = _page_items(source, "issue list")
     issues: list[Issue] = []
     for value in values:
+        if not isinstance(value, dict):
+            raise RepositoryResponseError("gh api issue list returned a non-object issue")
         if (issue := _issue(value)) is not None:
             issues.append(issue)
     return issues
@@ -256,25 +251,19 @@ def _issues(source: str) -> list[Issue]:
 def _ready_issue(source: str) -> Issue | None:
     value = json.loads(source)
     if not isinstance(value, dict):
-        raise RepositoryResponseError("gh issue get returned a non-object issue")
+        raise RepositoryResponseError("gh api issue returned a non-object issue")
     state = value.get("state")
     labels = value.get("labels")
-    if (
-        not isinstance(state, str)
-        or not isinstance(labels, list)
-        or not all(
-            isinstance(label, dict) and isinstance(label.get("name"), str) for label in labels
-        )
+    if not isinstance(state, str) or not isinstance(labels, list):
+        raise RepositoryResponseError("gh api issue returned an invalid issue")
+    if state != "open" or not any(
+        isinstance(label, dict) and label.get("name") == READY_LABEL for label in labels
     ):
-        raise RepositoryResponseError("gh issue get returned an invalid issue")
-    if state != "open" or not any(label["name"] == READY_LABEL for label in labels):
         return None
     return _issue(value)
 
 
-def _issue(value: object) -> Issue | None:
-    if not isinstance(value, dict):
-        raise RepositoryResponseError("gh returned a non-object issue")
+def _issue(value: dict[str, object]) -> Issue | None:
     if "pull_request" in value:
         return None
     number = value.get("number")
