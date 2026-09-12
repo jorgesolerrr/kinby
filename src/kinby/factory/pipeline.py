@@ -1,7 +1,7 @@
 """Run the delegated issue-to-pull-request pipeline."""
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
 from time import monotonic
 from typing import Literal, NewType
@@ -261,4 +261,4 @@ def implement_ready_issue(
             duration_seconds=monotonic() - started_at,
             failure_reason=failure,
         )
-    return report_json(asdict(report))
+    return report_json(report)

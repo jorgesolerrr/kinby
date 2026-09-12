@@ -4,7 +4,6 @@ import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from functools import cached_property
 from pathlib import Path
 from typing import NewType
 
@@ -42,6 +41,9 @@ class CheckRunStatus(StrEnum):
     QUEUED = "queued"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+    WAITING = "waiting"
+    REQUESTED = "requested"
+    PENDING = "pending"
 
 
 @dataclass(frozen=True)
@@ -90,18 +92,11 @@ class OpenedPullRequest:
 
 @dataclass(frozen=True)
 class RepositoryMetadata:
-    """GitHub values needed to open an agent pull request."""
+    """The identity and default branch of a GitHub repository."""
 
     maintainer: GitHubLogin
-    default_branch: BranchName
-
-
-@dataclass(frozen=True)
-class RepositoryCoordinates:
-    """The owner and name needed by GitHub's GraphQL API."""
-
-    owner: GitHubLogin
     name: RepositoryName
+    default_branch: BranchName
 
 
 @dataclass(frozen=True)
@@ -210,7 +205,7 @@ class GitHubRepository:
         return source.rstrip("\n")
 
     def metadata(self) -> RepositoryMetadata:
-        return _metadata(self._gh("repo", "view", "--json", "owner,defaultBranchRef"))
+        return _metadata(self._gh("repo", "view", "--json", "name,owner,defaultBranchRef"))
 
     def current_login(self) -> GitHubLogin:
         """Return the login used by the GitHub CLI."""
@@ -218,11 +213,6 @@ class GitHubRepository:
         if not login:
             raise RepositoryResponseError("gh api user returned an empty login")
         return GitHubLogin(login)
-
-    @cached_property
-    def _coordinates(self) -> RepositoryCoordinates:
-        """Return the repository owner and name."""
-        return _coordinates(self._gh("repo", "view", "--json", "nameWithOwner"))
 
     def pull_request_branch(self, pull_request: PullRequestNumber) -> BranchName:
         """Return a pull request's head branch."""
@@ -242,6 +232,7 @@ class GitHubRepository:
     def babysit_pull_requests(
         self,
         coder: GitHubLogin,
+        metadata: RepositoryMetadata,
     ) -> tuple[BabysitPullRequest, ...]:
         """Return open agent pull requests oldest first with their review state."""
         source = self._paginated_api(
@@ -252,7 +243,7 @@ class GitHubRepository:
         )
         pull_requests = select_agent_pull_requests(tuple(_pull_requests(source)))
         return tuple(
-            self._complete_babysit_pull_request(pull_request, coder)
+            self._complete_babysit_pull_request(pull_request, coder, metadata)
             for pull_request in pull_requests
         )
 
@@ -264,15 +255,13 @@ class GitHubRepository:
         """Add one repository label to a pull request."""
         self._gh("pr", "edit", str(pull_request), "--add-label", label)
 
-    def request_owner_review(self, pull_request: PullRequestNumber) -> None:
-        """Request a pull request review from the repository owner."""
-        self._gh(
-            "pr",
-            "edit",
-            str(pull_request),
-            "--add-reviewer",
-            self._coordinates.owner,
-        )
+    def request_review(
+        self,
+        pull_request: PullRequestNumber,
+        reviewer: GitHubLogin,
+    ) -> None:
+        """Request a pull request review from one login."""
+        self._gh("pr", "edit", str(pull_request), "--add-reviewer", reviewer)
 
     def open_pull_request(
         self,
@@ -350,6 +339,7 @@ class GitHubRepository:
         self,
         pull_request: AgentPullRequest,
         coder: GitHubLogin,
+        metadata: RepositoryMetadata,
     ) -> BabysitPullRequest:
         checks = _check_runs(
             self._paginated_api(f"repos/{{owner}}/{{repo}}/commits/{pull_request.head}/check-runs")
@@ -363,9 +353,9 @@ class GitHubRepository:
                 "-f",
                 f"query={_REVIEW_THREADS_QUERY}",
                 "-F",
-                f"owner={self._coordinates.owner}",
+                f"owner={metadata.maintainer}",
                 "-F",
-                f"name={self._coordinates.name}",
+                f"name={metadata.name}",
                 "-F",
                 f"number={pull_request.number}",
             )
@@ -550,26 +540,19 @@ def _metadata(source: str) -> RepositoryMetadata:
     if not isinstance(value, dict):
         raise RepositoryResponseError("gh repo view returned a non-object JSON value")
     owner = value.get("owner")
+    name = value.get("name")
     default_branch = value.get("defaultBranchRef")
     if not isinstance(owner, dict) or not isinstance(default_branch, dict):
         raise RepositoryResponseError("gh repo view returned invalid repository metadata")
     maintainer = owner.get("login")
     branch = default_branch.get("name")
-    if not isinstance(maintainer, str) or not isinstance(branch, str):
+    if not isinstance(maintainer, str) or not isinstance(name, str) or not isinstance(branch, str):
         raise RepositoryResponseError("gh repo view returned invalid repository metadata")
-    return RepositoryMetadata(GitHubLogin(maintainer), BranchName(branch))
-
-
-def _coordinates(source: str) -> RepositoryCoordinates:
-    value = json.loads(source)
-    if not isinstance(value, dict) or not isinstance(
-        name_with_owner := value.get("nameWithOwner"), str
-    ):
-        raise RepositoryResponseError("gh repo view returned invalid repository coordinates")
-    owner, separator, name = name_with_owner.partition("/")
-    if not separator or not owner or not name:
-        raise RepositoryResponseError("gh repo view returned invalid repository coordinates")
-    return RepositoryCoordinates(GitHubLogin(owner), RepositoryName(name))
+    return RepositoryMetadata(
+        GitHubLogin(maintainer),
+        RepositoryName(name),
+        BranchName(branch),
+    )
 
 
 def _label_names(values: list[object]) -> list[LabelName]:
