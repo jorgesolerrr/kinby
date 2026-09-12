@@ -124,10 +124,20 @@ def babysit_pull_request(
     pull_requests = repository.babysit_pull_requests(coder, metadata)
     actions = _select_babysit_actions(pull_requests, coder, metadata.maintainer, round_limit)
     actions_by_pull_request = {action.pull_request.listed.number: action for action in actions}
+    outcomes = {
+        pull_request.listed.number: _label_outcome(pull_request, coder, round_limit)
+        for pull_request in pull_requests
+    }
+    for pull_request in pull_requests:
+        if _has_stale_readiness_label(
+            pull_request,
+            outcomes[pull_request.listed.number],
+        ):
+            _closed_issue(pull_request)
     reports: list[BabysitReport] = []
     for pull_request in pull_requests:
         listed = pull_request.listed
-        outcome = _label_outcome(pull_request, coder, round_limit)
+        outcome = outcomes[listed.number]
         action = actions_by_pull_request.get(listed.number)
         if action is not None and action.request_review:
             repository.request_review(listed.number, metadata.maintainer)
@@ -223,13 +233,14 @@ def _select_babysit_actions(
             outcome is BabysitOutcome.MERGE_READY
             and coder != pull_request.listed.author
             and maintainer not in pull_request.listed.requested_reviewers
-            and not any(review.author == maintainer for review in pull_request.reviews)
+            and not any(
+                review.author == maintainer and review.commit == pull_request.listed.head
+                for review in pull_request.reviews
+            )
         )
         if not add_label and not request_review:
             continue
-        issue = pull_request.listed.closed_issue
-        if issue is None:
-            raise ValueError("agent pull request body does not close an issue")
+        issue = _closed_issue(pull_request)
         actions.append(
             _BabysitAction(
                 pull_request,
@@ -241,6 +252,23 @@ def _select_babysit_actions(
             )
         )
     return tuple(actions)
+
+
+def _has_stale_readiness_label(
+    pull_request: BabysitPullRequest,
+    outcome: Literal[BabysitOutcome.MERGE_READY, BabysitOutcome.ROUND_LIMIT] | None,
+) -> bool:
+    labels = pull_request.listed.labels
+    return (outcome is not BabysitOutcome.MERGE_READY and MERGE_READY_LABEL in labels) or (
+        outcome is BabysitOutcome.MERGE_READY and READY_FOR_HUMAN_LABEL in labels
+    )
+
+
+def _closed_issue(pull_request: BabysitPullRequest) -> IssueNumber:
+    issue = pull_request.listed.closed_issue
+    if issue is None:
+        raise ValueError("agent pull request body does not close an issue")
+    return issue
 
 
 def _reports_json(reports: list[BabysitReport]) -> str | None:

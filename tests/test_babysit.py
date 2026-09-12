@@ -201,12 +201,13 @@ def _pull_request(
     author: str = "kinby-coder",
     labels: list[dict[str, str]] | None = None,
     requested_reviewers: list[dict[str, str]] | None = None,
+    body: str | None = None,
 ) -> dict[str, object]:
     return {
         "number": number,
         "html_url": f"https://example.test/pull/{number}",
         "head": {"ref": f"agent/{issue}-babysit", "sha": f"head-{number}"},
-        "body": f"Closes #{issue}\n",
+        "body": body if body is not None else f"Closes #{issue}\n",
         "user": {"login": author},
         "labels": labels or [],
         "requested_reviewers": requested_reviewers or [],
@@ -275,6 +276,7 @@ def _run_babysit(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     delivery: dict[str, object] | None,
+    expected_exit_code: int = 0,
 ) -> str:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
     instance_path = _coder_copy(tmp_path)
@@ -292,7 +294,7 @@ def _run_babysit(
         payload.write_text(json.dumps(delivery), encoding="utf-8")
         arguments[3:3] = ["--payload", str(payload)]
 
-    assert main(arguments) == 0
+    assert main(arguments) == expected_exit_code
     return capsys.readouterr().out
 
 
@@ -530,6 +532,34 @@ def test_completed_maintainer_review_is_not_requested_again(
     assert not any(_arguments(record)[:2] == ["pr", "edit"] for record in _records(log))
 
 
+def test_maintainer_review_on_an_old_head_does_not_suppress_a_new_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("jorgesolerrr", "kinby-coder")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "old-head", "user": {"login": "jorgesolerrr"}}],
+        comments=[],
+        labels=[{"name": "merge-ready"}],
+        author="implementing-agent",
+    )
+
+    _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    assert ["pr", "edit", "24", "--add-reviewer", "jorgesolerrr"] in [
+        _arguments(record) for record in _records(log)
+    ]
+
+
 def test_round_limit_labels_the_pull_request_ready_for_human(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -657,6 +687,49 @@ def test_scan_removes_merge_ready_when_the_pull_request_is_no_longer_ready(
 
     assert "[tool.result] babysit_pull_request (ok): None" in output
     assert ["pr", "edit", "24", "--remove-label", "merge-ready"] in [
+        _arguments(record) for record in _records(log)
+    ]
+
+
+def test_stale_label_is_not_removed_before_the_closing_issue_is_validated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_github(tmp_path, monkeypatch)
+    canned.joinpath("pull-requests.json").write_text(
+        json.dumps(
+            [
+                _pull_request(
+                    number=24,
+                    issue=225,
+                    labels=[{"name": "merge-ready"}],
+                    body="No closing reference",
+                )
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _write_review_state(
+        canned,
+        number=24,
+        head="head-24",
+        threads=[_review_thread("reviewer")],
+        checks=[{"status": "in_progress"}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+    )
+
+    output = _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+        expected_exit_code=1,
+    )
+
+    assert "agent pull request body does not close an issue" in output
+    assert ["pr", "edit", "24", "--remove-label", "merge-ready"] not in [
         _arguments(record) for record in _records(log)
     ]
 
