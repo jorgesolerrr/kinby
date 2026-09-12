@@ -44,7 +44,13 @@ def test_coder_instance_loads_its_routines_and_skills(
     babysit, implement = routines
     assert babysit.enabled is True
     assert babysit.schedule == "15 * * * *"
-    assert babysit.arguments == {"round_limit": 3}
+    assert babysit.arguments == {
+        "fix_model": "gpt-5.6-sol",
+        "fix_effort": "high",
+        "round_limit": 3,
+        "fix_timeout_seconds": 900,
+        "checks_fix_timeout_seconds": 900,
+    }
     assert babysit.signal is not None
     assert babysit.signal.secret_name == "GITHUB_WEBHOOK_SECRET"
     assert babysit.signal.signature_header == "X-Hub-Signature-256"

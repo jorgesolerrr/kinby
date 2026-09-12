@@ -7,6 +7,28 @@ from pathlib import Path
 import pytest
 
 from kinby.cli import main
+from kinby.factory.babysit import (
+    actionable_threads,
+    is_merge_ready,
+    is_waiting,
+    signal_pull_request_number,
+    signal_warrants_scan,
+)
+from kinby.factory.repository import (
+    AgentPullRequest,
+    BabysitPullRequest,
+    BranchName,
+    CheckRun,
+    CheckRunStatus,
+    CommitSha,
+    GitHubLogin,
+    PullRequestNumber,
+    PullRequestReview,
+    PullRequestUrl,
+    ReviewComment,
+    ReviewThread,
+    select_agent_pull_requests,
+)
 from kinby.instance import load_instance
 from tests.test_factory import (
     _arguments,
@@ -16,6 +38,91 @@ from tests.test_factory import (
     _use_routine_model,
     _write_executable,
 )
+
+
+def _agent_pull_request(branch: str = "agent/225-babysit") -> AgentPullRequest:
+    return AgentPullRequest(
+        number=PullRequestNumber(24),
+        url=PullRequestUrl("https://example.test/pull/24"),
+        branch=BranchName(branch),
+        head=CommitSha("head-24"),
+        body="Closes #225\n",
+        stack=None,
+        author=GitHubLogin("kinby-coder"),
+        labels=(),
+    )
+
+
+def _babysit_pull_request(
+    *,
+    threads: tuple[ReviewThread, ...] = (),
+    checks: tuple[CheckRun, ...] = (),
+    reviews: tuple[PullRequestReview, ...] = (),
+) -> BabysitPullRequest:
+    return BabysitPullRequest(
+        listed=_agent_pull_request(),
+        checks=checks,
+        threads=threads,
+        reviews=reviews,
+        round_count=0,
+    )
+
+
+def test_thread_classification_is_pure_and_ignores_empty_and_resolved_threads() -> None:
+    coder = GitHubLogin("kinby-coder")
+    empty = ReviewThread(False, ())
+    actionable = ReviewThread(
+        False,
+        (ReviewComment(GitHubLogin("reviewer"), CommitSha("head-24")),),
+    )
+    answered = ReviewThread(
+        False,
+        (ReviewComment(coder, CommitSha("head-24")),),
+    )
+    resolved = ReviewThread(
+        True,
+        (ReviewComment(GitHubLogin("reviewer"), CommitSha("head-24")),),
+    )
+
+    assert actionable_threads((empty, actionable, answered, resolved), coder) == (actionable,)
+
+
+def test_waiting_and_merge_ready_are_pure_and_use_only_the_current_head() -> None:
+    coder = GitHubLogin("kinby-coder")
+    completed = CheckRun(CheckRunStatus.COMPLETED)
+    running = CheckRun(CheckRunStatus.IN_PROGRESS)
+    stale_review = PullRequestReview(CommitSha("old-head"))
+    current_review = PullRequestReview(CommitSha("head-24"))
+
+    assert not is_waiting((completed,))
+    assert is_waiting((completed, running))
+    assert not is_merge_ready(
+        _babysit_pull_request(checks=(completed,), reviews=(stale_review,)), coder
+    )
+    assert is_merge_ready(
+        _babysit_pull_request(checks=(completed,), reviews=(current_review,)), coder
+    )
+    assert not is_merge_ready(
+        _babysit_pull_request(checks=(running,), reviews=(current_review,)), coder
+    )
+
+
+def test_agent_pr_and_signal_selection_are_pure() -> None:
+    human = _agent_pull_request("feature/human")
+    agent = _agent_pull_request()
+    abbreviated_comment: dict[str, object] = {
+        "body": {"issue": {"number": 24, "pull_request": {"url": "https://example.test/pulls/24"}}}
+    }
+
+    assert select_agent_pull_requests((human, agent)) == (agent,)
+    assert signal_warrants_scan({})
+    assert signal_warrants_scan({"body": {"pull_request": {"head": {"ref": "agent/225-babysit"}}}})
+    assert not signal_warrants_scan({"body": {"pull_request": {"head": {"ref": "feature/human"}}}})
+    assert not signal_warrants_scan({"body": {"issue": {"number": 225}}})
+    assert not signal_warrants_scan(abbreviated_comment)
+    assert signal_warrants_scan(abbreviated_comment, BranchName("agent/225-babysit"))
+    assert not signal_warrants_scan(abbreviated_comment, BranchName("feature/human"))
+    assert signal_pull_request_number(abbreviated_comment) == PullRequestNumber(24)
 
 
 def _fake_github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
@@ -155,19 +262,14 @@ def _write_review_state(
 def _review_thread(
     *authors: str,
     resolved: bool = False,
-    thread_id: str = "PRRT_thread",
     head: str = "head-24",
 ) -> dict[str, object]:
     return {
-        "id": thread_id,
         "isResolved": resolved,
-        "path": "src/example.py",
-        "line": 12,
         "comments": {
             "nodes": [
                 {
                     "author": {"login": author},
-                    "body": "review comment",
                     "commit": {"oid": head},
                 }
                 for author in authors
@@ -275,7 +377,7 @@ def test_answered_review_labels_the_pull_request_merge_ready(
         canned,
         threads=[
             _review_thread("reviewer", "kinby-coder"),
-            _review_thread("reviewer", resolved=True, thread_id="PRRT_resolved"),
+            _review_thread("reviewer", resolved=True),
         ],
         checks=[{"status": "completed"}],
         reviews=[{"commit_id": "head-24"}],
@@ -301,6 +403,12 @@ def test_answered_review_labels_the_pull_request_merge_ready(
         "issue_number": 225,
         "outcome": "merge_ready",
         "round_number": 0,
+        "threads_fixed": 0,
+        "threads_answered": 0,
+        "codex": None,
+        "checks": None,
+        "warnings": [],
+        "failure_reason": None,
     }
     calls = [_arguments(record) for record in _records(log)]
     assert ["pr", "edit", "24", "--add-label", "merge-ready"] in calls

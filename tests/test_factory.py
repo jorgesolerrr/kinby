@@ -222,14 +222,18 @@ if joined.startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failure configured"
                 {
                     "number": 20,
                     "url": "https://example.test/pull/20",
-                    "headRefName": "agent/2-second-ticket",
+                    "head": {"ref": "agent/2-second-ticket", "sha": "head-20"},
                     "body": "Closes #2\n",
+                    "user": {"login": "kinby-coder"},
+                    "labels": [],
                 },
                 {
                     "number": 21,
                     "url": "https://example.test/pull/21",
-                    "headRefName": "feature/human-work",
+                    "head": {"ref": "feature/human-work", "sha": "head-21"},
                     "body": "Closes #4\n",
+                    "user": {"login": "jorgesolerrr"},
+                    "labels": [],
                 },
             ]
         ),
@@ -665,16 +669,20 @@ def test_sub_issue_extends_the_stack_from_its_most_recent_sibling(
                 {
                     "number": 22,
                     "url": "https://example.test/pull/22",
-                    "headRefName": "agent/3-third-ticket",
+                    "head": {"ref": "agent/3-third-ticket", "sha": "head-22"},
                     "body": "Closes #3\n",
                     "stack": {"number": 42},
+                    "user": {"login": "kinby-coder"},
+                    "labels": [],
                 },
                 {
                     "number": 20,
                     "url": "https://example.test/pull/20",
-                    "headRefName": "agent/2-second-ticket",
+                    "head": {"ref": "agent/2-second-ticket", "sha": "head-20"},
                     "body": "Closes #2\n",
                     "stack": {"number": 42},
+                    "user": {"login": "kinby-coder"},
+                    "labels": [],
                 },
             ]
         ),

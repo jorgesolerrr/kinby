@@ -11,7 +11,6 @@ from kinby.factory.process import run_command
 
 GITHUB_TIMEOUT_SECONDS = 60.0
 GITHUB_API_VERSION = "2026-03-10"
-READY_LABEL = "ready-for-agent"
 AGENT_BRANCH_PREFIX = "agent/"
 _CLOSES_ISSUE = re.compile(r"(?im)^Closes #(\d+)\s*$")
 _ISSUE_URL_NUMBER = re.compile(r"/issues/(\d+)$")
@@ -28,7 +27,8 @@ PullRequestUrl = NewType("PullRequestUrl", str)
 PullRequestNumber = NewType("PullRequestNumber", int)
 StackNumber = NewType("StackNumber", int)
 GitHubLogin = NewType("GitHubLogin", str)
-ReviewThreadId = NewType("ReviewThreadId", str)
+READY_LABEL = LabelName("ready-for-agent")
+READY_FOR_HUMAN_LABEL = LabelName("ready-for-human")
 
 
 class RepositoryResponseError(ValueError):
@@ -68,8 +68,11 @@ class AgentPullRequest:
     number: PullRequestNumber
     url: PullRequestUrl
     branch: BranchName
+    head: CommitSha
     body: str
     stack: StackNumber | None
+    author: GitHubLogin
+    labels: tuple[LabelName, ...]
 
     @property
     def closed_issue(self) -> IssueNumber | None:
@@ -112,7 +115,6 @@ class ReviewComment:
     """One comment in a pull request review thread."""
 
     author: GitHubLogin | None
-    body: str
     commit: CommitSha | None
 
 
@@ -120,10 +122,7 @@ class ReviewComment:
 class ReviewThread:
     """One GitHub pull request review thread."""
 
-    id: ReviewThreadId
     resolved: bool
-    path: str
-    line: int | None
     comments: tuple[ReviewComment, ...]
 
 
@@ -135,37 +134,14 @@ class PullRequestReview:
 
 
 @dataclass(frozen=True)
-class ListedBabysitPullRequest:
-    """An agent pull request before its review state is fetched."""
-
-    number: PullRequestNumber
-    url: PullRequestUrl
-    branch: BranchName
-    head: CommitSha
-    body: str
-    author: GitHubLogin
-    labels: tuple[LabelName, ...]
-
-
-@dataclass(frozen=True)
 class BabysitPullRequest:
     """An agent pull request with all state needed by the babysitter."""
 
-    number: PullRequestNumber
-    url: PullRequestUrl
-    branch: BranchName
-    head: CommitSha
-    body: str
-    author: GitHubLogin
-    labels: tuple[LabelName, ...]
+    listed: AgentPullRequest
     checks: tuple[CheckRun, ...]
     threads: tuple[ReviewThread, ...]
     reviews: tuple[PullRequestReview, ...]
     round_count: int
-
-    @property
-    def closed_issue(self) -> IssueNumber | None:
-        return closed_issue_number(self.body)
 
 
 _REVIEW_THREADS_QUERY = """query BabysitReviewThreads(
@@ -175,12 +151,9 @@ _REVIEW_THREADS_QUERY = """query BabysitReviewThreads(
     pullRequest(number: $number) {
       reviewThreads(first: 100, after: $endCursor) {
         nodes {
-          id
           isResolved
-          path
-          line
           comments(last: 100) {
-            nodes { author { login } body commit { oid } }
+            nodes { author { login } commit { oid } }
           }
         }
         pageInfo { hasNextPage endCursor }
@@ -211,11 +184,7 @@ class GitHubRepository:
             "sort=created",
             "direction=desc",
         )
-        return tuple(
-            pull_request
-            for pull_request in _pull_requests(result)
-            if pull_request.branch.startswith(AGENT_BRANCH_PREFIX)
-        )
+        return select_agent_pull_requests(tuple(_pull_requests(result)))
 
     def open_blockers(self, issue: IssueNumber) -> tuple[OpenBlocker, ...]:
         """Return every open issue that blocks an issue."""
@@ -279,11 +248,10 @@ class GitHubRepository:
             "sort=created",
             "direction=asc",
         )
-        pull_requests = _listed_babysit_pull_requests(source)
+        pull_requests = select_agent_pull_requests(tuple(_pull_requests(source)))
         return tuple(
             self._complete_babysit_pull_request(pull_request, coder, coordinates)
             for pull_request in pull_requests
-            if pull_request.branch.startswith(AGENT_BRANCH_PREFIX)
         )
 
     def label_pull_request(
@@ -371,12 +339,12 @@ class GitHubRepository:
             "--remove-label",
             READY_LABEL,
             "--add-label",
-            "ready-for-human",
+            READY_FOR_HUMAN_LABEL,
         )
 
     def _complete_babysit_pull_request(
         self,
-        pull_request: ListedBabysitPullRequest,
+        pull_request: AgentPullRequest,
         coder: GitHubLogin,
         coordinates: RepositoryCoordinates,
     ) -> BabysitPullRequest:
@@ -418,13 +386,7 @@ class GitHubRepository:
             coder,
         )
         return BabysitPullRequest(
-            number=pull_request.number,
-            url=pull_request.url,
-            branch=pull_request.branch,
-            head=pull_request.head,
-            body=pull_request.body,
-            author=pull_request.author,
-            labels=pull_request.labels,
+            listed=pull_request,
             checks=checks,
             threads=threads,
             reviews=reviews,
@@ -462,6 +424,17 @@ def closed_issue_number(body: str) -> IssueNumber | None:
     return IssueNumber(int(match.group(1))) if match is not None else None
 
 
+def select_agent_pull_requests(
+    pull_requests: tuple[AgentPullRequest, ...],
+) -> tuple[AgentPullRequest, ...]:
+    """Return pull requests whose head branch marks factory work."""
+    return tuple(
+        pull_request
+        for pull_request in pull_requests
+        if pull_request.branch.startswith(AGENT_BRANCH_PREFIX)
+    )
+
+
 def _issues(source: str) -> list[Issue]:
     values = _page_items(source, "issue list")
     issues: list[Issue] = []
@@ -495,24 +468,31 @@ def _pull_requests(source: str) -> list[AgentPullRequest]:
         number = value.get("number")
         url = value.get("html_url", value.get("url"))
         head = value.get("head")
-        branch = value.get("headRefName")
-        if isinstance(head, dict):
-            branch = head.get("ref")
         body = value.get("body")
+        author = value.get("user")
+        labels = value.get("labels")
         if (
             not isinstance(number, int)
             or not isinstance(url, str)
-            or not isinstance(branch, str)
+            or not isinstance(head, dict)
+            or not isinstance(branch := head.get("ref"), str)
+            or not isinstance(sha := head.get("sha"), str)
             or not isinstance(body, str)
+            or not isinstance(author, dict)
+            or not isinstance(login := author.get("login"), str)
+            or not isinstance(labels, list)
         ):
             raise RepositoryResponseError("gh pr list returned an invalid pull request")
         pull_requests.append(
             AgentPullRequest(
-                PullRequestNumber(number),
-                PullRequestUrl(url),
-                BranchName(branch),
-                body,
-                _stack_number(value.get("stack")),
+                number=PullRequestNumber(number),
+                url=PullRequestUrl(url),
+                branch=BranchName(branch),
+                head=CommitSha(sha),
+                body=body,
+                stack=_stack_number(value.get("stack")),
+                author=GitHubLogin(login),
+                labels=tuple(_label_names(labels)),
             )
         )
     return pull_requests
@@ -600,43 +580,6 @@ def _coordinates(source: str) -> RepositoryCoordinates:
     return RepositoryCoordinates(GitHubLogin(owner), RepositoryName(name))
 
 
-def _listed_babysit_pull_requests(source: str) -> list[ListedBabysitPullRequest]:
-    pull_requests: list[ListedBabysitPullRequest] = []
-    for value in _page_items(source, "pull request list"):
-        if not isinstance(value, dict):
-            raise RepositoryResponseError("gh pr list returned a non-object pull request")
-        number = value.get("number")
-        url = value.get("html_url", value.get("url"))
-        head = value.get("head")
-        body = value.get("body")
-        author = value.get("user")
-        labels = value.get("labels")
-        if (
-            not isinstance(number, int)
-            or not isinstance(url, str)
-            or not isinstance(head, dict)
-            or not isinstance(branch := head.get("ref"), str)
-            or not isinstance(sha := head.get("sha"), str)
-            or not isinstance(body, str)
-            or not isinstance(author, dict)
-            or not isinstance(login := author.get("login"), str)
-            or not isinstance(labels, list)
-        ):
-            raise RepositoryResponseError("gh pr list returned an invalid pull request")
-        pull_requests.append(
-            ListedBabysitPullRequest(
-                number=PullRequestNumber(number),
-                url=PullRequestUrl(url),
-                branch=BranchName(branch),
-                head=CommitSha(sha),
-                body=body,
-                author=GitHubLogin(login),
-                labels=tuple(_label_names(labels)),
-            )
-        )
-    return pull_requests
-
-
 def _label_names(values: list[object]) -> list[LabelName]:
     labels: list[LabelName] = []
     for value in values:
@@ -686,31 +629,19 @@ def _review_thread_nodes(page: dict[str, object]) -> list[object]:
 def _review_thread(value: object) -> ReviewThread:
     if not isinstance(value, dict):
         raise RepositoryResponseError("gh review thread list returned a non-object thread")
-    thread_id = value.get("id")
     resolved = value.get("isResolved")
-    path = value.get("path")
-    line = value.get("line")
     comments_value = value.get("comments")
     comments = comments_value.get("nodes") if isinstance(comments_value, dict) else None
-    if (
-        not isinstance(thread_id, str)
-        or not isinstance(resolved, bool)
-        or not isinstance(path, str)
-        or not (line is None or isinstance(line, int))
-        or not isinstance(comments, list)
-    ):
+    if not isinstance(resolved, bool) or not isinstance(comments, list):
         raise RepositoryResponseError("gh review thread list returned an invalid thread")
     return ReviewThread(
-        ReviewThreadId(thread_id),
         resolved,
-        path,
-        line,
         tuple(_review_comment(comment) for comment in comments),
     )
 
 
 def _review_comment(value: object) -> ReviewComment:
-    if not isinstance(value, dict) or not isinstance(body := value.get("body"), str):
+    if not isinstance(value, dict):
         raise RepositoryResponseError("gh review thread list returned an invalid comment")
     author_value = value.get("author")
     login = author_value.get("login") if isinstance(author_value, dict) else None
@@ -722,7 +653,6 @@ def _review_comment(value: object) -> ReviewComment:
         raise RepositoryResponseError("gh review thread list returned an invalid comment")
     return ReviewComment(
         GitHubLogin(login) if login is not None else None,
-        body,
         CommitSha(commit) if commit is not None else None,
     )
 

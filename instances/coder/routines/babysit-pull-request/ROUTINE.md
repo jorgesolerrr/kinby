@@ -3,7 +3,7 @@ description: Babysit agent pull requests through review until they are ready for
 enabled: true
 schedule: 15 * * * *
 mode: full-access
-arguments: {"round_limit":3}
+arguments: {"fix_model":"gpt-5.6-sol","fix_effort":"high","round_limit":3,"fix_timeout_seconds":900,"checks_fix_timeout_seconds":900}
 signal:
   auth: hmac-sha256
   secret: GITHUB_WEBHOOK_SECRET
