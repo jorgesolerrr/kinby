@@ -252,8 +252,8 @@ write_env GH_TOKEN "$GH_TOKEN"
 write_env GIT_USER_NAME "$GIT_USER_NAME"
 write_env GIT_USER_EMAIL "$GIT_USER_EMAIL"
 
-# ── 5. Start the stack and register the webhook ───────────────────────────
-stage "Start the stack and register the permanent webhook"
+# ── 5. Start the stack and register the webhooks ──────────────────────────
+stage "Start the stack and register the permanent webhooks"
 GITHUB_WEBHOOK_SECRET=$(_existing GITHUB_WEBHOOK_SECRET || openssl rand -hex 32)
 write_env GITHUB_WEBHOOK_SECRET "$GITHUB_WEBHOOK_SECRET"
 say "Building the image and starting coder and caddy. This takes a few minutes the first time."
@@ -300,6 +300,6 @@ $COMPOSE exec coder codex login --device-auth
 say "Smoke tests (each should answer with one word):"
 $COMPOSE exec -T coder codex exec --skip-git-repo-check -s read-only "Reply with one word: ready" </dev/null | tail -n1
 $COMPOSE exec coder claude -p "Reply with one word: ready"
-say "Remaining pieces run without you: the hourly routine, the webhook, and the update cron."
+say "Remaining pieces run without you: the hourly routines, webhooks, and update cron."
 
 finish
