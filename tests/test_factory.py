@@ -73,6 +73,70 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def _write_fake_github(path: Path) -> None:
+    _write_executable(
+        path,
+        """import json
+import os
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+record = {"command": "gh", "arguments": arguments, "cwd": os.getcwd()}
+responses = Path(os.environ["FAKE_GITHUB_RESPONSES"])
+endpoint = next((argument for argument in arguments if argument.startswith("repos/")), "")
+if arguments[:2] == ["repo", "view"]:
+    output = (responses / "repository.txt").read_text(encoding="utf-8")
+elif arguments[:2] == ["auth", "token"]:
+    output = (responses / "auth-token.txt").read_text(encoding="utf-8")
+elif arguments[:2] == ["pr", "view"]:
+    output = (responses / "signal-head.txt").read_text(encoding="utf-8")
+elif arguments[:1] == ["api"] and "user" in arguments:
+    output = (responses / "user.txt").read_text(encoding="utf-8")
+elif arguments[:2] == ["api", "graphql"]:
+    number = next(
+        argument.split("=", 1)[1]
+        for argument in arguments
+        if argument.startswith("number=")
+    )
+    output = (responses / f"review-threads-{number}.json").read_text(encoding="utf-8")
+elif endpoint.endswith("/hooks") and "--method" in arguments:
+    url = next(
+        value.split("=", 1)[1]
+        for value in arguments
+        if value.startswith("config[url]=")
+    )
+    with (responses / "hooks.txt").open("a", encoding="utf-8") as stream:
+        stream.write(f"{url}\\n")
+    output = ""
+elif endpoint.endswith("/hooks"):
+    output = (responses / "hooks.txt").read_text(encoding="utf-8")
+elif endpoint.endswith("/labels/merge-ready"):
+    # Empty output with status zero tells the deploy wizard that the label exists.
+    output = ""
+elif arguments[:1] == ["api"]:
+    if endpoint.endswith("/pulls"):
+        output = (responses / "pull-requests.json").read_text(encoding="utf-8")
+    elif endpoint.endswith("/check-runs"):
+        number = endpoint.split("/")[-2]
+        output = (responses / f"check-runs-{number}.json").read_text(encoding="utf-8")
+    elif endpoint.endswith("/reviews"):
+        number = endpoint.split("/")[-2]
+        output = (responses / f"reviews-{number}.json").read_text(encoding="utf-8")
+    elif endpoint.endswith("/comments"):
+        number = endpoint.split("/")[-2]
+        output = (responses / f"issue-comments-{number}.json").read_text(encoding="utf-8")
+    else:
+        output = ""
+else:
+    output = ""
+with Path(os.environ["FAKE_GITHUB_LOG"]).open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(record) + "\\n")
+print(output)
+""",
+    )
+
+
 def _fake_clients(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     binaries = tmp_path / "bin"
     binaries.mkdir()

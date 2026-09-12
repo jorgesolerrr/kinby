@@ -40,7 +40,7 @@ from tests.test_factory import (
     _records,
     _RoutineModel,
     _use_routine_model,
-    _write_executable,
+    _write_fake_github,
 )
 
 
@@ -144,54 +144,14 @@ def _fake_github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     canned = tmp_path / "canned"
     canned.mkdir()
     log = tmp_path / "commands.jsonl"
-    _write_executable(
-        binaries / "gh",
-        """import json
-import os
-import sys
-from pathlib import Path
-
-arguments = sys.argv[1:]
-record = {"command": "gh", "arguments": arguments, "cwd": os.getcwd()}
-responses = Path(os.environ["FACTORY_CANNED_RESPONSES"])
-if arguments[:2] == ["repo", "view"]:
-    output = '{"nameWithOwner":"jorgesolerrr/kinby"}'
-elif arguments[:2] == ["pr", "view"]:
-    output = (responses / "signal-head.txt").read_text(encoding="utf-8")
-elif arguments[:1] == ["api"] and "user" in arguments:
-    output = "kinby-coder"
-elif arguments[:2] == ["api", "graphql"]:
-    number = next(
-        argument.split("=", 1)[1]
-        for argument in arguments
-        if argument.startswith("number=")
-    )
-    output = (responses / f"review-threads-{number}.json").read_text(encoding="utf-8")
-elif arguments[:1] == ["api"]:
-    endpoint = next((argument for argument in arguments if argument.startswith("repos/")), "")
-    if endpoint.endswith("/pulls"):
-        output = (responses / "pull-requests.json").read_text(encoding="utf-8")
-    elif endpoint.endswith("/check-runs"):
-        number = endpoint.split("/")[-2]
-        output = (responses / f"check-runs-{number}.json").read_text(encoding="utf-8")
-    elif endpoint.endswith("/reviews"):
-        number = endpoint.split("/")[-2]
-        output = (responses / f"reviews-{number}.json").read_text(encoding="utf-8")
-    elif endpoint.endswith("/comments"):
-        number = endpoint.split("/")[-2]
-        output = (responses / f"issue-comments-{number}.json").read_text(encoding="utf-8")
-    else:
-        output = ""
-else:
-    output = ""
-with Path(os.environ["FACTORY_COMMAND_LOG"]).open("a", encoding="utf-8") as stream:
-    stream.write(json.dumps(record) + "\\n")
-print(output)
-""",
-    )
+    _write_fake_github(binaries / "gh")
     monkeypatch.setenv("PATH", f"{binaries}:{os.environ['PATH']}")
-    monkeypatch.setenv("FACTORY_COMMAND_LOG", str(log))
-    monkeypatch.setenv("FACTORY_CANNED_RESPONSES", str(canned))
+    monkeypatch.setenv("FAKE_GITHUB_LOG", str(log))
+    monkeypatch.setenv("FAKE_GITHUB_RESPONSES", str(canned))
+    (canned / "repository.txt").write_text(
+        '{"nameWithOwner":"jorgesolerrr/kinby"}\n', encoding="utf-8"
+    )
+    (canned / "user.txt").write_text("kinby-coder\n", encoding="utf-8")
     (canned / "signal-head.txt").write_text("agent/225-babysit\n", encoding="utf-8")
     (canned / "pull-requests.json").write_text("[]", encoding="utf-8")
     return canned, log
