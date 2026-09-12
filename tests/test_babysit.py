@@ -2,17 +2,22 @@
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from kinby.cli import main
 from kinby.factory.babysit import (
+    IgnoredWake,
+    PullRequestCommentWake,
+    PullRequestWake,
+    ScheduledWake,
     actionable_threads,
     is_merge_ready,
     is_waiting,
-    signal_pull_request_number,
-    signal_warrants_scan,
+    parse_babysit_signal,
+    select_babysit_action,
 )
 from kinby.factory.repository import (
     AgentPullRequest,
@@ -23,14 +28,12 @@ from kinby.factory.repository import (
     CommitSha,
     GitHubLogin,
     GitHubRepository,
+    LabelName,
     PullRequestNumber,
     PullRequestReview,
     PullRequestUrl,
-    RepositoryCoordinates,
-    RepositoryName,
     ReviewComment,
     ReviewThread,
-    ReviewThreadId,
     select_agent_pull_requests,
 )
 from kinby.instance import load_instance
@@ -74,26 +77,17 @@ def _babysit_pull_request(
 
 def test_thread_classification_is_pure_and_ignores_empty_and_resolved_threads() -> None:
     coder = GitHubLogin("kinby-coder")
-    empty = ReviewThread(ReviewThreadId("empty"), False, "src/example.py", None, ())
+    empty = ReviewThread(False, ())
     actionable = ReviewThread(
-        ReviewThreadId("actionable"),
         False,
-        "src/example.py",
-        12,
         (ReviewComment(GitHubLogin("reviewer"), "please fix", CommitSha("head-24")),),
     )
     answered = ReviewThread(
-        ReviewThreadId("answered"),
         False,
-        "src/example.py",
-        12,
         (ReviewComment(coder, "fixed", CommitSha("head-24")),),
     )
     resolved = ReviewThread(
-        ReviewThreadId("resolved"),
         True,
-        "src/example.py",
-        12,
         (ReviewComment(GitHubLogin("reviewer"), "please fix", CommitSha("head-24")),),
     )
 
@@ -128,14 +122,34 @@ def test_agent_pr_and_signal_selection_are_pure() -> None:
     }
 
     assert select_agent_pull_requests((human, agent)) == (agent,)
-    assert signal_warrants_scan({})
-    assert signal_warrants_scan({"body": {"pull_request": {"head": {"ref": "agent/225-babysit"}}}})
-    assert not signal_warrants_scan({"body": {"pull_request": {"head": {"ref": "feature/human"}}}})
-    assert not signal_warrants_scan({"body": {"issue": {"number": 225}}})
-    assert not signal_warrants_scan(abbreviated_comment)
-    assert signal_warrants_scan(abbreviated_comment, BranchName("agent/225-babysit"))
-    assert not signal_warrants_scan(abbreviated_comment, BranchName("feature/human"))
-    assert signal_pull_request_number(abbreviated_comment) == PullRequestNumber(24)
+    assert parse_babysit_signal({}) == ScheduledWake()
+    assert parse_babysit_signal(
+        {"body": {"pull_request": {"head": {"ref": "agent/225-babysit"}}}}
+    ) == PullRequestWake(BranchName("agent/225-babysit"))
+    assert parse_babysit_signal(
+        {"body": {"pull_request": {"head": {"ref": "feature/human"}}}}
+    ) == PullRequestWake(BranchName("feature/human"))
+    assert parse_babysit_signal({"body": {"issue": {"number": 225}}}) == IgnoredWake()
+    assert parse_babysit_signal(abbreviated_comment) == PullRequestCommentWake(
+        PullRequestNumber(24)
+    )
+
+
+def test_babysit_action_selection_uses_the_oldest_unlabelled_outcome() -> None:
+    coder = GitHubLogin("kinby-coder")
+    reviewed = PullRequestReview(CommitSha("head-24"))
+    already_labelled = _babysit_pull_request(reviews=(reviewed,))
+    already_labelled = replace(
+        already_labelled,
+        listed=replace(already_labelled.listed, labels=(LabelName("merge-ready"),)),
+    )
+    unlabelled = _babysit_pull_request(reviews=(reviewed,))
+
+    action = select_babysit_action((already_labelled, unlabelled), coder, 3)
+
+    assert action is not None
+    assert action.pull_request is unlabelled
+    assert action.label == LabelName("merge-ready")
 
 
 def _fake_github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
@@ -275,14 +289,10 @@ def _write_review_state(
 def _review_thread(
     *authors: str,
     resolved: bool = False,
-    thread_id: str = "PRRT_thread",
     head: str = "head-24",
 ) -> dict[str, object]:
     return {
-        "id": thread_id,
         "isResolved": resolved,
-        "path": "src/example.py",
-        "line": 12,
         "comments": {
             "nodes": [
                 {
@@ -385,30 +395,24 @@ def test_schedule_wake_always_scans(
     )
 
 
-def test_scan_reads_review_thread_location_and_comment_body(
+def test_scan_reads_review_comment_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     canned, _ = _fake_github(tmp_path, monkeypatch)
     _write_scan(
         canned,
-        threads=[_review_thread("reviewer", thread_id="PRRT_review")],
+        threads=[_review_thread("reviewer")],
         checks=[{"status": "completed"}],
         reviews=[],
         comments=[],
     )
 
     repository = GitHubRepository(tmp_path)
-    (pull_request,) = repository.babysit_pull_requests(
-        GitHubLogin("kinby-coder"),
-        RepositoryCoordinates(GitHubLogin("jorgesolerrr"), RepositoryName("kinby")),
-    )
+    (pull_request,) = repository.babysit_pull_requests(GitHubLogin("kinby-coder"))
     (thread,) = pull_request.threads
     (comment,) = thread.comments
 
-    assert thread.id == ReviewThreadId("PRRT_review")
-    assert thread.path == "src/example.py"
-    assert thread.line == 12
     assert comment.body == "review comment"
 
 
@@ -448,12 +452,6 @@ def test_answered_review_labels_the_pull_request_merge_ready(
         "issue_number": 225,
         "outcome": "merge_ready",
         "round_number": 0,
-        "threads_fixed": 0,
-        "threads_answered": 0,
-        "codex": None,
-        "checks": None,
-        "warnings": [],
-        "failure_reason": None,
     }
     calls = [_arguments(record) for record in _records(log)]
     assert ["pr", "edit", "24", "--add-label", "merge-ready"] in calls
@@ -504,7 +502,7 @@ def test_round_limit_labels_the_pull_request_ready_for_human(
     ]
 
 
-def test_one_scan_labels_every_completed_pull_request(
+def test_one_scan_labels_the_oldest_completed_pull_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -554,19 +552,19 @@ def test_one_scan_labels_every_completed_pull_request(
     calls = [_arguments(record) for record in _records(log)]
     assert ["pr", "edit", "24", "--add-label", "merge-ready"] in calls
     assert ["pr", "edit", "24", "--add-reviewer", "jorgesolerrr"] in calls
-    assert ["pr", "edit", "25", "--add-label", "ready-for-human"] in calls
+    assert ["pr", "edit", "25", "--add-label", "ready-for-human"] not in calls
     assert sum(arguments[:2] == ["repo", "view"] for arguments in calls) == 1
     result_line = next(
         line
         for line in output.splitlines()
         if line.startswith("[tool.result] babysit_pull_request (ok): ")
     )
-    reports = json.loads(result_line.partition(": ")[2])
-    assert [report["pull_request_number"] for report in reports] == [24, 25]
-    assert [report["outcome"] for report in reports] == ["merge_ready", "round_limit"]
+    report = json.loads(result_line.partition(": ")[2])
+    assert report["pull_request_number"] == 24
+    assert report["outcome"] == "merge_ready"
 
 
-def test_scan_removes_merge_ready_when_the_pull_request_is_no_longer_ready(
+def test_scan_does_not_remove_merge_ready_when_the_pull_request_is_no_longer_ready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -589,12 +587,12 @@ def test_scan_removes_merge_ready_when_the_pull_request_is_no_longer_ready(
     )
 
     assert "[tool.result] babysit_pull_request (ok): None" in output
-    assert ["pr", "edit", "24", "--remove-label", "merge-ready"] in [
+    assert ["pr", "edit", "24", "--remove-label", "merge-ready"] not in [
         _arguments(record) for record in _records(log)
     ]
 
 
-def test_scan_replaces_ready_for_human_when_the_pull_request_becomes_ready(
+def test_scan_does_not_remove_ready_for_human_when_the_pull_request_becomes_ready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -617,7 +615,7 @@ def test_scan_replaces_ready_for_human_when_the_pull_request_becomes_ready(
     )
 
     calls = [_arguments(record) for record in _records(log)]
-    assert ["pr", "edit", "24", "--remove-label", "ready-for-human"] in calls
+    assert ["pr", "edit", "24", "--remove-label", "ready-for-human"] not in calls
     assert ["pr", "edit", "24", "--add-label", "merge-ready"] in calls
 
 

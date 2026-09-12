@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import cached_property
 from pathlib import Path
 from typing import NewType
 
@@ -27,7 +28,6 @@ PullRequestUrl = NewType("PullRequestUrl", str)
 PullRequestNumber = NewType("PullRequestNumber", int)
 StackNumber = NewType("StackNumber", int)
 GitHubLogin = NewType("GitHubLogin", str)
-ReviewThreadId = NewType("ReviewThreadId", str)
 READY_LABEL = LabelName("ready-for-agent")
 READY_FOR_HUMAN_LABEL = LabelName("ready-for-human")
 
@@ -124,10 +124,7 @@ class ReviewComment:
 class ReviewThread:
     """One GitHub pull request review thread."""
 
-    id: ReviewThreadId
     resolved: bool
-    path: str
-    line: int | None
     comments: tuple[ReviewComment, ...]
 
 
@@ -156,10 +153,7 @@ _REVIEW_THREADS_QUERY = """query BabysitReviewThreads(
     pullRequest(number: $number) {
       reviewThreads(first: 100, after: $endCursor) {
         nodes {
-          id
           isResolved
-          path
-          line
           comments(last: 100) {
             nodes { author { login } body commit { oid } }
           }
@@ -225,7 +219,8 @@ class GitHubRepository:
             raise RepositoryResponseError("gh api user returned an empty login")
         return GitHubLogin(login)
 
-    def coordinates(self) -> RepositoryCoordinates:
+    @cached_property
+    def _coordinates(self) -> RepositoryCoordinates:
         """Return the repository owner and name."""
         return _coordinates(self._gh("repo", "view", "--json", "nameWithOwner"))
 
@@ -247,7 +242,6 @@ class GitHubRepository:
     def babysit_pull_requests(
         self,
         coder: GitHubLogin,
-        coordinates: RepositoryCoordinates,
     ) -> tuple[BabysitPullRequest, ...]:
         """Return open agent pull requests oldest first with their review state."""
         source = self._paginated_api(
@@ -258,7 +252,7 @@ class GitHubRepository:
         )
         pull_requests = select_agent_pull_requests(tuple(_pull_requests(source)))
         return tuple(
-            self._complete_babysit_pull_request(pull_request, coder, coordinates)
+            self._complete_babysit_pull_request(pull_request, coder)
             for pull_request in pull_requests
         )
 
@@ -270,21 +264,15 @@ class GitHubRepository:
         """Add one repository label to a pull request."""
         self._gh("pr", "edit", str(pull_request), "--add-label", label)
 
-    def remove_pull_request_label(
-        self,
-        pull_request: PullRequestNumber,
-        label: LabelName,
-    ) -> None:
-        """Remove one repository label from a pull request."""
-        self._gh("pr", "edit", str(pull_request), "--remove-label", label)
-
-    def request_review(
-        self,
-        pull_request: PullRequestNumber,
-        reviewer: GitHubLogin,
-    ) -> None:
-        """Request a pull request review from one login."""
-        self._gh("pr", "edit", str(pull_request), "--add-reviewer", reviewer)
+    def request_owner_review(self, pull_request: PullRequestNumber) -> None:
+        """Request a pull request review from the repository owner."""
+        self._gh(
+            "pr",
+            "edit",
+            str(pull_request),
+            "--add-reviewer",
+            self._coordinates.owner,
+        )
 
     def open_pull_request(
         self,
@@ -362,7 +350,6 @@ class GitHubRepository:
         self,
         pull_request: AgentPullRequest,
         coder: GitHubLogin,
-        coordinates: RepositoryCoordinates,
     ) -> BabysitPullRequest:
         checks = _check_runs(
             self._paginated_api(f"repos/{{owner}}/{{repo}}/commits/{pull_request.head}/check-runs")
@@ -376,9 +363,9 @@ class GitHubRepository:
                 "-f",
                 f"query={_REVIEW_THREADS_QUERY}",
                 "-F",
-                f"owner={coordinates.owner}",
+                f"owner={self._coordinates.owner}",
                 "-F",
-                f"name={coordinates.name}",
+                f"name={self._coordinates.name}",
                 "-F",
                 f"number={pull_request.number}",
             )
@@ -634,25 +621,13 @@ def _review_thread_nodes(page: dict[str, object]) -> list[object]:
 def _review_thread(value: object) -> ReviewThread:
     if not isinstance(value, dict):
         raise RepositoryResponseError("gh review thread list returned a non-object thread")
-    thread_id = value.get("id")
     resolved = value.get("isResolved")
-    path = value.get("path")
-    line = value.get("line")
     comments_value = value.get("comments")
     comments = comments_value.get("nodes") if isinstance(comments_value, dict) else None
-    if (
-        not isinstance(thread_id, str)
-        or not isinstance(resolved, bool)
-        or not isinstance(path, str)
-        or not (line is None or isinstance(line, int))
-        or not isinstance(comments, list)
-    ):
+    if not isinstance(resolved, bool) or not isinstance(comments, list):
         raise RepositoryResponseError("gh review thread list returned an invalid thread")
     return ReviewThread(
-        ReviewThreadId(thread_id),
         resolved,
-        path,
-        line,
         tuple(_review_comment(comment) for comment in comments),
     )
 
