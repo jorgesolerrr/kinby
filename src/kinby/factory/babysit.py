@@ -315,27 +315,6 @@ def _run_fix_round(
             codex = _combined_codex_run(codex, check_fix)
         commit = current_commit(workspace)
         push_checked_out_branch(workspace)
-        _publish_replies(repository, fix.replies, commit)
-        fixed = sum(reply.fixed for reply in fix.replies)
-        answered = len(fix.replies) - fixed
-        repository.comment_on_pull_request(
-            listed.number,
-            f"Babysit round {round_number} of {round_limit}: fixed {fixed}, answered {answered}.",
-        )
-        discard_branch(workspace, listed.branch, default_branch)
-        return BabysitReport(
-            pull_request_number=listed.number,
-            pull_request_url=listed.url,
-            issue_number=issue,
-            outcome=BabysitOutcome.FIXED,
-            round_number=round_number,
-            threads_fixed=fixed,
-            threads_answered=answered,
-            codex=codex,
-            checks=checks,
-            warnings=(),
-            failure_reason=None,
-        )
     except (
         CommandError,
         ChecksFixFailed,
@@ -368,18 +347,54 @@ def _run_fix_round(
             failure_reason=failure,
         )
 
+    fixed = sum(reply.fixed for reply in fix.replies)
+    answered = len(fix.replies) - fixed
+    warnings = list(_publish_replies(repository, fix.replies, commit))
+    try:
+        repository.comment_on_pull_request(
+            listed.number,
+            f"Babysit round {round_number} of {round_limit}: fixed {fixed}, answered {answered}.",
+        )
+    except (CommandError, RepositoryResponseError) as exc:
+        warnings.append(BabysitWarning(f"round comment failed: {exc}"))
+    try:
+        discard_branch(workspace, listed.branch, default_branch)
+    except (CommandError, WorkspaceFileError) as exc:
+        warnings.append(BabysitWarning(f"workspace cleanup failed: {exc}"))
+    return BabysitReport(
+        pull_request_number=listed.number,
+        pull_request_url=listed.url,
+        issue_number=issue,
+        outcome=BabysitOutcome.FIXED,
+        round_number=round_number,
+        threads_fixed=fixed,
+        threads_answered=answered,
+        codex=codex,
+        checks=checks,
+        warnings=tuple(warnings),
+        failure_reason=None,
+    )
+
 
 def _publish_replies(
     repository: GitHubRepository,
     replies: tuple[ReviewReply, ...],
     commit: CommitSha,
-) -> None:
+) -> tuple[BabysitWarning, ...]:
+    warnings: list[BabysitWarning] = []
     for reply in replies:
         body = f"{commit}: {reply.reply}" if reply.fixed else reply.reply
-        repository.reply_to_review_thread(reply.thread, body)
-    for reply in replies:
+        try:
+            repository.reply_to_review_thread(reply.thread, body)
+        except (CommandError, RepositoryResponseError) as exc:
+            warnings.append(BabysitWarning(f"reply to thread {reply.thread} failed: {exc}"))
+            continue
         if reply.fixed:
-            repository.resolve_review_thread(reply.thread)
+            try:
+                repository.resolve_review_thread(reply.thread)
+            except (CommandError, RepositoryResponseError) as exc:
+                warnings.append(BabysitWarning(f"resolving thread {reply.thread} failed: {exc}"))
+    return tuple(warnings)
 
 
 def _combined_codex_run(first: CodexRun, second: CodexRun) -> CodexRun:

@@ -280,7 +280,7 @@ def _review_threads_prompt(threads: tuple[ReviewThread, ...]) -> str:
     rendered = "\n\n".join(_review_thread_prompt(thread) for thread in threads)
     return (
         "Address every review thread below. Fix what you agree with and commit all fixes. "
-        "For anything you do not fix, explain why. Write .scratch/review-replies.json as "
+        f"For anything you do not fix, explain why. Write {REVIEW_REPLIES.as_posix()} as "
         "one JSON object mapping every thread id to "
         '{"fixed": true|false, "reply": "your reply"}. '
         "You have no GitHub access and must not push.\n\n"

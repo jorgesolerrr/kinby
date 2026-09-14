@@ -1364,3 +1364,63 @@ def test_codex_replies_or_push_failure_stops_before_changing_threads(
     workspace = tmp_path / "coder" / "workspace"
     assert not workspace.joinpath("fixed.py").exists()
     assert not workspace.joinpath(".scratch/review-replies.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("failure", "value", "warning"),
+    [
+        (
+            "FAKE_GH_FAIL",
+            "mutation ReplyToReviewThread",
+            "reply to thread PRRT_fix failed",
+        ),
+        (
+            "FAKE_GIT_FAIL",
+            "branch -D",
+            "workspace cleanup failed",
+        ),
+    ],
+)
+def test_post_push_failure_keeps_the_fixed_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+    value: str,
+    warning: str,
+) -> None:
+    canned, log = _fake_fix_clients(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("reviewer", thread_id="PRRT_fix")],
+        checks=[{"status": "completed"}],
+        reviews=[{"commit_id": "head-24"}],
+        comments=[],
+    )
+    canned.joinpath("review-replies.json").write_text(
+        json.dumps({"PRRT_fix": {"fixed": True, "reply": "Fixed."}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(failure, value)
+
+    output = _run_babysit(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        {"action": "submitted", "pull_request": {"head": {"ref": "agent/225-babysit"}}},
+    )
+
+    result_line = next(
+        line
+        for line in output.splitlines()
+        if line.startswith("[tool.result] babysit_pull_request (ok): ")
+    )
+    (report,) = json.loads(result_line.partition(": ")[2])
+    assert report["outcome"] == "fixed"
+    assert report["threads_fixed"] == 1
+    assert report["threads_answered"] == 0
+    assert report["failure_reason"] is None
+    assert any(warning in item for item in report["warnings"])
+    calls = [_arguments(record) for record in _records(log)]
+    assert ["push"] in calls
+    assert ["pr", "edit", "24", "--add-label", "ready-for-human"] not in calls
