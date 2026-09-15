@@ -28,6 +28,7 @@ from kinby.factory.pull_request import (
     discard_branch,
     discard_branch_for_report,
     push_checked_out_branch,
+    verify_committed_workspace,
 )
 from kinby.factory.report import report_json
 from kinby.factory.repository import (
@@ -183,6 +184,7 @@ def babysit_pull_request(
                 context.workspace,
                 selected,
                 coder,
+                metadata.maintainer,
                 metadata.default_branch,
                 fix_model,
                 fix_effort,
@@ -276,6 +278,7 @@ def _run_fix_round(
     workspace: Path,
     pull_request: BabysitPullRequest,
     coder: GitHubLogin,
+    maintainer: GitHubLogin,
     default_branch: BranchName,
     fix_model: CodexModel,
     fix_effort: ReasoningEffort,
@@ -289,10 +292,19 @@ def _run_fix_round(
     codex: CodexRun | None = None
     checks: ChecksPassed | ChecksFailed | None = None
     try:
+        threads = actionable_threads(pull_request.threads, coder)
+        trusted_authors = {maintainer, "greptile-apps", "greptile-apps[bot]"}
+        if any(thread.comments[-1].author not in trusted_authors for thread in threads):
+            raise CodingClientError("review feedback from an untrusted author needs a human")
+        repository.comment_on_pull_request(
+            listed.number,
+            f"Babysit round {round_number} of {round_limit}: started.",
+        )
         checkout_branch(workspace, listed.branch)
+        starting_commit = current_commit(workspace)
         fix = fix_review_threads_with_codex(
             workspace,
-            threads=actionable_threads(pull_request.threads, coder),
+            threads=threads,
             model=fix_model,
             effort=fix_effort,
             timeout_seconds=fix_timeout_seconds,
@@ -314,6 +326,9 @@ def _run_fix_round(
         if check_fix is not None:
             codex = _combined_codex_run(codex, check_fix)
         commit = current_commit(workspace)
+        verify_committed_workspace(workspace)
+        if any(reply.fixed for reply in fix.replies) and commit == starting_commit:
+            raise WorkspaceFileError("Codex reported fixes without advancing HEAD")
         push_checked_out_branch(workspace)
     except (
         CommandError,
@@ -353,7 +368,7 @@ def _run_fix_round(
     try:
         repository.comment_on_pull_request(
             listed.number,
-            f"Babysit round {round_number} of {round_limit}: fixed {fixed}, answered {answered}.",
+            f"Babysit result for round {round_number}: fixed {fixed}, answered {answered}.",
         )
     except (CommandError, RepositoryResponseError) as exc:
         warnings.append(BabysitWarning(f"round comment failed: {exc}"))

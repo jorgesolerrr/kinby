@@ -71,6 +71,14 @@ def push_checked_out_branch(workspace: Path) -> None:
     _git(workspace, "push")
 
 
+def verify_committed_workspace(workspace: Path) -> None:
+    """Reject checked changes that are absent from HEAD."""
+    status = _git(workspace, "status", "--porcelain", "--untracked-files=all").stdout
+    generated = {PR_BODY.as_posix(), REVIEW_REPLIES.as_posix()}
+    if any(line[3:] not in generated for line in status.splitlines()):
+        raise WorkspaceFileError("Codex left uncommitted workspace changes")
+
+
 def discard_branch(
     workspace: Path,
     branch: BranchName,

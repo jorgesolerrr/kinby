@@ -259,6 +259,7 @@ def _review_thread(
     line: int | None = 12,
     body: str = "review comment",
 ) -> dict[str, object]:
+    trusted = {"reviewer": "greptile-apps", "maintainer": "jorgesolerrr"}
     return {
         "id": thread_id,
         "isResolved": resolved,
@@ -267,7 +268,7 @@ def _review_thread(
         "comments": {
             "nodes": [
                 {
-                    "author": {"login": author},
+                    "author": {"login": trusted.get(author, author)},
                     "body": body,
                     "commit": {"oid": head},
                 }
@@ -333,7 +334,10 @@ if joined.startswith(os.environ.get("FAKE_GIT_FAIL", "no failure configured")):
 if arguments[:2] == ["branch", "--remotes"]:
     print("  origin/agent/225-babysit")
 elif arguments[:2] == ["rev-parse", "HEAD"]:
-    print("fix-commit-sha")
+    print("fix-commit-sha" if (Path.cwd() / "fixed.py").exists()
+          and not os.environ.get("FAKE_UNCHANGED_HEAD") else "starting-sha")
+elif arguments[:2] == ["status", "--porcelain"]:
+    print(os.environ.get("FAKE_DIRTY_STATUS", ""), end="")
 elif arguments[:2] == ["reset", "--hard"] or arguments[:2] == ["clean", "-fd"]:
     (Path.cwd() / "fixed.py").unlink(missing_ok=True)
 """,
@@ -670,10 +674,12 @@ def test_maintainer_review_on_an_old_head_does_not_suppress_a_new_request(
     ]
 
 
+@pytest.mark.parametrize("result", ["started.", "fixed 1, answered 0."])
 def test_round_limit_labels_the_pull_request_ready_for_human(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    result: str,
 ) -> None:
     canned, log = _fake_github(tmp_path, monkeypatch)
     _write_scan(
@@ -684,7 +690,7 @@ def test_round_limit_labels_the_pull_request_ready_for_human(
         comments=[
             {
                 "user": {"login": "kinby-coder"},
-                "body": f"Babysit round {number} of 3: fixed 1, answered 0.",
+                "body": f"Babysit round {number} of 3: {result}",
             }
             for number in range(1, 4)
         ],
@@ -1027,8 +1033,8 @@ def test_actionable_threads_run_one_fix_round_and_leave_a_clean_default_branch(
     assert "gpt-5.6-sol" in codex_arguments
     assert 'model_reasoning_effort="high"' in codex_arguments
     prompt = _text(codex, "stdin")
-    assert "src/first.py:8, reviewer: Rename this value." in prompt
-    assert "src/second.py:21, maintainer: Remove this fallback." in prompt
+    assert "src/first.py:8, greptile-apps: Rename this value." in prompt
+    assert "src/second.py:21, jorgesolerrr: Remove this fallback." in prompt
     assert "no GitHub access" in prompt
     assert "must not push" in prompt
 
@@ -1072,7 +1078,7 @@ def test_actionable_threads_run_one_fix_round_and_leave_a_clean_default_branch(
         "comment",
         "24",
         "--body",
-        "Babysit round 1 of 3: fixed 1, answered 1.",
+        "Babysit result for round 1: fixed 1, answered 1.",
     ] in calls
     workspace = tmp_path / "coder" / "workspace"
     assert not workspace.joinpath("fixed.py").exists()
@@ -1137,7 +1143,7 @@ def test_checks_failure_after_one_fix_stops_the_round_and_cleans_the_workspace(
         arguments[:2] == ["api", "graphql"] and any("mutation " in item for item in arguments)
         for arguments in calls
     )
-    assert not any(arguments[:2] == ["pr", "comment"] for arguments in calls)
+    assert ["pr", "comment", "24", "--body", "Babysit round 1 of 3: started."] in calls
     workspace = tmp_path / "coder" / "workspace"
     assert not workspace.joinpath("fixed.py").exists()
     assert not workspace.joinpath(".scratch/review-replies.json").exists()
@@ -1313,6 +1319,18 @@ def test_checks_fix_uses_its_routine_timeout(
             "git exited with status 7",
             {"passed": True, "failed": None},
         ),
+        (
+            "FAKE_UNCHANGED_HEAD",
+            "1",
+            "without advancing HEAD",
+            {"passed": True, "failed": None},
+        ),
+        (
+            "FAKE_DIRTY_STATUS",
+            " M fixed.py",
+            "uncommitted workspace changes",
+            {"passed": True, "failed": None},
+        ),
     ],
 )
 def test_codex_replies_or_push_failure_stops_before_changing_threads(
@@ -1360,7 +1378,7 @@ def test_codex_replies_or_push_failure_stops_before_changing_threads(
         arguments[:2] == ["api", "graphql"] and any("mutation " in item for item in arguments)
         for arguments in calls
     )
-    assert not any(arguments[:2] == ["pr", "comment"] for arguments in calls)
+    assert ["pr", "comment", "24", "--body", "Babysit round 1 of 3: started."] in calls
     workspace = tmp_path / "coder" / "workspace"
     assert not workspace.joinpath("fixed.py").exists()
     assert not workspace.joinpath(".scratch/review-replies.json").exists()
@@ -1423,4 +1441,52 @@ def test_post_push_failure_keeps_the_fixed_report(
     assert any(warning in item for item in report["warnings"])
     calls = [_arguments(record) for record in _records(log)]
     assert ["push"] in calls
+    assert calls.index(
+        ["pr", "comment", "24", "--body", "Babysit round 1 of 3: started."]
+    ) < calls.index(["push"])
     assert ["pr", "edit", "24", "--add-label", "ready-for-human"] not in calls
+
+
+@pytest.mark.parametrize("author", ["outside-contributor", "greptile-apps-staging", ""])
+def test_untrusted_review_does_not_start_codex(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    author: str,
+) -> None:
+    canned, log = _fake_fix_clients(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread(author, thread_id="PRRT_fix")],
+        checks=[],
+        reviews=[],
+        comments=[],
+    )
+
+    output = _run_babysit(tmp_path, monkeypatch, capsys, None)
+
+    assert "untrusted author" in output
+    assert not any(record["command"] == "codex" for record in _records(log))
+    assert ["push"] not in [_arguments(record) for record in _records(log)]
+
+
+def test_round_marker_failure_does_not_start_codex(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canned, log = _fake_fix_clients(tmp_path, monkeypatch)
+    _write_scan(
+        canned,
+        threads=[_review_thread("reviewer", thread_id="PRRT_fix")],
+        checks=[],
+        reviews=[],
+        comments=[],
+    )
+    monkeypatch.setenv("FAKE_GH_FAIL", "pr comment")
+
+    output = _run_babysit(tmp_path, monkeypatch, capsys, None)
+
+    assert '"outcome":"failed"' in output
+    assert not any(record["command"] == "codex" for record in _records(log))
+    assert ["push"] not in [_arguments(record) for record in _records(log)]
