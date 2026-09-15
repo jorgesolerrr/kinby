@@ -10,9 +10,16 @@ from pathlib import Path
 from typing import NewType
 
 from kinby.factory.process import run_command
-from kinby.factory.repository import IssueNumber, IssueTitle, IssueUrl
+from kinby.factory.repository import (
+    IssueNumber,
+    IssueTitle,
+    IssueUrl,
+    ReviewThread,
+    ReviewThreadId,
+)
 
 PR_BODY = Path(".scratch/pr-body.md")
+REVIEW_REPLIES = Path(".scratch/review-replies.json")
 TICKET_BODY = Path(".scratch/factory-ticket.md")
 CodexModel = NewType("CodexModel", str)
 ClaudeModel = NewType("ClaudeModel", str)
@@ -66,6 +73,23 @@ class CodexRun:
 
 
 @dataclass(frozen=True)
+class ReviewReply:
+    """Codex's answer to one actionable review thread."""
+
+    thread: ReviewThreadId
+    fixed: bool
+    reply: str
+
+
+@dataclass(frozen=True)
+class ReviewFixRun:
+    """One fresh Codex fix run and its review replies."""
+
+    codex: CodexRun
+    replies: tuple[ReviewReply, ...]
+
+
+@dataclass(frozen=True)
 class Findings:
     """Tagged findings returned by both review axes."""
 
@@ -93,21 +117,9 @@ def run_codex(
     timeout_seconds: float,
 ) -> CodexRun:
     """Run Codex once for one issue."""
-    _clear_pr_body(workspace)
+    _clear_generated_file(workspace, PR_BODY, "pull request body")
     result = run_command(
-        (
-            "codex",
-            "exec",
-            "--model",
-            model,
-            "--config",
-            f'model_reasoning_effort="{effort}"',
-            "--json",
-            "--dangerously-bypass-approvals-and-sandbox",
-            "--cd",
-            str(workspace),
-            "-",
-        ),
+        _fresh_codex_command(workspace, model, effort),
         cwd=workspace,
         timeout_seconds=timeout_seconds,
         stdin=_prompt(workspace, issue_number, issue_title, issue_url),
@@ -127,7 +139,7 @@ def fix_with_codex(
     timeout_seconds: float,
 ) -> CodexRun:
     """Resume the implementing Codex thread to address review findings."""
-    _clear_pr_body(workspace)
+    _clear_generated_file(workspace, PR_BODY, "pull request body")
     result = run_command(
         (
             "codex",
@@ -151,6 +163,30 @@ def fix_with_codex(
         raise CodingClientError("Codex resumed a different thread")
     _require_pr_body(workspace)
     return CodexRun(resumed_thread_id, usage, result.duration_seconds)
+
+
+def fix_review_threads_with_codex(
+    workspace: Path,
+    *,
+    threads: tuple[ReviewThread, ...],
+    model: CodexModel,
+    effort: ReasoningEffort,
+    timeout_seconds: float,
+) -> ReviewFixRun:
+    """Run a fresh Codex turn for actionable pull request threads."""
+    _clear_generated_file(workspace, REVIEW_REPLIES, "review replies")
+    result = run_command(
+        _fresh_codex_command(workspace, model, effort),
+        cwd=workspace,
+        timeout_seconds=timeout_seconds,
+        stdin=_review_threads_prompt(threads),
+    )
+    thread_id, usage = _codex_events(result.stdout)
+    replies = _review_replies(workspace, threads)
+    return ReviewFixRun(
+        CodexRun(thread_id, usage, result.duration_seconds),
+        replies,
+    )
 
 
 def review_with_claude(
@@ -240,6 +276,45 @@ def _fix_prompt(findings: Findings) -> str:
     )
 
 
+def _review_threads_prompt(threads: tuple[ReviewThread, ...]) -> str:
+    rendered = "\n\n".join(_review_thread_prompt(thread) for thread in threads)
+    return (
+        "Address every review thread below. Fix what you agree with and commit all fixes. "
+        f"For anything you do not fix, explain why. Write {REVIEW_REPLIES.as_posix()} as "
+        "one JSON object mapping every thread id to "
+        '{"fixed": true|false, "reply": "your reply"}. '
+        "You have no GitHub access and must not push.\n\n"
+        f"{rendered}\n"
+    )
+
+
+def _fresh_codex_command(
+    workspace: Path,
+    model: CodexModel,
+    effort: ReasoningEffort,
+) -> tuple[str, ...]:
+    return (
+        "codex",
+        "exec",
+        "--model",
+        model,
+        "--config",
+        f'model_reasoning_effort="{effort}"',
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--cd",
+        str(workspace),
+        "-",
+    )
+
+
+def _review_thread_prompt(thread: ReviewThread) -> str:
+    comment = thread.comments[-1]
+    author = comment.author or "unknown"
+    line = thread.line if thread.line is not None else "?"
+    return f"Thread {thread.id}\n{thread.path}:{line}, {author}: {comment.body}"
+
+
 def _standards_prompt(workspace: Path, base_branch: str) -> str:
     review_skill = workspace / ".claude" / "skills" / "adversarial-review" / "SKILL.md"
     smells = workspace / ".claude" / "skills" / "adversarial-review" / "references" / "smells.md"
@@ -294,11 +369,40 @@ def _findings(source: str) -> Findings:
     raise CodingClientError(f"Claude review returned no tagged findings: {excerpt}")
 
 
-def _clear_pr_body(workspace: Path) -> None:
+def _clear_generated_file(workspace: Path, path: Path, name: str) -> None:
     try:
-        (workspace / PR_BODY).unlink(missing_ok=True)
+        (workspace / path).unlink(missing_ok=True)
     except OSError as exc:
-        raise CodingClientError(f"could not clear pull request body: {exc}") from exc
+        raise CodingClientError(f"could not clear {name}: {exc}") from exc
+
+
+def _review_replies(
+    workspace: Path,
+    threads: tuple[ReviewThread, ...],
+) -> tuple[ReviewReply, ...]:
+    try:
+        source = (workspace / REVIEW_REPLIES).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CodingClientError(f"Codex did not write review replies: {exc}") from exc
+    try:
+        value = json.loads(source)
+    except json.JSONDecodeError as exc:
+        raise CodingClientError(f"Codex wrote invalid review replies: {exc}") from exc
+    expected = {str(thread.id) for thread in threads}
+    if not isinstance(value, dict) or set(value) != expected:
+        raise CodingClientError("Codex review replies do not match the actionable threads")
+    replies: list[ReviewReply] = []
+    for thread in threads:
+        reply = value[str(thread.id)]
+        if (
+            not isinstance(reply, dict)
+            or not isinstance(fixed := reply.get("fixed"), bool)
+            or not isinstance(body := reply.get("reply"), str)
+            or not body.strip()
+        ):
+            raise CodingClientError(f"Codex returned an invalid reply for thread {thread.id}")
+        replies.append(ReviewReply(thread.id, fixed, body.strip()))
+    return tuple(replies)
 
 
 def _require_pr_body(workspace: Path) -> None:
@@ -322,8 +426,11 @@ def _codex_events(source: str) -> tuple[CodexThreadId, TokenUsage]:
     lines = [line for line in source.splitlines() if line.strip()]
     if not lines:
         raise CodingClientError("Codex returned no JSON events")
-    first = json.loads(lines[0])
-    last = json.loads(lines[-1])
+    try:
+        first = json.loads(lines[0])
+        last = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise CodingClientError(f"Codex returned invalid JSON events: {exc}") from exc
     if not isinstance(first, dict) or not isinstance(thread_id := first.get("thread_id"), str):
         raise CodingClientError("Codex's first JSON event has no thread id")
     if not isinstance(last, dict) or not isinstance(usage := last.get("usage"), dict):

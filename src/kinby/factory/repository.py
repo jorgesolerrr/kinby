@@ -167,6 +167,18 @@ _REVIEW_THREADS_QUERY = """query BabysitReviewThreads(
     }
   }
 }"""
+_REPLY_TO_REVIEW_THREAD_MUTATION = """mutation ReplyToReviewThread(
+  $threadId: ID!, $body: String!
+) {
+  addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $threadId, body: $body}) {
+    comment { id }
+  }
+}"""
+_RESOLVE_REVIEW_THREAD_MUTATION = """mutation ResolveReviewThread($threadId: ID!) {
+  resolveReviewThread(input: {threadId: $threadId}) {
+    thread { id isResolved }
+  }
+}"""
 
 
 class GitHubRepository:
@@ -291,6 +303,38 @@ class GitHubRepository:
     ) -> None:
         """Request a pull request review from one login."""
         self._gh("pr", "edit", str(pull_request), "--add-reviewer", reviewer)
+
+    def reply_to_review_thread(self, thread: ReviewThreadId, body: str) -> None:
+        """Post one reply on a pull request review thread."""
+        self._gh(
+            "api",
+            "graphql",
+            "-f",
+            f"query={_REPLY_TO_REVIEW_THREAD_MUTATION}",
+            "-F",
+            f"threadId={thread}",
+            "-f",
+            f"body={body}",
+        )
+
+    def resolve_review_thread(self, thread: ReviewThreadId) -> None:
+        """Resolve one pull request review thread."""
+        self._gh(
+            "api",
+            "graphql",
+            "-f",
+            f"query={_RESOLVE_REVIEW_THREAD_MUTATION}",
+            "-F",
+            f"threadId={thread}",
+        )
+
+    def comment_on_pull_request(
+        self,
+        pull_request: PullRequestNumber,
+        body: str,
+    ) -> None:
+        """Post one issue comment on a pull request."""
+        self._gh("pr", "comment", str(pull_request), "--body", body)
 
     def open_pull_request(
         self,

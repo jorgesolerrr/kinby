@@ -1,33 +1,32 @@
 """Run the delegated issue-to-pull-request pipeline."""
 
-import json
 from dataclasses import dataclass
 from enum import StrEnum
 from time import monotonic
 from typing import Literal, NewType
 
+from kinby.factory.checks import (
+    ChecksFailed,
+    ChecksFixFailed,
+    ChecksPassed,
+    run_checks_with_fix,
+)
 from kinby.factory.clients import (
     ClaudeModel,
     CodexModel,
     CodexRun,
     CodingClientError,
-    Findings,
     ReasoningEffort,
-    fix_with_codex,
     review_with_claude,
     run_codex,
 )
 from kinby.factory.process import CommandError
 from kinby.factory.pull_request import (
-    ChecksFailed,
-    ChecksPassed,
-    PullRequestBodyError,
-    RepositoryCheckFailed,
+    WorkspaceFileError,
     branch_name,
-    clean_failed_branch,
+    discard_branch_for_report,
     open_pull_request,
     prepare_branch,
-    run_checks,
 )
 from kinby.factory.report import report_json
 from kinby.factory.repository import (
@@ -172,22 +171,18 @@ def implement_ready_issue(
             fix_timeout_seconds=fix_timeout_seconds,
         )
         try:
-            passed_checks = run_checks(context.workspace)
-        except RepositoryCheckFailed as exc:
-            checks = ChecksFailed(failed=" ".join(exc.command))
-            check_fix = fix_with_codex(
+            passed_checks, check_fix = run_checks_with_fix(
                 context.workspace,
                 thread_id=codex.thread_id,
-                findings=Findings((str(exc),), (), str(exc)),
                 model=implementer_model,
                 effort=implementer_effort,
                 timeout_seconds=fix_timeout_seconds,
             )
-            try:
-                passed_checks = run_checks(context.workspace)
-            except RepositoryCheckFailed as retry_error:
-                checks = ChecksFailed(failed=" ".join(retry_error.command))
-                raise
+        except ChecksFixFailed as exc:
+            checks = exc.checks
+            check_fix = exc.codex
+            raise
+        if check_fix is not None:
             final_review = review_with_claude(
                 context.workspace,
                 base_branch=base_branch,
@@ -243,18 +238,19 @@ def implement_ready_issue(
         )
     except (
         CommandError,
+        ChecksFixFailed,
         CodingClientError,
-        json.JSONDecodeError,
-        PullRequestBodyError,
-        RepositoryCheckFailed,
+        WorkspaceFileError,
         RepositoryResponseError,
     ) as exc:
         failure = str(exc)
         if branch is not None and base_branch is not None:
-            try:
-                clean_failed_branch(context.workspace, branch, base_branch)
-            except (CommandError, PullRequestBodyError) as cleanup_error:
-                failure = f"{failure}; workspace cleanup failed: {cleanup_error}"
+            failure = discard_branch_for_report(
+                context.workspace,
+                branch,
+                base_branch,
+                failure,
+            )
         if issue is not None:
             try:
                 repository.mark_ready_for_human(issue.number)

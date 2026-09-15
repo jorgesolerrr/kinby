@@ -95,12 +95,16 @@ elif arguments[:2] == ["pr", "view"]:
 elif arguments[:1] == ["api"] and "user" in arguments:
     output = (responses / "user.txt").read_text(encoding="utf-8")
 elif arguments[:2] == ["api", "graphql"]:
-    number = next(
-        argument.split("=", 1)[1]
-        for argument in arguments
-        if argument.startswith("number=")
-    )
-    output = (responses / f"review-threads-{number}.json").read_text(encoding="utf-8")
+    query = next(argument for argument in arguments if argument.startswith("query="))
+    if "query BabysitReviewThreads" in query:
+        number = next(
+            argument.split("=", 1)[1]
+            for argument in arguments
+            if argument.startswith("number=")
+        )
+        output = (responses / f"review-threads-{number}.json").read_text(encoding="utf-8")
+    else:
+        output = ""
 elif endpoint.endswith("/hooks") and "--method" in arguments:
     url = next(
         value.split("=", 1)[1]
@@ -133,6 +137,10 @@ else:
     output = ""
 with Path(os.environ["FAKE_GITHUB_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(record) + "\\n")
+if failure := os.environ.get("FAKE_GH_FAIL"):
+    if failure in " ".join(arguments):
+        print("gh exploded", file=sys.stderr)
+        raise SystemExit(7)
 print(output)
 """,
     )
