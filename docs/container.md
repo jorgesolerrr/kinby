@@ -38,6 +38,10 @@ Pass secrets with individual `--env` flags, `--env-file`, or the equivalent sett
 
 `compose.yaml` at the repository root runs the instances under `instances/`, one service per instance directory. Each service builds the same image, mounts its instance at `/instance`, reads secrets from the instance's `.env` (copy `.env.example`), and runs `kinby serve`. The `coder-workspace` volume stores the cloned workspace at `/instance/workspace`. The `coder-codex` volume stores the container's Codex login and config at `/root/.codex`. This separate volume prevents the container from reading or changing the host's Codex login.
 
+## Hub mount mapping
+
+The hub needs two explicit paths when it runs in a container: the instances directory as the hub sees it and the same directory on the Docker host. Docker bind sources are always host paths. For example, mount host `/srv/kinby` at `/hub` in the hub container, then configure the hub directory as `/hub` and the Docker-host directory as `/srv/kinby`. The hub rejects instance identities that do not resolve to one direct child of its instances directory. Named workspace and Codex volumes do not need path translation.
+
 ```sh
 cp instances/coder/.env.example instances/coder/.env
 claude setup-token

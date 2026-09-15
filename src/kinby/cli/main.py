@@ -200,7 +200,8 @@ def _contract_client(instance: Instance) -> ContractClient:
 
 
 def _contract_client_for(dispatcher: Dispatcher) -> ContractClient:
-    return ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+    instance_scopes = set(Scope) - {Scope.HUB_READ, Scope.HUB_ADMIN}
+    return ContractClient(dispatcher.dispatch, dispatcher.subscribe, instance_scopes)
 
 
 async def _show_usage(client: ContractClient, command: UsageGetCommand) -> int:
@@ -397,6 +398,42 @@ async def _serve_instance(instance: Instance) -> int:
             loop.remove_signal_handler(shutdown_signal)
 
 
+async def _run_hub(
+    directory: Path,
+    source_directory: Path,
+    docker_host_directory: Path,
+    network: str,
+) -> int:
+    from docker.errors import DockerException
+
+    from kinby.hub import build_docker_hub
+
+    loop = asyncio.get_running_loop()
+    stopping = asyncio.Event()
+    shutdown_signals = (signal.SIGINT, signal.SIGTERM)
+    for shutdown_signal in shutdown_signals:
+        loop.add_signal_handler(shutdown_signal, stopping.set)
+    try:
+        try:
+            hub = await asyncio.to_thread(
+                build_docker_hub,
+                directory,
+                source_directory,
+                docker_host_directory,
+                network=network,
+            )
+        except DockerException as exc:
+            print(f"Unable to start the Docker-backed hub: {exc}", file=sys.stderr)
+            return 1
+        print(f"hub id: {hub.registry.hub_id()}")
+        print(f"directory: {hub.directory}")
+        await stopping.wait()
+        return 0
+    finally:
+        for shutdown_signal in shutdown_signals:
+            loop.remove_signal_handler(shutdown_signal)
+
+
 async def _thread_for_session(
     client: ContractClient,
     thread_id: UUID | None,
@@ -537,6 +574,27 @@ def main(
         default=PLACEHOLDER_MODEL,
         help="value for [models].main (a placeholder is used when omitted)",
     )
+    hub_parser = subparsers.add_parser(
+        "hub",
+        help="run the instance management hub",
+    )
+    hub_parser.add_argument("directory", type=Path, help="hub state directory")
+    hub_parser.add_argument(
+        "--source",
+        type=Path,
+        default=Path.cwd(),
+        help="kinby Git repository used to build images",
+    )
+    hub_parser.add_argument(
+        "--docker-host-directory",
+        type=Path,
+        help="hub directory path as seen by the Docker host",
+    )
+    hub_parser.add_argument(
+        "--network",
+        default="kinby_private",
+        help="private Docker network shared with the hub",
+    )
     instance_parser = subparsers.add_parser(
         "instance",
         help="inspect an instance",
@@ -649,6 +707,16 @@ def main(
             return 1
         print(f"Created instance at {path}")
         return 0
+    if args.command == "hub":
+        host_directory = args.docker_host_directory or args.directory
+        return asyncio.run(
+            _run_hub(
+                args.directory,
+                args.source,
+                host_directory,
+                args.network,
+            )
+        )
     try:
         match args.command:
             case "instance" if args.instance_command == "show":

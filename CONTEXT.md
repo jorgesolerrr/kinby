@@ -96,6 +96,18 @@ The stable identity of one entry in the **instance registry**. It is distinct fr
 
 One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. Its identity and outcome remain available after the requesting client disconnects.
 
+### Image artifact
+
+An immutable container image together with the resolved source revision, dependency identity, and base-image identities that produced it. An instance keeps its selected image artifact until an explicit lifecycle operation changes it.
+
+### Container runtime
+
+The hub-facing interface that creates, starts, inspects, and reads logs from isolated instance containers. Docker is the first implementation; Docker-specific paths and identities stay behind the interface.
+
+### Storage inventory
+
+The hub's explicit record of storage owned by an instance. Each entry distinguishes a bind source or named volume from its container mount destination and records whether it is writable.
+
 ### Instance draining
 
 The period when an **instance** stops accepting new work and waits for its accepted work to finish before stopping. Reads and **approval** responses remain available, while new **deliveries** wait for the next start.
