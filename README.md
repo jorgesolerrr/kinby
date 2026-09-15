@@ -19,6 +19,14 @@ The package scaffold is in place. Clone the repo, run `uv sync`, then `uv run ki
 
 Instance init, manifest parsing, and discovery are in place. The agent loop comes later.
 
+The single-user hub can now prepare, start, and inspect vanilla instances through the typed contract. Run its Docker-backed process with an explicit state directory and source checkout:
+
+```sh
+uv run kinby hub .kinby/hub --source .
+```
+
+When the hub itself runs in a container, pass `--docker-host-directory` with the same directory's path on the Docker host. Hub management remains a local typed-contract API until authenticated network transport is added.
+
 ## Run an instance
 
 The reference deployment is Docker Compose: `compose.yaml` runs the instances under `instances/`, one container each. [`docs/container.md`](docs/container.md) has the container contract, the entrypoint, and the webhook setup for a coding instance.

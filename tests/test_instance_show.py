@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from kinby.cli import main
+from kinby.instance import inspect_instance, load_instance
 
 
 def _write_instance(instance: Path, instance_id: str) -> None:
@@ -25,6 +26,35 @@ def _control_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("KINBY_INSTANCE", raising=False)
     return home, cwd
+
+
+def test_metadata_inspection_does_not_load_instance_secrets(tmp_path, monkeypatch):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    _write_instance(first, "first")
+    _write_instance(second, "second")
+    (first / ".env").write_text("SHARED_SECRET=first-value\n", encoding="utf-8")
+    (second / ".env").write_text("SHARED_SECRET=second-value\n", encoding="utf-8")
+    monkeypatch.delenv("SHARED_SECRET", raising=False)
+
+    first_metadata = inspect_instance(first)
+    second_metadata = inspect_instance(second)
+
+    assert first_metadata.manifest.id == "first"
+    assert second_metadata.manifest.id == "second"
+    assert "SHARED_SECRET" not in os.environ
+
+
+def test_boot_loading_keeps_environment_precedence_and_model_override(tmp_path, monkeypatch):
+    instance = tmp_path / "alice"
+    _write_instance(instance, "alice")
+    (instance / ".env").write_text("MODEL_TOKEN=instance-value\n", encoding="utf-8")
+    monkeypatch.setenv("MODEL_TOKEN", "process-value")
+
+    loaded = load_instance(instance, model_override="anthropic:claude-sonnet-4-6")
+
+    assert os.environ["MODEL_TOKEN"] == "process-value"
+    assert loaded.manifest.models.main == "anthropic:claude-sonnet-4-6"
 
 
 def test_instance_show_reports_the_resolved_manifest(tmp_path, capsys):

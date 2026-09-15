@@ -7,7 +7,15 @@ from enum import StrEnum
 from typing import Annotated, Literal, NewType, TypeIs
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SecretStr,
+    field_serializer,
+)
 
 NodeId = NewType("NodeId", str)
 GateRule = NewType("GateRule", str)
@@ -26,6 +34,8 @@ class Scope(StrEnum):
     THREAD_RATE = "thread:rate"
     INSTANCE_READ = "instance:read"
     INSTANCE_ADMIN = "instance:admin"
+    HUB_READ = "hub:read"
+    HUB_ADMIN = "hub:admin"
 
 
 class ErrorCode(StrEnum):
@@ -461,6 +471,128 @@ class ThreadSummary(ContractModel):
 
 class ThreadListResult(ContractModel):
     threads: list[ThreadSummary]
+
+
+class IntendedState(StrEnum):
+    STOPPED = "stopped"
+    RUNNING = "running"
+
+
+class ProcessState(StrEnum):
+    MISSING = "missing"
+    CREATED = "created"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPED = "stopped"
+    FAILED = "failed"
+    UNAVAILABLE = "unavailable"
+
+
+class Readiness(StrEnum):
+    NOT_RUNNING = "not-running"
+    STARTING = "starting"
+    READY = "ready"
+    UNHEALTHY = "unhealthy"
+    UNKNOWN = "unknown"
+
+
+class StorageKind(StrEnum):
+    BIND = "bind"
+    VOLUME = "volume"
+
+
+class StorageItem(ContractModel):
+    kind: StorageKind
+    source: str
+    destination: str
+    writable: bool
+
+
+class InstanceCreateCommand(ContractModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    manifest_id: Annotated[str, Field(min_length=1)]
+    persona_name: Annotated[str, Field(min_length=1)] | None = None
+    model: Annotated[str, Field(min_length=1)]
+    revision: Annotated[str, Field(min_length=1)] = "HEAD"
+    secrets: dict[str, SecretStr] = Field(default_factory=dict)
+
+    @field_serializer("secrets", when_used="json")
+    def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
+        return {name: value.get_secret_value() for name, value in secrets.items()}
+
+
+class InstanceListCommand(ContractModel):
+    pass
+
+
+class InstanceStartCommand(ContractModel):
+    instance_id: UUID
+
+
+class InstanceStatusCommand(ContractModel):
+    instance_id: UUID
+
+
+class InstanceLogsCommand(ContractModel):
+    instance_id: UUID
+    tail: Annotated[int, Field(gt=0)] | None = None
+
+
+class OperationGetCommand(ContractModel):
+    operation_id: UUID
+
+
+class LifecycleOperationResult(ContractModel):
+    operation_id: UUID
+    instance_id: UUID
+
+
+class InstanceSummary(ContractModel):
+    instance_id: UUID
+    manifest_id: str
+    persona_name: str | None
+    source_revision: str
+    image_id: str
+    intended_state: IntendedState
+    runtime_id: str
+    storage: list[StorageItem]
+
+
+class InstanceListResult(ContractModel):
+    instances: list[InstanceSummary]
+
+
+class InstanceStatusResult(ContractModel):
+    instance_id: UUID
+    process: ProcessState
+    readiness: Readiness
+    detail: str = ""
+
+
+class InstanceLogsResult(ContractModel):
+    instance_id: UUID
+    text: str
+
+
+class OperationKind(StrEnum):
+    CREATE = "create"
+    START = "start"
+
+
+class OperationState(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class OperationGetResult(ContractModel):
+    operation_id: UUID
+    instance_id: UUID
+    kind: OperationKind
+    state: OperationState
+    detail: str
 
 
 class UsageGetCommand(ContractModel):

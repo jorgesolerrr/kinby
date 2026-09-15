@@ -40,6 +40,14 @@ class InstanceBusy(CoreError):
     retryable = True
 
 
+class ManagedInstanceNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
+class LifecycleOperationNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
 class ThreadBusy(CoreError):
     code = ErrorCode.THREAD_BUSY
     retryable = True

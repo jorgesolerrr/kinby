@@ -255,14 +255,14 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
     )
 
 
-def load_instance(
+def inspect_instance(
     directory: Path,
     *,
     matching_rule: MatchingRule = "explicit directory",
     model_override: str | None = None,
 ) -> Instance:
+    """Read validated management metadata without loading instance secrets."""
     instance_path = Path(directory).resolve()
-    load_dotenv(instance_path / ENV_NAME, override=False)
     manifest_path = instance_path / MANIFEST_NAME
     try:
         with manifest_path.open("rb") as manifest_file:
@@ -277,6 +277,22 @@ def load_instance(
         path=instance_path,
         manifest=_manifest(instance_path, raw, model_override),
         matching_rule=matching_rule,
+    )
+
+
+def load_instance(
+    directory: Path,
+    *,
+    matching_rule: MatchingRule = "explicit directory",
+    model_override: str | None = None,
+) -> Instance:
+    """Load one instance for boot, including its non-overriding environment."""
+    instance_path = Path(directory).resolve()
+    load_dotenv(instance_path / ENV_NAME, override=False)
+    return inspect_instance(
+        instance_path,
+        matching_rule=matching_rule,
+        model_override=model_override,
     )
 
 

@@ -8,6 +8,17 @@ from kinby.contracts.models import (
     AcceptedResult,
     ContractModel,
     Event,
+    InstanceCreateCommand,
+    InstanceListCommand,
+    InstanceListResult,
+    InstanceLogsCommand,
+    InstanceLogsResult,
+    InstanceStartCommand,
+    InstanceStatusCommand,
+    InstanceStatusResult,
+    LifecycleOperationResult,
+    OperationGetCommand,
+    OperationGetResult,
     RoutineListCommand,
     RoutineListResult,
     RoutineRunCommand,
@@ -112,3 +123,16 @@ THREAD_SUBSCRIBE = Subscription(
 
 ROUTINE_LIST = Method("routine.list", Scope.INSTANCE_READ, RoutineListCommand, RoutineListResult)
 ROUTINE_RUN = Method("routine.run", Scope.INSTANCE_ADMIN, RoutineRunCommand, AcceptedResult)
+
+INSTANCE_CREATE = Method(
+    "instance.create", Scope.HUB_ADMIN, InstanceCreateCommand, LifecycleOperationResult
+)
+INSTANCE_START = Method(
+    "instance.start", Scope.HUB_ADMIN, InstanceStartCommand, LifecycleOperationResult
+)
+INSTANCE_LIST = Method("instance.list", Scope.HUB_READ, InstanceListCommand, InstanceListResult)
+INSTANCE_STATUS = Method(
+    "instance.status", Scope.HUB_READ, InstanceStatusCommand, InstanceStatusResult
+)
+INSTANCE_LOGS = Method("instance.logs", Scope.HUB_READ, InstanceLogsCommand, InstanceLogsResult)
+OPERATION_GET = Method("operation.get", Scope.HUB_READ, OperationGetCommand, OperationGetResult)
