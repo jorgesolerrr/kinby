@@ -299,6 +299,22 @@ One sequence-numbered record in a **thread**'s durable history. Events record tu
 
 A named permission a **contract** command requires of its caller. Holding a connection is not permission to call everything.
 
+### Package
+
+A reusable starting configuration for an **instance**, together with the **plugins** and **routine** implementations that support it. An instance starts from at most one package and retains its own editable configuration when that package updates.
+
+### Instance template
+
+The initial behavior and configuration a **package** supplies for a new **instance**. Once copied, that configuration belongs to the instance.
+
+### Vanilla instance
+
+An **instance** created from kinby's built-in defaults with no **package** selected.
+
+### Curated list
+
+The selection of **packages** kinby recommends when creating an **instance**, with the information needed to present and prepare each choice.
+
 ### Plugin
 
 Anything an **instance** loads beyond the core: a **tool** or a **skill**, from the instance directory or from an installed package. The workspace never supplies plugins.
