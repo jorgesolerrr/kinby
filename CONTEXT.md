@@ -80,6 +80,26 @@ The suppression marker a forget leaves behind. The **knowledge graph** is derive
 
 One kinby deployment: a directory (and, when deployed, a container) that owns its behavior configuration, memory and transcripts. One instance serves one user with one persona. Every instance has the same shape; a repo-scoped coding agent is an instance whose workspace is that repo, not a different kind of instance.
 
+### Hub
+
+The single-user service that manages **instances** and provides their shared entry point for the user. An instance can keep running while its hub is stopped.
+
+### Instance registry
+
+The hub's record of the **instances** it manages, their identities, storage locations, selected versions, and intended running states. Each instance's **manifest** remains the source of its behavior configuration.
+
+### Hub instance ID
+
+The stable identity of one entry in the **instance registry**. It is distinct from the instance's own manifest ID and **persona name**, so adoption preserves both.
+
+### Lifecycle operation
+
+One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. Its identity and outcome remain available after the requesting client disconnects.
+
+### Instance draining
+
+The period when an **instance** stops accepting new work and waits for its accepted work to finish before stopping. Reads and **approval** responses remain available, while new **deliveries** wait for the next start.
+
 ### Instance discovery
 
 The ordered lookup that selects an existing **instance** when a command does not name one directly. The matching rule is part of the result so kinby can tell the user why it selected that instance.

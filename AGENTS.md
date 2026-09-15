@@ -22,7 +22,9 @@ Issues are GitHub Issues on `jorgesolerrr/kinby`, operated via the `gh` CLI. See
 
 ### Triage labels
 
-Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, plus `spec`. See `docs/agents/triage-labels.md`.
+
+`ready-for-agent` starts the coder on the box within seconds, so it goes only on tickets cut by the maintainer's `to-tickets` skill. A spec published by the maintainer's `to-spec` skill gets `spec` until it is broken into tickets. These two skills are installed by the maintainer and are not bundled with the repository.
 
 ### Domain docs
 
