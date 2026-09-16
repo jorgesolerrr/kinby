@@ -176,10 +176,10 @@ def _copy_package_template(directory: Path, package: InstalledPackage) -> None:
         if relative is None:
             continue
         destination = directory / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
         try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(body, encoding="utf-8")
-        except IsADirectoryError, NotADirectoryError:
+        except IsADirectoryError, NotADirectoryError, FileExistsError:
             raise ValueError(f'Package template cannot copy "{name}".') from None
 
 
@@ -295,9 +295,11 @@ def _write_starter_tree(directory: Path, model: str) -> None:
 
 
 def _publish_directory(source: Path, destination: Path) -> None:
-    if destination.exists():
-        destination.rmdir()
-    source.replace(destination)
+    if not destination.exists():
+        source.replace(destination)
+        return
+    for child in source.iterdir():
+        child.replace(destination / child.name)
 
 
 def init_instance(
@@ -307,7 +309,7 @@ def init_instance(
     package: InstalledPackage | None = None,
 ) -> Path:
     """Write a readable starter instance at *directory*."""
-    directory = Path(directory)
+    directory = Path(directory).resolve()
     if package is not None and directory.is_dir() and any(directory.iterdir()):
         raise InstanceExistsError(f"instance directory is not empty: {directory}")
     manifest = directory / MANIFEST_NAME

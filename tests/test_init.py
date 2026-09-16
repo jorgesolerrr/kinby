@@ -260,6 +260,30 @@ def test_failed_package_init_leaves_the_destination_unused_so_retry_can_succeed(
     assert (target / "SYSTEM.md").read_text(encoding="utf-8") == "Write clearly.\n"
 
 
+def test_package_init_into_the_current_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        cli_module,
+        "inspect_installed_package",
+        lambda package_id: InstalledPackage(
+            descriptor=PackageDescriptor(
+                id="writer",
+                display_name="Writing teammate",
+                description="Drafts articles.",
+                icon="pen",
+                distribution="kinby-writer",
+                version="1.4.2",
+            ),
+            files={"SYSTEM.md": "Write clearly.\n"},
+        ),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["init", ".", "--package", "writer"])
+
+    assert exit_code == 0
+    assert (tmp_path / "SYSTEM.md").read_text(encoding="utf-8") == "Write clearly.\n"
+
+
 @pytest.mark.parametrize(
     ("files", "error"),
     [
@@ -267,6 +291,7 @@ def test_failed_package_init_leaves_the_destination_unused_so_retry_can_succeed(
         ({"workspace/notes.md": "secret\n"}, 'cannot copy "workspace/notes.md"'),
         ({"routines": "not a directory\n"}, 'cannot copy "routines"'),
         ({"kinby.toml": "[[models.extra]]\n"}, "cannot be serialized"),
+        ({"SYSTEM.md/child.txt": "nope\n"}, 'cannot copy "SYSTEM.md/child.txt"'),
     ],
 )
 def test_invalid_package_files_are_rejected_before_creating_the_destination(
