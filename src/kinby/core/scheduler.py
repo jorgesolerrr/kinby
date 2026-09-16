@@ -258,7 +258,13 @@ class Scheduler:
             histories = routine_history(self._log.all_events())
             history = histories.routines
             self._armed = self._arm(routines, history)
-            pending = [item for record in history.values() for item in record.pending]
+            disabled = {routine.name for routine in routines if not routine.enabled}
+            pending = [
+                item
+                for record in history.values()
+                for item in record.pending
+                if item.origin.name not in disabled or item.origin.trigger is RoutineTrigger.MANUAL
+            ]
             delivery = min(pending, key=lambda item: item.receipt_order) if pending else None
             due = [
                 (armed.time, routine, armed)

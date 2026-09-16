@@ -475,7 +475,7 @@ The part of **serve mode** that listens for **signals**, authenticates each call
 
 ### Delivery
 
-One authenticated inbound call the **receiver** accepted for a **routine**. Recorded the moment it arrives, before any work starts, so it survives a restart. The **scheduler** starts its **turn** when the instance is free. Two deliveries with the same provider id are one delivery.
+One authenticated inbound call the **receiver** accepted for a **routine**. Recorded the moment it arrives, before any work starts, so it survives a restart. The **scheduler** starts its **turn** when the instance is free and the routine is enabled. Disabling the routine leaves queued signals pending until re-enabled. Two deliveries with the same provider id are one delivery.
 
 ### Delivery receipt
 
