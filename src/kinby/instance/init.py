@@ -294,23 +294,31 @@ def _write_starter_tree(directory: Path, model: str) -> None:
     (directory / STATE_DIR).mkdir(exist_ok=True)
 
 
+def _publish_into_existing(source: Path, destination: Path) -> None:
+    if any(destination.iterdir()):
+        raise InstanceExistsError(f"instance directory is not empty: {destination}")
+    for child in source.iterdir():
+        target = destination / child.name
+        if target.exists():
+            raise InstanceExistsError(f"instance directory is not empty: {destination}")
+        child.replace(target)
+
+
 def _publish_directory(source: Path, destination: Path) -> None:
     if not destination.exists():
         source.replace(destination)
         return
     try:
+        working = Path.cwd().resolve()
+    except OSError:
+        working = None
+    if working is not None and destination == working:
+        _publish_into_existing(source, destination)
+        return
+    try:
         destination.rmdir()
     except OSError:
-        if any(destination.iterdir()):
-            raise InstanceExistsError(f"instance directory is not empty: {destination}") from None
-        for child in source.iterdir():
-            target = destination / child.name
-            if target.exists():
-                raise InstanceExistsError(
-                    f"instance directory is not empty: {destination}"
-                ) from None
-            child.replace(target)
-        return
+        raise InstanceExistsError(f"instance directory is not empty: {destination}") from None
     source.replace(destination)
 
 

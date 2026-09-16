@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 
 import pytest
 
@@ -317,11 +318,14 @@ def test_package_init_into_the_current_directory(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.chdir(tmp_path)
+    inode = tmp_path.stat().st_ino
 
     exit_code = main(["init", ".", "--package", "writer"])
 
     assert exit_code == 0
-    assert (tmp_path / "SYSTEM.md").read_text(encoding="utf-8") == "Write clearly.\n"
+    assert Path.cwd() == tmp_path
+    assert Path.cwd().stat().st_ino == inode
+    assert Path("SYSTEM.md").read_text(encoding="utf-8") == "Write clearly.\n"
 
 
 @pytest.mark.parametrize(
