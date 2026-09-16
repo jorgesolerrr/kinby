@@ -12,9 +12,9 @@ from kinby.factory.checks import (
     run_checks_with_fix,
 )
 from kinby.factory.clients import (
-    CodexModel,
-    CodexRun,
     CodingClientError,
+    CodingModel,
+    CodingRun,
     ReasoningEffort,
     ReviewReply,
     TokenUsage,
@@ -50,7 +50,7 @@ from kinby.factory.repository import (
 )
 from kinby.plugins import ToolContext, tool
 
-DEFAULT_FIX_MODEL = CodexModel("gpt-5.6-sol")
+DEFAULT_FIX_MODEL = CodingModel("gpt-5.6-sol")
 MERGE_READY_LABEL = LabelName("merge-ready")
 BabysitWarning = NewType("BabysitWarning", str)
 
@@ -75,7 +75,7 @@ class BabysitReport:
     round_number: int
     threads_fixed: int
     threads_answered: int
-    codex: CodexRun | None
+    codex: CodingRun | None
     checks: ChecksPassed | ChecksFailed | None
     warnings: tuple[BabysitWarning, ...]
     failure_reason: str | None
@@ -129,7 +129,7 @@ def is_merge_ready(pull_request: BabysitPullRequest, coder: GitHubLogin) -> bool
 def babysit_pull_request(
     signal: dict[str, object],
     context: ToolContext,
-    fix_model: CodexModel = DEFAULT_FIX_MODEL,
+    fix_model: CodingModel = DEFAULT_FIX_MODEL,
     fix_effort: ReasoningEffort = ReasoningEffort.HIGH,
     round_limit: int = 3,
     fix_timeout_seconds: float = 900,
@@ -280,7 +280,7 @@ def _run_fix_round(
     coder: GitHubLogin,
     maintainer: GitHubLogin,
     default_branch: BranchName,
-    fix_model: CodexModel,
+    fix_model: CodingModel,
     fix_effort: ReasoningEffort,
     round_limit: int,
     fix_timeout_seconds: float,
@@ -289,7 +289,7 @@ def _run_fix_round(
     listed = pull_request.listed
     issue = _closed_issue(pull_request)
     round_number = pull_request.round_count + 1
-    codex: CodexRun | None = None
+    codex: CodingRun | None = None
     checks: ChecksPassed | ChecksFailed | None = None
     try:
         threads = actionable_threads(pull_request.threads, coder)
@@ -320,8 +320,8 @@ def _run_fix_round(
             )
         except ChecksFixFailed as exc:
             checks = exc.checks
-            if exc.codex is not None:
-                codex = _combined_codex_run(codex, exc.codex)
+            if exc.implementation is not None:
+                codex = _combined_codex_run(codex, exc.implementation)
             raise
         if check_fix is not None:
             codex = _combined_codex_run(codex, check_fix)
@@ -412,8 +412,8 @@ def _publish_replies(
     return tuple(warnings)
 
 
-def _combined_codex_run(first: CodexRun, second: CodexRun) -> CodexRun:
-    return CodexRun(
+def _combined_codex_run(first: CodingRun, second: CodingRun) -> CodingRun:
+    return CodingRun(
         first.thread_id,
         TokenUsage(
             input_tokens=first.usage.input_tokens + second.usage.input_tokens,

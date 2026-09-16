@@ -751,10 +751,12 @@ def fetch(signal: dict) -> str:
 
 
 @pytest.mark.parametrize("deleted", [False, True])
-def test_pending_delivery_fires_after_routine_is_disabled_or_deleted(
+@pytest.mark.parametrize("trigger", [RoutineTrigger.SIGNAL, RoutineTrigger.MANUAL])
+def test_pending_delivery_respects_disablement_and_reports_deleted_routine(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     deleted: bool,
+    trigger: RoutineTrigger,
 ) -> None:
     async def scenario() -> None:
         monkeypatch.setenv("SIGNAL_SECRET", "secret")
@@ -775,7 +777,7 @@ def test_pending_delivery_fires_after_routine_is_disabled_or_deleted(
                 body="opened",
                 received_at=datetime(2026, 9, 7, 10, tzinfo=UTC),
             ),
-            RoutineTrigger.SIGNAL,
+            trigger,
         )
         if deleted:
             path.unlink()
@@ -788,6 +790,38 @@ def test_pending_delivery_fires_after_routine_is_disabled_or_deleted(
 
         await scheduler.tick()
         await scheduler.drain()
+
+        if not deleted and trigger is RoutineTrigger.SIGNAL:
+            assert [type(event.payload) for event in log.stored(accepted.accepted.thread_id)] == [
+                SignalReceived
+            ]
+            assert model.messages == []
+            dispatcher, log = signal_runtime(instance, model)
+            scheduler = dispatcher.scheduler
+            await scheduler.tick()
+            assert model.messages == []
+
+            routine_file(instance, "description: Other", name="other")
+            other = await scheduler.receive(
+                RoutineName("other"),
+                Delivery(
+                    headers={},
+                    content_type="text/plain",
+                    body="next",
+                    received_at=datetime(2026, 9, 7, 11, tzinfo=UTC),
+                ),
+                RoutineTrigger.SIGNAL,
+            )
+            await scheduler.tick()
+            await scheduler.drain()
+            assert any(
+                isinstance(event.payload, TurnCompleted)
+                for event in log.stored(other.accepted.thread_id)
+            )
+            model.messages.clear()
+            path.write_text(path.read_text().replace("enabled: false", "enabled: true"))
+            await scheduler.tick()
+            await scheduler.drain()
 
         closing = next(
             event.payload

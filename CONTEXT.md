@@ -398,6 +398,10 @@ A **routine**'s own deterministic code, a **tool** never offered to the model, t
 A command-line agent that implements or reviews repository changes for a coding **instance** under a separate model subscription.
 _Avoid_: model, subagent
 
+### Coding run
+
+One invocation of a **coding client**, identified by its client session and recorded with its token usage and duration. A later invocation can resume that session to repair the change.
+
 ### Delegated pipeline
 
 The issue-to-PR process that assigns implementation and review to **coding clients**, then gives the coding **instance** a **pipeline report**.
@@ -471,7 +475,7 @@ The part of **serve mode** that listens for **signals**, authenticates each call
 
 ### Delivery
 
-One authenticated inbound call the **receiver** accepted for a **routine**. Recorded the moment it arrives, before any work starts, so it survives a restart. The **scheduler** starts its **turn** when the instance is free. Two deliveries with the same provider id are one delivery.
+One authenticated inbound call the **receiver** accepted for a **routine**. Recorded the moment it arrives, before any work starts, so it survives a restart. The **scheduler** starts its **turn** when the instance is free and the routine is enabled. Disabling the routine leaves queued signals pending until re-enabled. Two deliveries with the same provider id are one delivery.
 
 ### Delivery receipt
 
