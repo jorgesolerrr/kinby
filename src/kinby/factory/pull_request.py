@@ -118,7 +118,7 @@ def open_pull_request(
     metadata: RepositoryMetadata,
     branch: BranchName,
     base_branch: BranchName,
-    open_findings: Findings,
+    open_findings: Findings | None,
 ) -> OpenedPullRequest:
     """Push the checked branch and open its pull request."""
     _git(workspace, "push", "-u", "origin", branch)
@@ -146,7 +146,12 @@ def open_pull_request(
     )
 
 
-def _open_findings(findings: Findings) -> str:
+def _open_findings(findings: Findings | None) -> str:
+    if findings is None:
+        return (
+            "\n\n## Review status\n\n"
+            "Adversarial review was not run. Review happens on this pull request."
+        )
     items = tuple(f"- [hard] {item}" for item in findings.hard) + tuple(
         f"- [suggestion] {item}" for item in findings.suggestions
     )

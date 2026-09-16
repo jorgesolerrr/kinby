@@ -24,7 +24,7 @@ INSTANCES = Path(__file__).parents[1] / "instances"
 CODER = INSTANCES / "coder"
 
 
-def _coder_copy(tmp_path: Path) -> Path:
+def _coder_copy(tmp_path: Path, *, review_round_limit: int | None = 0) -> Path:
     instance = tmp_path / "coder"
     shutil.copytree(CODER, instance, ignore=shutil.ignore_patterns(".state", ".env", "workspace"))
     workspace = instance / "workspace"
@@ -32,6 +32,14 @@ def _coder_copy(tmp_path: Path) -> Path:
     source_skills = INSTANCES.parent / ".claude" / "skills"
     for name in ("adversarial-review", "implement-ticket", "open-pr"):
         shutil.copytree(source_skills / name, workspace / ".claude" / "skills" / name)
+    routine = instance / "routines" / "implement-ready-issue" / "ROUTINE.md"
+    arguments = (
+        f',"review_round_limit":{review_round_limit}' if review_round_limit is not None else ""
+    )
+    routine.write_text(
+        routine.read_text(encoding="utf-8").replace(',"review_round_limit":0', arguments),
+        encoding="utf-8",
+    )
     return instance
 
 
@@ -998,13 +1006,15 @@ def test_sub_issue_extends_the_stack_from_its_most_recent_sibling(
     ]
 
 
+@pytest.mark.parametrize("review_round_limit", [None, 0, 3])
 def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    review_round_limit: int | None,
 ) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    instance_path = _coder_copy(tmp_path)
+    instance_path = _coder_copy(tmp_path, review_round_limit=review_round_limit)
     instance = load_instance(instance_path)
     model = _RoutineModel()
     _use_routine_model(monkeypatch, instance, model)
@@ -1054,11 +1064,14 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     codex_duration = _number(codex_report["duration_seconds"])
     assert codex_duration >= 0
     assert _number(report["duration_seconds"]) >= codex_duration
-    review = _mapping(report["review"])
-    rounds = review["rounds"]
-    assert isinstance(rounds, list)
-    assert len(rounds) == 1
-    assert _mapping(review["open_findings"])["hard"] == []
+    if review_round_limit:
+        review = _mapping(report["review"])
+        rounds = review["rounds"]
+        assert isinstance(rounds, list)
+        assert len(rounds) == 1
+        assert _mapping(review["open_findings"])["hard"] == []
+    else:
+        assert report["review"] is None
 
     records = _records(log)
     codex = next(record for record in records if record["command"] == "codex")
@@ -1073,29 +1086,32 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     assert ".scratch/pr-body.md" in _text(codex, "stdin")
 
     reviews = [record for record in records if record["command"] == "claude"]
-    assert len(reviews) == 2
-    assert all("--permission-mode" in _arguments(record) for record in reviews)
-    assert all("--allowedTools" in _arguments(record) for record in reviews)
-    assert all("claude-fable-5-1" in _arguments(record) for record in reviews)
-    assert all("plan" in _arguments(record) for record in reviews)
-    assert all("none" in _arguments(record) for record in reviews)
-    assert all("--no-session-persistence" in _arguments(record) for record in reviews)
-    assert all(record["api_key"] is None for record in reviews)
-    assert {"standards", "spec"} == {
-        "standards" if "Review axis: standards" in _text(record, "stdin") else "spec"
-        for record in reviews
-    }
-    standards = next(
-        record for record in reviews if "Review axis: standards" in _text(record, "stdin")
-    )
-    assert "AGENTS.md" in _text(standards, "stdin")
-    assert "CODING-STANDARD.md" in _text(standards, "stdin")
-    assert "references/smells.md" in _text(standards, "stdin")
-    spec = next(record for record in reviews if "Review axis: spec" in _text(record, "stdin"))
-    assert ".scratch/factory-ticket.md" in _text(spec, "stdin")
-    assert (instance_path / "workspace" / ".scratch" / "factory-ticket.md").read_text(
-        encoding="utf-8"
-    ) == "Build the fourth ticket and cover it with tests."
+    if review_round_limit:
+        assert len(reviews) == 2
+        assert all("--permission-mode" in _arguments(record) for record in reviews)
+        assert all("--allowedTools" in _arguments(record) for record in reviews)
+        assert all("claude-fable-5-1" in _arguments(record) for record in reviews)
+        assert all("plan" in _arguments(record) for record in reviews)
+        assert all("none" in _arguments(record) for record in reviews)
+        assert all("--no-session-persistence" in _arguments(record) for record in reviews)
+        assert all(record["api_key"] is None for record in reviews)
+        assert {"standards", "spec"} == {
+            "standards" if "Review axis: standards" in _text(record, "stdin") else "spec"
+            for record in reviews
+        }
+        standards = next(
+            record for record in reviews if "Review axis: standards" in _text(record, "stdin")
+        )
+        assert "AGENTS.md" in _text(standards, "stdin")
+        assert "CODING-STANDARD.md" in _text(standards, "stdin")
+        assert "references/smells.md" in _text(standards, "stdin")
+        spec = next(record for record in reviews if "Review axis: spec" in _text(record, "stdin"))
+        assert ".scratch/factory-ticket.md" in _text(spec, "stdin")
+        assert (instance_path / "workspace" / ".scratch" / "factory-ticket.md").read_text(
+            encoding="utf-8"
+        ) == "Build the fourth ticket and cover it with tests."
+    else:
+        assert reviews == []
 
     checks = [_arguments(record) for record in records if record["command"] == "uv"]
     assert checks == [
@@ -1120,6 +1136,8 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
         if record["command"] == "gh" and _arguments(record)[:2] == ["pr", "create"]
     )
     assert _text(create, "body").startswith("Closes #4\n")
+    if not review_round_limit:
+        assert "Adversarial review was not run" in _text(create, "body")
     create_arguments = _arguments(create)
     assert create_arguments[create_arguments.index("--reviewer") + 1] == "jorgesolerrr"
     assert not any(
@@ -1135,7 +1153,7 @@ def test_hard_review_finding_resumes_codex_and_reviews_the_fix(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    instance_path = _coder_copy(tmp_path)
+    instance_path = _coder_copy(tmp_path, review_round_limit=3)
     instance = load_instance(instance_path)
     _use_routine_model(monkeypatch, instance, _RoutineModel())
     log = _fake_clients(tmp_path, monkeypatch)
@@ -1190,7 +1208,7 @@ def test_open_review_findings_are_reported_after_the_round_cap(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    instance_path = _coder_copy(tmp_path)
+    instance_path = _coder_copy(tmp_path, review_round_limit=3)
     instance = load_instance(instance_path)
     _use_routine_model(monkeypatch, instance, _RoutineModel())
     log = _fake_clients(tmp_path, monkeypatch)
@@ -1240,7 +1258,7 @@ def test_suggestions_get_one_fix_then_remain_for_the_pull_request(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    instance_path = _coder_copy(tmp_path)
+    instance_path = _coder_copy(tmp_path, review_round_limit=3)
     instance = load_instance(instance_path)
     _use_routine_model(monkeypatch, instance, _RoutineModel())
     log = _fake_clients(tmp_path, monkeypatch)
@@ -1404,13 +1422,15 @@ def test_failing_check_reports_output_and_relabels_issue(
     ]
 
 
-def test_check_fix_is_reviewed_before_the_pull_request_opens(
+@pytest.mark.parametrize("review_round_limit", [0, 3])
+def test_check_fix_obeys_review_policy_before_the_pull_request_opens(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    review_round_limit: int,
 ) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    instance_path = _coder_copy(tmp_path)
+    instance_path = _coder_copy(tmp_path, review_round_limit=review_round_limit)
     instance = load_instance(instance_path)
     _use_routine_model(monkeypatch, instance, _RoutineModel())
     log = _fake_clients(tmp_path, monkeypatch)
@@ -1439,24 +1459,31 @@ def test_check_fix_is_reviewed_before_the_pull_request_opens(
     report = _report(capsys.readouterr().out)
     assert report["outcome"] == "opened"
     assert report["check_fix"] is not None
-    rounds = _mapping(report["review"])["rounds"]
-    assert isinstance(rounds, list)
-    assert len(rounds) == 2
     records = _records(log)
-    assert len([record for record in records if record["command"] == "claude"]) == 4
+    reviews = [record for record in records if record["command"] == "claude"]
+    if review_round_limit:
+        rounds = _mapping(report["review"])["rounds"]
+        assert isinstance(rounds, list)
+        assert len(rounds) == 2
+        assert len(reviews) == 4
+    else:
+        assert report["review"] is None
+        assert reviews == []
     last_check = max(index for index, record in enumerate(records) if record["command"] == "uv")
-    final_reviews = [
-        index
-        for index, record in enumerate(records)
-        if record["command"] == "claude" and index > last_check
-    ]
-    assert len(final_reviews) == 2
     create_index = next(
         index
         for index, record in enumerate(records)
         if record["command"] == "gh" and _arguments(record)[:2] == ["pr", "create"]
     )
-    assert max(final_reviews) < create_index
+    assert last_check < create_index
+    if review_round_limit:
+        final_reviews = [
+            index
+            for index, record in enumerate(records)
+            if record["command"] == "claude" and index > last_check
+        ]
+        assert len(final_reviews) == 2
+        assert max(final_reviews) < create_index
 
 
 @pytest.mark.parametrize(
@@ -1576,7 +1603,7 @@ def test_review_run_uses_the_review_limit(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    instance_path = _coder_copy(tmp_path)
+    instance_path = _coder_copy(tmp_path, review_round_limit=3)
     routine = instance_path / "routines" / "implement-ready-issue" / "ROUTINE.md"
     routine.write_text(
         routine.read_text(encoding="utf-8").replace(
@@ -1621,7 +1648,7 @@ def test_fix_run_uses_the_fix_limit(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    instance_path = _coder_copy(tmp_path)
+    instance_path = _coder_copy(tmp_path, review_round_limit=3)
     routine = instance_path / "routines" / "implement-ready-issue" / "ROUTINE.md"
     routine.write_text(
         routine.read_text(encoding="utf-8").replace(
@@ -1681,7 +1708,7 @@ def test_decorated_no_findings_answer_opens_a_clean_pull_request(
     answer: str,
 ) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    instance_path = _coder_copy(tmp_path)
+    instance_path = _coder_copy(tmp_path, review_round_limit=3)
     instance = load_instance(instance_path)
     _use_routine_model(monkeypatch, instance, _RoutineModel())
     log = _fake_clients(tmp_path, monkeypatch)
@@ -1725,7 +1752,7 @@ def test_bold_review_tag_resumes_codex_like_a_plain_one(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    instance_path = _coder_copy(tmp_path)
+    instance_path = _coder_copy(tmp_path, review_round_limit=3)
     instance = load_instance(instance_path)
     _use_routine_model(monkeypatch, instance, _RoutineModel())
     log = _fake_clients(tmp_path, monkeypatch)
@@ -1773,7 +1800,7 @@ def test_untagged_review_answer_fails_with_an_excerpt(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    instance_path = _coder_copy(tmp_path)
+    instance_path = _coder_copy(tmp_path, review_round_limit=3)
     instance = load_instance(instance_path)
     _use_routine_model(monkeypatch, instance, _RoutineModel())
     _fake_clients(tmp_path, monkeypatch)

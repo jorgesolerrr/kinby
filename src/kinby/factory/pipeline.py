@@ -75,7 +75,7 @@ class OpenedPipelineReport:
     pull_request: PullRequestReport
     checks: ChecksPassed
     codex: CodexRun
-    review: ReviewLoop
+    review: ReviewLoop | None
     check_fix: CodexRun | None
     warnings: tuple[PipelineWarning, ...]
     duration_seconds: float
@@ -111,7 +111,7 @@ def implement_ready_issue(
     implementer_model: CodexModel = DEFAULT_IMPLEMENTER_MODEL,
     implementer_effort: ReasoningEffort = ReasoningEffort.HIGH,
     reviewer_model: ClaudeModel = DEFAULT_REVIEWER_MODEL,
-    review_round_limit: int = 3,
+    review_round_limit: int = 0,
     implement_timeout_seconds: float = 1800,
     review_timeout_seconds: float = 600,
     fix_timeout_seconds: float = 900,
@@ -158,18 +158,19 @@ def implement_ready_issue(
             effort=implementer_effort,
             timeout_seconds=implement_timeout_seconds,
         )
-        review = run_review_loop(
-            context.workspace,
-            base_branch=base_branch,
-            ticket_body=repository.issue_body(issue.number),
-            thread_id=codex.thread_id,
-            implementer_model=implementer_model,
-            implementer_effort=implementer_effort,
-            reviewer_model=reviewer_model,
-            round_limit=review_round_limit,
-            review_timeout_seconds=review_timeout_seconds,
-            fix_timeout_seconds=fix_timeout_seconds,
-        )
+        if review_round_limit != 0:
+            review = run_review_loop(
+                context.workspace,
+                base_branch=base_branch,
+                ticket_body=repository.issue_body(issue.number),
+                thread_id=codex.thread_id,
+                implementer_model=implementer_model,
+                implementer_effort=implementer_effort,
+                reviewer_model=reviewer_model,
+                round_limit=review_round_limit,
+                review_timeout_seconds=review_timeout_seconds,
+                fix_timeout_seconds=fix_timeout_seconds,
+            )
         try:
             passed_checks, check_fix = run_checks_with_fix(
                 context.workspace,
@@ -182,7 +183,7 @@ def implement_ready_issue(
             checks = exc.checks
             check_fix = exc.codex
             raise
-        if check_fix is not None:
+        if check_fix is not None and review is not None:
             final_review = review_with_claude(
                 context.workspace,
                 base_branch=base_branch,
@@ -211,7 +212,7 @@ def implement_ready_issue(
             metadata,
             branch,
             base_branch,
-            review.open_findings,
+            review.open_findings if review is not None else None,
         )
         if siblings:
             try:
@@ -222,7 +223,9 @@ def implement_ready_issue(
                     repository.extend_stack(stack, pull_request.number)
             except CommandError as exc:
                 warnings = (PipelineWarning(f"stack registration failed: {exc}"),)
-        has_findings = bool(review.open_findings.hard or review.open_findings.suggestions)
+        has_findings = review is not None and bool(
+            review.open_findings.hard or review.open_findings.suggestions
+        )
         report = OpenedPipelineReport(
             issue=issue,
             pull_request=PullRequestReport(pull_request.url, branch, base_branch),
