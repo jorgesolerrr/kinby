@@ -1,17 +1,18 @@
-"""Run repository checks and one Codex repair attempt."""
+"""Run repository checks and one coding client repair attempt."""
 
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from kinby.factory.clients import (
-    CodexModel,
-    CodexRun,
-    CodexThreadId,
+    CodingClient,
     CodingClientError,
+    CodingModel,
+    CodingRun,
+    CodingSessionId,
     Findings,
     ReasoningEffort,
-    fix_with_codex,
+    fix_implementation,
 )
 from kinby.factory.process import CommandError, run_command
 
@@ -45,16 +46,16 @@ class RepositoryCheckFailed(RuntimeError):
 
 
 class ChecksFixFailed(RuntimeError):
-    """Repository checks still failed after one Codex fix attempt."""
+    """Repository checks still failed after one coding client fix attempt."""
 
     def __init__(
         self,
         checks: ChecksFailed,
-        codex: CodexRun | None,
+        implementation: CodingRun | None,
         reason: str,
     ) -> None:
         self.checks = checks
-        self.codex = codex
+        self.implementation = implementation
         super().__init__(reason)
 
 
@@ -71,20 +72,22 @@ def run_checks(workspace: Path) -> ChecksPassed:
 def run_checks_with_fix(
     workspace: Path,
     *,
-    thread_id: CodexThreadId,
-    model: CodexModel,
+    thread_id: CodingSessionId,
+    model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
-) -> tuple[ChecksPassed, CodexRun | None]:
-    """Run repository checks and make one Codex fix attempt after a failure."""
+    client: CodingClient = CodingClient.CODEX,
+) -> tuple[ChecksPassed, CodingRun | None]:
+    """Run repository checks and make one coding client fix attempt after a failure."""
     try:
         return run_checks(workspace), None
     except RepositoryCheckFailed as exc:
         checks = ChecksFailed(failed=" ".join(exc.command))
         failure = exc
     try:
-        codex = fix_with_codex(
+        implementation = fix_implementation(
             workspace,
+            client=client,
             thread_id=thread_id,
             findings=Findings((str(failure),), (), str(failure)),
             model=model,
@@ -94,7 +97,7 @@ def run_checks_with_fix(
     except (CommandError, CodingClientError) as fix_error:
         raise ChecksFixFailed(checks, None, str(fix_error)) from fix_error
     try:
-        return run_checks(workspace), codex
+        return run_checks(workspace), implementation
     except RepositoryCheckFailed as retry_error:
         failed = ChecksFailed(failed=" ".join(retry_error.command))
-        raise ChecksFixFailed(failed, codex, str(retry_error)) from retry_error
+        raise ChecksFixFailed(failed, implementation, str(retry_error)) from retry_error

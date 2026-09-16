@@ -12,13 +12,13 @@ from kinby.factory.checks import (
     run_checks_with_fix,
 )
 from kinby.factory.clients import (
-    ClaudeModel,
-    CodexModel,
-    CodexRun,
+    CodingClient,
     CodingClientError,
+    CodingModel,
+    CodingRun,
     ReasoningEffort,
     review_with_claude,
-    run_codex,
+    run_implementation,
 )
 from kinby.factory.process import CommandError
 from kinby.factory.pull_request import (
@@ -45,8 +45,8 @@ from kinby.factory.scan import (
 )
 from kinby.plugins import ToolContext, tool
 
-DEFAULT_IMPLEMENTER_MODEL = CodexModel("gpt-5.6-sol")
-DEFAULT_REVIEWER_MODEL = ClaudeModel("claude-fable-5-1")
+DEFAULT_IMPLEMENTER_MODEL = CodingModel("claude-opus-5")
+DEFAULT_REVIEWER_MODEL = CodingModel("claude-fable-5-1")
 PipelineWarning = NewType("PipelineWarning", str)
 
 
@@ -74,9 +74,9 @@ class OpenedPipelineReport:
     issue: Issue
     pull_request: PullRequestReport
     checks: ChecksPassed
-    codex: CodexRun
+    implementation: CodingRun
     review: ReviewLoop | None
-    check_fix: CodexRun | None
+    check_fix: CodingRun | None
     warnings: tuple[PipelineWarning, ...]
     duration_seconds: float
     outcome: Literal[
@@ -92,9 +92,9 @@ class FailedPipelineReport:
 
     issue: Issue | None
     checks: ChecksFailed | None
-    codex: CodexRun | None
+    implementation: CodingRun | None
     review: ReviewLoop | None
-    check_fix: CodexRun | None
+    check_fix: CodingRun | None
     duration_seconds: float
     failure_reason: str
     outcome: Literal[PipelineOutcome.FAILED] = PipelineOutcome.FAILED
@@ -108,9 +108,10 @@ type PipelineReport = OpenedPipelineReport | FailedPipelineReport
 def implement_ready_issue(
     signal: dict[str, object],
     context: ToolContext,
-    implementer_model: CodexModel = DEFAULT_IMPLEMENTER_MODEL,
+    implementer_client: CodingClient = CodingClient.CLAUDE,
+    implementer_model: CodingModel = DEFAULT_IMPLEMENTER_MODEL,
     implementer_effort: ReasoningEffort = ReasoningEffort.HIGH,
-    reviewer_model: ClaudeModel = DEFAULT_REVIEWER_MODEL,
+    reviewer_model: CodingModel = DEFAULT_REVIEWER_MODEL,
     review_round_limit: int = 0,
     implement_timeout_seconds: float = 1800,
     review_timeout_seconds: float = 600,
@@ -123,9 +124,9 @@ def implement_ready_issue(
     started_at = monotonic()
     repository = GitHubRepository(context.workspace)
     issue: Issue | None = None
-    codex: CodexRun | None = None
+    implementation: CodingRun | None = None
     review: ReviewLoop | None = None
-    check_fix: CodexRun | None = None
+    check_fix: CodingRun | None = None
     checks: ChecksFailed | None = None
     branch: BranchName | None = None
     base_branch: BranchName | None = None
@@ -149,8 +150,9 @@ def implement_ready_issue(
         base_branch = siblings[-1].branch if siblings else metadata.default_branch
         branch = branch_name(issue)
         prepare_branch(context.workspace, branch, base_branch)
-        codex = run_codex(
+        implementation = run_implementation(
             context.workspace,
+            client=implementer_client,
             issue_number=issue.number,
             issue_title=issue.title,
             issue_url=issue.url,
@@ -163,7 +165,8 @@ def implement_ready_issue(
                 context.workspace,
                 base_branch=base_branch,
                 ticket_body=repository.issue_body(issue.number),
-                thread_id=codex.thread_id,
+                thread_id=implementation.thread_id,
+                implementer_client=implementer_client,
                 implementer_model=implementer_model,
                 implementer_effort=implementer_effort,
                 reviewer_model=reviewer_model,
@@ -174,14 +177,15 @@ def implement_ready_issue(
         try:
             passed_checks, check_fix = run_checks_with_fix(
                 context.workspace,
-                thread_id=codex.thread_id,
+                client=implementer_client,
+                thread_id=implementation.thread_id,
                 model=implementer_model,
                 effort=implementer_effort,
                 timeout_seconds=fix_timeout_seconds,
             )
         except ChecksFixFailed as exc:
             checks = exc.checks
-            check_fix = exc.codex
+            check_fix = exc.implementation
             raise
         if check_fix is not None and review is not None:
             final_review = review_with_claude(
@@ -230,7 +234,7 @@ def implement_ready_issue(
             issue=issue,
             pull_request=PullRequestReport(pull_request.url, branch, base_branch),
             checks=passed_checks,
-            codex=codex,
+            implementation=implementation,
             review=review,
             check_fix=check_fix,
             warnings=warnings,
@@ -262,7 +266,7 @@ def implement_ready_issue(
         report = FailedPipelineReport(
             issue=issue,
             checks=checks,
-            codex=codex,
+            implementation=implementation,
             review=review,
             check_fix=check_fix,
             duration_seconds=monotonic() - started_at,

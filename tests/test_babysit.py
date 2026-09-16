@@ -390,7 +390,7 @@ def _run_babysit(
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
     instance_path = _coder_copy(tmp_path)
     routine = instance_path / "routines" / "babysit-pull-request" / "ROUTINE.md"
-    routine_text = routine.read_text(encoding="utf-8")
+    routine_text = routine.read_text(encoding="utf-8").replace("enabled: false", "enabled: true")
     for old, new in routine_replacements:
         routine_text = routine_text.replace(old, new)
     routine.write_text(routine_text, encoding="utf-8")
@@ -1013,6 +1013,7 @@ def test_actionable_threads_run_one_fix_round_and_leave_a_clean_default_branch(
             "threads_answered": 1,
             "codex": {
                 "thread_id": "thread-fix-226",
+                "client": "codex",
                 "usage": {
                     "input_tokens": 90,
                     "cached_input_tokens": 60,

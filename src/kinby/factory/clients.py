@@ -21,9 +21,8 @@ from kinby.factory.repository import (
 PR_BODY = Path(".scratch/pr-body.md")
 REVIEW_REPLIES = Path(".scratch/review-replies.json")
 TICKET_BODY = Path(".scratch/factory-ticket.md")
-CodexModel = NewType("CodexModel", str)
-ClaudeModel = NewType("ClaudeModel", str)
-CodexThreadId = NewType("CodexThreadId", str)
+CodingModel = NewType("CodingModel", str)
+CodingSessionId = NewType("CodingSessionId", str)
 # Claude Code bills an API key over the subscription token when both are set.
 _API_KEY = "ANTHROPIC_API_KEY"
 _EMPHASIS = r"(?:\*\*|__|`)?"
@@ -39,8 +38,15 @@ _ANSWER_SHAPE = (
 )
 
 
+class CodingClient(StrEnum):
+    """The command-line client that owns an implementation session."""
+
+    CODEX = "codex"
+    CLAUDE = "claude"
+
+
 class ReasoningEffort(StrEnum):
-    """A reasoning effort accepted by the Codex client."""
+    """A reasoning effort requested from a coding client."""
 
     NONE = "none"
     MINIMAL = "minimal"
@@ -48,6 +54,7 @@ class ReasoningEffort(StrEnum):
     MEDIUM = "medium"
     HIGH = "high"
     XHIGH = "xhigh"
+    MAX = "max"
 
 
 class CodingClientError(RuntimeError):
@@ -64,12 +71,13 @@ class TokenUsage:
 
 
 @dataclass(frozen=True)
-class CodexRun:
-    """The observable result of one Codex implementation run."""
+class CodingRun:
+    """The observable result of one coding client invocation."""
 
-    thread_id: CodexThreadId
+    thread_id: CodingSessionId
     usage: TokenUsage
     duration_seconds: float
+    client: CodingClient = CodingClient.CODEX
 
 
 @dataclass(frozen=True)
@@ -85,7 +93,7 @@ class ReviewReply:
 class ReviewFixRun:
     """One fresh Codex fix run and its review replies."""
 
-    codex: CodexRun
+    codex: CodingRun
     replies: tuple[ReviewReply, ...]
 
 
@@ -106,16 +114,157 @@ class ReviewRun:
     duration_seconds: float
 
 
+def run_implementation(
+    workspace: Path,
+    *,
+    client: CodingClient,
+    issue_number: IssueNumber,
+    issue_title: IssueTitle,
+    issue_url: IssueUrl,
+    model: CodingModel,
+    effort: ReasoningEffort,
+    timeout_seconds: float,
+) -> CodingRun:
+    """Implement one issue with the selected coding client."""
+    if client is CodingClient.CODEX:
+        return run_codex(
+            workspace,
+            issue_number=issue_number,
+            issue_title=issue_title,
+            issue_url=issue_url,
+            model=model,
+            effort=effort,
+            timeout_seconds=timeout_seconds,
+        )
+    return _run_claude(
+        workspace,
+        prompt=_prompt(workspace, issue_number, issue_title, issue_url),
+        model=model,
+        effort=effort,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def fix_implementation(
+    workspace: Path,
+    *,
+    client: CodingClient,
+    thread_id: CodingSessionId,
+    findings: Findings,
+    model: CodingModel,
+    effort: ReasoningEffort,
+    timeout_seconds: float,
+) -> CodingRun:
+    """Resume the same coding client session to repair a change."""
+    if client is CodingClient.CODEX:
+        return fix_with_codex(
+            workspace,
+            thread_id=thread_id,
+            findings=findings,
+            model=model,
+            effort=effort,
+            timeout_seconds=timeout_seconds,
+        )
+    return _run_claude(
+        workspace,
+        prompt=_fix_prompt(findings),
+        model=model,
+        effort=effort,
+        timeout_seconds=timeout_seconds,
+        thread_id=thread_id,
+    )
+
+
+def _run_claude(
+    workspace: Path,
+    *,
+    prompt: str,
+    model: CodingModel,
+    effort: ReasoningEffort,
+    timeout_seconds: float,
+    thread_id: CodingSessionId | None = None,
+) -> CodingRun:
+    if effort not in {
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+        ReasoningEffort.MAX,
+    }:
+        raise CodingClientError(f"Claude does not support reasoning effort {effort}")
+    _clear_generated_file(workspace, PR_BODY, "pull request body")
+    command = (
+        "claude",
+        "-p",
+        "--model",
+        model,
+        "--effort",
+        effort,
+        "--permission-mode",
+        "acceptEdits",
+        "--permission-prompts",
+        "none",
+        "--allowedTools",
+        "Read,Write,Edit,Bash,Glob,Grep,Skill",
+        "--output-format",
+        "json",
+    )
+    if thread_id is not None:
+        command += ("--resume", thread_id)
+    result = run_command(
+        command,
+        cwd=workspace,
+        timeout_seconds=timeout_seconds,
+        stdin=prompt,
+        env={name: value for name, value in os.environ.items() if name != _API_KEY},
+    )
+    session_id, usage = _claude_result(result.stdout)
+    if thread_id is not None and session_id != thread_id:
+        raise CodingClientError("Claude resumed a different session")
+    _require_pr_body(workspace)
+    return CodingRun(session_id, usage, result.duration_seconds, CodingClient.CLAUDE)
+
+
+def _claude_result(source: str) -> tuple[CodingSessionId, TokenUsage]:
+    try:
+        result = json.loads(source)
+    except json.JSONDecodeError as exc:
+        raise CodingClientError(f"Claude returned invalid JSON: {exc}") from exc
+    if not isinstance(result, dict) or result.get("type") != "result":
+        raise CodingClientError("Claude returned an invalid result")
+    if result.get("is_error") is not False or result.get("subtype") != "success":
+        raise CodingClientError(f"Claude failed: {str(result.get('result', 'no result'))[:400]}")
+    if not isinstance(session_id := result.get("session_id"), str) or not session_id:
+        raise CodingClientError("Claude returned no session id")
+    if not isinstance(usage := result.get("usage"), dict):
+        raise CodingClientError("Claude returned no usage")
+    counts = [
+        usage.get(name)
+        for name in (
+            "input_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "output_tokens",
+        )
+    ]
+    if any(type(count) is not int or count < 0 for count in counts):
+        raise CodingClientError("Claude returned invalid usage")
+    input_tokens, cached, created, output_tokens = counts
+    return CodingSessionId(session_id), TokenUsage(
+        input_tokens + cached + created, cached, output_tokens
+    )
+
+
 def run_codex(
     workspace: Path,
     *,
     issue_number: IssueNumber,
     issue_title: IssueTitle,
     issue_url: IssueUrl,
-    model: CodexModel,
+    model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
-) -> CodexRun:
+) -> CodingRun:
     """Run Codex once for one issue."""
     _clear_generated_file(workspace, PR_BODY, "pull request body")
     result = run_command(
@@ -126,18 +275,18 @@ def run_codex(
     )
     thread_id, usage = _codex_events(result.stdout)
     _require_pr_body(workspace)
-    return CodexRun(thread_id, usage, result.duration_seconds)
+    return CodingRun(thread_id, usage, result.duration_seconds)
 
 
 def fix_with_codex(
     workspace: Path,
     *,
-    thread_id: CodexThreadId,
+    thread_id: CodingSessionId,
     findings: Findings,
-    model: CodexModel,
+    model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
-) -> CodexRun:
+) -> CodingRun:
     """Resume the implementing Codex thread to address review findings."""
     _clear_generated_file(workspace, PR_BODY, "pull request body")
     result = run_command(
@@ -162,14 +311,14 @@ def fix_with_codex(
     if resumed_thread_id != thread_id:
         raise CodingClientError("Codex resumed a different thread")
     _require_pr_body(workspace)
-    return CodexRun(resumed_thread_id, usage, result.duration_seconds)
+    return CodingRun(resumed_thread_id, usage, result.duration_seconds)
 
 
 def fix_review_threads_with_codex(
     workspace: Path,
     *,
     threads: tuple[ReviewThread, ...],
-    model: CodexModel,
+    model: CodingModel,
     effort: ReasoningEffort,
     timeout_seconds: float,
 ) -> ReviewFixRun:
@@ -184,7 +333,7 @@ def fix_review_threads_with_codex(
     thread_id, usage = _codex_events(result.stdout)
     replies = _review_replies(workspace, threads)
     return ReviewFixRun(
-        CodexRun(thread_id, usage, result.duration_seconds),
+        CodingRun(thread_id, usage, result.duration_seconds),
         replies,
     )
 
@@ -194,7 +343,7 @@ def review_with_claude(
     *,
     base_branch: str,
     ticket_body: str,
-    model: ClaudeModel,
+    model: CodingModel,
     timeout_seconds: float,
 ) -> ReviewRun:
     """Run fresh standards and spec reviews in parallel."""
@@ -290,7 +439,7 @@ def _review_threads_prompt(threads: tuple[ReviewThread, ...]) -> str:
 
 def _fresh_codex_command(
     workspace: Path,
-    model: CodexModel,
+    model: CodingModel,
     effort: ReasoningEffort,
 ) -> tuple[str, ...]:
     return (
@@ -409,7 +558,7 @@ def _require_pr_body(workspace: Path) -> None:
     path = workspace / PR_BODY
     try:
         if not path.read_text(encoding="utf-8").strip():
-            raise CodingClientError("Codex did not write a pull request body")
+            raise CodingClientError("Coding client did not write a pull request body")
     except OSError as exc:
         raise CodingClientError(f"could not read pull request body: {exc}") from exc
 
@@ -422,7 +571,7 @@ def _skill(workspace: Path, name: str) -> str:
         raise CodingClientError(f"could not read {name} skill: {exc}") from exc
 
 
-def _codex_events(source: str) -> tuple[CodexThreadId, TokenUsage]:
+def _codex_events(source: str) -> tuple[CodingSessionId, TokenUsage]:
     lines = [line for line in source.splitlines() if line.strip()]
     if not lines:
         raise CodingClientError("Codex returned no JSON events")
@@ -444,4 +593,4 @@ def _codex_events(source: str) -> tuple[CodexThreadId, TokenUsage]:
         or not isinstance(output_tokens, int)
     ):
         raise CodingClientError("Codex's last JSON event has invalid usage")
-    return CodexThreadId(thread_id), TokenUsage(input_tokens, cached_input_tokens, output_tokens)
+    return CodingSessionId(thread_id), TokenUsage(input_tokens, cached_input_tokens, output_tokens)

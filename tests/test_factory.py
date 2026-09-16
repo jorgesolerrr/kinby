@@ -24,7 +24,9 @@ INSTANCES = Path(__file__).parents[1] / "instances"
 CODER = INSTANCES / "coder"
 
 
-def _coder_copy(tmp_path: Path, *, review_round_limit: int | None = 0) -> Path:
+def _coder_copy(
+    tmp_path: Path, *, review_round_limit: int | None = 0, client: str = "codex"
+) -> Path:
     instance = tmp_path / "coder"
     shutil.copytree(CODER, instance, ignore=shutil.ignore_patterns(".state", ".env", "workspace"))
     workspace = instance / "workspace"
@@ -33,11 +35,20 @@ def _coder_copy(tmp_path: Path, *, review_round_limit: int | None = 0) -> Path:
     for name in ("adversarial-review", "implement-ticket", "open-pr"):
         shutil.copytree(source_skills / name, workspace / ".claude" / "skills" / name)
     routine = instance / "routines" / "implement-ready-issue" / "ROUTINE.md"
+    content = routine.read_text(encoding="utf-8")
+    if client == "codex":
+        content = content.replace('"implementer_client":"claude"', '"implementer_client":"codex"')
+        content = content.replace(
+            '"implementer_model":"claude-opus-5"', '"implementer_model":"gpt-5.6-sol"'
+        )
+    elif client == "default":
+        content = content.replace('"implementer_client":"claude",', "")
+        content = content.replace('"implementer_model":"claude-opus-5",', "")
     arguments = (
         f',"review_round_limit":{review_round_limit}' if review_round_limit is not None else ""
     )
     routine.write_text(
-        routine.read_text(encoding="utf-8").replace(',"review_round_limit":0', arguments),
+        content.replace(',"review_round_limit":0', arguments),
         encoding="utf-8",
     )
     return instance
@@ -238,6 +249,25 @@ record["stdin"] = prompt
 record["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
 with Path(os.environ["FACTORY_COMMAND_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(record) + "\\n")
+if "--output-format" in arguments:
+    resumed = "--resume" in arguments
+    time.sleep(float(os.environ.get("FAKE_CLAUDE_IMPLEMENT_SLEEP", "0")))
+    if exit_code := int(os.environ.get("FAKE_CLAUDE_IMPLEMENT_EXIT", "0")):
+        print("Claude exploded", file=sys.stderr)
+        raise SystemExit(exit_code)
+    if os.environ.get("FAKE_CLAUDE_WRITE_BODY", "1") == "1":
+        scratch = Path.cwd() / ".scratch"
+        scratch.mkdir(exist_ok=True)
+        (scratch / "pr-body.md").write_text(
+            (responses / "pr-body.md").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    if resumed and os.environ.get("FAKE_CLAUDE_WRONG_SESSION"):
+        result = json.loads((responses / "claude-result.json").read_text(encoding="utf-8"))
+        result["session_id"] = "wrong-session"
+        print(json.dumps(result))
+    else:
+        print((responses / "claude-result.json").read_text(encoding="utf-8"))
+    raise SystemExit(0)
 if os.environ.get("FAKE_CLAUDE_REQUIRE_PARALLEL") == "1":
     axis = "standards" if "Review axis: standards" in prompt else "spec"
     peer = "spec" if axis == "standards" else "standards"
@@ -348,6 +378,23 @@ if joined.startswith(os.environ.get("FAKE_COMMAND_FAIL", "no failure configured"
         '{"type":"thread.started","thread_id":"thread-184"}\n'
         '{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":80,'
         '"output_tokens":35}}',
+        encoding="utf-8",
+    )
+    (canned / "claude-result.json").write_text(
+        json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "session_id": "claude-session-184",
+                "usage": {
+                    "input_tokens": 2,
+                    "cache_read_input_tokens": 80,
+                    "cache_creation_input_tokens": 38,
+                    "output_tokens": 35,
+                },
+            }
+        ),
         encoding="utf-8",
     )
     return log
@@ -1054,7 +1101,7 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
         "base_branch": "main",
     }
     assert report["checks"] == {"passed": True, "failed": None}
-    codex_report = _mapping(report["codex"])
+    codex_report = _mapping(report["implementation"])
     assert codex_report["thread_id"] == "thread-184"
     assert codex_report["usage"] == {
         "input_tokens": 120,

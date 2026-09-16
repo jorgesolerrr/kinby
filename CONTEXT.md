@@ -398,6 +398,10 @@ A **routine**'s own deterministic code, a **tool** never offered to the model, t
 A command-line agent that implements or reviews repository changes for a coding **instance** under a separate model subscription.
 _Avoid_: model, subagent
 
+### Coding run
+
+One invocation of a **coding client**, identified by its client session and recorded with its token usage and duration. A later invocation can resume that session to repair the change.
+
 ### Delegated pipeline
 
 The issue-to-PR process that assigns implementation and review to **coding clients**, then gives the coding **instance** a **pipeline report**.

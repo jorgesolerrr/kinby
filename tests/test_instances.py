@@ -42,7 +42,7 @@ def test_coder_instance_loads_its_routines_and_skills(
         "implement-ready-issue",
     ]
     babysit, implement = routines
-    assert babysit.enabled is True
+    assert babysit.enabled is False
     assert babysit.schedule == "15 * * * *"
     assert babysit.arguments == {
         "fix_model": "gpt-5.6-sol",
@@ -63,7 +63,8 @@ def test_coder_instance_loads_its_routines_and_skills(
     assert implement.enabled is True
     assert implement.schedule == "0 * * * *"
     assert implement.arguments == {
-        "implementer_model": "gpt-5.6-sol",
+        "implementer_client": "claude",
+        "implementer_model": "claude-opus-5",
         "implementer_effort": "high",
         "reviewer_model": "claude-fable-5-1",
         "review_round_limit": 0,
@@ -77,7 +78,7 @@ def test_coder_instance_loads_its_routines_and_skills(
     assert implement.code_step.name == "implement_ready_issue"
     assert main(["routine", "list", "--instance", str(CODER)]) == 0
     listed = capsys.readouterr().out
-    assert "babysit-pull-request\t15 * * * *\tenabled" in listed
+    assert "babysit-pull-request\t15 * * * *\tdisabled" in listed
     assert "/signals/babysit-pull-request\thmac-sha256" in listed
     assert {path.name for path in (CODER / "skills").iterdir()} == {"unslop"}
     assert {skill.name for skill in skills} == {"unslop", "write-routine"}

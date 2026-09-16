@@ -4,16 +4,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from kinby.factory.clients import (
-    ClaudeModel,
-    CodexModel,
-    CodexRun,
-    CodexThreadId,
+    CodingClient,
     CodingClientError,
+    CodingModel,
+    CodingRun,
+    CodingSessionId,
     Findings,
     ReasoningEffort,
     ReviewRun,
     TokenUsage,
-    fix_with_codex,
+    fix_implementation,
     review_with_claude,
 )
 from kinby.factory.repository import BranchName
@@ -25,7 +25,7 @@ class ReviewRound:
 
     number: int
     review: ReviewRun
-    fix: CodexRun | None
+    fix: CodingRun | None
     hard_count: int
     suggestion_count: int
     fix_usage: TokenUsage | None
@@ -44,13 +44,14 @@ def run_review_loop(
     *,
     base_branch: BranchName,
     ticket_body: str,
-    thread_id: CodexThreadId,
-    implementer_model: CodexModel,
+    thread_id: CodingSessionId,
+    implementer_model: CodingModel,
     implementer_effort: ReasoningEffort,
-    reviewer_model: ClaudeModel,
+    reviewer_model: CodingModel,
     round_limit: int,
     review_timeout_seconds: float,
     fix_timeout_seconds: float,
+    implementer_client: CodingClient = CodingClient.CODEX,
 ) -> ReviewLoop:
     """Review and fix until clean or the configured review cap is reached."""
     if round_limit < 1:
@@ -83,8 +84,9 @@ def run_review_loop(
             findings.suggestions if not rounds else (),
             findings.raw,
         )
-        fix = fix_with_codex(
+        fix = fix_implementation(
             workspace,
+            client=implementer_client,
             thread_id=thread_id,
             findings=fix_findings,
             model=implementer_model,
