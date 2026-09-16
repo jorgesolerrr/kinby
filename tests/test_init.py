@@ -6,6 +6,7 @@ from kinby.cli import main
 from kinby.packages import InstalledPackage, PackageDescriptor
 
 cli_module = importlib.import_module("kinby.cli.main")
+init_module = importlib.import_module("kinby.instance.init")
 
 
 def test_init_writes_the_starter_instance_tree(tmp_path):
@@ -207,6 +208,45 @@ def test_package_init_refuses_a_nonempty_destination_without_overwriting_it(
         files={"SYSTEM.md": "Write clearly.\n"},
     )
     monkeypatch.setattr(cli_module, "inspect_installed_package", lambda package_id: package)
+
+    exit_code = main(["init", str(target), "--package", "writer"])
+
+    assert exit_code == 1
+    assert marker.read_text(encoding="utf-8") == "keep this\n"
+    assert sorted(path.name for path in target.iterdir()) == ["notes.md"]
+    assert "not empty" in capsys.readouterr().err
+
+
+def test_package_init_does_not_overwrite_a_destination_that_fills_during_staging(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    target = tmp_path / "writer"
+    target.mkdir()
+    marker = target / "notes.md"
+    monkeypatch.setattr(
+        cli_module,
+        "inspect_installed_package",
+        lambda package_id: InstalledPackage(
+            descriptor=PackageDescriptor(
+                id="writer",
+                display_name="Writing teammate",
+                description="Drafts articles.",
+                icon="pen",
+                distribution="kinby-writer",
+                version="1.4.2",
+            ),
+            files={"SYSTEM.md": "Write clearly.\n"},
+        ),
+    )
+    write_starter = init_module._write_starter_tree
+
+    def contaminate(directory, model):
+        write_starter(directory, model)
+        marker.write_text("keep this\n", encoding="utf-8")
+
+    monkeypatch.setattr(init_module, "_write_starter_tree", contaminate)
 
     exit_code = main(["init", str(target), "--package", "writer"])
 

@@ -298,8 +298,20 @@ def _publish_directory(source: Path, destination: Path) -> None:
     if not destination.exists():
         source.replace(destination)
         return
-    for child in source.iterdir():
-        child.replace(destination / child.name)
+    try:
+        destination.rmdir()
+    except OSError:
+        if any(destination.iterdir()):
+            raise InstanceExistsError(f"instance directory is not empty: {destination}") from None
+        for child in source.iterdir():
+            target = destination / child.name
+            if target.exists():
+                raise InstanceExistsError(
+                    f"instance directory is not empty: {destination}"
+                ) from None
+            child.replace(target)
+        return
+    source.replace(destination)
 
 
 def init_instance(
