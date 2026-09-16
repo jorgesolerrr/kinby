@@ -36,6 +36,30 @@ README_NAME = "README.md"
 _PROTECTED_TEMPLATE_ROOTS = {STATE_DIR, WORKSPACE_DIR}
 _REFERENCED_TEMPLATE_ROOTS = {SKILLS_DIR, TOOLS_DIR}
 _FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir", "package")
+_STARTER_DIRECTORIES = frozenset(
+    {
+        MEMORY_DIR,
+        f"{MEMORY_DIR}/{GRAPH_DIR}",
+        TOOLS_DIR,
+        SKILLS_DIR,
+        ROUTINES_DIR,
+        WORKSPACE_DIR,
+        STATE_DIR,
+    }
+)
+_STARTER_FILES = frozenset(
+    {
+        MANIFEST_NAME,
+        SYSTEM_NAME,
+        RECAP_NAME,
+        PERMISSIONS_NAME,
+        f"{MEMORY_DIR}/{PROFILE_NAME}",
+        GITIGNORE_NAME,
+        f"{TOOLS_DIR}/{README_NAME}",
+        f"{SKILLS_DIR}/{README_NAME}",
+        f"{ROUTINES_DIR}/{README_NAME}",
+    }
+)
 
 
 def _slugify(name: str) -> str:
@@ -122,6 +146,13 @@ def _copied_template_path(name: str) -> Path | None:
         raise ValueError(f'Package template cannot copy "{name}".')
     if relative.parts[0] == MEMORY_DIR and name != f"{MEMORY_DIR}/{PROFILE_NAME}":
         raise ValueError(f'Package template cannot copy "{name}".')
+    posix = relative.as_posix()
+    if posix in _STARTER_DIRECTORIES:
+        raise ValueError(f'Package template cannot copy "{name}".')
+    for index in range(len(relative.parts) - 1):
+        ancestor = Path(*relative.parts[: index + 1]).as_posix()
+        if ancestor in _STARTER_FILES:
+            raise ValueError(f'Package template cannot copy "{name}".')
     return relative
 
 
@@ -140,7 +171,11 @@ def _package_template_manifest(package: InstalledPackage) -> dict[str, TomlValue
 def _validate_package_template(package: InstalledPackage) -> None:
     for name in package.files:
         _copied_template_path(name)
-    _package_template_manifest(package)
+    template = _package_template_manifest(package)
+    try:
+        _toml_document(template)
+    except TypeError as exc:
+        raise ValueError("Package template manifest cannot be serialized.") from exc
 
 
 def _package_manifest(

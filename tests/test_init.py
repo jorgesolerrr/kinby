@@ -265,6 +265,8 @@ def test_failed_package_init_leaves_the_destination_unused_so_retry_can_succeed(
     [
         ({"kinby.toml": "[\n"}, "Invalid"),
         ({"workspace/notes.md": "secret\n"}, 'cannot copy "workspace/notes.md"'),
+        ({"routines": "not a directory\n"}, 'cannot copy "routines"'),
+        ({"kinby.toml": "[[models.extra]]\n"}, "cannot be serialized"),
     ],
 )
 def test_invalid_package_files_are_rejected_before_creating_the_destination(
