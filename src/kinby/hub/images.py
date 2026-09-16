@@ -9,8 +9,15 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from kinby.hub.models import BuildResult, ImageArtifact, ImageBackend
+from kinby.hub.models import (
+    BuildResult,
+    ImageArtifact,
+    ImageBackend,
+    ImageSelection,
+    PreparedImage,
+)
 from kinby.hub.registry import HubRegistry
+from kinby.packages import InstalledPackage
 
 _ROOT_FILES = frozenset({"Dockerfile", "pyproject.toml", "uv.lock", "README.md", "LICENSE"})
 
@@ -41,17 +48,20 @@ class ImagePreparer:
         self._registry = registry
         self._backend = backend
 
-    async def prepare(self, revision: str) -> ImageArtifact:
-        resolved = await asyncio.to_thread(self._resolve, revision)
+    async def prepare(self, selection: ImageSelection) -> PreparedImage:
+        resolved = await asyncio.to_thread(self._resolve, selection.revision)
         with TemporaryDirectory(prefix="kinby-build-") as temporary:
             context = Path(temporary)
             await asyncio.to_thread(self._export, resolved, context)
-            dependency_id = self._dependency_id(context)
+            if selection.package is not None:
+                self._install_package(context / "Dockerfile", selection)
+            dependency_id = self._dependency_id(context, selection)
             base_images = await self._backend.resolve_base_images(context / "Dockerfile")
-            input_key = self._input_key(resolved, dependency_id, base_images)
+            input_key = self._input_key(resolved, dependency_id, base_images, selection)
             recorded = self._registry.image_artifact(input_key)
             if recorded is not None and await self._backend.exists(recorded.image_id):
-                return recorded
+                package = await self._inspect_package(recorded)
+                return PreparedImage(artifact=recorded, package=package)
             built = await self._backend.build(context, base_images)
         artifact = ImageArtifact(
             image_id=built.image_id,
@@ -59,9 +69,34 @@ class ImagePreparer:
             dependency_id=dependency_id,
             base_images=base_images,
             dependencies=built.dependencies,
+            package=selection.package,
         )
         self._registry.record_image_artifact(input_key, artifact)
-        return artifact
+        package = await self._inspect_package(artifact)
+        return PreparedImage(artifact=artifact, package=package)
+
+    async def _inspect_package(self, artifact: ImageArtifact) -> InstalledPackage | None:
+        if artifact.package is None:
+            return None
+        return await self._backend.inspect_package(artifact.image_id, artifact.package.id)
+
+    @staticmethod
+    def _install_package(dockerfile: Path, selection: ImageSelection) -> None:
+        package = selection.package
+        if package is None:
+            return
+        body = dockerfile.read_text(encoding="utf-8").rstrip() + "\n"
+        if package.image_recipe:
+            body += package.image_recipe.rstrip() + "\n"
+        command = [
+            "uv",
+            "pip",
+            "install",
+            "--system",
+            "--no-cache",
+            f"{package.distribution}=={package.version}",
+        ]
+        dockerfile.write_text(f"{body}RUN {json.dumps(command)}\n", encoding="utf-8")
 
     def _resolve(self, revision: str) -> str:
         return (
@@ -81,13 +116,15 @@ class ImagePreparer:
             destination.write_bytes(_git(self._repository, "show", f"{revision}:{name}"))
 
     @staticmethod
-    def _dependency_id(context: Path) -> str:
+    def _dependency_id(context: Path, selection: ImageSelection) -> str:
         digest = hashlib.sha256()
         for name in ("pyproject.toml", "uv.lock"):
             path = context / name
             if path.is_file():
                 digest.update(name.encode())
                 digest.update(path.read_bytes())
+        if selection.package is not None:
+            digest.update(selection.package.model_dump_json().encode())
         return f"sha256:{digest.hexdigest()}"
 
     @staticmethod
@@ -95,9 +132,15 @@ class ImagePreparer:
         revision: str,
         dependency_id: str,
         base_images: tuple[str, ...],
+        selection: ImageSelection,
     ) -> str:
         encoded = json.dumps(
-            [revision, dependency_id, base_images],
+            [
+                revision,
+                dependency_id,
+                base_images,
+                selection.package.model_dump(mode="json") if selection.package else None,
+            ],
             separators=(",", ":"),
         ).encode()
         return hashlib.sha256(encoded).hexdigest()

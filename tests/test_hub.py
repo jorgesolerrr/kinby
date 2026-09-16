@@ -24,29 +24,48 @@ from kinby.contracts import (
     LifecycleOperationResult,
     OperationGetCommand,
     OperationState,
+    PackageSelection,
     Readiness,
     Scope,
     StorageItem,
     StorageKind,
 )
-from kinby.hub import Hub, ImageArtifact, InstanceSpec, RuntimeStatus
+from kinby.hub import (
+    Hub,
+    ImageArtifact,
+    ImageSelection,
+    InstanceSpec,
+    PreparedImage,
+    RuntimeStatus,
+)
 from kinby.instance import inspect_instance
+from kinby.packages import InstalledPackage, PackageDescriptor, RequiredSecret
 
 
 class FakeImages:
-    def __init__(self, *, failure: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        failure: str | None = None,
+        package: InstalledPackage | None = None,
+    ) -> None:
         self.revisions: list[str] = []
         self.failure = failure
+        self.package = package
 
-    async def prepare(self, revision: str) -> ImageArtifact:
-        self.revisions.append(revision)
+    async def prepare(self, selection: ImageSelection) -> PreparedImage:
+        self.revisions.append(selection.revision)
         if self.failure is not None:
             raise RuntimeError(self.failure)
-        return ImageArtifact(
-            image_id="sha256:selected-image",
-            revision="a" * 40,
-            dependency_id="sha256:dependencies",
-            base_images=("python@sha256:base",),
+        return PreparedImage(
+            artifact=ImageArtifact(
+                image_id="sha256:selected-image",
+                revision="a" * 40,
+                dependency_id="sha256:dependencies",
+                base_images=("python@sha256:base",),
+                package=selection.package,
+            ),
+            package=self.package,
         )
 
 
@@ -197,6 +216,173 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
         )
         assert not isinstance(reopened_result, ErrorEnvelope)
         assert reopened_result.state is OperationState.SUCCEEDED
+
+    asyncio.run(scenario())
+
+
+def test_create_from_a_pinned_package_seeds_owned_configuration_and_provenance(tmp_path):
+    async def scenario() -> None:
+        package = InstalledPackage(
+            descriptor=PackageDescriptor(
+                id="writer",
+                display_name="Writing teammate",
+                description="Drafts and edits articles.",
+                icon="pen",
+                distribution="kinby-writer",
+                version="1.4.2",
+                required_secrets=(
+                    RequiredSecret(
+                        name="EDITOR_TOKEN",
+                        label="Editor token",
+                        description="Authenticates the editor service.",
+                    ),
+                ),
+            ),
+            files={
+                "kinby.toml": '[feedback]\nask = "off"\n',
+                "SYSTEM.md": "You are an exacting editor.\n",
+                "factory.toml": 'style = "plain"\n',
+                "routines/draft/ROUTINE.md": "---\nname: draft\n---\nDraft an article.\n",
+                "routines/draft/run.py": "from kinby_writer import draft\n",
+                "skills/voice/SKILL.md": "Packaged skill.\n",
+                "tools/editor.py": "def edit(): ...\n",
+            },
+        )
+        runtime = FakeRuntime()
+        images = FakeImages(package=package)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
+        client = _client(hub)
+        selection = PackageSelection(
+            id="writer",
+            distribution="kinby-writer",
+            version="1.4.2",
+        )
+
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="editor",
+                persona_name="Quill",
+                model="openai:gpt-5",
+                revision="v0.1.0",
+                package=selection,
+                secrets={"EDITOR_TOKEN": "private-editor-token"},
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await _operation(client, accepted)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        assert listed.instances[0].package is not None
+        assert listed.instances[0].package.id == "writer"
+        assert listed.instances[0].package.version == "1.4.2"
+        instance_path = tmp_path / "hub" / "instances" / str(accepted.instance_id)
+        instance = inspect_instance(instance_path)
+        assert instance.manifest.package is not None
+        assert instance.manifest.package.id == "writer"
+        assert instance.manifest.package.distribution == "kinby-writer"
+        assert instance.manifest.package.version == "1.4.2"
+        assert instance.manifest.feedback.ask == "off"
+        assert (instance_path / "SYSTEM.md").read_text() == "You are an exacting editor.\n"
+        assert (instance_path / "factory.toml").read_text() == 'style = "plain"\n'
+        assert (instance_path / "routines" / "draft" / "run.py").is_file()
+        assert not (instance_path / "skills" / "voice").exists()
+        assert not (instance_path / "tools" / "editor.py").exists()
+        assert runtime.created[0].env == {"EDITOR_TOKEN": "private-editor-token"}
+        assert runtime.started == []
+
+    asyncio.run(scenario())
+
+
+def test_package_creation_requires_declared_secrets_before_publishing_an_instance(tmp_path):
+    async def scenario() -> None:
+        package = InstalledPackage(
+            descriptor=PackageDescriptor(
+                id="writer",
+                display_name="Writing teammate",
+                description="Drafts articles.",
+                icon="pen",
+                distribution="kinby-writer",
+                version="1.4.2",
+                required_secrets=(
+                    RequiredSecret("EDITOR_TOKEN", "Editor token", "Authenticates editing."),
+                ),
+            ),
+            files={"SYSTEM.md": "Write clearly.\n"},
+        )
+        runtime = FakeRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages(package=package))
+        client = _client(hub)
+
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="editor",
+                model="openai:gpt-5",
+                package=PackageSelection(
+                    id="writer",
+                    distribution="kinby-writer",
+                    version="1.4.2",
+                ),
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await _operation(client, accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == 'Missing required secret: "EDITOR_TOKEN".'
+        assert runtime.created == []
+        assert not (tmp_path / "hub" / "instances" / str(accepted.instance_id)).exists()
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        assert listed.instances == []
+
+    asyncio.run(scenario())
+
+
+def test_invalid_package_configuration_is_not_published_or_sent_to_the_runtime(tmp_path):
+    async def scenario() -> None:
+        package = InstalledPackage(
+            descriptor=PackageDescriptor(
+                id="writer",
+                display_name="Writing teammate",
+                description="Drafts articles.",
+                icon="pen",
+                distribution="kinby-writer",
+                version="1.4.2",
+            ),
+            files={"kinby.toml": '[workspace]\nsnapshots = "invalid"\n'},
+        )
+        secret = "recognizable-package-secret"
+        runtime = FakeRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages(package=package))
+        client = _client(hub)
+
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="editor",
+                model="openai:gpt-5",
+                package=PackageSelection(
+                    id="writer",
+                    distribution="kinby-writer",
+                    version="1.4.2",
+                ),
+                secrets={"TOKEN": secret},
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await _operation(client, accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert "workspace.snapshots" in outcome.detail
+        assert secret not in outcome.detail
+        assert runtime.created == []
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        assert listed.instances == []
 
     asyncio.run(scenario())
 

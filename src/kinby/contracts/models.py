@@ -508,6 +508,19 @@ class StorageItem(ContractModel):
     writable: bool
 
 
+class PackageSelection(ContractModel):
+    id: Annotated[str, Field(min_length=1)]
+    distribution: Annotated[str, Field(min_length=1)]
+    version: Annotated[str, Field(min_length=1)]
+    image_recipe: str = ""
+
+
+class PackageSummary(ContractModel):
+    id: str
+    distribution: str
+    version: str
+
+
 class InstanceCreateCommand(ContractModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
@@ -515,6 +528,7 @@ class InstanceCreateCommand(ContractModel):
     persona_name: Annotated[str, Field(min_length=1)] | None = None
     model: Annotated[str, Field(min_length=1)]
     revision: Annotated[str, Field(min_length=1)] = "HEAD"
+    package: PackageSelection | None = None
     secrets: dict[str, SecretStr] = Field(default_factory=dict)
 
     @field_serializer("secrets", when_used="json")
@@ -557,6 +571,7 @@ class InstanceSummary(ContractModel):
     intended_state: IntendedState
     runtime_id: str
     storage: list[StorageItem]
+    package: PackageSummary | None = None
 
 
 class InstanceListResult(ContractModel):

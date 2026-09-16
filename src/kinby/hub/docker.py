@@ -15,6 +15,7 @@ from docker.types import Mount
 
 import docker
 from kinby.hub.models import BuildResult, InstanceSpec, RuntimeStatus
+from kinby.packages import InstalledPackage, installed_package_from_json
 
 _FROM = re.compile(r"^(FROM\s+)(\S+)(.*)$", re.MULTILINE | re.IGNORECASE)
 _END = object()
@@ -83,6 +84,20 @@ class DockerImageBackend:
         except ImageNotFound:
             return False
         return True
+
+    async def inspect_package(
+        self,
+        image_id: str,
+        package_id: str,
+    ) -> InstalledPackage:
+        output = await asyncio.to_thread(
+            self._client.containers.run,
+            image_id,
+            command=["-m", "kinby.packages", package_id],
+            entrypoint="python",
+            remove=True,
+        )
+        return installed_package_from_json(cast(bytes, output).decode())
 
 
 class DockerRuntime:

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
+import tomllib
 import unicodedata
 from pathlib import Path
+from typing import cast
 
 from kinby.instance.dataclasses import FeedbackPolicy, RecapPolicy
 from kinby.instance.errors import InstanceExistsError
@@ -26,6 +29,7 @@ from kinby.instance.layout import (
 )
 from kinby.instance.permissions import SHIPPED_BASH_DENY
 from kinby.instance.recap import DEFAULT_RECAP_LENS
+from kinby.packages import InstalledPackage
 
 PLACEHOLDER_MODEL = "provider:model"
 README_NAME = "README.md"
@@ -51,9 +55,112 @@ def _write_readme(directory: Path, explanation: str) -> None:
     )
 
 
-def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
+type TomlValue = str | int | float | bool | list["TomlValue"] | dict[str, "TomlValue"]
+
+
+def _merge(base: dict[str, TomlValue], override: dict[str, TomlValue]) -> None:
+    for key, value in override.items():
+        current = base.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            _merge(current, value)
+        else:
+            base[key] = value
+
+
+def _toml_key(key: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_-]+", key):
+        return key
+    return json.dumps(key)
+
+
+def _toml_value(value: TomlValue) -> str:
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    raise TypeError("TOML tables are written separately.")
+
+
+def _toml_document(values: dict[str, TomlValue]) -> str:
+    lines: list[str] = []
+
+    def write_table(table: dict[str, TomlValue], path: tuple[str, ...]) -> None:
+        if path:
+            if lines and lines[-1]:
+                lines.append("")
+            lines.append("[" + ".".join(_toml_key(part) for part in path) + "]")
+        for key, value in table.items():
+            if not isinstance(value, dict):
+                lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
+        for key, value in table.items():
+            if isinstance(value, dict):
+                write_table(value, (*path, key))
+
+    write_table(values, ())
+    return "\n".join(lines) + "\n"
+
+
+def _package_manifest(
+    directory: Path,
+    package: InstalledPackage,
+    *,
+    model: str,
+) -> None:
+    path = directory / MANIFEST_NAME
+    base = cast(dict[str, TomlValue], tomllib.loads(path.read_text(encoding="utf-8")))
+    template_body = package.files.get(MANIFEST_NAME, "")
+    template = cast(dict[str, TomlValue], tomllib.loads(template_body))
+    forbidden = [key for key in ("id", "persona_name", "state_dir", "package") if key in template]
+    if forbidden:
+        raise ValueError(f'Package template cannot set "{forbidden[0]}".')
+    _merge(base, template)
+    models = base["models"]
+    if not isinstance(models, dict):
+        raise ValueError("Package template [models] must be a table.")
+    models["main"] = model
+    descriptor = package.descriptor
+    base["package"] = {
+        "id": descriptor.id,
+        "distribution": descriptor.distribution,
+        "version": descriptor.version,
+    }
+    path.write_text(_toml_document(base), encoding="utf-8")
+
+
+def _copy_package_template(directory: Path, package: InstalledPackage) -> None:
+    protected = {".state", "workspace"}
+    referenced = {"skills", "tools"}
+    for name, body in package.files.items():
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            raise ValueError(f'Package template path is invalid: "{name}".')
+        if name == MANIFEST_NAME:
+            continue
+        if relative.parts[0] in referenced:
+            continue
+        if relative.parts[0] in protected or name == ENV_NAME:
+            raise ValueError(f'Package template cannot copy "{name}".')
+        if relative.parts[0] == MEMORY_DIR and name != f"{MEMORY_DIR}/{PROFILE_NAME}":
+            raise ValueError(f'Package template cannot copy "{name}".')
+        destination = directory / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(body, encoding="utf-8")
+
+
+def init_instance(
+    directory: Path,
+    model: str = PLACEHOLDER_MODEL,
+    *,
+    package: InstalledPackage | None = None,
+) -> Path:
     """Write a readable starter instance at *directory*."""
     directory = Path(directory)
+    if package is not None and directory.is_dir() and any(directory.iterdir()):
+        raise InstanceExistsError(f"instance directory is not empty: {directory}")
     manifest = directory / MANIFEST_NAME
     if manifest.is_file():
         raise InstanceExistsError(f"instance already exists: {manifest}")
@@ -168,5 +275,9 @@ def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
     )
     (directory / WORKSPACE_DIR).mkdir(exist_ok=True)
     (directory / STATE_DIR).mkdir(exist_ok=True)
+
+    if package is not None:
+        _copy_package_template(directory, package)
+        _package_manifest(directory, package, model=model)
 
     return directory.resolve()

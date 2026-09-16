@@ -39,9 +39,17 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import LifecycleOperationNotFound, ManagedInstanceNotFound
-from kinby.hub.models import ContainerRuntime, ImagePreparation, InstanceSpec, RuntimeStatus
+from kinby.hub.models import (
+    ContainerRuntime,
+    ImagePreparation,
+    ImageSelection,
+    InstanceSpec,
+    PreparedImage,
+    RuntimeStatus,
+)
 from kinby.hub.registry import HubRegistry, ManagedInstance
 from kinby.instance import init_instance, inspect_instance
+from kinby.packages import InstalledPackage
 
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _INSTANCE_HOST = "0.0.0.0"
@@ -101,6 +109,7 @@ class Hub:
             runtime_id=str(instance_id),
             prepared=False,
             storage=(),
+            package=command.package,
         )
         self.registry.begin_create(record, operation_id)
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
@@ -122,16 +131,28 @@ class Hub:
         )
         try:
             self._validate_secret_names(secrets)
-            init_instance(staging, model=model)
-            self._write_configuration(staging, record.manifest_id, record.persona_name)
-            self._write_secrets(staging, secrets)
-            inspect_instance(staging)
+            selection = ImageSelection(
+                revision=record.requested_revision,
+                package=record.package,
+            )
+            if selection.package is None:
+                init_instance(staging, model=model)
+                self._write_configuration(staging, record.manifest_id, record.persona_name)
+                self._write_secrets(staging, secrets)
+                inspect_instance(staging)
             self.registry.update_operation(
                 operation_id,
                 OperationState.RUNNING,
                 "Preparing selected image.",
             )
-            artifact = await self._images.prepare(record.requested_revision)
+            prepared = await self._images.prepare(selection)
+            package = self._package(prepared, selection, secrets)
+            if package is not None:
+                init_instance(staging, model=model, package=package)
+                self._write_configuration(staging, record.manifest_id, record.persona_name)
+                self._write_secrets(staging, secrets)
+                inspect_instance(staging)
+            artifact = prepared.artifact
             if record.path.exists():
                 raise FileExistsError(f"Instance directory already exists: {record.path}")
             staging.replace(record.path)
@@ -256,6 +277,36 @@ class Hub:
         if record is None or not record.prepared:
             raise ManagedInstanceNotFound(f'Instance "{instance_id}" was not found.')
         return record
+
+    @staticmethod
+    def _package(
+        prepared: PreparedImage,
+        selection: ImageSelection,
+        secrets: dict[str, str],
+    ) -> InstalledPackage | None:
+        selected = selection.package
+        installed = prepared.package
+        if selected is None:
+            if installed is not None:
+                raise ValueError("A vanilla image unexpectedly exported a package.")
+            return None
+        if installed is None:
+            raise ValueError(f'Package "{selected.id}" was not found in the prepared image.')
+        descriptor = installed.descriptor
+        expected = (selected.id, selected.distribution, selected.version)
+        actual = (descriptor.id, descriptor.distribution, descriptor.version)
+        if actual != expected:
+            raise ValueError(
+                f"Prepared package was {descriptor.id} from "
+                f"{descriptor.distribution} {descriptor.version}; expected "
+                f"{selected.id} from {selected.distribution} {selected.version}."
+            )
+        missing = [
+            secret.name for secret in descriptor.required_secrets if secret.name not in secrets
+        ]
+        if missing:
+            raise ValueError(f'Missing required secret: "{missing[0]}".')
+        return installed
 
     def _storage(self, instance_id: UUID, path: Path) -> tuple[StorageItem, ...]:
         relative = path.relative_to(self.directory)

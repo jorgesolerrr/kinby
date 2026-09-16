@@ -1,4 +1,9 @@
+import importlib
+
 from kinby.cli import main
+from kinby.packages import InstalledPackage, PackageDescriptor
+
+cli_module = importlib.import_module("kinby.cli.main")
 
 
 def test_init_writes_the_starter_instance_tree(tmp_path):
@@ -135,3 +140,75 @@ def test_init_does_not_validate_the_model_placeholder(tmp_path):
     assert exit_code == 0
     manifest = (target / "kinby.toml").read_text(encoding="utf-8")
     assert 'main = "not-a-real-model"' in manifest
+
+
+def test_init_from_an_installed_package_copies_owned_configuration(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    package = InstalledPackage(
+        descriptor=PackageDescriptor(
+            id="writer",
+            display_name="Writing teammate",
+            description="Drafts articles.",
+            icon="pen",
+            distribution="kinby-writer",
+            version="1.4.2",
+        ),
+        files={
+            "kinby.toml": '[feedback]\nask = "off"\n',
+            "SYSTEM.md": "Write clearly.\n",
+            "factory.toml": 'style = "plain"\n',
+            "routines/draft/run.py": "from kinby_writer import draft\n",
+        },
+    )
+    monkeypatch.setattr(cli_module, "inspect_installed_package", lambda package_id: package)
+    target = tmp_path / "writer"
+
+    exit_code = main(["init", str(target), "--package", "writer", "--model", "openai:gpt-5"])
+
+    assert exit_code == 0
+    manifest = (target / "kinby.toml").read_text(encoding="utf-8")
+    assert '[package]\nid = "writer"' in manifest
+    assert 'distribution = "kinby-writer"' in manifest
+    assert 'version = "1.4.2"' in manifest
+    assert '[feedback]\nask = "off"' in manifest
+    assert (target / "SYSTEM.md").read_text(encoding="utf-8") == "Write clearly.\n"
+    assert (target / "factory.toml").read_text(encoding="utf-8") == 'style = "plain"\n'
+
+    assert main(["instance", "show", str(target)]) == 0
+    output = capsys.readouterr().out
+    assert (
+        "package:\n  id: writer\n  distribution: kinby-writer\n  template version: 1.4.2" in output
+    )
+
+
+def test_package_init_refuses_a_nonempty_destination_without_overwriting_it(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    target = tmp_path / "writer"
+    target.mkdir()
+    marker = target / "notes.md"
+    marker.write_text("keep this\n", encoding="utf-8")
+    package = InstalledPackage(
+        descriptor=PackageDescriptor(
+            id="writer",
+            display_name="Writing teammate",
+            description="Drafts articles.",
+            icon="pen",
+            distribution="kinby-writer",
+            version="1.4.2",
+        ),
+        files={"SYSTEM.md": "Write clearly.\n"},
+    )
+    monkeypatch.setattr(cli_module, "inspect_installed_package", lambda package_id: package)
+
+    exit_code = main(["init", str(target), "--package", "writer"])
+
+    assert exit_code == 1
+    assert marker.read_text(encoding="utf-8") == "keep this\n"
+    assert sorted(path.name for path in target.iterdir()) == ["notes.md"]
+    assert "not empty" in capsys.readouterr().err

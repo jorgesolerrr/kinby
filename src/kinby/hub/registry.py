@@ -14,6 +14,8 @@ from kinby.contracts import (
     OperationGetResult,
     OperationKind,
     OperationState,
+    PackageSelection,
+    PackageSummary,
     StorageItem,
     StorageKind,
 )
@@ -33,6 +35,7 @@ class ManagedInstance:
     runtime_id: str
     prepared: bool
     storage: tuple[StorageItem, ...]
+    package: PackageSelection | None = None
 
 
 class HubRegistry:
@@ -64,7 +67,11 @@ class HubRegistry:
                     image_id TEXT,
                     intended_state TEXT NOT NULL,
                     runtime_id TEXT NOT NULL UNIQUE,
-                    prepared INTEGER NOT NULL DEFAULT 0
+                    prepared INTEGER NOT NULL DEFAULT 0,
+                    package_id TEXT,
+                    package_distribution TEXT,
+                    package_version TEXT,
+                    package_image_recipe TEXT
                 );
                 CREATE TABLE IF NOT EXISTS storage (
                     instance_id TEXT NOT NULL REFERENCES instances(id),
@@ -87,7 +94,8 @@ class HubRegistry:
                     revision TEXT NOT NULL,
                     dependency_id TEXT NOT NULL,
                     base_images TEXT NOT NULL,
-                    dependencies TEXT NOT NULL
+                    dependencies TEXT NOT NULL,
+                    package_selection TEXT
                 );
                 CREATE TABLE IF NOT EXISTS hub_metadata (
                     key TEXT PRIMARY KEY,
@@ -95,6 +103,32 @@ class HubRegistry:
                 );
                 """
             )
+            self._add_columns(
+                connection,
+                "instances",
+                {
+                    "package_id": "TEXT",
+                    "package_distribution": "TEXT",
+                    "package_version": "TEXT",
+                    "package_image_recipe": "TEXT",
+                },
+            )
+            self._add_columns(
+                connection,
+                "image_artifacts",
+                {"package_selection": "TEXT"},
+            )
+
+    @staticmethod
+    def _add_columns(
+        connection: sqlite3.Connection,
+        table: str,
+        columns: dict[str, str],
+    ) -> None:
+        existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        for name, declaration in columns.items():
+            if name not in existing:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
 
     def hub_id(self) -> str:
         with self._connect() as connection:
@@ -120,8 +154,9 @@ class HubRegistry:
                 """
                 INSERT INTO instances (
                     id, path, manifest_id, persona_name, requested_revision,
-                    intended_state, runtime_id, prepared
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                    intended_state, runtime_id, prepared, package_id,
+                    package_distribution, package_version, package_image_recipe
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
                 """,
                 (
                     str(instance.instance_id),
@@ -131,6 +166,10 @@ class HubRegistry:
                     instance.requested_revision,
                     instance.intended_state.value,
                     instance.runtime_id,
+                    instance.package.id if instance.package is not None else None,
+                    instance.package.distribution if instance.package is not None else None,
+                    instance.package.version if instance.package is not None else None,
+                    instance.package.image_recipe if instance.package is not None else None,
                 ),
             )
             connection.execute(
@@ -284,7 +323,9 @@ class HubRegistry:
             row = connection.execute(
                 """
                 SELECT id, path, manifest_id, persona_name, requested_revision,
-                       source_revision, image_id, intended_state, runtime_id, prepared
+                       source_revision, image_id, intended_state, runtime_id, prepared,
+                       package_id, package_distribution, package_version,
+                       package_image_recipe
                 FROM instances WHERE id = ?
                 """,
                 (str(instance_id),),
@@ -318,6 +359,16 @@ class HubRegistry:
                 )
                 for kind, source, destination, writable in storage_rows
             ),
+            package=(
+                PackageSelection(
+                    id=row[10],
+                    distribution=row[11],
+                    version=row[12],
+                    image_recipe=row[13],
+                )
+                if row[10] is not None
+                else None
+            ),
         )
 
     def list_instances(self) -> list[InstanceSummary]:
@@ -339,6 +390,15 @@ class HubRegistry:
                 intended_state=record.intended_state,
                 runtime_id=record.runtime_id,
                 storage=list(record.storage),
+                package=(
+                    PackageSummary(
+                        id=record.package.id,
+                        distribution=record.package.distribution,
+                        version=record.package.version,
+                    )
+                    if record.package is not None
+                    else None
+                ),
             )
             for record in records
             if record is not None
@@ -348,7 +408,8 @@ class HubRegistry:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT image_id, revision, dependency_id, base_images, dependencies
+                SELECT image_id, revision, dependency_id, base_images, dependencies,
+                       package_selection
                 FROM image_artifacts WHERE input_key = ?
                 """,
                 (input_key,),
@@ -361,6 +422,7 @@ class HubRegistry:
             dependency_id=row[2],
             base_images=tuple(json.loads(row[3])),
             dependencies=tuple(json.loads(row[4])),
+            package=(PackageSelection.model_validate_json(row[5]) if row[5] is not None else None),
         )
 
     def record_image_artifact(self, input_key: str, artifact: ImageArtifact) -> None:
@@ -368,8 +430,9 @@ class HubRegistry:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO image_artifacts (
-                    input_key, image_id, revision, dependency_id, base_images, dependencies
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    input_key, image_id, revision, dependency_id, base_images, dependencies,
+                    package_selection
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     input_key,
@@ -378,6 +441,7 @@ class HubRegistry:
                     artifact.dependency_id,
                     json.dumps(artifact.base_images),
                     json.dumps(artifact.dependencies),
+                    artifact.package.model_dump_json() if artifact.package is not None else None,
                 ),
             )
 
