@@ -76,6 +76,13 @@ The `coder` instance listens on `127.0.0.1:8787`. Its two GitHub routines use se
 
 Relevant deliveries start a scan, and each routine's hourly schedule catches missed deliveries.
 
+The implementation routine runs repository checks and opens the pull request without
+adversarial review. Its `review_round_limit` defaults to `0`, which also skips review
+after a check fix. The report records `review: null`, and the pull request states that
+adversarial review was not run. Third-party reviewers review the published pull request;
+the babysitting routine continues to handle their feedback. A positive
+`review_round_limit` explicitly enables the previous review loop.
+
 A local box has no public URL for GitHub to call. Forward the repository's webhook deliveries with the gh webhook extension (`gh extension install cli/gh-webhook`), using the same secret as the instance. Run each forwarder in its own terminal:
 
 ```sh
