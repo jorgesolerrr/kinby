@@ -7,6 +7,7 @@ import re
 import tomllib
 import unicodedata
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import cast
 
 from kinby.instance.dataclasses import FeedbackPolicy, RecapPolicy
@@ -36,30 +37,6 @@ README_NAME = "README.md"
 _PROTECTED_TEMPLATE_ROOTS = {STATE_DIR, WORKSPACE_DIR}
 _REFERENCED_TEMPLATE_ROOTS = {SKILLS_DIR, TOOLS_DIR}
 _FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir", "package")
-_STARTER_DIRECTORIES = frozenset(
-    {
-        MEMORY_DIR,
-        f"{MEMORY_DIR}/{GRAPH_DIR}",
-        TOOLS_DIR,
-        SKILLS_DIR,
-        ROUTINES_DIR,
-        WORKSPACE_DIR,
-        STATE_DIR,
-    }
-)
-_STARTER_FILES = frozenset(
-    {
-        MANIFEST_NAME,
-        SYSTEM_NAME,
-        RECAP_NAME,
-        PERMISSIONS_NAME,
-        f"{MEMORY_DIR}/{PROFILE_NAME}",
-        GITIGNORE_NAME,
-        f"{TOOLS_DIR}/{README_NAME}",
-        f"{SKILLS_DIR}/{README_NAME}",
-        f"{ROUTINES_DIR}/{README_NAME}",
-    }
-)
 
 
 def _slugify(name: str) -> str:
@@ -146,13 +123,6 @@ def _copied_template_path(name: str) -> Path | None:
         raise ValueError(f'Package template cannot copy "{name}".')
     if relative.parts[0] == MEMORY_DIR and name != f"{MEMORY_DIR}/{PROFILE_NAME}":
         raise ValueError(f'Package template cannot copy "{name}".')
-    posix = relative.as_posix()
-    if posix in _STARTER_DIRECTORIES:
-        raise ValueError(f'Package template cannot copy "{name}".')
-    for index in range(len(relative.parts) - 1):
-        ancestor = Path(*relative.parts[: index + 1]).as_posix()
-        if ancestor in _STARTER_FILES:
-            raise ValueError(f'Package template cannot copy "{name}".')
     return relative
 
 
@@ -207,28 +177,14 @@ def _copy_package_template(directory: Path, package: InstalledPackage) -> None:
             continue
         destination = directory / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(body, encoding="utf-8")
+        try:
+            destination.write_text(body, encoding="utf-8")
+        except IsADirectoryError, NotADirectoryError:
+            raise ValueError(f'Package template cannot copy "{name}".') from None
 
 
-def init_instance(
-    directory: Path,
-    model: str = PLACEHOLDER_MODEL,
-    *,
-    package: InstalledPackage | None = None,
-) -> Path:
-    """Write a readable starter instance at *directory*."""
-    directory = Path(directory)
-    if package is not None and directory.is_dir() and any(directory.iterdir()):
-        raise InstanceExistsError(f"instance directory is not empty: {directory}")
-    manifest = directory / MANIFEST_NAME
-    if manifest.is_file():
-        raise InstanceExistsError(f"instance already exists: {manifest}")
-    if package is not None:
-        _validate_package_template(package)
-    directory.mkdir(parents=True, exist_ok=True)
-
+def _write_starter_tree(directory: Path, model: str) -> None:
     instance_id = _slugify(directory.name)
-
     (directory / MANIFEST_NAME).write_text(
         (
             "# Instance manifest. Commit this file; keep secrets in the environment.\n"
@@ -337,8 +293,39 @@ def init_instance(
     (directory / WORKSPACE_DIR).mkdir(exist_ok=True)
     (directory / STATE_DIR).mkdir(exist_ok=True)
 
-    if package is not None:
-        _copy_package_template(directory, package)
-        _package_manifest(directory, package, model=model)
 
+def _publish_directory(source: Path, destination: Path) -> None:
+    if destination.exists():
+        destination.rmdir()
+    source.replace(destination)
+
+
+def init_instance(
+    directory: Path,
+    model: str = PLACEHOLDER_MODEL,
+    *,
+    package: InstalledPackage | None = None,
+) -> Path:
+    """Write a readable starter instance at *directory*."""
+    directory = Path(directory)
+    if package is not None and directory.is_dir() and any(directory.iterdir()):
+        raise InstanceExistsError(f"instance directory is not empty: {directory}")
+    manifest = directory / MANIFEST_NAME
+    if manifest.is_file():
+        raise InstanceExistsError(f"instance already exists: {manifest}")
+    if package is None:
+        directory.mkdir(parents=True, exist_ok=True)
+        _write_starter_tree(directory, model)
+        return directory.resolve()
+
+    _validate_package_template(package)
+    parent = directory.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=parent, prefix=f".{directory.name}.creating-") as temporary:
+        staging = Path(temporary) / directory.name
+        staging.mkdir()
+        _write_starter_tree(staging, model)
+        _copy_package_template(staging, package)
+        _package_manifest(staging, package, model=model)
+        _publish_directory(staging, directory)
     return directory.resolve()
