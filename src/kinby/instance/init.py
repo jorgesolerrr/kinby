@@ -33,6 +33,9 @@ from kinby.packages import InstalledPackage
 
 PLACEHOLDER_MODEL = "provider:model"
 README_NAME = "README.md"
+_PROTECTED_TEMPLATE_ROOTS = {STATE_DIR, WORKSPACE_DIR}
+_REFERENCED_TEMPLATE_ROOTS = {SKILLS_DIR, TOOLS_DIR}
+_FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir", "package")
 
 
 def _slugify(name: str) -> str:
@@ -104,6 +107,42 @@ def _toml_document(values: dict[str, TomlValue]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _relative_template_path(name: str) -> Path:
+    relative = Path(name)
+    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+        raise ValueError(f'Package template path is invalid: "{name}".')
+    return relative
+
+
+def _copied_template_path(name: str) -> Path | None:
+    relative = _relative_template_path(name)
+    if name == MANIFEST_NAME or relative.parts[0] in _REFERENCED_TEMPLATE_ROOTS:
+        return None
+    if relative.parts[0] in _PROTECTED_TEMPLATE_ROOTS or name == ENV_NAME:
+        raise ValueError(f'Package template cannot copy "{name}".')
+    if relative.parts[0] == MEMORY_DIR and name != f"{MEMORY_DIR}/{PROFILE_NAME}":
+        raise ValueError(f'Package template cannot copy "{name}".')
+    return relative
+
+
+def _package_template_manifest(package: InstalledPackage) -> dict[str, TomlValue]:
+    template_body = package.files.get(MANIFEST_NAME, "")
+    template = cast(dict[str, TomlValue], tomllib.loads(template_body))
+    forbidden = [key for key in _FORBIDDEN_TEMPLATE_MANIFEST_KEYS if key in template]
+    if forbidden:
+        raise ValueError(f'Package template cannot set "{forbidden[0]}".')
+    models = template.get("models")
+    if models is not None and not isinstance(models, dict):
+        raise ValueError("Package template [models] must be a table.")
+    return template
+
+
+def _validate_package_template(package: InstalledPackage) -> None:
+    for name in package.files:
+        _copied_template_path(name)
+    _package_template_manifest(package)
+
+
 def _package_manifest(
     directory: Path,
     package: InstalledPackage,
@@ -112,12 +151,7 @@ def _package_manifest(
 ) -> None:
     path = directory / MANIFEST_NAME
     base = cast(dict[str, TomlValue], tomllib.loads(path.read_text(encoding="utf-8")))
-    template_body = package.files.get(MANIFEST_NAME, "")
-    template = cast(dict[str, TomlValue], tomllib.loads(template_body))
-    forbidden = [key for key in ("id", "persona_name", "state_dir", "package") if key in template]
-    if forbidden:
-        raise ValueError(f'Package template cannot set "{forbidden[0]}".')
-    _merge(base, template)
+    _merge(base, _package_template_manifest(package))
     models = base["models"]
     if not isinstance(models, dict):
         raise ValueError("Package template [models] must be a table.")
@@ -132,20 +166,10 @@ def _package_manifest(
 
 
 def _copy_package_template(directory: Path, package: InstalledPackage) -> None:
-    protected = {".state", "workspace"}
-    referenced = {"skills", "tools"}
     for name, body in package.files.items():
-        relative = Path(name)
-        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-            raise ValueError(f'Package template path is invalid: "{name}".')
-        if name == MANIFEST_NAME:
+        relative = _copied_template_path(name)
+        if relative is None:
             continue
-        if relative.parts[0] in referenced:
-            continue
-        if relative.parts[0] in protected or name == ENV_NAME:
-            raise ValueError(f'Package template cannot copy "{name}".')
-        if relative.parts[0] == MEMORY_DIR and name != f"{MEMORY_DIR}/{PROFILE_NAME}":
-            raise ValueError(f'Package template cannot copy "{name}".')
         destination = directory / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(body, encoding="utf-8")
@@ -164,6 +188,8 @@ def init_instance(
     manifest = directory / MANIFEST_NAME
     if manifest.is_file():
         raise InstanceExistsError(f"instance already exists: {manifest}")
+    if package is not None:
+        _validate_package_template(package)
     directory.mkdir(parents=True, exist_ok=True)
 
     instance_id = _slugify(directory.name)

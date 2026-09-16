@@ -1,5 +1,7 @@
 import importlib
 
+import pytest
+
 from kinby.cli import main
 from kinby.packages import InstalledPackage, PackageDescriptor
 
@@ -212,3 +214,85 @@ def test_package_init_refuses_a_nonempty_destination_without_overwriting_it(
     assert marker.read_text(encoding="utf-8") == "keep this\n"
     assert sorted(path.name for path in target.iterdir()) == ["notes.md"]
     assert "not empty" in capsys.readouterr().err
+
+
+def test_failed_package_init_leaves_the_destination_unused_so_retry_can_succeed(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    descriptor = PackageDescriptor(
+        id="writer",
+        display_name="Writing teammate",
+        description="Drafts articles.",
+        icon="pen",
+        distribution="kinby-writer",
+        version="1.4.2",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "inspect_installed_package",
+        lambda package_id: InstalledPackage(
+            descriptor=descriptor,
+            files={"kinby.toml": 'id = "from-package"\n'},
+        ),
+    )
+    target = tmp_path / "writer"
+
+    exit_code = main(["init", str(target), "--package", "writer"])
+
+    assert exit_code == 1
+    assert not target.exists()
+    assert 'cannot set "id"' in capsys.readouterr().err
+
+    monkeypatch.setattr(
+        cli_module,
+        "inspect_installed_package",
+        lambda package_id: InstalledPackage(
+            descriptor=descriptor,
+            files={"SYSTEM.md": "Write clearly.\n"},
+        ),
+    )
+
+    exit_code = main(["init", str(target), "--package", "writer"])
+
+    assert exit_code == 0
+    assert (target / "SYSTEM.md").read_text(encoding="utf-8") == "Write clearly.\n"
+
+
+@pytest.mark.parametrize(
+    ("files", "error"),
+    [
+        ({"kinby.toml": "[\n"}, "Invalid"),
+        ({"workspace/notes.md": "secret\n"}, 'cannot copy "workspace/notes.md"'),
+    ],
+)
+def test_invalid_package_files_are_rejected_before_creating_the_destination(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    files,
+    error,
+):
+    monkeypatch.setattr(
+        cli_module,
+        "inspect_installed_package",
+        lambda package_id: InstalledPackage(
+            descriptor=PackageDescriptor(
+                id="writer",
+                display_name="Writing teammate",
+                description="Drafts articles.",
+                icon="pen",
+                distribution="kinby-writer",
+                version="1.4.2",
+            ),
+            files=files,
+        ),
+    )
+    target = tmp_path / "writer"
+
+    exit_code = main(["init", str(target), "--package", "writer"])
+
+    assert exit_code == 1
+    assert not target.exists()
+    assert error in capsys.readouterr().err
