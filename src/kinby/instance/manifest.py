@@ -32,6 +32,7 @@ from kinby.instance.dataclasses import (
     Memory,
     ModelPrice,
     Models,
+    PackageProvenance,
     RecapPolicy,
     Routines,
     Serve,
@@ -153,6 +154,12 @@ class RawServe(_Section):
     listen: ListenAddress
 
 
+class RawPackage(_Section):
+    id: NonEmpty
+    distribution: NonEmpty
+    version: NonEmpty
+
+
 class RawManifest(_Section):
     """The shape of ``kinby.toml``, validated once at load."""
 
@@ -166,6 +173,7 @@ class RawManifest(_Section):
     tools: RawTools = RawTools()
     routines: RawRoutines = RawRoutines()
     serve: RawServe | None = None
+    package: RawPackage | None = None
     budgets: RawBudgets = Field(default_factory=RawBudgets, title="Budgets")
     prices: dict[ModelName, RawModelPrice] = Field(
         default_factory=dict,
@@ -252,6 +260,15 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
             )
             for model, price in raw.prices.items()
         },
+        package=(
+            PackageProvenance(
+                id=raw.package.id,
+                distribution=raw.package.distribution,
+                version=raw.package.version,
+            )
+            if raw.package is not None
+            else None
+        ),
     )
 
 

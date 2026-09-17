@@ -63,6 +63,7 @@ from kinby.instance import (
     load_instance,
 )
 from kinby.instance.recap import load_recap_lens
+from kinby.packages import inspect_installed_package
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
@@ -117,6 +118,11 @@ def _print_instance(instance: Instance) -> None:
             for path in skills:
                 print(f"    {path}")
     print(f"state dir: {manifest.state_dir}")
+    if manifest.package is not None:
+        print("package:")
+        print(f"  id: {manifest.package.id}")
+        print(f"  distribution: {manifest.package.distribution}")
+        print(f"  template version: {manifest.package.version}")
 
 
 def _print_turn_inputs(instance: Instance, today: date) -> None:
@@ -574,6 +580,11 @@ def main(
         default=PLACEHOLDER_MODEL,
         help="value for [models].main (a placeholder is used when omitted)",
     )
+    init_parser.add_argument(
+        "--package",
+        dest="package_id",
+        help="installed package whose template should seed the instance",
+    )
     hub_parser = subparsers.add_parser(
         "hub",
         help="run the instance management hub",
@@ -701,8 +712,11 @@ def main(
         return 0
     if args.command == "init":
         try:
-            path = init_instance(Path(args.directory), model=args.model)
-        except InstanceExistsError as exc:
+            package = (
+                inspect_installed_package(args.package_id) if args.package_id is not None else None
+            )
+            path = init_instance(Path(args.directory), model=args.model, package=package)
+        except (InstanceExistsError, LookupError, TypeError, ValueError) as exc:
             print(exc, file=sys.stderr)
             return 1
         print(f"Created instance at {path}")

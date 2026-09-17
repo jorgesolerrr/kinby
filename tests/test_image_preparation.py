@@ -4,13 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from kinby.hub import BuildResult, HubRegistry, ImagePreparer
+from kinby.contracts import PackageSelection
+from kinby.hub import BuildResult, HubRegistry, ImagePreparer, ImageSelection
+from kinby.packages import InstalledPackage, PackageDescriptor
 
 
 class FakeImageBackend:
     def __init__(self) -> None:
         self.builds: list[set[str]] = []
         self.images: set[str] = set()
+        self.dockerfiles: list[str] = []
 
     async def resolve_base_images(self, dockerfile: Path) -> tuple[str, ...]:
         return ("python:3.14@sha256:resolved-base",)
@@ -20,12 +23,26 @@ class FakeImageBackend:
             path.relative_to(context).as_posix() for path in context.rglob("*") if path.is_file()
         }
         self.builds.append(files)
+        self.dockerfiles.append((context / "Dockerfile").read_text(encoding="utf-8"))
         image_id = f"sha256:image-{len(self.builds)}"
         self.images.add(image_id)
         return BuildResult(image_id=image_id, dependencies=("pydantic==2.0",))
 
     async def exists(self, image_id: str) -> bool:
         return image_id in self.images
+
+    async def inspect_package(self, image_id: str, package_id: str) -> InstalledPackage:
+        return InstalledPackage(
+            descriptor=PackageDescriptor(
+                id=package_id,
+                display_name="Writing teammate",
+                description="Drafts articles.",
+                icon="pen",
+                distribution="kinby-writer",
+                version="1.4.2",
+            ),
+            files={"SYSTEM.md": "Write clearly.\n"},
+        )
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -72,13 +89,13 @@ def test_image_preparation_resolves_revision_restricts_context_and_reuses_artifa
         backend = FakeImageBackend()
         preparer = ImagePreparer(source, registry, backend)
 
-        first = await preparer.prepare("HEAD")
-        second = await preparer.prepare("HEAD")
+        first = await preparer.prepare(ImageSelection("HEAD"))
+        second = await preparer.prepare(ImageSelection("HEAD"))
 
         assert first == second
-        assert first.revision == revision
-        assert first.base_images == ("python:3.14@sha256:resolved-base",)
-        assert first.dependencies == ("pydantic==2.0",)
+        assert first.artifact.revision == revision
+        assert first.artifact.base_images == ("python:3.14@sha256:resolved-base",)
+        assert first.artifact.dependencies == ("pydantic==2.0",)
         assert len(backend.builds) == 1
         assert "src/app.py" in backend.builds[0]
         assert "instances/private/.env" not in backend.builds[0]
@@ -86,8 +103,43 @@ def test_image_preparation_resolves_revision_restricts_context_and_reuses_artifa
         assert not any(path.endswith(".env") for path in backend.builds[0])
 
         backend.images.clear()
-        rebuilt = await preparer.prepare("HEAD")
-        assert rebuilt.image_id == "sha256:image-2"
+        rebuilt = await preparer.prepare(ImageSelection("HEAD"))
+        assert rebuilt.artifact.image_id == "sha256:image-2"
+        assert len(backend.builds) == 2
+
+    asyncio.run(scenario())
+
+
+def test_pinned_package_is_installed_in_the_image_and_part_of_artifact_reuse(tmp_path):
+    async def scenario() -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        _source_repo(source)
+        registry = HubRegistry(tmp_path / "hub")
+        backend = FakeImageBackend()
+        preparer = ImagePreparer(source, registry, backend)
+        package = PackageSelection(
+            id="writer",
+            distribution="kinby-writer",
+            version="1.4.2",
+            image_recipe="RUN install-writing-client\n",
+        )
+
+        first = await preparer.prepare(ImageSelection("HEAD", package))
+        second = await preparer.prepare(ImageSelection("HEAD", package))
+
+        assert first == second
+        assert first.package is not None
+        assert first.package.descriptor.id == "writer"
+        assert first.artifact.package == package
+        assert len(backend.builds) == 1
+        install = 'RUN ["uv", "pip", "install", "--system", "--no-cache", "kinby-writer==1.4.2"]'
+        assert install in backend.dockerfiles[0]
+        assert "RUN install-writing-client" in backend.dockerfiles[0]
+        assert registry.image_artifacts()[0].package == package
+
+        newer = package.model_copy(update={"version": "1.5.0"})
+        await preparer.prepare(ImageSelection("HEAD", newer))
         assert len(backend.builds) == 2
 
     asyncio.run(scenario())
@@ -106,7 +158,7 @@ def test_image_preparation_records_no_artifact_when_the_build_fails(tmp_path):
         preparer = ImagePreparer(source, registry, FailingBackend())
 
         with pytest.raises(RuntimeError, match="controlled build failure"):
-            await preparer.prepare("HEAD")
+            await preparer.prepare(ImageSelection("HEAD"))
 
         assert registry.image_artifacts() == []
 

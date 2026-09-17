@@ -9,7 +9,9 @@ from kinby.hub.models import (
     ImageArtifact,
     ImageBackend,
     ImagePreparation,
+    ImageSelection,
     InstanceSpec,
+    PreparedImage,
     RuntimeStatus,
 )
 from kinby.hub.registry import HubRegistry
@@ -26,7 +28,9 @@ __all__ = [
     "ImageBackend",
     "ImagePreparation",
     "ImagePreparer",
+    "ImageSelection",
     "InstanceSpec",
+    "PreparedImage",
     "RuntimeStatus",
     "build_docker_hub",
 ]

@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
+from kinby.contracts import PackageSelection
+from kinby.packages import InstalledPackage
+
 
 @dataclass(frozen=True)
 class InstanceSpec:
@@ -63,10 +66,23 @@ class ImageArtifact:
     dependency_id: str
     base_images: tuple[str, ...]
     dependencies: tuple[str, ...] = ()
+    package: PackageSelection | None = None
+
+
+@dataclass(frozen=True)
+class ImageSelection:
+    revision: str
+    package: PackageSelection | None = None
+
+
+@dataclass(frozen=True)
+class PreparedImage:
+    artifact: ImageArtifact
+    package: InstalledPackage | None = None
 
 
 class ImagePreparation(Protocol):
-    async def prepare(self, revision: str) -> ImageArtifact: ...
+    async def prepare(self, selection: ImageSelection) -> PreparedImage: ...
 
 
 @dataclass(frozen=True)
@@ -81,3 +97,9 @@ class ImageBackend(Protocol):
     async def build(self, context: Path, base_images: tuple[str, ...]) -> BuildResult: ...
 
     async def exists(self, image_id: str) -> bool: ...
+
+    async def inspect_package(
+        self,
+        image_id: str,
+        package_id: str,
+    ) -> InstalledPackage: ...

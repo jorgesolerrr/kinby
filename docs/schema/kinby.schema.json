@@ -215,6 +215,33 @@
       "title": "RawModels",
       "type": "object"
     },
+    "RawPackage": {
+      "additionalProperties": false,
+      "properties": {
+        "distribution": {
+          "minLength": 1,
+          "title": "Distribution",
+          "type": "string"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "distribution",
+        "version"
+      ],
+      "title": "RawPackage",
+      "type": "object"
+    },
     "RawRoutines": {
       "additionalProperties": false,
       "properties": {
@@ -340,6 +367,17 @@
     },
     "models": {
       "$ref": "#/$defs/RawModels"
+    },
+    "package": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RawPackage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "persona_name": {
       "anyOf": [

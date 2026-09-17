@@ -14,8 +14,10 @@ from kinby.hub import (
     DockerRuntime,
     HubRegistry,
     ImagePreparer,
+    ImageSelection,
     InstanceSpec,
 )
+from kinby.packages import InstalledPackage, PackageDescriptor, package_json
 
 
 class FakeNetworks:
@@ -28,12 +30,31 @@ class FakeContainers:
         self.arguments: tuple[object, object] | None = None
         self.options: dict[str, object] = {}
         self.thread_id: int | None = None
+        self.run_arguments: tuple[object, object] | None = None
+        self.run_options: dict[str, object] = {}
 
     def create(self, image: object, command: object, **options: object) -> object:
         self.arguments = (image, command)
         self.options = options
         self.thread_id = threading.get_ident()
         return object()
+
+    def run(self, image: object, command: object, **options: object) -> bytes:
+        self.run_arguments = (image, command)
+        self.run_options = options
+        return package_json(
+            InstalledPackage(
+                descriptor=PackageDescriptor(
+                    id="writer",
+                    display_name="Writing teammate",
+                    description="Drafts articles.",
+                    icon="pen",
+                    distribution="kinby-writer",
+                    version="1.4.2",
+                ),
+                files={"SYSTEM.md": "Write clearly.\n"},
+            )
+        ).encode()
 
 
 class FakeDockerClient:
@@ -80,6 +101,25 @@ def test_docker_runtime_translates_the_host_mount_and_offloads_creation(tmp_path
     assert mounts[0]["Target"] == "/instance"
     assert client.containers.options["network"] == "kinby_private"
     assert client.containers.options["restart_policy"] == {"Name": "unless-stopped"}
+
+
+def test_docker_image_backend_inspects_the_authoritative_package_in_the_image():
+    async def scenario() -> tuple[FakeDockerClient, InstalledPackage]:
+        client = FakeDockerClient()
+        backend = DockerImageBackend(cast(DockerClient, client))
+        package = await backend.inspect_package("sha256:selected", "writer")
+        return client, package
+
+    client, package = asyncio.run(scenario())
+
+    assert package.descriptor.distribution == "kinby-writer"
+    assert package.descriptor.version == "1.4.2"
+    assert package.files == {"SYSTEM.md": "Write clearly.\n"}
+    assert client.containers.run_arguments == (
+        "sha256:selected",
+        ["-m", "kinby.packages", "writer"],
+    )
+    assert client.containers.run_options == {"entrypoint": "python", "remove": True}
 
 
 def _docker_available() -> bool:
@@ -132,11 +172,12 @@ def test_real_docker_artifact_has_an_immutable_identity_and_excludes_managed_dat
         _git(source, "config", "user.name", "Test")
         _git(source, "add", ".")
         _git(source, "commit", "-m", "source")
-        artifact = await ImagePreparer(
+        prepared = await ImagePreparer(
             source,
             HubRegistry(tmp_path / "hub"),
             DockerImageBackend(),
-        ).prepare("HEAD")
+        ).prepare(ImageSelection("HEAD"))
+        artifact = prepared.artifact
         assert artifact.image_id.startswith("sha256:")
         return artifact.image_id
 
