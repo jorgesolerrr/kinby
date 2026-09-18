@@ -21,6 +21,7 @@ from tests.test_factory import (
     _RoutineModel,
     _text,
     _use_routine_model,
+    _with_implement_timeout,
 )
 from tests.test_receiver import request
 from tests.test_scheduler import FakeClock, runtime
@@ -155,11 +156,7 @@ def test_claude_execution_failures_stop_publication(
         monkeypatch.setenv(key, value)
     if "FAKE_CLAUDE_IMPLEMENT_SLEEP" in environment:
         routine = instance / "routines" / "implement-ready-issue" / "ROUTINE.md"
-        routine.write_text(
-            routine.read_text().replace(
-                '"implement_timeout_seconds":1800', '"implement_timeout_seconds":0.05'
-            )
-        )
+        routine.write_text(_with_implement_timeout(routine.read_text(), "0.05"))
 
     report = _run(instance, capsys)
 

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import sys
 from collections.abc import AsyncIterator, Sequence
@@ -22,6 +23,15 @@ from tests.helpers import turn_config_stub
 
 INSTANCES = Path(__file__).parents[1] / "instances"
 CODER = INSTANCES / "coder"
+
+
+def _with_implement_timeout(routine: str, seconds: str) -> str:
+    """Set the implement timeout whatever the shipped routine asks for."""
+    return re.sub(
+        r'"implement_timeout_seconds":[\d.]+',
+        f'"implement_timeout_seconds":{seconds}',
+        routine,
+    )
 
 
 def _coder_copy(
@@ -1596,10 +1606,7 @@ def test_client_overrun_is_killed_and_relabels_issue(
     instance_path = _coder_copy(tmp_path)
     routine = instance_path / "routines" / "implement-ready-issue" / "ROUTINE.md"
     routine.write_text(
-        routine.read_text(encoding="utf-8").replace(
-            '"implement_timeout_seconds":1800',
-            '"implement_timeout_seconds":0.05',
-        ),
+        _with_implement_timeout(routine.read_text(encoding="utf-8"), "0.05"),
         encoding="utf-8",
     )
     instance = load_instance(instance_path)
