@@ -289,7 +289,7 @@ The instance's list of command patterns the **gate** refuses or escalates regard
 
 ### Contract
 
-The typed set of commands and subscriptions every client uses to drive a session. The CLI is its client today; a server can use the same boundary later. Clients import contracts, never core.
+The typed set of commands and subscriptions every **client** uses to drive a session or manage **instances**. Clients import contracts, never core.
 
 ### Event
 
@@ -298,6 +298,24 @@ One sequence-numbered record in a **thread**'s durable history. Events record tu
 ### Scope
 
 A named permission a **contract** command requires of its caller. Holding a connection is not permission to call everything.
+
+### Client
+
+A program that drives kinby through the **contract**. The REPL, the web app, and the management CLI are clients. A client in the same process calls the contract directly; any other client goes through a **contract server**.
+_Avoid_: coding client (a different term), frontend
+
+### Contract server
+
+The part of **serve mode**, and of the **hub**, that carries the **contract** to network **clients** and authenticates each connection. It decides which **scopes** a connection holds. The hub's contract server also relays a client's connection to one **instance**. Separate from the **receiver**, which accepts **signals**.
+_Avoid_: gateway, API server
+
+### Access token
+
+The single secret the user presents to the **hub**'s **contract server**. An authenticated connection holds every **scope**, because a hub has one user. The token never enters an **instance**.
+
+### Control token
+
+The secret a **hub** presents to one **instance**'s **contract server**. Each instance has its own. It reaches that instance only, and grants no hub **scope**.
 
 ### Package
 
