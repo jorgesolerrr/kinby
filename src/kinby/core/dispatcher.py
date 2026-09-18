@@ -12,6 +12,8 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from kinby.contracts import (
+    CONTRACT_VERSION,
+    INSTANCE_PROBE,
     ROUTINE_LIST,
     ROUTINE_RUN,
     STATS_GET,
@@ -30,15 +32,19 @@ from kinby.contracts import (
     THREAD_TURN_TARGET_LIST,
     USAGE_GET,
     AcceptedResult,
+    Capability,
     ContractModel,
     ErrorCode,
     ErrorEnvelope,
     Event,
+    InstanceProbeCommand,
+    InstanceProbeResult,
     Method,
     PermissionMode,
     Scope,
     StatsGetCommand,
     StatsGetResult,
+    Stream,
     Subscription,
     ThreadCreateCommand,
     ThreadCreateResult,
@@ -68,7 +74,22 @@ from kinby.instance import Instance, ModelPrice
 from kinby.memory import GraphStore, RecapWriter
 
 Handler = Callable[[ContractModel], Awaitable[ContractModel]]
-SubscriptionHandler = Callable[[ContractModel], AsyncGenerator[ContractModel]]
+SubscriptionHandler = Callable[[ContractModel], Awaitable[Stream[ContractModel]]]
+_SUBSCRIPTION_FAILED = ErrorEnvelope(
+    code=ErrorCode.INTERNAL,
+    message="The subscription failed unexpectedly.",
+    retryable=False,
+)
+
+
+async def _guarded(items: AsyncGenerator[ContractModel]) -> AsyncGenerator[ContractModel]:
+    """Turn a failure mid-stream into a last item, so a subscriber always sees why it ended."""
+    try:
+        async with aclosing(items):
+            async for item in items:
+                yield item
+    except Exception:
+        yield _SUBSCRIPTION_FAILED
 
 
 @dataclass(frozen=True)
@@ -108,7 +129,7 @@ class Dispatcher:
     def register_subscription[Command: ContractModel, Item: ContractModel](
         self,
         subscription: Subscription[Command, Item],
-        handler: Callable[[Command], AsyncGenerator[Item]],
+        handler: Callable[[Command], Awaitable[Stream[Item]]],
     ) -> None:
         self._subscription_routes[subscription.name] = Route(
             subscription.scope,
@@ -176,22 +197,16 @@ class Dispatcher:
         method: str,
         payload: Mapping[str, object],
         scopes: Collection[Scope],
-    ) -> AsyncGenerator[ContractModel]:
+    ) -> Stream[ContractModel] | ErrorEnvelope:
         call = self._validate_call(self._subscription_routes, method, payload, scopes)
         if isinstance(call, ErrorEnvelope):
-            yield call
-            return
+            return call
         route, command = call
         try:
-            async with aclosing(route.handler(command)) as subscription:
-                async for event in subscription:
-                    yield event
+            stream = await route.handler(command)
         except Exception:
-            yield ErrorEnvelope(
-                code=ErrorCode.INTERNAL,
-                message="The subscription failed unexpectedly.",
-                retryable=False,
-            )
+            return _SUBSCRIPTION_FAILED
+        return Stream(stream.head_sequence, _guarded(stream.items))
 
 
 class ScheduledDispatcher(Dispatcher):
@@ -314,13 +329,20 @@ def build_dispatcher(
         )
         return accepted(event)
 
-    def subscribe_to_thread(command: ThreadSubscribeCommand) -> AsyncGenerator[Event]:
-        return event_log.subscribe(command.thread_id, command.after_sequence)
+    async def subscribe_to_thread(command: ThreadSubscribeCommand) -> Stream[Event]:
+        return await event_log.subscribe(command.thread_id, command.after_sequence)
+
+    async def probe(command: InstanceProbeCommand) -> InstanceProbeResult:
+        return InstanceProbeResult(
+            contract_version=CONTRACT_VERSION,
+            capabilities=[Capability.WS],
+        )
 
     dispatcher.register(THREAD_CREATE, create_thread)
     dispatcher.register(THREAD_LIST, list_threads)
     dispatcher.register(USAGE_GET, get_usage)
     dispatcher.register(STATS_GET, get_stats)
+    dispatcher.register(INSTANCE_PROBE, probe)
     dispatcher.register(THREAD_TURN_RATE, rate_turn)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
     if scheduler is not None:

@@ -36,6 +36,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    thread_events,
 )
 
 _EXPECTED_TOOL_RESULT_MAX_CHARS = 800
@@ -185,7 +186,7 @@ def test_kept_draft_writes_narrative_episode_and_token_marker(tmp_path: Path) ->
         )
         assert isinstance(accepted, AcceptedResult)
 
-        closing_events = event_log.subscribe(created.id, accepted.sequence)
+        closing_events = (await event_log.subscribe(created.id, accepted.sequence)).items
         for _ in range(7):
             await anext(closing_events)
         await closing_events.aclose()
@@ -298,7 +299,7 @@ def test_recap_model_receives_the_harness_owned_turn_frame(tmp_path: Path) -> No
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(accepted, AcceptedResult)
-        closing_events = event_log.subscribe(created.id, accepted.sequence)
+        closing_events = (await event_log.subscribe(created.id, accepted.sequence)).items
         for _ in range(5):
             await anext(closing_events)
         await closing_events.aclose()
@@ -363,7 +364,7 @@ def test_discarded_draft_writes_marker_without_episode(tmp_path: Path) -> None:
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(accepted, AcceptedResult)
-        closing_events = event_log.subscribe(created.id, accepted.sequence)
+        closing_events = (await event_log.subscribe(created.id, accepted.sequence)).items
         for _ in range(7):
             await anext(closing_events)
         await closing_events.aclose()
@@ -409,7 +410,7 @@ def test_recap_model_error_warns_without_changing_the_closed_turn(tmp_path: Path
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(accepted, AcceptedResult)
-        closing_events = event_log.subscribe(created.id, accepted.sequence)
+        closing_events = (await event_log.subscribe(created.id, accepted.sequence)).items
         for _ in range(7):
             await anext(closing_events)
         await closing_events.aclose()
@@ -467,7 +468,7 @@ def test_catch_up_retries_a_failed_recap_and_writes_its_marker(tmp_path: Path) -
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(accepted, AcceptedResult)
-        closing_events = event_log.subscribe(created.id, accepted.sequence)
+        closing_events = (await event_log.subscribe(created.id, accepted.sequence)).items
         for _ in range(2):
             await anext(closing_events)
         await closing_events.aclose()
@@ -558,7 +559,7 @@ def test_recap_model_selection_reloads_the_manifest_for_each_turn(tmp_path: Path
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(first, AcceptedResult)
-        first_closing = event_log.subscribe(created.id, first.sequence)
+        first_closing = (await event_log.subscribe(created.id, first.sequence)).items
         for _ in range(2):
             await anext(first_closing)
         await first_closing.aclose()
@@ -579,7 +580,7 @@ def test_recap_model_selection_reloads_the_manifest_for_each_turn(tmp_path: Path
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(second, AcceptedResult)
-        second_closing = event_log.subscribe(created.id, second.sequence)
+        second_closing = (await event_log.subscribe(created.id, second.sequence)).items
         for _ in range(2):
             await anext(second_closing)
         await second_closing.aclose()
@@ -636,7 +637,7 @@ def test_recap_lens_reloads_for_each_turn(tmp_path: Path) -> None:
                 {Scope.THREAD_OPERATE},
             )
             assert isinstance(accepted, AcceptedResult)
-            closing = event_log.subscribe(created.id, accepted.sequence)
+            closing = (await event_log.subscribe(created.id, accepted.sequence)).items
             for _ in range(2):
                 await anext(closing)
             await closing.aclose()
@@ -868,7 +869,7 @@ def test_catch_up_queues_oldest_turns_before_a_newly_closed_turn(tmp_path: Path)
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(newest, AcceptedResult)
-        closing_events = event_log.subscribe(created.id, newest.sequence)
+        closing_events = (await event_log.subscribe(created.id, newest.sequence)).items
         for _ in range(2):
             await anext(closing_events)
         await closing_events.aclose()
@@ -913,11 +914,7 @@ def test_completed_tool_turn_writes_trace_episode_and_marker(tmp_path: Path) -> 
         assert isinstance(accepted, AcceptedResult)
 
         await asyncio.wait_for(recap.drain(), timeout=1)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         events = [await anext(subscription) for _ in range(9)]
         await subscription.aclose()
 
@@ -954,11 +951,7 @@ def test_completed_tool_turn_writes_trace_episode_and_marker(tmp_path: Path) -> 
 
         recap.schedule(created.id, accepted.turn_id)
         await asyncio.wait_for(recap.drain(), timeout=1)
-        replay = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        replay = await thread_events(dispatcher, {"thread_id": created.id})
         replayed = [await anext(replay) for _ in range(9)]
         await replay.aclose()
         assert (
@@ -1009,7 +1002,7 @@ def test_tool_call_summary_is_one_bounded_line(tmp_path: Path) -> None:
             {Scope.THREAD_OPERATE},
         )
 
-        closing_events = event_log.subscribe(created.id)
+        closing_events = (await event_log.subscribe(created.id)).items
         for _ in range(3):
             await anext(closing_events)
         await closing_events.aclose()
@@ -1047,7 +1040,7 @@ def test_failed_recap_appends_warning_without_marker(tmp_path: Path) -> None:
             {Scope.THREAD_OPERATE},
         )
 
-        closing_events = event_log.subscribe(created.id)
+        closing_events = (await event_log.subscribe(created.id)).items
         for _ in range(8):
             await anext(closing_events)
         await closing_events.aclose()
@@ -1088,11 +1081,7 @@ def test_chat_only_turn_writes_marker_without_episode(tmp_path: Path) -> None:
         assert isinstance(accepted, AcceptedResult)
 
         await asyncio.wait_for(recap.drain(), timeout=1)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         events = [await anext(subscription) for _ in range(3)]
         await subscription.aclose()
 
@@ -1146,11 +1135,7 @@ def test_failed_and_interrupted_tool_turns_are_recapped(tmp_path: Path) -> None:
                 )
                 assert not isinstance(interrupted, ErrorEnvelope)
             await asyncio.wait_for(recap.drain(), timeout=1)
-            subscription = dispatcher.subscribe(
-                "thread.subscribe",
-                {"thread_id": created.id},
-                {Scope.THREAD_READ},
-            )
+            subscription = await thread_events(dispatcher, {"thread_id": created.id})
             events = [await anext(subscription) for _ in range(4)]
             await subscription.aclose()
             closing = events[-2]
@@ -1204,11 +1189,7 @@ def test_next_turn_starts_while_previous_recap_is_blocked(tmp_path: Path) -> Non
         memory.release_write.set()
         await asyncio.wait_for(recap.drain(), timeout=1)
 
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         events = [await anext(subscription) for _ in range(8)]
         await subscription.aclose()
         markers = [

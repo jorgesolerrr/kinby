@@ -309,6 +309,19 @@ _Avoid_: coding client (a different term), frontend
 The part of **serve mode**, and of the **hub**, that carries the **contract** to network **clients** and authenticates each connection. It decides which **scopes** a connection holds. The hub's contract server also relays a client's connection to one **instance**. Separate from the **receiver**, which accepts **signals**.
 _Avoid_: gateway, API server
 
+### Frame
+
+One message a **client** and a **contract server** exchange over a connection. A client calls, subscribes, or cancels; the server answers with a result, an error, a subscription's acknowledgement, its items, and its end.
+_Avoid_: envelope, packet, request
+
+### Head sequence
+
+The **event** sequence a subscription is caught up to when it starts. Items up to it are replay, later ones are live. A **frame** carries it, never an **event**: a thread's history is not a record of who caught up when.
+
+### Capability
+
+One thing an **instance**'s **contract server** can do, reported so a **hub** knows what it may ask of that instance without reading a version.
+
 ### Access token
 
 The single secret the user presents to the **hub**'s **contract server**. An authenticated connection holds every **scope**, because a hub has one user. The token never enters an **instance**.

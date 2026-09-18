@@ -120,10 +120,11 @@ def test_finished_thread_replays_every_stored_event_in_order(tmp_path: Path) -> 
             ),
         ]
 
-        subscription = EventLog(tmp_path).subscribe(thread_id, after_sequence=0)
-        replayed = [await anext(subscription) for _ in stored]
-        await subscription.aclose()
+        stream = await EventLog(tmp_path).subscribe(thread_id, after_sequence=0)
+        replayed = [await anext(stream.items) for _ in stored]
+        await stream.items.aclose()
 
+        assert stream.head_sequence == 3
         assert replayed == stored
         assert [event.sequence for event in replayed] == [1, 2, 3]
 
@@ -169,7 +170,8 @@ def test_subscriber_receives_replay_gap_then_live_events_once(tmp_path: Path) ->
             turn_id,
             MessageDelta(text="halfway"),
         )
-        subscription = event_log.subscribe(thread_id, after_sequence=1)
+        stream = await event_log.subscribe(thread_id, after_sequence=1)
+        subscription = stream.items
 
         received_gap = await anext(subscription)
         during_handoff = await event_log.append(
@@ -188,6 +190,7 @@ def test_subscriber_receives_replay_gap_then_live_events_once(tmp_path: Path) ->
         received_live = await asyncio.wait_for(waiting_for_live, timeout=1)
         await subscription.aclose()
 
+        assert stream.head_sequence == 2
         assert [received_gap, received_during_handoff, received_live] == [
             replay_gap,
             during_handoff,
@@ -207,7 +210,8 @@ def test_subscriber_does_not_receive_live_events_before_its_cursor(tmp_path: Pat
         thread_id = uuid4()
         turn_id = uuid4()
         event_log = EventLog(tmp_path)
-        subscription = event_log.subscribe(thread_id, after_sequence=2)
+        stream = await event_log.subscribe(thread_id, after_sequence=2)
+        subscription = stream.items
         waiting = asyncio.ensure_future(anext(subscription))
         await asyncio.sleep(0)
 
@@ -224,6 +228,7 @@ def test_subscriber_does_not_receive_live_events_before_its_cursor(tmp_path: Pat
         received = await asyncio.wait_for(waiting, timeout=1)
         await subscription.aclose()
 
+        assert stream.head_sequence == 0
         assert received == third
 
     asyncio.run(scenario())

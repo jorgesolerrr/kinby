@@ -181,10 +181,14 @@ async def _run_repl(
     stderr: TextIO,
 ) -> int:
     repl_io = _ReplIO(_AsyncInput(stdin), stdout, stderr)
-    subscription = client.subscribe(
+    stream = await client.subscribe(
         THREAD_SUBSCRIBE,
         ThreadSubscribeCommand(thread_id=thread_id),
     )
+    if isinstance(stream, ErrorEnvelope):
+        repl_io.stderr.write(f"{format_error(stream)}\n")
+        return 1
+    subscription = stream.items
     async with aclosing(subscription):
         parked_turn_id = _parked_routine_turn(routines, thread_id)
         if parked_turn_id is not None:

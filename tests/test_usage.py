@@ -33,6 +33,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    thread_events,
 )
 
 
@@ -81,10 +82,8 @@ async def _record_turn(
         {Scope.THREAD_OPERATE},
     )
     assert isinstance(accepted, AcceptedResult)
-    subscription = dispatcher.subscribe(
-        "thread.subscribe",
-        {"thread_id": thread_id, "after_sequence": accepted.sequence},
-        {Scope.THREAD_READ},
+    subscription = await thread_events(
+        dispatcher, {"thread_id": thread_id, "after_sequence": accepted.sequence}
     )
     completed = await asyncio.wait_for(anext(subscription), timeout=1)
     await subscription.aclose()
