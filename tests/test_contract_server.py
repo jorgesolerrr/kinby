@@ -174,6 +174,10 @@ def test_a_call_returns_its_result_and_a_wrong_token_never_upgrades(tmp_path: Pa
             with pytest.raises(aiohttp.WSServerHandshakeError) as missing:
                 async with connected(address, token=None):
                     pass
+            # A token is whatever the caller sent, not necessarily ASCII.
+            with pytest.raises(aiohttp.WSServerHandshakeError) as unreadable:
+                async with connected(address, token="wrøng"):
+                    pass
 
         assert result["type"] == FrameType.RESULT.value
         assert result["id"] == "1"
@@ -181,6 +185,7 @@ def test_a_call_returns_its_result_and_a_wrong_token_never_upgrades(tmp_path: Pa
         assert UUID(str(result["result"]["id"]))
         assert wrong.value.status == 401
         assert missing.value.status == 401
+        assert unreadable.value.status == 401
 
     asyncio.run(scenario())
 
@@ -512,6 +517,39 @@ def test_health_reports_the_contract_version_and_what_the_instance_can_do(tmp_pa
         "capabilities": [Capability.WS.value],
     }
     assert off == {"id": "test", "contract_version": CONTRACT_VERSION, "capabilities": []}
+
+
+def test_a_frame_is_logged_by_its_type_id_and_method_but_never_its_params(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The log says what a client asked for. Params carry the user's own words."""
+    secret = "the-user-said-something-private"
+
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        dispatcher = dispatcher_at(tmp_path)
+        thread = await created_thread(dispatcher)
+        async with (
+            served(instance, dispatcher) as address,
+            connected(address) as socket,
+        ):
+            await call(socket, "thread.create", title=secret)
+            await frame(socket)
+            await subscribe(socket, thread.id)
+            await frame(socket)
+            await socket.send_str(json.dumps({"type": "cancel", "id": "1"}))
+            await frame(socket)
+            await socket.send_str(json.dumps({"type": "call", "id": "9", "params": secret}))
+            await frame(socket)
+
+    with caplog.at_level(logging.INFO, logger="kinby.core.contract_server"):
+        asyncio.run(scenario())
+
+    assert "Frame call id=1 method=thread.create" in caplog.text
+    assert "Frame subscribe id=1 method=thread.subscribe" in caplog.text
+    assert "Frame cancel id=1 method=None" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_an_instance_without_a_control_token_leaves_the_contract_server_off(

@@ -250,7 +250,7 @@ def test_closing_a_dispatcher_subscription_before_its_first_item_drops_the_subsc
         assert not isinstance(stream, ErrorEnvelope)
         await stream.aclose()
         await event_log.append(created.id, uuid4(), STARTED)
-        assert event_log._subscribers == {}
+        assert event_log.subscriber_count(created.id) == 0
 
     asyncio.run(scenario())
 
@@ -282,6 +282,26 @@ def test_closing_subscription_releases_its_handler() -> None:
         await subscription.aclose()
 
         assert handler_closed is True
+
+    asyncio.run(scenario())
+
+
+def test_closing_a_client_subscription_before_its_first_item_drops_the_subscriber(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        event_log = EventLog(tmp_path)
+        dispatcher = build_dispatcher(tmp_path, event_log=event_log)
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, {Scope.THREAD_READ})
+        stream = await client.subscribe(
+            THREAD_SUBSCRIBE, ThreadSubscribeCommand(thread_id=thread_id)
+        )
+        assert not isinstance(stream, ErrorEnvelope)
+        await stream.aclose()
+        await event_log.append(thread_id, uuid4(), STARTED)
+
+        assert event_log.subscriber_count(thread_id) == 0
 
     asyncio.run(scenario())
 

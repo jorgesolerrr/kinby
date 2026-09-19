@@ -93,6 +93,10 @@ class EventLog:
         if not subscribers:
             del self._subscribers[thread_id]
 
+    def subscriber_count(self, thread_id: UUID) -> int:
+        """How many subscriptions the log delivers a thread's events to, so a leak is visible."""
+        return len(self._subscribers.get(thread_id, ()))
+
     def stored(self, thread_id: UUID) -> list[Event]:
         return [event for event in self.all_events() if event.thread_id == thread_id]
 

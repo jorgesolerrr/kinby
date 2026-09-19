@@ -215,7 +215,7 @@ def test_closing_a_subscription_before_its_first_item_drops_the_subscriber(
         await stream.aclose()
         await event_log.append(thread_id, uuid4(), STARTED)
 
-        assert event_log._subscribers == {}
+        assert event_log.subscriber_count(thread_id) == 0
 
     asyncio.run(scenario())
 

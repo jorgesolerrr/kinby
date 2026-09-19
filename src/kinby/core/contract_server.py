@@ -108,9 +108,10 @@ class ContractServer:
         return socket
 
     def _authenticated(self, request: web.Request) -> bool:
+        """Compare as bytes: a header the caller chose is not guaranteed to be ASCII."""
         return hmac.compare_digest(
-            request.headers.get("Authorization", ""),
-            f"Bearer {self._token}",
+            request.headers.get("Authorization", "").encode(),
+            f"Bearer {self._token}".encode(),
         )
 
 

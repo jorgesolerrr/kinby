@@ -14,6 +14,10 @@ class Stream[Item]:
     items: AsyncGenerator[Item]
     _close: Callable[[], None] | None = None
 
+    def carrying[Other](self, items: AsyncGenerator[Other]) -> Stream[Other]:
+        """Return the same subscription seen through another generator over its items."""
+        return Stream(self.head_sequence, items, self._close)
+
     async def aclose(self) -> None:
         """End the subscription, even if the caller never pulled an item."""
         try:
