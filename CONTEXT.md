@@ -326,6 +326,11 @@ One thing an **instance**'s **contract server** can do, reported so a **hub** kn
 
 The single secret the user presents to the **hub**'s **contract server**. An authenticated connection holds every **scope**, because a hub has one user. The token never enters an **instance**.
 
+### Session cookie
+
+What a browser carries after it exchanges the **access token** at the **hub**'s login route. The hub stores it, so a restart does not sign the user out, and rotating the access token ends it. Not a **session**, which is one run of the agent loop.
+_Avoid_: auth cookie, login token
+
 ### Control token
 
 The secret a **hub** presents to one **instance**'s **contract server**. Each instance has its own. It reaches that instance only, and grants no hub **scope**.

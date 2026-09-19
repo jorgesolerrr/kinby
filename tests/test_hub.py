@@ -195,7 +195,7 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
         assert len(runtime.created) == 1
         spec = runtime.created[0]
         assert spec.image == "sha256:selected-image"
-        assert spec.env == {"PROVIDER_TOKEN": "private-value"}
+        assert spec.env["PROVIDER_TOKEN"] == "private-value"
         assert runtime.started == []
         instance_path = tmp_path / "hub" / "instances" / str(accepted.instance_id)
         assert instance_path.is_dir()
@@ -290,7 +290,7 @@ def test_create_from_a_pinned_package_seeds_owned_configuration_and_provenance(t
         assert (instance_path / "routines" / "draft" / "run.py").is_file()
         assert not (instance_path / "skills" / "voice").exists()
         assert not (instance_path / "tools" / "editor.py").exists()
-        assert runtime.created[0].env == {"EDITOR_TOKEN": "private-editor-token"}
+        assert runtime.created[0].env["EDITOR_TOKEN"] == "private-editor-token"
         assert runtime.started == []
 
     asyncio.run(scenario())
@@ -629,6 +629,34 @@ def test_metadata_for_two_created_instances_never_changes_process_environment(tm
         assert dict(os.environ) == before
         assert runtime.created[0].env["SHARED"] == "one"
         assert runtime.created[1].env["SHARED"] == "two"
+
+    asyncio.run(scenario())
+
+
+def test_each_instance_gets_its_own_control_token_and_never_the_access_token(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        access_token = hub.access.issue()
+        assert access_token is not None
+        client = _client(hub)
+        paths = []
+        for manifest_id in ("first", "second"):
+            created = await client.call(
+                INSTANCE_CREATE,
+                InstanceCreateCommand(manifest_id=manifest_id, model="openai:gpt-5"),
+            )
+            assert isinstance(created, LifecycleOperationResult)
+            assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+            paths.append(tmp_path / "hub" / "instances" / str(created.instance_id))
+
+        tokens = [spec.env["KINBY_CONTROL_TOKEN"] for spec in runtime.created]
+        assert len(set(tokens)) == 2
+        for path, token in zip(paths, tokens, strict=True):
+            environment = (path / ".env").read_text(encoding="utf-8")
+            assert f"KINBY_CONTROL_TOKEN='{token}'" in environment
+            assert access_token not in environment
+        assert all(access_token not in spec.env.values() for spec in runtime.created)
 
     asyncio.run(scenario())
 

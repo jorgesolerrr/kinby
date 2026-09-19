@@ -101,6 +101,9 @@ class HubRegistry:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS sessions (
+                    token_hash TEXT PRIMARY KEY
+                );
                 """
             )
             self._add_columns(
@@ -143,6 +146,42 @@ class HubRegistry:
                 (identifier,),
             )
             return identifier
+
+    def access_token_hash(self) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM hub_metadata WHERE key = 'access_token_hash'"
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def set_access_token_hash(self, token_hash: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO hub_metadata (key, value)
+                VALUES ('access_token_hash', ?)
+                """,
+                (token_hash,),
+            )
+
+    def open_session(self, token_hash: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO sessions (token_hash) VALUES (?)",
+                (token_hash,),
+            )
+
+    def session_open(self, token_hash: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM sessions WHERE token_hash = ?",
+                (token_hash,),
+            ).fetchone()
+        return row is not None
+
+    def end_sessions(self) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM sessions")
 
     def begin_create(
         self,
