@@ -25,7 +25,9 @@ The single-user hub can now prepare, start, and inspect vanilla instances throug
 uv run kinby hub .kinby/hub --source .
 ```
 
-When the hub itself runs in a container, pass `--docker-host-directory` with the same directory's path on the Docker host. Hub management remains a local typed-contract API until authenticated network transport is added.
+When the hub itself runs in a container, pass `--docker-host-directory` with the same directory's path on the Docker host.
+
+The hub serves its contract at `GET /ws` on the `--listen` address, `0.0.0.0:8080` by default. On its first start it prints an access token and never prints it again, so store it then. A client sends that token as `Authorization: Bearer <token>`. A browser posts it to `POST /auth/login` and gets a session cookie back. `uv run kinby hub .kinby/hub token rotate` replaces the token and ends open sessions. Pass `--web-app <dir>` and the hub serves the built web app from it.
 
 ## Run an instance
 
