@@ -27,6 +27,7 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.contract_server import (
+    CALL_LIMIT,
     CONTROL_TOKEN_VARIABLE,
     SUBSCRIPTION_QUEUE_LIMIT,
     ContractServer,
@@ -340,6 +341,64 @@ def test_a_waiting_call_still_lets_the_socket_interrupt_the_turn(tmp_path: Path)
         assert started["type"] == FrameType.RESULT.value
         assert answers["3"]["type"] == FrameType.RESULT.value
         assert answers["2"]["type"] == FrameType.RESULT.value
+        assert runner.cancelled.is_set() is True
+
+    asyncio.run(scenario())
+
+
+def test_a_connection_rejects_calls_past_its_limit_and_still_takes_an_interrupt(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = BlockFirstRunner()
+        dispatcher = dispatcher_at(tmp_path, runner)
+        thread = await created_thread(dispatcher)
+        async with served(instance, dispatcher) as address, connected(address) as socket:
+            await call(socket, "thread.turn.start", thread_id=str(thread.id), message="Hello")
+            started = await frame(socket)
+            await asyncio.to_thread(runner.started.wait, 5)
+            for index in range(CALL_LIMIT + 1):
+                await socket.send_str(
+                    json.dumps(
+                        {
+                            "type": "call",
+                            "id": str(index + 2),
+                            "method": "routine.run",
+                            "params": {
+                                "name": "news",
+                                "payload": {"body": "later", "content_type": "text/plain"},
+                            },
+                        }
+                    )
+                )
+            await socket.send_str(
+                json.dumps(
+                    {
+                        "type": "call",
+                        "id": "interrupt",
+                        "method": "thread.turn.interrupt",
+                        "params": {"thread_id": str(thread.id)},
+                    }
+                )
+            )
+            answers = {
+                received["id"]: received
+                for received in [await frame(socket) for _ in range(CALL_LIMIT + 2)]
+            }
+
+        overflow = answers[str(CALL_LIMIT + 2)]
+        assert started["type"] == FrameType.RESULT.value
+        assert overflow["type"] == FrameType.ERROR.value
+        assert overflow["error"] == {
+            "code": ErrorCode.RESOURCE_EXHAUSTED.value,
+            "message": (
+                f"This connection already has {CALL_LIMIT} calls in flight. Wait for one to finish."
+            ),
+            "retryable": True,
+        }
+        assert answers["interrupt"]["type"] == FrameType.RESULT.value
         assert runner.cancelled.is_set() is True
 
     asyncio.run(scenario())

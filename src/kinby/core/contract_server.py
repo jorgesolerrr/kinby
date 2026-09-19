@@ -16,6 +16,8 @@ from aiohttp import WSMsgType, web
 from kinby.contracts import (
     CONTROL_SCOPES,
     INSTANCE_SCOPES,
+    THREAD_APPROVAL_RESPOND,
+    THREAD_TURN_INTERRUPT,
     CallFrame,
     CancelFrame,
     ClientFrame,
@@ -39,7 +41,10 @@ from kinby.core.dispatcher import Dispatcher
 CONTROL_TOKEN_VARIABLE = "KINBY_CONTROL_TOKEN"
 #: Items one subscription may hold for a client that is not reading fast enough.
 SUBSCRIPTION_QUEUE_LIMIT = 1024
+#: Unary calls one connection may hold, not counting interrupt and approval.
+CALL_LIMIT = 8
 _HEARTBEAT_SECONDS = 30
+_UNBLOCKING = frozenset({THREAD_TURN_INTERRUPT.name, THREAD_APPROVAL_RESPOND.name})
 
 _logger = logging.getLogger(__name__)
 
@@ -49,6 +54,11 @@ _OVERFLOWED = ErrorEnvelope(
         f"The subscription fell more than {SUBSCRIPTION_QUEUE_LIMIT} items behind. "
         "Subscribe again after the last sequence you received."
     ),
+    retryable=True,
+)
+_TOO_MANY_CALLS = ErrorEnvelope(
+    code=ErrorCode.RESOURCE_EXHAUSTED,
+    message=(f"This connection already has {CALL_LIMIT} calls in flight. Wait for one to finish."),
     retryable=True,
 )
 
@@ -140,15 +150,23 @@ class _Connection:
         _log(frame)
         match frame:
             case CallFrame():
-                self._spawn(self._call(frame))
+                await self._begin(frame)
             case SubscribeFrame():
                 await self._open(frame)
             case CancelFrame():
                 await self._cancel(frame)
 
-    def _spawn(self, work: Coroutine[object, object, None]) -> None:
+    async def _begin(self, frame: CallFrame) -> None:
+        limited = frame.method not in _UNBLOCKING
+        if limited and len(self._calls) >= CALL_LIMIT:
+            await self._send(ErrorFrame(id=frame.id, error=_TOO_MANY_CALLS))
+            return
+        self._spawn(self._call(frame), limited=limited)
+
+    def _spawn(self, work: Coroutine[object, object, None], *, limited: bool) -> None:
         task = asyncio.create_task(work)
-        self._calls.add(task)
+        if limited:
+            self._calls.add(task)
         task.add_done_callback(self._forget_call)
 
     def _forget_call(self, task: asyncio.Task[None]) -> None:
