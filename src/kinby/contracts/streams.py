@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 
 
@@ -12,3 +12,12 @@ class Stream[Item]:
 
     head_sequence: int
     items: AsyncGenerator[Item]
+    _close: Callable[[], None] | None = None
+
+    async def aclose(self) -> None:
+        """End the subscription, even if the caller never pulled an item."""
+        try:
+            await self.items.aclose()
+        finally:
+            if self._close is not None:
+                self._close()

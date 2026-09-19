@@ -65,6 +65,7 @@ class EventLog:
         return Stream(
             head_sequence,
             self._deliver(thread_id, subscriber, replay, after_sequence),
+            _close=lambda: self._drop(thread_id, subscriber),
         )
 
     async def _deliver(
@@ -82,10 +83,15 @@ class EventLog:
                 if event.sequence > after_sequence:
                     yield event
         finally:
-            subscribers = self._subscribers[thread_id]
-            subscribers.remove(subscriber)
-            if not subscribers:
-                del self._subscribers[thread_id]
+            self._drop(thread_id, subscriber)
+
+    def _drop(self, thread_id: UUID, subscriber: asyncio.Queue[Event]) -> None:
+        subscribers = self._subscribers.get(thread_id)
+        if subscribers is None:
+            return
+        subscribers.discard(subscriber)
+        if not subscribers:
+            del self._subscribers[thread_id]
 
     def stored(self, thread_id: UUID) -> list[Event]:
         return [event for event in self.all_events() if event.thread_id == thread_id]

@@ -33,8 +33,9 @@ from kinby.core.contract_server import (
 )
 from kinby.core.dispatcher import ScheduledDispatcher
 from kinby.core.receiver import Receiver
+from kinby.core.turns import TurnOutcome
 from kinby.instance import Instance, Serve
-from tests.test_routines import instance_at
+from tests.test_routines import instance_at, routine_file
 from tests.test_scheduler import FakeClock, ScriptedRunner, runtime
 from tests.test_serve import BlockingRoutineRunner
 
@@ -284,6 +285,62 @@ def test_a_subscription_past_its_queue_limit_ends_with_a_retryable_error(tmp_pat
         assert received["error"]["code"] == ErrorCode.RESOURCE_EXHAUSTED.value
         assert received["error"]["retryable"] is True
         assert ended == {"type": FrameType.END.value, "id": "1"}
+
+    asyncio.run(scenario())
+
+
+class BlockFirstRunner(BlockingRoutineRunner):
+    """Hold only the first turn, so a later routine fire can finish."""
+
+    async def run(self, turn: object, context: object) -> TurnOutcome:
+        if self.started.is_set():
+            self.runs += 1
+            return TurnOutcome()
+        return await super().run(turn, context)
+
+
+def test_a_waiting_call_still_lets_the_socket_interrupt_the_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = BlockFirstRunner()
+        dispatcher = dispatcher_at(tmp_path, runner)
+        thread = await created_thread(dispatcher)
+        async with served(instance, dispatcher) as address, connected(address) as socket:
+            await call(socket, "thread.turn.start", thread_id=str(thread.id), message="Hello")
+            started = await frame(socket)
+            await asyncio.to_thread(runner.started.wait, 5)
+            await socket.send_str(
+                json.dumps(
+                    {
+                        "type": "call",
+                        "id": "2",
+                        "method": "routine.run",
+                        "params": {
+                            "name": "news",
+                            "payload": {"body": "later", "content_type": "text/plain"},
+                        },
+                    }
+                )
+            )
+            await socket.send_str(
+                json.dumps(
+                    {
+                        "type": "call",
+                        "id": "3",
+                        "method": "thread.turn.interrupt",
+                        "params": {"thread_id": str(thread.id)},
+                    }
+                )
+            )
+            answers = {
+                received["id"]: received for received in [await frame(socket) for _ in range(2)]
+            }
+
+        assert started["type"] == FrameType.RESULT.value
+        assert answers["3"]["type"] == FrameType.RESULT.value
+        assert answers["2"]["type"] == FrameType.RESULT.value
+        assert runner.cancelled.is_set() is True
 
     asyncio.run(scenario())
 

@@ -206,7 +206,7 @@ class Dispatcher:
             stream = await route.handler(command)
         except Exception:
             return _SUBSCRIPTION_FAILED
-        return Stream(stream.head_sequence, _guarded(stream.items))
+        return Stream(stream.head_sequence, _guarded(stream.items), _close=stream._close)
 
 
 class ScheduledDispatcher(Dispatcher):

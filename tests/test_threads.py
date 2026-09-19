@@ -236,6 +236,25 @@ def test_subscription_translates_a_failure_after_its_first_item() -> None:
     asyncio.run(scenario())
 
 
+def test_closing_a_dispatcher_subscription_before_its_first_item_drops_the_subscriber(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path)
+        dispatcher = build_dispatcher(tmp_path, event_log=event_log)
+        created = await dispatcher.dispatch("thread.create", {}, set(Scope))
+        assert isinstance(created, ThreadCreateResult)
+        stream = await dispatcher.subscribe(
+            "thread.subscribe", {"thread_id": str(created.id)}, set(Scope)
+        )
+        assert not isinstance(stream, ErrorEnvelope)
+        await stream.aclose()
+        await event_log.append(created.id, uuid4(), STARTED)
+        assert event_log._subscribers == {}
+
+    asyncio.run(scenario())
+
+
 def test_closing_subscription_releases_its_handler() -> None:
     async def scenario() -> None:
         handler_closed = False

@@ -6,7 +6,7 @@ import asyncio
 import hmac
 import logging
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Coroutine
 from contextlib import aclosing, suppress
 from enum import Enum, auto
 from functools import partial
@@ -117,6 +117,8 @@ class _Connection:
         self._dispatcher = dispatcher
         self._scopes = scopes
         self._subscriptions: dict[FrameId, asyncio.Task[None]] = {}
+        self._calls: set[asyncio.Task[None]] = set()
+        self._sending = asyncio.Lock()
 
     async def serve(self) -> None:
         try:
@@ -138,11 +140,20 @@ class _Connection:
         _log(frame)
         match frame:
             case CallFrame():
-                await self._call(frame)
+                self._spawn(self._call(frame))
             case SubscribeFrame():
                 await self._open(frame)
             case CancelFrame():
                 await self._cancel(frame)
+
+    def _spawn(self, work: Coroutine[object, object, None]) -> None:
+        task = asyncio.create_task(work)
+        self._calls.add(task)
+        task.add_done_callback(self._forget_call)
+
+    def _forget_call(self, task: asyncio.Task[None]) -> None:
+        self._calls.discard(task)
+        _log_task_error(task, "A call failed.")
 
     async def _call(self, frame: CallFrame) -> None:
         result = await self._dispatcher.dispatch(frame.method, frame.params, self._scopes)
@@ -172,23 +183,27 @@ class _Connection:
     def _forget(self, frame_id: FrameId, subscription: asyncio.Task[None]) -> None:
         if self._subscriptions.get(frame_id) is subscription:
             del self._subscriptions[frame_id]
+        _log_task_error(subscription, f"Subscription {frame_id} failed.")
 
     async def _stream(self, frame: SubscribeFrame) -> None:
         stream = await self._dispatcher.subscribe(frame.method, frame.params, self._scopes)
         if isinstance(stream, ErrorEnvelope):
             await self._send(ErrorFrame(id=frame.id, error=stream))
             return
-        await self._send(SubscribedFrame(id=frame.id, head_sequence=stream.head_sequence))
-        queue: asyncio.Queue[ContractModel | _StreamEnd] = asyncio.Queue(
-            SUBSCRIPTION_QUEUE_LIMIT + 1
-        )
-        filling = asyncio.create_task(_fill(stream.items, queue))
         try:
-            await self._drain(frame.id, queue)
+            await self._send(SubscribedFrame(id=frame.id, head_sequence=stream.head_sequence))
+            queue: asyncio.Queue[ContractModel | _StreamEnd] = asyncio.Queue(
+                SUBSCRIPTION_QUEUE_LIMIT + 1
+            )
+            filling = asyncio.create_task(_fill(stream.items, queue))
+            try:
+                await self._drain(frame.id, queue)
+            finally:
+                filling.cancel()
+                with suppress(asyncio.CancelledError):
+                    await filling
         finally:
-            filling.cancel()
-            with suppress(asyncio.CancelledError):
-                await filling
+            await stream.aclose()
 
     async def _drain(
         self,
@@ -205,9 +220,18 @@ class _Connection:
             await self._send(ItemFrame(id=frame_id, item=item.model_dump(mode="json")))
 
     async def _send(self, frame: ServerFrame) -> None:
-        if self._socket.closed:
-            return
-        await self._socket.send_str(frame.model_dump_json())
+        async with self._sending:
+            if self._socket.closed:
+                return
+            await self._socket.send_str(frame.model_dump_json())
+
+
+def _log_task_error(task: asyncio.Task[None], message: str) -> None:
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        _logger.error(message, exc_info=error)
 
 
 async def _fill(

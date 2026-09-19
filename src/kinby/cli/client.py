@@ -66,7 +66,11 @@ class ContractClient:
         stream = await self._subscribe(subscription.name, command.model_dump(), self._scopes)
         if isinstance(stream, ErrorEnvelope):
             return stream
-        return Stream(stream.head_sequence, self._items(subscription, stream.items))
+        return Stream(
+            stream.head_sequence,
+            self._items(subscription, stream.items),
+            _close=stream._close,
+        )
 
     @staticmethod
     async def _items[Command: ContractModel, Item: ContractModel](
