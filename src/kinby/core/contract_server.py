@@ -41,7 +41,7 @@ from kinby.core.dispatcher import Dispatcher
 CONTROL_TOKEN_VARIABLE = "KINBY_CONTROL_TOKEN"
 #: Items one subscription may hold for a client that is not reading fast enough.
 SUBSCRIPTION_QUEUE_LIMIT = 1024
-#: Unary calls one connection may hold, not counting interrupt and approval.
+#: Unary calls one connection may hold in each bucket: ordinary, or interrupt and approval.
 CALL_LIMIT = 8
 _HEARTBEAT_SECONDS = 30
 _UNBLOCKING = frozenset({THREAD_TURN_INTERRUPT.name, THREAD_APPROVAL_RESPOND.name})
@@ -128,6 +128,7 @@ class _Connection:
         self._scopes = scopes
         self._subscriptions: dict[FrameId, asyncio.Task[None]] = {}
         self._calls: set[asyncio.Task[None]] = set()
+        self._unblocking: set[asyncio.Task[None]] = set()
         self._sending = asyncio.Lock()
 
     async def serve(self) -> None:
@@ -157,20 +158,23 @@ class _Connection:
                 await self._cancel(frame)
 
     async def _begin(self, frame: CallFrame) -> None:
-        limited = frame.method not in _UNBLOCKING
-        if limited and len(self._calls) >= CALL_LIMIT:
+        bucket = self._unblocking if frame.method in _UNBLOCKING else self._calls
+        if len(bucket) >= CALL_LIMIT:
             await self._send(ErrorFrame(id=frame.id, error=_TOO_MANY_CALLS))
             return
-        self._spawn(self._call(frame), limited=limited)
+        self._spawn(self._call(frame), bucket)
 
-    def _spawn(self, work: Coroutine[object, object, None], *, limited: bool) -> None:
+    def _spawn(
+        self,
+        work: Coroutine[object, object, None],
+        bucket: set[asyncio.Task[None]],
+    ) -> None:
         task = asyncio.create_task(work)
-        if limited:
-            self._calls.add(task)
-        task.add_done_callback(self._forget_call)
+        bucket.add(task)
+        task.add_done_callback(lambda done: self._forget_call(done, bucket))
 
-    def _forget_call(self, task: asyncio.Task[None]) -> None:
-        self._calls.discard(task)
+    def _forget_call(self, task: asyncio.Task[None], bucket: set[asyncio.Task[None]]) -> None:
+        bucket.discard(task)
         _log_task_error(task, "A call failed.")
 
     async def _call(self, frame: CallFrame) -> None:

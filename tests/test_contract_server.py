@@ -9,9 +9,12 @@ from uuid import UUID, uuid4
 
 import aiohttp
 import pytest
+from aiohttp import web
 
 from kinby.contracts import (
     CONTRACT_VERSION,
+    THREAD_TURN_INTERRUPT,
+    AcceptedResult,
     Capability,
     ControlToken,
     ErrorCode,
@@ -22,6 +25,7 @@ from kinby.contracts import (
     Payload,
     Scope,
     ThreadCreateResult,
+    ThreadTurnInterruptCommand,
     TurnCompleted,
     TurnStarted,
     is_turn_closing,
@@ -32,7 +36,7 @@ from kinby.core.contract_server import (
     SUBSCRIPTION_QUEUE_LIMIT,
     ContractServer,
 )
-from kinby.core.dispatcher import ScheduledDispatcher
+from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
 from kinby.core.receiver import Receiver
 from kinby.core.turns import TurnOutcome
 from kinby.instance import Instance, Serve
@@ -67,6 +71,20 @@ async def served(
         yield address
     finally:
         await receiver.stop()
+
+
+@asynccontextmanager
+async def served_dispatcher(dispatcher: Dispatcher) -> AsyncIterator[Serve]:
+    application = web.Application()
+    ContractServer(dispatcher, TOKEN).add_routes(application)
+    runner = web.AppRunner(application)
+    await runner.setup()
+    try:
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        yield Serve("127.0.0.1", site.port)
+    finally:
+        await runner.cleanup()
 
 
 @asynccontextmanager
@@ -400,6 +418,55 @@ def test_a_connection_rejects_calls_past_its_limit_and_still_takes_an_interrupt(
         }
         assert answers["interrupt"]["type"] == FrameType.RESULT.value
         assert runner.cancelled.is_set() is True
+
+    asyncio.run(scenario())
+
+
+def test_interrupt_calls_share_the_same_cap() -> None:
+    async def scenario() -> None:
+        held = asyncio.Event()
+        dispatcher = Dispatcher()
+
+        async def hold(command: ThreadTurnInterruptCommand) -> AcceptedResult:
+            await held.wait()
+            return AcceptedResult(thread_id=command.thread_id, turn_id=uuid4(), sequence=1)
+
+        dispatcher.register(THREAD_TURN_INTERRUPT, hold)
+        thread_id = uuid4()
+        async with served_dispatcher(dispatcher) as address, connected(address) as socket:
+            for index in range(CALL_LIMIT + 1):
+                await socket.send_str(
+                    json.dumps(
+                        {
+                            "type": "call",
+                            "id": str(index),
+                            "method": "thread.turn.interrupt",
+                            "params": {"thread_id": str(thread_id)},
+                        }
+                    )
+                )
+            overflow = await frame(socket)
+            held.set()
+            answers = {
+                received["id"]: received
+                for received in [await frame(socket) for _ in range(CALL_LIMIT)]
+            }
+
+        assert overflow == {
+            "type": FrameType.ERROR.value,
+            "id": str(CALL_LIMIT),
+            "error": {
+                "code": ErrorCode.RESOURCE_EXHAUSTED.value,
+                "message": (
+                    f"This connection already has {CALL_LIMIT} calls in flight. "
+                    "Wait for one to finish."
+                ),
+                "retryable": True,
+            },
+        }
+        assert all(
+            answers[str(index)]["type"] == FrameType.RESULT.value for index in range(CALL_LIMIT)
+        )
 
     asyncio.run(scenario())
 
