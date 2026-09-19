@@ -7,8 +7,9 @@ The root `Dockerfile` builds one image for every kinby instance. Instance identi
 - Mount one instance directory at `/instance`. The image declares this path as a volume.
 - `KINBY_INSTANCE` is set to `/instance`, so commands use the mounted instance unless an explicit path overrides it.
 - `KINBY_CONTROL_TOKEN` is the instance's control token. With it set, `kinby serve` carries the contract over WebSocket at `GET /ws` and `GET /control` on the receiver's port, and a caller presents the token as `Authorization: Bearer <token>`. Without it, serve mode starts the receiver alone.
+- `kinby repl --connect <url>` drives that socket from outside the container, reading its bearer token from `KINBY_TOKEN`. `kinby repl <dir>` runs the instance in its own process instead, and refuses to start while another process holds the instance's runtime lock at `.state/runtime.lock`.
 - Pass provider credentials and other secrets as environment variables at runtime. Do not add them to the image or `kinby.toml`. Claude Code reads `CLAUDE_CODE_OAUTH_TOKEN`, a one-year subscription token from `claude setup-token`. The Anthropic SDK can use `ANTHROPIC_API_KEY` or an `ant auth login` profile mounted read-only at `/anthropic-profile`.
-- The image entrypoint is `kinby-entrypoint`, a shell script that prepares the mounted instance and then runs `kinby` with the container command. The default command is `run`.
+- The image entrypoint is `kinby-entrypoint`, a shell script that prepares the mounted instance and then runs `kinby` with the container command. The default command is `repl`.
 - Runtime data written under the instance's `.state/` directory persists with the mounted instance, including the shadow repository at `.state/snapshots.git` that holds the workspace snapshots.
 - The image ships git, gh, uv, Claude Code, and Codex. The Dockerfile pins both coding client versions. Workspace snapshots run git as a subprocess. Without git, kinby boots with snapshots off and one warning. gh and uv serve a coding workspace through issue and pull request operations and the workspace's own checks.
 

@@ -3,6 +3,7 @@ import json
 import pytest
 
 from kinby.contracts import (
+    RESULT_MODELS,
     CallFrame,
     CancelFrame,
     ErrorCode,
@@ -11,6 +12,7 @@ from kinby.contracts import (
     FrameId,
     FrameType,
     SubscribeFrame,
+    methods,
     parse_client_frame,
 )
 from kinby.contracts.schema import frames_schema
@@ -89,3 +91,13 @@ def test_the_frame_schema_requires_the_type_every_frame_is_discriminated_on() ->
         assert "const" in properties["type"]
         assert isinstance(required, list)
         assert "type" in required
+
+
+def test_every_declared_method_says_what_its_answer_arrives_as() -> None:
+    declared = [
+        value
+        for value in vars(methods).values()
+        if isinstance(value, methods.Method | methods.Subscription)
+    ]
+
+    assert {value.name for value in declared} == set(RESULT_MODELS)

@@ -275,7 +275,7 @@ def test_routine_run_rejects_a_non_utf8_payload(
     assert f'Could not read payload "{payload}":' in output.err
 
 
-def test_run_fires_a_due_routine_while_the_repl_waits(tmp_path, monkeypatch) -> None:
+def test_the_repl_fires_a_due_routine_while_it_waits(tmp_path, monkeypatch) -> None:
     instance = instance_at(tmp_path)
     routine = routine_file(instance, "description: News\nschedule: * * * * *")
     (routine.parent / "run.py").write_text(
@@ -316,7 +316,7 @@ def test_run_fires_a_due_routine_while_the_repl_waits(tmp_path, monkeypatch) -> 
 
     closer = Thread(target=close_repl_after_fire, daemon=True)
     closer.start()
-    exit_code = main(["run", "--instance", str(tmp_path)])
+    exit_code = main(["repl", "--instance", str(tmp_path)])
     closer.join(timeout=5)
 
     events = list(EventLog(tmp_path / ".state").all_events())
@@ -367,7 +367,7 @@ def test_run_fires_pending_delivery_on_boot(
     )
     monkeypatch.setattr("sys.stdin", StringIO())
 
-    assert main(["run", "--instance", str(tmp_path)]) == 0
+    assert main(["repl", "--instance", str(tmp_path)]) == 0
 
     events = EventLog(instance.manifest.state_dir).stored(thread.id)
     started = next(event for event in events if isinstance(event.payload, TurnStarted))
