@@ -1,5 +1,7 @@
 """Decide whether a routine wake can change issue eligibility."""
 
+from collections.abc import Collection
+
 from kinby.factory.repository import (
     AGENT_BRANCH_PREFIX,
     READY_LABEL,
@@ -51,8 +53,13 @@ def oldest_eligible_issue(
     repository: GitHubRepository,
     issues: tuple[Issue, ...],
     pull_requests: tuple[AgentPullRequest, ...],
+    confirmed: Collection[IssueNumber] = (),
 ) -> Issue | None:
-    """Return the lowest-numbered issue whose blockers are covered in its stack."""
+    """Return the lowest-numbered issue whose blockers are covered in its stack.
+
+    The issues list can lag a close or a label change, so a listed issue is read
+    again on its own before it is selected. `confirmed` names issues already read.
+    """
     covered = {
         pull_request.closed_issue
         for pull_request in pull_requests
@@ -62,7 +69,9 @@ def oldest_eligible_issue(
         if issue.number in covered:
             continue
         blockers = repository.open_blockers(issue.number)
-        if all(_covered_in_same_stack(issue, blocker, covered) for blocker in blockers):
+        if not all(_covered_in_same_stack(issue, blocker, covered) for blocker in blockers):
+            continue
+        if issue.number in confirmed or repository.ready_issue(issue.number) is not None:
             return issue
     return None
 

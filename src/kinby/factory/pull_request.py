@@ -31,15 +31,15 @@ def branch_name(issue: Issue) -> BranchName:
 
 
 def prepare_branch(workspace: Path, branch: BranchName, base_branch: BranchName) -> None:
-    """Start or resume an agent branch from a clean persistent workspace."""
+    """Start an agent branch from the freshly fetched base in a clean persistent workspace.
+
+    A leftover remote branch of the same name is ignored. An eligible issue has no open
+    pull request, so that branch is a merged or abandoned run and would hide what the
+    base already contains.
+    """
     _clean_workspace(workspace)
-    _git(workspace, "fetch", "origin")
-    remote_branch = f"origin/{branch}"
-    remote_exists = bool(
-        _git(workspace, "branch", "--remotes", "--list", remote_branch).stdout.strip()
-    )
-    start = remote_branch if remote_exists else f"origin/{base_branch}"
-    _git(workspace, "switch", "--discard-changes", "-C", branch, start)
+    _git(workspace, "fetch", "--prune", "origin")
+    _git(workspace, "switch", "--discard-changes", "-C", branch, f"origin/{base_branch}")
     _clean_workspace(workspace)
 
 
@@ -121,7 +121,7 @@ def open_pull_request(
     open_findings: Findings | None,
 ) -> OpenedPullRequest:
     """Push the checked branch and open its pull request."""
-    _git(workspace, "push", "-u", "origin", branch)
+    _git(workspace, "push", "--force-with-lease", "-u", "origin", branch)
     body_file = workspace / PR_BODY
     try:
         body = body_file.read_text(encoding="utf-8").strip()

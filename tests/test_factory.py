@@ -205,7 +205,15 @@ responses = Path(os.environ["FACTORY_CANNED_RESPONSES"])
         output = path.read_text(encoding="utf-8") if path.exists() else "[]"
     elif "/issues/" in endpoint and "--jq" not in arguments:
         issue = endpoint.rsplit("/", 1)[-1]
-        output = (responses / f"issue-{issue}.json").read_text(encoding="utf-8")
+        path = responses / f"issue-{issue}.json"
+        if path.exists():
+            output = path.read_text(encoding="utf-8")
+        else:
+            listed = json.loads((responses / "issues.json").read_text(encoding="utf-8"))
+            match = next(item for item in listed if str(item["number"]) == issue)
+            output = json.dumps(
+                {**match, "state": "open", "labels": [{"name": "ready-for-agent"}]}
+            )
     else:
         output = (responses / "issue-body.md").read_text(encoding="utf-8")
 elif arguments[:2] == ["repo", "view"]:
@@ -473,14 +481,14 @@ def _run_labeled_delivery(instance: Path, tmp_path: Path, issue: int) -> int:
     )
 
 
-def _canned_issue(canned: Path, number: int, labels: tuple[str, ...]) -> None:
+def _canned_issue(canned: Path, number: int, labels: tuple[str, ...], state: str = "open") -> None:
     (canned / f"issue-{number}.json").write_text(
         json.dumps(
             {
                 "number": number,
                 "title": f"Issue {number}",
                 "html_url": f"https://example.test/issues/{number}",
-                "state": "open",
+                "state": state,
                 "labels": [{"name": label} for label in labels],
             }
         ),
@@ -677,7 +685,7 @@ def test_labeled_issue_with_removed_label_returns_no_work(
     assert len(_single_issue_reads(log, 4)) == 1
 
 
-def test_labeled_issue_already_in_list_is_not_read_again_or_duplicated(
+def test_labeled_issue_already_in_list_is_confirmed_once_and_not_duplicated(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -691,7 +699,56 @@ def test_labeled_issue_already_in_list_is_not_read_again_or_duplicated(
     assert _run_labeled_delivery(instance_path, tmp_path, 4) == 0
 
     assert _mapping(_report(capsys.readouterr().out)["issue"])["number"] == 4
-    assert _single_issue_reads(log, 4) == []
+    assert len(_single_issue_reads(log, 4)) == 1
+
+
+def test_merged_pull_request_wake_skips_an_issue_the_list_still_shows_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
+    instance_path = _coder_copy(tmp_path)
+    instance = load_instance(instance_path)
+    _use_routine_model(monkeypatch, instance, _RoutineModel())
+    log = _fake_clients(tmp_path, monkeypatch)
+    # The merge closed #4 a moment ago, and the issues list has not caught up.
+    _canned_issue(tmp_path / "canned", 4, ("ready-for-agent",), state="closed")
+    payload = tmp_path / "delivery.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "action": "closed",
+                "pull_request": {"merged": True, "head": {"ref": "agent/4-fourth-ticket"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "routine",
+            "run",
+            "implement-ready-issue",
+            "--payload",
+            str(payload),
+            "--instance",
+            str(instance_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert _mapping(_report(capsys.readouterr().out)["issue"])["number"] == 9
+    git_calls = [_arguments(record) for record in _records(log) if record["command"] == "git"]
+    switches = [call for call in git_calls if call[:1] == ["switch"]]
+    assert switches[0] == [
+        "switch",
+        "--discard-changes",
+        "-C",
+        "agent/9-ninth-ticket",
+        "origin/main",
+    ]
+    assert not any(call[:2] == ["branch", "--remotes"] for call in git_calls)
 
 
 def test_lower_labeled_issue_missing_from_list_wins_over_listed_issue(
@@ -870,7 +927,7 @@ def test_agent_pull_request_wake_stacks_a_sub_issue_on_its_sibling(
     assert _mapping(report["pull_request"])["base_branch"] == "agent/2-second-ticket"
     records = _records(log)
     git_calls = [_arguments(record) for record in records if record["command"] == "git"]
-    assert ["fetch", "origin"] in git_calls
+    assert ["fetch", "--prune", "origin"] in git_calls
     assert [
         "switch",
         "--discard-changes",
@@ -1185,7 +1242,13 @@ def test_ready_issue_runs_codex_checks_and_opens_pull_request(
     last_check = max(index for index, record in enumerate(records) if record["command"] == "uv")
     assert last_check < push_index
     push = records[push_index]
-    assert _arguments(push) == ["push", "-u", "origin", "agent/4-fourth-ticket"]
+    assert _arguments(push) == [
+        "push",
+        "--force-with-lease",
+        "-u",
+        "origin",
+        "agent/4-fourth-ticket",
+    ]
 
     create = next(
         record

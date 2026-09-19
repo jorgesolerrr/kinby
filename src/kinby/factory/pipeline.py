@@ -141,7 +141,8 @@ def implement_ready_issue(
         if fetched_issue is not None:
             issues = tuple(sorted((*issues, fetched_issue), key=lambda issue: issue.number))
         pull_requests = repository.agent_pull_requests()
-        selected = oldest_eligible_issue(repository, issues, pull_requests)
+        confirmed = () if fetched_issue is None else (fetched_issue.number,)
+        selected = oldest_eligible_issue(repository, issues, pull_requests, confirmed)
         if selected is None:
             return None
         issue = selected
