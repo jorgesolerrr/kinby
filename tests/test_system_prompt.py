@@ -20,7 +20,7 @@ from kinby.core.events import EventLog
 from kinby.core.turns import TurnPreparation
 from kinby.instance import load_instance
 from kinby.plugins.skills import load_skills
-from tests.helpers import GRAPH_EVENT_TIMEOUT
+from tests.helpers import GRAPH_EVENT_TIMEOUT, thread_events
 
 _FIXED_TODAY = date(2026, 8, 28)
 
@@ -86,11 +86,7 @@ async def _start_turn(dispatcher: Dispatcher, message: str) -> None:
         {Scope.THREAD_OPERATE},
     )
     assert isinstance(accepted, AcceptedResult)
-    subscription = dispatcher.subscribe(
-        "thread.subscribe",
-        {"thread_id": created.id, "after_sequence": 0},
-        {Scope.THREAD_READ},
-    )
+    subscription = await thread_events(dispatcher, {"thread_id": created.id, "after_sequence": 0})
     for _ in range(3):
         await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
     await subscription.aclose()
@@ -188,10 +184,8 @@ def test_prompt_files_and_manifest_are_reloaded_between_turns(tmp_path: Path) ->
                 {Scope.THREAD_OPERATE},
             )
             assert isinstance(accepted, AcceptedResult)
-            subscription = dispatcher.subscribe(
-                "thread.subscribe",
-                {"thread_id": created.id, "after_sequence": after_sequence},
-                {Scope.THREAD_READ},
+            subscription = await thread_events(
+                dispatcher, {"thread_id": created.id, "after_sequence": after_sequence}
             )
             events = [
                 await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)

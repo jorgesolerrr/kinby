@@ -403,7 +403,7 @@ async def fire(
         "Read the news.",
         RoutineOrigin(name=RoutineName("news"), trigger=trigger),
     )
-    subscription = log.subscribe(thread.id)
+    subscription = (await log.subscribe(thread.id)).items
     events: list[Event] = []
     async with asyncio.timeout(5):
         async for event in subscription:
@@ -1098,7 +1098,7 @@ def fetch() -> str:
         await turns.wake(
             thread.id, "", RoutineOrigin(name=RoutineName("news"), trigger=RoutineTrigger.SCHEDULED)
         )
-        subscription = log.subscribe(thread.id)
+        subscription = (await log.subscribe(thread.id)).items
         async with asyncio.timeout(5):
             while True:
                 event = await anext(subscription)
@@ -1125,7 +1125,7 @@ def fetch() -> str:
                 thread_id=thread.id, approval_id=approval.approval_id, answer="yes"
             )
         )
-        subscription = log.subscribe(thread.id, after_sequence=event.sequence)
+        subscription = (await log.subscribe(thread.id, after_sequence=event.sequence)).items
         async with asyncio.timeout(5):
             while True:
                 event = await anext(subscription)

@@ -9,8 +9,16 @@ from collections.abc import Awaitable, Callable, Mapping
 
 from aiohttp import web
 
-from kinby.contracts import Delivery, DeliveryId, RoutineName, RoutineTrigger
+from kinby.contracts import (
+    CONTRACT_VERSION,
+    Capability,
+    Delivery,
+    DeliveryId,
+    RoutineName,
+    RoutineTrigger,
+)
 from kinby.core.clock import utc_now
+from kinby.core.contract_server import ContractServer
 from kinby.core.errors import RoutineNotFound
 from kinby.core.scheduler import Scheduler
 from kinby.instance import Instance, Serve
@@ -72,10 +80,12 @@ class Receiver:
         listen: Serve,
         scheduler: Scheduler,
         instance: Instance,
+        contract: ContractServer | None = None,
     ) -> None:
         self._listen = listen
         self._scheduler = scheduler
         self._instance = instance
+        self._contract = contract
         self._runner: web.AppRunner | None = None
 
     async def start(self) -> Serve:
@@ -83,6 +93,8 @@ class Receiver:
             client_max_size=_CLIENT_MAX_SIZE,
             middlewares=(_rejection_log,),
         )
+        if self._contract is not None:
+            self._contract.add_routes(application)
         application.router.add_get("/health", self._health, allow_head=False)
         application.router.add_route("*", "/health", self._not_found)
         application.router.add_post("/signals/{routine}", self._receive)
@@ -106,7 +118,14 @@ class Receiver:
             self._runner = None
 
     async def _health(self, _request: web.Request) -> web.Response:
-        return web.json_response({"id": self._instance.manifest.id})
+        capabilities = [Capability.WS.value] if self._contract is not None else []
+        return web.json_response(
+            {
+                "id": self._instance.manifest.id,
+                "contract_version": CONTRACT_VERSION,
+                "capabilities": capabilities,
+            }
+        )
 
     async def _not_found(self, _request: web.Request) -> web.Response:
         raise web.HTTPNotFound()

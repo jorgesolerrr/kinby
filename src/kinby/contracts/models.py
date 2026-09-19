@@ -34,8 +34,26 @@ class Scope(StrEnum):
     THREAD_RATE = "thread:rate"
     INSTANCE_READ = "instance:read"
     INSTANCE_ADMIN = "instance:admin"
+    INSTANCE_LIFECYCLE = "instance:lifecycle"
     HUB_READ = "hub:read"
     HUB_ADMIN = "hub:admin"
+
+
+#: What a client driving one instance holds. Lifecycle is granted by the control route alone.
+INSTANCE_SCOPES = frozenset(
+    {
+        Scope.THREAD_READ,
+        Scope.THREAD_OPERATE,
+        Scope.THREAD_ADMIN,
+        Scope.THREAD_RATE,
+        Scope.INSTANCE_READ,
+        Scope.INSTANCE_ADMIN,
+    }
+)
+CONTROL_SCOPES = INSTANCE_SCOPES | {Scope.INSTANCE_LIFECYCLE}
+
+#: The secret a hub presents to one instance's contract server.
+ControlToken = NewType("ControlToken", str)
 
 
 class ErrorCode(StrEnum):
@@ -49,6 +67,7 @@ class ErrorCode(StrEnum):
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
     MODEL_UNPRICED = "MODEL_UNPRICED"
     SNAPSHOT_UNAVAILABLE = "SNAPSHOT_UNAVAILABLE"
+    RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
     INTERNAL = "INTERNAL"
 
@@ -551,6 +570,25 @@ class InstanceStatusCommand(ContractModel):
 class InstanceLogsCommand(ContractModel):
     instance_id: UUID
     tail: Annotated[int, Field(gt=0)] | None = None
+
+
+#: The version of the contract an instance speaks, reported before a lifecycle operation.
+CONTRACT_VERSION = "1"
+
+
+class Capability(StrEnum):
+    """What an instance's contract server can do. A hub reads it before acting on the instance."""
+
+    WS = "ws"
+
+
+class InstanceProbeCommand(ContractModel):
+    pass
+
+
+class InstanceProbeResult(ContractModel):
+    contract_version: str
+    capabilities: list[Capability]
 
 
 class OperationGetCommand(ContractModel):

@@ -11,6 +11,7 @@ from kinby.contracts import (
     Event,
     PermissionMode,
     Scope,
+    Stream,
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListResult,
@@ -21,6 +22,7 @@ from kinby.contracts import (
 from kinby.contracts.methods import Method, Subscription
 from kinby.core.dispatcher import Dispatcher, build_dispatcher
 from kinby.core.events import EventLog
+from tests.helpers import thread_events
 
 STARTED = TurnStarted(
     message="Hello",
@@ -133,10 +135,8 @@ def test_thread_subscribe_replays_a_finished_thread_through_dispatcher(
         ]
         dispatcher = build_dispatcher(tmp_path)
 
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": thread_id, "after_sequence": 0},
-            {Scope.THREAD_READ},
+        subscription = await thread_events(
+            dispatcher, {"thread_id": thread_id, "after_sequence": 0}
         )
         replayed = [await anext(subscription) for _ in stored]
         await subscription.aclose()
@@ -151,18 +151,12 @@ def test_thread_subscribe_checks_scope_before_payload(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = build_dispatcher(tmp_path)
 
-        denied_subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"unexpected": True},
-            set(),
-        )
-        denied = await anext(denied_subscription)
-        invalid_subscription = dispatcher.subscribe(
+        denied = await dispatcher.subscribe("thread.subscribe", {"unexpected": True}, set())
+        invalid = await dispatcher.subscribe(
             "thread.subscribe",
             {"unexpected": True},
             {Scope.THREAD_READ},
         )
-        invalid = await anext(invalid_subscription)
 
         assert isinstance(denied, ErrorEnvelope)
         assert denied.code is ErrorCode.PERMISSION_DENIED
@@ -174,13 +168,11 @@ def test_thread_subscribe_checks_scope_before_payload(tmp_path: Path) -> None:
 
 def test_unknown_subscription_returns_not_found() -> None:
     async def scenario() -> None:
-        subscription = Dispatcher().subscribe(
+        result = await Dispatcher().subscribe(
             "thread.missing",
             {},
             {Scope.THREAD_READ},
         )
-
-        result = await anext(subscription)
 
         assert isinstance(result, ErrorEnvelope)
         assert result.code is ErrorCode.NOT_FOUND
@@ -190,12 +182,8 @@ def test_unknown_subscription_returns_not_found() -> None:
 
 def test_subscription_translates_an_unexpected_handler_failure() -> None:
     async def scenario() -> None:
-        async def handler(
-            command: ThreadCreateCommand,
-        ) -> AsyncGenerator[ThreadCreateCommand]:
-            if command.title is None:
-                raise RuntimeError("event log unavailable")
-            yield command
+        async def handler(command: ThreadCreateCommand) -> Stream[ThreadCreateCommand]:
+            raise RuntimeError("event log unavailable")
 
         dispatcher = Dispatcher()
         dispatcher.register_subscription(
@@ -204,15 +192,9 @@ def test_subscription_translates_an_unexpected_handler_failure() -> None:
             ),
             handler,
         )
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {},
-            {Scope.THREAD_READ},
-        )
 
-        result = await anext(subscription)
+        result = await dispatcher.subscribe("thread.subscribe", {}, {Scope.THREAD_READ})
 
-        assert isinstance(result, ErrorEnvelope)
         assert result == ErrorEnvelope(
             code=ErrorCode.INTERNAL,
             message="The subscription failed unexpectedly.",
@@ -222,18 +204,14 @@ def test_subscription_translates_an_unexpected_handler_failure() -> None:
     asyncio.run(scenario())
 
 
-def test_closing_subscription_releases_its_handler() -> None:
+def test_subscription_translates_a_failure_after_its_first_item() -> None:
     async def scenario() -> None:
-        handler_closed = False
+        async def items(command: ThreadCreateCommand) -> AsyncGenerator[ThreadCreateCommand]:
+            yield command
+            raise RuntimeError("event log unavailable")
 
-        async def handler(
-            command: ThreadCreateCommand,
-        ) -> AsyncGenerator[ThreadCreateCommand]:
-            nonlocal handler_closed
-            try:
-                yield command
-            finally:
-                handler_closed = True
+        async def handler(command: ThreadCreateCommand) -> Stream[ThreadCreateCommand]:
+            return Stream(0, items(command))
 
         dispatcher = Dispatcher()
         dispatcher.register_subscription(
@@ -242,11 +220,63 @@ def test_closing_subscription_releases_its_handler() -> None:
             ),
             handler,
         )
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {},
-            {Scope.THREAD_READ},
+        subscription = await thread_events(dispatcher, {})
+
+        received = [item async for item in subscription]
+
+        assert received == [
+            ThreadCreateCommand(),
+            ErrorEnvelope(
+                code=ErrorCode.INTERNAL,
+                message="The subscription failed unexpectedly.",
+                retryable=False,
+            ),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_closing_a_dispatcher_subscription_before_its_first_item_drops_the_subscriber(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path)
+        dispatcher = build_dispatcher(tmp_path, event_log=event_log)
+        created = await dispatcher.dispatch("thread.create", {}, set(Scope))
+        assert isinstance(created, ThreadCreateResult)
+        stream = await dispatcher.subscribe(
+            "thread.subscribe", {"thread_id": str(created.id)}, set(Scope)
         )
+        assert not isinstance(stream, ErrorEnvelope)
+        await stream.aclose()
+        await event_log.append(created.id, uuid4(), STARTED)
+        assert event_log._subscribers == {}
+
+    asyncio.run(scenario())
+
+
+def test_closing_subscription_releases_its_handler() -> None:
+    async def scenario() -> None:
+        handler_closed = False
+
+        async def items(command: ThreadCreateCommand) -> AsyncGenerator[ThreadCreateCommand]:
+            nonlocal handler_closed
+            try:
+                yield command
+            finally:
+                handler_closed = True
+
+        async def handler(command: ThreadCreateCommand) -> Stream[ThreadCreateCommand]:
+            return Stream(0, items(command))
+
+        dispatcher = Dispatcher()
+        dispatcher.register_subscription(
+            Subscription(
+                "thread.subscribe", Scope.THREAD_READ, ThreadCreateCommand, ThreadCreateCommand
+            ),
+            handler,
+        )
+        subscription = await thread_events(dispatcher, {})
 
         await anext(subscription)
         await subscription.aclose()
@@ -272,9 +302,11 @@ def test_contract_client_subscription_replays_then_stays_live(tmp_path: Path) ->
             dispatcher.subscribe,
             {Scope.THREAD_READ},
         )
-        subscription = client.subscribe(
+        stream = await client.subscribe(
             THREAD_SUBSCRIBE, ThreadSubscribeCommand(thread_id=thread_id)
         )
+        assert not isinstance(stream, ErrorEnvelope)
+        subscription = stream.items
 
         received_replay = await anext(subscription)
         waiting_for_live = asyncio.ensure_future(anext(subscription))
@@ -287,6 +319,7 @@ def test_contract_client_subscription_replays_then_stays_live(tmp_path: Path) ->
         received_live = await asyncio.wait_for(waiting_for_live, timeout=1)
         await subscription.aclose()
 
+        assert stream.head_sequence == replayed.sequence
         assert [received_replay, received_live] == [replayed, live]
 
     asyncio.run(scenario())

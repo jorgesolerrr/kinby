@@ -68,7 +68,7 @@ def test_coder_instance_loads_its_routines_and_skills(
         "implementer_effort": "high",
         "reviewer_model": "claude-fable-5-1",
         "review_round_limit": 0,
-        "implement_timeout_seconds": 1800,
+        "implement_timeout_seconds": 3600,
         "review_timeout_seconds": 900,
         "fix_timeout_seconds": 900,
     }

@@ -32,7 +32,7 @@ from kinby.core import Dispatcher, LangGraphRunner, TurnConfig, build_dispatcher
 from kinby.instance import Instance, load_instance
 from kinby.plugins import Tool, ToolContext, tool
 from kinby.plugins.defaults.shell import bash
-from tests.helpers import GRAPH_EVENT_TIMEOUT
+from tests.helpers import GRAPH_EVENT_TIMEOUT, thread_events
 
 _MODEL = "openai:gpt-5"
 
@@ -199,10 +199,8 @@ async def _turn_events(
         {Scope.THREAD_OPERATE},
     )
     assert isinstance(accepted, AcceptedResult)
-    subscription = dispatcher.subscribe(
-        "thread.subscribe",
-        {"thread_id": thread_id, "after_sequence": after_sequence},
-        {Scope.THREAD_READ},
+    subscription = await thread_events(
+        dispatcher, {"thread_id": thread_id, "after_sequence": after_sequence}
     )
     events: list[Event] = []
     answers = iter(approval_answers)
@@ -1036,11 +1034,7 @@ def write_note(note: str, context: ToolContext) -> str:
         {Scope.THREAD_OPERATE},
     )
     assert isinstance(accepted, AcceptedResult)
-    subscription = dispatcher.subscribe(
-        "thread.subscribe",
-        {"thread_id": thread_id},
-        {Scope.THREAD_READ},
-    )
+    subscription = await thread_events(dispatcher, {"thread_id": thread_id})
     started = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
     while True:
         requested = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
@@ -1070,10 +1064,8 @@ async def _answer_write_tool(
         {Scope.THREAD_OPERATE},
     )
     assert isinstance(accepted, AcceptedResult)
-    subscription = dispatcher.subscribe(
-        "thread.subscribe",
-        {"thread_id": thread_id, "after_sequence": requested.sequence},
-        {Scope.THREAD_READ},
+    subscription = await thread_events(
+        dispatcher, {"thread_id": thread_id, "after_sequence": requested.sequence}
     )
     events: list[Event] = []
     while not events or not isinstance(events[-1].payload, TurnCompleted):
@@ -1230,11 +1222,7 @@ def write_note(note: str, context: ToolContext) -> str:
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(accepted, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": thread_id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": thread_id})
         requested: Event | None = None
         events: list[Event] = []
         while requested is None:
@@ -2320,11 +2308,7 @@ def second() -> str:
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(accepted, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": thread_id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": thread_id})
         events: list[Event] = []
         while not any(isinstance(event.payload, ToolCall) for event in events):
             event = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)

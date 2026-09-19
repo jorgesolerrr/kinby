@@ -33,7 +33,7 @@ from kinby.core.snapshots import SNAPSHOTS_DIR
 from kinby.core.turn_runner import ChatModel
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome, TurnRequest
 from kinby.instance import Budgets, Instance, ModelName, load_instance
-from tests.helpers import GRAPH_EVENT_TIMEOUT
+from tests.helpers import GRAPH_EVENT_TIMEOUT, thread_events
 
 _MODEL = "openai:gpt-5"
 
@@ -362,11 +362,7 @@ async def _park_budget_turn(dispatcher: Dispatcher, thread_id: UUID) -> Event:
         {Scope.THREAD_OPERATE},
     )
     assert isinstance(accepted, AcceptedResult)
-    subscription = dispatcher.subscribe(
-        "thread.subscribe",
-        {"thread_id": thread_id},
-        {Scope.THREAD_READ},
-    )
+    subscription = await thread_events(dispatcher, {"thread_id": thread_id})
     while True:
         event = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
         assert isinstance(event, Event)
@@ -391,10 +387,8 @@ async def _resume_budget_turn(
         {Scope.THREAD_OPERATE},
     )
     assert isinstance(accepted, AcceptedResult)
-    subscription = dispatcher.subscribe(
-        "thread.subscribe",
-        {"thread_id": thread_id, "after_sequence": requested.sequence},
-        {Scope.THREAD_READ},
+    subscription = await thread_events(
+        dispatcher, {"thread_id": thread_id, "after_sequence": requested.sequence}
     )
     events: list[Event] = []
     while True:
@@ -418,10 +412,8 @@ async def _budget_turn_events(
         {Scope.THREAD_OPERATE},
     )
     assert isinstance(accepted, AcceptedResult)
-    subscription = dispatcher.subscribe(
-        "thread.subscribe",
-        {"thread_id": thread_id, "after_sequence": after_sequence},
-        {Scope.THREAD_READ},
+    subscription = await thread_events(
+        dispatcher, {"thread_id": thread_id, "after_sequence": after_sequence}
     )
     events: list[Event] = []
     while True:
@@ -755,10 +747,8 @@ def test_runner_reloads_the_instance_model_between_turns(
                 {Scope.THREAD_OPERATE},
             )
             assert isinstance(accepted, AcceptedResult)
-            subscription = dispatcher.subscribe(
-                "thread.subscribe",
-                {"thread_id": created.id, "after_sequence": after_sequence},
-                {Scope.THREAD_READ},
+            subscription = await thread_events(
+                dispatcher, {"thread_id": created.id, "after_sequence": after_sequence}
             )
             events = [
                 await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)

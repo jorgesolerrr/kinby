@@ -47,6 +47,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    thread_events,
     turn_config_stub,
 )
 from tests.test_routines import instance_at, routine_file
@@ -161,7 +162,7 @@ async def cancel_call(pending_call: asyncio.Task[ContractModel]) -> None:
 
 async def events_for(dispatcher, thread_id):
     events = []
-    stream = dispatcher.subscribe("thread.subscribe", {"thread_id": thread_id}, set(Scope))
+    stream = await thread_events(dispatcher, {"thread_id": thread_id}, set(Scope))
     async with asyncio.timeout(3):
         async for event in stream:
             assert isinstance(event, Event)

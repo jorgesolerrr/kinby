@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from kinby.contracts import Event, Payload
+from kinby.contracts import Event, Payload, Stream
 from kinby.core.clock import utc_now
 
 _EVENTS_NAME = "events.jsonl"
@@ -54,11 +54,27 @@ class EventLog:
         self,
         thread_id: UUID,
         after_sequence: int = 0,
-    ) -> AsyncGenerator[Event]:
+    ) -> Stream[Event]:
+        """Take the head sequence and the replay under the lock, so neither misses an append."""
         subscriber: asyncio.Queue[Event] = asyncio.Queue()
         async with self._lock:
-            replay = [event for event in self.stored(thread_id) if event.sequence > after_sequence]
+            stored = self.stored(thread_id)
             self._subscribers.setdefault(thread_id, set()).add(subscriber)
+        replay = [event for event in stored if event.sequence > after_sequence]
+        head_sequence = stored[-1].sequence if stored else 0
+        return Stream(
+            head_sequence,
+            self._deliver(thread_id, subscriber, replay, after_sequence),
+            _close=lambda: self._drop(thread_id, subscriber),
+        )
+
+    async def _deliver(
+        self,
+        thread_id: UUID,
+        subscriber: asyncio.Queue[Event],
+        replay: list[Event],
+        after_sequence: int,
+    ) -> AsyncGenerator[Event]:
         try:
             for event in replay:
                 yield event
@@ -67,10 +83,15 @@ class EventLog:
                 if event.sequence > after_sequence:
                     yield event
         finally:
-            subscribers = self._subscribers[thread_id]
-            subscribers.remove(subscriber)
-            if not subscribers:
-                del self._subscribers[thread_id]
+            self._drop(thread_id, subscriber)
+
+    def _drop(self, thread_id: UUID, subscriber: asyncio.Queue[Event]) -> None:
+        subscribers = self._subscribers.get(thread_id)
+        if subscribers is None:
+            return
+        subscribers.discard(subscriber)
+        if not subscribers:
+            del self._subscribers[thread_id]
 
     def stored(self, thread_id: UUID) -> list[Event]:
         return [event for event in self.all_events() if event.thread_id == thread_id]

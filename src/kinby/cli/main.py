@@ -22,6 +22,7 @@ from kinby.cli.client import ContractClient, format_error
 from kinby.cli.repl import render_event, run_repl
 from kinby.cli.routines import show_routines
 from kinby.contracts import (
+    INSTANCE_SCOPES,
     ROUTINE_RUN,
     STATS_GET,
     THREAD_CREATE,
@@ -35,7 +36,6 @@ from kinby.contracts import (
     RoutineName,
     RoutinePayload,
     RoutineRunCommand,
-    Scope,
     StatsBucketSize,
     StatsGetCommand,
     StatsSummary,
@@ -50,6 +50,7 @@ from kinby.contracts import (
 )
 from kinby.core import Dispatcher, assemble_system_prompt, boot_instance, build_dispatcher
 from kinby.core.clock import utc_today
+from kinby.core.contract_server import ContractServer
 from kinby.core.receiver import Receiver
 from kinby.core.stats import stats_summary
 from kinby.instance import (
@@ -206,8 +207,7 @@ def _contract_client(instance: Instance) -> ContractClient:
 
 
 def _contract_client_for(dispatcher: Dispatcher) -> ContractClient:
-    instance_scopes = set(Scope) - {Scope.HUB_READ, Scope.HUB_ADMIN}
-    return ContractClient(dispatcher.dispatch, dispatcher.subscribe, instance_scopes)
+    return ContractClient(dispatcher.dispatch, dispatcher.subscribe, INSTANCE_SCOPES)
 
 
 async def _show_usage(client: ContractClient, command: UsageGetCommand) -> int:
@@ -386,6 +386,7 @@ async def _serve_instance(instance: Instance) -> int:
                 instance.manifest.serve,
                 runtime.scheduler,
                 instance,
+                ContractServer.from_environment(runtime.dispatcher),
             )
             address = await receiver.start()
             print(f"listen: {address.host}:{address.port}")
@@ -511,12 +512,15 @@ async def _run_routine_command(
         print(format_error(accepted), file=sys.stderr)
         return 1
     print(f"thread: {accepted.thread_id}")
-    stream = client.subscribe(
+    stream = await client.subscribe(
         THREAD_SUBSCRIBE, ThreadSubscribeCommand(thread_id=accepted.thread_id)
     )
+    if isinstance(stream, ErrorEnvelope):
+        print(format_error(stream), file=sys.stderr)
+        return 1
     status = 0
     try:
-        async for event in stream:
+        async for event in stream.items:
             if isinstance(event, ErrorEnvelope):
                 print(format_error(event), file=sys.stderr)
                 status = 1
@@ -542,7 +546,7 @@ async def _run_routine_command(
             if is_turn_closing(event.payload):
                 break
     finally:
-        await stream.aclose()
+        await stream.items.aclose()
     return status
 
 

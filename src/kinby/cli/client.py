@@ -3,8 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping
+from contextlib import aclosing
 
-from kinby.contracts import ContractModel, ErrorCode, ErrorEnvelope, Method, Scope, Subscription
+from kinby.contracts import (
+    ContractModel,
+    ErrorCode,
+    ErrorEnvelope,
+    Method,
+    Scope,
+    Stream,
+    Subscription,
+)
 
 UNEXPECTED_RESULT = ErrorEnvelope(
     code=ErrorCode.INTERNAL,
@@ -18,7 +27,7 @@ Dispatch = Callable[
 ]
 Subscribe = Callable[
     [str, Mapping[str, object], Collection[Scope]],
-    AsyncGenerator[ContractModel],
+    Awaitable[Stream[ContractModel] | ErrorEnvelope],
 ]
 
 
@@ -53,10 +62,24 @@ class ContractClient:
         self,
         subscription: Subscription[Command, Item],
         command: Command,
+    ) -> Stream[Item | ErrorEnvelope] | ErrorEnvelope:
+        stream = await self._subscribe(subscription.name, command.model_dump(), self._scopes)
+        if isinstance(stream, ErrorEnvelope):
+            return stream
+        return Stream(
+            stream.head_sequence,
+            self._items(subscription, stream.items),
+            _close=stream._close,
+        )
+
+    @staticmethod
+    async def _items[Command: ContractModel, Item: ContractModel](
+        subscription: Subscription[Command, Item],
+        items: AsyncGenerator[ContractModel],
     ) -> AsyncGenerator[Item | ErrorEnvelope]:
-        stream = self._subscribe(subscription.name, command.model_dump(), self._scopes)
-        async for item in stream:
-            if isinstance(item, (subscription.item, ErrorEnvelope)):
-                yield item
-            else:
-                yield UNEXPECTED_RESULT
+        async with aclosing(items):
+            async for item in items:
+                if isinstance(item, (subscription.item, ErrorEnvelope)):
+                    yield item
+                else:
+                    yield UNEXPECTED_RESULT

@@ -49,6 +49,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    thread_events,
 )
 from tests.test_turns import (
     FailingRunner,
@@ -65,11 +66,7 @@ async def _closed_turn_events(
     *,
     count: int,
 ) -> list[Event]:
-    subscription = dispatcher.subscribe(
-        "thread.subscribe",
-        {"thread_id": thread_id},
-        {Scope.THREAD_READ},
-    )
+    subscription = await thread_events(dispatcher, {"thread_id": thread_id})
     events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(count)]
     await subscription.aclose()
     return cast(list[Event], events)
@@ -669,11 +666,7 @@ async def _closed_turn(dispatcher: Dispatcher, thread_id: UUID) -> UUID:
         {Scope.THREAD_OPERATE},
     )
     assert isinstance(started, AcceptedResult)
-    subscription = dispatcher.subscribe(
-        "thread.subscribe",
-        {"thread_id": thread_id},
-        {Scope.THREAD_READ},
-    )
+    subscription = await thread_events(dispatcher, {"thread_id": thread_id})
     while True:
         event = cast(Event, await asyncio.wait_for(anext(subscription), timeout=1))
         if event.turn_id == started.turn_id and is_turn_closing(event.payload):

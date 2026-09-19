@@ -1,9 +1,17 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping
 from uuid import UUID
 
-from kinby.contracts import PermissionMode, PromptVersion, SystemPrompt, TreeId
+from kinby.contracts import (
+    ContractModel,
+    ErrorEnvelope,
+    PermissionMode,
+    PromptVersion,
+    Scope,
+    SystemPrompt,
+    TreeId,
+)
 from kinby.core.budgets import DailyBudget, DailyCost
-from kinby.core.dispatcher import TurnConfig
+from kinby.core.dispatcher import Dispatcher, TurnConfig
 from kinby.core.snapshots import SnapshotError, SnapshotRef, WorkspaceDiff
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
@@ -16,6 +24,7 @@ from kinby.core.turns import (
 from kinby.instance import Budgets
 
 GRAPH_EVENT_TIMEOUT: float = 5
+_READ_ONLY = frozenset({Scope.THREAD_READ})
 _DEFAULT_BUDGETS = Budgets()
 _DEFAULT_DAILY_COST = DailyCost()
 
@@ -101,3 +110,14 @@ def turn_config_stub(build: Callable[[], TurnConfig]) -> Callable[..., Awaitable
         return build()
 
     return configured
+
+
+async def thread_events(
+    dispatcher: Dispatcher,
+    payload: Mapping[str, object],
+    scopes: Collection[Scope] = _READ_ONLY,
+) -> AsyncGenerator[ContractModel]:
+    """Open thread.subscribe through the dispatcher and hand back the items it streams."""
+    stream = await dispatcher.subscribe("thread.subscribe", payload, scopes)
+    assert not isinstance(stream, ErrorEnvelope)
+    return stream.items

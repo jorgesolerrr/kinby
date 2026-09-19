@@ -54,6 +54,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    thread_events,
 )
 
 _APPROVAL_ID = UUID("11111111-1111-1111-1111-111111111111")
@@ -311,11 +312,7 @@ def test_pinned_mode_is_recorded_and_used_by_the_next_turn(tmp_path: Path) -> No
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(started, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(3)]
         await subscription.aclose()
 
@@ -429,10 +426,8 @@ def test_lowered_ceiling_constrains_an_existing_pin(tmp_path: Path) -> None:
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(started, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": started.sequence},
-            {Scope.THREAD_READ},
+        subscription = await thread_events(
+            dispatcher, {"thread_id": created.id, "after_sequence": started.sequence}
         )
         completed = await asyncio.wait_for(anext(subscription), timeout=1)
         await subscription.aclose()
@@ -474,10 +469,8 @@ def test_pinned_mode_survives_a_dispatcher_restart(tmp_path: Path) -> None:
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(started, AcceptedResult)
-        subscription = resumed.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": started.sequence},
-            {Scope.THREAD_READ},
+        subscription = await thread_events(
+            resumed, {"thread_id": created.id, "after_sequence": started.sequence}
         )
         completed = await asyncio.wait_for(anext(subscription), timeout=1)
         await subscription.aclose()
@@ -515,10 +508,8 @@ def test_unpinned_thread_uses_the_instance_default_mode(tmp_path: Path) -> None:
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(started, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": started.sequence},
-            {Scope.THREAD_READ},
+        subscription = await thread_events(
+            dispatcher, {"thread_id": created.id, "after_sequence": started.sequence}
         )
         completed = await asyncio.wait_for(anext(subscription), timeout=1)
         await subscription.aclose()
@@ -556,11 +547,7 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
         assert accepted.thread_id == created.id
         assert accepted.sequence == 1
 
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(4)]
         await subscription.aclose()
 
@@ -582,10 +569,8 @@ def test_turn_streams_and_replays_through_the_dispatcher(tmp_path: Path) -> None
         assert typed_events[2].payload == MessageDelta(text=" there")
         assert typed_events[3].payload == TurnCompleted(input_tokens=4, output_tokens=2)
 
-        replay = build_dispatcher(tmp_path).subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": 0},
-            {Scope.THREAD_READ},
+        replay = await thread_events(
+            build_dispatcher(tmp_path), {"thread_id": created.id, "after_sequence": 0}
         )
         replayed = [await asyncio.wait_for(anext(replay), timeout=1) for _ in events]
         await replay.aclose()
@@ -621,11 +606,7 @@ def test_turn_started_records_the_prepared_prompt_version(tmp_path: Path) -> Non
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(accepted, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         started = await asyncio.wait_for(anext(subscription), timeout=1)
         await subscription.aclose()
 
@@ -654,10 +635,8 @@ def test_no_work_turn_closes_with_zero_tokens_after_a_model_call(tmp_path: Path)
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(accepted, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": accepted.sequence},
-            {Scope.THREAD_READ},
+        subscription = await thread_events(
+            dispatcher, {"thread_id": created.id, "after_sequence": accepted.sequence}
         )
         model_completed = await asyncio.wait_for(anext(subscription), timeout=1)
         completed = await asyncio.wait_for(anext(subscription), timeout=1)
@@ -702,11 +681,7 @@ def test_daily_cost_budget_refuses_a_turn_at_the_limit_without_an_event(
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(accepted, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(4)]
         await subscription.aclose()
         assert isinstance(events[-1], Event)
@@ -723,10 +698,8 @@ def test_daily_cost_budget_refuses_a_turn_at_the_limit_without_an_event(
             message="The daily cost reached the usd_per_day budget of 0.000025.",
             retryable=False,
         )
-        no_new_events = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": events[-1].sequence},
-            {Scope.THREAD_READ},
+        no_new_events = await thread_events(
+            dispatcher, {"thread_id": created.id, "after_sequence": events[-1].sequence}
         )
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(anext(no_new_events), timeout=0.01)
@@ -1001,11 +974,7 @@ def test_completed_turn_can_be_rated_through_the_dispatcher(tmp_path: Path) -> N
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(started, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         for _ in range(4):
             await asyncio.wait_for(anext(subscription), timeout=1)
 
@@ -1091,11 +1060,7 @@ def test_unknown_turn_or_thread_cannot_be_rated(tmp_path: Path) -> None:
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(started, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         for _ in range(4):
             await asyncio.wait_for(anext(subscription), timeout=1)
         await subscription.aclose()
@@ -1194,11 +1159,7 @@ def test_dispatcher_without_turn_service_appends_a_second_rating(tmp_path: Path)
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(started, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         for _ in range(4):
             await asyncio.wait_for(anext(subscription), timeout=1)
         await subscription.aclose()
@@ -1274,10 +1235,8 @@ def test_start_rejects_a_second_turn_while_the_first_is_running(tmp_path: Path) 
         )
 
         runner.release.set()
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": 1},
-            {Scope.THREAD_READ},
+        subscription = await thread_events(
+            dispatcher, {"thread_id": created.id, "after_sequence": 1}
         )
         completed = await asyncio.wait_for(anext(subscription), timeout=1)
         await subscription.aclose()
@@ -1320,11 +1279,7 @@ def test_interrupt_ends_the_running_turn_and_allows_another(tmp_path: Path) -> N
             turn_id=first.turn_id,
             sequence=2,
         )
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(2)]
         await subscription.aclose()
         assert [event.type for event in cast(list[Event], events)] == [
@@ -1405,11 +1360,7 @@ def test_interrupt_ends_the_turn_when_the_runner_suppresses_cancellation(
         )
 
         assert isinstance(interrupted, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         events = [await asyncio.wait_for(anext(subscription), timeout=1) for _ in range(3)]
         await subscription.aclose()
         assert [event.type for event in cast(list[Event], events)] == [
@@ -1483,11 +1434,7 @@ def test_failed_model_turn_ends_with_the_error_code(tmp_path: Path) -> None:
             {"thread_id": created.id, "message": "Hello"},
             {Scope.THREAD_OPERATE},
         )
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id},
-            {Scope.THREAD_READ},
-        )
+        subscription = await thread_events(dispatcher, {"thread_id": created.id})
         started = await asyncio.wait_for(anext(subscription), timeout=1)
         failed = await asyncio.wait_for(anext(subscription), timeout=1)
         await subscription.aclose()
@@ -1523,11 +1470,7 @@ async def _park_turn(
         {Scope.THREAD_OPERATE},
     )
     assert isinstance(accepted, AcceptedResult)
-    subscription = dispatcher.subscribe(
-        "thread.subscribe",
-        {"thread_id": created.id},
-        {Scope.THREAD_READ},
-    )
+    subscription = await thread_events(dispatcher, {"thread_id": created.id})
     await asyncio.wait_for(anext(subscription), timeout=1)
     requested = await asyncio.wait_for(anext(subscription), timeout=1)
     await subscription.aclose()
@@ -1576,10 +1519,8 @@ def test_parked_approval_resumes_after_dispatcher_restart(tmp_path: Path) -> Non
         assert resumed.thread_id == created.id
         assert resumed.turn_id == accepted.turn_id
 
-        live = restarted.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": requested.sequence},
-            {Scope.THREAD_READ},
+        live = await thread_events(
+            restarted, {"thread_id": created.id, "after_sequence": requested.sequence}
         )
         delta = await asyncio.wait_for(anext(live), timeout=1)
         completed = await asyncio.wait_for(anext(live), timeout=1)
@@ -1640,10 +1581,8 @@ def test_concurrent_approval_responses_resume_once(tmp_path: Path) -> None:
             message=f'Thread "{created.id}" already has a running turn.',
             retryable=True,
         )
-        live = restarted.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": requested.sequence},
-            {Scope.THREAD_READ},
+        live = await thread_events(
+            restarted, {"thread_id": created.id, "after_sequence": requested.sequence}
         )
         await asyncio.wait_for(anext(live), timeout=1)
         await asyncio.wait_for(anext(live), timeout=1)
@@ -1755,10 +1694,8 @@ def test_parked_turn_uses_checkpoint_mode_when_event_lacks_mode(tmp_path: Path) 
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(resumed, AcceptedResult)
-        live = restarted.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": requested.sequence},
-            {Scope.THREAD_READ},
+        live = await thread_events(
+            restarted, {"thread_id": created.id, "after_sequence": requested.sequence}
         )
         await asyncio.wait_for(anext(live), timeout=1)
         await asyncio.wait_for(anext(live), timeout=1)
@@ -1794,10 +1731,8 @@ def test_set_mode_rejects_a_thread_with_a_pending_approval(tmp_path: Path) -> No
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(resumed, AcceptedResult)
-        live = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": requested.sequence},
-            {Scope.THREAD_READ},
+        live = await thread_events(
+            dispatcher, {"thread_id": created.id, "after_sequence": requested.sequence}
         )
         await asyncio.wait_for(anext(live), timeout=1)
         await asyncio.wait_for(anext(live), timeout=1)
@@ -1830,10 +1765,8 @@ def test_parked_approval_resumes_with_the_turns_pinned_mode(tmp_path: Path) -> N
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(started, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": started.sequence},
-            {Scope.THREAD_READ},
+        subscription = await thread_events(
+            dispatcher, {"thread_id": created.id, "after_sequence": started.sequence}
         )
         requested = await asyncio.wait_for(anext(subscription), timeout=1)
         await subscription.aclose()
@@ -1864,10 +1797,8 @@ def test_parked_approval_resumes_with_the_turns_pinned_mode(tmp_path: Path) -> N
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(resumed, AcceptedResult)
-        live = restarted.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": requested.sequence},
-            {Scope.THREAD_READ},
+        live = await thread_events(
+            restarted, {"thread_id": created.id, "after_sequence": requested.sequence}
         )
         await asyncio.wait_for(anext(live), timeout=1)
         await asyncio.wait_for(anext(live), timeout=1)
@@ -1904,10 +1835,8 @@ def test_lowered_ceiling_constrains_a_parked_turn_on_resume(tmp_path: Path) -> N
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(started, AcceptedResult)
-        subscription = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": started.sequence},
-            {Scope.THREAD_READ},
+        subscription = await thread_events(
+            dispatcher, {"thread_id": created.id, "after_sequence": started.sequence}
         )
         requested = await asyncio.wait_for(anext(subscription), timeout=1)
         await subscription.aclose()
@@ -1925,10 +1854,8 @@ def test_lowered_ceiling_constrains_a_parked_turn_on_resume(tmp_path: Path) -> N
             {Scope.THREAD_OPERATE},
         )
         assert isinstance(resumed, AcceptedResult)
-        live = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": requested.sequence},
-            {Scope.THREAD_READ},
+        live = await thread_events(
+            dispatcher, {"thread_id": created.id, "after_sequence": requested.sequence}
         )
         await asyncio.wait_for(anext(live), timeout=1)
         await asyncio.wait_for(anext(live), timeout=1)
@@ -1954,10 +1881,8 @@ def test_parked_approval_resumes_on_the_same_dispatcher(tmp_path: Path) -> None:
         assert isinstance(resumed, AcceptedResult)
         assert resumed.turn_id == accepted.turn_id
 
-        live = dispatcher.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": requested.sequence},
-            {Scope.THREAD_READ},
+        live = await thread_events(
+            dispatcher, {"thread_id": created.id, "after_sequence": requested.sequence}
         )
         delta = await asyncio.wait_for(anext(live), timeout=1)
         completed = await asyncio.wait_for(anext(live), timeout=1)
@@ -2059,10 +1984,8 @@ def test_interrupt_ends_a_parked_turn_after_restart(tmp_path: Path) -> None:
             turn_id=accepted.turn_id,
             sequence=requested.sequence + 1,
         )
-        subscription = restarted.subscribe(
-            "thread.subscribe",
-            {"thread_id": created.id, "after_sequence": requested.sequence},
-            {Scope.THREAD_READ},
+        subscription = await thread_events(
+            restarted, {"thread_id": created.id, "after_sequence": requested.sequence}
         )
         event = await asyncio.wait_for(anext(subscription), timeout=1)
         await subscription.aclose()

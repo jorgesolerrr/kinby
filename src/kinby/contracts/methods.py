@@ -13,6 +13,8 @@ from kinby.contracts.models import (
     InstanceListResult,
     InstanceLogsCommand,
     InstanceLogsResult,
+    InstanceProbeCommand,
+    InstanceProbeResult,
     InstanceStartCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
@@ -119,6 +121,10 @@ USAGE_GET = Method("usage.get", Scope.INSTANCE_READ, UsageGetCommand, UsageGetRe
 STATS_GET = Method("stats.get", Scope.INSTANCE_READ, StatsGetCommand, StatsGetResult)
 THREAD_SUBSCRIBE = Subscription(
     "thread.subscribe", Scope.THREAD_READ, ThreadSubscribeCommand, Event
+)
+
+INSTANCE_PROBE = Method(
+    "instance.probe", Scope.INSTANCE_LIFECYCLE, InstanceProbeCommand, InstanceProbeResult
 )
 
 ROUTINE_LIST = Method("routine.list", Scope.INSTANCE_READ, RoutineListCommand, RoutineListResult)

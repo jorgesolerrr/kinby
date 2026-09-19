@@ -14,7 +14,13 @@ from uuid import UUID
 import pytest
 
 from kinby.cli import main
-from kinby.contracts import RoutineOrigin, RoutineTrigger, SignalReceived, TurnStarted
+from kinby.contracts import (
+    CONTRACT_VERSION,
+    RoutineOrigin,
+    RoutineTrigger,
+    SignalReceived,
+    TurnStarted,
+)
 from kinby.core.dispatcher import TurnConfig
 from kinby.core.events import EventLog
 from kinby.core.receiver import Receiver
@@ -62,7 +68,11 @@ def test_health_names_the_served_instance(tmp_path) -> None:
             await receiver.stop()
 
         assert status == 200
-        assert json.loads(body) == {"id": "test"}
+        assert json.loads(body) == {
+            "id": "test",
+            "contract_version": CONTRACT_VERSION,
+            "capabilities": [],
+        }
         assert head_status == 404
         assert unknown_status == 404
 
@@ -382,7 +392,9 @@ def test_serve_listens_reports_paths_and_stops_on_process_signal(
     assert exit_code == 0, (output.out, output.err)
     assert started.is_set()
     assert not stopper.is_alive()
-    assert health == [(200, b'{"id": "test"}')]
+    assert [(status, json.loads(body)) for status, body in health] == [
+        (200, {"id": "test", "contract_version": CONTRACT_VERSION, "capabilities": []})
+    ]
     assert f"listen: 127.0.0.1:{port}" in output.out
     assert ("/signals/news" in output.out) is has_signal
 
