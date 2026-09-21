@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+import yaml
 
 PROJECT_ROOT = Path(__file__).parents[1]
 
@@ -248,3 +249,67 @@ def test_entrypoint_clones_the_workspace_source_only_into_an_empty_workspace(
     finally:
         _allow_temp_mount_cleanup(image, mounts, "/instance")
         _docker("image", "rm", "--force", image, check=False)
+
+
+def _compose(name: str) -> dict[str, object]:
+    parsed: dict[str, object] = yaml.safe_load((PROJECT_ROOT / name).read_text(encoding="utf-8"))
+    return parsed
+
+
+def _mapping(value: object) -> dict[str, object]:
+    assert isinstance(value, dict), value
+    return value
+
+
+def _sequence(value: object) -> list[object]:
+    assert isinstance(value, list), value
+    return value
+
+
+def _strings(value: object) -> list[str]:
+    return [str(item) for item in _sequence(value)]
+
+
+def _variable(value: str) -> str:
+    """The environment variable a compose value interpolates, without its default clause."""
+    return value.removeprefix("${").split("}", 1)[0].split(":", 1)[0]
+
+
+def test_the_hub_recipe_keeps_instances_private_and_maps_the_docker_host_path() -> None:
+    recipe = _compose("compose.hub.yaml")
+    services = _mapping(recipe["services"])
+    hub = _mapping(services["hub"])
+    caddy = _mapping(services["caddy"])
+    flags = dict(
+        argument.split("=", 1) for argument in _strings(hub["command"]) if argument.startswith("--")
+    )
+    binds = {
+        str(_mapping(volume)["target"]): str(_mapping(volume)["source"])
+        for volume in _sequence(hub["volumes"])
+    }
+    private = _mapping(_mapping(recipe["networks"])[flags["--network"]])
+    caddyfile = (PROJECT_ROOT / "docker" / "Caddyfile.hub").read_text(encoding="utf-8")
+
+    assert _variable(binds["/hub"]) == "KINBY_HUB_DIR"
+    assert _variable(flags["--docker-host-directory"]) == "KINBY_HUB_DIR"
+    assert binds["/var/run/docker.sock"] == "/var/run/docker.sock"
+    assert private == {"name": flags["--network"]}
+    assert set(_strings(hub["networks"])) == {"kinby_public", flags["--network"]}
+    assert flags["--network"] not in _strings(caddy["networks"])
+    assert f"reverse_proxy hub:{flags['--listen'].rsplit(':', 1)[1]}" in caddyfile
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker CLI is not available")
+def test_the_hub_recipe_is_a_valid_compose_project() -> None:
+    result = _docker(
+        "compose",
+        "--file",
+        "compose.hub.yaml",
+        "config",
+        "--no-env-resolution",
+        "--no-path-resolution",
+        "--quiet",
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

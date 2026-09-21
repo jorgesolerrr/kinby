@@ -14,6 +14,7 @@ from kinby.contracts import (
     OperationGetResult,
     OperationKind,
     OperationState,
+    OperationStep,
     PackageSelection,
     PackageSummary,
     StorageItem,
@@ -88,6 +89,14 @@ class HubRegistry:
                     state TEXT NOT NULL,
                     detail TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS operation_steps (
+                    operation_id TEXT NOT NULL REFERENCES operations(id),
+                    position INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    PRIMARY KEY (operation_id, name)
+                );
                 CREATE TABLE IF NOT EXISTS image_artifacts (
                     input_key TEXT PRIMARY KEY,
                     image_id TEXT NOT NULL,
@@ -146,6 +155,24 @@ class HubRegistry:
                 (identifier,),
             )
             return identifier
+
+    def signal_alias(self) -> UUID | None:
+        """The instance that answers the public signal path, when adoption has claimed it."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM hub_metadata WHERE key = 'signal_alias'"
+            ).fetchone()
+        return UUID(row[0]) if row is not None else None
+
+    def set_signal_alias(self, instance_id: UUID) -> None:
+        """Point the public signal path at a managed instance, so its webhook URL keeps working."""
+        if self.instance(instance_id) is None:
+            raise ValueError(f'Instance "{instance_id}" was not found.')
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO hub_metadata (key, value) VALUES ('signal_alias', ?)",
+                (str(instance_id),),
+            )
 
     def access_token_hash(self) -> str | None:
         with self._connect() as connection:
@@ -250,14 +277,50 @@ class HubRegistry:
                 ),
             )
 
+    def fail_interrupted_operations(self, detail: str) -> None:
+        """Fail operations the previous process left unfinished.
+
+        A start that is still pending after a restart would otherwise be returned
+        forever, and nothing would run it.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id FROM operations WHERE state IN (?, ?)",
+                (OperationState.PENDING.value, OperationState.RUNNING.value),
+            ).fetchall()
+        for (operation_id,) in rows:
+            self.finish_operation(UUID(operation_id), OperationState.FAILED, detail)
+
     def begin_operation(
         self,
         operation_id: UUID,
         instance_id: UUID,
         kind: OperationKind,
         detail: str,
-    ) -> None:
+    ) -> UUID:
+        """Open this operation, or return the unfinished one of the same kind.
+
+        A second start while the first is still running would hide the first from
+        `instance.status`, and that is how a client finds a response it lost.
+        """
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT id FROM operations
+                WHERE instance_id = ? AND kind = ? AND state IN (?, ?)
+                ORDER BY rowid
+                LIMIT 1
+                """,
+                (
+                    str(instance_id),
+                    kind.value,
+                    OperationState.PENDING.value,
+                    OperationState.RUNNING.value,
+                ),
+            ).fetchone()
+            if existing is not None:
+                return UUID(existing[0])
             connection.execute(
                 """
                 INSERT INTO operations (id, instance_id, kind, state, detail)
@@ -271,18 +334,78 @@ class HubRegistry:
                     detail,
                 ),
             )
+        return operation_id
 
-    def update_operation(
+    def advance_operation(self, operation_id: UUID, step: str, detail: str) -> None:
+        """Succeed the step that was running and open the named one, both operation and step."""
+        with self._connect() as connection:
+            self._close_running_step(connection, operation_id, OperationState.SUCCEEDED, None)
+            position = connection.execute(
+                "SELECT COUNT(*) FROM operation_steps WHERE operation_id = ?",
+                (str(operation_id),),
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO operation_steps (operation_id, position, name, state, detail)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (str(operation_id), position, step, OperationState.RUNNING.value, detail),
+            )
+            connection.execute(
+                "UPDATE operations SET state = ?, detail = ? WHERE id = ?",
+                (OperationState.RUNNING.value, detail, str(operation_id)),
+            )
+
+    def finish_operation(
         self,
         operation_id: UUID,
         state: OperationState,
         detail: str,
     ) -> None:
+        """Record the outcome on the operation and on the step it stopped in."""
         with self._connect() as connection:
+            self._close_running_step(connection, operation_id, state, detail)
             connection.execute(
                 "UPDATE operations SET state = ?, detail = ? WHERE id = ?",
                 (state.value, detail, str(operation_id)),
             )
+
+    @staticmethod
+    def _close_running_step(
+        connection: sqlite3.Connection,
+        operation_id: UUID,
+        state: OperationState,
+        detail: str | None,
+    ) -> None:
+        """A step that ends without its own outcome keeps the detail it was opened with."""
+        connection.execute(
+            """
+            UPDATE operation_steps SET state = ?, detail = COALESCE(?, detail)
+            WHERE operation_id = ? AND state = ?
+            """,
+            (state.value, detail, str(operation_id), OperationState.RUNNING.value),
+        )
+
+    def active_operation(self, instance_id: UUID) -> UUID | None:
+        """The earliest lifecycle operation this instance has not finished.
+
+        A client that lost a response finds that operation here. A later operation
+        does not take its place while this one is still running.
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id FROM operations
+                WHERE instance_id = ? AND state IN (?, ?)
+                ORDER BY rowid LIMIT 1
+                """,
+                (
+                    str(instance_id),
+                    OperationState.PENDING.value,
+                    OperationState.RUNNING.value,
+                ),
+            ).fetchone()
+        return UUID(row[0]) if row is not None else None
 
     def operation(self, operation_id: UUID) -> OperationGetResult | None:
         with self._connect() as connection:
@@ -290,6 +413,13 @@ class HubRegistry:
                 "SELECT id, instance_id, kind, state, detail FROM operations WHERE id = ?",
                 (str(operation_id),),
             ).fetchone()
+            steps = connection.execute(
+                """
+                SELECT name, state, detail FROM operation_steps
+                WHERE operation_id = ? ORDER BY position
+                """,
+                (str(operation_id),),
+            ).fetchall()
         if row is None:
             return None
         return OperationGetResult(
@@ -298,6 +428,10 @@ class HubRegistry:
             kind=OperationKind(row[2]),
             state=OperationState(row[3]),
             detail=row[4],
+            steps=[
+                OperationStep(name=name, state=OperationState(state), detail=detail)
+                for name, state, detail in steps
+            ],
         )
 
     def record_preparation(

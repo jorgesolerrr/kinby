@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Protocol
+from uuid import UUID
 
-from kinby.contracts import PackageSelection
+from kinby.contracts import ControlToken, PackageSelection
 from kinby.packages import InstalledPackage
 
 
@@ -23,6 +25,29 @@ class InstanceSpec:
     files: Mapping[str, str] = field(default_factory=dict)
     public_host: str | None = None
     stop_grace_seconds: int = 30
+
+
+@dataclass(frozen=True)
+class InstanceEndpoint:
+    """Where the hub reaches one running instance, and the secret it presents there."""
+
+    url: str
+    control_token: ControlToken
+
+
+class InstanceUnreachable(StrEnum):
+    """Why the hub cannot reach an instance: the two answers a public caller gets."""
+
+    MISSING = "missing"
+    UNAVAILABLE = "unavailable"
+
+
+class InstanceRouting(Protocol):
+    """How a public route finds the instance it carries traffic to."""
+
+    async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable: ...
+
+    async def signal_endpoint(self) -> InstanceEndpoint | InstanceUnreachable: ...
 
 
 type RuntimeState = Literal["absent", "created", "starting", "running", "stopped", "failed"]
@@ -45,6 +70,8 @@ class ContainerRuntime(Protocol):
     async def remove(self, instance_id: str, *, delete_data: bool = False) -> None: ...
 
     async def status(self, instance_id: str) -> RuntimeStatus: ...
+
+    async def address(self, instance_id: str) -> str | None: ...
 
     def logs(
         self,

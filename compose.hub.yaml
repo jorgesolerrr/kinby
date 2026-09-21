@@ -1,0 +1,62 @@
+# The hub deployment. Caddy terminates TLS for KINBY_DOMAIN and forwards every public
+# request to the hub. The hub reaches its instances on kinby_private.
+#   docker compose -f compose.hub.yaml up --build --detach
+services:
+  hub:
+    build: .
+    entrypoint: ["kinby"]
+    command:
+      - hub
+      - /hub
+      # Bind sources are always host paths, so the hub needs the same directory twice:
+      # once as it sees it, and once as the Docker daemon sees it.
+      - --docker-host-directory=${KINBY_HUB_DIR:?set KINBY_HUB_DIR to the hub directory on the Docker host}
+      - --source=/source
+      - --network=kinby_private
+      - --listen=0.0.0.0:8080
+    volumes:
+      - type: bind
+        source: ${KINBY_HUB_DIR:?set KINBY_HUB_DIR to the hub directory on the Docker host}
+        target: /hub
+      # The hub builds instance images from an exact revision of this repository.
+      - type: bind
+        source: .
+        target: /source
+        read_only: true
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    networks:
+      - kinby_public
+      - kinby_private
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.10
+    environment:
+      KINBY_DOMAIN: ${KINBY_DOMAIN:?set KINBY_DOMAIN in .env next to compose.hub.yaml}
+    volumes:
+      - ./docker/Caddyfile.hub:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      # The daemon may bind published ports to 127.0.0.1 by default; ingress is public.
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    networks:
+      - kinby_public
+    depends_on:
+      - hub
+    restart: unless-stopped
+
+networks:
+  kinby_public:
+  # Instances join this network. Caddy stays on kinby_public, and instance ports are
+  # not published, so a client reaches an instance through the hub's relay. This is a
+  # normal bridge, so the instance can still reach model providers, git, and GitHub.
+  kinby_private:
+    name: kinby_private
+
+volumes:
+  caddy-config:
+  caddy-data:

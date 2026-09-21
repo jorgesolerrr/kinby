@@ -44,6 +44,35 @@ Pass secrets with individual `--env` flags, `--env-file`, or the equivalent sett
 
 The hub needs two explicit paths when it runs in a container: the instances directory as the hub sees it and the same directory on the Docker host. Docker bind sources are always host paths. For example, mount host `/srv/kinby` at `/hub` in the hub container, then configure the hub directory as `/hub` and the Docker-host directory as `/srv/kinby`. The hub rejects instance identities that do not resolve to one direct child of its instances directory. Named workspace and Codex volumes do not need path translation.
 
+## Hub deployment
+
+`compose.hub.yaml` is the reference recipe. Caddy terminates TLS for `KINBY_DOMAIN` and forwards every public request to the hub; `KINBY_HUB_DIR` is the hub directory on the Docker host, used both as the bind source for `/hub` and as `--docker-host-directory`. Instances join `kinby_private`. Caddy stays on `kinby_public`, and instance ports stay unpublished, so a client reaches an instance through the hub's relay. `kinby_private` is a normal bridge, so the instance can reach model providers, git, and GitHub.
+
+If a previous hub created `kinby_private` as an internal network, the next instance create or start attaches every container on it, stopped ones included, to a temporary network first. It then recreates `kinby_private` as a normal bridge and moves those containers onto it. A failed step leaves each container on at least one of those networks.
+
+```sh
+printf 'KINBY_DOMAIN=kinby.example.com\nKINBY_HUB_DIR=/srv/kinby\n' > .env
+docker compose -f compose.hub.yaml up --build --detach
+docker compose -f compose.hub.yaml logs hub   # the access token is printed once
+```
+
+The hub serves these routes:
+
+| Route | Purpose |
+| --- | --- |
+| `POST /auth/login` | Exchange the access token for the session cookie the browser carries. |
+| `GET /ws` | The hub's own contract: instances, lifecycle operations. |
+| `GET /instances/{instance_id}/ws` | One instance's contract, relayed frame for frame to its private `/ws`. A stopped instance answers 503, an unknown one 404. |
+| `POST /instances/{instance_id}/signals/{routine}` | A webhook, forwarded byte for byte. The instance authenticates it and answers it; the hub queues nothing. |
+| `POST /signals/{routine}` | The same, for the instance holding the signal alias. |
+| `/assets`, `/{tail:.*}` | The built web app, with the `index.html` fallback. |
+
+The relay reaches an instance's `/ws` only, never its `/control`, so no client that arrives through the hub holds `instance:lifecycle`. Adoption keeps an established webhook URL by claiming the bare signal path:
+
+```sh
+kinby hub /srv/kinby signals <instance-id>
+```
+
 ```sh
 cp instances/coder/.env.example instances/coder/.env
 claude setup-token

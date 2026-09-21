@@ -452,6 +452,7 @@ async def _run_hub(
     from docker.errors import DockerException
 
     from kinby.hub import HubContractServer, build_docker_hub
+    from kinby.hub.service import HubAlreadyRunning
 
     loop = asyncio.get_running_loop()
     stopping = asyncio.Event()
@@ -468,13 +469,13 @@ async def _run_hub(
                 docker_host_directory,
                 network=network,
             )
-        except DockerException as exc:
+        except (DockerException, HubAlreadyRunning) as exc:
             print(f"Unable to start the Docker-backed hub: {exc}", file=sys.stderr)
             return 1
         print(f"hub id: {hub.registry.hub_id()}")
         print(f"directory: {hub.directory}")
         _announce(hub.access.issue())
-        server = HubContractServer(hub.dispatcher, hub.access, web_app)
+        server = HubContractServer(hub.dispatcher, hub.access, hub, web_app)
         address = await server.start(listen)
         print(f"listen: {address.host}:{address.port}")
         await stopping.wait()
@@ -492,6 +493,19 @@ def _announce(token: AccessToken | None) -> None:
         return
     print("This hub's access token is shown once. Store it now:")
     print(f"access token: {token}")
+
+
+def _set_signal_alias(directory: Path, instance_id: str) -> int:
+    """Adoption keeps a webhook URL working by claiming the hub's public signal path."""
+    from kinby.hub import HubRegistry
+
+    try:
+        HubRegistry(directory).set_signal_alias(UUID(instance_id))
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print(f"signals: /signals/<routine> now reaches {instance_id}")
+    return 0
 
 
 def _rotate_access_token(directory: Path) -> int:
@@ -681,13 +695,22 @@ def main(
         type=Path,
         help="directory holding the built web app",
     )
-    hub_token_parser = hub_parser.add_subparsers(dest="hub_command").add_parser(
+    hub_subparsers = hub_parser.add_subparsers(dest="hub_command")
+    hub_token_parser = hub_subparsers.add_parser(
         "token",
         help="manage the hub access token",
     )
     hub_token_parser.add_subparsers(dest="token_command", required=True).add_parser(
         "rotate",
         help="replace the access token and end open sessions",
+    )
+    hub_signals_parser = hub_subparsers.add_parser(
+        "signals",
+        help="point the public /signals path at one managed instance",
+    )
+    hub_signals_parser.add_argument(
+        "instance_id",
+        help="hub instance id that keeps the established webhook URL",
     )
     instance_parser = subparsers.add_parser(
         "instance",
@@ -811,6 +834,8 @@ def main(
     if args.command == "hub":
         if args.hub_command == "token":
             return _rotate_access_token(args.directory)
+        if args.hub_command == "signals":
+            return _set_signal_alias(args.directory, args.instance_id)
         try:
             listen = parse_listen(args.listen)
         except ValueError as exc:

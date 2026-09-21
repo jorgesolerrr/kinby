@@ -43,7 +43,8 @@ CONTROL_TOKEN_VARIABLE = "KINBY_CONTROL_TOKEN"
 SUBSCRIPTION_QUEUE_LIMIT = 1024
 #: Unary calls one connection may hold in each bucket: ordinary, or interrupt and approval.
 CALL_LIMIT = 8
-_HEARTBEAT_SECONDS = 30
+#: How often a contract server pings, on its own socket and on one a hub relays.
+HEARTBEAT_SECONDS = 30
 _UNBLOCKING = frozenset({THREAD_TURN_INTERRUPT.name, THREAD_APPROVAL_RESPOND.name})
 
 _logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ async def serve_contract(
     scopes: frozenset[Scope],
 ) -> web.WebSocketResponse:
     """Upgrade an authenticated request and carry the contract over it until it closes."""
-    socket = web.WebSocketResponse(heartbeat=_HEARTBEAT_SECONDS)
+    socket = web.WebSocketResponse(heartbeat=HEARTBEAT_SECONDS)
     await socket.prepare(request)
     await _Connection(socket, dispatcher, scopes).serve()
     return socket

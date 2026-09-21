@@ -14,7 +14,7 @@ from kinby.contracts import CONTRACT_VERSION, AccessToken, FrameType
 from kinby.hub import Hub, HubAccess, HubContractServer, HubRegistry
 from kinby.hub.access import SessionId
 from kinby.instance import Serve
-from tests.test_hub import FakeImages, FakeRuntime
+from tests.test_hub import FakeImages, FakeRuntime, HeldRuntime
 
 
 def hub_at(directory: Path, runtime: FakeRuntime | None = None) -> Hub:
@@ -23,7 +23,7 @@ def hub_at(directory: Path, runtime: FakeRuntime | None = None) -> Hub:
 
 @asynccontextmanager
 async def served(hub: Hub, *, web_app: Path | None = None) -> AsyncIterator[Serve]:
-    server = HubContractServer(hub.dispatcher, hub.access, web_app)
+    server = HubContractServer(hub.dispatcher, hub.access, hub, web_app)
     address = await server.start(Serve("127.0.0.1", 0))
     try:
         yield address
@@ -125,6 +125,7 @@ def test_the_session_cookie_is_secure_when_the_request_is_https(tmp_path: Path) 
 def test_the_hub_issues_one_access_token_and_stores_only_its_hash(tmp_path: Path) -> None:
     hub = hub_at(tmp_path / "hub")
     token = hub.access.issue()
+    hub.close()
 
     assert token is not None
     assert hub_at(tmp_path / "hub").access.issue() is None
@@ -231,6 +232,7 @@ def test_a_session_survives_a_hub_restart(tmp_path: Path) -> None:
         assert token is not None
         async with served(hub) as address, aiohttp.ClientSession() as session:
             cookie = await session_cookie(session, address, token)
+        hub.close()
         restarted = hub_at(tmp_path / "hub")
         async with served(restarted) as address, aiohttp.ClientSession() as session:
             headers = {
@@ -245,20 +247,6 @@ def test_a_session_survives_a_hub_restart(tmp_path: Path) -> None:
         assert listed["type"] == FrameType.RESULT.value
 
     asyncio.run(scenario())
-
-
-class HeldRuntime(FakeRuntime):
-    """Hold a start until the test releases it, so a client can disconnect mid-operation."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.holding = asyncio.Event()
-        self.released = asyncio.Event()
-
-    async def start(self, instance_id: str) -> None:
-        self.holding.set()
-        await self.released.wait()
-        await super().start(instance_id)
 
 
 async def created_instance(socket: aiohttp.ClientWebSocketResponse) -> str:
@@ -483,3 +471,41 @@ def test_concurrent_first_starts_keep_one_access_token(tmp_path: Path) -> None:
     kept = [token for token in issued if token is not None]
     assert len(kept) == 1
     assert HubAccess(HubRegistry(directory)).accepts(kept[0]) is True
+
+
+def test_a_reconnecting_client_finds_the_operation_whose_answer_it_lost(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runtime = HeldRuntime()
+        hub = hub_at(tmp_path / "hub", runtime)
+        token = hub.access.issue()
+        assert token is not None
+        headers = {"Authorization": f"Bearer {token}"}
+        async with served(hub) as address, aiohttp.ClientSession(headers=headers) as session:
+            async with session.ws_connect(url(address, "/ws")) as socket:
+                instance_id = await created_instance(socket)
+                await call(socket, "instance.start", instance_id=instance_id)
+                accepted = await frame(socket)
+                assert isinstance(accepted["result"], dict)
+                lost = str(accepted["result"]["operation_id"])
+                await asyncio.wait_for(runtime.holding.wait(), timeout=5)
+            async with session.ws_connect(url(address, "/ws")) as reconnected:
+                await call(reconnected, "instance.status", instance_id=instance_id)
+                status = await frame(reconnected)
+                assert isinstance(status["result"], dict)
+                await call(
+                    reconnected,
+                    "operation.get",
+                    operation_id=status["result"]["active_operation_id"],
+                )
+                running = await frame(reconnected)
+                runtime.released.set()
+                state = await finished(reconnected, lost)
+
+        assert status["result"]["active_operation_id"] == lost
+        assert isinstance(running["result"], dict)
+        assert running["result"]["state"] == "running"
+        assert [step["name"] for step in running["result"]["steps"]] == ["start"]
+        assert state == "succeeded"
+        assert runtime.started == [instance_id]
+
+    asyncio.run(scenario())

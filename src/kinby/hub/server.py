@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from aiohttp import web
 
@@ -12,6 +13,8 @@ from kinby.contracts import CONTRACT_VERSION, HUB_SCOPES, AccessToken
 from kinby.core.contract_server import serve_contract
 from kinby.core.dispatcher import Dispatcher
 from kinby.hub.access import SESSION_COOKIE, HubAccess, SessionId
+from kinby.hub.models import InstanceEndpoint, InstanceRouting, InstanceUnreachable
+from kinby.hub.relay import forward_signal, relay_socket, unreachable
 from kinby.instance import Serve
 
 _UNAUTHORIZED = "authentication failed"
@@ -24,10 +27,12 @@ class HubContractServer:
         self,
         dispatcher: Dispatcher,
         access: HubAccess,
+        routing: InstanceRouting,
         web_app: Path | None = None,
     ) -> None:
         self._dispatcher = dispatcher
         self._access = access
+        self._routing = routing
         self._web_app = web_app
         self._runner: web.AppRunner | None = None
 
@@ -50,6 +55,16 @@ class HubContractServer:
         """Register the contract first: aiohttp resolves routes in order, and the app is last."""
         application.router.add_post("/auth/login", self._login)
         application.router.add_get("/ws", self._socket, allow_head=False)
+        application.router.add_get(
+            "/instances/{instance_id}/ws",
+            self._instance_socket,
+            allow_head=False,
+        )
+        application.router.add_post(
+            "/instances/{instance_id}/signals/{routine}",
+            self._instance_signal,
+        )
+        application.router.add_post("/signals/{routine}", self._aliased_signal)
         if self._web_app is not None:
             _add_web_app(application, self._web_app)
 
@@ -73,6 +88,35 @@ class HubContractServer:
             raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
         return await serve_contract(request, self._dispatcher, HUB_SCOPES)
 
+    async def _instance_socket(self, request: web.Request) -> web.WebSocketResponse:
+        """Relay to the instance's own ``/ws``, which grants no lifecycle authority."""
+        if not self._authenticated(request):
+            raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
+        return await relay_socket(request, await self._reach(request))
+
+    async def _instance_signal(self, request: web.Request) -> web.Response:
+        """Webhooks carry their own signature, so the hub authenticates none of them."""
+        return await forward_signal(
+            request,
+            await self._reach(request),
+            request.match_info["routine"],
+        )
+
+    async def _aliased_signal(self, request: web.Request) -> web.Response:
+        """The path a webhook was registered with before the hub existed."""
+        return await forward_signal(
+            request,
+            _reached(await self._routing.signal_endpoint()),
+            request.match_info["routine"],
+        )
+
+    async def _reach(self, request: web.Request) -> InstanceEndpoint:
+        try:
+            instance_id = UUID(request.match_info["instance_id"])
+        except ValueError as exc:
+            raise unreachable(InstanceUnreachable.MISSING) from exc
+        return _reached(await self._routing.endpoint(instance_id))
+
     def _authenticated(self, request: web.Request) -> bool:
         """A bearer token authenticates any client; a cookie only from the hub's own page."""
         header = request.headers.get("Authorization")
@@ -84,6 +128,12 @@ class HubContractServer:
         if session is None:
             return False
         return _same_origin(request) and self._access.session_open(SessionId(session))
+
+
+def _reached(endpoint: InstanceEndpoint | InstanceUnreachable) -> InstanceEndpoint:
+    if isinstance(endpoint, InstanceUnreachable):
+        raise unreachable(endpoint)
+    return endpoint
 
 
 def _add_web_app(application: web.Application, web_app: Path) -> None:

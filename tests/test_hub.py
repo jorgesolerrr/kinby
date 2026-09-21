@@ -3,14 +3,17 @@ import os
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
+    CONTROL_SCOPES,
     INSTANCE_CREATE,
     INSTANCE_LIST,
     INSTANCE_LOGS,
+    INSTANCE_SCOPES,
     INSTANCE_START,
     INSTANCE_STATUS,
     OPERATION_GET,
@@ -23,6 +26,7 @@ from kinby.contracts import (
     InstanceStatusCommand,
     LifecycleOperationResult,
     OperationGetCommand,
+    OperationKind,
     OperationState,
     PackageSelection,
     Readiness,
@@ -32,12 +36,14 @@ from kinby.contracts import (
 )
 from kinby.hub import (
     Hub,
+    HubRegistry,
     ImageArtifact,
     ImageSelection,
     InstanceSpec,
     PreparedImage,
     RuntimeStatus,
 )
+from kinby.hub.service import HubAlreadyRunning
 from kinby.instance import inspect_instance
 from kinby.packages import InstalledPackage, PackageDescriptor, RequiredSecret
 
@@ -74,6 +80,7 @@ class FakeRuntime:
         self.created: list[InstanceSpec] = []
         self.started: list[str] = []
         self.states: dict[str, RuntimeStatus] = {}
+        self.addresses: dict[str, str] = {}
         self.log_output = b"booted\n"
 
     async def create(self, spec: InstanceSpec) -> None:
@@ -92,6 +99,11 @@ class FakeRuntime:
 
     async def status(self, instance_id: str) -> RuntimeStatus:
         return self.states.get(instance_id, RuntimeStatus("absent", None))
+
+    async def address(self, instance_id: str) -> str | None:
+        if self.states.get(instance_id, RuntimeStatus("absent", None)).state != "running":
+            return None
+        return self.addresses.get(instance_id)
 
     async def logs(
         self,
@@ -131,6 +143,20 @@ class SerialRuntime(FakeRuntime):
 class UnavailableRuntime(FakeRuntime):
     async def status(self, instance_id: str) -> RuntimeStatus:
         raise ConnectionError("Docker daemon unavailable")
+
+
+class HeldRuntime(FakeRuntime):
+    """Hold a start until the test releases it, so an operation stays in flight."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.holding = asyncio.Event()
+        self.released = asyncio.Event()
+
+    async def start(self, instance_id: str) -> None:
+        self.holding.set()
+        await self.released.wait()
+        await super().start(instance_id)
 
 
 def _client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
@@ -208,6 +234,7 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
             "utf-8", errors="ignore"
         )
 
+        hub.close()
         reopened = Hub(tmp_path / "hub", runtime=runtime, images=images)
         assert reopened.registry.hub_id() == hub_id
         reopened_result = await _client(reopened).call(
@@ -596,6 +623,7 @@ def test_status_distinguishes_missing_starting_unhealthy_and_unavailable(tmp_pat
 
         unavailable = UnavailableRuntime()
         unavailable.states = runtime.states
+        hub.close()
         reopened = Hub(tmp_path / "hub", runtime=unavailable, images=FakeImages())
         result = await _client(reopened).call(
             INSTANCE_STATUS,
@@ -707,7 +735,9 @@ def test_concurrent_starts_are_serialized_per_instance(tmp_path):
         assert isinstance(second, LifecycleOperationResult)
         await asyncio.gather(_operation(client, first), _operation(client, second))
 
+        assert first.operation_id == second.operation_id
         assert runtime.maximum_active_starts == 1
+        assert runtime.started == [str(created.instance_id)]
 
     asyncio.run(scenario())
 
@@ -753,3 +783,295 @@ def test_retained_writable_bind_rejects_an_overlapping_path_alias(tmp_path):
             )
 
     asyncio.run(scenario())
+
+
+def test_an_operation_reports_every_step_it_ran(tmp_path):
+    async def scenario() -> None:
+        hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+
+        outcome = await _operation(client, created)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert [(step.name, step.state) for step in outcome.steps] == [
+            ("configure", OperationState.SUCCEEDED),
+            ("image", OperationState.SUCCEEDED),
+            ("container", OperationState.SUCCEEDED),
+        ]
+        assert outcome.steps[-1].detail == "Instance prepared and stopped."
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_operation_marks_the_step_that_failed(tmp_path):
+    async def scenario() -> None:
+        hub = Hub(
+            tmp_path / "hub",
+            runtime=FakeRuntime(),
+            images=FakeImages(failure="no such revision"),
+        )
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+
+        outcome = await _operation(client, created)
+
+        assert outcome.state is OperationState.FAILED
+        assert [(step.name, step.state) for step in outcome.steps] == [
+            ("configure", OperationState.SUCCEEDED),
+            ("image", OperationState.FAILED),
+        ]
+        assert outcome.steps[-1].detail == "no such revision"
+
+    asyncio.run(scenario())
+
+
+def test_status_carries_the_operation_a_client_lost_the_response_to(tmp_path):
+    async def scenario() -> None:
+        runtime = HeldRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+
+        started = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        await asyncio.wait_for(runtime.holding.wait(), timeout=5)
+        during = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+        runtime.released.set()
+        assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+        after = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+
+        assert not isinstance(during, ErrorEnvelope)
+        assert during.active_operation_id == started.operation_id
+        assert not isinstance(after, ErrorEnvelope)
+        assert after.active_operation_id is None
+
+    asyncio.run(scenario())
+
+
+def test_a_second_start_keeps_the_operation_a_client_can_still_find(tmp_path):
+    async def scenario() -> None:
+        runtime = HeldRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+
+        started = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        await asyncio.wait_for(runtime.holding.wait(), timeout=5)
+        again = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        during = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+        runtime.released.set()
+        assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+
+        assert isinstance(again, LifecycleOperationResult)
+        assert again.operation_id == started.operation_id
+        assert not isinstance(during, ErrorEnvelope)
+        assert during.active_operation_id == started.operation_id
+        assert runtime.started == [str(created.instance_id)]
+
+    asyncio.run(scenario())
+
+
+def test_a_restarted_hub_can_start_an_instance_whose_start_was_interrupted(tmp_path):
+    async def scenario() -> None:
+        directory = tmp_path / "hub"
+        hub = Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        stale = uuid4()
+        assert (
+            hub.registry.begin_operation(
+                stale,
+                created.instance_id,
+                OperationKind.START,
+                "Start queued.",
+            )
+            == stale
+        )
+        hub.close()
+
+        runtime = FakeRuntime()
+        restarted = Hub(directory, runtime=runtime, images=FakeImages())
+        restarted_client = _client(restarted)
+        failed = await restarted_client.call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=stale),
+        )
+        started = await restarted_client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        outcome = await _operation(restarted_client, started)
+
+        assert not isinstance(failed, ErrorEnvelope)
+        assert failed.state is OperationState.FAILED
+        assert failed.detail == "The hub stopped before this operation finished."
+        assert started.operation_id != stale
+        assert outcome.state is OperationState.SUCCEEDED
+        assert runtime.started == [str(created.instance_id)]
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_hub_constructor_releases_the_directory(tmp_path, monkeypatch):
+    directory = tmp_path / "hub"
+    original = HubRegistry.fail_interrupted_operations
+    attempts = 0
+
+    def fail_once(self, detail: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("recovery failed")
+        original(self, detail)
+
+    monkeypatch.setattr(HubRegistry, "fail_interrupted_operations", fail_once)
+    with pytest.raises(RuntimeError, match="recovery failed"):
+        Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+
+    Hub(directory, runtime=FakeRuntime(), images=FakeImages()).close()
+
+
+def test_a_second_hub_does_not_fail_an_operation_the_first_is_running(tmp_path):
+    async def scenario() -> None:
+        directory = tmp_path / "hub"
+        hub = Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        stale = uuid4()
+        hub.registry.begin_operation(
+            stale,
+            created.instance_id,
+            OperationKind.START,
+            "Start queued.",
+        )
+
+        with pytest.raises(HubAlreadyRunning):
+            Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+        current = hub.registry.operation(stale)
+
+        assert current is not None
+        assert current.state is OperationState.PENDING
+
+    asyncio.run(scenario())
+
+
+def test_a_cancelled_start_can_be_started_again(tmp_path):
+    async def scenario() -> None:
+        runtime = HeldRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        started = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        await asyncio.wait_for(runtime.holding.wait(), timeout=5)
+        assert len(hub._tasks) == 1
+        task = next(iter(hub._tasks))
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        failed = await client.call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=started.operation_id),
+        )
+        runtime.released.set()
+        again = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(again, LifecycleOperationResult)
+        outcome = await _operation(client, again)
+
+        assert not isinstance(failed, ErrorEnvelope)
+        assert failed.state is OperationState.FAILED
+        assert again.operation_id != started.operation_id
+        assert outcome.state is OperationState.SUCCEEDED
+        assert runtime.started == [str(created.instance_id)]
+
+    asyncio.run(scenario())
+
+
+def test_hub_reads_and_mutations_ask_for_different_scopes(tmp_path):
+    async def scenario() -> None:
+        hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
+        reader = _client(hub, {Scope.HUB_READ})
+        agent = _client(hub, set(INSTANCE_SCOPES) | set(CONTROL_SCOPES))
+
+        listed = await reader.call(INSTANCE_LIST, InstanceListCommand())
+        refused = await reader.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        unreachable = await agent.call(INSTANCE_LIST, InstanceListCommand())
+
+        assert not isinstance(listed, ErrorEnvelope)
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.PERMISSION_DENIED
+        assert isinstance(unreachable, ErrorEnvelope)
+        assert unreachable.code is ErrorCode.PERMISSION_DENIED
+
+    asyncio.run(scenario())
+
+
+def test_no_scope_an_instance_grants_carries_hub_authority():
+    hub_scopes = {Scope.HUB_READ, Scope.HUB_ADMIN}
+
+    assert INSTANCE_SCOPES & hub_scopes == set()
+    assert CONTROL_SCOPES & hub_scopes == set()
+    assert {INSTANCE_LIST.scope, INSTANCE_STATUS.scope, INSTANCE_LOGS.scope} == {Scope.HUB_READ}
+    assert {INSTANCE_CREATE.scope, INSTANCE_START.scope} == {Scope.HUB_ADMIN}
