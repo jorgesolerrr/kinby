@@ -48,6 +48,7 @@ from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import LifecycleOperationNotFound, ManagedInstanceNotFound
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.control import (
+    ControlConnectionLost,
     ControlEndpoint,
     IncompatibleLifecycleEndpoint,
     InstanceControl,
@@ -75,6 +76,8 @@ FORCE_ANSWER_SECONDS = 30
 #: How often the hub looks for the container to have actually stopped, and for how long.
 _STOP_POLL_SECONDS = 0.2
 _STOP_OBSERVE_SECONDS = 120
+#: Pause before calling a drain again, so a socket that closes immediately does not spin.
+_DRAIN_RETRY_SECONDS = 0.2
 _RUNTIME_STOPPED = frozenset({"absent", "created", "stopped", "failed"})
 
 
@@ -336,7 +339,7 @@ class Hub:
             operation_id,
             "Interrupting active work." if forced else "Draining accepted work.",
         )
-        draining = asyncio.create_task(self._control.drain(endpoint, force=forced))
+        draining = asyncio.create_task(self._call_drain(operation_id, endpoint, pending))
         escalation = asyncio.create_task(pending.force.wait())
         interrupting: asyncio.Task[DrainState] | None = None
         try:
@@ -345,7 +348,9 @@ class Hub:
                 if draining.done():
                     return draining.result()
                 self._record(operation_id, "Force stop requested. Interrupting active work.")
-                interrupting = asyncio.create_task(self._control.drain(endpoint, force=True))
+                interrupting = asyncio.create_task(
+                    self._call_drain(operation_id, endpoint, pending)
+                )
             try:
                 return await asyncio.wait_for(
                     asyncio.shield(draining),
@@ -361,6 +366,26 @@ class Hub:
                 *(task for task in (escalation, draining, interrupting) if task is not None),
                 return_exceptions=True,
             )
+
+    async def _call_drain(
+        self,
+        operation_id: UUID,
+        endpoint: ControlEndpoint,
+        pending: PendingStop,
+    ) -> DrainState:
+        """Call the drain again when the socket drops. The instance keeps draining either way."""
+        reported = False
+        while True:
+            try:
+                return await self._control.drain(endpoint, force=pending.force.is_set())
+            except ControlConnectionLost:
+                if not reported:
+                    self._record(
+                        operation_id,
+                        "The control socket closed. Waiting for the drain again.",
+                    )
+                    reported = True
+                await asyncio.sleep(_DRAIN_RETRY_SECONDS)
 
     async def _observe_stop(self, runtime_id: str) -> None:
         """Report stopped only once the container itself is: an interrupt alone is not enough."""

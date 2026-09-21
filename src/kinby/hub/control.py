@@ -43,6 +43,13 @@ class InstanceUnreachable(Exception):
     """The instance's private lifecycle endpoint did not answer."""
 
 
+class ControlConnectionLost(InstanceUnreachable):
+    """The control socket dropped after the drain was sent.
+
+    The instance keeps that drain running, so the hub calls again and waits.
+    """
+
+
 class IncompatibleLifecycleEndpoint(Exception):
     """The instance's lifecycle endpoint answers, but not with what the hub needs."""
 
@@ -92,15 +99,26 @@ class HttpInstanceControl:
                 ) as socket,
             ):
                 await socket.send_str(call.model_dump_json())
-                return _drained(await _answer(socket))
+                return await _finished(socket)
         except (aiohttp.ClientError, TimeoutError) as exc:
             raise InstanceUnreachable(str(exc) or type(exc).__name__) from exc
+
+
+async def _finished(socket: aiohttp.ClientWebSocketResponse) -> DrainState:
+    """Read the drain answer. A socket that dies after the call was sent is a lost connection."""
+    try:
+        message = await _answer(socket)
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        raise ControlConnectionLost(str(exc) or type(exc).__name__) from exc
+    return _drained(message)
 
 
 async def _answer(socket: aiohttp.ClientWebSocketResponse) -> str:
     message = await socket.receive()
     if message.type is not aiohttp.WSMsgType.TEXT:
-        raise InstanceUnreachable(f"The control socket closed before it answered ({message.type}).")
+        raise ControlConnectionLost(
+            f"The control socket closed before it answered ({message.type})."
+        )
     return str(message.data)
 
 

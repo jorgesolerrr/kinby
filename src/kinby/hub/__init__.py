@@ -2,6 +2,7 @@
 
 from kinby.hub.access import HubAccess
 from kinby.hub.control import (
+    ControlConnectionLost,
     ControlEndpoint,
     HttpInstanceControl,
     IncompatibleLifecycleEndpoint,
@@ -30,6 +31,7 @@ from kinby.hub.service import Hub
 __all__ = [
     "BuildResult",
     "ContainerRuntime",
+    "ControlConnectionLost",
     "ControlEndpoint",
     "DockerImageBackend",
     "DockerRuntime",

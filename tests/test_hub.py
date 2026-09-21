@@ -1,10 +1,13 @@
 import asyncio
 import os
-from collections.abc import AsyncIterator, Sequence
+import socket
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from aiohttp import web
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
@@ -17,9 +20,12 @@ from kinby.contracts import (
     INSTANCE_STOP,
     OPERATION_GET,
     Capability,
+    ControlToken,
     DrainState,
     ErrorCode,
     ErrorEnvelope,
+    ErrorFrame,
+    FrameId,
     InstanceCreateCommand,
     InstanceListCommand,
     InstanceLogsCommand,
@@ -40,7 +46,9 @@ from kinby.contracts import (
     StorageKind,
 )
 from kinby.hub import (
+    ControlConnectionLost,
     ControlEndpoint,
+    HttpInstanceControl,
     Hub,
     ImageArtifact,
     ImageSelection,
@@ -161,10 +169,14 @@ class FakeControl:
         reachable: bool = True,
         holds: bool = False,
         answers: bool = True,
+        drops: int = 0,
+        refuses: bool = False,
     ) -> None:
         self.capabilities = capabilities or [Capability.WS, Capability.DRAIN]
         self.reachable = reachable
         self.answers = answers
+        self.drops = drops
+        self.refuses = refuses
         self.endpoints: list[ControlEndpoint] = []
         self.forces: list[bool] = []
         self.asked = asyncio.Event()
@@ -184,6 +196,13 @@ class FakeControl:
     async def drain(self, endpoint: ControlEndpoint, *, force: bool) -> DrainState:
         self.forces.append(force)
         self.asked.set()
+        if self.refuses:
+            raise InstanceUnreachable("The instance refused to drain: no")
+        if self.drops:
+            self.drops -= 1
+            raise ControlConnectionLost(
+                "The control socket closed before it answered (WSMsgType.CLOSED)."
+            )
         if force:
             self.release.set()
         if not self.answers:
@@ -1034,6 +1053,59 @@ def test_an_instance_that_cannot_drain_is_reported_and_left_running(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_dropped_control_socket_keeps_the_stop_waiting_for_the_drain(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl(drops=1)
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await operation_outcome(client, stopped)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert control.forces == [False, False]
+        assert [step.detail for step in outcome.steps] == [
+            "Stop queued.",
+            "Checking the instance's lifecycle endpoint.",
+            "Draining accepted work.",
+            "The control socket closed. Waiting for the drain again.",
+            "Instance drained. Stopping the container.",
+            "Instance stopped.",
+        ]
+        assert runtime.stopped == [30]
+
+    asyncio.run(scenario())
+
+
+def test_a_drain_the_instance_refuses_fails_the_stop_and_leaves_it_running(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl(refuses=True)
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await operation_outcome(client, stopped)
+
+        assert outcome.state is OperationState.FAILED
+        assert "refused to drain" in outcome.detail
+        assert control.forces == [False]
+        assert runtime.stopped == []
+
+    asyncio.run(scenario())
+
+
 def test_an_unreachable_lifecycle_endpoint_is_reported_without_stopping_the_container(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
@@ -1145,3 +1217,66 @@ def test_a_start_requested_during_a_pending_stop_waits_for_it(tmp_path):
         assert listed.instances[0].intended_state is IntendedState.RUNNING
 
     asyncio.run(scenario())
+
+
+def test_a_control_socket_that_closes_after_the_drain_is_sent_is_a_lost_connection():
+    async def scenario() -> None:
+        async with _control_server(_close_after_call) as endpoint:
+            with pytest.raises(ControlConnectionLost, match="closed before it answered"):
+                await HttpInstanceControl().drain(endpoint, force=False)
+
+    asyncio.run(scenario())
+
+
+def test_a_drain_answer_that_refuses_is_not_a_lost_connection():
+    async def scenario() -> None:
+        async with _control_server(_refuse_drain) as endpoint:
+            with pytest.raises(InstanceUnreachable, match="refused to drain") as raised:
+                await HttpInstanceControl().drain(endpoint, force=False)
+            assert not isinstance(raised.value, ControlConnectionLost)
+
+    asyncio.run(scenario())
+
+
+async def _close_after_call(opened: web.WebSocketResponse) -> None:
+    await opened.receive()
+    await opened.close()
+
+
+async def _refuse_drain(opened: web.WebSocketResponse) -> None:
+    await opened.receive()
+    await opened.send_str(
+        ErrorFrame(
+            id=FrameId("1"),
+            error=ErrorEnvelope(code=ErrorCode.INTERNAL, message="no", retryable=False),
+        ).model_dump_json()
+    )
+    await opened.receive()
+
+
+@asynccontextmanager
+async def _control_server(
+    handle: Callable[[web.WebSocketResponse], Awaitable[None]],
+) -> AsyncIterator[ControlEndpoint]:
+    application = web.Application()
+
+    async def control(request: web.Request) -> web.WebSocketResponse:
+        opened = web.WebSocketResponse()
+        await opened.prepare(request)
+        await handle(opened)
+        return opened
+
+    application.router.add_get("/control", control)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    runner = web.AppRunner(application)
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", port).start()
+    try:
+        yield ControlEndpoint(
+            address=InstanceAddress(f"http://127.0.0.1:{port}"),
+            token=ControlToken("token"),
+        )
+    finally:
+        await runner.cleanup()
