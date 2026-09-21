@@ -283,3 +283,41 @@ def test_a_failed_write_keeps_the_previous_secrets_whole_and_stays_inspectable(
         assert sorted(path.name for path in instance_path.glob(".env*")) == [".env"]
 
     asyncio.run(scenario())
+
+
+def test_a_failed_rename_removes_the_staging_file_and_keeps_the_previous_secrets(
+    tmp_path,
+    monkeypatch,
+):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub", images=FakeImages())
+        client = hub_client(hub)
+        created = await created_instance(client, secrets={"PROVIDER_TOKEN": "first-value"})
+        instance_path = hub.instances_directory / str(created.instance_id)
+        original = Path.replace
+
+        def refuse_rename(path: Path, target: Path) -> Path:
+            """Stand in for the rename failing after the staging file is written."""
+            if path.name == ".env.replacing":
+                raise OSError("cross-device rename failed")
+            return original(path, target)
+
+        monkeypatch.setattr(Path, "replace", refuse_rename)
+        accepted = await client.call(
+            INSTANCE_SECRETS_SET,
+            InstanceSecretsSetCommand(
+                instance_id=created.instance_id,
+                secrets={"PROVIDER_TOKEN": _SENTINEL},
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+        monkeypatch.undo()
+
+        assert outcome.state is OperationState.FAILED
+        assert _SENTINEL not in outcome.detail
+        assert "cross-device rename failed" in outcome.detail
+        assert instance_environment(hub, created.instance_id)["PROVIDER_TOKEN"] == "first-value"
+        assert sorted(path.name for path in instance_path.glob(".env*")) == [".env"]
+
+    asyncio.run(scenario())

@@ -797,14 +797,18 @@ class Hub:
 
     @classmethod
     def _replace_secrets(cls, directory: Path, secrets: dict[str, str]) -> None:
-        """Merge the submitted values in through one rename, so a failure replaces nothing."""
+        """Merge the submitted values in through one rename.
+
+        A failure leaves the previous secrets in place and removes the staging file,
+        so the values are not left in a second copy.
+        """
         staging = directory / ".env.replacing"
         try:
             cls._write_secrets(staging, cls._environment(directory) | secrets)
+            staging.replace(directory / ".env")
         except OSError:
             staging.unlink(missing_ok=True)
             raise
-        staging.replace(directory / ".env")
 
     @staticmethod
     def _toml_string(value: str) -> str:
