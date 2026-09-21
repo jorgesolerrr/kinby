@@ -581,6 +581,23 @@ class InstanceStopCommand(ContractModel):
     force: bool = False
 
 
+class InstanceRecreateCommand(ContractModel):
+    instance_id: UUID
+
+
+class InstanceSecretsSetCommand(ContractModel):
+    """Replace the named values in one instance's secrets. The result carries none of them back."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    instance_id: UUID
+    secrets: Annotated[dict[str, SecretStr], Field(min_length=1)]
+
+    @field_serializer("secrets", when_used="json")
+    def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
+        return {name: value.get_secret_value() for name, value in secrets.items()}
+
+
 class InstanceLogsCommand(ContractModel):
     instance_id: UUID
     tail: Annotated[int, Field(gt=0)] | None = None
@@ -664,6 +681,8 @@ class OperationKind(StrEnum):
     CREATE = "create"
     START = "start"
     STOP = "stop"
+    SECRETS = "secrets"
+    RECREATE = "recreate"
 
 
 class OperationState(StrEnum):

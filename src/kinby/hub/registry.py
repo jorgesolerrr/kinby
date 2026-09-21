@@ -263,19 +263,46 @@ class HubRegistry:
                     instance.package.image_recipe if instance.package is not None else None,
                 ),
             )
-            connection.execute(
-                """
-                INSERT INTO operations (id, instance_id, kind, state, detail)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    str(operation_id),
-                    str(instance.instance_id),
-                    OperationKind.CREATE.value,
-                    OperationState.PENDING.value,
-                    "Creation queued.",
-                ),
+            self._insert_operation(
+                connection,
+                operation_id,
+                instance.instance_id,
+                OperationKind.CREATE,
+                "Creation queued.",
             )
+
+    def record_operation(
+        self,
+        operation_id: UUID,
+        instance_id: UUID,
+        kind: OperationKind,
+        detail: str,
+    ) -> None:
+        """Open this operation on its own, even while another one is unfinished."""
+        with self._connect() as connection:
+            self._insert_operation(connection, operation_id, instance_id, kind, detail)
+
+    @staticmethod
+    def _insert_operation(
+        connection: sqlite3.Connection,
+        operation_id: UUID,
+        instance_id: UUID,
+        kind: OperationKind,
+        detail: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO operations (id, instance_id, kind, state, detail)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                str(operation_id),
+                str(instance_id),
+                kind.value,
+                OperationState.PENDING.value,
+                detail,
+            ),
+        )
 
     def fail_interrupted_operations(self, detail: str) -> None:
         """Fail operations the previous process left unfinished.
@@ -321,19 +348,7 @@ class HubRegistry:
             ).fetchone()
             if existing is not None:
                 return UUID(existing[0])
-            connection.execute(
-                """
-                INSERT INTO operations (id, instance_id, kind, state, detail)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    str(operation_id),
-                    str(instance_id),
-                    kind.value,
-                    OperationState.PENDING.value,
-                    detail,
-                ),
-            )
+            self._insert_operation(connection, operation_id, instance_id, kind, detail)
         return operation_id
 
     def advance_operation(self, operation_id: UUID, step: str, detail: str) -> None:
@@ -440,7 +455,9 @@ class HubRegistry:
         artifact: ImageArtifact,
         storage: tuple[StorageItem, ...],
     ) -> None:
-        self._check_storage(instance_id, storage)
+        conflict = self.conflicting_storage(instance_id, storage)
+        if conflict is not None:
+            raise ValueError(f'Storage source "{conflict.source}" is already owned.')
         with self._connect() as connection:
             connection.executemany(
                 """
@@ -484,7 +501,12 @@ class HubRegistry:
             or second_path in first_path.parents
         )
 
-    def _check_storage(self, instance_id: UUID, storage: tuple[StorageItem, ...]) -> None:
+    def conflicting_storage(
+        self,
+        instance_id: UUID,
+        storage: tuple[StorageItem, ...],
+    ) -> StorageItem | None:
+        """The first of these writable sources another instance already owns, if any."""
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -507,7 +529,8 @@ class HubRegistry:
                     and self._binds_overlap(item.source, source)
                 )
                 if conflict:
-                    raise ValueError(f'Storage source "{item.source}" is already owned.')
+                    return item
+        return None
 
     def set_intended_state(self, instance_id: UUID, state: IntendedState) -> None:
         with self._connect() as connection:
@@ -568,6 +591,32 @@ class HubRegistry:
                 else None
             ),
         )
+
+    def managed_instances(self) -> list[ManagedInstance]:
+        """Every record the hub owns, in creation order, including creations that never finished."""
+        with self._connect() as connection:
+            ids = [
+                UUID(row[0])
+                for row in connection.execute("SELECT id FROM instances ORDER BY rowid").fetchall()
+            ]
+        return [record for instance_id in ids if (record := self.instance(instance_id)) is not None]
+
+    def last_operation(self, instance_id: UUID) -> OperationGetResult | None:
+        """The latest operation that changed this instance's container.
+
+        Replacing secrets writes a file and leaves the container where it is, so a
+        later secrets operation does not hide an earlier start, stop, or recreation.
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id FROM operations
+                WHERE instance_id = ? AND kind != ?
+                ORDER BY rowid DESC LIMIT 1
+                """,
+                (str(instance_id), OperationKind.SECRETS.value),
+            ).fetchone()
+        return self.operation(UUID(row[0])) if row is not None else None
 
     def list_instances(self) -> list[InstanceSummary]:
         with self._connect() as connection:

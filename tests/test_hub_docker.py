@@ -15,12 +15,17 @@ from docker import DockerClient
 from kinby.hub import (
     DockerImageBackend,
     DockerRuntime,
+    Hub,
     HubRegistry,
+    ImageArtifact,
     ImagePreparer,
     ImageSelection,
     InstanceSpec,
+    PreparedImage,
+    RecoveredState,
 )
 from kinby.packages import InstalledPackage, PackageDescriptor, package_json
+from tests.test_hub import hub_client, started_instance
 
 
 class FakeNetworks:
@@ -148,7 +153,7 @@ def test_docker_image_backend_inspects_the_authoritative_package_in_the_image():
     assert client.containers.run_options == {"entrypoint": "python", "remove": True}
 
 
-def _docker_available() -> bool:
+def docker_available() -> bool:
     if shutil.which("docker") is None:
         return False
     try:
@@ -168,7 +173,7 @@ def _git(repository: Path, *arguments: str) -> None:
     subprocess.run(["git", *arguments], cwd=repository, check=True, capture_output=True)
 
 
-@pytest.mark.skipif(not _docker_available(), reason="Docker daemon is not available")
+@pytest.mark.skipif(not docker_available(), reason="Docker daemon is not available")
 def test_real_docker_artifact_has_an_immutable_identity_and_excludes_managed_data(tmp_path):
     async def scenario() -> str:
         source = tmp_path / "source"
@@ -226,7 +231,7 @@ def test_real_docker_artifact_has_an_immutable_identity_and_excludes_managed_dat
         )
 
 
-@pytest.mark.skipif(not _docker_available(), reason="Docker daemon is not available")
+@pytest.mark.skipif(not docker_available(), reason="Docker daemon is not available")
 def test_real_docker_runtime_labels_stopped_and_independent_instances(tmp_path):
     async def scenario() -> None:
         import docker
@@ -291,6 +296,120 @@ def test_real_docker_runtime_labels_stopped_and_independent_instances(tmp_path):
             await asyncio.to_thread(network.remove)
 
     asyncio.run(scenario())
+
+
+class PulledImage:
+    """Prepare nothing: this image is already on the daemon."""
+
+    def __init__(self, image_id: str) -> None:
+        self._image_id = image_id
+
+    async def prepare(self, selection: ImageSelection) -> PreparedImage:
+        return PreparedImage(
+            artifact=ImageArtifact(
+                image_id=self._image_id,
+                revision="a" * 40,
+                dependency_id="sha256:dependencies",
+                base_images=("busybox:1.36",),
+            )
+        )
+
+
+@pytest.mark.skipif(not docker_available(), reason="Docker daemon is not available")
+def test_a_real_docker_hub_restart_keeps_one_instance_up_and_starts_the_other_again(tmp_path):
+    async def scenario() -> None:
+        import docker
+
+        client = docker.from_env()
+        context = tmp_path / "image"
+        context.mkdir()
+        (context / "Dockerfile").write_text(
+            'FROM busybox:1.36\nENTRYPOINT ["sh", "-c", "sleep 300"]\n',
+            encoding="utf-8",
+        )
+        await asyncio.to_thread(client.images.pull, "busybox:1.36")
+        image, _ = await asyncio.to_thread(
+            client.images.build,
+            path=str(context),
+            rm=True,
+            forcerm=True,
+            pull=False,
+        )
+        network_name = f"kinby-test-{uuid.uuid4().hex}"
+        await asyncio.to_thread(client.networks.create, network_name, internal=False)
+        directory = tmp_path / "hub"
+        images = PulledImage(image.id)
+        runtime_ids: list[str] = []
+        try:
+            hub = _docker_hub(directory, network_name, client, images)
+            first = await started_instance(hub_client(hub), hub)
+            runtime_ids.append(str(first.instance_id))
+            second = await started_instance(hub_client(hub), hub)
+            runtime_ids.append(str(second.instance_id))
+            running = await asyncio.to_thread(client.containers.get, f"kinby-{first.instance_id}")
+            stopping = await asyncio.to_thread(client.containers.get, f"kinby-{second.instance_id}")
+            await asyncio.to_thread(stopping.stop, timeout=1)
+            hub.close()
+
+            reopened = _docker_hub(directory, network_name, client, images)
+            recovery = await reopened.recover()
+            reopened.close()
+
+            assert recovery.unknown_containers == ()
+            assert {instance.instance_id: instance.state for instance in recovery.instances} == {
+                first.instance_id: RecoveredState.RUNNING,
+                second.instance_id: RecoveredState.STARTED,
+            }
+            kept = await asyncio.to_thread(client.containers.get, f"kinby-{first.instance_id}")
+            assert kept.id == running.id
+            await asyncio.to_thread(kept.reload)
+            assert kept.status == "running"
+            started = await asyncio.to_thread(client.containers.get, f"kinby-{second.instance_id}")
+            await asyncio.to_thread(started.reload)
+            assert started.status == "running"
+        finally:
+            for runtime_id in runtime_ids:
+                await _discard(client, runtime_id)
+            network = await asyncio.to_thread(client.networks.get, network_name)
+            await asyncio.to_thread(network.remove)
+            await asyncio.to_thread(client.images.remove, image.id, force=True)
+
+    asyncio.run(scenario())
+
+
+def _docker_hub(
+    directory: Path,
+    network: str,
+    client: DockerClient,
+    images: PulledImage,
+) -> Hub:
+    registry = HubRegistry(directory)
+    return Hub(
+        directory,
+        runtime=DockerRuntime(
+            registry.hub_id(),
+            directory,
+            directory,
+            network=network,
+            client=client,
+        ),
+        images=images,
+    )
+
+
+async def _discard(client: DockerClient, runtime_id: str) -> None:
+    try:
+        container = await asyncio.to_thread(client.containers.get, f"kinby-{runtime_id}")
+    except Exception:
+        container = None
+    if container is not None:
+        await asyncio.to_thread(container.remove, force=True, v=True)
+    for suffix in ("workspace", "codex"):
+        try:
+            volume = await asyncio.to_thread(client.volumes.get, f"kinby-{runtime_id}-{suffix}")
+        except Exception:
+            continue
+        await asyncio.to_thread(volume.remove, force=True)
 
 
 @pytest.mark.parametrize(

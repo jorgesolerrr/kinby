@@ -1,12 +1,19 @@
 import logging
 from importlib import import_module
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
 from kinby.cli import main
 from kinby.contracts import AccessToken
-from kinby.hub import HubAccess, HubRegistry
+from kinby.hub import (
+    HubAccess,
+    HubRegistry,
+    LifecycleRecovery,
+    RecoveredInstance,
+    RecoveredState,
+)
 from kinby.instance import Serve
 
 
@@ -90,6 +97,30 @@ def test_hub_command_carries_its_listen_address_and_web_app(tmp_path, monkeypatc
 
     assert (exit_code, defaults) == (0, 0)
     assert received == [(Serve("127.0.0.1", 9000), app), (Serve("0.0.0.0", 8080), None)]
+
+
+def test_a_starting_hub_reports_what_lifecycle_recovery_found(capsys):
+    cli_module = import_module("kinby.cli.main")
+    instance_id = UUID("11111111-1111-1111-1111-111111111111")
+
+    cli_module._announce_recovery(
+        LifecycleRecovery(
+            instances=(
+                RecoveredInstance(
+                    instance_id=instance_id,
+                    state=RecoveredState.MISSING,
+                    detail="The container is gone. Recreate it to bring it back.",
+                ),
+            ),
+            unknown_containers=("a-stranger",),
+        )
+    )
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed == [
+        f"recovered: {instance_id} missing: The container is gone. Recreate it to bring it back.",
+        "unowned container: a-stranger",
+    ]
 
 
 def test_hub_token_rotate_replaces_the_token_and_ends_sessions(tmp_path, capsys):

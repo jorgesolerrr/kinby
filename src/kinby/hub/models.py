@@ -85,6 +85,36 @@ class ContainerRuntime(Protocol):
     async def list(self) -> Sequence[str]: ...
 
 
+class RecoveredState(StrEnum):
+    """What a hub found for one managed instance when it opened its directory."""
+
+    RUNNING = "running"
+    STARTED = "started"
+    STOPPED = "stopped"
+    UNSTOPPED = "unstopped"
+    UNHEALTHY = "unhealthy"
+    MISSING = "missing"
+    INCOMPLETE = "incomplete"
+    CONFLICTED = "conflicted"
+    UNAVAILABLE = "unavailable"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class RecoveredInstance:
+    instance_id: UUID
+    state: RecoveredState
+    detail: str
+
+
+@dataclass(frozen=True)
+class LifecycleRecovery:
+    """One pass of lifecycle recovery: what each instance came back as, and what is not ours."""
+
+    instances: tuple[RecoveredInstance, ...]
+    unknown_containers: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class ImageArtifact:
     image_id: str

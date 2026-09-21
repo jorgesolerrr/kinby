@@ -54,6 +54,13 @@ class LifecycleOperationNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class LifecycleOperationInFlight(CoreError):
+    """Another lifecycle operation owns this managed instance right now."""
+
+    code = ErrorCode.INSTANCE_BUSY
+    retryable = True
+
+
 class ThreadBusy(CoreError):
     code = ErrorCode.THREAD_BUSY
     retryable = True

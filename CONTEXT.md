@@ -92,6 +92,11 @@ The hub's record of the **instances** it manages, their identities, storage loca
 
 The stable identity of one entry in the **instance registry**. It is distinct from the instance's own manifest ID and **persona name**, so adoption preserves both.
 
+### Instance secrets
+
+The environment values one managed **instance** holds, kept in a protected file beside that instance and never in the **instance registry** or the **hub**'s own environment. A container reads them once, when it is created, so replacing them changes nothing until a **container recreation**.
+_Avoid_: credentials, env vars
+
 ### Lifecycle operation
 
 One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. Its identity and outcome remain available after the requesting client disconnects.
@@ -103,6 +108,16 @@ One recorded stage of a **lifecycle operation**, kept in the order the **hub** r
 ### Force stop
 
 A user's request to stop an **instance** without waiting for its accepted work. It interrupts running **turns** and parked **approvals** through the **instance runtime**, then takes the container down within a bounded grace period. A force stop may also escalate an **instance draining** that is already pending, inside the same **lifecycle operation**.
+
+### Container recreation
+
+The **lifecycle operation** that replaces one **instance**'s container with a new one built from the **image artifact** and **instance secrets** already recorded for it. It is how replaced secrets reach a running instance, and the only way a container the **hub** has lost comes back; it never selects a different image and never touches the instance's storage.
+_Avoid_: rebuild, restart, update
+
+### Lifecycle recovery
+
+What the **hub** does with each managed **instance** when it opens its directory: it reads the **instance registry** and the containers labeled as its own, then restores the intended running or stopped state of the containers that are still there. It reports everything else — a missing container, an unfinished **lifecycle operation**, a container it does not own — and changes nothing.
+_Avoid_: reconciliation, adoption, self-healing
 
 ### Image artifact
 
