@@ -9,7 +9,9 @@ from collections.abc import AsyncGenerator, AsyncIterator, Collection, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from http import HTTPStatus
+from ipaddress import ip_address
 from itertools import count
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -37,6 +39,9 @@ from kinby.contracts import (
 )
 
 TOKEN_VARIABLE = "KINBY_TOKEN"
+_SECURE_SCHEMES = frozenset({"https", "wss"})
+_PLAIN_SCHEMES = frozenset({"http", "ws"})
+_LOOPBACK_NAMES = frozenset({"localhost", "localhost."})
 #: Full-jitter backoff between reconnects, in seconds.
 FIRST_BACKOFF = 0.5
 LAST_BACKOFF = 30.0
@@ -56,11 +61,15 @@ AUTHENTICATION_FAILED = ErrorEnvelope(
     message="The contract server rejected the token.",
     retryable=False,
 )
-_UNREADABLE = ErrorEnvelope(
+UNREADABLE = ErrorEnvelope(
     code=ErrorCode.INTERNAL,
     message="The contract server answered with something this client could not read.",
     retryable=False,
 )
+
+
+class InsecureContractUrl(ValueError):
+    """The URL would send the control token in the clear to a remote host."""
 
 
 @dataclass(frozen=True)
@@ -250,6 +259,19 @@ class ContractSocket:
                 self._end(frame)
             case ErrorFrame() if frame.id is not None:
                 self._error(frame.id, frame.error)
+            case ErrorFrame():
+                self._fail_pending(frame.error)
+            case ErrorEnvelope():
+                self._fail_pending(UNREADABLE)
+
+    def _fail_pending(self, error: ErrorEnvelope) -> None:
+        """Unblock every waiter that a frame without an id cannot name."""
+        for call in self._calls.values():
+            if not call.answer.done():
+                call.answer.set_result(error)
+        for frame_id, subscription in list(self._subscriptions.items()):
+            if not subscription.opened.done() and subscription.fail(error):
+                del self._subscriptions[frame_id]
 
     def _resolve(self, frame_id: FrameId, payload: Mapping[str, object]) -> None:
         call = self._calls.get(frame_id)
@@ -297,11 +319,37 @@ class ContractSocket:
 @asynccontextmanager
 async def contract_client(url: str, token: ControlToken) -> AsyncIterator[ContractClient]:
     """Open a client on a contract server, authenticated with a bearer token."""
+    protected = protected_contract_url(url)
     headers = {"Authorization": f"Bearer {token}"}
     async with aiohttp.ClientSession(headers=headers) as session:
-        contract = ContractSocket(session, url)
+        contract = ContractSocket(session, protected)
         async with contract.connected():
             yield ContractClient(contract.dispatch, contract.subscribe, INSTANCE_SCOPES)
+
+
+def protected_contract_url(url: str) -> str:
+    """Refuse a URL that would send the control token in the clear off this machine."""
+    parsed = urlparse(url)
+    scheme = parsed.scheme.casefold()
+    if scheme in _SECURE_SCHEMES:
+        return url
+    host = parsed.hostname
+    if scheme in _PLAIN_SCHEMES and host is not None and _loopback(host):
+        return url
+    target = host or url
+    raise InsecureContractUrl(
+        f"Refusing to send the control token over plaintext to {target}. "
+        "Use https:// or wss://, or a loopback http:// or ws:// address."
+    )
+
+
+def _loopback(host: str) -> bool:
+    if host.casefold() in _LOOPBACK_NAMES:
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _backoff(attempt: int) -> float:
@@ -313,4 +361,4 @@ def _validated(model: type[ContractModel], payload: Mapping[str, object]) -> Con
     try:
         return model.model_validate(payload)
     except ValueError:
-        return _UNREADABLE
+        return UNREADABLE

@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from io import StringIO
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -13,7 +15,10 @@ from kinby.cli.contract_socket import (
     CONNECTION_LOST,
     FIRST_BACKOFF,
     TOKEN_VARIABLE,
+    UNREADABLE,
+    InsecureContractUrl,
     contract_client,
+    protected_contract_url,
 )
 from kinby.contracts import (
     THREAD_CREATE,
@@ -296,3 +301,97 @@ def test_the_repl_refuses_an_instance_directory_beside_connect(
 
     assert exit_code == 1
     assert "--connect" in capsys.readouterr().err
+
+
+@asynccontextmanager
+async def answering(body: str) -> AsyncIterator[Serve]:
+    """A socket that answers every client frame with one text payload and stays open."""
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        async for message in socket:
+            if message.type is web.WSMsgType.TEXT:
+                await socket.send_str(body)
+        return socket
+
+    application = web.Application()
+    application.router.add_get("/ws", handler)
+    runner = web.AppRunner(application, shutdown_timeout=0.1)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    try:
+        yield Serve("127.0.0.1", site.port)
+    finally:
+        await runner.cleanup()
+
+
+def test_an_unreadable_frame_fails_the_call_instead_of_waiting() -> None:
+    async def scenario() -> None:
+        async with (
+            answering("not a frame") as address,
+            contract_client(url(address), TOKEN) as client,
+        ):
+            listed = client.call(THREAD_LIST, ThreadListCommand())
+            answer = await asyncio.wait_for(listed, timeout=5)
+
+        assert answer == UNREADABLE
+
+    asyncio.run(scenario())
+
+
+def test_an_unreadable_frame_fails_a_subscription_that_never_opened() -> None:
+    async def scenario() -> None:
+        async with (
+            answering("not a frame") as address,
+            contract_client(url(address), TOKEN) as client,
+        ):
+            command = ThreadSubscribeCommand(thread_id=uuid4())
+            answer = await asyncio.wait_for(client.subscribe(THREAD_SUBSCRIBE, command), timeout=5)
+
+        assert answer == UNREADABLE
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        "http://example.com/ws",
+        "ws://8.8.8.8/ws",
+        "http://192.168.1.10:8787/ws",
+    ],
+)
+def test_a_plaintext_remote_url_does_not_open_a_client(remote: str) -> None:
+    async def scenario() -> None:
+        with pytest.raises(InsecureContractUrl, match="plaintext"):
+            async with contract_client(remote, TOKEN):
+                pass
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "allowed",
+    [
+        "http://127.0.0.1:8787/ws",
+        "http://localhost/ws",
+        "ws://[::1]/ws",
+        "https://example.com/ws",
+        "wss://hub.example.com/instances/1/ws",
+    ],
+)
+def test_loopback_and_tls_urls_keep_the_control_token_on_a_safe_path(allowed: str) -> None:
+    assert protected_contract_url(allowed) == allowed
+
+
+def test_the_repl_refuses_a_plaintext_remote_url(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(TOKEN_VARIABLE, TOKEN)
+    exit_code = main(["repl", "--connect", "http://example.com/ws"])
+
+    assert exit_code == 1
+    assert "plaintext" in capsys.readouterr().err

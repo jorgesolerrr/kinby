@@ -20,7 +20,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from kinby.cli.client import ContractClient, format_error
-from kinby.cli.contract_socket import TOKEN_VARIABLE, contract_client
+from kinby.cli.contract_socket import TOKEN_VARIABLE, InsecureContractUrl, contract_client
 from kinby.cli.repl import render_event, run_repl
 from kinby.cli.routines import show_routines
 from kinby.contracts import (
@@ -834,7 +834,7 @@ def main(
                 instance = _load_selected_instance(args)
                 client = _contract_client(instance)
                 return asyncio.run(_show_stats(client, command, instance.manifest.state_dir))
-    except (InstanceNotFoundError, InstanceBusyError, ManifestError) as exc:
+    except (InstanceNotFoundError, InstanceBusyError, InsecureContractUrl, ManifestError) as exc:
         print(exc, file=sys.stderr)
         return 1
     parser.print_help()
