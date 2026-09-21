@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from aiohttp import web
@@ -1250,6 +1251,87 @@ def test_status_names_the_running_stop_while_a_start_is_queued(tmp_path):
         assert not isinstance(status, ErrorEnvelope)
         assert status.active_operation_id == stopping.operation_id
         assert status.active_operation_id != starting.operation_id
+
+    asyncio.run(scenario())
+
+
+def test_status_names_the_newer_running_operation_when_an_older_one_remains(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(holds=True)
+        hub = hub_at(tmp_path / "hub", control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+        stale = uuid4()
+        hub.registry.begin_operation(
+            stale,
+            created.instance_id,
+            OperationKind.STOP,
+            "Stop queued.",
+        )
+        hub.registry.update_operation(stale, OperationState.RUNNING, "Draining accepted work.")
+
+        stopping = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopping, LifecycleOperationResult)
+        await asyncio.wait_for(control.asked.wait(), timeout=5)
+        status = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+        control.release.set()
+        assert (await operation_outcome(client, stopping)).state is OperationState.SUCCEEDED
+
+        assert not isinstance(status, ErrorEnvelope)
+        assert status.active_operation_id == stopping.operation_id
+        assert status.active_operation_id != stale
+
+    asyncio.run(scenario())
+
+
+def test_a_restarted_hub_fails_operations_the_previous_process_left_unfinished(tmp_path):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+        abandoned = uuid4()
+        hub.registry.begin_operation(
+            abandoned,
+            created.instance_id,
+            OperationKind.START,
+            "Start queued.",
+        )
+        hub.registry.update_operation(abandoned, OperationState.RUNNING, "Starting selected image.")
+        finished = uuid4()
+        hub.registry.begin_operation(
+            finished,
+            created.instance_id,
+            OperationKind.CREATE,
+            "Creation queued.",
+        )
+        hub.registry.update_operation(
+            finished,
+            OperationState.SUCCEEDED,
+            "Instance prepared and stopped.",
+        )
+
+        hub.registry.fail_abandoned_operations()
+        failed = await client.call(OPERATION_GET, OperationGetCommand(operation_id=abandoned))
+        kept = await client.call(OPERATION_GET, OperationGetCommand(operation_id=finished))
+        status = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+
+        assert not isinstance(failed, ErrorEnvelope)
+        assert failed.state is OperationState.FAILED
+        assert failed.detail == "The hub restarted before this operation finished."
+        assert failed.steps[-1].detail == failed.detail
+        assert not isinstance(kept, ErrorEnvelope)
+        assert kept.state is OperationState.SUCCEEDED
+        assert not isinstance(status, ErrorEnvelope)
+        assert status.active_operation_id is None
 
     asyncio.run(scenario())
 

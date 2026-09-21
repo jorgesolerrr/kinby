@@ -341,15 +341,17 @@ class HubRegistry:
     def active_operation(self, instance_id: UUID) -> UUID | None:
         """The operation still changing this instance, for a client that lost its connection.
 
-        A queued start sits behind the stop that holds the instance. The running row is
-        that stop; the oldest queued row is only the answer when nothing is running yet.
+        The running row holds the instance. A newer running row wins when a restart left
+        an older one behind, because only the newer task belongs to this process. A queued
+        row is the answer only when nothing is running, and the oldest of those runs first.
         """
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT id FROM operations
                 WHERE instance_id = ? AND state IN (?, ?)
-                ORDER BY CASE state WHEN ? THEN 0 ELSE 1 END, rowid
+                ORDER BY CASE state WHEN ? THEN 0 ELSE 1 END,
+                    CASE state WHEN ? THEN -rowid ELSE rowid END
                 LIMIT 1
                 """,
                 (
@@ -357,9 +359,29 @@ class HubRegistry:
                     OperationState.PENDING.value,
                     OperationState.RUNNING.value,
                     OperationState.RUNNING.value,
+                    OperationState.RUNNING.value,
                 ),
             ).fetchone()
         return UUID(row[0]) if row is not None else None
+
+    def fail_abandoned_operations(self) -> None:
+        """Fail operations a previous process left unfinished.
+
+        Their tasks died with that process. The steps stay, so a client can see how far
+        the work got, and status no longer treats the row as still running.
+        """
+        detail = "The hub restarted before this operation finished."
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id FROM operations WHERE state IN (?, ?)",
+                (OperationState.PENDING.value, OperationState.RUNNING.value),
+            ).fetchall()
+            for (operation_id,) in rows:
+                connection.execute(
+                    "UPDATE operations SET state = ?, detail = ? WHERE id = ?",
+                    (OperationState.FAILED.value, detail, operation_id),
+                )
+                self._add_step(connection, UUID(operation_id), OperationState.FAILED, detail)
 
     def record_preparation(
         self,
