@@ -1,6 +1,7 @@
 """Lifecycle recovery: what a reopened hub does with each managed instance, and what it reports."""
 
 import asyncio
+import os
 import sqlite3
 from pathlib import Path
 from uuid import uuid4
@@ -8,6 +9,7 @@ from uuid import uuid4
 from kinby.contracts import (
     INSTANCE_CREATE,
     INSTANCE_LIST,
+    INSTANCE_SECRETS_SET,
     INSTANCE_START,
     INSTANCE_STATUS,
     INSTANCE_STOP,
@@ -15,6 +17,7 @@ from kinby.contracts import (
     ErrorEnvelope,
     InstanceCreateCommand,
     InstanceListCommand,
+    InstanceSecretsSetCommand,
     InstanceStartCommand,
     InstanceStatusCommand,
     InstanceStopCommand,
@@ -348,6 +351,81 @@ def test_a_start_that_failed_is_reported_and_not_repeated(tmp_path):
         assert [instance.state for instance in recovery.instances] == [RecoveredState.FAILED]
         assert "The last start operation failed" in recovery.instances[0].detail
         assert runtime.started == [str(created.instance_id)]
+
+    asyncio.run(scenario())
+
+
+def test_a_later_secrets_replacement_does_not_repeat_a_failed_start(tmp_path):
+    async def scenario() -> None:
+        runtime = RefusingRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = hub_client(hub)
+        created = await created_instance(client, secrets={"PROVIDER_TOKEN": "first-value"})
+        refused = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(refused, LifecycleOperationResult)
+        assert (await finished_operation(client, refused)).state is OperationState.FAILED
+        replaced = await client.call(
+            INSTANCE_SECRETS_SET,
+            InstanceSecretsSetCommand(
+                instance_id=created.instance_id,
+                secrets={"PROVIDER_TOKEN": "second-value"},
+            ),
+        )
+        assert isinstance(replaced, LifecycleOperationResult)
+        assert (await finished_operation(client, replaced)).state is OperationState.SUCCEEDED
+        hub.close()
+
+        reopened = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        recovery = await reopened.recover()
+
+        assert [instance.state for instance in recovery.instances] == [RecoveredState.FAILED]
+        assert "The last start operation failed" in recovery.instances[0].detail
+        assert runtime.started == [str(created.instance_id)]
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_secrets_replacement_does_not_block_restoring_a_stopped_container(
+    tmp_path,
+    monkeypatch,
+):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = hub_client(hub)
+        created = await started_instance(client, hub, secrets={"PROVIDER_TOKEN": "first-value"})
+        instance_path = hub.instances_directory / str(created.instance_id)
+        original = os.open
+
+        def refuse_to_write(path: object, *arguments: object, **options: object) -> int:
+            """Stand in for the disk failing under the secrets write."""
+            named = Path(path) if isinstance(path, str | Path) else None
+            if named is not None and named.parent == instance_path:
+                raise OSError("no space left on device")
+            return original(path, *arguments, **options)  # ty: ignore[invalid-argument-type]
+
+        monkeypatch.setattr(os, "open", refuse_to_write)
+        replaced = await client.call(
+            INSTANCE_SECRETS_SET,
+            InstanceSecretsSetCommand(
+                instance_id=created.instance_id,
+                secrets={"PROVIDER_TOKEN": "second-value"},
+            ),
+        )
+        assert isinstance(replaced, LifecycleOperationResult)
+        assert (await finished_operation(client, replaced)).state is OperationState.FAILED
+        monkeypatch.undo()
+        hub.close()
+        runtime.states[str(created.instance_id)] = RuntimeStatus("stopped", None)
+
+        reopened = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        recovery = await reopened.recover()
+
+        assert [instance.state for instance in recovery.instances] == [RecoveredState.STARTED]
+        assert runtime.started == [str(created.instance_id)] * 2
 
     asyncio.run(scenario())
 

@@ -602,11 +602,19 @@ class HubRegistry:
         return [record for instance_id in ids if (record := self.instance(instance_id)) is not None]
 
     def last_operation(self, instance_id: UUID) -> OperationGetResult | None:
-        """The most recent lifecycle operation recorded for this instance."""
+        """The latest operation that changed this instance's container.
+
+        Replacing secrets writes a file and leaves the container where it is, so a
+        later secrets operation does not hide an earlier start, stop, or recreation.
+        """
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT id FROM operations WHERE instance_id = ? ORDER BY rowid DESC LIMIT 1",
-                (str(instance_id),),
+                """
+                SELECT id FROM operations
+                WHERE instance_id = ? AND kind != ?
+                ORDER BY rowid DESC LIMIT 1
+                """,
+                (str(instance_id), OperationKind.SECRETS.value),
             ).fetchone()
         return self.operation(UUID(row[0])) if row is not None else None
 

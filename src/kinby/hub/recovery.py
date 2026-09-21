@@ -1,9 +1,10 @@
 """Lifecycle recovery: restore the intended state of the containers that are still there.
 
 Recovery inspects before it acts, and acts on one case only: an existing container whose
-instance is recorded as intended running and whose last lifecycle operation succeeded. It
-never adopts a container it does not know, never creates one, and never repeats an
-operation that failed. See ADR 0051.
+instance is recorded as intended running and whose last operation that changed the
+container succeeded. A secrets replacement leaves the container where it is, so it does
+not count. Recovery never adopts a container it does not know, never creates one, and
+never repeats an operation that failed. See ADR 0051.
 """
 
 from __future__ import annotations
