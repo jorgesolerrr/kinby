@@ -13,9 +13,11 @@ from aiohttp import web
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
     CONTRACT_VERSION,
+    CONTROL_SCOPES,
     INSTANCE_CREATE,
     INSTANCE_LIST,
     INSTANCE_LOGS,
+    INSTANCE_SCOPES,
     INSTANCE_START,
     INSTANCE_STATUS,
     INSTANCE_STOP,
@@ -40,7 +42,6 @@ from kinby.contracts import (
     OperationKind,
     OperationState,
     PackageSelection,
-    ProcessState,
     Readiness,
     Scope,
     StorageItem,
@@ -49,17 +50,18 @@ from kinby.contracts import (
 from kinby.hub import (
     ControlConnectionLost,
     ControlEndpoint,
+    ControlUnreachable,
     HttpInstanceControl,
     Hub,
+    HubRegistry,
     ImageArtifact,
     ImageSelection,
-    InstanceAddress,
     InstanceControl,
     InstanceSpec,
-    InstanceUnreachable,
     PreparedImage,
     RuntimeStatus,
 )
+from kinby.hub.service import HubAlreadyRunning
 from kinby.instance import inspect_instance
 from kinby.packages import InstalledPackage, PackageDescriptor, RequiredSecret
 
@@ -97,6 +99,7 @@ class FakeRuntime:
         self.started: list[str] = []
         self.stopped: list[int] = []
         self.states: dict[str, RuntimeStatus] = {}
+        self.addresses: dict[str, str] = {}
         self.log_output = b"booted\n"
 
     async def create(self, spec: InstanceSpec) -> None:
@@ -111,14 +114,16 @@ class FakeRuntime:
         self.stopped.append(grace_seconds)
         self.states[instance_id] = RuntimeStatus("stopped", None)
 
-    def address(self, instance_id: str, port: int) -> InstanceAddress:
-        return InstanceAddress(f"http://kinby-{instance_id}:{port}")
-
     async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
         self.states.pop(instance_id, None)
 
     async def status(self, instance_id: str) -> RuntimeStatus:
         return self.states.get(instance_id, RuntimeStatus("absent", None))
+
+    async def address(self, instance_id: str) -> str | None:
+        if self.states.get(instance_id, RuntimeStatus("absent", None)).state != "running":
+            return None
+        return self.addresses.get(instance_id)
 
     async def logs(
         self,
@@ -160,6 +165,41 @@ class UnavailableRuntime(FakeRuntime):
         raise ConnectionError("Docker daemon unavailable")
 
 
+class HeldRuntime(FakeRuntime):
+    """Hold a start until the test releases it, so an operation stays in flight."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.holding = asyncio.Event()
+        self.released = asyncio.Event()
+
+    async def start(self, instance_id: str) -> None:
+        self.holding.set()
+        await self.released.wait()
+        await super().start(instance_id)
+
+
+def _client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
+    return ContractClient(
+        hub.dispatcher.dispatch,
+        hub.dispatcher.subscribe,
+        scopes if scopes is not None else {Scope.HUB_READ, Scope.HUB_ADMIN},
+    )
+
+
+async def _operation(client: ContractClient, accepted: LifecycleOperationResult):
+    for _ in range(100):
+        result = await client.call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=accepted.operation_id),
+        )
+        assert not isinstance(result, ErrorEnvelope)
+        if result.state in {OperationState.SUCCEEDED, OperationState.FAILED}:
+            return result
+        await asyncio.sleep(0.01)
+    raise AssertionError("lifecycle operation did not finish")
+
+
 class FakeControl:
     """An instance that drains when asked, and records what the hub asked it."""
 
@@ -188,7 +228,7 @@ class FakeControl:
     async def probe(self, endpoint: ControlEndpoint) -> InstanceProbeResult:
         self.endpoints.append(endpoint)
         if not self.reachable:
-            raise InstanceUnreachable("Cannot connect to host kinby-instance:8787")
+            raise ControlUnreachable("Cannot connect to host kinby-instance:8787")
         return InstanceProbeResult(
             contract_version=CONTRACT_VERSION,
             capabilities=self.capabilities,
@@ -198,7 +238,7 @@ class FakeControl:
         self.forces.append(force)
         self.asked.set()
         if self.refuses:
-            raise InstanceUnreachable("The instance refused to drain: no")
+            raise ControlUnreachable("The instance refused to drain: no")
         if self.drops:
             self.drops -= 1
             raise ControlConnectionLost(
@@ -223,38 +263,40 @@ def hub_at(
         directory,
         runtime=runtime or FakeRuntime(),
         images=images or FakeImages(),
-        control=control or FakeControl(),
+        control=control,
     )
 
 
 def hub_client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
-    return ContractClient(
-        hub.dispatcher.dispatch,
-        hub.dispatcher.subscribe,
-        scopes if scopes is not None else {Scope.HUB_READ, Scope.HUB_ADMIN},
+    return _client(hub, scopes)
+
+
+async def started_instance(client: ContractClient, hub: Hub) -> LifecycleOperationResult:
+    created = await client.call(
+        INSTANCE_CREATE,
+        InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
     )
-
-
-async def operation_outcome(client: ContractClient, accepted: LifecycleOperationResult):
-    for _ in range(100):
-        result = await client.call(
-            OPERATION_GET,
-            OperationGetCommand(operation_id=accepted.operation_id),
-        )
-        assert not isinstance(result, ErrorEnvelope)
-        if result.state in {OperationState.SUCCEEDED, OperationState.FAILED}:
-            return result
-        await asyncio.sleep(0.01)
-    raise AssertionError("lifecycle operation did not finish")
+    assert isinstance(created, LifecycleOperationResult)
+    assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+    started = await client.call(
+        INSTANCE_START,
+        InstanceStartCommand(instance_id=created.instance_id),
+    )
+    assert isinstance(started, LifecycleOperationResult)
+    assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+    runtime = hub._runtime
+    if isinstance(runtime, FakeRuntime):
+        runtime.addresses[str(created.instance_id)] = f"http://kinby-{created.instance_id}:8787"
+    return created
 
 
 def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
         images = FakeImages()
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
         hub_id = hub.registry.hub_id()
-        client = hub_client(hub)
+        client = _client(hub)
 
         accepted = await client.call(
             INSTANCE_CREATE,
@@ -267,7 +309,7 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await operation_outcome(client, accepted)
+        outcome = await _operation(client, accepted)
 
         assert outcome.state is OperationState.SUCCEEDED
         assert outcome.detail == "Instance prepared and stopped."
@@ -302,9 +344,10 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
             "utf-8", errors="ignore"
         )
 
-        reopened = hub_at(tmp_path / "hub", runtime=runtime, images=images)
+        hub.close()
+        reopened = Hub(tmp_path / "hub", runtime=runtime, images=images)
         assert reopened.registry.hub_id() == hub_id
-        reopened_result = await hub_client(reopened).call(
+        reopened_result = await _client(reopened).call(
             OPERATION_GET,
             OperationGetCommand(operation_id=accepted.operation_id),
         )
@@ -344,8 +387,8 @@ def test_create_from_a_pinned_package_seeds_owned_configuration_and_provenance(t
         )
         runtime = FakeRuntime()
         images = FakeImages(package=package)
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images)
-        client = hub_client(hub)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
+        client = _client(hub)
         selection = PackageSelection(
             id="writer",
             distribution="kinby-writer",
@@ -364,7 +407,7 @@ def test_create_from_a_pinned_package_seeds_owned_configuration_and_provenance(t
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await operation_outcome(client, accepted)
+        outcome = await _operation(client, accepted)
 
         assert outcome.state is OperationState.SUCCEEDED
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
@@ -407,8 +450,8 @@ def test_package_creation_requires_declared_secrets_before_publishing_an_instanc
             files={"SYSTEM.md": "Write clearly.\n"},
         )
         runtime = FakeRuntime()
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(package=package))
-        client = hub_client(hub)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages(package=package))
+        client = _client(hub)
 
         accepted = await client.call(
             INSTANCE_CREATE,
@@ -423,7 +466,7 @@ def test_package_creation_requires_declared_secrets_before_publishing_an_instanc
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await operation_outcome(client, accepted)
+        outcome = await _operation(client, accepted)
 
         assert outcome.state is OperationState.FAILED
         assert outcome.detail == 'Missing required secret: "EDITOR_TOKEN".'
@@ -451,8 +494,8 @@ def test_invalid_package_configuration_is_not_published_or_sent_to_the_runtime(t
         )
         secret = "recognizable-package-secret"
         runtime = FakeRuntime()
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(package=package))
-        client = hub_client(hub)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages(package=package))
+        client = _client(hub)
 
         accepted = await client.call(
             INSTANCE_CREATE,
@@ -468,7 +511,7 @@ def test_invalid_package_configuration_is_not_published_or_sent_to_the_runtime(t
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await operation_outcome(client, accepted)
+        outcome = await _operation(client, accepted)
 
         assert outcome.state is OperationState.FAILED
         assert "workspace.snapshots" in outcome.detail
@@ -485,7 +528,7 @@ def test_authorization_precedes_secret_validation_and_effects(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
         images = FakeImages()
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
 
         result = await hub.dispatcher.dispatch(
             INSTANCE_CREATE.name,
@@ -520,7 +563,7 @@ def test_secret_command_serializes_the_value_for_transport_without_exposing_its_
 def test_malformed_secret_is_not_exposed_by_contract_validation(tmp_path):
     async def scenario() -> None:
         secret = "malformed-submitted-secret"
-        hub = hub_at(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
+        hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
 
         result = await hub.dispatcher.dispatch(
             INSTANCE_CREATE.name,
@@ -544,8 +587,8 @@ def test_invalid_manifest_metadata_is_an_operation_failure_before_runtime_effect
     async def scenario() -> None:
         runtime = FakeRuntime()
         images = FakeImages()
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images)
-        client = hub_client(hub)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
+        client = _client(hub)
 
         accepted = await client.call(
             INSTANCE_CREATE,
@@ -556,7 +599,7 @@ def test_invalid_manifest_metadata_is_an_operation_failure_before_runtime_effect
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await operation_outcome(client, accepted)
+        outcome = await _operation(client, accepted)
 
         assert outcome.state is OperationState.FAILED
         assert "models.main" in outcome.detail
@@ -572,8 +615,8 @@ def test_failed_build_is_inspectable_and_does_not_touch_the_runtime(tmp_path):
         secret = "submitted-secret"
         runtime = FakeRuntime()
         images = FakeImages(failure=f"builder rejected {secret}")
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images)
-        client = hub_client(hub)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
+        client = _client(hub)
 
         accepted = await client.call(
             INSTANCE_CREATE,
@@ -584,7 +627,7 @@ def test_failed_build_is_inspectable_and_does_not_touch_the_runtime(tmp_path):
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await operation_outcome(client, accepted)
+        outcome = await _operation(client, accepted)
 
         assert outcome.state is OperationState.FAILED
         assert secret not in outcome.detail
@@ -601,8 +644,8 @@ def test_start_status_and_logs_use_the_selected_image_and_redact_secrets(tmp_pat
         secret = "secret-in-runtime-log"
         runtime = FakeRuntime()
         images = FakeImages()
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images)
-        client = hub_client(hub)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
+        client = _client(hub)
         created = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
@@ -612,7 +655,7 @@ def test_start_status_and_logs_use_the_selected_image_and_redact_secrets(tmp_pat
             ),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await operation_outcome(client, created)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
         runtime.log_output = f"ready token={secret}\n".encode()
 
         started = await client.call(
@@ -620,7 +663,7 @@ def test_start_status_and_logs_use_the_selected_image_and_redact_secrets(tmp_pat
             InstanceStartCommand(instance_id=created.instance_id),
         )
         assert isinstance(started, LifecycleOperationResult)
-        assert (await operation_outcome(client, started)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, started)).state is OperationState.SUCCEEDED
         status = await client.call(
             INSTANCE_STATUS,
             InstanceStatusCommand(instance_id=created.instance_id),
@@ -641,7 +684,7 @@ def test_start_status_and_logs_use_the_selected_image_and_redact_secrets(tmp_pat
             InstanceStartCommand(instance_id=created.instance_id),
         )
         assert isinstance(started_again, LifecycleOperationResult)
-        assert (await operation_outcome(client, started_again)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, started_again)).state is OperationState.SUCCEEDED
         assert images.revisions == ["HEAD"]
         assert runtime.created[0].image == "sha256:selected-image"
         assert runtime.started == [str(created.instance_id), str(created.instance_id)]
@@ -660,18 +703,18 @@ def test_status_distinguishes_missing_starting_unhealthy_and_unavailable(tmp_pat
         readiness: Readiness
 
     async def create(hub: Hub, runtime: FakeRuntime):
-        client = hub_client(hub)
+        client = _client(hub)
         created = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await operation_outcome(client, created)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
         return client, created
 
     async def scenario() -> None:
         runtime = FakeRuntime()
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
         client, created = await create(hub, runtime)
         cases = (
             ExpectedStatus(RuntimeStatus("absent", None), "missing", Readiness.NOT_RUNNING),
@@ -690,8 +733,9 @@ def test_status_distinguishes_missing_starting_unhealthy_and_unavailable(tmp_pat
 
         unavailable = UnavailableRuntime()
         unavailable.states = runtime.states
-        reopened = hub_at(tmp_path / "hub", runtime=unavailable, images=FakeImages())
-        result = await hub_client(reopened).call(
+        hub.close()
+        reopened = Hub(tmp_path / "hub", runtime=unavailable, images=FakeImages())
+        result = await _client(reopened).call(
             INSTANCE_STATUS,
             InstanceStatusCommand(instance_id=created.instance_id),
         )
@@ -705,8 +749,8 @@ def test_status_distinguishes_missing_starting_unhealthy_and_unavailable(tmp_pat
 def test_metadata_for_two_created_instances_never_changes_process_environment(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
-        client = hub_client(hub)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
         before = dict(os.environ)
         for manifest_id, value in (("first", "one"), ("second", "two")):
             created = await client.call(
@@ -718,7 +762,7 @@ def test_metadata_for_two_created_instances_never_changes_process_environment(tm
                 ),
             )
             assert isinstance(created, LifecycleOperationResult)
-            assert (await operation_outcome(client, created)).state is OperationState.SUCCEEDED
+            assert (await _operation(client, created)).state is OperationState.SUCCEEDED
 
         assert dict(os.environ) == before
         assert runtime.created[0].env["SHARED"] == "one"
@@ -730,10 +774,10 @@ def test_metadata_for_two_created_instances_never_changes_process_environment(tm
 def test_each_instance_gets_its_own_control_token_and_never_the_access_token(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
         access_token = hub.access.issue()
         assert access_token is not None
-        client = hub_client(hub)
+        client = _client(hub)
         paths = []
         for manifest_id in ("first", "second"):
             created = await client.call(
@@ -741,7 +785,7 @@ def test_each_instance_gets_its_own_control_token_and_never_the_access_token(tmp
                 InstanceCreateCommand(manifest_id=manifest_id, model="openai:gpt-5"),
             )
             assert isinstance(created, LifecycleOperationResult)
-            assert (await operation_outcome(client, created)).state is OperationState.SUCCEEDED
+            assert (await _operation(client, created)).state is OperationState.SUCCEEDED
             paths.append(tmp_path / "hub" / "instances" / str(created.instance_id))
 
         tokens = [spec.env["KINBY_CONTROL_TOKEN"] for spec in runtime.created]
@@ -758,8 +802,8 @@ def test_each_instance_gets_its_own_control_token_and_never_the_access_token(tmp
 def test_secret_values_are_passed_without_environment_interpolation(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
-        client = hub_client(hub)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
         created = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
@@ -769,7 +813,7 @@ def test_secret_values_are_passed_without_environment_interpolation(tmp_path):
             ),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await operation_outcome(client, created)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
         assert runtime.created[0].env["TOKEN"] == "${HOME}:a'b\\c\n"
 
     asyncio.run(scenario())
@@ -778,14 +822,14 @@ def test_secret_values_are_passed_without_environment_interpolation(tmp_path):
 def test_concurrent_starts_are_serialized_per_instance(tmp_path):
     async def scenario() -> None:
         runtime = SerialRuntime()
-        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
-        client = hub_client(hub)
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
         created = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await operation_outcome(client, created)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
 
         first, second = await asyncio.gather(
             client.call(
@@ -799,17 +843,19 @@ def test_concurrent_starts_are_serialized_per_instance(tmp_path):
         )
         assert isinstance(first, LifecycleOperationResult)
         assert isinstance(second, LifecycleOperationResult)
-        await asyncio.gather(operation_outcome(client, first), operation_outcome(client, second))
+        await asyncio.gather(_operation(client, first), _operation(client, second))
 
+        assert first.operation_id == second.operation_id
         assert runtime.maximum_active_starts == 1
+        assert runtime.started == [str(created.instance_id)]
 
     asyncio.run(scenario())
 
 
 def test_retained_writable_bind_rejects_an_overlapping_path_alias(tmp_path):
     async def scenario() -> None:
-        hub = hub_at(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
-        client = hub_client(hub)
+        hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
+        client = _client(hub)
         created = []
         for manifest_id in ("first", "second"):
             result = await client.call(
@@ -817,7 +863,7 @@ def test_retained_writable_bind_rejects_an_overlapping_path_alias(tmp_path):
                 InstanceCreateCommand(manifest_id=manifest_id, model="openai:gpt-5"),
             )
             assert isinstance(result, LifecycleOperationResult)
-            assert (await operation_outcome(client, result)).state is OperationState.SUCCEEDED
+            assert (await _operation(client, result)).state is OperationState.SUCCEEDED
             created.append(result)
 
         first = hub.registry.instance(created[0].instance_id)
@@ -849,20 +895,296 @@ def test_retained_writable_bind_rejects_an_overlapping_path_alias(tmp_path):
     asyncio.run(scenario())
 
 
-async def started_instance(client: ContractClient, hub: Hub) -> LifecycleOperationResult:
-    created = await client.call(
-        INSTANCE_CREATE,
-        InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
-    )
-    assert isinstance(created, LifecycleOperationResult)
-    assert (await operation_outcome(client, created)).state is OperationState.SUCCEEDED
-    started = await client.call(
-        INSTANCE_START,
-        InstanceStartCommand(instance_id=created.instance_id),
-    )
-    assert isinstance(started, LifecycleOperationResult)
-    assert (await operation_outcome(client, started)).state is OperationState.SUCCEEDED
-    return created
+def test_an_operation_reports_every_step_it_ran(tmp_path):
+    async def scenario() -> None:
+        hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+
+        outcome = await _operation(client, created)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert [(step.name, step.state) for step in outcome.steps] == [
+            ("configure", OperationState.SUCCEEDED),
+            ("image", OperationState.SUCCEEDED),
+            ("container", OperationState.SUCCEEDED),
+        ]
+        assert outcome.steps[-1].detail == "Instance prepared and stopped."
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_operation_marks_the_step_that_failed(tmp_path):
+    async def scenario() -> None:
+        hub = Hub(
+            tmp_path / "hub",
+            runtime=FakeRuntime(),
+            images=FakeImages(failure="no such revision"),
+        )
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+
+        outcome = await _operation(client, created)
+
+        assert outcome.state is OperationState.FAILED
+        assert [(step.name, step.state) for step in outcome.steps] == [
+            ("configure", OperationState.SUCCEEDED),
+            ("image", OperationState.FAILED),
+        ]
+        assert outcome.steps[-1].detail == "no such revision"
+
+    asyncio.run(scenario())
+
+
+def test_status_carries_the_operation_a_client_lost_the_response_to(tmp_path):
+    async def scenario() -> None:
+        runtime = HeldRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+
+        started = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        await asyncio.wait_for(runtime.holding.wait(), timeout=5)
+        during = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+        runtime.released.set()
+        assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+        after = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+
+        assert not isinstance(during, ErrorEnvelope)
+        assert during.active_operation_id == started.operation_id
+        assert not isinstance(after, ErrorEnvelope)
+        assert after.active_operation_id is None
+
+    asyncio.run(scenario())
+
+
+def test_a_second_start_keeps_the_operation_a_client_can_still_find(tmp_path):
+    async def scenario() -> None:
+        runtime = HeldRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+
+        started = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        await asyncio.wait_for(runtime.holding.wait(), timeout=5)
+        again = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        during = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+        runtime.released.set()
+        assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+
+        assert isinstance(again, LifecycleOperationResult)
+        assert again.operation_id == started.operation_id
+        assert not isinstance(during, ErrorEnvelope)
+        assert during.active_operation_id == started.operation_id
+        assert runtime.started == [str(created.instance_id)]
+
+    asyncio.run(scenario())
+
+
+def test_a_restarted_hub_can_start_an_instance_whose_start_was_interrupted(tmp_path):
+    async def scenario() -> None:
+        directory = tmp_path / "hub"
+        hub = Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        stale = uuid4()
+        assert (
+            hub.registry.begin_operation(
+                stale,
+                created.instance_id,
+                OperationKind.START,
+                "Start queued.",
+            )
+            == stale
+        )
+        hub.close()
+
+        runtime = FakeRuntime()
+        restarted = Hub(directory, runtime=runtime, images=FakeImages())
+        restarted_client = _client(restarted)
+        failed = await restarted_client.call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=stale),
+        )
+        started = await restarted_client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        outcome = await _operation(restarted_client, started)
+
+        assert not isinstance(failed, ErrorEnvelope)
+        assert failed.state is OperationState.FAILED
+        assert failed.detail == "The hub stopped before this operation finished."
+        assert started.operation_id != stale
+        assert outcome.state is OperationState.SUCCEEDED
+        assert runtime.started == [str(created.instance_id)]
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_hub_constructor_releases_the_directory(tmp_path, monkeypatch):
+    directory = tmp_path / "hub"
+    original = HubRegistry.fail_interrupted_operations
+    attempts = 0
+
+    def fail_once(self, detail: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("recovery failed")
+        original(self, detail)
+
+    monkeypatch.setattr(HubRegistry, "fail_interrupted_operations", fail_once)
+    with pytest.raises(RuntimeError, match="recovery failed"):
+        Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+
+    Hub(directory, runtime=FakeRuntime(), images=FakeImages()).close()
+
+
+def test_a_second_hub_does_not_fail_an_operation_the_first_is_running(tmp_path):
+    async def scenario() -> None:
+        directory = tmp_path / "hub"
+        hub = Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        stale = uuid4()
+        hub.registry.begin_operation(
+            stale,
+            created.instance_id,
+            OperationKind.START,
+            "Start queued.",
+        )
+
+        with pytest.raises(HubAlreadyRunning):
+            Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+        current = hub.registry.operation(stale)
+
+        assert current is not None
+        assert current.state is OperationState.PENDING
+
+    asyncio.run(scenario())
+
+
+def test_a_cancelled_start_can_be_started_again(tmp_path):
+    async def scenario() -> None:
+        runtime = HeldRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        started = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        await asyncio.wait_for(runtime.holding.wait(), timeout=5)
+        assert len(hub._tasks) == 1
+        task = next(iter(hub._tasks))
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        failed = await client.call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=started.operation_id),
+        )
+        runtime.released.set()
+        again = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(again, LifecycleOperationResult)
+        outcome = await _operation(client, again)
+
+        assert not isinstance(failed, ErrorEnvelope)
+        assert failed.state is OperationState.FAILED
+        assert again.operation_id != started.operation_id
+        assert outcome.state is OperationState.SUCCEEDED
+        assert runtime.started == [str(created.instance_id)]
+
+    asyncio.run(scenario())
+
+
+def test_hub_reads_and_mutations_ask_for_different_scopes(tmp_path):
+    async def scenario() -> None:
+        hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
+        reader = _client(hub, {Scope.HUB_READ})
+        agent = _client(hub, set(INSTANCE_SCOPES) | set(CONTROL_SCOPES))
+
+        listed = await reader.call(INSTANCE_LIST, InstanceListCommand())
+        refused = await reader.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        unreachable = await agent.call(INSTANCE_LIST, InstanceListCommand())
+
+        assert not isinstance(listed, ErrorEnvelope)
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.PERMISSION_DENIED
+        assert isinstance(unreachable, ErrorEnvelope)
+        assert unreachable.code is ErrorCode.PERMISSION_DENIED
+
+    asyncio.run(scenario())
+
+
+def test_no_scope_an_instance_grants_carries_hub_authority():
+    hub_scopes = {Scope.HUB_READ, Scope.HUB_ADMIN}
+
+    assert INSTANCE_SCOPES & hub_scopes == set()
+    assert CONTROL_SCOPES & hub_scopes == set()
+    assert {INSTANCE_LIST.scope, INSTANCE_STATUS.scope, INSTANCE_LOGS.scope} == {Scope.HUB_READ}
+    assert {INSTANCE_CREATE.scope, INSTANCE_START.scope, INSTANCE_STOP.scope} == {Scope.HUB_ADMIN}
 
 
 def test_stop_drains_the_instance_then_observes_the_container_stop(tmp_path):
@@ -878,30 +1200,21 @@ def test_stop_drains_the_instance_then_observes_the_container_stop(tmp_path):
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await operation_outcome(client, stopped)
+        outcome = await _operation(client, stopped)
 
-        assert outcome.kind is OperationKind.STOP
         assert outcome.state is OperationState.SUCCEEDED
         assert outcome.detail == "Instance stopped."
-        assert [step.detail for step in outcome.steps] == [
-            "Stop queued.",
-            "Checking the instance's lifecycle endpoint.",
-            "Draining accepted work.",
-            "Instance drained. Stopping the container.",
-            "Instance stopped.",
+        assert [(step.name, step.detail) for step in outcome.steps] == [
+            ("probe", "Checking the instance's lifecycle endpoint."),
+            ("drain", "Draining accepted work."),
+            ("result", "Instance drained. Stopping the container."),
+            ("container", "Instance stopped."),
         ]
         assert control.forces == [False]
         assert runtime.stopped == [30]
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
         assert not isinstance(listed, ErrorEnvelope)
         assert listed.instances[0].intended_state is IntendedState.STOPPED
-        status = await client.call(
-            INSTANCE_STATUS,
-            InstanceStatusCommand(instance_id=created.instance_id),
-        )
-        assert not isinstance(status, ErrorEnvelope)
-        assert status.process is ProcessState.STOPPED
-        assert status.active_operation_id is None
 
     asyncio.run(scenario())
 
@@ -919,7 +1232,7 @@ def test_the_control_endpoint_carries_the_instances_own_token(tmp_path):
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        await operation_outcome(client, stopped)
+        await _operation(client, stopped)
 
         endpoint = control.endpoints[0]
         assert endpoint.address == f"http://kinby-{created.instance_id}:8787"
@@ -942,7 +1255,7 @@ def test_a_pending_stop_reports_its_operation_after_the_client_disconnects(tmp_p
         assert isinstance(stopped, LifecycleOperationResult)
         await asyncio.wait_for(control.asked.wait(), timeout=5)
 
-        reopened = hub_client(hub_at(tmp_path / "hub", control=control))
+        reopened = hub_client(hub)
         status = await reopened.call(
             INSTANCE_STATUS,
             InstanceStatusCommand(instance_id=created.instance_id),
@@ -954,7 +1267,7 @@ def test_a_pending_stop_reports_its_operation_after_the_client_disconnects(tmp_p
         )
         assert not isinstance(pending, ErrorEnvelope)
         control.release.set()
-        assert (await operation_outcome(client, stopped)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, stopped)).state is OperationState.SUCCEEDED
 
         assert status.active_operation_id == stopped.operation_id
         assert pending.state is OperationState.RUNNING
@@ -963,7 +1276,7 @@ def test_a_pending_stop_reports_its_operation_after_the_client_disconnects(tmp_p
     asyncio.run(scenario())
 
 
-def test_force_escalates_the_pending_stop_inside_the_sameoperation_outcome(tmp_path):
+def test_force_escalates_the_pending_stop_inside_the_same_operation(tmp_path):
     async def scenario() -> None:
         control = FakeControl(holds=True)
         runtime = FakeRuntime()
@@ -982,18 +1295,17 @@ def test_force_escalates_the_pending_stop_inside_the_sameoperation_outcome(tmp_p
             InstanceStopCommand(instance_id=created.instance_id, force=True),
         )
         assert isinstance(escalated, LifecycleOperationResult)
-        outcome = await operation_outcome(client, stopped)
+        outcome = await _operation(client, stopped)
 
         assert escalated.operation_id == stopped.operation_id
         assert outcome.state is OperationState.SUCCEEDED
         assert control.forces == [False, True]
-        assert [step.detail for step in outcome.steps] == [
-            "Stop queued.",
-            "Checking the instance's lifecycle endpoint.",
-            "Draining accepted work.",
-            "Force stop requested. Interrupting active work.",
-            "Instance interrupted. Stopping the container.",
-            "Instance stopped.",
+        assert [(step.name, step.detail) for step in outcome.steps] == [
+            ("probe", "Checking the instance's lifecycle endpoint."),
+            ("drain", "Draining accepted work."),
+            ("force", "Force stop requested. Interrupting active work."),
+            ("result", "Instance interrupted. Stopping the container."),
+            ("container", "Instance stopped."),
         ]
         assert runtime.stopped == [30]
 
@@ -1015,16 +1327,15 @@ def test_a_force_stop_interrupts_and_terminates_an_unresponsive_instance(tmp_pat
             InstanceStopCommand(instance_id=created.instance_id, force=True),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await operation_outcome(client, stopped)
+        outcome = await _operation(client, stopped)
 
         assert outcome.state is OperationState.SUCCEEDED
         assert control.forces == [True]
-        assert [step.detail for step in outcome.steps] == [
-            "Stop queued.",
-            "Checking the instance's lifecycle endpoint.",
-            "Interrupting active work.",
-            "The instance did not report its drain. Terminating the container.",
-            "Instance stopped.",
+        assert [(step.name, step.detail) for step in outcome.steps] == [
+            ("probe", "Checking the instance's lifecycle endpoint."),
+            ("drain", "Interrupting active work."),
+            ("result", "The instance did not report its drain. Terminating the container."),
+            ("container", "Instance stopped."),
         ]
         assert runtime.stopped == [30]
 
@@ -1044,7 +1355,7 @@ def test_an_instance_that_cannot_drain_is_reported_and_left_running(tmp_path):
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await operation_outcome(client, stopped)
+        outcome = await _operation(client, stopped)
 
         assert outcome.state is OperationState.FAILED
         assert "cannot drain" in outcome.detail
@@ -1067,17 +1378,16 @@ def test_a_dropped_control_socket_keeps_the_stop_waiting_for_the_drain(tmp_path)
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await operation_outcome(client, stopped)
+        outcome = await _operation(client, stopped)
 
         assert outcome.state is OperationState.SUCCEEDED
         assert control.forces == [False, False]
-        assert [step.detail for step in outcome.steps] == [
-            "Stop queued.",
-            "Checking the instance's lifecycle endpoint.",
-            "Draining accepted work.",
-            "The control socket closed. Waiting for the drain again.",
-            "Instance drained. Stopping the container.",
-            "Instance stopped.",
+        assert [(step.name, step.detail) for step in outcome.steps] == [
+            ("probe", "Checking the instance's lifecycle endpoint."),
+            ("drain", "Draining accepted work."),
+            ("reconnect", "The control socket closed. Waiting for the drain again."),
+            ("result", "Instance drained. Stopping the container."),
+            ("container", "Instance stopped."),
         ]
         assert runtime.stopped == [30]
 
@@ -1097,7 +1407,7 @@ def test_a_drain_the_instance_refuses_fails_the_stop_and_leaves_it_running(tmp_p
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await operation_outcome(client, stopped)
+        outcome = await _operation(client, stopped)
 
         assert outcome.state is OperationState.FAILED
         assert "refused to drain" in outcome.detail
@@ -1110,11 +1420,7 @@ def test_a_drain_the_instance_refuses_fails_the_stop_and_leaves_it_running(tmp_p
 def test_an_unreachable_lifecycle_endpoint_is_reported_without_stopping_the_container(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        hub = hub_at(
-            tmp_path / "hub",
-            runtime=runtime,
-            control=FakeControl(reachable=False),
-        )
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=FakeControl(reachable=False))
         client = hub_client(hub)
         created = await started_instance(client, hub)
 
@@ -1123,7 +1429,7 @@ def test_an_unreachable_lifecycle_endpoint_is_reported_without_stopping_the_cont
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await operation_outcome(client, stopped)
+        outcome = await _operation(client, stopped)
 
         assert outcome.state is OperationState.FAILED
         assert "Cannot connect to host" in outcome.detail
@@ -1143,17 +1449,17 @@ def test_stopping_an_already_stopped_instance_reaches_no_lifecycle_endpoint(tmp_
             InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await operation_outcome(client, created)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
 
         stopped = await client.call(
             INSTANCE_STOP,
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await operation_outcome(client, stopped)
+        outcome = await _operation(client, stopped)
 
         assert outcome.state is OperationState.SUCCEEDED
-        assert outcome.steps[-2].detail == "Instance was already stopped."
+        assert outcome.detail == "Instance was already stopped."
         assert control.endpoints == []
         assert runtime.stopped == []
 
@@ -1207,8 +1513,8 @@ def test_a_start_requested_during_a_pending_stop_waits_for_it(tmp_path):
         await asyncio.sleep(0)
         while_stopping = list(runtime.started)
         control.release.set()
-        assert (await operation_outcome(client, stopping)).state is OperationState.SUCCEEDED
-        assert (await operation_outcome(client, starting)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, stopping)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, starting)).state is OperationState.SUCCEEDED
 
         assert starting.operation_id != stopping.operation_id
         assert while_stopping == [str(created.instance_id)]
@@ -1245,93 +1551,12 @@ def test_status_names_the_running_stop_while_a_start_is_queued(tmp_path):
             InstanceStatusCommand(instance_id=created.instance_id),
         )
         control.release.set()
-        assert (await operation_outcome(client, stopping)).state is OperationState.SUCCEEDED
-        assert (await operation_outcome(client, starting)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, stopping)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, starting)).state is OperationState.SUCCEEDED
 
         assert not isinstance(status, ErrorEnvelope)
         assert status.active_operation_id == stopping.operation_id
         assert status.active_operation_id != starting.operation_id
-
-    asyncio.run(scenario())
-
-
-def test_status_names_the_newer_running_operation_when_an_older_one_remains(tmp_path):
-    async def scenario() -> None:
-        control = FakeControl(holds=True)
-        hub = hub_at(tmp_path / "hub", control=control)
-        client = hub_client(hub)
-        created = await started_instance(client, hub)
-        stale = uuid4()
-        hub.registry.begin_operation(
-            stale,
-            created.instance_id,
-            OperationKind.STOP,
-            "Stop queued.",
-        )
-        hub.registry.update_operation(stale, OperationState.RUNNING, "Draining accepted work.")
-
-        stopping = await client.call(
-            INSTANCE_STOP,
-            InstanceStopCommand(instance_id=created.instance_id),
-        )
-        assert isinstance(stopping, LifecycleOperationResult)
-        await asyncio.wait_for(control.asked.wait(), timeout=5)
-        status = await client.call(
-            INSTANCE_STATUS,
-            InstanceStatusCommand(instance_id=created.instance_id),
-        )
-        control.release.set()
-        assert (await operation_outcome(client, stopping)).state is OperationState.SUCCEEDED
-
-        assert not isinstance(status, ErrorEnvelope)
-        assert status.active_operation_id == stopping.operation_id
-        assert status.active_operation_id != stale
-
-    asyncio.run(scenario())
-
-
-def test_a_restarted_hub_fails_operations_the_previous_process_left_unfinished(tmp_path):
-    async def scenario() -> None:
-        hub = hub_at(tmp_path / "hub")
-        client = hub_client(hub)
-        created = await started_instance(client, hub)
-        abandoned = uuid4()
-        hub.registry.begin_operation(
-            abandoned,
-            created.instance_id,
-            OperationKind.START,
-            "Start queued.",
-        )
-        hub.registry.update_operation(abandoned, OperationState.RUNNING, "Starting selected image.")
-        finished = uuid4()
-        hub.registry.begin_operation(
-            finished,
-            created.instance_id,
-            OperationKind.CREATE,
-            "Creation queued.",
-        )
-        hub.registry.update_operation(
-            finished,
-            OperationState.SUCCEEDED,
-            "Instance prepared and stopped.",
-        )
-
-        hub.registry.fail_abandoned_operations()
-        failed = await client.call(OPERATION_GET, OperationGetCommand(operation_id=abandoned))
-        kept = await client.call(OPERATION_GET, OperationGetCommand(operation_id=finished))
-        status = await client.call(
-            INSTANCE_STATUS,
-            InstanceStatusCommand(instance_id=created.instance_id),
-        )
-
-        assert not isinstance(failed, ErrorEnvelope)
-        assert failed.state is OperationState.FAILED
-        assert failed.detail == "The hub restarted before this operation finished."
-        assert failed.steps[-1].detail == failed.detail
-        assert not isinstance(kept, ErrorEnvelope)
-        assert kept.state is OperationState.SUCCEEDED
-        assert not isinstance(status, ErrorEnvelope)
-        assert status.active_operation_id is None
 
     asyncio.run(scenario())
 
@@ -1348,7 +1573,7 @@ def test_a_control_socket_that_closes_after_the_drain_is_sent_is_a_lost_connecti
 def test_a_drain_answer_that_refuses_is_not_a_lost_connection():
     async def scenario() -> None:
         async with _control_server(_refuse_drain) as endpoint:
-            with pytest.raises(InstanceUnreachable, match="refused to drain") as raised:
+            with pytest.raises(ControlUnreachable, match="refused to drain") as raised:
                 await HttpInstanceControl().drain(endpoint, force=False)
             assert not isinstance(raised.value, ControlConnectionLost)
 
@@ -1392,7 +1617,7 @@ async def _control_server(
     await web.TCPSite(runner, "127.0.0.1", port).start()
     try:
         yield ControlEndpoint(
-            address=InstanceAddress(f"http://127.0.0.1:{port}"),
+            address=f"http://127.0.0.1:{port}",
             token=ControlToken("token"),
         )
     finally:

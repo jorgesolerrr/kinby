@@ -76,6 +76,8 @@ class ErrorCode(StrEnum):
     SNAPSHOT_UNAVAILABLE = "SNAPSHOT_UNAVAILABLE"
     RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
+    #: Raised by a client, never sent by a server: its connection dropped under a call.
+    CONNECTION_LOST = "CONNECTION_LOST"
     INTERNAL = "INTERNAL"
 
 
@@ -649,7 +651,7 @@ class InstanceStatusResult(ContractModel):
     process: ProcessState
     readiness: Readiness
     detail: str = ""
-    #: The lifecycle operation still running on this instance, for a client that reconnected.
+    #: The lifecycle operation still running, so a client that lost its response finds it again.
     active_operation_id: UUID | None = None
 
 
@@ -672,8 +674,9 @@ class OperationState(StrEnum):
 
 
 class OperationStep(ContractModel):
-    """One recorded stage of a lifecycle operation, in the order the hub reached it."""
+    """One named stage of a lifecycle operation, in the order the hub ran it."""
 
+    name: str
     state: OperationState
     detail: str
 

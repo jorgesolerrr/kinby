@@ -136,6 +136,10 @@ The live state and background work of one booted **instance**, owned and stopped
 
 An **instance runtime** without a REPL, kept alive so the **scheduler** can fire **routines**.
 
+### Runtime lock
+
+The claim an **instance runtime** holds on its **instance**'s state directory for as long as it runs. A second runtime on the same instance refuses to start, because one process owns **event** appends.
+
 ### Manifest
 
 The portable description of an instance's identity and configuration. It contains no secrets or runtime state.
@@ -342,6 +346,10 @@ _Avoid_: auth cookie, login token
 ### Control token
 
 The secret a **hub** presents to one **instance**'s **contract server**. Each instance has its own. It reaches that instance only, and grants no hub **scope**.
+
+### Signal alias
+
+The **hub**'s record of which managed **instance** answers the public **signal** path, so a webhook registered before the hub existed keeps its URL after adoption. At most one instance holds it.
 
 ### Package
 

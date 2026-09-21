@@ -219,6 +219,6 @@ class LangGraphRunner:
             self._model = self._factory(self._model_name)
 ```
 
-`None` here means "lazy init pending", a fact about the object's lifecycle, and every method re-checks it. Build the model in `__init__` and the field becomes `self._model: ChatModel`. Side effect worth knowing: a provider that fails to initialise now fails when `kinby run` starts, not on the first message.
+`None` here means "lazy init pending", a fact about the object's lifecycle, and every method re-checks it. Build the model in `__init__` and the field becomes `self._model: ChatModel`. Side effect worth knowing: a provider that fails to initialise now fails when `kinby repl` starts, not on the first message.
 
 Same test for parameters: `init_instance(directory, model: str | None = None)` uses `None` as a stand-in for `PLACEHOLDER_MODEL`. The default can be the placeholder itself.

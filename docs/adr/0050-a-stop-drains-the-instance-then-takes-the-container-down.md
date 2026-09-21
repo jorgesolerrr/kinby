@@ -4,7 +4,7 @@ The hub stops a managed instance in two steps, in this order. It calls `instance
 
 `instance.drain` answers when the drain is complete, not when it starts. A drain has no deadline of its own, so the call can stay open for as long as the instance's accepted work takes. The instance keeps the drain running behind the call, so a hub that loses the connection reconnects and calls again to keep waiting, and `instance.status` carries the `active_operation_id` a client needs to find its way back. We rejected having the instance exit its own process when it finishes draining: the container's `unless-stopped` restart policy would bring it straight back up, so the hub would race Docker for the shutdown it asked for.
 
-A hub process that starts fails every lifecycle operation the previous process left unfinished. The tasks driving them died with that process. The recorded steps stay, so a client can see how far the operation got and ask for another.
+The process that acquires the hub directory fails every lifecycle operation the previous process left unfinished. The tasks driving them died with that process. The recorded steps stay, so a client can see how far the operation got and ask for another.
 
 The hub never substitutes Docker's shutdown timeout for the drain. When the instance's `/health` does not report the `drain` capability, the stop fails and says so, leaving the instance running; a legacy interrupting stop is never described as graceful.
 

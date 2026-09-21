@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import shlex
 import signal
 import sys
@@ -19,6 +20,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from kinby.cli.client import ContractClient, format_error
+from kinby.cli.contract_socket import TOKEN_VARIABLE, InsecureContractUrl, contract_client
 from kinby.cli.repl import render_event, run_repl
 from kinby.cli.routines import show_routines
 from kinby.contracts import (
@@ -31,6 +33,7 @@ from kinby.contracts import (
     USAGE_GET,
     AccessToken,
     ApprovalRequested,
+    ControlToken,
     ErrorCode,
     ErrorEnvelope,
     ModelCallMismatch,
@@ -53,9 +56,11 @@ from kinby.core import Dispatcher, assemble_system_prompt, boot_instance, build_
 from kinby.core.clock import utc_today
 from kinby.core.contract_server import ContractServer
 from kinby.core.receiver import Receiver
+from kinby.core.runtime_lock import InstanceBusyError, runtime_lock
 from kinby.core.stats import stats_summary
 from kinby.instance import (
     PLACEHOLDER_MODEL,
+    FeedbackPolicy,
     Instance,
     InstanceExistsError,
     InstanceNotFoundError,
@@ -353,6 +358,34 @@ async def _instance_session(
         await runtime.stop_after_running_routine()
 
 
+def _repl_on_server(url: str, thread_id: UUID | None) -> int:
+    token = os.environ.get(TOKEN_VARIABLE)
+    if not token:
+        print(
+            f"Set {TOKEN_VARIABLE} to the token the contract server accepts.",
+            file=sys.stderr,
+        )
+        return 1
+    return asyncio.run(_run_on_server(url, ControlToken(token), thread_id))
+
+
+async def _run_on_server(url: str, token: ControlToken, thread_id: UUID | None) -> int:
+    """Open the REPL on a contract server, where no manifest says how often to ask for a rating."""
+    async with contract_client(url, token) as client:
+        opened = await _thread_for_session(client, thread_id)
+        if isinstance(opened, ErrorEnvelope):
+            print(format_error(opened), file=sys.stderr)
+            return 1
+        return await run_repl(
+            client,
+            opened,
+            feedback=FeedbackPolicy.EVERY_TURN,
+            stdin=sys.stdin,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+        )
+
+
 async def _run_instance(
     instance: Instance,
     *,
@@ -421,6 +454,7 @@ async def _run_hub(
     from docker.errors import DockerException
 
     from kinby.hub import HubContractServer, build_docker_hub
+    from kinby.hub.service import HubAlreadyRunning
 
     loop = asyncio.get_running_loop()
     stopping = asyncio.Event()
@@ -437,13 +471,13 @@ async def _run_hub(
                 docker_host_directory,
                 network=network,
             )
-        except DockerException as exc:
+        except (DockerException, HubAlreadyRunning) as exc:
             print(f"Unable to start the Docker-backed hub: {exc}", file=sys.stderr)
             return 1
         print(f"hub id: {hub.registry.hub_id()}")
         print(f"directory: {hub.directory}")
         _announce(hub.access.issue())
-        server = HubContractServer(hub.dispatcher, hub.access, web_app)
+        server = HubContractServer(hub.dispatcher, hub.access, hub, web_app)
         address = await server.start(listen)
         print(f"listen: {address.host}:{address.port}")
         await stopping.wait()
@@ -461,6 +495,19 @@ def _announce(token: AccessToken | None) -> None:
         return
     print("This hub's access token is shown once. Store it now:")
     print(f"access token: {token}")
+
+
+def _set_signal_alias(directory: Path, instance_id: str) -> int:
+    """Adoption keeps a webhook URL working by claiming the hub's public signal path."""
+    from kinby.hub import HubRegistry
+
+    try:
+        HubRegistry(directory).set_signal_alias(UUID(instance_id))
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print(f"signals: /signals/<routine> now reaches {instance_id}")
+    return 0
 
 
 def _rotate_access_token(directory: Path) -> int:
@@ -560,7 +607,7 @@ async def _run_routine_command(
                 command = shlex.join(
                     (
                         "kinby",
-                        "run",
+                        "repl",
                         "--thread",
                         str(accepted.thread_id),
                         "--instance",
@@ -650,13 +697,22 @@ def main(
         type=Path,
         help="directory holding the built web app",
     )
-    hub_token_parser = hub_parser.add_subparsers(dest="hub_command").add_parser(
+    hub_subparsers = hub_parser.add_subparsers(dest="hub_command")
+    hub_token_parser = hub_subparsers.add_parser(
         "token",
         help="manage the hub access token",
     )
     hub_token_parser.add_subparsers(dest="token_command", required=True).add_parser(
         "rotate",
         help="replace the access token and end open sessions",
+    )
+    hub_signals_parser = hub_subparsers.add_parser(
+        "signals",
+        help="point the public /signals path at one managed instance",
+    )
+    hub_signals_parser.add_argument(
+        "instance_id",
+        help="hub instance id that keeps the established webhook URL",
     )
     instance_parser = subparsers.add_parser(
         "instance",
@@ -668,20 +724,24 @@ def main(
         help="show the resolved instance settings",
     )
     _add_instance_selector(show_parser, "instance directory to inspect")
-    run_parser = subparsers.add_parser(
-        "run",
-        help="run an instance",
+    repl_parser = subparsers.add_parser(
+        "repl",
+        help="open a REPL on an instance",
     )
-    _add_instance_selector(run_parser, "instance directory to run")
-    run_parser.add_argument(
+    _add_instance_selector(repl_parser, "instance directory to open")
+    repl_parser.add_argument(
+        "--connect",
+        help="contract server URL to drive instead of a local instance",
+    )
+    repl_parser.add_argument(
         "--model",
         help="override [models].main for this session",
     )
-    run_parser.add_argument(
+    repl_parser.add_argument(
         "--thread",
         help="resume this thread instead of creating one",
     )
-    run_parser.add_argument(
+    repl_parser.add_argument(
         "--verbose",
         action="store_true",
         help="show debug logs",
@@ -776,6 +836,8 @@ def main(
     if args.command == "hub":
         if args.hub_command == "token":
             return _rotate_access_token(args.directory)
+        if args.hub_command == "signals":
+            return _set_signal_alias(args.directory, args.instance_id)
         try:
             listen = parse_listen(args.listen)
         except ValueError as exc:
@@ -799,9 +861,13 @@ def main(
                 _print_instance(instance)
                 _print_turn_inputs(instance, today())
                 return 0
-            case "run":
-                instance = _load_selected_instance(args, model_override=args.model)
-                _print_instance(instance)
+            case "repl" if args.connect and (args.directory or args.instance_directory):
+                print(
+                    "--connect opens a REPL on a contract server, not on an instance directory",
+                    file=sys.stderr,
+                )
+                return 1
+            case "repl":
                 try:
                     thread_id = UUID(args.thread) if args.thread else None
                 except ValueError:
@@ -810,17 +876,23 @@ def main(
                         file=sys.stderr,
                     )
                     return 1
-                return asyncio.run(
-                    _run_instance(
-                        instance,
-                        model_override=args.model,
-                        thread_id=thread_id,
+                if args.connect:
+                    return _repl_on_server(args.connect, thread_id)
+                instance = _load_selected_instance(args, model_override=args.model)
+                _print_instance(instance)
+                with runtime_lock(instance.manifest.state_dir):
+                    return asyncio.run(
+                        _run_instance(
+                            instance,
+                            model_override=args.model,
+                            thread_id=thread_id,
+                        )
                     )
-                )
             case "serve":
                 instance = _load_selected_instance(args)
                 _print_instance(instance)
-                return asyncio.run(_serve_instance(instance))
+                with runtime_lock(instance.manifest.state_dir):
+                    return asyncio.run(_serve_instance(instance))
             case "thread" if args.thread_command in {"create", "list"}:
                 client = _contract_client(_load_selected_instance(args))
                 if args.thread_command == "create":
@@ -844,7 +916,7 @@ def main(
                 instance = _load_selected_instance(args)
                 client = _contract_client(instance)
                 return asyncio.run(_show_stats(client, command, instance.manifest.state_dir))
-    except (InstanceNotFoundError, ManifestError) as exc:
+    except (InstanceNotFoundError, InstanceBusyError, InsecureContractUrl, ManifestError) as exc:
         print(exc, file=sys.stderr)
         return 1
     parser.print_help()

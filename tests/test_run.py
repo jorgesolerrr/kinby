@@ -1,4 +1,5 @@
 import asyncio
+import os
 from io import StringIO
 from pathlib import Path
 from queue import Queue
@@ -17,6 +18,7 @@ from kinby.contracts import (
     TurnStarted,
 )
 from kinby.core.events import EventLog
+from kinby.core.runtime_lock import runtime_lock
 from kinby.instance import Budgets, RecapPolicy, init_instance, load_instance, reload_manifest
 
 
@@ -76,7 +78,7 @@ def test_run_opens_a_repl_with_a_session_model_override_without_changing_the_man
 
     monkeypatch.setattr("sys.stdin", StringIO(""))
 
-    exit_code = main(["run", str(instance), "--model", "anthropic:claude-sonnet-4-6"])
+    exit_code = main(["repl", str(instance), "--model", "anthropic:claude-sonnet-4-6"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -92,7 +94,7 @@ def test_verbose_run_writes_no_process_log_under_state(tmp_path, capsys, monkeyp
     init_instance(instance)
     monkeypatch.setattr("sys.stdin", StringIO(""))
 
-    exit_code = main(["run", "--verbose", str(instance)])
+    exit_code = main(["repl", "--verbose", str(instance)])
 
     captured = capsys.readouterr()
     state_files = {path.name for path in (instance / ".state").iterdir()}
@@ -102,6 +104,7 @@ def test_verbose_run_writes_no_process_log_under_state(tmp_path, capsys, monkeyp
         "events.jsonl",
         "checkpoints.sqlite",
         "snapshots.git",
+        "runtime.lock",
     }
 
 
@@ -148,7 +151,7 @@ def test_run_catches_up_uncovered_turns_before_waiting_for_input(
     stdin = BlockingInput()
     monkeypatch.setattr("sys.stdin", stdin)
     exit_codes: Queue[int] = Queue()
-    run = Thread(target=lambda: exit_codes.put(main(["run", str(instance)])))
+    run = Thread(target=lambda: exit_codes.put(main(["repl", str(instance)])))
     run.start()
 
     marker_seen = False
@@ -209,7 +212,7 @@ def test_run_resumes_an_existing_thread_instead_of_creating_one(
     thread_id = created.out.splitlines()[0].removeprefix("id: ")
 
     monkeypatch.setattr("sys.stdin", StringIO(""))
-    exit_code = main(["run", str(instance), "--thread", thread_id])
+    exit_code = main(["repl", str(instance), "--thread", thread_id])
     run_output = capsys.readouterr()
 
     list_exit = main(["thread", "list", str(instance)])
@@ -235,7 +238,7 @@ def test_run_rejects_an_unknown_thread(
     thread_id = uuid4()
 
     monkeypatch.setattr("sys.stdin", StringIO(""))
-    exit_code = main(["run", str(instance), "--thread", str(thread_id)])
+    exit_code = main(["repl", str(instance), "--thread", str(thread_id)])
     captured = capsys.readouterr()
 
     assert exit_code == 1
@@ -252,7 +255,7 @@ def test_run_rejects_a_malformed_thread_id(
     init_instance(instance)
 
     monkeypatch.setattr("sys.stdin", StringIO(""))
-    exit_code = main(["run", str(instance), "--thread", "not-a-thread"])
+    exit_code = main(["repl", str(instance), "--thread", "not-a-thread"])
     captured = capsys.readouterr()
 
     assert exit_code == 1
@@ -271,7 +274,7 @@ def test_run_creates_a_new_thread_when_one_already_exists(
     capsys.readouterr()
 
     monkeypatch.setattr("sys.stdin", StringIO(""))
-    exit_code = main(["run", str(instance)])
+    exit_code = main(["repl", str(instance)])
     capsys.readouterr()
     list_exit = main(["thread", "list", str(instance)])
     listed = capsys.readouterr()
@@ -279,3 +282,22 @@ def test_run_creates_a_new_thread_when_one_already_exists(
     assert exit_code == 0
     assert list_exit == 0
     assert len(listed.out.splitlines()) == 2
+
+
+def test_the_repl_refuses_to_start_beside_a_live_server(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path)
+    state_dir = load_instance(instance_path).manifest.state_dir
+    monkeypatch.setattr("sys.stdin", StringIO(""))
+
+    with runtime_lock(state_dir):
+        refused = main(["repl", str(instance_path)])
+    refusal = capsys.readouterr().err
+
+    assert refused == 1
+    assert str(os.getpid()) in refusal
+    assert main(["repl", str(instance_path)]) == 0

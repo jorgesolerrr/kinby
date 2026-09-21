@@ -6,9 +6,10 @@ The root `Dockerfile` builds one image for every kinby instance. Instance identi
 
 - Mount one instance directory at `/instance`. The image declares this path as a volume.
 - `KINBY_INSTANCE` is set to `/instance`, so commands use the mounted instance unless an explicit path overrides it.
-- `KINBY_CONTROL_TOKEN` is the instance's control token. With it set, `kinby serve` carries the contract over WebSocket at `GET /ws` and `GET /control` on the receiver's port, and a caller presents the token as `Authorization: Bearer <token>`. Without it, serve mode starts the receiver alone. The hub generates one token for each instance it creates and writes it to that instance's `.env`. The hub's own access token never reaches an instance.
+- `KINBY_CONTROL_TOKEN` is the instance's control token. With it set, `kinby serve` carries the contract over WebSocket at `GET /ws` and `GET /control` on the receiver's port, and a caller presents the token as `Authorization: Bearer <token>`. Without it, serve mode starts the receiver alone.
+- `kinby repl --connect <url>` drives that socket from outside the container, reading its bearer token from `KINBY_TOKEN`. `kinby repl <dir>` runs the instance in its own process instead, and refuses to start while another process holds the instance's runtime lock at `.state/runtime.lock`.
 - Pass provider credentials and other secrets as environment variables at runtime. Do not add them to the image or `kinby.toml`. Claude Code reads `CLAUDE_CODE_OAUTH_TOKEN`, a one-year subscription token from `claude setup-token`. The Anthropic SDK can use `ANTHROPIC_API_KEY` or an `ant auth login` profile mounted read-only at `/anthropic-profile`.
-- The image entrypoint is `kinby-entrypoint`, a shell script that prepares the mounted instance and then runs `kinby` with the container command. The default command is `run`.
+- The image entrypoint is `kinby-entrypoint`, a shell script that prepares the mounted instance and then runs `kinby` with the container command. The default command is `repl`.
 - Runtime data written under the instance's `.state/` directory persists with the mounted instance, including the shadow repository at `.state/snapshots.git` that holds the workspace snapshots.
 - The image ships git, gh, uv, Claude Code, and Codex. The Dockerfile pins both coding client versions. Workspace snapshots run git as a subprocess. Without git, kinby boots with snapshots off and one warning. gh and uv serve a coding workspace through issue and pull request operations and the workspace's own checks.
 
@@ -42,6 +43,35 @@ Pass secrets with individual `--env` flags, `--env-file`, or the equivalent sett
 ## Hub mount mapping
 
 The hub needs two explicit paths when it runs in a container: the instances directory as the hub sees it and the same directory on the Docker host. Docker bind sources are always host paths. For example, mount host `/srv/kinby` at `/hub` in the hub container, then configure the hub directory as `/hub` and the Docker-host directory as `/srv/kinby`. The hub rejects instance identities that do not resolve to one direct child of its instances directory. Named workspace and Codex volumes do not need path translation.
+
+## Hub deployment
+
+`compose.hub.yaml` is the reference recipe. Caddy terminates TLS for `KINBY_DOMAIN` and forwards every public request to the hub; `KINBY_HUB_DIR` is the hub directory on the Docker host, used both as the bind source for `/hub` and as `--docker-host-directory`. Instances join `kinby_private`. Caddy stays on `kinby_public`, and instance ports stay unpublished, so a client reaches an instance through the hub's relay. `kinby_private` is a normal bridge, so the instance can reach model providers, git, and GitHub.
+
+If a previous hub created `kinby_private` as an internal network, the next instance create or start attaches every container on it, stopped ones included, to a temporary network first. It then recreates `kinby_private` as a normal bridge and moves those containers onto it. A failed step leaves each container on at least one of those networks.
+
+```sh
+printf 'KINBY_DOMAIN=kinby.example.com\nKINBY_HUB_DIR=/srv/kinby\n' > .env
+docker compose -f compose.hub.yaml up --build --detach
+docker compose -f compose.hub.yaml logs hub   # the access token is printed once
+```
+
+The hub serves these routes:
+
+| Route | Purpose |
+| --- | --- |
+| `POST /auth/login` | Exchange the access token for the session cookie the browser carries. |
+| `GET /ws` | The hub's own contract: instances, lifecycle operations. |
+| `GET /instances/{instance_id}/ws` | One instance's contract, relayed frame for frame to its private `/ws`. A stopped instance answers 503, an unknown one 404. |
+| `POST /instances/{instance_id}/signals/{routine}` | A webhook, forwarded byte for byte. The instance authenticates it and answers it; the hub queues nothing. |
+| `POST /signals/{routine}` | The same, for the instance holding the signal alias. |
+| `/assets`, `/{tail:.*}` | The built web app, with the `index.html` fallback. |
+
+The relay reaches an instance's `/ws` only, never its `/control`, so no client that arrives through the hub holds `instance:lifecycle`. Adoption keeps an established webhook URL by claiming the bare signal path:
+
+```sh
+kinby hub /srv/kinby signals <instance-id>
+```
 
 ```sh
 cp instances/coder/.env.example instances/coder/.env

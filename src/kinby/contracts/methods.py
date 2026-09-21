@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from kinby.contracts.models import (
@@ -151,3 +152,37 @@ INSTANCE_STATUS = Method(
 )
 INSTANCE_LOGS = Method("instance.logs", Scope.HUB_READ, InstanceLogsCommand, InstanceLogsResult)
 OPERATION_GET = Method("operation.get", Scope.HUB_READ, OperationGetCommand, OperationGetResult)
+
+_METHODS = (
+    THREAD_CREATE,
+    THREAD_LIST,
+    THREAD_MODE_SET,
+    THREAD_TURN_START,
+    THREAD_TURN_DIFF,
+    THREAD_TURN_REVERT,
+    THREAD_TURN_REVERT_PREVIEW,
+    THREAD_TURN_LIST,
+    THREAD_TURN_TARGET_LIST,
+    THREAD_TURN_INTERRUPT,
+    THREAD_TURN_RATE,
+    THREAD_APPROVAL_RESPOND,
+    USAGE_GET,
+    STATS_GET,
+    INSTANCE_PROBE,
+    INSTANCE_DRAIN,
+    ROUTINE_LIST,
+    ROUTINE_RUN,
+    INSTANCE_CREATE,
+    INSTANCE_START,
+    INSTANCE_STOP,
+    INSTANCE_LIST,
+    INSTANCE_STATUS,
+    INSTANCE_LOGS,
+    OPERATION_GET,
+)
+_SUBSCRIPTIONS = (THREAD_SUBSCRIBE,)
+
+#: What a result or an item arrives as, by wire name, so a client off the socket parses it once.
+RESULT_MODELS: Mapping[str, type[ContractModel]] = {
+    method.name: method.result for method in _METHODS
+} | {subscription.name: subscription.item for subscription in _SUBSCRIPTIONS}

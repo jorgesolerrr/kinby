@@ -53,7 +53,7 @@ class ContractClient:
         method: Method[Command, Result],
         command: Command,
     ) -> Result | ErrorEnvelope:
-        result = await self._dispatch(method.name, command.model_dump(), self._scopes)
+        result = await self._dispatch(method.name, command.model_dump(mode="json"), self._scopes)
         if isinstance(result, (method.result, ErrorEnvelope)):
             return result
         return UNEXPECTED_RESULT
@@ -63,7 +63,9 @@ class ContractClient:
         subscription: Subscription[Command, Item],
         command: Command,
     ) -> Stream[Item | ErrorEnvelope] | ErrorEnvelope:
-        stream = await self._subscribe(subscription.name, command.model_dump(), self._scopes)
+        stream = await self._subscribe(
+            subscription.name, command.model_dump(mode="json"), self._scopes
+        )
         if isinstance(stream, ErrorEnvelope):
             return stream
         return Stream(

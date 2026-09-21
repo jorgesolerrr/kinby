@@ -11,10 +11,11 @@ from typing import cast
 from docker.errors import DockerException, ImageNotFound, NotFound
 from docker.models.containers import Container
 from docker.models.images import Image
+from docker.models.networks import Network
 from docker.types import Mount
 
 import docker
-from kinby.hub.models import BuildResult, InstanceAddress, InstanceSpec, RuntimeStatus
+from kinby.hub.models import BuildResult, InstanceSpec, RuntimeStatus
 from kinby.packages import InstalledPackage, installed_package_from_json
 
 _FROM = re.compile(r"^(FROM\s+)(\S+)(.*)$", re.MULTILINE | re.IGNORECASE)
@@ -117,6 +118,7 @@ class DockerRuntime:
         self._docker_host_directory = Path(docker_host_directory).resolve()
         self._network = network
         self._client = client or docker.from_env()
+        self._network_lock = asyncio.Lock()
 
     def _name(self, instance_id: str) -> str:
         return f"kinby-{instance_id}"
@@ -153,7 +155,11 @@ class DockerRuntime:
             spec.image,
             list(spec.command),
             name=self._name(runtime_id),
-            labels={"kinby.hub": self._hub_id, "kinby.instance": runtime_id},
+            labels={
+                "kinby.hub": self._hub_id,
+                "kinby.instance": runtime_id,
+                "kinby.port": str(spec.port),
+            },
             environment=dict(spec.env),
             mounts=mounts,
             network=self._network,
@@ -169,15 +175,93 @@ class DockerRuntime:
         )
 
     async def _ensure_network(self) -> None:
-        try:
-            await asyncio.to_thread(self._client.networks.get, self._network)
-        except NotFound:
-            await asyncio.to_thread(
-                self._client.networks.create,
-                self._network,
-                internal=True,
-                labels={"kinby.hub": self._hub_id},
+        """The instance network exists and has a route out.
+
+        An older hub created this network as internal. Containers move onto a
+        temporary network first, including stopped ones, and only then does the
+        hub recreate this network and move them back. A failed step leaves every
+        container attached to at least one of those networks. One migration
+        runs at a time, and a temporary network is used only when this hub
+        labeled it.
+        """
+        async with self._network_lock:
+            migrate = await self._owned_migrate_network()
+            current = await self._optional_network(self._network)
+            if current is not None and _is_internal(current):
+                await self._move_off_internal(current)
+                current = None
+                migrate = await self._owned_migrate_network()
+            if current is None:
+                await self._create_named(self._network)
+                current = await self._required_network(self._network)
+            if migrate is not None:
+                await self._move_onto(current, migrate)
+
+    @property
+    def _migrate_network(self) -> str:
+        return f"{self._network}_migrate"
+
+    async def _owned_migrate_network(self) -> Network | None:
+        network = await self._optional_network(self._migrate_network)
+        if network is None:
+            return None
+        if _hub_label(network) != self._hub_id:
+            raise RuntimeError(
+                f"Network {self._migrate_network} already exists and is not owned by this hub."
             )
+        return network
+
+    async def _move_off_internal(self, network: Network) -> None:
+        migrate = await self._owned_migrate_network()
+        if migrate is None:
+            await self._create_named(self._migrate_network)
+            migrate = await self._required_network(self._migrate_network)
+        container_ids = await self._attached(network)
+        await self._connect_missing(migrate, container_ids)
+        await self._disconnect_present(network, container_ids)
+        await asyncio.to_thread(network.remove)
+
+    async def _move_onto(self, target: Network, migrate: Network) -> None:
+        container_ids = await self._attached(migrate)
+        await self._connect_missing(target, container_ids)
+        await self._disconnect_present(migrate, container_ids)
+        await asyncio.to_thread(migrate.remove)
+
+    async def _connect_missing(self, network: Network, container_ids: tuple[str, ...]) -> None:
+        attached = set(await self._attached(network))
+        for container_id in container_ids:
+            if container_id in attached:
+                continue
+            await asyncio.to_thread(network.connect, container_id)
+            attached.add(container_id)
+
+    async def _disconnect_present(self, network: Network, container_ids: tuple[str, ...]) -> None:
+        attached = set(await self._attached(network))
+        for container_id in container_ids:
+            if container_id not in attached:
+                continue
+            await asyncio.to_thread(network.disconnect, container_id, force=True)
+
+    async def _attached(self, network: Network) -> tuple[str, ...]:
+        await asyncio.to_thread(network.reload)
+        return _attached_containers(_network_attrs(network))
+
+    async def _optional_network(self, name: str) -> Network | None:
+        try:
+            return await asyncio.to_thread(self._client.networks.get, name)
+        except NotFound:
+            return None
+
+    async def _required_network(self, name: str) -> Network:
+        return await asyncio.to_thread(self._client.networks.get, name)
+
+    async def _create_named(self, name: str) -> None:
+        await asyncio.to_thread(
+            self._client.networks.create,
+            name,
+            internal=False,
+            labels={"kinby.hub": self._hub_id},
+        )
 
     async def start(self, instance_id: str) -> None:
         container = await self._container(instance_id)
@@ -187,9 +271,6 @@ class DockerRuntime:
         """Signal the container, then terminate it if the process has not exited by then."""
         container = await self._container(instance_id)
         await asyncio.to_thread(container.stop, timeout=grace_seconds)
-
-    def address(self, instance_id: str, port: int) -> InstanceAddress:
-        return InstanceAddress(f"http://{self._name(instance_id)}:{port}")
 
     async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
         container = await self._container(instance_id)
@@ -236,6 +317,20 @@ class DockerRuntime:
             return RuntimeStatus("failed", None, f"exited ({state.get('ExitCode')})")
         return RuntimeStatus("failed", None, detail)
 
+    async def address(self, instance_id: str) -> str | None:
+        """The private URL of a running instance, read from the container the hub labeled."""
+        try:
+            container = await self._container(instance_id)
+        except NotFound:
+            return None
+        await asyncio.to_thread(container.reload)
+        attributes = container.attrs or {}
+        if attributes.get("State", {}).get("Status") != "running":
+            return None
+        # Containers created before this label existed listen on the spec default.
+        port = container.labels.get("kinby.port", str(InstanceSpec.port))
+        return f"http://{self._name(instance_id)}:{port}"
+
     async def logs(
         self,
         instance_id: str,
@@ -281,6 +376,34 @@ class DockerRuntime:
 
     async def _container(self, instance_id: str) -> Container:
         return await asyncio.to_thread(self._client.containers.get, self._name(instance_id))
+
+
+def _is_internal(network: Network | None) -> bool:
+    return bool(_network_attrs(network).get("Internal"))
+
+
+def _hub_label(network: Network) -> str | None:
+    labels = _network_attrs(network).get("Labels")
+    if not isinstance(labels, dict):
+        return None
+    label = labels.get("kinby.hub")
+    return label if isinstance(label, str) else None
+
+
+def _network_attrs(network: Network | None) -> dict[str, object]:
+    if network is None:
+        return {}
+    raw = getattr(network, "attrs", None)
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): value for key, value in raw.items()}
+
+
+def _attached_containers(attrs: dict[str, object]) -> tuple[str, ...]:
+    containers = attrs.get("Containers")
+    if not isinstance(containers, dict):
+        return ()
+    return tuple(str(container_id) for container_id in containers)
 
 
 def _next_or_end(iterator: Iterator[bytes]) -> bytes | object:

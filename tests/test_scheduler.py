@@ -896,7 +896,7 @@ def test_cli_parked_routine_reports_non_success(tmp_path, capsys, monkeypatch):
     assert "thread:" in output.out
     thread_id = output.out.splitlines()[0].removeprefix("thread: ")
     assert (
-        f"Resume with: kinby run --thread {thread_id} --instance '{instance_path}'\n"
+        f"Resume with: kinby repl --thread {thread_id} --instance '{instance_path}'\n"
     ) in output.out
     assert "parked" in output.err and "approval" in output.err
     events = EventLog(instance.manifest.state_dir).all_events()

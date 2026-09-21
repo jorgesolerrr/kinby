@@ -34,12 +34,10 @@ def build_docker_hub(
         registry,
         DockerImageBackend(client),
     )
-    hub = Hub(
+    return Hub(
         directory,
         runtime=runtime,
         images=images,
         control=HttpInstanceControl(),
         docker_host_directory=docker_host_directory,
     )
-    hub.registry.fail_abandoned_operations()
-    return hub

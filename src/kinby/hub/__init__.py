@@ -4,10 +4,10 @@ from kinby.hub.access import HubAccess
 from kinby.hub.control import (
     ControlConnectionLost,
     ControlEndpoint,
+    ControlUnreachable,
     HttpInstanceControl,
     IncompatibleLifecycleEndpoint,
     InstanceControl,
-    InstanceUnreachable,
 )
 from kinby.hub.docker import DockerImageBackend, DockerRuntime
 from kinby.hub.factory import build_docker_hub
@@ -19,8 +19,10 @@ from kinby.hub.models import (
     ImageBackend,
     ImagePreparation,
     ImageSelection,
-    InstanceAddress,
+    InstanceEndpoint,
+    InstanceRouting,
     InstanceSpec,
+    InstanceUnreachable,
     PreparedImage,
     RuntimeStatus,
 )
@@ -33,6 +35,7 @@ __all__ = [
     "ContainerRuntime",
     "ControlConnectionLost",
     "ControlEndpoint",
+    "ControlUnreachable",
     "DockerImageBackend",
     "DockerRuntime",
     "HttpInstanceControl",
@@ -46,8 +49,9 @@ __all__ = [
     "ImagePreparer",
     "ImageSelection",
     "IncompatibleLifecycleEndpoint",
-    "InstanceAddress",
     "InstanceControl",
+    "InstanceEndpoint",
+    "InstanceRouting",
     "InstanceSpec",
     "InstanceUnreachable",
     "PreparedImage",

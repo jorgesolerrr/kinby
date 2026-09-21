@@ -23,7 +23,6 @@ from kinby.contracts import (
     ResultFrame,
     parse_server_frame,
 )
-from kinby.hub.models import InstanceAddress
 
 #: How long the probe waits before it calls the lifecycle endpoint unreachable.
 PROBE_SECONDS = 10
@@ -35,15 +34,15 @@ _HEARTBEAT_SECONDS = 30
 class ControlEndpoint:
     """One instance's private server, and the secret that opens it."""
 
-    address: InstanceAddress
+    address: str
     token: ControlToken
 
 
-class InstanceUnreachable(Exception):
+class ControlUnreachable(Exception):
     """The instance's private lifecycle endpoint did not answer."""
 
 
-class ControlConnectionLost(InstanceUnreachable):
+class ControlConnectionLost(ControlUnreachable):
     """The control socket dropped after the drain was sent.
 
     The instance keeps that drain running, so the hub calls again and waits.
@@ -77,7 +76,7 @@ class HttpInstanceControl:
                 response.raise_for_status()
                 body = await response.json()
         except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
-            raise InstanceUnreachable(str(exc) or type(exc).__name__) from exc
+            raise ControlUnreachable(str(exc) or type(exc).__name__) from exc
         return _probed(body)
 
     async def drain(self, endpoint: ControlEndpoint, *, force: bool) -> DrainState:
@@ -101,7 +100,7 @@ class HttpInstanceControl:
                 await socket.send_str(call.model_dump_json())
                 return await _finished(socket)
         except (aiohttp.ClientError, TimeoutError) as exc:
-            raise InstanceUnreachable(str(exc) or type(exc).__name__) from exc
+            raise ControlUnreachable(str(exc) or type(exc).__name__) from exc
 
 
 async def _finished(socket: aiohttp.ClientWebSocketResponse) -> DrainState:
@@ -124,11 +123,11 @@ async def _answer(socket: aiohttp.ClientWebSocketResponse) -> str:
 
 def _probed(body: object) -> InstanceProbeResult:
     if not isinstance(body, dict):
-        raise InstanceUnreachable("The health route did not report a contract version.")
+        raise ControlUnreachable("The health route did not report a contract version.")
     reported = body.get("capabilities")
     version = body.get("contract_version")
     if not isinstance(reported, list) or not isinstance(version, str):
-        raise InstanceUnreachable("The health route did not report a contract version.")
+        raise ControlUnreachable("The health route did not report a contract version.")
     return InstanceProbeResult(
         contract_version=version,
         # An instance may report a capability this hub does not know yet.
@@ -142,10 +141,10 @@ def _drained(message: str) -> DrainState:
             try:
                 return InstanceDrainResult.model_validate(result.result).state
             except ValidationError as exc:
-                raise InstanceUnreachable(f"The drain answer could not be read: {exc}") from exc
+                raise ControlUnreachable(f"The drain answer could not be read: {exc}") from exc
         case ErrorFrame() as error:
-            raise InstanceUnreachable(f"The instance refused to drain: {error.error.message}")
+            raise ControlUnreachable(f"The instance refused to drain: {error.error.message}")
         case ErrorEnvelope() as unreadable:
-            raise InstanceUnreachable(f"The drain answer could not be read: {unreadable.message}")
+            raise ControlUnreachable(f"The drain answer could not be read: {unreadable.message}")
         case other:
-            raise InstanceUnreachable(f'The instance answered the drain with "{other.type.value}".')
+            raise ControlUnreachable(f'The instance answered the drain with "{other.type.value}".')

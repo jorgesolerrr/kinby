@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import re
 import shutil
 from collections.abc import Collection, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 from uuid import UUID, uuid4
 
 from dotenv import dotenv_values
@@ -50,15 +52,18 @@ from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.control import (
     ControlConnectionLost,
     ControlEndpoint,
+    ControlUnreachable,
+    HttpInstanceControl,
     IncompatibleLifecycleEndpoint,
     InstanceControl,
-    InstanceUnreachable,
 )
 from kinby.hub.models import (
     ContainerRuntime,
     ImagePreparation,
     ImageSelection,
+    InstanceEndpoint,
     InstanceSpec,
+    InstanceUnreachable,
     PreparedImage,
     RuntimeStatus,
 )
@@ -79,6 +84,26 @@ _STOP_OBSERVE_SECONDS = 120
 #: Pause before calling a drain again, so a socket that closes immediately does not spin.
 _DRAIN_RETRY_SECONDS = 0.2
 _RUNTIME_STOPPED = frozenset({"absent", "created", "stopped", "failed"})
+_INTERRUPTED_OPERATION = "The hub stopped before this operation finished."
+
+
+class HubAlreadyRunning(RuntimeError):
+    """Another process holds this hub directory."""
+
+
+def _acquire_directory(directory: Path) -> IO[str]:
+    """Hold this directory until the process exits, or until close.
+
+    The kernel releases the lock when the process dies, so a later hub can tell
+    that unfinished operations belong to a process that is gone.
+    """
+    handle = (directory / "hub.lock").open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        raise HubAlreadyRunning(f"Another hub is already running for {directory}.") from None
+    return handle
 
 
 @dataclass(frozen=True)
@@ -98,33 +123,44 @@ class Hub:
         *,
         runtime: ContainerRuntime,
         images: ImagePreparation,
-        control: InstanceControl,
+        control: InstanceControl | None = None,
         docker_host_directory: Path | None = None,
     ) -> None:
         self.directory = Path(directory).resolve()
-        self.instances_directory = self.directory / "instances"
-        self.instances_directory.mkdir(parents=True, exist_ok=True)
-        self._docker_host_directory = (
-            Path(docker_host_directory).resolve()
-            if docker_host_directory is not None
-            else self.directory
-        )
-        self.registry = HubRegistry(self.directory)
-        self.access = HubAccess(self.registry)
-        self._runtime = runtime
-        self._images = images
-        self._control = control
-        self._locks: dict[UUID, asyncio.Lock] = {}
-        self._stopping: dict[UUID, PendingStop] = {}
-        self._tasks: set[asyncio.Task[None]] = set()
-        self.dispatcher = Dispatcher()
-        self.dispatcher.register(INSTANCE_CREATE, self.create)
-        self.dispatcher.register(INSTANCE_START, self.start)
-        self.dispatcher.register(INSTANCE_STOP, self.stop)
-        self.dispatcher.register(INSTANCE_LIST, self.list)
-        self.dispatcher.register(INSTANCE_STATUS, self.status)
-        self.dispatcher.register(INSTANCE_LOGS, self.logs)
-        self.dispatcher.register(OPERATION_GET, self.operation)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self._directory_lock = _acquire_directory(self.directory)
+        try:
+            self.instances_directory = self.directory / "instances"
+            self.instances_directory.mkdir(parents=True, exist_ok=True)
+            self._docker_host_directory = (
+                Path(docker_host_directory).resolve()
+                if docker_host_directory is not None
+                else self.directory
+            )
+            self.registry = HubRegistry(self.directory)
+            self.registry.fail_interrupted_operations(_INTERRUPTED_OPERATION)
+            self.access = HubAccess(self.registry)
+            self._runtime = runtime
+            self._images = images
+            self._control = control if control is not None else HttpInstanceControl()
+            self._locks: dict[UUID, asyncio.Lock] = {}
+            self._stopping: dict[UUID, PendingStop] = {}
+            self._tasks: set[asyncio.Task[None]] = set()
+            self.dispatcher = Dispatcher()
+            self.dispatcher.register(INSTANCE_CREATE, self.create)
+            self.dispatcher.register(INSTANCE_START, self.start)
+            self.dispatcher.register(INSTANCE_STOP, self.stop)
+            self.dispatcher.register(INSTANCE_LIST, self.list)
+            self.dispatcher.register(INSTANCE_STATUS, self.status)
+            self.dispatcher.register(INSTANCE_LOGS, self.logs)
+            self.dispatcher.register(OPERATION_GET, self.operation)
+        except BaseException:
+            self._directory_lock.close()
+            raise
+
+    def close(self) -> None:
+        """Release this directory so another process can own it."""
+        self._directory_lock.close()
 
     def _schedule(self, work: Coroutine[object, object, None]) -> None:
         task = asyncio.create_task(work)
@@ -162,9 +198,9 @@ class Hub:
         secrets: dict[str, str],
     ) -> None:
         staging = record.path.with_name(f"{record.path.name}.creating")
-        self.registry.update_operation(
+        self.registry.advance_operation(
             operation_id,
-            OperationState.RUNNING,
+            "configure",
             "Preparing instance configuration.",
         )
         try:
@@ -179,11 +215,7 @@ class Hub:
                 self._write_configuration(staging, record.manifest_id, record.persona_name)
                 self._write_secrets(staging, secrets)
                 inspect_instance(staging)
-            self.registry.update_operation(
-                operation_id,
-                OperationState.RUNNING,
-                "Preparing selected image.",
-            )
+            self.registry.advance_operation(operation_id, "image", "Preparing selected image.")
             prepared = await self._images.prepare(selection)
             package = self._package(prepared, selection, secrets)
             if package is not None:
@@ -197,6 +229,11 @@ class Hub:
             staging.replace(record.path)
             storage = self._storage(record.instance_id, record.path)
             self.registry.record_preparation(record.instance_id, artifact, storage)
+            self.registry.advance_operation(
+                operation_id,
+                "container",
+                "Creating the instance container.",
+            )
             environment = self._environment(record.path)
             await self._runtime.create(
                 InstanceSpec(
@@ -207,7 +244,7 @@ class Hub:
                 )
             )
             self.registry.mark_prepared(record.instance_id)
-            self.registry.update_operation(
+            self.registry.finish_operation(
                 operation_id,
                 OperationState.SUCCEEDED,
                 "Instance prepared and stopped.",
@@ -215,7 +252,7 @@ class Hub:
         except Exception as exc:
             if staging.exists():
                 shutil.rmtree(staging)
-            self.registry.update_operation(
+            self.registry.finish_operation(
                 operation_id,
                 OperationState.FAILED,
                 self._redact(str(exc) or type(exc).__name__, secrets.values()),
@@ -224,39 +261,43 @@ class Hub:
     async def start(self, command: InstanceStartCommand) -> LifecycleOperationResult:
         record = self._prepared_instance(command.instance_id)
         operation_id = uuid4()
-        self.registry.begin_operation(
+        opened = self.registry.begin_operation(
             operation_id,
             record.instance_id,
             OperationKind.START,
             "Start queued.",
         )
-        self._schedule(self._start(operation_id, record.instance_id))
+        if opened == operation_id:
+            self._schedule(self._start(operation_id, record.instance_id))
         return LifecycleOperationResult(
-            operation_id=operation_id,
+            operation_id=opened,
             instance_id=record.instance_id,
         )
 
     async def _start(self, operation_id: UUID, instance_id: UUID) -> None:
+        try:
+            await self._run_start(operation_id, instance_id)
+        except asyncio.CancelledError:
+            self._fail_if_unfinished(operation_id)
+            raise
+
+    async def _run_start(self, operation_id: UUID, instance_id: UUID) -> None:
         lock = self._locks.setdefault(instance_id, asyncio.Lock())
         async with lock:
             record = self._prepared_instance(instance_id)
             secrets = self._environment(record.path).values()
-            self.registry.update_operation(
-                operation_id,
-                OperationState.RUNNING,
-                "Starting selected image.",
-            )
+            self.registry.advance_operation(operation_id, "start", "Starting selected image.")
             self.registry.set_intended_state(instance_id, IntendedState.RUNNING)
             try:
                 await self._runtime.start(record.runtime_id)
             except Exception as exc:
-                self.registry.update_operation(
+                self.registry.finish_operation(
                     operation_id,
                     OperationState.FAILED,
                     self._redact(str(exc) or type(exc).__name__, secrets),
                 )
                 return
-            self.registry.update_operation(
+            self.registry.finish_operation(
                 operation_id,
                 OperationState.SUCCEEDED,
                 "Instance started.",
@@ -267,15 +308,17 @@ class Hub:
         record = self._prepared_instance(command.instance_id)
         pending = self._stopping.get(record.instance_id)
         if pending is None:
-            pending = PendingStop(uuid4(), asyncio.Event())
-            self._stopping[record.instance_id] = pending
-            self.registry.begin_operation(
-                pending.operation_id,
+            operation_id = uuid4()
+            opened = self.registry.begin_operation(
+                operation_id,
                 record.instance_id,
                 OperationKind.STOP,
                 "Stop queued.",
             )
-            self._schedule(self._stop(record.instance_id, pending))
+            pending = PendingStop(opened, asyncio.Event())
+            self._stopping[record.instance_id] = pending
+            if opened == operation_id:
+                self._schedule(self._stop(record.instance_id, pending))
         if command.force:
             pending.force.set()
         return LifecycleOperationResult(
@@ -286,31 +329,30 @@ class Hub:
     async def _stop(self, instance_id: UUID, pending: PendingStop) -> None:
         operation_id = pending.operation_id
         try:
-            # The lock serializes stops against other mutations; escalation never takes it.
-            async with self._locks.setdefault(instance_id, asyncio.Lock()):
-                record = self._prepared_instance(instance_id)
-                self.registry.set_intended_state(instance_id, IntendedState.STOPPED)
-                try:
-                    await self._stop_running(record, pending)
-                except Exception as exc:
-                    self._fail(operation_id, record, str(exc) or type(exc).__name__)
-                    return
-                self.registry.update_operation(
-                    operation_id,
-                    OperationState.SUCCEEDED,
-                    "Instance stopped.",
-                )
+            try:
+                # The lock serializes stops against other mutations; escalation never takes it.
+                async with self._locks.setdefault(instance_id, asyncio.Lock()):
+                    record = self._prepared_instance(instance_id)
+                    self.registry.set_intended_state(instance_id, IntendedState.STOPPED)
+                    try:
+                        detail = await self._stop_running(record, pending)
+                    except Exception as exc:
+                        self._fail(operation_id, record, str(exc) or type(exc).__name__)
+                        return
+                    self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, detail)
+            except asyncio.CancelledError:
+                self._fail_if_unfinished(operation_id)
+                raise
         finally:
             self._stopping.pop(instance_id, None)
 
-    async def _stop_running(self, record: ManagedInstance, pending: PendingStop) -> None:
+    async def _stop_running(self, record: ManagedInstance, pending: PendingStop) -> str:
         """Drain the instance through its own runtime, then take the container down."""
         operation_id = pending.operation_id
         if (await self._runtime.status(record.runtime_id)).state in _RUNTIME_STOPPED:
-            self._record(operation_id, "Instance was already stopped.")
-            return
-        self._record(operation_id, "Checking the instance's lifecycle endpoint.")
-        endpoint = self._endpoint(record)
+            return "Instance was already stopped."
+        self._record(operation_id, "probe", "Checking the instance's lifecycle endpoint.")
+        endpoint = await self._endpoint(record)
         probed = await self._control.probe(endpoint)
         if Capability.DRAIN not in probed.capabilities:
             raise IncompatibleLifecycleEndpoint(
@@ -320,12 +362,15 @@ class Hub:
         state = await self._drain(operation_id, endpoint, pending)
         self._record(
             operation_id,
+            "result",
             f"Instance {state.value}. Stopping the container."
             if state is not None
             else "The instance did not report its drain. Terminating the container.",
         )
         await self._runtime.stop(record.runtime_id, grace_seconds=STOP_GRACE_SECONDS)
         await self._observe_stop(record.runtime_id)
+        self._record(operation_id, "container", "Stopping the container.")
+        return "Instance stopped."
 
     async def _drain(
         self,
@@ -337,6 +382,7 @@ class Hub:
         forced = pending.force.is_set()
         self._record(
             operation_id,
+            "drain",
             "Interrupting active work." if forced else "Draining accepted work.",
         )
         draining = asyncio.create_task(self._call_drain(operation_id, endpoint, pending))
@@ -347,7 +393,11 @@ class Hub:
                 await asyncio.wait((draining, escalation), return_when=asyncio.FIRST_COMPLETED)
                 if draining.done():
                     return draining.result()
-                self._record(operation_id, "Force stop requested. Interrupting active work.")
+                self._record(
+                    operation_id,
+                    "force",
+                    "Force stop requested. Interrupting active work.",
+                )
                 interrupting = asyncio.create_task(
                     self._call_drain(operation_id, endpoint, pending)
                 )
@@ -382,6 +432,7 @@ class Hub:
                 if not reported:
                     self._record(
                         operation_id,
+                        "reconnect",
                         "The control socket closed. Waiting for the drain again.",
                     )
                     reported = True
@@ -399,26 +450,32 @@ class Hub:
                 "after it was told to stop."
             ) from exc
 
-    def _endpoint(self, record: ManagedInstance) -> ControlEndpoint:
+    async def _endpoint(self, record: ManagedInstance) -> ControlEndpoint:
         token = self._environment(record.path).get(CONTROL_TOKEN_VARIABLE)
-        if token is None:
-            raise InstanceUnreachable(
-                "The instance has no control token, so its lifecycle endpoint cannot be reached."
-            )
-        return ControlEndpoint(
-            address=self._runtime.address(record.runtime_id, _INSTANCE_PORT),
-            token=ControlToken(token),
-        )
+        address = await self._runtime.address(record.runtime_id)
+        if token is None or address is None:
+            raise ControlUnreachable("The instance's lifecycle endpoint cannot be reached.")
+        return ControlEndpoint(address=address, token=ControlToken(token))
 
-    def _record(self, operation_id: UUID, detail: str) -> None:
-        self.registry.update_operation(operation_id, OperationState.RUNNING, detail)
+    def _record(self, operation_id: UUID, step: str, detail: str) -> None:
+        self.registry.advance_operation(operation_id, step, detail)
 
     def _fail(self, operation_id: UUID, record: ManagedInstance, detail: str) -> None:
-        self.registry.update_operation(
+        self.registry.finish_operation(
             operation_id,
             OperationState.FAILED,
             self._redact(detail, self._environment(record.path).values()),
         )
+
+    def _fail_if_unfinished(self, operation_id: UUID) -> None:
+        current = self.registry.operation(operation_id)
+        unfinished = {OperationState.PENDING, OperationState.RUNNING}
+        if current is not None and current.state in unfinished:
+            self.registry.finish_operation(
+                operation_id,
+                OperationState.FAILED,
+                _INTERRUPTED_OPERATION,
+            )
 
     async def list(self, command: InstanceListCommand) -> InstanceListResult:
         return InstanceListResult(instances=self.registry.list_instances())
@@ -463,6 +520,27 @@ class Hub:
             instance_id=record.instance_id,
             text=self._redact(text, self._environment(record.path).values()),
         )
+
+    async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable:
+        """Answer where a public route may reach one instance, and with which control token."""
+        record = self.registry.instance(instance_id)
+        if record is None or not record.prepared:
+            return InstanceUnreachable.MISSING
+        try:
+            address = await self._runtime.address(record.runtime_id)
+        except Exception:
+            return InstanceUnreachable.UNAVAILABLE
+        token = self._environment(record.path).get(CONTROL_TOKEN_VARIABLE)
+        if address is None or not token:
+            return InstanceUnreachable.UNAVAILABLE
+        return InstanceEndpoint(url=address, control_token=ControlToken(token))
+
+    async def signal_endpoint(self) -> InstanceEndpoint | InstanceUnreachable:
+        """Reach the instance that kept the public webhook URL it was registered with."""
+        alias = self.registry.signal_alias()
+        if alias is None:
+            return InstanceUnreachable.MISSING
+        return await self.endpoint(alias)
 
     async def operation(self, command: OperationGetCommand) -> OperationGetResult:
         result = self.registry.operation(command.operation_id)

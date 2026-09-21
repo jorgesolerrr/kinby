@@ -59,7 +59,7 @@ from kinby.core.turns import (
     TurnOutcome,
     TurnRunner,
 )
-from kinby.hub import HttpInstanceControl, Hub, InstanceAddress
+from kinby.hub import HttpInstanceControl, Hub
 from kinby.instance import Instance, Serve, load_instance
 from kinby.memory import GraphStore, RecapWriter
 from tests.helpers import (
@@ -464,9 +464,9 @@ class ServedRuntime(FakeRuntime):
         super().__init__()
         self.serving: Serve | None = None
 
-    def address(self, instance_id: str, port: int) -> InstanceAddress:
+    async def address(self, instance_id: str) -> str | None:
         assert self.serving is not None
-        return InstanceAddress(f"http://{self.serving.host}:{self.serving.port}")
+        return f"http://{self.serving.host}:{self.serving.port}"
 
 
 def test_the_hub_stops_a_served_instance_through_its_private_server(
