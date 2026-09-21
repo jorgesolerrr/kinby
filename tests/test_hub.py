@@ -729,7 +729,9 @@ def test_concurrent_starts_are_serialized_per_instance(tmp_path):
         assert isinstance(second, LifecycleOperationResult)
         await asyncio.gather(_operation(client, first), _operation(client, second))
 
+        assert first.operation_id == second.operation_id
         assert runtime.maximum_active_starts == 1
+        assert runtime.started == [str(created.instance_id)]
 
     asyncio.run(scenario())
 
@@ -859,6 +861,44 @@ def test_status_carries_the_operation_a_client_lost_the_response_to(tmp_path):
         assert during.active_operation_id == started.operation_id
         assert not isinstance(after, ErrorEnvelope)
         assert after.active_operation_id is None
+
+    asyncio.run(scenario())
+
+
+def test_a_second_start_keeps_the_operation_a_client_can_still_find(tmp_path):
+    async def scenario() -> None:
+        runtime = HeldRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+
+        started = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        await asyncio.wait_for(runtime.holding.wait(), timeout=5)
+        again = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        during = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+        runtime.released.set()
+        assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+
+        assert isinstance(again, LifecycleOperationResult)
+        assert again.operation_id == started.operation_id
+        assert not isinstance(during, ErrorEnvelope)
+        assert during.active_operation_id == started.operation_id
+        assert runtime.started == [str(created.instance_id)]
 
     asyncio.run(scenario())
 

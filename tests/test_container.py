@@ -293,7 +293,7 @@ def test_the_hub_recipe_keeps_instances_private_and_maps_the_docker_host_path() 
     assert _variable(binds["/hub"]) == "KINBY_HUB_DIR"
     assert _variable(flags["--docker-host-directory"]) == "KINBY_HUB_DIR"
     assert binds["/var/run/docker.sock"] == "/var/run/docker.sock"
-    assert private == {"name": flags["--network"], "internal": True}
+    assert private == {"name": flags["--network"]}
     assert set(_strings(hub["networks"])) == {"kinby_public", flags["--network"]}
     assert flags["--network"] not in _strings(caddy["networks"])
     assert f"reverse_proxy hub:{flags['--listen'].rsplit(':', 1)[1]}" in caddyfile

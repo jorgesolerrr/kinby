@@ -193,15 +193,16 @@ class Hub:
     async def start(self, command: InstanceStartCommand) -> LifecycleOperationResult:
         record = self._prepared_instance(command.instance_id)
         operation_id = uuid4()
-        self.registry.begin_operation(
+        opened = self.registry.begin_operation(
             operation_id,
             record.instance_id,
             OperationKind.START,
             "Start queued.",
         )
-        self._schedule(self._start(operation_id, record.instance_id))
+        if opened == operation_id:
+            self._schedule(self._start(operation_id, record.instance_id))
         return LifecycleOperationResult(
-            operation_id=operation_id,
+            operation_id=opened,
             instance_id=record.instance_id,
         )
 

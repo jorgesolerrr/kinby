@@ -173,15 +173,32 @@ class DockerRuntime:
         )
 
     async def _ensure_network(self) -> None:
+        """The instance network exists and has a route out.
+
+        An older hub created this network as internal, which leaves an instance
+        unable to reach model providers, git, and GitHub. Replace that network
+        when nothing is attached. A network that still has containers stays.
+        """
         try:
-            await asyncio.to_thread(self._client.networks.get, self._network)
+            network = await asyncio.to_thread(self._client.networks.get, self._network)
         except NotFound:
-            await asyncio.to_thread(
-                self._client.networks.create,
-                self._network,
-                internal=True,
-                labels={"kinby.hub": self._hub_id},
-            )
+            await self._create_network()
+            return
+        attrs = network.attrs if isinstance(getattr(network, "attrs", None), dict) else {}
+        if not attrs.get("Internal"):
+            return
+        if attrs.get("Containers"):
+            return
+        await asyncio.to_thread(network.remove)
+        await self._create_network()
+
+    async def _create_network(self) -> None:
+        await asyncio.to_thread(
+            self._client.networks.create,
+            self._network,
+            internal=False,
+            labels={"kinby.hub": self._hub_id},
+        )
 
     async def start(self, instance_id: str) -> None:
         container = await self._container(instance_id)
@@ -244,9 +261,10 @@ class DockerRuntime:
             return None
         await asyncio.to_thread(container.reload)
         attributes = container.attrs or {}
-        port = container.labels.get("kinby.port")
-        if attributes.get("State", {}).get("Status") != "running" or port is None:
+        if attributes.get("State", {}).get("Status") != "running":
             return None
+        # Containers created before this label existed listen on the spec default.
+        port = container.labels.get("kinby.port", str(InstanceSpec.port))
         return f"http://{self._name(instance_id)}:{port}"
 
     async def logs(

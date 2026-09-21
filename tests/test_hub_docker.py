@@ -226,7 +226,7 @@ def test_real_docker_runtime_labels_stopped_and_independent_instances(tmp_path):
         client = docker.from_env()
         image = await asyncio.to_thread(client.images.pull, "busybox:1.36")
         network_name = f"kinby-test-{uuid.uuid4().hex}"
-        await asyncio.to_thread(client.networks.create, network_name, internal=True)
+        await asyncio.to_thread(client.networks.create, network_name, internal=False)
         hub_id = str(uuid.uuid4())
         runtime = DockerRuntime(
             hub_id,
@@ -252,6 +252,7 @@ def test_real_docker_runtime_labels_stopped_and_independent_instances(tmp_path):
             assert first_container.labels == {
                 "kinby.hub": hub_id,
                 "kinby.instance": first,
+                "kinby.port": "8787",
             }
             await asyncio.gather(runtime.start(first), runtime.start(second))
             del runtime
@@ -288,8 +289,9 @@ def test_real_docker_runtime_labels_stopped_and_independent_instances(tmp_path):
     ("status", "labels", "expected"),
     [
         ("running", {"kinby.port": "8787"}, "http://kinby-abc:8787"),
+        ("running", {"kinby.port": "9000"}, "http://kinby-abc:9000"),
         ("exited", {"kinby.port": "8787"}, None),
-        ("running", {}, None),
+        ("running", {}, "http://kinby-abc:8787"),
     ],
 )
 def test_the_docker_runtime_addresses_only_a_running_instance(tmp_path, status, labels, expected):
@@ -316,3 +318,79 @@ def test_the_docker_runtime_has_no_address_for_a_container_that_is_gone(tmp_path
     )
 
     assert asyncio.run(runtime.address("abc")) is None
+
+
+class _RecordingNetwork:
+    def __init__(self, attrs: dict[str, object]) -> None:
+        self.attrs = attrs
+        self.removed = False
+
+    def remove(self) -> None:
+        self.removed = True
+
+
+class _RecordingNetworks:
+    def __init__(self, network: _RecordingNetwork | None) -> None:
+        self.network = network
+        self.created: list[tuple[str, dict[str, object]]] = []
+
+    def get(self, name: str) -> _RecordingNetwork:
+        if self.network is None or self.network.removed:
+            raise NotFound(name)
+        return self.network
+
+    def create(self, name: str, **options: object) -> _RecordingNetwork:
+        self.created.append((name, options))
+        self.network = _RecordingNetwork({"Internal": bool(options.get("internal"))})
+        return self.network
+
+
+def _runtime_on(tmp_path: Path, networks: _RecordingNetworks) -> DockerRuntime:
+    class _Client:
+        def __init__(self) -> None:
+            self.containers = FakeContainers()
+            self.networks = networks
+
+    (tmp_path / "instances" / "abc").mkdir(parents=True)
+    return DockerRuntime(
+        "hub-id",
+        tmp_path,
+        tmp_path,
+        network="kinby_private",
+        client=cast(DockerClient, _Client()),
+    )
+
+
+def test_a_missing_network_is_created_with_a_route_out(tmp_path: Path) -> None:
+    networks = _RecordingNetworks(None)
+    runtime = _runtime_on(tmp_path, networks)
+
+    asyncio.run(runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected")))
+
+    assert networks.created == [
+        ("kinby_private", {"internal": False, "labels": {"kinby.hub": "hub-id"}})
+    ]
+
+
+def test_an_empty_internal_network_is_replaced_by_one_with_a_route_out(tmp_path: Path) -> None:
+    internal = _RecordingNetwork({"Internal": True, "Containers": {}})
+    networks = _RecordingNetworks(internal)
+    runtime = _runtime_on(tmp_path, networks)
+
+    asyncio.run(runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected")))
+
+    assert internal.removed
+    assert networks.created == [
+        ("kinby_private", {"internal": False, "labels": {"kinby.hub": "hub-id"}})
+    ]
+
+
+def test_an_internal_network_that_still_has_containers_is_left_in_place(tmp_path: Path) -> None:
+    internal = _RecordingNetwork({"Internal": True, "Containers": {"c1": {}}})
+    networks = _RecordingNetworks(internal)
+    runtime = _runtime_on(tmp_path, networks)
+
+    asyncio.run(runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected")))
+
+    assert not internal.removed
+    assert networks.created == []

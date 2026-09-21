@@ -283,8 +283,30 @@ class HubRegistry:
         instance_id: UUID,
         kind: OperationKind,
         detail: str,
-    ) -> None:
+    ) -> UUID:
+        """Open this operation, or return the unfinished one of the same kind.
+
+        A second start while the first is still running would hide the first from
+        `instance.status`, and that is how a client finds a response it lost.
+        """
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT id FROM operations
+                WHERE instance_id = ? AND kind = ? AND state IN (?, ?)
+                ORDER BY rowid
+                LIMIT 1
+                """,
+                (
+                    str(instance_id),
+                    kind.value,
+                    OperationState.PENDING.value,
+                    OperationState.RUNNING.value,
+                ),
+            ).fetchone()
+            if existing is not None:
+                return UUID(existing[0])
             connection.execute(
                 """
                 INSERT INTO operations (id, instance_id, kind, state, detail)
@@ -298,6 +320,7 @@ class HubRegistry:
                     detail,
                 ),
             )
+        return operation_id
 
     def advance_operation(self, operation_id: UUID, step: str, detail: str) -> None:
         """Succeed the step that was running and open the named one, both operation and step."""
@@ -350,13 +373,17 @@ class HubRegistry:
         )
 
     def active_operation(self, instance_id: UUID) -> UUID | None:
-        """The lifecycle operation this instance has not finished, so a client can find it."""
+        """The earliest lifecycle operation this instance has not finished.
+
+        A client that lost a response finds that operation here. A later operation
+        does not take its place while this one is still running.
+        """
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT id FROM operations
                 WHERE instance_id = ? AND state IN (?, ?)
-                ORDER BY rowid DESC LIMIT 1
+                ORDER BY rowid LIMIT 1
                 """,
                 (
                     str(instance_id),
