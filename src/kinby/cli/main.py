@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from importlib.metadata import version
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -76,6 +77,10 @@ from kinby.packages import inspect_installed_package
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
+
+if TYPE_CHECKING:
+    # The hub pulls in the Docker SDK; only the hub command imports it at runtime.
+    from kinby.hub import LifecycleRecovery
 
 
 class _CurrentStderr:
@@ -477,6 +482,7 @@ async def _run_hub(
         print(f"hub id: {hub.registry.hub_id()}")
         print(f"directory: {hub.directory}")
         _announce(hub.access.issue())
+        _announce_recovery(await hub.recover())
         server = HubContractServer(hub.dispatcher, hub.access, hub, web_app)
         address = await server.start(listen)
         print(f"listen: {address.host}:{address.port}")
@@ -487,6 +493,14 @@ async def _run_hub(
             await server.stop()
         for shutdown_signal in shutdown_signals:
             loop.remove_signal_handler(shutdown_signal)
+
+
+def _announce_recovery(recovery: LifecycleRecovery) -> None:
+    """Print what this hub found for each managed instance, and what it does not own."""
+    for instance in recovery.instances:
+        print(f"recovered: {instance.instance_id} {instance.state.value}: {instance.detail}")
+    for runtime_id in recovery.unknown_containers:
+        print(f"unowned container: {runtime_id}")
 
 
 def _announce(token: AccessToken | None) -> None:

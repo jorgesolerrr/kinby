@@ -23,7 +23,10 @@ from kinby.hub.models import (
     InstanceRouting,
     InstanceSpec,
     InstanceUnreachable,
+    LifecycleRecovery,
     PreparedImage,
+    RecoveredInstance,
+    RecoveredState,
     RuntimeStatus,
 )
 from kinby.hub.registry import HubRegistry
@@ -54,7 +57,10 @@ __all__ = [
     "InstanceRouting",
     "InstanceSpec",
     "InstanceUnreachable",
+    "LifecycleRecovery",
     "PreparedImage",
+    "RecoveredInstance",
+    "RecoveredState",
     "RuntimeStatus",
     "build_docker_hub",
 ]

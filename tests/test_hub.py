@@ -5,10 +5,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from aiohttp import web
+from dotenv import dotenv_values
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
@@ -17,7 +18,9 @@ from kinby.contracts import (
     INSTANCE_CREATE,
     INSTANCE_LIST,
     INSTANCE_LOGS,
+    INSTANCE_RECREATE,
     INSTANCE_SCOPES,
+    INSTANCE_SECRETS_SET,
     INSTANCE_START,
     INSTANCE_STATUS,
     INSTANCE_STOP,
@@ -39,6 +42,7 @@ from kinby.contracts import (
     IntendedState,
     LifecycleOperationResult,
     OperationGetCommand,
+    OperationGetResult,
     OperationKind,
     OperationState,
     PackageSelection,
@@ -98,6 +102,7 @@ class FakeRuntime:
         self.created: list[InstanceSpec] = []
         self.started: list[str] = []
         self.stopped: list[int] = []
+        self.removed: list[tuple[str, bool]] = []
         self.states: dict[str, RuntimeStatus] = {}
         self.addresses: dict[str, str] = {}
         self.log_output = b"booted\n"
@@ -115,6 +120,7 @@ class FakeRuntime:
         self.states[instance_id] = RuntimeStatus("stopped", None)
 
     async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
+        self.removed.append((instance_id, delete_data))
         self.states.pop(instance_id, None)
 
     async def status(self, instance_id: str) -> RuntimeStatus:
@@ -187,7 +193,10 @@ def _client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
     )
 
 
-async def _operation(client: ContractClient, accepted: LifecycleOperationResult):
+async def finished_operation(
+    client: ContractClient,
+    accepted: LifecycleOperationResult,
+) -> OperationGetResult:
     for _ in range(100):
         result = await client.call(
             OPERATION_GET,
@@ -271,19 +280,48 @@ def hub_client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
     return _client(hub, scopes)
 
 
-async def started_instance(client: ContractClient, hub: Hub) -> LifecycleOperationResult:
+async def created_instance(
+    client: ContractClient,
+    *,
+    secrets: dict[str, str] | None = None,
+) -> LifecycleOperationResult:
+    """Create one vanilla instance and wait for it to be prepared and stopped."""
     created = await client.call(
         INSTANCE_CREATE,
-        InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        InstanceCreateCommand(
+            manifest_id="alice",
+            model="openai:gpt-5",
+            secrets=secrets if secrets is not None else {},
+        ),
     )
     assert isinstance(created, LifecycleOperationResult)
-    assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+    assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+    return created
+
+
+def instance_environment(hub: Hub, instance_id: UUID) -> dict[str, str]:
+    """Read the secrets file the hub wrote for one instance."""
+    path = hub.instances_directory / str(instance_id) / ".env"
+    return {
+        name: value
+        for name, value in dotenv_values(path, interpolate=False).items()
+        if value is not None
+    }
+
+
+async def started_instance(
+    client: ContractClient,
+    hub: Hub,
+    *,
+    secrets: dict[str, str] | None = None,
+) -> LifecycleOperationResult:
+    created = await created_instance(client, secrets=secrets)
     started = await client.call(
         INSTANCE_START,
         InstanceStartCommand(instance_id=created.instance_id),
     )
     assert isinstance(started, LifecycleOperationResult)
-    assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+    assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
     runtime = hub._runtime
     if isinstance(runtime, FakeRuntime):
         runtime.addresses[str(created.instance_id)] = f"http://kinby-{created.instance_id}:8787"
@@ -309,7 +347,7 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await _operation(client, accepted)
+        outcome = await finished_operation(client, accepted)
 
         assert outcome.state is OperationState.SUCCEEDED
         assert outcome.detail == "Instance prepared and stopped."
@@ -407,7 +445,7 @@ def test_create_from_a_pinned_package_seeds_owned_configuration_and_provenance(t
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await _operation(client, accepted)
+        outcome = await finished_operation(client, accepted)
 
         assert outcome.state is OperationState.SUCCEEDED
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
@@ -466,7 +504,7 @@ def test_package_creation_requires_declared_secrets_before_publishing_an_instanc
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await _operation(client, accepted)
+        outcome = await finished_operation(client, accepted)
 
         assert outcome.state is OperationState.FAILED
         assert outcome.detail == 'Missing required secret: "EDITOR_TOKEN".'
@@ -511,7 +549,7 @@ def test_invalid_package_configuration_is_not_published_or_sent_to_the_runtime(t
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await _operation(client, accepted)
+        outcome = await finished_operation(client, accepted)
 
         assert outcome.state is OperationState.FAILED
         assert "workspace.snapshots" in outcome.detail
@@ -599,7 +637,7 @@ def test_invalid_manifest_metadata_is_an_operation_failure_before_runtime_effect
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await _operation(client, accepted)
+        outcome = await finished_operation(client, accepted)
 
         assert outcome.state is OperationState.FAILED
         assert "models.main" in outcome.detail
@@ -627,7 +665,7 @@ def test_failed_build_is_inspectable_and_does_not_touch_the_runtime(tmp_path):
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await _operation(client, accepted)
+        outcome = await finished_operation(client, accepted)
 
         assert outcome.state is OperationState.FAILED
         assert secret not in outcome.detail
@@ -655,7 +693,7 @@ def test_start_status_and_logs_use_the_selected_image_and_redact_secrets(tmp_pat
             ),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
         runtime.log_output = f"ready token={secret}\n".encode()
 
         started = await client.call(
@@ -663,7 +701,7 @@ def test_start_status_and_logs_use_the_selected_image_and_redact_secrets(tmp_pat
             InstanceStartCommand(instance_id=created.instance_id),
         )
         assert isinstance(started, LifecycleOperationResult)
-        assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
         status = await client.call(
             INSTANCE_STATUS,
             InstanceStatusCommand(instance_id=created.instance_id),
@@ -684,7 +722,7 @@ def test_start_status_and_logs_use_the_selected_image_and_redact_secrets(tmp_pat
             InstanceStartCommand(instance_id=created.instance_id),
         )
         assert isinstance(started_again, LifecycleOperationResult)
-        assert (await _operation(client, started_again)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, started_again)).state is OperationState.SUCCEEDED
         assert images.revisions == ["HEAD"]
         assert runtime.created[0].image == "sha256:selected-image"
         assert runtime.started == [str(created.instance_id), str(created.instance_id)]
@@ -709,7 +747,7 @@ def test_status_distinguishes_missing_starting_unhealthy_and_unavailable(tmp_pat
             InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
         return client, created
 
     async def scenario() -> None:
@@ -762,7 +800,7 @@ def test_metadata_for_two_created_instances_never_changes_process_environment(tm
                 ),
             )
             assert isinstance(created, LifecycleOperationResult)
-            assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+            assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
 
         assert dict(os.environ) == before
         assert runtime.created[0].env["SHARED"] == "one"
@@ -785,7 +823,7 @@ def test_each_instance_gets_its_own_control_token_and_never_the_access_token(tmp
                 InstanceCreateCommand(manifest_id=manifest_id, model="openai:gpt-5"),
             )
             assert isinstance(created, LifecycleOperationResult)
-            assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+            assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
             paths.append(tmp_path / "hub" / "instances" / str(created.instance_id))
 
         tokens = [spec.env["KINBY_CONTROL_TOKEN"] for spec in runtime.created]
@@ -813,7 +851,7 @@ def test_secret_values_are_passed_without_environment_interpolation(tmp_path):
             ),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
         assert runtime.created[0].env["TOKEN"] == "${HOME}:a'b\\c\n"
 
     asyncio.run(scenario())
@@ -829,7 +867,7 @@ def test_concurrent_starts_are_serialized_per_instance(tmp_path):
             InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
 
         first, second = await asyncio.gather(
             client.call(
@@ -843,7 +881,7 @@ def test_concurrent_starts_are_serialized_per_instance(tmp_path):
         )
         assert isinstance(first, LifecycleOperationResult)
         assert isinstance(second, LifecycleOperationResult)
-        await asyncio.gather(_operation(client, first), _operation(client, second))
+        await asyncio.gather(finished_operation(client, first), finished_operation(client, second))
 
         assert first.operation_id == second.operation_id
         assert runtime.maximum_active_starts == 1
@@ -863,7 +901,7 @@ def test_retained_writable_bind_rejects_an_overlapping_path_alias(tmp_path):
                 InstanceCreateCommand(manifest_id=manifest_id, model="openai:gpt-5"),
             )
             assert isinstance(result, LifecycleOperationResult)
-            assert (await _operation(client, result)).state is OperationState.SUCCEEDED
+            assert (await finished_operation(client, result)).state is OperationState.SUCCEEDED
             created.append(result)
 
         first = hub.registry.instance(created[0].instance_id)
@@ -905,7 +943,7 @@ def test_an_operation_reports_every_step_it_ran(tmp_path):
         )
         assert isinstance(created, LifecycleOperationResult)
 
-        outcome = await _operation(client, created)
+        outcome = await finished_operation(client, created)
 
         assert outcome.state is OperationState.SUCCEEDED
         assert [(step.name, step.state) for step in outcome.steps] == [
@@ -932,7 +970,7 @@ def test_a_failed_operation_marks_the_step_that_failed(tmp_path):
         )
         assert isinstance(created, LifecycleOperationResult)
 
-        outcome = await _operation(client, created)
+        outcome = await finished_operation(client, created)
 
         assert outcome.state is OperationState.FAILED
         assert [(step.name, step.state) for step in outcome.steps] == [
@@ -954,7 +992,7 @@ def test_status_carries_the_operation_a_client_lost_the_response_to(tmp_path):
             InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
 
         started = await client.call(
             INSTANCE_START,
@@ -967,7 +1005,7 @@ def test_status_carries_the_operation_a_client_lost_the_response_to(tmp_path):
             InstanceStatusCommand(instance_id=created.instance_id),
         )
         runtime.released.set()
-        assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
         after = await client.call(
             INSTANCE_STATUS,
             InstanceStatusCommand(instance_id=created.instance_id),
@@ -991,7 +1029,7 @@ def test_a_second_start_keeps_the_operation_a_client_can_still_find(tmp_path):
             InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
 
         started = await client.call(
             INSTANCE_START,
@@ -1008,7 +1046,7 @@ def test_a_second_start_keeps_the_operation_a_client_can_still_find(tmp_path):
             InstanceStatusCommand(instance_id=created.instance_id),
         )
         runtime.released.set()
-        assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
 
         assert isinstance(again, LifecycleOperationResult)
         assert again.operation_id == started.operation_id
@@ -1029,7 +1067,7 @@ def test_a_restarted_hub_can_start_an_instance_whose_start_was_interrupted(tmp_p
             InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
         stale = uuid4()
         assert (
             hub.registry.begin_operation(
@@ -1054,7 +1092,7 @@ def test_a_restarted_hub_can_start_an_instance_whose_start_was_interrupted(tmp_p
             InstanceStartCommand(instance_id=created.instance_id),
         )
         assert isinstance(started, LifecycleOperationResult)
-        outcome = await _operation(restarted_client, started)
+        outcome = await finished_operation(restarted_client, started)
 
         assert not isinstance(failed, ErrorEnvelope)
         assert failed.state is OperationState.FAILED
@@ -1095,7 +1133,7 @@ def test_a_second_hub_does_not_fail_an_operation_the_first_is_running(tmp_path):
             InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
         stale = uuid4()
         hub.registry.begin_operation(
             stale,
@@ -1124,7 +1162,7 @@ def test_a_cancelled_start_can_be_started_again(tmp_path):
             InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
         started = await client.call(
             INSTANCE_START,
             InstanceStartCommand(instance_id=created.instance_id),
@@ -1145,7 +1183,7 @@ def test_a_cancelled_start_can_be_started_again(tmp_path):
             InstanceStartCommand(instance_id=created.instance_id),
         )
         assert isinstance(again, LifecycleOperationResult)
-        outcome = await _operation(client, again)
+        outcome = await finished_operation(client, again)
 
         assert not isinstance(failed, ErrorEnvelope)
         assert failed.state is OperationState.FAILED
@@ -1184,7 +1222,13 @@ def test_no_scope_an_instance_grants_carries_hub_authority():
     assert INSTANCE_SCOPES & hub_scopes == set()
     assert CONTROL_SCOPES & hub_scopes == set()
     assert {INSTANCE_LIST.scope, INSTANCE_STATUS.scope, INSTANCE_LOGS.scope} == {Scope.HUB_READ}
-    assert {INSTANCE_CREATE.scope, INSTANCE_START.scope, INSTANCE_STOP.scope} == {Scope.HUB_ADMIN}
+    assert {
+        INSTANCE_CREATE.scope,
+        INSTANCE_START.scope,
+        INSTANCE_STOP.scope,
+        INSTANCE_RECREATE.scope,
+        INSTANCE_SECRETS_SET.scope,
+    } == {Scope.HUB_ADMIN}
 
 
 def test_stop_drains_the_instance_then_observes_the_container_stop(tmp_path):
@@ -1200,7 +1244,7 @@ def test_stop_drains_the_instance_then_observes_the_container_stop(tmp_path):
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await _operation(client, stopped)
+        outcome = await finished_operation(client, stopped)
 
         assert outcome.state is OperationState.SUCCEEDED
         assert outcome.detail == "Instance stopped."
@@ -1232,7 +1276,7 @@ def test_the_control_endpoint_carries_the_instances_own_token(tmp_path):
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        await _operation(client, stopped)
+        await finished_operation(client, stopped)
 
         endpoint = control.endpoints[0]
         assert endpoint.address == f"http://kinby-{created.instance_id}:8787"
@@ -1267,7 +1311,7 @@ def test_a_pending_stop_reports_its_operation_after_the_client_disconnects(tmp_p
         )
         assert not isinstance(pending, ErrorEnvelope)
         control.release.set()
-        assert (await _operation(client, stopped)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, stopped)).state is OperationState.SUCCEEDED
 
         assert status.active_operation_id == stopped.operation_id
         assert pending.state is OperationState.RUNNING
@@ -1295,7 +1339,7 @@ def test_force_escalates_the_pending_stop_inside_the_same_operation(tmp_path):
             InstanceStopCommand(instance_id=created.instance_id, force=True),
         )
         assert isinstance(escalated, LifecycleOperationResult)
-        outcome = await _operation(client, stopped)
+        outcome = await finished_operation(client, stopped)
 
         assert escalated.operation_id == stopped.operation_id
         assert outcome.state is OperationState.SUCCEEDED
@@ -1327,7 +1371,7 @@ def test_a_force_stop_interrupts_and_terminates_an_unresponsive_instance(tmp_pat
             InstanceStopCommand(instance_id=created.instance_id, force=True),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await _operation(client, stopped)
+        outcome = await finished_operation(client, stopped)
 
         assert outcome.state is OperationState.SUCCEEDED
         assert control.forces == [True]
@@ -1355,7 +1399,7 @@ def test_an_instance_that_cannot_drain_is_reported_and_left_running(tmp_path):
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await _operation(client, stopped)
+        outcome = await finished_operation(client, stopped)
 
         assert outcome.state is OperationState.FAILED
         assert "cannot drain" in outcome.detail
@@ -1378,7 +1422,7 @@ def test_a_dropped_control_socket_keeps_the_stop_waiting_for_the_drain(tmp_path)
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await _operation(client, stopped)
+        outcome = await finished_operation(client, stopped)
 
         assert outcome.state is OperationState.SUCCEEDED
         assert control.forces == [False, False]
@@ -1407,7 +1451,7 @@ def test_a_drain_the_instance_refuses_fails_the_stop_and_leaves_it_running(tmp_p
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await _operation(client, stopped)
+        outcome = await finished_operation(client, stopped)
 
         assert outcome.state is OperationState.FAILED
         assert "refused to drain" in outcome.detail
@@ -1429,7 +1473,7 @@ def test_an_unreachable_lifecycle_endpoint_is_reported_without_stopping_the_cont
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await _operation(client, stopped)
+        outcome = await finished_operation(client, stopped)
 
         assert outcome.state is OperationState.FAILED
         assert "Cannot connect to host" in outcome.detail
@@ -1449,14 +1493,14 @@ def test_stopping_an_already_stopped_instance_reaches_no_lifecycle_endpoint(tmp_
             InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
         )
         assert isinstance(created, LifecycleOperationResult)
-        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
 
         stopped = await client.call(
             INSTANCE_STOP,
             InstanceStopCommand(instance_id=created.instance_id),
         )
         assert isinstance(stopped, LifecycleOperationResult)
-        outcome = await _operation(client, stopped)
+        outcome = await finished_operation(client, stopped)
 
         assert outcome.state is OperationState.SUCCEEDED
         assert outcome.detail == "Instance was already stopped."
@@ -1513,8 +1557,8 @@ def test_a_start_requested_during_a_pending_stop_waits_for_it(tmp_path):
         await asyncio.sleep(0)
         while_stopping = list(runtime.started)
         control.release.set()
-        assert (await _operation(client, stopping)).state is OperationState.SUCCEEDED
-        assert (await _operation(client, starting)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, stopping)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, starting)).state is OperationState.SUCCEEDED
 
         assert starting.operation_id != stopping.operation_id
         assert while_stopping == [str(created.instance_id)]
@@ -1551,8 +1595,8 @@ def test_status_names_the_running_stop_while_a_start_is_queued(tmp_path):
             InstanceStatusCommand(instance_id=created.instance_id),
         )
         control.release.set()
-        assert (await _operation(client, stopping)).state is OperationState.SUCCEEDED
-        assert (await _operation(client, starting)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, stopping)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, starting)).state is OperationState.SUCCEEDED
 
         assert not isinstance(status, ErrorEnvelope)
         assert status.active_operation_id == stopping.operation_id

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import os
 import re
 import shutil
 from collections.abc import Collection, Coroutine
@@ -18,6 +19,8 @@ from kinby.contracts import (
     INSTANCE_CREATE,
     INSTANCE_LIST,
     INSTANCE_LOGS,
+    INSTANCE_RECREATE,
+    INSTANCE_SECRETS_SET,
     INSTANCE_START,
     INSTANCE_STATUS,
     INSTANCE_STOP,
@@ -30,6 +33,8 @@ from kinby.contracts import (
     InstanceListResult,
     InstanceLogsCommand,
     InstanceLogsResult,
+    InstanceRecreateCommand,
+    InstanceSecretsSetCommand,
     InstanceStartCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
@@ -47,7 +52,11 @@ from kinby.contracts import (
 )
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
-from kinby.core.errors import LifecycleOperationNotFound, ManagedInstanceNotFound
+from kinby.core.errors import (
+    LifecycleOperationInFlight,
+    LifecycleOperationNotFound,
+    ManagedInstanceNotFound,
+)
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.control import (
     ControlConnectionLost,
@@ -64,9 +73,11 @@ from kinby.hub.models import (
     InstanceEndpoint,
     InstanceSpec,
     InstanceUnreachable,
+    LifecycleRecovery,
     PreparedImage,
     RuntimeStatus,
 )
+from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import HubRegistry, ManagedInstance
 from kinby.instance import init_instance, inspect_instance
 from kinby.packages import InstalledPackage
@@ -150,6 +161,8 @@ class Hub:
             self.dispatcher.register(INSTANCE_CREATE, self.create)
             self.dispatcher.register(INSTANCE_START, self.start)
             self.dispatcher.register(INSTANCE_STOP, self.stop)
+            self.dispatcher.register(INSTANCE_RECREATE, self.recreate)
+            self.dispatcher.register(INSTANCE_SECRETS_SET, self.set_secrets)
             self.dispatcher.register(INSTANCE_LIST, self.list)
             self.dispatcher.register(INSTANCE_STATUS, self.status)
             self.dispatcher.register(INSTANCE_LOGS, self.logs)
@@ -213,7 +226,7 @@ class Hub:
             if selection.package is None:
                 init_instance(staging, model=model)
                 self._write_configuration(staging, record.manifest_id, record.persona_name)
-                self._write_secrets(staging, secrets)
+                self._write_secrets(staging / ".env", secrets)
                 inspect_instance(staging)
             self.registry.advance_operation(operation_id, "image", "Preparing selected image.")
             prepared = await self._images.prepare(selection)
@@ -221,7 +234,7 @@ class Hub:
             if package is not None:
                 init_instance(staging, model=model, package=package)
                 self._write_configuration(staging, record.manifest_id, record.persona_name)
-                self._write_secrets(staging, secrets)
+                self._write_secrets(staging / ".env", secrets)
                 inspect_instance(staging)
             artifact = prepared.artifact
             if record.path.exists():
@@ -303,6 +316,58 @@ class Hub:
                 "Instance started.",
             )
 
+    async def set_secrets(self, command: InstanceSecretsSetCommand) -> LifecycleOperationResult:
+        """Replace the named values in this instance's secrets. No value travels back out."""
+        record = self._prepared_instance(command.instance_id)
+        secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
+        operation_id = uuid4()
+        self.registry.record_operation(
+            operation_id,
+            record.instance_id,
+            OperationKind.SECRETS,
+            "Secret replacement queued.",
+        )
+        self._schedule(self._set_secrets(operation_id, record.instance_id, secrets))
+        return LifecycleOperationResult(
+            operation_id=operation_id,
+            instance_id=record.instance_id,
+        )
+
+    async def _set_secrets(
+        self,
+        operation_id: UUID,
+        instance_id: UUID,
+        secrets: dict[str, str],
+    ) -> None:
+        try:
+            # The lock serializes this write against every other lifecycle mutation.
+            async with self._locks.setdefault(instance_id, asyncio.Lock()):
+                record = self._prepared_instance(instance_id)
+                self.registry.advance_operation(
+                    operation_id,
+                    "secrets",
+                    "Replacing the instance's secrets.",
+                )
+                try:
+                    self._validate_secret_names(secrets)
+                    self._replace_secrets(record.path, secrets)
+                except Exception as exc:
+                    self._fail(
+                        operation_id,
+                        record,
+                        str(exc) or type(exc).__name__,
+                        secrets.values(),
+                    )
+                    return
+                self.registry.finish_operation(
+                    operation_id,
+                    OperationState.SUCCEEDED,
+                    "Secrets replaced. Recreate the container to apply them.",
+                )
+        except asyncio.CancelledError:
+            self._fail_if_unfinished(operation_id)
+            raise
+
     async def stop(self, command: InstanceStopCommand) -> LifecycleOperationResult:
         """Stop the instance gracefully, or escalate the stop already running to a force stop."""
         record = self._prepared_instance(command.instance_id)
@@ -325,6 +390,83 @@ class Hub:
             operation_id=pending.operation_id,
             instance_id=record.instance_id,
         )
+
+    async def recreate(self, command: InstanceRecreateCommand) -> LifecycleOperationResult:
+        """Replace this instance's container from the image and secrets already recorded for it."""
+        record = self._prepared_instance(command.instance_id)
+        active = self.registry.active_operation(record.instance_id)
+        if active is not None:
+            raise LifecycleOperationInFlight(
+                f'Lifecycle operation "{active}" is still running for this instance.'
+            )
+        operation_id = uuid4()
+        self.registry.record_operation(
+            operation_id,
+            record.instance_id,
+            OperationKind.RECREATE,
+            "Recreation queued.",
+        )
+        self._schedule(self._recreate(operation_id, record.instance_id))
+        return LifecycleOperationResult(
+            operation_id=operation_id,
+            instance_id=record.instance_id,
+        )
+
+    async def _recreate(self, operation_id: UUID, instance_id: UUID) -> None:
+        try:
+            async with self._locks.setdefault(instance_id, asyncio.Lock()):
+                record = self._prepared_instance(instance_id)
+                try:
+                    await self._replace_container(operation_id, record)
+                except Exception as exc:
+                    self._fail(operation_id, record, str(exc) or type(exc).__name__)
+                    return
+                self.registry.finish_operation(
+                    operation_id,
+                    OperationState.SUCCEEDED,
+                    "Container recreated.",
+                )
+        except asyncio.CancelledError:
+            self._fail_if_unfinished(operation_id)
+            raise
+
+    async def _replace_container(self, operation_id: UUID, record: ManagedInstance) -> None:
+        """Take the existing container down the established way, then build its replacement."""
+        image = self._revalidated_image(operation_id, record)
+        if (await self._runtime.status(record.runtime_id)).state != "absent":
+            await self._stop_running(record, PendingStop(operation_id, asyncio.Event()))
+            self._record(operation_id, "remove", "Removing the container, keeping its storage.")
+            await self._runtime.remove(record.runtime_id)
+        self._record(operation_id, "create", f"Creating the container from image {image}.")
+        await self._runtime.create(
+            InstanceSpec(
+                instance_id=record.runtime_id,
+                image=image,
+                env=self._environment(record.path),
+                port=_INSTANCE_PORT,
+            )
+        )
+        if record.intended_state is IntendedState.RUNNING:
+            self._record(operation_id, "start", "Restoring the intended running state.")
+            await self._runtime.start(record.runtime_id)
+
+    def _revalidated_image(self, operation_id: UUID, record: ManagedInstance) -> str:
+        """Revalidate what a replacement is built from. No revision is resolved here."""
+        self._record(
+            operation_id,
+            "validate",
+            f"Revalidating the retained configuration of instance {record.instance_id}.",
+        )
+        inspect_instance(record.path)
+        conflict = self.registry.conflicting_storage(record.instance_id, record.storage)
+        if conflict is not None:
+            raise ValueError(
+                f'Storage source "{conflict.source}" is owned by another instance, '
+                "so this container was not replaced."
+            )
+        if not record.image_id:
+            raise ValueError("This instance has no recorded image to recreate its container from.")
+        return record.image_id
 
     async def _stop(self, instance_id: UUID, pending: PendingStop) -> None:
         operation_id = pending.operation_id
@@ -460,11 +602,18 @@ class Hub:
     def _record(self, operation_id: UUID, step: str, detail: str) -> None:
         self.registry.advance_operation(operation_id, step, detail)
 
-    def _fail(self, operation_id: UUID, record: ManagedInstance, detail: str) -> None:
+    def _fail(
+        self,
+        operation_id: UUID,
+        record: ManagedInstance,
+        detail: str,
+        submitted: Collection[str] = (),
+    ) -> None:
+        """Fail with every secret cut from the detail: the stored ones and the submitted ones."""
         self.registry.finish_operation(
             operation_id,
             OperationState.FAILED,
-            self._redact(detail, self._environment(record.path).values()),
+            self._redact(detail, [*submitted, *self._environment(record.path).values()]),
         )
 
     def _fail_if_unfinished(self, operation_id: UUID) -> None:
@@ -476,6 +625,22 @@ class Hub:
                 OperationState.FAILED,
                 _INTERRUPTED_OPERATION,
             )
+
+    async def recover(self) -> LifecycleRecovery:
+        """Reconcile every managed instance against what the container runtime still has."""
+        return await recover_lifecycle(self.registry, self._runtime, self._restore_start)
+
+    async def _restore_start(self, instance_id: UUID) -> OperationState:
+        """Start one instance again under its own lifecycle operation, so the attempt is visible."""
+        operation_id = self.registry.begin_operation(
+            uuid4(),
+            instance_id,
+            OperationKind.START,
+            "Restoring the intended running state.",
+        )
+        await self._run_start(operation_id, instance_id)
+        finished = self.registry.operation(operation_id)
+        return finished.state if finished is not None else OperationState.FAILED
 
     async def list(self, command: InstanceListCommand) -> InstanceListResult:
         return InstanceListResult(instances=self.registry.list_instances())
@@ -622,11 +787,24 @@ class Hub:
         return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
     @classmethod
-    def _write_secrets(cls, directory: Path, secrets: dict[str, str]) -> None:
-        path = directory / ".env"
+    def _write_secrets(cls, path: Path, secrets: dict[str, str]) -> None:
+        """Close the file to everyone else before the first secret byte lands in it."""
         body = "".join(f"{name}={cls._dotenv_value(value)}\n" for name, value in secrets.items())
-        path.write_text(body, encoding="utf-8")
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(body)
         path.chmod(0o600)
+
+    @classmethod
+    def _replace_secrets(cls, directory: Path, secrets: dict[str, str]) -> None:
+        """Merge the submitted values in through one rename, so a failure replaces nothing."""
+        staging = directory / ".env.replacing"
+        try:
+            cls._write_secrets(staging, cls._environment(directory) | secrets)
+        except OSError:
+            staging.unlink(missing_ok=True)
+            raise
+        staging.replace(directory / ".env")
 
     @staticmethod
     def _toml_string(value: str) -> str:
