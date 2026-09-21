@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from kinby.contracts import (
     CONTRACT_VERSION,
+    INSTANCE_DRAIN,
     INSTANCE_PROBE,
     ROUTINE_LIST,
     ROUTINE_RUN,
@@ -192,6 +193,12 @@ class Dispatcher:
                 retryable=False,
             )
 
+    def handles[Command: ContractModel, Result: ContractModel](
+        self,
+        method: Method[Command, Result],
+    ) -> bool:
+        return method.name in self._routes
+
     async def subscribe(
         self,
         method: str,
@@ -207,6 +214,11 @@ class Dispatcher:
         except Exception:
             return _SUBSCRIPTION_FAILED
         return Stream(stream.head_sequence, _guarded(stream.items), _close=stream._close)
+
+
+def instance_capabilities(dispatcher: Dispatcher) -> list[Capability]:
+    """What a hub may ask of this instance: the socket, plus the lifecycle methods it serves."""
+    return [Capability.WS, *([Capability.DRAIN] if dispatcher.handles(INSTANCE_DRAIN) else [])]
 
 
 class ScheduledDispatcher(Dispatcher):
@@ -335,7 +347,7 @@ def build_dispatcher(
     async def probe(command: InstanceProbeCommand) -> InstanceProbeResult:
         return InstanceProbeResult(
             contract_version=CONTRACT_VERSION,
-            capabilities=[Capability.WS],
+            capabilities=instance_capabilities(dispatcher),
         )
 
     dispatcher.register(THREAD_CREATE, create_thread)

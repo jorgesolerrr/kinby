@@ -20,6 +20,7 @@ from kinby.contracts import (
     THREAD_TURN_INTERRUPT,
     CallFrame,
     CancelFrame,
+    Capability,
     ClientFrame,
     ContractModel,
     ControlToken,
@@ -36,7 +37,7 @@ from kinby.contracts import (
     SubscribeFrame,
     parse_client_frame,
 )
-from kinby.core.dispatcher import Dispatcher
+from kinby.core.dispatcher import Dispatcher, instance_capabilities
 
 CONTROL_TOKEN_VARIABLE = "KINBY_CONTROL_TOKEN"
 #: Items one subscription may hold for a client that is not reading fast enough.
@@ -101,6 +102,10 @@ class ContractServer:
             )
             return None
         return cls(dispatcher, ControlToken(token))
+
+    @property
+    def capabilities(self) -> list[Capability]:
+        return instance_capabilities(self._dispatcher)
 
     def add_routes(self, application: web.Application) -> None:
         application.router.add_get("/ws", self._instance_socket, allow_head=False)

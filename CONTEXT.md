@@ -96,6 +96,14 @@ The stable identity of one entry in the **instance registry**. It is distinct fr
 
 One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. Its identity and outcome remain available after the requesting client disconnects.
 
+### Operation step
+
+One recorded stage of a **lifecycle operation**, kept in the order the **hub** reached it. A client polls the steps to follow an operation that outlives its connection; there is no operation stream.
+
+### Force stop
+
+A user's request to stop an **instance** without waiting for its accepted work. It interrupts running **turns** and parked **approvals** through the **instance runtime**, then takes the container down within a bounded grace period. A force stop may also escalate an **instance draining** that is already pending, inside the same **lifecycle operation**.
+
 ### Image artifact
 
 An immutable container image together with the resolved source revision, dependency identity, and base-image identities that produced it. An instance keeps its selected image artifact until an explicit lifecycle operation changes it.

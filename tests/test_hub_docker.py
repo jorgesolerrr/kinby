@@ -34,9 +34,13 @@ class FakeContainer:
     def __init__(self, status: str, labels: dict[str, str]) -> None:
         self.attrs: dict[str, object] = {"State": {"Status": status}}
         self.labels = labels
+        self.stop_timeout: int | None = None
 
     def reload(self) -> None:
         return None
+
+    def stop(self, timeout: int | None = None) -> None:
+        self.stop_timeout = timeout
 
 
 class FakeContainers:
@@ -322,6 +326,26 @@ def test_the_docker_runtime_has_no_address_for_a_container_that_is_gone(tmp_path
     )
 
     assert asyncio.run(runtime.address("abc")) is None
+
+
+def test_docker_runtime_stops_within_the_grace_period(tmp_path):
+    async def scenario() -> FakeDockerClient:
+        client = FakeDockerClient()
+        client.containers.container = FakeContainer("running", {"kinby.port": "8787"})
+        runtime = DockerRuntime(
+            "hub-id",
+            tmp_path,
+            tmp_path,
+            network="kinby_private",
+            client=cast(DockerClient, client),
+        )
+        await runtime.stop("alice", grace_seconds=45)
+        return client
+
+    client = asyncio.run(scenario())
+
+    assert client.containers.container is not None
+    assert client.containers.container.stop_timeout == 45
 
 
 class _RecordingNetwork:

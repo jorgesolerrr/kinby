@@ -433,10 +433,12 @@ async def _serve_instance(instance: Instance) -> int:
         await stopping.wait()
         return 0
     finally:
-        if receiver is not None:
-            await receiver.stop()
+        # The runtime first: a turn it is finishing may still need an approval response,
+        # and the hub may be waiting on the drain it asked for over the same server.
         if runtime is not None:
             await runtime.stop_interrupting_running_routine()
+        if receiver is not None:
+            await receiver.stop()
         for shutdown_signal in shutdown_signals:
             loop.remove_signal_handler(shutdown_signal)
 

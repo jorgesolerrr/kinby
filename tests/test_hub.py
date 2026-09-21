@@ -1,14 +1,18 @@
 import asyncio
 import os
-from collections.abc import AsyncIterator, Sequence
+import socket
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from aiohttp import web
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
+    CONTRACT_VERSION,
     CONTROL_SCOPES,
     INSTANCE_CREATE,
     INSTANCE_LIST,
@@ -16,14 +20,23 @@ from kinby.contracts import (
     INSTANCE_SCOPES,
     INSTANCE_START,
     INSTANCE_STATUS,
+    INSTANCE_STOP,
     OPERATION_GET,
+    Capability,
+    ControlToken,
+    DrainState,
     ErrorCode,
     ErrorEnvelope,
+    ErrorFrame,
+    FrameId,
     InstanceCreateCommand,
     InstanceListCommand,
     InstanceLogsCommand,
+    InstanceProbeResult,
     InstanceStartCommand,
     InstanceStatusCommand,
+    InstanceStopCommand,
+    IntendedState,
     LifecycleOperationResult,
     OperationGetCommand,
     OperationKind,
@@ -35,10 +48,15 @@ from kinby.contracts import (
     StorageKind,
 )
 from kinby.hub import (
+    ControlConnectionLost,
+    ControlEndpoint,
+    ControlUnreachable,
+    HttpInstanceControl,
     Hub,
     HubRegistry,
     ImageArtifact,
     ImageSelection,
+    InstanceControl,
     InstanceSpec,
     PreparedImage,
     RuntimeStatus,
@@ -79,6 +97,7 @@ class FakeRuntime:
     def __init__(self) -> None:
         self.created: list[InstanceSpec] = []
         self.started: list[str] = []
+        self.stopped: list[int] = []
         self.states: dict[str, RuntimeStatus] = {}
         self.addresses: dict[str, str] = {}
         self.log_output = b"booted\n"
@@ -91,7 +110,8 @@ class FakeRuntime:
         self.started.append(instance_id)
         self.states[instance_id] = RuntimeStatus("running", True)
 
-    async def stop(self, instance_id: str) -> None:
+    async def stop(self, instance_id: str, *, grace_seconds: int) -> None:
+        self.stopped.append(grace_seconds)
         self.states[instance_id] = RuntimeStatus("stopped", None)
 
     async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
@@ -178,6 +198,96 @@ async def _operation(client: ContractClient, accepted: LifecycleOperationResult)
             return result
         await asyncio.sleep(0.01)
     raise AssertionError("lifecycle operation did not finish")
+
+
+class FakeControl:
+    """An instance that drains when asked, and records what the hub asked it."""
+
+    def __init__(
+        self,
+        *,
+        capabilities: list[Capability] | None = None,
+        reachable: bool = True,
+        holds: bool = False,
+        answers: bool = True,
+        drops: int = 0,
+        refuses: bool = False,
+    ) -> None:
+        self.capabilities = capabilities or [Capability.WS, Capability.DRAIN]
+        self.reachable = reachable
+        self.answers = answers
+        self.drops = drops
+        self.refuses = refuses
+        self.endpoints: list[ControlEndpoint] = []
+        self.forces: list[bool] = []
+        self.asked = asyncio.Event()
+        self.release = asyncio.Event()
+        if not holds:
+            self.release.set()
+
+    async def probe(self, endpoint: ControlEndpoint) -> InstanceProbeResult:
+        self.endpoints.append(endpoint)
+        if not self.reachable:
+            raise ControlUnreachable("Cannot connect to host kinby-instance:8787")
+        return InstanceProbeResult(
+            contract_version=CONTRACT_VERSION,
+            capabilities=self.capabilities,
+        )
+
+    async def drain(self, endpoint: ControlEndpoint, *, force: bool) -> DrainState:
+        self.forces.append(force)
+        self.asked.set()
+        if self.refuses:
+            raise ControlUnreachable("The instance refused to drain: no")
+        if self.drops:
+            self.drops -= 1
+            raise ControlConnectionLost(
+                "The control socket closed before it answered (WSMsgType.CLOSED)."
+            )
+        if force:
+            self.release.set()
+        if not self.answers:
+            await asyncio.Event().wait()
+        await self.release.wait()
+        return DrainState.INTERRUPTED if any(self.forces) else DrainState.DRAINED
+
+
+def hub_at(
+    directory: Path,
+    *,
+    runtime: FakeRuntime | None = None,
+    images: FakeImages | None = None,
+    control: InstanceControl | None = None,
+) -> Hub:
+    return Hub(
+        directory,
+        runtime=runtime or FakeRuntime(),
+        images=images or FakeImages(),
+        control=control,
+    )
+
+
+def hub_client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
+    return _client(hub, scopes)
+
+
+async def started_instance(client: ContractClient, hub: Hub) -> LifecycleOperationResult:
+    created = await client.call(
+        INSTANCE_CREATE,
+        InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+    )
+    assert isinstance(created, LifecycleOperationResult)
+    assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+    started = await client.call(
+        INSTANCE_START,
+        InstanceStartCommand(instance_id=created.instance_id),
+    )
+    assert isinstance(started, LifecycleOperationResult)
+    assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+    runtime = hub._runtime
+    if isinstance(runtime, FakeRuntime):
+        runtime.addresses[str(created.instance_id)] = f"http://kinby-{created.instance_id}:8787"
+    return created
 
 
 def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_path):
@@ -1074,4 +1184,441 @@ def test_no_scope_an_instance_grants_carries_hub_authority():
     assert INSTANCE_SCOPES & hub_scopes == set()
     assert CONTROL_SCOPES & hub_scopes == set()
     assert {INSTANCE_LIST.scope, INSTANCE_STATUS.scope, INSTANCE_LOGS.scope} == {Scope.HUB_READ}
-    assert {INSTANCE_CREATE.scope, INSTANCE_START.scope} == {Scope.HUB_ADMIN}
+    assert {INSTANCE_CREATE.scope, INSTANCE_START.scope, INSTANCE_STOP.scope} == {Scope.HUB_ADMIN}
+
+
+def test_stop_drains_the_instance_then_observes_the_container_stop(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await _operation(client, stopped)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert outcome.detail == "Instance stopped."
+        assert [(step.name, step.detail) for step in outcome.steps] == [
+            ("probe", "Checking the instance's lifecycle endpoint."),
+            ("drain", "Draining accepted work."),
+            ("result", "Instance drained. Stopping the container."),
+            ("container", "Instance stopped."),
+        ]
+        assert control.forces == [False]
+        assert runtime.stopped == [30]
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        assert listed.instances[0].intended_state is IntendedState.STOPPED
+
+    asyncio.run(scenario())
+
+
+def test_the_control_endpoint_carries_the_instances_own_token(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl()
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        await _operation(client, stopped)
+
+        endpoint = control.endpoints[0]
+        assert endpoint.address == f"http://kinby-{created.instance_id}:8787"
+        assert endpoint.token == runtime.created[0].env["KINBY_CONTROL_TOKEN"]
+
+    asyncio.run(scenario())
+
+
+def test_a_pending_stop_reports_its_operation_after_the_client_disconnects(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(holds=True)
+        hub = hub_at(tmp_path / "hub", control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        await asyncio.wait_for(control.asked.wait(), timeout=5)
+
+        reopened = hub_client(hub)
+        status = await reopened.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+        assert not isinstance(status, ErrorEnvelope)
+        pending = await reopened.call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=stopped.operation_id),
+        )
+        assert not isinstance(pending, ErrorEnvelope)
+        control.release.set()
+        assert (await _operation(client, stopped)).state is OperationState.SUCCEEDED
+
+        assert status.active_operation_id == stopped.operation_id
+        assert pending.state is OperationState.RUNNING
+        assert pending.detail == "Draining accepted work."
+
+    asyncio.run(scenario())
+
+
+def test_force_escalates_the_pending_stop_inside_the_same_operation(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(holds=True)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        await asyncio.wait_for(control.asked.wait(), timeout=5)
+        escalated = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id, force=True),
+        )
+        assert isinstance(escalated, LifecycleOperationResult)
+        outcome = await _operation(client, stopped)
+
+        assert escalated.operation_id == stopped.operation_id
+        assert outcome.state is OperationState.SUCCEEDED
+        assert control.forces == [False, True]
+        assert [(step.name, step.detail) for step in outcome.steps] == [
+            ("probe", "Checking the instance's lifecycle endpoint."),
+            ("drain", "Draining accepted work."),
+            ("force", "Force stop requested. Interrupting active work."),
+            ("result", "Instance interrupted. Stopping the container."),
+            ("container", "Instance stopped."),
+        ]
+        assert runtime.stopped == [30]
+
+    asyncio.run(scenario())
+
+
+def test_a_force_stop_interrupts_and_terminates_an_unresponsive_instance(tmp_path, monkeypatch):
+    monkeypatch.setattr("kinby.hub.service.FORCE_ANSWER_SECONDS", 0.05)
+
+    async def scenario() -> None:
+        control = FakeControl(answers=False)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id, force=True),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await _operation(client, stopped)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert control.forces == [True]
+        assert [(step.name, step.detail) for step in outcome.steps] == [
+            ("probe", "Checking the instance's lifecycle endpoint."),
+            ("drain", "Interrupting active work."),
+            ("result", "The instance did not report its drain. Terminating the container."),
+            ("container", "Instance stopped."),
+        ]
+        assert runtime.stopped == [30]
+
+    asyncio.run(scenario())
+
+
+def test_an_instance_that_cannot_drain_is_reported_and_left_running(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl(capabilities=[Capability.WS])
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await _operation(client, stopped)
+
+        assert outcome.state is OperationState.FAILED
+        assert "cannot drain" in outcome.detail
+        assert control.forces == []
+        assert runtime.stopped == []
+
+    asyncio.run(scenario())
+
+
+def test_a_dropped_control_socket_keeps_the_stop_waiting_for_the_drain(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl(drops=1)
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await _operation(client, stopped)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert control.forces == [False, False]
+        assert [(step.name, step.detail) for step in outcome.steps] == [
+            ("probe", "Checking the instance's lifecycle endpoint."),
+            ("drain", "Draining accepted work."),
+            ("reconnect", "The control socket closed. Waiting for the drain again."),
+            ("result", "Instance drained. Stopping the container."),
+            ("container", "Instance stopped."),
+        ]
+        assert runtime.stopped == [30]
+
+    asyncio.run(scenario())
+
+
+def test_a_drain_the_instance_refuses_fails_the_stop_and_leaves_it_running(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl(refuses=True)
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await _operation(client, stopped)
+
+        assert outcome.state is OperationState.FAILED
+        assert "refused to drain" in outcome.detail
+        assert control.forces == [False]
+        assert runtime.stopped == []
+
+    asyncio.run(scenario())
+
+
+def test_an_unreachable_lifecycle_endpoint_is_reported_without_stopping_the_container(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=FakeControl(reachable=False))
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await _operation(client, stopped)
+
+        assert outcome.state is OperationState.FAILED
+        assert "Cannot connect to host" in outcome.detail
+        assert runtime.stopped == []
+
+    asyncio.run(scenario())
+
+
+def test_stopping_an_already_stopped_instance_reaches_no_lifecycle_endpoint(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await _operation(client, stopped)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert outcome.detail == "Instance was already stopped."
+        assert control.endpoints == []
+        assert runtime.stopped == []
+
+    asyncio.run(scenario())
+
+
+def test_an_unauthorized_stop_has_no_effect(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        refused = await hub.dispatcher.dispatch(
+            INSTANCE_STOP.name,
+            {"instance_id": str(created.instance_id), "force": True},
+            {Scope.HUB_READ},
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.PERMISSION_DENIED
+        assert control.forces == []
+        assert runtime.stopped == []
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        assert listed.instances[0].intended_state is IntendedState.RUNNING
+
+    asyncio.run(scenario())
+
+
+def test_a_start_requested_during_a_pending_stop_waits_for_it(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(holds=True)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopping = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopping, LifecycleOperationResult)
+        await asyncio.wait_for(control.asked.wait(), timeout=5)
+        starting = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(starting, LifecycleOperationResult)
+        await asyncio.sleep(0)
+        while_stopping = list(runtime.started)
+        control.release.set()
+        assert (await _operation(client, stopping)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, starting)).state is OperationState.SUCCEEDED
+
+        assert starting.operation_id != stopping.operation_id
+        assert while_stopping == [str(created.instance_id)]
+        assert runtime.started == [str(created.instance_id)] * 2
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        assert listed.instances[0].intended_state is IntendedState.RUNNING
+
+    asyncio.run(scenario())
+
+
+def test_status_names_the_running_stop_while_a_start_is_queued(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(holds=True)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopping = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopping, LifecycleOperationResult)
+        await asyncio.wait_for(control.asked.wait(), timeout=5)
+        starting = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(starting, LifecycleOperationResult)
+        await asyncio.sleep(0)
+        status = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+        control.release.set()
+        assert (await _operation(client, stopping)).state is OperationState.SUCCEEDED
+        assert (await _operation(client, starting)).state is OperationState.SUCCEEDED
+
+        assert not isinstance(status, ErrorEnvelope)
+        assert status.active_operation_id == stopping.operation_id
+        assert status.active_operation_id != starting.operation_id
+
+    asyncio.run(scenario())
+
+
+def test_a_control_socket_that_closes_after_the_drain_is_sent_is_a_lost_connection():
+    async def scenario() -> None:
+        async with _control_server(_close_after_call) as endpoint:
+            with pytest.raises(ControlConnectionLost, match="closed before it answered"):
+                await HttpInstanceControl().drain(endpoint, force=False)
+
+    asyncio.run(scenario())
+
+
+def test_a_drain_answer_that_refuses_is_not_a_lost_connection():
+    async def scenario() -> None:
+        async with _control_server(_refuse_drain) as endpoint:
+            with pytest.raises(ControlUnreachable, match="refused to drain") as raised:
+                await HttpInstanceControl().drain(endpoint, force=False)
+            assert not isinstance(raised.value, ControlConnectionLost)
+
+    asyncio.run(scenario())
+
+
+async def _close_after_call(opened: web.WebSocketResponse) -> None:
+    await opened.receive()
+    await opened.close()
+
+
+async def _refuse_drain(opened: web.WebSocketResponse) -> None:
+    await opened.receive()
+    await opened.send_str(
+        ErrorFrame(
+            id=FrameId("1"),
+            error=ErrorEnvelope(code=ErrorCode.INTERNAL, message="no", retryable=False),
+        ).model_dump_json()
+    )
+    await opened.receive()
+
+
+@asynccontextmanager
+async def _control_server(
+    handle: Callable[[web.WebSocketResponse], Awaitable[None]],
+) -> AsyncIterator[ControlEndpoint]:
+    application = web.Application()
+
+    async def control(request: web.Request) -> web.WebSocketResponse:
+        opened = web.WebSocketResponse()
+        await opened.prepare(request)
+        await handle(opened)
+        return opened
+
+    application.router.add_get("/control", control)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    runner = web.AppRunner(application)
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", port).start()
+    try:
+        yield ControlEndpoint(
+            address=f"http://127.0.0.1:{port}",
+            token=ControlToken("token"),
+        )
+    finally:
+        await runner.cleanup()

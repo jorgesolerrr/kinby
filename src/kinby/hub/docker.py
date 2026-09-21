@@ -267,9 +267,10 @@ class DockerRuntime:
         container = await self._container(instance_id)
         await asyncio.to_thread(container.start)
 
-    async def stop(self, instance_id: str) -> None:
+    async def stop(self, instance_id: str, *, grace_seconds: int) -> None:
+        """Signal the container, then terminate it if the process has not exited by then."""
         container = await self._container(instance_id)
-        await asyncio.to_thread(container.stop)
+        await asyncio.to_thread(container.stop, timeout=grace_seconds)
 
     async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
         container = await self._container(instance_id)

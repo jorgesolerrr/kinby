@@ -86,23 +86,20 @@ _SERVER_FRAMES: TypeAdapter[ServerFrame] = TypeAdapter(ServerFrame)
 
 def parse_client_frame(message: str) -> ClientFrame | ErrorEnvelope:
     """Turn one received message into a frame, or the error the sender gets back."""
-    try:
-        return _CLIENT_FRAMES.validate_json(message)
-    except ValidationError as exc:
-        return _unreadable(exc)
+    return _parsed(_CLIENT_FRAMES, message)
 
 
 def parse_server_frame(message: str) -> ServerFrame | ErrorEnvelope:
-    """Turn one received message into a frame, or the error the client reports instead."""
+    """Turn one answered message into a frame, or the error a client reports instead."""
+    return _parsed(_SERVER_FRAMES, message)
+
+
+def _parsed[Parsed: Frame](frames: TypeAdapter[Parsed], message: str) -> Parsed | ErrorEnvelope:
     try:
-        return _SERVER_FRAMES.validate_json(message)
+        return frames.validate_json(message)
     except ValidationError as exc:
-        return _unreadable(exc)
-
-
-def _unreadable(exc: ValidationError) -> ErrorEnvelope:
-    return ErrorEnvelope(
-        code=ErrorCode.INVALID_ARGUMENT,
-        message=f"The frame could not be read: {exc}",
-        retryable=False,
-    )
+        return ErrorEnvelope(
+            code=ErrorCode.INVALID_ARGUMENT,
+            message=f"The frame could not be read: {exc}",
+            retryable=False,
+        )

@@ -32,7 +32,13 @@ from kinby.contracts import (
     accepted,
 )
 from kinby.core.clock import utc_now
-from kinby.core.errors import BudgetExceeded, InstanceBusy, ModelUnpriced, RoutineNotFound
+from kinby.core.errors import (
+    BudgetExceeded,
+    InstanceBusy,
+    InstanceDraining,
+    ModelUnpriced,
+    RoutineNotFound,
+)
 from kinby.core.events import EventLog
 from kinby.core.routine_history import RoutineHistory, routine_history
 from kinby.core.threads import ThreadStore
@@ -95,8 +101,16 @@ class Scheduler:
                 await self._worker
             self._worker = None
 
+    def close(self) -> None:
+        """Take no new turns and fire no more routines. Work already accepted keeps going."""
+        self._turns.close()
+
     async def interrupt(self) -> None:
         await self._turns.interrupt_routine()
+
+    async def interrupt_all(self) -> None:
+        """Interrupt every live turn and parked approval: only a force stop asks for this."""
+        await self._turns.interrupt_all()
 
     async def receive(
         self,
@@ -217,6 +231,8 @@ class Scheduler:
         return RoutineListResult(routines=result, warnings=warnings)
 
     async def run(self, command: RoutineRunCommand) -> AcceptedResult:
+        # Before the payload is persisted: a manual run is new work, whatever it carries.
+        self._turns.require_admitting()
         routines, _ = load_routines(self._instance)
         routine = next((r for r in routines if r.name == command.name), None)
         if routine is None:
@@ -301,7 +317,7 @@ class Scheduler:
                 return
             try:
                 await firing
-            except InstanceBusy:
+            except InstanceBusy, InstanceDraining:
                 return
             except BudgetExceeded, ModelUnpriced:
                 if rearm is not None:
@@ -347,3 +363,12 @@ class Scheduler:
         async with self._pass:
             await self._turns.drain()
             await self._handle_failures()
+
+    async def wait_idle(self) -> None:
+        """Wait for every accepted turn, parked approval and resumed approval to finish.
+
+        Holds no lock while it waits, so a force stop can still escalate a closed instance.
+        """
+        await self._turns.wait_idle()
+        await self.stop()
+        await self.drain()

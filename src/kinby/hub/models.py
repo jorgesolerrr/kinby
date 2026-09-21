@@ -24,7 +24,6 @@ class InstanceSpec:
     port: int = 8787
     files: Mapping[str, str] = field(default_factory=dict)
     public_host: str | None = None
-    stop_grace_seconds: int = 30
 
 
 @dataclass(frozen=True)
@@ -65,7 +64,7 @@ class ContainerRuntime(Protocol):
 
     async def start(self, instance_id: str) -> None: ...
 
-    async def stop(self, instance_id: str) -> None: ...
+    async def stop(self, instance_id: str, *, grace_seconds: int) -> None: ...
 
     async def remove(self, instance_id: str, *, delete_data: bool = False) -> None: ...
 
