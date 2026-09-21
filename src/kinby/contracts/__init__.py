@@ -15,6 +15,7 @@ from kinby.contracts.frames import (
     SubscribedFrame,
     SubscribeFrame,
     parse_client_frame,
+    parse_server_frame,
 )
 from kinby.contracts.methods import (
     INSTANCE_CREATE,
@@ -24,6 +25,7 @@ from kinby.contracts.methods import (
     INSTANCE_START,
     INSTANCE_STATUS,
     OPERATION_GET,
+    RESULT_MODELS,
     ROUTINE_LIST,
     ROUTINE_RUN,
     STATS_GET,
@@ -189,6 +191,7 @@ __all__ = [
     "INSTANCE_START",
     "INSTANCE_STATUS",
     "OPERATION_GET",
+    "RESULT_MODELS",
     "ROUTINE_LIST",
     "ROUTINE_RUN",
     "STATS_GET",
@@ -348,4 +351,5 @@ __all__ = [
     "gate_denial_source",
     "is_turn_closing",
     "parse_client_frame",
+    "parse_server_frame",
 ]

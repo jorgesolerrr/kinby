@@ -66,7 +66,7 @@ def test_image_runs_a_mounted_instance_with_the_container_contract() -> None:
         assert "KINBY_INSTANCE=/instance" in config["Env"]
         assert config["Volumes"] == {"/instance": {}}
         assert config["Entrypoint"] == ["kinby-entrypoint"]
-        assert config["Cmd"] == ["run"]
+        assert config["Cmd"] == ["repl"]
 
         result = _docker(
             "run",

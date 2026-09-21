@@ -75,6 +75,8 @@ class ErrorCode(StrEnum):
     SNAPSHOT_UNAVAILABLE = "SNAPSHOT_UNAVAILABLE"
     RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
+    #: Raised by a client, never sent by a server: its connection dropped under a call.
+    CONNECTION_LOST = "CONNECTION_LOST"
     INTERNAL = "INTERNAL"
 
 

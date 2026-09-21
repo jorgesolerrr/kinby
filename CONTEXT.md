@@ -128,6 +128,10 @@ The live state and background work of one booted **instance**, owned and stopped
 
 An **instance runtime** without a REPL, kept alive so the **scheduler** can fire **routines**.
 
+### Runtime lock
+
+The claim an **instance runtime** holds on its **instance**'s state directory for as long as it runs. A second runtime on the same instance refuses to start, because one process owns **event** appends.
+
 ### Manifest
 
 The portable description of an instance's identity and configuration. It contains no secrets or runtime state.

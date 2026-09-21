@@ -31,4 +31,4 @@ ENV DISABLE_AUTOUPDATER=1 KINBY_INSTANCE=/instance
 VOLUME ["/instance"]
 
 ENTRYPOINT ["kinby-entrypoint"]
-CMD ["run"]
+CMD ["repl"]

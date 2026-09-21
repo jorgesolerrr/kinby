@@ -81,6 +81,7 @@ ServerFrame = Annotated[
 Frame = ClientFrame | ServerFrame
 
 _CLIENT_FRAMES: TypeAdapter[ClientFrame] = TypeAdapter(ClientFrame)
+_SERVER_FRAMES: TypeAdapter[ServerFrame] = TypeAdapter(ServerFrame)
 
 
 def parse_client_frame(message: str) -> ClientFrame | ErrorEnvelope:
@@ -88,8 +89,20 @@ def parse_client_frame(message: str) -> ClientFrame | ErrorEnvelope:
     try:
         return _CLIENT_FRAMES.validate_json(message)
     except ValidationError as exc:
-        return ErrorEnvelope(
-            code=ErrorCode.INVALID_ARGUMENT,
-            message=f"The frame could not be read: {exc}",
-            retryable=False,
-        )
+        return _unreadable(exc)
+
+
+def parse_server_frame(message: str) -> ServerFrame | ErrorEnvelope:
+    """Turn one received message into a frame, or the error the client reports instead."""
+    try:
+        return _SERVER_FRAMES.validate_json(message)
+    except ValidationError as exc:
+        return _unreadable(exc)
+
+
+def _unreadable(exc: ValidationError) -> ErrorEnvelope:
+    return ErrorEnvelope(
+        code=ErrorCode.INVALID_ARGUMENT,
+        message=f"The frame could not be read: {exc}",
+        retryable=False,
+    )
