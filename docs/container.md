@@ -47,7 +47,7 @@ The hub needs two explicit paths when it runs in a container: the instances dire
 
 `compose.hub.yaml` is the reference recipe. Caddy terminates TLS for `KINBY_DOMAIN` and forwards every public request to the hub; `KINBY_HUB_DIR` is the hub directory on the Docker host, used both as the bind source for `/hub` and as `--docker-host-directory`. Instances join `kinby_private`. Caddy stays on `kinby_public`, and instance ports stay unpublished, so a client reaches an instance through the hub's relay. `kinby_private` is a normal bridge, so the instance can reach model providers, git, and GitHub.
 
-If a previous hub created `kinby_private` as an internal network, the next instance create or start disconnects every container still attached to it, stopped ones included, recreates the network as a normal bridge, and connects those containers again.
+If a previous hub created `kinby_private` as an internal network, the next instance create or start attaches every container on it, stopped ones included, to a temporary network first. It then recreates `kinby_private` as a normal bridge and moves those containers onto it. A failed step leaves each container on at least one of those networks.
 
 ```sh
 printf 'KINBY_DOMAIN=kinby.example.com\nKINBY_HUB_DIR=/srv/kinby\n' > .env

@@ -125,6 +125,7 @@ def test_the_session_cookie_is_secure_when_the_request_is_https(tmp_path: Path) 
 def test_the_hub_issues_one_access_token_and_stores_only_its_hash(tmp_path: Path) -> None:
     hub = hub_at(tmp_path / "hub")
     token = hub.access.issue()
+    hub.close()
 
     assert token is not None
     assert hub_at(tmp_path / "hub").access.issue() is None
@@ -231,6 +232,7 @@ def test_a_session_survives_a_hub_restart(tmp_path: Path) -> None:
         assert token is not None
         async with served(hub) as address, aiohttp.ClientSession() as session:
             cookie = await session_cookie(session, address, token)
+        hub.close()
         restarted = hub_at(tmp_path / "hub")
         async with served(restarted) as address, aiohttp.ClientSession() as session:
             headers = {

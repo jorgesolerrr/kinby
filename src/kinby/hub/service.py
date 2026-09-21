@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import re
 import shutil
 from collections.abc import Collection, Coroutine
 from pathlib import Path
+from typing import IO
 from uuid import UUID, uuid4
 
 from dotenv import dotenv_values
@@ -62,6 +64,25 @@ _INSTANCE_PORT = 8787
 _INTERRUPTED_OPERATION = "The hub stopped before this operation finished."
 
 
+class HubAlreadyRunning(RuntimeError):
+    """Another process holds this hub directory."""
+
+
+def _acquire_directory(directory: Path) -> IO[str]:
+    """Hold this directory until the process exits, or until close.
+
+    The kernel releases the lock when the process dies, so a later hub can tell
+    that unfinished operations belong to a process that is gone.
+    """
+    handle = (directory / "hub.lock").open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        raise HubAlreadyRunning(f"Another hub is already running for {directory}.") from None
+    return handle
+
+
 class Hub:
     """Own instance management without booting instance runtimes in this process."""
 
@@ -74,6 +95,8 @@ class Hub:
         docker_host_directory: Path | None = None,
     ) -> None:
         self.directory = Path(directory).resolve()
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self._directory_lock = _acquire_directory(self.directory)
         self.instances_directory = self.directory / "instances"
         self.instances_directory.mkdir(parents=True, exist_ok=True)
         self._docker_host_directory = (
@@ -95,6 +118,10 @@ class Hub:
         self.dispatcher.register(INSTANCE_STATUS, self.status)
         self.dispatcher.register(INSTANCE_LOGS, self.logs)
         self.dispatcher.register(OPERATION_GET, self.operation)
+
+    def close(self) -> None:
+        """Release this directory so another process can own it."""
+        self._directory_lock.close()
 
     def _schedule(self, work: Coroutine[object, object, None]) -> None:
         task = asyncio.create_task(work)

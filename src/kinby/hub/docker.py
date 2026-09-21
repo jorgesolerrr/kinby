@@ -176,43 +176,75 @@ class DockerRuntime:
     async def _ensure_network(self) -> None:
         """The instance network exists and has a route out.
 
-        An older hub created this network as internal, which leaves an instance
-        unable to reach model providers, git, and GitHub. Stopped containers stay
-        attached, so disconnect every one of them, recreate the network, and
-        connect them to it.
+        An older hub created this network as internal. Containers move onto a
+        temporary network first, including stopped ones, and only then does the
+        hub recreate this network and move them back. A failed step leaves every
+        container attached to at least one of those networks.
         """
-        try:
-            network = await asyncio.to_thread(self._client.networks.get, self._network)
-        except NotFound:
-            await self._create_network()
-            return
-        attrs = network.attrs if isinstance(getattr(network, "attrs", None), dict) else {}
-        if not attrs.get("Internal"):
-            return
-        await self._replace_internal_network(network, _attached_containers(attrs))
+        migrate = await self._optional_network(self._migrate_network)
+        current = await self._optional_network(self._network)
+        if current is not None and _is_internal(current):
+            await self._move_off_internal(current)
+            current = None
+            migrate = await self._optional_network(self._migrate_network)
+        if current is None:
+            await self._create_named(self._network)
+            current = await self._required_network(self._network)
+        if migrate is not None:
+            await self._move_onto(current, migrate)
 
-    async def _replace_internal_network(
-        self,
-        network: Network,
-        container_ids: tuple[str, ...],
-    ) -> None:
+    @property
+    def _migrate_network(self) -> str:
+        return f"{self._network}_migrate"
+
+    async def _move_off_internal(self, network: Network) -> None:
+        migrate = await self._optional_network(self._migrate_network)
+        if migrate is None:
+            await self._create_named(self._migrate_network)
+            migrate = await self._required_network(self._migrate_network)
+        container_ids = await self._attached(network)
+        await self._connect_missing(migrate, container_ids)
+        await self._disconnect_present(network, container_ids)
+        await asyncio.to_thread(network.remove)
+
+    async def _move_onto(self, target: Network, migrate: Network) -> None:
+        container_ids = await self._attached(migrate)
+        await self._connect_missing(target, container_ids)
+        await self._disconnect_present(migrate, container_ids)
+        await asyncio.to_thread(migrate.remove)
+
+    async def _connect_missing(self, network: Network, container_ids: tuple[str, ...]) -> None:
+        attached = set(await self._attached(network))
         for container_id in container_ids:
+            if container_id in attached:
+                continue
+            await asyncio.to_thread(network.connect, container_id)
+            attached.add(container_id)
+
+    async def _disconnect_present(self, network: Network, container_ids: tuple[str, ...]) -> None:
+        attached = set(await self._attached(network))
+        for container_id in container_ids:
+            if container_id not in attached:
+                continue
             await asyncio.to_thread(network.disconnect, container_id, force=True)
-        try:
-            await asyncio.to_thread(network.remove)
-        except Exception:
-            for container_id in container_ids:
-                await asyncio.to_thread(network.connect, container_id)
-            raise
-        await self._create_network()
-        restored = await asyncio.to_thread(self._client.networks.get, self._network)
-        for container_id in container_ids:
-            await asyncio.to_thread(restored.connect, container_id)
 
-    async def _create_network(self) -> None:
+    async def _attached(self, network: Network) -> tuple[str, ...]:
+        await asyncio.to_thread(network.reload)
+        return _attached_containers(_network_attrs(network))
+
+    async def _optional_network(self, name: str) -> Network | None:
+        try:
+            return await asyncio.to_thread(self._client.networks.get, name)
+        except NotFound:
+            return None
+
+    async def _required_network(self, name: str) -> Network:
+        return await asyncio.to_thread(self._client.networks.get, name)
+
+    async def _create_named(self, name: str) -> None:
         await asyncio.to_thread(
             self._client.networks.create,
-            self._network,
+            name,
             internal=False,
             labels={"kinby.hub": self._hub_id},
         )
@@ -329,6 +361,19 @@ class DockerRuntime:
 
     async def _container(self, instance_id: str) -> Container:
         return await asyncio.to_thread(self._client.containers.get, self._name(instance_id))
+
+
+def _is_internal(network: Network | None) -> bool:
+    return bool(_network_attrs(network).get("Internal"))
+
+
+def _network_attrs(network: Network | None) -> dict[str, object]:
+    if network is None:
+        return {}
+    raw = getattr(network, "attrs", None)
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): value for key, value in raw.items()}
 
 
 def _attached_containers(attrs: dict[str, object]) -> tuple[str, ...]:

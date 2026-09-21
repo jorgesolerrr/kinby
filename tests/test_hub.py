@@ -42,6 +42,7 @@ from kinby.hub import (
     PreparedImage,
     RuntimeStatus,
 )
+from kinby.hub.service import HubAlreadyRunning
 from kinby.instance import inspect_instance
 from kinby.packages import InstalledPackage, PackageDescriptor, RequiredSecret
 
@@ -232,6 +233,7 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
             "utf-8", errors="ignore"
         )
 
+        hub.close()
         reopened = Hub(tmp_path / "hub", runtime=runtime, images=images)
         assert reopened.registry.hub_id() == hub_id
         reopened_result = await _client(reopened).call(
@@ -620,6 +622,7 @@ def test_status_distinguishes_missing_starting_unhealthy_and_unavailable(tmp_pat
 
         unavailable = UnavailableRuntime()
         unavailable.states = runtime.states
+        hub.close()
         reopened = Hub(tmp_path / "hub", runtime=unavailable, images=FakeImages())
         result = await _client(reopened).call(
             INSTANCE_STATUS,
@@ -926,6 +929,7 @@ def test_a_restarted_hub_can_start_an_instance_whose_start_was_interrupted(tmp_p
             )
             == stale
         )
+        hub.close()
 
         runtime = FakeRuntime()
         restarted = Hub(directory, runtime=runtime, images=FakeImages())
@@ -947,6 +951,35 @@ def test_a_restarted_hub_can_start_an_instance_whose_start_was_interrupted(tmp_p
         assert started.operation_id != stale
         assert outcome.state is OperationState.SUCCEEDED
         assert runtime.started == [str(created.instance_id)]
+
+    asyncio.run(scenario())
+
+
+def test_a_second_hub_does_not_fail_an_operation_the_first_is_running(tmp_path):
+    async def scenario() -> None:
+        directory = tmp_path / "hub"
+        hub = Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        stale = uuid4()
+        hub.registry.begin_operation(
+            stale,
+            created.instance_id,
+            OperationKind.START,
+            "Start queued.",
+        )
+
+        with pytest.raises(HubAlreadyRunning):
+            Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+        current = hub.registry.operation(stale)
+
+        assert current is not None
+        assert current.state is OperationState.PENDING
 
     asyncio.run(scenario())
 

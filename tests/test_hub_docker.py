@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import shutil
 import subprocess
@@ -23,6 +25,8 @@ from kinby.packages import InstalledPackage, PackageDescriptor, package_json
 
 class FakeNetworks:
     def get(self, name: str) -> object:
+        if name != "kinby_private":
+            raise NotFound(name)
         return object()
 
 
@@ -321,41 +325,84 @@ def test_the_docker_runtime_has_no_address_for_a_container_that_is_gone(tmp_path
 
 
 class _RecordingNetwork:
-    def __init__(self, *, internal: bool, containers: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        name: str,
+        owner: _RecordingNetworks,
+        *,
+        internal: bool,
+        containers: tuple[str, ...] = (),
+    ) -> None:
+        self.name = name
+        self._owner = owner
         self.containers: dict[str, object] = {container_id: {} for container_id in containers}
         self.attrs: dict[str, object] = {"Internal": internal, "Containers": self.containers}
         self.removed = False
-        self.disconnected: list[str] = []
-        self.connected: list[str] = []
+        self.fail_connect: set[str] = set()
+
+    def reload(self) -> None:
+        return None
 
     def disconnect(self, container: str, force: bool = False) -> None:
-        self.disconnected.append(container)
+        self._owner.events.append(("disconnect", self.name, container))
         self.containers.pop(container, None)
+        if not self._owner.hosts(container):
+            self._owner.stranded.append(container)
 
     def connect(self, container: str) -> None:
-        self.connected.append(container)
+        if container in self.fail_connect:
+            raise RuntimeError(f"could not attach {container} to {self.name}")
+        self._owner.events.append(("connect", self.name, container))
         self.containers[container] = {}
 
     def remove(self) -> None:
         if self.containers:
             raise RuntimeError("network still has containers attached")
+        self._owner.events.append(("remove", self.name))
         self.removed = True
 
 
 class _RecordingNetworks:
-    def __init__(self, network: _RecordingNetwork | None) -> None:
-        self.network = network
+    def __init__(self) -> None:
+        self.networks: dict[str, _RecordingNetwork] = {}
         self.created: list[tuple[str, dict[str, object]]] = []
+        self.events: list[tuple[str, ...]] = []
+        self.stranded: list[str] = []
+        self.fail_once: set[str] = set()
+
+    def add(
+        self,
+        name: str,
+        *,
+        internal: bool,
+        containers: tuple[str, ...] = (),
+    ) -> _RecordingNetwork:
+        network = _RecordingNetwork(name, self, internal=internal, containers=containers)
+        self.networks[name] = network
+        return network
+
+    def hosts(self, container: str) -> bool:
+        return any(
+            container in network.containers
+            for network in self.networks.values()
+            if not network.removed
+        )
 
     def get(self, name: str) -> _RecordingNetwork:
-        if self.network is None or self.network.removed:
+        network = self.networks.get(name)
+        if network is None or network.removed:
             raise NotFound(name)
-        return self.network
+        return network
 
     def create(self, name: str, **options: object) -> _RecordingNetwork:
+        if name in self.fail_once:
+            self.fail_once.remove(name)
+            raise RuntimeError("docker could not create the network")
+        self.events.append(("create", name))
         self.created.append((name, options))
-        self.network = _RecordingNetwork(internal=bool(options.get("internal")))
-        return self.network
+        network = _RecordingNetwork(name, self, internal=bool(options.get("internal")))
+        self.networks[name] = network
+        return network
 
 
 def _runtime_on(tmp_path: Path, networks: _RecordingNetworks) -> DockerRuntime:
@@ -375,7 +422,7 @@ def _runtime_on(tmp_path: Path, networks: _RecordingNetworks) -> DockerRuntime:
 
 
 def test_a_missing_network_is_created_with_a_route_out(tmp_path: Path) -> None:
-    networks = _RecordingNetworks(None)
+    networks = _RecordingNetworks()
     runtime = _runtime_on(tmp_path, networks)
 
     asyncio.run(runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected")))
@@ -386,33 +433,59 @@ def test_a_missing_network_is_created_with_a_route_out(tmp_path: Path) -> None:
 
 
 def test_an_empty_internal_network_is_replaced_by_one_with_a_route_out(tmp_path: Path) -> None:
-    internal = _RecordingNetwork(internal=True)
-    networks = _RecordingNetworks(internal)
+    networks = _RecordingNetworks()
+    internal = networks.add("kinby_private", internal=True)
     runtime = _runtime_on(tmp_path, networks)
 
     asyncio.run(runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected")))
 
     assert internal.removed
+    assert networks.stranded == []
     assert networks.created == [
-        ("kinby_private", {"internal": False, "labels": {"kinby.hub": "hub-id"}})
+        ("kinby_private_migrate", {"internal": False, "labels": {"kinby.hub": "hub-id"}}),
+        ("kinby_private", {"internal": False, "labels": {"kinby.hub": "hub-id"}}),
     ]
+    assert networks.get("kinby_private").attrs["Internal"] is False
 
 
-def test_stopped_containers_on_an_internal_network_are_reconnected_with_a_route_out(
+def test_stopped_containers_move_onto_the_replacement_before_the_old_network_is_removed(
     tmp_path: Path,
 ) -> None:
-    internal = _RecordingNetwork(internal=True, containers=("stopped-instance", "hub"))
-    networks = _RecordingNetworks(internal)
+    networks = _RecordingNetworks()
+    internal = networks.add("kinby_private", internal=True, containers=("stopped-instance", "hub"))
     runtime = _runtime_on(tmp_path, networks)
 
     asyncio.run(runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected")))
 
-    restored = networks.network
+    restored = networks.get("kinby_private")
+    connected_before_disconnect = networks.events.index(
+        ("connect", "kinby_private_migrate", "stopped-instance")
+    ) < networks.events.index(("disconnect", "kinby_private", "stopped-instance"))
+    assert connected_before_disconnect
     assert internal.removed
-    assert internal.disconnected == ["stopped-instance", "hub"]
-    assert networks.created == [
-        ("kinby_private", {"internal": False, "labels": {"kinby.hub": "hub-id"}})
-    ]
-    assert restored is not None
-    assert restored is not internal
-    assert restored.connected == ["stopped-instance", "hub"]
+    assert networks.stranded == []
+    assert set(restored.containers) == {"stopped-instance", "hub"}
+    assert restored.attrs["Internal"] is False
+    with pytest.raises(NotFound):
+        networks.get("kinby_private_migrate")
+
+
+def test_a_failed_migration_leaves_every_container_attached(tmp_path: Path) -> None:
+    networks = _RecordingNetworks()
+    networks.add("kinby_private", internal=True, containers=("stopped-instance", "hub"))
+    networks.fail_once.add("kinby_private")
+    runtime = _runtime_on(tmp_path, networks)
+
+    with pytest.raises(RuntimeError, match="could not create"):
+        asyncio.run(runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected")))
+
+    assert networks.stranded == []
+    assert set(networks.get("kinby_private_migrate").containers) == {"stopped-instance", "hub"}
+
+    asyncio.run(runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected")))
+
+    assert networks.stranded == []
+    assert set(networks.get("kinby_private").containers) == {"stopped-instance", "hub"}
+    assert networks.get("kinby_private").attrs["Internal"] is False
+    with pytest.raises(NotFound):
+        networks.get("kinby_private_migrate")

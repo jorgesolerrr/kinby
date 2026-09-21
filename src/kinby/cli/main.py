@@ -419,6 +419,7 @@ async def _run_hub(
     from docker.errors import DockerException
 
     from kinby.hub import HubContractServer, build_docker_hub
+    from kinby.hub.service import HubAlreadyRunning
 
     loop = asyncio.get_running_loop()
     stopping = asyncio.Event()
@@ -435,7 +436,7 @@ async def _run_hub(
                 docker_host_directory,
                 network=network,
             )
-        except DockerException as exc:
+        except (DockerException, HubAlreadyRunning) as exc:
             print(f"Unable to start the Docker-backed hub: {exc}", file=sys.stderr)
             return 1
         print(f"hub id: {hub.registry.hub_id()}")
