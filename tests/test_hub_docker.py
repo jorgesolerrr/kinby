@@ -25,6 +25,14 @@ class FakeNetworks:
         return object()
 
 
+class FakeContainer:
+    def __init__(self) -> None:
+        self.stop_timeout: int | None = None
+
+    def stop(self, timeout: int | None = None) -> None:
+        self.stop_timeout = timeout
+
+
 class FakeContainers:
     def __init__(self) -> None:
         self.arguments: tuple[object, object] | None = None
@@ -32,6 +40,10 @@ class FakeContainers:
         self.thread_id: int | None = None
         self.run_arguments: tuple[object, object] | None = None
         self.run_options: dict[str, object] = {}
+        self.container = FakeContainer()
+
+    def get(self, name: str) -> FakeContainer:
+        return self.container
 
     def create(self, image: object, command: object, **options: object) -> object:
         self.arguments = (image, command)
@@ -264,3 +276,22 @@ def test_real_docker_runtime_labels_stopped_and_independent_instances(tmp_path):
             await asyncio.to_thread(network.remove)
 
     asyncio.run(scenario())
+
+
+def test_docker_runtime_stops_within_a_grace_period_and_names_the_private_address(tmp_path):
+    async def scenario() -> FakeDockerClient:
+        client = FakeDockerClient()
+        runtime = DockerRuntime(
+            "hub-id",
+            tmp_path,
+            tmp_path,
+            network="kinby_private",
+            client=cast(DockerClient, client),
+        )
+        assert runtime.address("alice", 8787) == "http://kinby-alice:8787"
+        await runtime.stop("alice", grace_seconds=45)
+        return client
+
+    client = asyncio.run(scenario())
+
+    assert client.containers.container.stop_timeout == 45

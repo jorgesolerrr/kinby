@@ -14,7 +14,7 @@ from docker.models.images import Image
 from docker.types import Mount
 
 import docker
-from kinby.hub.models import BuildResult, InstanceSpec, RuntimeStatus
+from kinby.hub.models import BuildResult, InstanceAddress, InstanceSpec, RuntimeStatus
 from kinby.packages import InstalledPackage, installed_package_from_json
 
 _FROM = re.compile(r"^(FROM\s+)(\S+)(.*)$", re.MULTILINE | re.IGNORECASE)
@@ -183,9 +183,13 @@ class DockerRuntime:
         container = await self._container(instance_id)
         await asyncio.to_thread(container.start)
 
-    async def stop(self, instance_id: str) -> None:
+    async def stop(self, instance_id: str, *, grace_seconds: int) -> None:
+        """Signal the container, then terminate it if the process has not exited by then."""
         container = await self._container(instance_id)
-        await asyncio.to_thread(container.stop)
+        await asyncio.to_thread(container.stop, timeout=grace_seconds)
+
+    def address(self, instance_id: str, port: int) -> InstanceAddress:
+        return InstanceAddress(f"http://{self._name(instance_id)}:{port}")
 
     async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
         container = await self._container(instance_id)

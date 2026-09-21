@@ -11,7 +11,6 @@ from aiohttp import web
 
 from kinby.contracts import (
     CONTRACT_VERSION,
-    Capability,
     Delivery,
     DeliveryId,
     RoutineName,
@@ -118,7 +117,11 @@ class Receiver:
             self._runner = None
 
     async def _health(self, _request: web.Request) -> web.Response:
-        capabilities = [Capability.WS.value] if self._contract is not None else []
+        capabilities = (
+            [capability.value for capability in self._contract.capabilities]
+            if self._contract is not None
+            else []
+        )
         return web.json_response(
             {
                 "id": self._instance.manifest.id,

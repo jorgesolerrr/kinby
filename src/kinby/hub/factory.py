@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import docker
+from kinby.hub.control import HttpInstanceControl
 from kinby.hub.docker import DockerImageBackend, DockerRuntime
 from kinby.hub.images import ImagePreparer
 from kinby.hub.registry import HubRegistry
@@ -37,5 +38,6 @@ def build_docker_hub(
         directory,
         runtime=runtime,
         images=images,
+        control=HttpInstanceControl(),
         docker_host_directory=docker_host_directory,
     )

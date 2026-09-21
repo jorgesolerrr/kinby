@@ -66,6 +66,7 @@ class ErrorCode(StrEnum):
     NOT_FOUND = "NOT_FOUND"
     THREAD_BUSY = "THREAD_BUSY"
     INSTANCE_BUSY = "INSTANCE_BUSY"
+    INSTANCE_DRAINING = "INSTANCE_DRAINING"
     TURN_OPEN = "TURN_OPEN"
     NO_ACTIVE_TURN = "NO_ACTIVE_TURN"
     PARKED_TURN_UNAVAILABLE = "PARKED_TURN_UNAVAILABLE"
@@ -573,6 +574,11 @@ class InstanceStatusCommand(ContractModel):
     instance_id: UUID
 
 
+class InstanceStopCommand(ContractModel):
+    instance_id: UUID
+    force: bool = False
+
+
 class InstanceLogsCommand(ContractModel):
     instance_id: UUID
     tail: Annotated[int, Field(gt=0)] | None = None
@@ -586,6 +592,7 @@ class Capability(StrEnum):
     """What an instance's contract server can do. A hub reads it before acting on the instance."""
 
     WS = "ws"
+    DRAIN = "drain"
 
 
 class InstanceProbeCommand(ContractModel):
@@ -595,6 +602,21 @@ class InstanceProbeCommand(ContractModel):
 class InstanceProbeResult(ContractModel):
     contract_version: str
     capabilities: list[Capability]
+
+
+class DrainState(StrEnum):
+    """How an instance's accepted work ended when it drained."""
+
+    DRAINED = "drained"
+    INTERRUPTED = "interrupted"
+
+
+class InstanceDrainCommand(ContractModel):
+    force: bool = False
+
+
+class InstanceDrainResult(ContractModel):
+    state: DrainState
 
 
 class OperationGetCommand(ContractModel):
@@ -627,6 +649,8 @@ class InstanceStatusResult(ContractModel):
     process: ProcessState
     readiness: Readiness
     detail: str = ""
+    #: The lifecycle operation still running on this instance, for a client that reconnected.
+    active_operation_id: UUID | None = None
 
 
 class InstanceLogsResult(ContractModel):
@@ -637,6 +661,7 @@ class InstanceLogsResult(ContractModel):
 class OperationKind(StrEnum):
     CREATE = "create"
     START = "start"
+    STOP = "stop"
 
 
 class OperationState(StrEnum):
@@ -646,12 +671,20 @@ class OperationState(StrEnum):
     FAILED = "failed"
 
 
+class OperationStep(ContractModel):
+    """One recorded stage of a lifecycle operation, in the order the hub reached it."""
+
+    state: OperationState
+    detail: str
+
+
 class OperationGetResult(ContractModel):
     operation_id: UUID
     instance_id: UUID
     kind: OperationKind
     state: OperationState
     detail: str
+    steps: list[OperationStep] = Field(default_factory=list)
 
 
 class UsageGetCommand(ContractModel):

@@ -14,11 +14,7 @@ from kinby.contracts import CONTRACT_VERSION, AccessToken, FrameType
 from kinby.hub import Hub, HubAccess, HubContractServer, HubRegistry
 from kinby.hub.access import SessionId
 from kinby.instance import Serve
-from tests.test_hub import FakeImages, FakeRuntime
-
-
-def hub_at(directory: Path, runtime: FakeRuntime | None = None) -> Hub:
-    return Hub(directory, runtime=runtime or FakeRuntime(), images=FakeImages())
+from tests.test_hub import FakeRuntime, hub_at
 
 
 @asynccontextmanager
@@ -292,7 +288,7 @@ async def finished(socket: aiohttp.ClientWebSocketResponse, operation_id: str) -
 def test_an_operation_keeps_running_after_its_client_disconnects(tmp_path: Path) -> None:
     async def scenario() -> None:
         runtime = HeldRuntime()
-        hub = hub_at(tmp_path / "hub", runtime)
+        hub = hub_at(tmp_path / "hub", runtime=runtime)
         token = hub.access.issue()
         assert token is not None
         headers = {"Authorization": f"Bearer {token}"}

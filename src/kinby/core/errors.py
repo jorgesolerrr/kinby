@@ -40,6 +40,12 @@ class InstanceBusy(CoreError):
     retryable = True
 
 
+class InstanceDraining(CoreError):
+    """The instance is finishing its accepted work and takes no new work."""
+
+    code = ErrorCode.INSTANCE_DRAINING
+
+
 class ManagedInstanceNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 

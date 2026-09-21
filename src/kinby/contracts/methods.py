@@ -9,6 +9,8 @@ from kinby.contracts.models import (
     ContractModel,
     Event,
     InstanceCreateCommand,
+    InstanceDrainCommand,
+    InstanceDrainResult,
     InstanceListCommand,
     InstanceListResult,
     InstanceLogsCommand,
@@ -18,6 +20,7 @@ from kinby.contracts.models import (
     InstanceStartCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
+    InstanceStopCommand,
     LifecycleOperationResult,
     OperationGetCommand,
     OperationGetResult,
@@ -126,6 +129,9 @@ THREAD_SUBSCRIBE = Subscription(
 INSTANCE_PROBE = Method(
     "instance.probe", Scope.INSTANCE_LIFECYCLE, InstanceProbeCommand, InstanceProbeResult
 )
+INSTANCE_DRAIN = Method(
+    "instance.drain", Scope.INSTANCE_LIFECYCLE, InstanceDrainCommand, InstanceDrainResult
+)
 
 ROUTINE_LIST = Method("routine.list", Scope.INSTANCE_READ, RoutineListCommand, RoutineListResult)
 ROUTINE_RUN = Method("routine.run", Scope.INSTANCE_ADMIN, RoutineRunCommand, AcceptedResult)
@@ -135,6 +141,9 @@ INSTANCE_CREATE = Method(
 )
 INSTANCE_START = Method(
     "instance.start", Scope.HUB_ADMIN, InstanceStartCommand, LifecycleOperationResult
+)
+INSTANCE_STOP = Method(
+    "instance.stop", Scope.HUB_ADMIN, InstanceStopCommand, LifecycleOperationResult
 )
 INSTANCE_LIST = Method("instance.list", Scope.HUB_READ, InstanceListCommand, InstanceListResult)
 INSTANCE_STATUS = Method(

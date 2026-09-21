@@ -59,12 +59,13 @@ async def served(
     dispatcher: ScheduledDispatcher,
     *,
     contract: bool = True,
+    token: ControlToken = TOKEN,
 ) -> AsyncIterator[Serve]:
     receiver = Receiver(
         Serve("127.0.0.1", 0),
         dispatcher.scheduler,
         instance,
-        ContractServer(dispatcher, TOKEN) if contract else None,
+        ContractServer(dispatcher, token) if contract else None,
     )
     address = await receiver.start()
     try:

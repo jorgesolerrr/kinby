@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import partial
@@ -55,6 +56,7 @@ from kinby.core.errors import (
     ApprovalNotFound,
     CoreError,
     InstanceBusy,
+    InstanceDraining,
     InvalidParkedTurn,
     NoActiveTurn,
     PermissionDenied,
@@ -237,8 +239,20 @@ class Turns:
         self._changed = asyncio.Event()
         self._running: dict[UUID, RunningTurn] = {}
         self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim | RevertClaim] = {}
+        self._admitting = True
 
-    def running(self) -> tuple[Origin, ...]:
+    def close(self) -> None:
+        """Take no more turns. Accepted work, reads and approval responses keep going."""
+        self._admitting = False
+
+    def require_admitting(self) -> None:
+        if not self._admitting:
+            raise InstanceDraining(
+                "The instance is draining. It takes no new work until it starts again."
+            )
+
+    def running(self) -> dict[UUID, Origin]:
+        """What each thread is working on: a live turn, a reserved one, or a parked approval."""
         origins = {
             thread: running.request.origin
             for thread, running in self._running.items()
@@ -257,12 +271,13 @@ class Turns:
             pending = _pending_approval(events)
             if pending is not None:
                 origins[thread_id] = _turn_origin(events, pending.event.turn_id)
-        return tuple(origins.values())
+        return origins
 
     def require_available(self, origin: Origin) -> None:
+        self.require_admitting()
         if any(isinstance(claim, RevertClaim) for claim in self._claims.values()):
             raise InstanceBusy("A revert is running. Wait for it to finish before starting a turn.")
-        running = self.running()
+        running = self.running().values()
         routine = next((item for item in running if isinstance(item, RoutineOrigin)), None)
         if routine is not None:
             raise InstanceBusy(f'Routine "{routine.name}" is running. Waiting for it to finish.')
@@ -270,9 +285,10 @@ class Turns:
             raise InstanceBusy(f'Routine "{origin.name}" is waiting for the running user turn.')
 
     async def wait_idle(self) -> None:
+        """Wait until nothing holds the instance: no live turn, no parked approval, no claim."""
         while True:
             self._changed.clear()
-            if not self.running():
+            if not self.running() and not self._claims:
                 return
             await self._changed.wait()
 
@@ -286,6 +302,23 @@ class Turns:
             if not running.task.done() and isinstance(running.request.origin, RoutineOrigin):
                 await self.interrupt(ThreadTurnInterruptCommand(thread_id=thread_id))
                 return
+
+    async def interrupt_all(self) -> None:
+        """Interrupt every live turn and parked approval, including one still being reserved."""
+        while True:
+            # Clear before reading, so a change made while interrupting is never missed.
+            self._changed.clear()
+            threads = tuple(self.running())
+            if not threads:
+                return
+            interrupted = False
+            for thread_id in threads:
+                with suppress(CoreError):
+                    await self.interrupt(ThreadTurnInterruptCommand(thread_id=thread_id))
+                    interrupted = True
+            if not interrupted:
+                # Only a turn mid-reservation is left: it has nothing to interrupt yet.
+                await self._changed.wait()
 
     async def set_mode(self, command: ThreadModeSetCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
@@ -345,6 +378,8 @@ class Turns:
         )
 
     async def revert(self, command: ThreadTurnRevertCommand) -> AcceptedResult:
+        # A revert writes the workspace, so a draining instance takes no more of them.
+        self.require_admitting()
         self._require_thread(command.thread_id)
         claim = self._claim_revert(command.thread_id)
         try:

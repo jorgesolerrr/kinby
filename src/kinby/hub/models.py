@@ -5,10 +5,13 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, NewType, Protocol
 
 from kinby.contracts import PackageSelection
 from kinby.packages import InstalledPackage
+
+#: Where an instance's own server answers on the hub's private network.
+InstanceAddress = NewType("InstanceAddress", str)
 
 
 @dataclass(frozen=True)
@@ -22,7 +25,6 @@ class InstanceSpec:
     port: int = 8787
     files: Mapping[str, str] = field(default_factory=dict)
     public_host: str | None = None
-    stop_grace_seconds: int = 30
 
 
 type RuntimeState = Literal["absent", "created", "starting", "running", "stopped", "failed"]
@@ -40,11 +42,13 @@ class ContainerRuntime(Protocol):
 
     async def start(self, instance_id: str) -> None: ...
 
-    async def stop(self, instance_id: str) -> None: ...
+    async def stop(self, instance_id: str, *, grace_seconds: int) -> None: ...
 
     async def remove(self, instance_id: str, *, delete_data: bool = False) -> None: ...
 
     async def status(self, instance_id: str) -> RuntimeStatus: ...
+
+    def address(self, instance_id: str, port: int) -> InstanceAddress: ...
 
     def logs(
         self,

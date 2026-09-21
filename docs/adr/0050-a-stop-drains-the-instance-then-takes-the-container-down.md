@@ -1,0 +1,13 @@
+# A stop drains the instance, then takes the container down
+
+The hub stops a managed instance in two steps, in this order. It calls `instance.drain` on the instance's private `/control` route and waits for that call to return, then it stops the container and polls the container runtime until the container has actually stopped. The operation succeeds only after that observation: a recorded turn interruption is not evidence that the process exited.
+
+`instance.drain` answers when the drain is complete, not when it starts. A drain has no deadline of its own, so the call can stay open for as long as the instance's accepted work takes. The instance keeps the drain running behind the call, so a hub that loses the connection reconnects and calls again to keep waiting, and `instance.status` carries the `active_operation_id` a client needs to find its way back. We rejected having the instance exit its own process when it finishes draining: the container's `unless-stopped` restart policy would bring it straight back up, so the hub would race Docker for the shutdown it asked for.
+
+The hub never substitutes Docker's shutdown timeout for the drain. When the instance's `/health` does not report the `drain` capability, the stop fails and says so, leaving the instance running; a legacy interrupting stop is never described as graceful.
+
+A force stop is the same operation with interruption added. `instance.drain {force: true}` interrupts running user turns, running routine turns and parked approvals through the existing runtime, so each one closes with a durable `turn.interrupted` event, and only then does the container go down within a bounded grace period the runtime terminates it after. A force request that arrives while a drain is pending escalates that operation rather than starting a competing one, and the per-instance lock the hub holds to serialize lifecycle mutations is never held by the escalation path. A forced instance that does not answer its drain within that grace period still has its container terminated.
+
+A plain process shutdown is not a force stop. `kinby serve` on SIGTERM interrupts the running routine and leaves a parked approval to resume from its graph checkpoint at the next start, as [ADR 0015](0015-sqlite-checkpoints-resume-approvals-after-restart.md) intends. Only a user asking to force-stop interrupts a parked approval.
+
+Decision agreed during [Drain or force-stop a managed instance](https://github.com/jorgesolerrr/kinby/issues/239), under the constraints of [ADR 0048](0048-the-contract-crosses-the-network-in-typed-frames-one-socket-per-instance.md) and [ADR 0049](0049-a-cookie-session-for-the-browser-and-a-control-token-per-instance.md).

@@ -14,6 +14,7 @@ from kinby.contracts import (
     OperationGetResult,
     OperationKind,
     OperationState,
+    OperationStep,
     PackageSelection,
     PackageSummary,
     StorageItem,
@@ -87,6 +88,13 @@ class HubRegistry:
                     kind TEXT NOT NULL,
                     state TEXT NOT NULL,
                     detail TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS operation_steps (
+                    operation_id TEXT NOT NULL REFERENCES operations(id),
+                    position INTEGER NOT NULL,
+                    state TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    PRIMARY KEY (operation_id, position)
                 );
                 CREATE TABLE IF NOT EXISTS image_artifacts (
                     input_key TEXT PRIMARY KEY,
@@ -249,6 +257,7 @@ class HubRegistry:
                     "Creation queued.",
                 ),
             )
+            self._add_step(connection, operation_id, OperationState.PENDING, "Creation queued.")
 
     def begin_operation(
         self,
@@ -271,6 +280,7 @@ class HubRegistry:
                     detail,
                 ),
             )
+            self._add_step(connection, operation_id, OperationState.PENDING, detail)
 
     def update_operation(
         self,
@@ -278,11 +288,29 @@ class HubRegistry:
         state: OperationState,
         detail: str,
     ) -> None:
+        """Move the operation on and keep the stage it reached, so progress survives a restart."""
         with self._connect() as connection:
             connection.execute(
                 "UPDATE operations SET state = ?, detail = ? WHERE id = ?",
                 (state.value, detail, str(operation_id)),
             )
+            self._add_step(connection, operation_id, state, detail)
+
+    @staticmethod
+    def _add_step(
+        connection: sqlite3.Connection,
+        operation_id: UUID,
+        state: OperationState,
+        detail: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO operation_steps (operation_id, position, state, detail)
+            SELECT ?, COALESCE(MAX(position), 0) + 1, ?, ?
+            FROM operation_steps WHERE operation_id = ?
+            """,
+            (str(operation_id), state.value, detail, str(operation_id)),
+        )
 
     def operation(self, operation_id: UUID) -> OperationGetResult | None:
         with self._connect() as connection:
@@ -290,6 +318,13 @@ class HubRegistry:
                 "SELECT id, instance_id, kind, state, detail FROM operations WHERE id = ?",
                 (str(operation_id),),
             ).fetchone()
+            steps = connection.execute(
+                """
+                SELECT state, detail FROM operation_steps
+                WHERE operation_id = ? ORDER BY position
+                """,
+                (str(operation_id),),
+            ).fetchall()
         if row is None:
             return None
         return OperationGetResult(
@@ -298,7 +333,23 @@ class HubRegistry:
             kind=OperationKind(row[2]),
             state=OperationState(row[3]),
             detail=row[4],
+            steps=[
+                OperationStep(state=OperationState(state), detail=detail) for state, detail in steps
+            ],
         )
+
+    def active_operation(self, instance_id: UUID) -> UUID | None:
+        """The operation still changing this instance, for a client that lost its connection."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id FROM operations
+                WHERE instance_id = ? AND state IN (?, ?)
+                ORDER BY rowid DESC LIMIT 1
+                """,
+                (str(instance_id), OperationState.PENDING.value, OperationState.RUNNING.value),
+            ).fetchone()
+        return UUID(row[0]) if row is not None else None
 
     def record_preparation(
         self,
