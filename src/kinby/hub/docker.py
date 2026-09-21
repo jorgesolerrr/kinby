@@ -118,6 +118,7 @@ class DockerRuntime:
         self._docker_host_directory = Path(docker_host_directory).resolve()
         self._network = network
         self._client = client or docker.from_env()
+        self._network_lock = asyncio.Lock()
 
     def _name(self, instance_id: str) -> str:
         return f"kinby-{instance_id}"
@@ -179,26 +180,39 @@ class DockerRuntime:
         An older hub created this network as internal. Containers move onto a
         temporary network first, including stopped ones, and only then does the
         hub recreate this network and move them back. A failed step leaves every
-        container attached to at least one of those networks.
+        container attached to at least one of those networks. One migration
+        runs at a time, and a temporary network is used only when this hub
+        labeled it.
         """
-        migrate = await self._optional_network(self._migrate_network)
-        current = await self._optional_network(self._network)
-        if current is not None and _is_internal(current):
-            await self._move_off_internal(current)
-            current = None
-            migrate = await self._optional_network(self._migrate_network)
-        if current is None:
-            await self._create_named(self._network)
-            current = await self._required_network(self._network)
-        if migrate is not None:
-            await self._move_onto(current, migrate)
+        async with self._network_lock:
+            migrate = await self._owned_migrate_network()
+            current = await self._optional_network(self._network)
+            if current is not None and _is_internal(current):
+                await self._move_off_internal(current)
+                current = None
+                migrate = await self._owned_migrate_network()
+            if current is None:
+                await self._create_named(self._network)
+                current = await self._required_network(self._network)
+            if migrate is not None:
+                await self._move_onto(current, migrate)
 
     @property
     def _migrate_network(self) -> str:
         return f"{self._network}_migrate"
 
+    async def _owned_migrate_network(self) -> Network | None:
+        network = await self._optional_network(self._migrate_network)
+        if network is None:
+            return None
+        if _hub_label(network) != self._hub_id:
+            raise RuntimeError(
+                f"Network {self._migrate_network} already exists and is not owned by this hub."
+            )
+        return network
+
     async def _move_off_internal(self, network: Network) -> None:
-        migrate = await self._optional_network(self._migrate_network)
+        migrate = await self._owned_migrate_network()
         if migrate is None:
             await self._create_named(self._migrate_network)
             migrate = await self._required_network(self._migrate_network)
@@ -365,6 +379,14 @@ class DockerRuntime:
 
 def _is_internal(network: Network | None) -> bool:
     return bool(_network_attrs(network).get("Internal"))
+
+
+def _hub_label(network: Network) -> str | None:
+    labels = _network_attrs(network).get("Labels")
+    if not isinstance(labels, dict):
+        return None
+    label = labels.get("kinby.hub")
+    return label if isinstance(label, str) else None
 
 
 def _network_attrs(network: Network | None) -> dict[str, object]:

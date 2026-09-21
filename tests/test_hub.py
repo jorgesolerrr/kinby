@@ -36,6 +36,7 @@ from kinby.contracts import (
 )
 from kinby.hub import (
     Hub,
+    HubRegistry,
     ImageArtifact,
     ImageSelection,
     InstanceSpec,
@@ -953,6 +954,25 @@ def test_a_restarted_hub_can_start_an_instance_whose_start_was_interrupted(tmp_p
         assert runtime.started == [str(created.instance_id)]
 
     asyncio.run(scenario())
+
+
+def test_a_failed_hub_constructor_releases_the_directory(tmp_path, monkeypatch):
+    directory = tmp_path / "hub"
+    original = HubRegistry.fail_interrupted_operations
+    attempts = 0
+
+    def fail_once(self, detail: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("recovery failed")
+        original(self, detail)
+
+    monkeypatch.setattr(HubRegistry, "fail_interrupted_operations", fail_once)
+    with pytest.raises(RuntimeError, match="recovery failed"):
+        Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+
+    Hub(directory, runtime=FakeRuntime(), images=FakeImages()).close()
 
 
 def test_a_second_hub_does_not_fail_an_operation_the_first_is_running(tmp_path):

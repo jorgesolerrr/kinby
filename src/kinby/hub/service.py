@@ -97,27 +97,31 @@ class Hub:
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self._directory_lock = _acquire_directory(self.directory)
-        self.instances_directory = self.directory / "instances"
-        self.instances_directory.mkdir(parents=True, exist_ok=True)
-        self._docker_host_directory = (
-            Path(docker_host_directory).resolve()
-            if docker_host_directory is not None
-            else self.directory
-        )
-        self.registry = HubRegistry(self.directory)
-        self.registry.fail_interrupted_operations(_INTERRUPTED_OPERATION)
-        self.access = HubAccess(self.registry)
-        self._runtime = runtime
-        self._images = images
-        self._locks: dict[UUID, asyncio.Lock] = {}
-        self._tasks: set[asyncio.Task[None]] = set()
-        self.dispatcher = Dispatcher()
-        self.dispatcher.register(INSTANCE_CREATE, self.create)
-        self.dispatcher.register(INSTANCE_START, self.start)
-        self.dispatcher.register(INSTANCE_LIST, self.list)
-        self.dispatcher.register(INSTANCE_STATUS, self.status)
-        self.dispatcher.register(INSTANCE_LOGS, self.logs)
-        self.dispatcher.register(OPERATION_GET, self.operation)
+        try:
+            self.instances_directory = self.directory / "instances"
+            self.instances_directory.mkdir(parents=True, exist_ok=True)
+            self._docker_host_directory = (
+                Path(docker_host_directory).resolve()
+                if docker_host_directory is not None
+                else self.directory
+            )
+            self.registry = HubRegistry(self.directory)
+            self.registry.fail_interrupted_operations(_INTERRUPTED_OPERATION)
+            self.access = HubAccess(self.registry)
+            self._runtime = runtime
+            self._images = images
+            self._locks: dict[UUID, asyncio.Lock] = {}
+            self._tasks: set[asyncio.Task[None]] = set()
+            self.dispatcher = Dispatcher()
+            self.dispatcher.register(INSTANCE_CREATE, self.create)
+            self.dispatcher.register(INSTANCE_START, self.start)
+            self.dispatcher.register(INSTANCE_LIST, self.list)
+            self.dispatcher.register(INSTANCE_STATUS, self.status)
+            self.dispatcher.register(INSTANCE_LOGS, self.logs)
+            self.dispatcher.register(OPERATION_GET, self.operation)
+        except BaseException:
+            self._directory_lock.close()
+            raise
 
     def close(self) -> None:
         """Release this directory so another process can own it."""

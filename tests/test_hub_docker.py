@@ -332,11 +332,16 @@ class _RecordingNetwork:
         *,
         internal: bool,
         containers: tuple[str, ...] = (),
+        labels: dict[str, str] | None = None,
     ) -> None:
         self.name = name
         self._owner = owner
         self.containers: dict[str, object] = {container_id: {} for container_id in containers}
-        self.attrs: dict[str, object] = {"Internal": internal, "Containers": self.containers}
+        self.attrs: dict[str, object] = {
+            "Internal": internal,
+            "Containers": self.containers,
+            "Labels": dict(labels or {}),
+        }
         self.removed = False
         self.fail_connect: set[str] = set()
 
@@ -369,6 +374,12 @@ class _RecordingNetworks:
         self.events: list[tuple[str, ...]] = []
         self.stranded: list[str] = []
         self.fail_once: set[str] = set()
+        self.hold_create = False
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.max_active_creates = 0
+        self._active_creates = 0
+        self._create_lock = threading.Lock()
 
     def add(
         self,
@@ -376,8 +387,15 @@ class _RecordingNetworks:
         *,
         internal: bool,
         containers: tuple[str, ...] = (),
+        labels: dict[str, str] | None = None,
     ) -> _RecordingNetwork:
-        network = _RecordingNetwork(name, self, internal=internal, containers=containers)
+        network = _RecordingNetwork(
+            name,
+            self,
+            internal=internal,
+            containers=containers,
+            labels=labels,
+        )
         self.networks[name] = network
         return network
 
@@ -398,9 +416,30 @@ class _RecordingNetworks:
         if name in self.fail_once:
             self.fail_once.remove(name)
             raise RuntimeError("docker could not create the network")
+        with self._create_lock:
+            self._active_creates += 1
+            self.max_active_creates = max(self.max_active_creates, self._active_creates)
+            hold = self.hold_create
+            self.hold_create = False
+        if hold:
+            self.entered.set()
+            assert self.release.wait(timeout=2)
+        with self._create_lock:
+            self._active_creates -= 1
         self.events.append(("create", name))
         self.created.append((name, options))
-        network = _RecordingNetwork(name, self, internal=bool(options.get("internal")))
+        raw_labels = options.get("labels")
+        labels = (
+            {str(key): str(value) for key, value in raw_labels.items()}
+            if isinstance(raw_labels, dict)
+            else {}
+        )
+        network = _RecordingNetwork(
+            name,
+            self,
+            internal=bool(options.get("internal")),
+            labels=labels,
+        )
         self.networks[name] = network
         return network
 
@@ -489,3 +528,50 @@ def test_a_failed_migration_leaves_every_container_attached(tmp_path: Path) -> N
     assert networks.get("kinby_private").attrs["Internal"] is False
     with pytest.raises(NotFound):
         networks.get("kinby_private_migrate")
+
+
+def test_a_migration_network_owned_by_someone_else_is_left_alone(tmp_path: Path) -> None:
+    networks = _RecordingNetworks()
+    networks.add("kinby_private", internal=False)
+    foreign = networks.add(
+        "kinby_private_migrate",
+        internal=False,
+        containers=("other-workload",),
+        labels={"kinby.hub": "other-hub"},
+    )
+    runtime = _runtime_on(tmp_path, networks)
+
+    with pytest.raises(RuntimeError, match="not owned"):
+        asyncio.run(runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected")))
+
+    assert foreign.removed is False
+    assert set(foreign.containers) == {"other-workload"}
+    assert networks.stranded == []
+
+
+def test_two_creates_migrate_one_network_at_a_time(tmp_path: Path) -> None:
+    networks = _RecordingNetworks()
+    networks.hold_create = True
+    networks.add("kinby_private", internal=True, containers=("stopped-instance",))
+    runtime = _runtime_on(tmp_path, networks)
+    (tmp_path / "instances" / "two").mkdir()
+
+    async def both() -> None:
+        first = asyncio.create_task(
+            runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected"))
+        )
+        assert await asyncio.to_thread(networks.entered.wait, 2)
+        second = asyncio.create_task(
+            runtime.create(InstanceSpec(instance_id="two", image="sha256:selected"))
+        )
+        await asyncio.sleep(0.05)
+        assert networks.max_active_creates == 1
+        networks.release.set()
+        await first
+        await second
+
+    asyncio.run(both())
+
+    assert networks.max_active_creates == 1
+    assert networks.stranded == []
+    assert set(networks.get("kinby_private").containers) == {"stopped-instance"}
