@@ -104,6 +104,7 @@ def test_verbose_run_writes_no_process_log_under_state(tmp_path, capsys, monkeyp
         "events.jsonl",
         "checkpoints.sqlite",
         "snapshots.git",
+        "runtime.lock",
     }
 
 
