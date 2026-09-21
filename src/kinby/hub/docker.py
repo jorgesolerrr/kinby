@@ -11,6 +11,7 @@ from typing import cast
 from docker.errors import DockerException, ImageNotFound, NotFound
 from docker.models.containers import Container
 from docker.models.images import Image
+from docker.models.networks import Network
 from docker.types import Mount
 
 import docker
@@ -176,8 +177,9 @@ class DockerRuntime:
         """The instance network exists and has a route out.
 
         An older hub created this network as internal, which leaves an instance
-        unable to reach model providers, git, and GitHub. Replace that network
-        when nothing is attached. A network that still has containers stays.
+        unable to reach model providers, git, and GitHub. Stopped containers stay
+        attached, so disconnect every one of them, recreate the network, and
+        connect them to it.
         """
         try:
             network = await asyncio.to_thread(self._client.networks.get, self._network)
@@ -187,10 +189,25 @@ class DockerRuntime:
         attrs = network.attrs if isinstance(getattr(network, "attrs", None), dict) else {}
         if not attrs.get("Internal"):
             return
-        if attrs.get("Containers"):
-            return
-        await asyncio.to_thread(network.remove)
+        await self._replace_internal_network(network, _attached_containers(attrs))
+
+    async def _replace_internal_network(
+        self,
+        network: Network,
+        container_ids: tuple[str, ...],
+    ) -> None:
+        for container_id in container_ids:
+            await asyncio.to_thread(network.disconnect, container_id, force=True)
+        try:
+            await asyncio.to_thread(network.remove)
+        except Exception:
+            for container_id in container_ids:
+                await asyncio.to_thread(network.connect, container_id)
+            raise
         await self._create_network()
+        restored = await asyncio.to_thread(self._client.networks.get, self._network)
+        for container_id in container_ids:
+            await asyncio.to_thread(restored.connect, container_id)
 
     async def _create_network(self) -> None:
         await asyncio.to_thread(
@@ -312,6 +329,13 @@ class DockerRuntime:
 
     async def _container(self, instance_id: str) -> Container:
         return await asyncio.to_thread(self._client.containers.get, self._name(instance_id))
+
+
+def _attached_containers(attrs: dict[str, object]) -> tuple[str, ...]:
+    containers = attrs.get("Containers")
+    if not isinstance(containers, dict):
+        return ()
+    return tuple(str(container_id) for container_id in containers)
 
 
 def _next_or_end(iterator: Iterator[bytes]) -> bytes | object:

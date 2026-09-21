@@ -59,6 +59,7 @@ from kinby.packages import InstalledPackage
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _INSTANCE_HOST = "0.0.0.0"
 _INSTANCE_PORT = 8787
+_INTERRUPTED_OPERATION = "The hub stopped before this operation finished."
 
 
 class Hub:
@@ -81,6 +82,7 @@ class Hub:
             else self.directory
         )
         self.registry = HubRegistry(self.directory)
+        self.registry.fail_interrupted_operations(_INTERRUPTED_OPERATION)
         self.access = HubAccess(self.registry)
         self._runtime = runtime
         self._images = images
@@ -207,6 +209,13 @@ class Hub:
         )
 
     async def _start(self, operation_id: UUID, instance_id: UUID) -> None:
+        try:
+            await self._run_start(operation_id, instance_id)
+        except asyncio.CancelledError:
+            self._fail_if_unfinished(operation_id)
+            raise
+
+    async def _run_start(self, operation_id: UUID, instance_id: UUID) -> None:
         lock = self._locks.setdefault(instance_id, asyncio.Lock())
         async with lock:
             record = self._prepared_instance(instance_id)
@@ -226,6 +235,16 @@ class Hub:
                 operation_id,
                 OperationState.SUCCEEDED,
                 "Instance started.",
+            )
+
+    def _fail_if_unfinished(self, operation_id: UUID) -> None:
+        current = self.registry.operation(operation_id)
+        unfinished = {OperationState.PENDING, OperationState.RUNNING}
+        if current is not None and current.state in unfinished:
+            self.registry.finish_operation(
+                operation_id,
+                OperationState.FAILED,
+                _INTERRUPTED_OPERATION,
             )
 
     async def list(self, command: InstanceListCommand) -> InstanceListResult:

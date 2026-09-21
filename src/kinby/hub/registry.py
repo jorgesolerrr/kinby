@@ -277,6 +277,20 @@ class HubRegistry:
                 ),
             )
 
+    def fail_interrupted_operations(self, detail: str) -> None:
+        """Fail operations the previous process left unfinished.
+
+        A start that is still pending after a restart would otherwise be returned
+        forever, and nothing would run it.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id FROM operations WHERE state IN (?, ?)",
+                (OperationState.PENDING.value, OperationState.RUNNING.value),
+            ).fetchall()
+        for (operation_id,) in rows:
+            self.finish_operation(UUID(operation_id), OperationState.FAILED, detail)
+
     def begin_operation(
         self,
         operation_id: UUID,

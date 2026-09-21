@@ -3,6 +3,7 @@ import os
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -25,6 +26,7 @@ from kinby.contracts import (
     InstanceStatusCommand,
     LifecycleOperationResult,
     OperationGetCommand,
+    OperationKind,
     OperationState,
     PackageSelection,
     Readiness,
@@ -898,6 +900,94 @@ def test_a_second_start_keeps_the_operation_a_client_can_still_find(tmp_path):
         assert again.operation_id == started.operation_id
         assert not isinstance(during, ErrorEnvelope)
         assert during.active_operation_id == started.operation_id
+        assert runtime.started == [str(created.instance_id)]
+
+    asyncio.run(scenario())
+
+
+def test_a_restarted_hub_can_start_an_instance_whose_start_was_interrupted(tmp_path):
+    async def scenario() -> None:
+        directory = tmp_path / "hub"
+        hub = Hub(directory, runtime=FakeRuntime(), images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        stale = uuid4()
+        assert (
+            hub.registry.begin_operation(
+                stale,
+                created.instance_id,
+                OperationKind.START,
+                "Start queued.",
+            )
+            == stale
+        )
+
+        runtime = FakeRuntime()
+        restarted = Hub(directory, runtime=runtime, images=FakeImages())
+        restarted_client = _client(restarted)
+        failed = await restarted_client.call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=stale),
+        )
+        started = await restarted_client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        outcome = await _operation(restarted_client, started)
+
+        assert not isinstance(failed, ErrorEnvelope)
+        assert failed.state is OperationState.FAILED
+        assert failed.detail == "The hub stopped before this operation finished."
+        assert started.operation_id != stale
+        assert outcome.state is OperationState.SUCCEEDED
+        assert runtime.started == [str(created.instance_id)]
+
+    asyncio.run(scenario())
+
+
+def test_a_cancelled_start_can_be_started_again(tmp_path):
+    async def scenario() -> None:
+        runtime = HeldRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+        started = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        await asyncio.wait_for(runtime.holding.wait(), timeout=5)
+        assert len(hub._tasks) == 1
+        task = next(iter(hub._tasks))
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        failed = await client.call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=started.operation_id),
+        )
+        runtime.released.set()
+        again = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(again, LifecycleOperationResult)
+        outcome = await _operation(client, again)
+
+        assert not isinstance(failed, ErrorEnvelope)
+        assert failed.state is OperationState.FAILED
+        assert again.operation_id != started.operation_id
+        assert outcome.state is OperationState.SUCCEEDED
         assert runtime.started == [str(created.instance_id)]
 
     asyncio.run(scenario())

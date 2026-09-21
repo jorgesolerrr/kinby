@@ -321,11 +321,24 @@ def test_the_docker_runtime_has_no_address_for_a_container_that_is_gone(tmp_path
 
 
 class _RecordingNetwork:
-    def __init__(self, attrs: dict[str, object]) -> None:
-        self.attrs = attrs
+    def __init__(self, *, internal: bool, containers: tuple[str, ...] = ()) -> None:
+        self.containers: dict[str, object] = {container_id: {} for container_id in containers}
+        self.attrs: dict[str, object] = {"Internal": internal, "Containers": self.containers}
         self.removed = False
+        self.disconnected: list[str] = []
+        self.connected: list[str] = []
+
+    def disconnect(self, container: str, force: bool = False) -> None:
+        self.disconnected.append(container)
+        self.containers.pop(container, None)
+
+    def connect(self, container: str) -> None:
+        self.connected.append(container)
+        self.containers[container] = {}
 
     def remove(self) -> None:
+        if self.containers:
+            raise RuntimeError("network still has containers attached")
         self.removed = True
 
 
@@ -341,7 +354,7 @@ class _RecordingNetworks:
 
     def create(self, name: str, **options: object) -> _RecordingNetwork:
         self.created.append((name, options))
-        self.network = _RecordingNetwork({"Internal": bool(options.get("internal"))})
+        self.network = _RecordingNetwork(internal=bool(options.get("internal")))
         return self.network
 
 
@@ -373,7 +386,7 @@ def test_a_missing_network_is_created_with_a_route_out(tmp_path: Path) -> None:
 
 
 def test_an_empty_internal_network_is_replaced_by_one_with_a_route_out(tmp_path: Path) -> None:
-    internal = _RecordingNetwork({"Internal": True, "Containers": {}})
+    internal = _RecordingNetwork(internal=True)
     networks = _RecordingNetworks(internal)
     runtime = _runtime_on(tmp_path, networks)
 
@@ -385,12 +398,21 @@ def test_an_empty_internal_network_is_replaced_by_one_with_a_route_out(tmp_path:
     ]
 
 
-def test_an_internal_network_that_still_has_containers_is_left_in_place(tmp_path: Path) -> None:
-    internal = _RecordingNetwork({"Internal": True, "Containers": {"c1": {}}})
+def test_stopped_containers_on_an_internal_network_are_reconnected_with_a_route_out(
+    tmp_path: Path,
+) -> None:
+    internal = _RecordingNetwork(internal=True, containers=("stopped-instance", "hub"))
     networks = _RecordingNetworks(internal)
     runtime = _runtime_on(tmp_path, networks)
 
     asyncio.run(runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected")))
 
-    assert not internal.removed
-    assert networks.created == []
+    restored = networks.network
+    assert internal.removed
+    assert internal.disconnected == ["stopped-instance", "hub"]
+    assert networks.created == [
+        ("kinby_private", {"internal": False, "labels": {"kinby.hub": "hub-id"}})
+    ]
+    assert restored is not None
+    assert restored is not internal
+    assert restored.connected == ["stopped-instance", "hub"]
