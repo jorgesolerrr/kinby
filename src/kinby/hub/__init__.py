@@ -1,5 +1,6 @@
 """Create, start, and inspect containerized kinby instances."""
 
+from kinby.hub.access import HubAccess
 from kinby.hub.docker import DockerImageBackend, DockerRuntime
 from kinby.hub.factory import build_docker_hub
 from kinby.hub.images import ImagePreparer
@@ -15,6 +16,7 @@ from kinby.hub.models import (
     RuntimeStatus,
 )
 from kinby.hub.registry import HubRegistry
+from kinby.hub.server import HubContractServer
 from kinby.hub.service import Hub
 
 __all__ = [
@@ -23,6 +25,8 @@ __all__ = [
     "DockerImageBackend",
     "DockerRuntime",
     "Hub",
+    "HubAccess",
+    "HubContractServer",
     "HubRegistry",
     "ImageArtifact",
     "ImageBackend",

@@ -70,6 +70,18 @@ class _StreamEnd(Enum):
     OVERFLOWED = auto()
 
 
+async def serve_contract(
+    request: web.Request,
+    dispatcher: Dispatcher,
+    scopes: frozenset[Scope],
+) -> web.WebSocketResponse:
+    """Upgrade an authenticated request and carry the contract over it until it closes."""
+    socket = web.WebSocketResponse(heartbeat=_HEARTBEAT_SECONDS)
+    await socket.prepare(request)
+    await _Connection(socket, dispatcher, scopes).serve()
+    return socket
+
+
 class ContractServer:
     """Serve the contract at ``/ws``, and the routes a hub drives at ``/control``."""
 
@@ -102,10 +114,7 @@ class ContractServer:
     async def _serve(self, request: web.Request, scopes: frozenset[Scope]) -> web.WebSocketResponse:
         if not self._authenticated(request):
             raise web.HTTPUnauthorized(reason="authentication failed")
-        socket = web.WebSocketResponse(heartbeat=_HEARTBEAT_SECONDS)
-        await socket.prepare(request)
-        await _Connection(socket, self._dispatcher, scopes).serve()
-        return socket
+        return await serve_contract(request, self._dispatcher, scopes)
 
     def _authenticated(self, request: web.Request) -> bool:
         return hmac.compare_digest(

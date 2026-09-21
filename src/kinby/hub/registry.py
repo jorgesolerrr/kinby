@@ -101,6 +101,9 @@ class HubRegistry:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS sessions (
+                    token_hash TEXT PRIMARY KEY
+                );
                 """
             )
             self._add_columns(
@@ -143,6 +146,67 @@ class HubRegistry:
                 (identifier,),
             )
             return identifier
+
+    def access_token_hash(self) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM hub_metadata WHERE key = 'access_token_hash'"
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def try_set_access_token_hash(self, token_hash: str) -> bool:
+        """Store the first hash. A second issuer leaves the existing one in place."""
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    "INSERT INTO hub_metadata (key, value) VALUES ('access_token_hash', ?)",
+                    (token_hash,),
+                )
+        except sqlite3.IntegrityError:
+            return False
+        return True
+
+    def replace_access_token_hash(self, token_hash: str) -> None:
+        """Swap the hash and drop every session in one transaction."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO hub_metadata (key, value)
+                VALUES ('access_token_hash', ?)
+                """,
+                (token_hash,),
+            )
+            connection.execute("DELETE FROM sessions")
+
+    def open_session(self, token_hash: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO sessions (token_hash) VALUES (?)",
+                (token_hash,),
+            )
+
+    def open_session_if_current(self, token_hash: str, session_hash: str) -> bool:
+        """Insert the session only if this token hash is still the stored one."""
+        with self._connect() as connection:
+            inserted = connection.execute(
+                """
+                INSERT INTO sessions (token_hash)
+                SELECT ? WHERE EXISTS (
+                    SELECT 1 FROM hub_metadata
+                    WHERE key = 'access_token_hash' AND value = ?
+                )
+                """,
+                (session_hash, token_hash),
+            )
+            return inserted.rowcount == 1
+
+    def session_open(self, token_hash: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM sessions WHERE token_hash = ?",
+                (token_hash,),
+            ).fetchone()
+        return row is not None
 
     def begin_create(
         self,
