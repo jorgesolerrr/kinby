@@ -129,7 +129,7 @@ class RawRoutines(_Section):
         return value
 
 
-def _parse_listen(value: object) -> Serve:
+def parse_listen(value: object) -> Serve:
     if isinstance(value, Serve):
         return value
     if not isinstance(value, str) or any(character.isspace() for character in value):
@@ -145,7 +145,7 @@ def _parse_listen(value: object) -> Serve:
 
 ListenAddress = Annotated[
     Serve,
-    BeforeValidator(_parse_listen),
+    BeforeValidator(parse_listen),
     WithJsonSchema({"title": "Listen", "type": "string", "pattern": _LISTEN_PATTERN}),
 ]
 

@@ -49,8 +49,10 @@ from kinby.contracts.methods import (
 from kinby.contracts.models import (
     CONTRACT_VERSION,
     CONTROL_SCOPES,
+    HUB_SCOPES,
     INSTANCE_SCOPES,
     AcceptedResult,
+    AccessToken,
     ApprovalRequested,
     Capability,
     ChangeStatus,
@@ -180,6 +182,7 @@ from kinby.contracts.streams import Stream
 __all__ = [
     "CONTRACT_VERSION",
     "CONTROL_SCOPES",
+    "HUB_SCOPES",
     "INSTANCE_CREATE",
     "INSTANCE_LIST",
     "INSTANCE_LOGS",
@@ -207,6 +210,7 @@ __all__ = [
     "THREAD_TURN_TARGET_LIST",
     "USAGE_GET",
     "AcceptedResult",
+    "AccessToken",
     "ApprovalRequested",
     "CallFrame",
     "CancelFrame",

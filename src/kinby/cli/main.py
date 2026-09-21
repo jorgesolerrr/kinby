@@ -31,6 +31,7 @@ from kinby.contracts import (
     THREAD_LIST,
     THREAD_SUBSCRIBE,
     USAGE_GET,
+    AccessToken,
     ApprovalRequested,
     ControlToken,
     ErrorCode,
@@ -64,9 +65,11 @@ from kinby.instance import (
     InstanceExistsError,
     InstanceNotFoundError,
     ManifestError,
+    Serve,
     discover_instance,
     init_instance,
     load_instance,
+    parse_listen,
 )
 from kinby.instance.recap import load_recap_lens
 from kinby.packages import inspect_installed_package
@@ -443,16 +446,19 @@ async def _run_hub(
     source_directory: Path,
     docker_host_directory: Path,
     network: str,
+    listen: Serve,
+    web_app: Path | None,
 ) -> int:
     from docker.errors import DockerException
 
-    from kinby.hub import build_docker_hub
+    from kinby.hub import HubContractServer, build_docker_hub
 
     loop = asyncio.get_running_loop()
     stopping = asyncio.Event()
     shutdown_signals = (signal.SIGINT, signal.SIGTERM)
     for shutdown_signal in shutdown_signals:
         loop.add_signal_handler(shutdown_signal, stopping.set)
+    server = None
     try:
         try:
             hub = await asyncio.to_thread(
@@ -467,11 +473,33 @@ async def _run_hub(
             return 1
         print(f"hub id: {hub.registry.hub_id()}")
         print(f"directory: {hub.directory}")
+        _announce(hub.access.issue())
+        server = HubContractServer(hub.dispatcher, hub.access, web_app)
+        address = await server.start(listen)
+        print(f"listen: {address.host}:{address.port}")
         await stopping.wait()
         return 0
     finally:
+        if server is not None:
+            await server.stop()
         for shutdown_signal in shutdown_signals:
             loop.remove_signal_handler(shutdown_signal)
+
+
+def _announce(token: AccessToken | None) -> None:
+    """Print a newly generated access token once. A hub that already has one prints nothing."""
+    if token is None:
+        return
+    print("This hub's access token is shown once. Store it now:")
+    print(f"access token: {token}")
+
+
+def _rotate_access_token(directory: Path) -> int:
+    from kinby.hub import HubAccess, HubRegistry
+
+    print("The previous access token and its sessions are now closed:")
+    print(f"access token: {HubAccess(HubRegistry(directory)).rotate()}")
+    return 0
 
 
 async def _thread_for_session(
@@ -643,6 +671,24 @@ def main(
         default="kinby_private",
         help="private Docker network shared with the hub",
     )
+    hub_parser.add_argument(
+        "--listen",
+        default="0.0.0.0:8080",
+        help="host:port the hub's contract server listens on",
+    )
+    hub_parser.add_argument(
+        "--web-app",
+        type=Path,
+        help="directory holding the built web app",
+    )
+    hub_token_parser = hub_parser.add_subparsers(dest="hub_command").add_parser(
+        "token",
+        help="manage the hub access token",
+    )
+    hub_token_parser.add_subparsers(dest="token_command", required=True).add_parser(
+        "rotate",
+        help="replace the access token and end open sessions",
+    )
     instance_parser = subparsers.add_parser(
         "instance",
         help="inspect an instance",
@@ -763,6 +809,13 @@ def main(
         print(f"Created instance at {path}")
         return 0
     if args.command == "hub":
+        if args.hub_command == "token":
+            return _rotate_access_token(args.directory)
+        try:
+            listen = parse_listen(args.listen)
+        except ValueError as exc:
+            print(f"--listen {exc}", file=sys.stderr)
+            return 1
         host_directory = args.docker_host_directory or args.directory
         return asyncio.run(
             _run_hub(
@@ -770,6 +823,8 @@ def main(
                 args.source,
                 host_directory,
                 args.network,
+                listen,
+                args.web_app,
             )
         )
     try:

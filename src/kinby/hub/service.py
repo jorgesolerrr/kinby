@@ -37,8 +37,10 @@ from kinby.contracts import (
     StorageItem,
     StorageKind,
 )
+from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import LifecycleOperationNotFound, ManagedInstanceNotFound
+from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.models import (
     ContainerRuntime,
     ImagePreparation,
@@ -76,6 +78,7 @@ class Hub:
             else self.directory
         )
         self.registry = HubRegistry(self.directory)
+        self.access = HubAccess(self.registry)
         self._runtime = runtime
         self._images = images
         self._locks: dict[UUID, asyncio.Lock] = {}
@@ -131,6 +134,7 @@ class Hub:
         )
         try:
             self._validate_secret_names(secrets)
+            secrets[CONTROL_TOKEN_VARIABLE] = new_control_token()
             selection = ImageSelection(
                 revision=record.requested_revision,
                 package=record.package,

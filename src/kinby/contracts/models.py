@@ -52,8 +52,14 @@ INSTANCE_SCOPES = frozenset(
 )
 CONTROL_SCOPES = INSTANCE_SCOPES | {Scope.INSTANCE_LIFECYCLE}
 
+#: What a client authenticated against the hub holds: a hub has one user.
+HUB_SCOPES = frozenset(Scope)
+
 #: The secret a hub presents to one instance's contract server.
 ControlToken = NewType("ControlToken", str)
+
+#: The single secret the user presents to the hub's contract server.
+AccessToken = NewType("AccessToken", str)
 
 
 class ErrorCode(StrEnum):
