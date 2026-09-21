@@ -35,14 +35,15 @@ class HubAccess:
 
     def issue(self) -> AccessToken | None:
         """Generate the access token on first start. A hub that has one keeps it."""
-        if self._registry.access_token_hash() is not None:
-            return None
-        return self._store(AccessToken(token_urlsafe(_TOKEN_BYTES)))
+        token = AccessToken(token_urlsafe(_TOKEN_BYTES))
+        if self._registry.try_set_access_token_hash(_hashed(token)):
+            return token
+        return None
 
     def rotate(self) -> AccessToken:
         """Replace the access token and end every session the old one opened."""
-        token = self._store(AccessToken(token_urlsafe(_TOKEN_BYTES)))
-        self._registry.end_sessions()
+        token = AccessToken(token_urlsafe(_TOKEN_BYTES))
+        self._registry.replace_access_token_hash(_hashed(token))
         return token
 
     def accepts(self, token: AccessToken) -> bool:
@@ -52,6 +53,15 @@ class HubAccess:
             return False
         return hmac.compare_digest(stored, _hashed(token))
 
+    def login(self, token: AccessToken) -> SessionId | None:
+        """Open a session if the token is still current after rotation."""
+        if not self.accepts(token):
+            return None
+        session = SessionId(token_urlsafe(_TOKEN_BYTES))
+        if self._registry.open_session_if_current(_hashed(token), _hashed(session)):
+            return session
+        return None
+
     def open_session(self) -> SessionId:
         session = SessionId(token_urlsafe(_TOKEN_BYTES))
         self._registry.open_session(_hashed(session))
@@ -59,7 +69,3 @@ class HubAccess:
 
     def session_open(self, session: SessionId) -> bool:
         return self._registry.session_open(_hashed(session))
-
-    def _store(self, token: AccessToken) -> AccessToken:
-        self._registry.set_access_token_hash(_hashed(token))
-        return token

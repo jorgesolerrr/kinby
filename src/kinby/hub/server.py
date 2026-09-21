@@ -54,14 +54,15 @@ class HubContractServer:
             _add_web_app(application, self._web_app)
 
     async def _login(self, request: web.Request) -> web.Response:
-        if not self._access.accepts(await _submitted_token(request)):
+        session = self._access.login(await _submitted_token(request))
+        if session is None:
             raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
         response = web.json_response({"contract_version": CONTRACT_VERSION})
         response.set_cookie(
             SESSION_COOKIE,
-            self._access.open_session(),
+            session,
             httponly=True,
-            secure=True,
+            secure=_cookie_secure(request),
             samesite="Strict",
             path="/",
         )
@@ -116,3 +117,11 @@ def _same_origin(request: web.Request) -> bool:
     origin = request.headers.get("Origin")
     host = request.headers.get("Host")
     return origin is not None and host is not None and urlsplit(origin).netloc == host
+
+
+def _cookie_secure(request: web.Request) -> bool:
+    """Mark Secure on HTTPS, including a request Caddy forwarded as https."""
+    if request.secure:
+        return True
+    forwarded = request.headers.get("X-Forwarded-Proto", "")
+    return forwarded.split(",", 1)[0].strip().lower() == "https"
