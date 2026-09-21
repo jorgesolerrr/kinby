@@ -1,0 +1,5 @@
+# One public name in front of the hub. Caddy obtains and renews the certificate, and the
+# hub owns every route behind it: the web app, the contract, and the instance relay.
+{$KINBY_DOMAIN} {
+    reverse_proxy hub:8080
+}

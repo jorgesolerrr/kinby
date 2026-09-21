@@ -29,6 +29,8 @@ When the hub itself runs in a container, pass `--docker-host-directory` with the
 
 The hub serves its contract at `GET /ws` on the `--listen` address, `0.0.0.0:8080` by default. On its first start it prints an access token and never prints it again, so store it then. A client sends that token as `Authorization: Bearer <token>`. A browser posts it to `POST /auth/login` and gets a session cookie back. `uv run kinby hub .kinby/hub token rotate` replaces the token and ends open sessions. Pass `--web-app <dir>` and the hub serves the built web app from it.
 
+The hub is also the only public way to an instance. `GET /instances/{instance_id}/ws` relays a client to that instance's private contract, and `POST /instances/{instance_id}/signals/{routine}` forwards a webhook to it unchanged. `compose.hub.yaml` is the reference deployment: Caddy in front, instances on an internal network.
+
 ## Run an instance
 
 The reference deployment is Docker Compose: `compose.yaml` runs the instances under `instances/`, one container each. [`docs/container.md`](docs/container.md) has the container contract, the entrypoint, and the webhook setup for a coding instance.

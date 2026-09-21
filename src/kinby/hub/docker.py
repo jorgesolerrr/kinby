@@ -153,7 +153,11 @@ class DockerRuntime:
             spec.image,
             list(spec.command),
             name=self._name(runtime_id),
-            labels={"kinby.hub": self._hub_id, "kinby.instance": runtime_id},
+            labels={
+                "kinby.hub": self._hub_id,
+                "kinby.instance": runtime_id,
+                "kinby.port": str(spec.port),
+            },
             environment=dict(spec.env),
             mounts=mounts,
             network=self._network,
@@ -231,6 +235,19 @@ class DockerRuntime:
         if docker_state == "exited":
             return RuntimeStatus("failed", None, f"exited ({state.get('ExitCode')})")
         return RuntimeStatus("failed", None, detail)
+
+    async def address(self, instance_id: str) -> str | None:
+        """The private URL of a running instance, read from the container the hub labeled."""
+        try:
+            container = await self._container(instance_id)
+        except NotFound:
+            return None
+        await asyncio.to_thread(container.reload)
+        attributes = container.attrs or {}
+        port = container.labels.get("kinby.port")
+        if attributes.get("State", {}).get("Status") != "running" or port is None:
+            return None
+        return f"http://{self._name(instance_id)}:{port}"
 
     async def logs(
         self,

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from docker.errors import NotFound
 
 from docker import DockerClient
 from kinby.hub import (
@@ -25,8 +26,18 @@ class FakeNetworks:
         return object()
 
 
+class FakeContainer:
+    def __init__(self, status: str, labels: dict[str, str]) -> None:
+        self.attrs: dict[str, object] = {"State": {"Status": status}}
+        self.labels = labels
+
+    def reload(self) -> None:
+        return None
+
+
 class FakeContainers:
     def __init__(self) -> None:
+        self.container: FakeContainer | None = None
         self.arguments: tuple[object, object] | None = None
         self.options: dict[str, object] = {}
         self.thread_id: int | None = None
@@ -38,6 +49,11 @@ class FakeContainers:
         self.options = options
         self.thread_id = threading.get_ident()
         return object()
+
+    def get(self, name: str) -> FakeContainer:
+        if self.container is None:
+            raise NotFound(name)
+        return self.container
 
     def run(self, image: object, command: object, **options: object) -> bytes:
         self.run_arguments = (image, command)
@@ -94,6 +110,8 @@ def test_docker_runtime_translates_the_host_mount_and_offloads_creation(tmp_path
     assert client.containers.options["labels"] == {
         "kinby.hub": "hub-id",
         "kinby.instance": name.removeprefix("kinby-"),
+        # The hub reads the port back off the container when it routes to the instance.
+        "kinby.port": "8787",
     }
     mounts = client.containers.options["mounts"]
     assert isinstance(mounts, list)
@@ -264,3 +282,37 @@ def test_real_docker_runtime_labels_stopped_and_independent_instances(tmp_path):
             await asyncio.to_thread(network.remove)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("status", "labels", "expected"),
+    [
+        ("running", {"kinby.port": "8787"}, "http://kinby-abc:8787"),
+        ("exited", {"kinby.port": "8787"}, None),
+        ("running", {}, None),
+    ],
+)
+def test_the_docker_runtime_addresses_only_a_running_instance(tmp_path, status, labels, expected):
+    client = FakeDockerClient()
+    client.containers.container = FakeContainer(status, labels)
+    runtime = DockerRuntime(
+        "hub-id",
+        tmp_path,
+        tmp_path,
+        network="kinby_private",
+        client=cast(DockerClient, client),
+    )
+
+    assert asyncio.run(runtime.address("abc")) == expected
+
+
+def test_the_docker_runtime_has_no_address_for_a_container_that_is_gone(tmp_path):
+    runtime = DockerRuntime(
+        "hub-id",
+        tmp_path,
+        tmp_path,
+        network="kinby_private",
+        client=cast(DockerClient, FakeDockerClient()),
+    )
+
+    assert asyncio.run(runtime.address("abc")) is None

@@ -8,9 +8,11 @@ import pytest
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
+    CONTROL_SCOPES,
     INSTANCE_CREATE,
     INSTANCE_LIST,
     INSTANCE_LOGS,
+    INSTANCE_SCOPES,
     INSTANCE_START,
     INSTANCE_STATUS,
     OPERATION_GET,
@@ -74,6 +76,7 @@ class FakeRuntime:
         self.created: list[InstanceSpec] = []
         self.started: list[str] = []
         self.states: dict[str, RuntimeStatus] = {}
+        self.addresses: dict[str, str] = {}
         self.log_output = b"booted\n"
 
     async def create(self, spec: InstanceSpec) -> None:
@@ -92,6 +95,11 @@ class FakeRuntime:
 
     async def status(self, instance_id: str) -> RuntimeStatus:
         return self.states.get(instance_id, RuntimeStatus("absent", None))
+
+    async def address(self, instance_id: str) -> str | None:
+        if self.states.get(instance_id, RuntimeStatus("absent", None)).state != "running":
+            return None
+        return self.addresses.get(instance_id)
 
     async def logs(
         self,
@@ -131,6 +139,20 @@ class SerialRuntime(FakeRuntime):
 class UnavailableRuntime(FakeRuntime):
     async def status(self, instance_id: str) -> RuntimeStatus:
         raise ConnectionError("Docker daemon unavailable")
+
+
+class HeldRuntime(FakeRuntime):
+    """Hold a start until the test releases it, so an operation stays in flight."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.holding = asyncio.Event()
+        self.released = asyncio.Event()
+
+    async def start(self, instance_id: str) -> None:
+        self.holding.set()
+        await self.released.wait()
+        await super().start(instance_id)
 
 
 def _client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
@@ -753,3 +775,120 @@ def test_retained_writable_bind_rejects_an_overlapping_path_alias(tmp_path):
             )
 
     asyncio.run(scenario())
+
+
+def test_an_operation_reports_every_step_it_ran(tmp_path):
+    async def scenario() -> None:
+        hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+
+        outcome = await _operation(client, created)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert [(step.name, step.state) for step in outcome.steps] == [
+            ("configure", OperationState.SUCCEEDED),
+            ("image", OperationState.SUCCEEDED),
+            ("container", OperationState.SUCCEEDED),
+        ]
+        assert outcome.steps[-1].detail == "Instance prepared and stopped."
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_operation_marks_the_step_that_failed(tmp_path):
+    async def scenario() -> None:
+        hub = Hub(
+            tmp_path / "hub",
+            runtime=FakeRuntime(),
+            images=FakeImages(failure="no such revision"),
+        )
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+
+        outcome = await _operation(client, created)
+
+        assert outcome.state is OperationState.FAILED
+        assert [(step.name, step.state) for step in outcome.steps] == [
+            ("configure", OperationState.SUCCEEDED),
+            ("image", OperationState.FAILED),
+        ]
+        assert outcome.steps[-1].detail == "no such revision"
+
+    asyncio.run(scenario())
+
+
+def test_status_carries_the_operation_a_client_lost_the_response_to(tmp_path):
+    async def scenario() -> None:
+        runtime = HeldRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _operation(client, created)).state is OperationState.SUCCEEDED
+
+        started = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        await asyncio.wait_for(runtime.holding.wait(), timeout=5)
+        during = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+        runtime.released.set()
+        assert (await _operation(client, started)).state is OperationState.SUCCEEDED
+        after = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+
+        assert not isinstance(during, ErrorEnvelope)
+        assert during.active_operation_id == started.operation_id
+        assert not isinstance(after, ErrorEnvelope)
+        assert after.active_operation_id is None
+
+    asyncio.run(scenario())
+
+
+def test_hub_reads_and_mutations_ask_for_different_scopes(tmp_path):
+    async def scenario() -> None:
+        hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
+        reader = _client(hub, {Scope.HUB_READ})
+        agent = _client(hub, set(INSTANCE_SCOPES) | set(CONTROL_SCOPES))
+
+        listed = await reader.call(INSTANCE_LIST, InstanceListCommand())
+        refused = await reader.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+        )
+        unreachable = await agent.call(INSTANCE_LIST, InstanceListCommand())
+
+        assert not isinstance(listed, ErrorEnvelope)
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.PERMISSION_DENIED
+        assert isinstance(unreachable, ErrorEnvelope)
+        assert unreachable.code is ErrorCode.PERMISSION_DENIED
+
+    asyncio.run(scenario())
+
+
+def test_no_scope_an_instance_grants_carries_hub_authority():
+    hub_scopes = {Scope.HUB_READ, Scope.HUB_ADMIN}
+
+    assert INSTANCE_SCOPES & hub_scopes == set()
+    assert CONTROL_SCOPES & hub_scopes == set()
+    assert {INSTANCE_LIST.scope, INSTANCE_STATUS.scope, INSTANCE_LOGS.scope} == {Scope.HUB_READ}
+    assert {INSTANCE_CREATE.scope, INSTANCE_START.scope} == {Scope.HUB_ADMIN}

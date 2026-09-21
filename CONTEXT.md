@@ -335,6 +335,10 @@ _Avoid_: auth cookie, login token
 
 The secret a **hub** presents to one **instance**'s **contract server**. Each instance has its own. It reaches that instance only, and grants no hub **scope**.
 
+### Signal alias
+
+The **hub**'s record of which managed **instance** answers the public **signal** path, so a webhook registered before the hub existed keeps its URL after adoption. At most one instance holds it.
+
 ### Package
 
 A reusable starting configuration for an **instance**, together with the **plugins** and **routine** implementations that support it. An instance starts from at most one package and retains its own editable configuration when that package updates.

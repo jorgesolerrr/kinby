@@ -627,6 +627,8 @@ class InstanceStatusResult(ContractModel):
     process: ProcessState
     readiness: Readiness
     detail: str = ""
+    #: The lifecycle operation still running, so a client that lost its response finds it again.
+    active_operation_id: UUID | None = None
 
 
 class InstanceLogsResult(ContractModel):
@@ -646,12 +648,21 @@ class OperationState(StrEnum):
     FAILED = "failed"
 
 
+class OperationStep(ContractModel):
+    """One named stage of a lifecycle operation, in the order the hub ran it."""
+
+    name: str
+    state: OperationState
+    detail: str
+
+
 class OperationGetResult(ContractModel):
     operation_id: UUID
     instance_id: UUID
     kind: OperationKind
     state: OperationState
     detail: str
+    steps: list[OperationStep] = Field(default_factory=list)
 
 
 class UsageGetCommand(ContractModel):

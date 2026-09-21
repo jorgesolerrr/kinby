@@ -18,6 +18,7 @@ from kinby.contracts import (
     INSTANCE_START,
     INSTANCE_STATUS,
     OPERATION_GET,
+    ControlToken,
     InstanceCreateCommand,
     InstanceListCommand,
     InstanceListResult,
@@ -45,7 +46,9 @@ from kinby.hub.models import (
     ContainerRuntime,
     ImagePreparation,
     ImageSelection,
+    InstanceEndpoint,
     InstanceSpec,
+    InstanceUnreachable,
     PreparedImage,
     RuntimeStatus,
 )
@@ -127,9 +130,9 @@ class Hub:
         secrets: dict[str, str],
     ) -> None:
         staging = record.path.with_name(f"{record.path.name}.creating")
-        self.registry.update_operation(
+        self.registry.advance_operation(
             operation_id,
-            OperationState.RUNNING,
+            "configure",
             "Preparing instance configuration.",
         )
         try:
@@ -144,11 +147,7 @@ class Hub:
                 self._write_configuration(staging, record.manifest_id, record.persona_name)
                 self._write_secrets(staging, secrets)
                 inspect_instance(staging)
-            self.registry.update_operation(
-                operation_id,
-                OperationState.RUNNING,
-                "Preparing selected image.",
-            )
+            self.registry.advance_operation(operation_id, "image", "Preparing selected image.")
             prepared = await self._images.prepare(selection)
             package = self._package(prepared, selection, secrets)
             if package is not None:
@@ -162,6 +161,11 @@ class Hub:
             staging.replace(record.path)
             storage = self._storage(record.instance_id, record.path)
             self.registry.record_preparation(record.instance_id, artifact, storage)
+            self.registry.advance_operation(
+                operation_id,
+                "container",
+                "Creating the instance container.",
+            )
             environment = self._environment(record.path)
             await self._runtime.create(
                 InstanceSpec(
@@ -172,7 +176,7 @@ class Hub:
                 )
             )
             self.registry.mark_prepared(record.instance_id)
-            self.registry.update_operation(
+            self.registry.finish_operation(
                 operation_id,
                 OperationState.SUCCEEDED,
                 "Instance prepared and stopped.",
@@ -180,7 +184,7 @@ class Hub:
         except Exception as exc:
             if staging.exists():
                 shutil.rmtree(staging)
-            self.registry.update_operation(
+            self.registry.finish_operation(
                 operation_id,
                 OperationState.FAILED,
                 self._redact(str(exc) or type(exc).__name__, secrets.values()),
@@ -206,22 +210,18 @@ class Hub:
         async with lock:
             record = self._prepared_instance(instance_id)
             secrets = self._environment(record.path).values()
-            self.registry.update_operation(
-                operation_id,
-                OperationState.RUNNING,
-                "Starting selected image.",
-            )
+            self.registry.advance_operation(operation_id, "start", "Starting selected image.")
             self.registry.set_intended_state(instance_id, IntendedState.RUNNING)
             try:
                 await self._runtime.start(record.runtime_id)
             except Exception as exc:
-                self.registry.update_operation(
+                self.registry.finish_operation(
                     operation_id,
                     OperationState.FAILED,
                     self._redact(str(exc) or type(exc).__name__, secrets),
                 )
                 return
-            self.registry.update_operation(
+            self.registry.finish_operation(
                 operation_id,
                 OperationState.SUCCEEDED,
                 "Instance started.",
@@ -232,6 +232,7 @@ class Hub:
 
     async def status(self, command: InstanceStatusCommand) -> InstanceStatusResult:
         record = self._prepared_instance(command.instance_id)
+        active = self.registry.active_operation(record.instance_id)
         try:
             status = await self._runtime.status(record.runtime_id)
         except Exception as exc:
@@ -243,6 +244,7 @@ class Hub:
                     str(exc) or type(exc).__name__,
                     self._environment(record.path).values(),
                 ),
+                active_operation_id=active,
             )
         process, readiness = self._status(status)
         return InstanceStatusResult(
@@ -250,6 +252,7 @@ class Hub:
             process=process,
             readiness=readiness,
             detail=self._redact(status.detail, self._environment(record.path).values()),
+            active_operation_id=active,
         )
 
     async def logs(self, command: InstanceLogsCommand) -> InstanceLogsResult:
@@ -267,6 +270,27 @@ class Hub:
             instance_id=record.instance_id,
             text=self._redact(text, self._environment(record.path).values()),
         )
+
+    async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable:
+        """Answer where a public route may reach one instance, and with which control token."""
+        record = self.registry.instance(instance_id)
+        if record is None or not record.prepared:
+            return InstanceUnreachable.MISSING
+        try:
+            address = await self._runtime.address(record.runtime_id)
+        except Exception:
+            return InstanceUnreachable.UNAVAILABLE
+        token = self._environment(record.path).get(CONTROL_TOKEN_VARIABLE)
+        if address is None or not token:
+            return InstanceUnreachable.UNAVAILABLE
+        return InstanceEndpoint(url=address, control_token=ControlToken(token))
+
+    async def signal_endpoint(self) -> InstanceEndpoint | InstanceUnreachable:
+        """Reach the instance that kept the public webhook URL it was registered with."""
+        alias = self.registry.signal_alias()
+        if alias is None:
+            return InstanceUnreachable.MISSING
+        return await self.endpoint(alias)
 
     async def operation(self, command: OperationGetCommand) -> OperationGetResult:
         result = self.registry.operation(command.operation_id)
