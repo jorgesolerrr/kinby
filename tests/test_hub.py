@@ -1219,6 +1219,41 @@ def test_a_start_requested_during_a_pending_stop_waits_for_it(tmp_path):
     asyncio.run(scenario())
 
 
+def test_status_names_the_running_stop_while_a_start_is_queued(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(holds=True)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopping = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopping, LifecycleOperationResult)
+        await asyncio.wait_for(control.asked.wait(), timeout=5)
+        starting = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(starting, LifecycleOperationResult)
+        await asyncio.sleep(0)
+        status = await client.call(
+            INSTANCE_STATUS,
+            InstanceStatusCommand(instance_id=created.instance_id),
+        )
+        control.release.set()
+        assert (await operation_outcome(client, stopping)).state is OperationState.SUCCEEDED
+        assert (await operation_outcome(client, starting)).state is OperationState.SUCCEEDED
+
+        assert not isinstance(status, ErrorEnvelope)
+        assert status.active_operation_id == stopping.operation_id
+        assert status.active_operation_id != starting.operation_id
+
+    asyncio.run(scenario())
+
+
 def test_a_control_socket_that_closes_after_the_drain_is_sent_is_a_lost_connection():
     async def scenario() -> None:
         async with _control_server(_close_after_call) as endpoint:

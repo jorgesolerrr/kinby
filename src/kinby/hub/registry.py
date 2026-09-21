@@ -339,15 +339,25 @@ class HubRegistry:
         )
 
     def active_operation(self, instance_id: UUID) -> UUID | None:
-        """The operation still changing this instance, for a client that lost its connection."""
+        """The operation still changing this instance, for a client that lost its connection.
+
+        A queued start sits behind the stop that holds the instance. The running row is
+        that stop; the oldest queued row is only the answer when nothing is running yet.
+        """
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT id FROM operations
                 WHERE instance_id = ? AND state IN (?, ?)
-                ORDER BY rowid DESC LIMIT 1
+                ORDER BY CASE state WHEN ? THEN 0 ELSE 1 END, rowid
+                LIMIT 1
                 """,
-                (str(instance_id), OperationState.PENDING.value, OperationState.RUNNING.value),
+                (
+                    str(instance_id),
+                    OperationState.PENDING.value,
+                    OperationState.RUNNING.value,
+                    OperationState.RUNNING.value,
+                ),
             ).fetchone()
         return UUID(row[0]) if row is not None else None
 
