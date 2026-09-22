@@ -49,11 +49,11 @@ def _coder_copy(
     if client == "codex":
         content = content.replace('"implementer_client":"claude"', '"implementer_client":"codex"')
         content = content.replace(
-            '"implementer_model":"claude-opus-5"', '"implementer_model":"gpt-5.6-sol"'
+            '"implementer_model":"claude-opus-5-5"', '"implementer_model":"gpt-5.6-sol"'
         )
     elif client == "default":
         content = content.replace('"implementer_client":"claude",', "")
-        content = content.replace('"implementer_model":"claude-opus-5",', "")
+        content = content.replace('"implementer_model":"claude-opus-5-5",', "")
     arguments = (
         f',"review_round_limit":{review_round_limit}' if review_round_limit is not None else ""
     )

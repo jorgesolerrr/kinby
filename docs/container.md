@@ -107,7 +107,7 @@ The `coder` instance listens on `127.0.0.1:8787`. Its two GitHub routines use se
 
 Relevant deliveries start a scan, and each routine's hourly schedule catches missed deliveries.
 
-The implementation routine uses Claude Code with `claude-opus-5` and high effort.
+The implementation routine uses Claude Code with `claude-opus-5-5` and high effort.
 It uses the subscription login, excluding `ANTHROPIC_API_KEY` from the coding client's
 environment. A failed repository check gets one repair attempt in the same Claude
 session. The pipeline report records the coding run under `implementation`, including

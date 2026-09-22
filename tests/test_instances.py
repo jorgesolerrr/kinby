@@ -64,7 +64,7 @@ def test_coder_instance_loads_its_routines_and_skills(
     assert implement.schedule == "0 * * * *"
     assert implement.arguments == {
         "implementer_client": "claude",
-        "implementer_model": "claude-opus-5",
+        "implementer_model": "claude-opus-5-5",
         "implementer_effort": "high",
         "reviewer_model": "claude-fable-5-1",
         "review_round_limit": 0,
