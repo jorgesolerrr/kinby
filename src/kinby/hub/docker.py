@@ -15,7 +15,8 @@ from docker.models.networks import Network
 from docker.types import Mount
 
 import docker
-from kinby.hub.models import BuildResult, InstanceSpec, RuntimeStatus
+from kinby.contracts import ContainerOwner, StorageItem, StorageKind
+from kinby.hub.models import BuildResult, ContainerDescription, InstanceSpec, RuntimeStatus
 from kinby.packages import InstalledPackage, installed_package_from_json
 
 _FROM = re.compile(r"^(FROM\s+)(\S+)(.*)$", re.MULTILINE | re.IGNORECASE)
@@ -107,54 +108,33 @@ class DockerRuntime:
     def __init__(
         self,
         hub_id: str,
-        hub_directory: Path,
-        docker_host_directory: Path,
         *,
         network: str,
         client: docker.DockerClient | None = None,
     ) -> None:
         self._hub_id = hub_id
-        self._hub_directory = Path(hub_directory).resolve()
-        self._docker_host_directory = Path(docker_host_directory).resolve()
         self._network = network
         self._client = client or docker.from_env()
         self._network_lock = asyncio.Lock()
 
-    def _name(self, instance_id: str) -> str:
-        return f"kinby-{instance_id}"
-
-    def _instance_source(self, instance_id: str) -> str:
-        local = (self._hub_directory / "instances" / instance_id).resolve()
-        instances = (self._hub_directory / "instances").resolve()
-        if local.parent != instances:
-            raise ValueError("Instance identity does not map to one hub instance directory.")
-        return str(self._docker_host_directory / "instances" / instance_id)
-
     async def create(self, spec: InstanceSpec) -> None:
+        """Mount exactly the storage inventory the hub recorded, and nothing it did not."""
         runtime_id = spec.instance_id
         await self._ensure_network()
         mounts = [
             Mount(
-                target="/instance",
-                source=self._instance_source(runtime_id),
-                type="bind",
-            ),
-            Mount(
-                target="/instance/workspace",
-                source=f"kinby-{runtime_id}-workspace",
-                type="volume",
-            ),
-            Mount(
-                target="/root/.codex",
-                source=f"kinby-{runtime_id}-codex",
-                type="volume",
-            ),
+                target=item.destination,
+                source=item.source,
+                type=item.kind.value,
+                read_only=not item.writable,
+            )
+            for item in spec.storage
         ]
         await asyncio.to_thread(
             self._client.containers.create,
             spec.image,
             list(spec.command),
-            name=self._name(runtime_id),
+            name=runtime_id,
             labels={
                 "kinby.hub": self._hub_id,
                 "kinby.instance": runtime_id,
@@ -273,18 +253,50 @@ class DockerRuntime:
         await asyncio.to_thread(container.stop, timeout=grace_seconds)
 
     async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
+        """Remove the container. Its named volumes go only when the caller asks for the data."""
+        described = await self.describe(instance_id)
         container = await self._container(instance_id)
         await asyncio.to_thread(container.remove, v=True)
-        if delete_data:
-            for suffix in ("workspace", "codex"):
-                try:
-                    volume = await asyncio.to_thread(
-                        self._client.volumes.get,
-                        f"kinby-{instance_id}-{suffix}",
-                    )
-                except NotFound:
-                    continue
-                await asyncio.to_thread(volume.remove)
+        if not delete_data or described is None:
+            return
+        for item in described.storage:
+            if item.kind is not StorageKind.VOLUME:
+                continue
+            try:
+                volume = await asyncio.to_thread(self._client.volumes.get, item.source)
+            except NotFound:
+                continue
+            await asyncio.to_thread(volume.remove)
+
+    async def describe(self, instance_id: str) -> ContainerDescription | None:
+        """Read one existing container: its image, the storage it mounts, and who manages it."""
+        try:
+            container = await self._container(instance_id)
+        except NotFound:
+            return None
+        await asyncio.to_thread(container.reload)
+        attributes = container.attrs or {}
+        labels = container.labels or {}
+        owner, owner_name = self._owner(labels)
+        return ContainerDescription(
+            runtime_id=instance_id,
+            image=str(attributes.get("Image", "")),
+            owner=owner,
+            owner_name=owner_name,
+            storage=_mounted(attributes),
+        )
+
+    def _owner(self, labels: dict[str, str]) -> tuple[ContainerOwner, str]:
+        """Who manages this container, by the label its manager left on it."""
+        hub = labels.get("kinby.hub")
+        if hub == self._hub_id:
+            return ContainerOwner.HUB, hub
+        if hub is not None:
+            return ContainerOwner.OTHER_HUB, hub
+        compose = labels.get("com.docker.compose.project")
+        if compose is not None:
+            return ContainerOwner.COMPOSE, compose
+        return ContainerOwner.UNMANAGED, ""
 
     async def status(self, instance_id: str) -> RuntimeStatus:
         try:
@@ -329,7 +341,7 @@ class DockerRuntime:
             return None
         # Containers created before this label existed listen on the spec default.
         port = container.labels.get("kinby.port", str(InstanceSpec.port))
-        return f"http://{self._name(instance_id)}:{port}"
+        return f"http://{instance_id}:{port}"
 
     async def logs(
         self,
@@ -375,7 +387,24 @@ class DockerRuntime:
         )
 
     async def _container(self, instance_id: str) -> Container:
-        return await asyncio.to_thread(self._client.containers.get, self._name(instance_id))
+        return await asyncio.to_thread(self._client.containers.get, instance_id)
+
+
+def _mounted(attributes: dict[str, object]) -> tuple[StorageItem, ...]:
+    """What the container actually mounts: bind sources are the Docker host's own paths."""
+    mounts = attributes.get("Mounts")
+    if not isinstance(mounts, list):
+        return ()
+    return tuple(
+        StorageItem(
+            kind=StorageKind.VOLUME if mount.get("Type") == "volume" else StorageKind.BIND,
+            source=str(mount.get("Name") or mount.get("Source", "")),
+            destination=str(mount.get("Destination", "")),
+            writable=bool(mount.get("RW", False)),
+        )
+        for mount in mounts
+        if isinstance(mount, dict) and mount.get("Type") in {"volume", "bind"}
+    )
 
 
 def _is_internal(network: Network | None) -> bool:

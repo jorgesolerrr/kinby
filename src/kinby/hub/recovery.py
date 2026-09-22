@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
-from kinby.contracts import IntendedState, OperationState
+from kinby.contracts import IntendedState, OperationKind, OperationState
 from kinby.hub.models import (
     ContainerRuntime,
     LifecycleRecovery,
@@ -62,7 +62,7 @@ async def _recover(
         return _at(
             record,
             RecoveredState.CONFLICTED,
-            f'Storage source "{conflict.source}" is owned by another instance.',
+            f'Storage source "{conflict.item.source}" is owned by instance {conflict.owner}.',
         )
     try:
         status = await runtime.status(record.runtime_id)
@@ -73,7 +73,7 @@ async def _recover(
             f"The container runtime could not be reached: {exc or type(exc).__name__}",
         )
     if not record.prepared:
-        return _finish_create(record, registry, status)
+        return await _unclaimed(record, registry, runtime, status)
     if status.state == "absent":
         return _at(
             record,
@@ -102,6 +102,41 @@ def _running(record: ManagedInstance, status: RuntimeStatus) -> RecoveredInstanc
             "Stop it again to take it down.",
         )
     return _at(record, RecoveredState.RUNNING, "The container is still running.")
+
+
+async def _unclaimed(
+    record: ManagedInstance,
+    registry: HubRegistry,
+    runtime: ContainerRuntime,
+    status: RuntimeStatus,
+) -> RecoveredInstance:
+    """An instance the hub never finished taking on. What that means depends on how it began."""
+    last = registry.last_operation(record.instance_id)
+    if last is not None and last.kind is OperationKind.ADOPT:
+        return await _unfinished_handoff(record, runtime)
+    return _finish_create(record, registry, status)
+
+
+async def _unfinished_handoff(
+    record: ManagedInstance,
+    runtime: ContainerRuntime,
+) -> RecoveredInstance:
+    """Ownership never moved, so say who holds the data instead of guessing that it is ours."""
+    described = await runtime.describe(record.runtime_id)
+    if described is None:
+        return _at(
+            record,
+            RecoveredState.INCOMPLETE,
+            f'The handoff did not take ownership, and container "{record.runtime_id}" is gone. '
+            "Adopt the instance again from the container that runs it.",
+        )
+    return _at(
+        record,
+        RecoveredState.INCOMPLETE,
+        f"The handoff did not take ownership: {described.owner.value} "
+        f'"{described.owner_name}" still holds container "{record.runtime_id}". '
+        "Adopt the instance again.",
+    )
 
 
 def _finish_create(

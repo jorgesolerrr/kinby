@@ -9,6 +9,9 @@ from kinby.contracts.models import (
     AcceptedResult,
     ContractModel,
     Event,
+    InstanceAdoptCommand,
+    InstanceAdoptPreviewCommand,
+    InstanceAdoptPreviewResult,
     InstanceCreateCommand,
     InstanceDrainCommand,
     InstanceDrainResult,
@@ -154,6 +157,15 @@ INSTANCE_RECREATE = Method(
 INSTANCE_SECRETS_SET = Method(
     "instance.secrets.set", Scope.HUB_ADMIN, InstanceSecretsSetCommand, LifecycleOperationResult
 )
+INSTANCE_ADOPT_PREVIEW = Method(
+    "instance.adopt.preview",
+    Scope.HUB_READ,
+    InstanceAdoptPreviewCommand,
+    InstanceAdoptPreviewResult,
+)
+INSTANCE_ADOPT = Method(
+    "instance.adopt", Scope.HUB_ADMIN, InstanceAdoptCommand, LifecycleOperationResult
+)
 INSTANCE_LIST = Method("instance.list", Scope.HUB_READ, InstanceListCommand, InstanceListResult)
 INSTANCE_STATUS = Method(
     "instance.status", Scope.HUB_READ, InstanceStatusCommand, InstanceStatusResult
@@ -185,6 +197,8 @@ _METHODS = (
     INSTANCE_STOP,
     INSTANCE_RECREATE,
     INSTANCE_SECRETS_SET,
+    INSTANCE_ADOPT_PREVIEW,
+    INSTANCE_ADOPT,
     INSTANCE_LIST,
     INSTANCE_STATUS,
     INSTANCE_LOGS,

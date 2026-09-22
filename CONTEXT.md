@@ -119,6 +119,18 @@ _Avoid_: rebuild, restart, update
 What the **hub** does with each managed **instance** when it opens its directory: it reads the **instance registry** and the containers labeled as its own, then restores the intended running or stopped state of the containers that are still there. It reports everything else — a missing container, an unfinished **lifecycle operation**, a container it does not own — and changes nothing.
 _Avoid_: reconciliation, adoption, self-healing
 
+### Adoption
+
+The **lifecycle operation** that puts an existing **instance** under a **hub** without moving its data. The hub keeps the instance's manifest id, persona name, bind locations and named volumes exactly where they are, gives it a **hub instance ID**, and replaces its container with one it labels itself. The previous manager relinquishes control first, and the hub rewrites no Compose file.
+
+### Adoption preflight
+
+The read-only preview of an **adoption**: the identity, directories, **storage inventory**, image and current container owner the hub observed, what the handoff will cost, the steps the operator takes first, and every **adoption finding** that would stop it. It changes nothing, so it can be run as often as the operator likes.
+
+### Adoption finding
+
+One thing an **adoption preflight** observed about an instance and its container, such as a manager that has not let go, a runtime that cannot drain, or storage another record already owns. A blocking finding stops the handoff; the rest are there to be read.
+
 ### Image artifact
 
 An immutable container image together with the resolved source revision, dependency identity, and base-image identities that produced it. An instance keeps its selected image artifact until an explicit lifecycle operation changes it.

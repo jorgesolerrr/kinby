@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 from uuid import UUID
 
-from kinby.contracts import ControlToken, PackageSelection
+from kinby.contracts import ContainerOwner, ControlToken, PackageSelection, StorageItem
 from kinby.packages import InstalledPackage
 
 
@@ -19,11 +19,11 @@ class InstanceSpec:
 
     instance_id: str
     image: str
+    #: Exactly what the container mounts. The hub owns this inventory; the runtime obeys it.
+    storage: tuple[StorageItem, ...] = ()
     command: Sequence[str] = ("serve",)
     env: Mapping[str, str] = field(default_factory=dict)
     port: int = 8787
-    files: Mapping[str, str] = field(default_factory=dict)
-    public_host: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,8 +59,26 @@ class RuntimeStatus:
     detail: str = ""
 
 
+@dataclass(frozen=True)
+class ContainerDescription:
+    """What one existing container carries, read without changing it.
+
+    Adoption reads its storage here rather than deriving it from the instance's
+    manifest: only the container knows which host directories and named volumes
+    it actually mounts, and which of them it may write.
+    """
+
+    runtime_id: str
+    image: str
+    owner: ContainerOwner
+    owner_name: str
+    storage: tuple[StorageItem, ...]
+
+
 class ContainerRuntime(Protocol):
     async def create(self, spec: InstanceSpec) -> None: ...
+
+    async def describe(self, instance_id: str) -> ContainerDescription | None: ...
 
     async def start(self, instance_id: str) -> None: ...
 

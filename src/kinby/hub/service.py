@@ -16,6 +16,8 @@ from uuid import UUID, uuid4
 from dotenv import dotenv_values
 
 from kinby.contracts import (
+    INSTANCE_ADOPT,
+    INSTANCE_ADOPT_PREVIEW,
     INSTANCE_CREATE,
     INSTANCE_LIST,
     INSTANCE_LOGS,
@@ -28,6 +30,9 @@ from kinby.contracts import (
     Capability,
     ControlToken,
     DrainState,
+    InstanceAdoptCommand,
+    InstanceAdoptPreviewCommand,
+    InstanceAdoptPreviewResult,
     InstanceCreateCommand,
     InstanceListCommand,
     InstanceListResult,
@@ -53,11 +58,13 @@ from kinby.contracts import (
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import (
+    AdoptionBlocked,
     LifecycleOperationInFlight,
     LifecycleOperationNotFound,
     ManagedInstanceNotFound,
 )
 from kinby.hub.access import HubAccess, new_control_token
+from kinby.hub.adoption import blocker, preflight
 from kinby.hub.control import (
     ControlConnectionLost,
     ControlEndpoint,
@@ -163,6 +170,8 @@ class Hub:
             self.dispatcher.register(INSTANCE_STOP, self.stop)
             self.dispatcher.register(INSTANCE_RECREATE, self.recreate)
             self.dispatcher.register(INSTANCE_SECRETS_SET, self.set_secrets)
+            self.dispatcher.register(INSTANCE_ADOPT_PREVIEW, self.adopt_preview)
+            self.dispatcher.register(INSTANCE_ADOPT, self.adopt)
             self.dispatcher.register(INSTANCE_LIST, self.list)
             self.dispatcher.register(INSTANCE_STATUS, self.status)
             self.dispatcher.register(INSTANCE_LOGS, self.logs)
@@ -252,6 +261,7 @@ class Hub:
                 InstanceSpec(
                     instance_id=record.runtime_id,
                     image=artifact.image_id,
+                    storage=storage,
                     env=environment,
                     port=_INSTANCE_PORT,
                 )
@@ -391,6 +401,136 @@ class Hub:
             instance_id=record.instance_id,
         )
 
+    async def adopt_preview(
+        self,
+        command: InstanceAdoptPreviewCommand,
+    ) -> InstanceAdoptPreviewResult:
+        """Preview a handoff: what the hub would take over, and what stands in the way."""
+        return await preflight(command, self.registry, self._runtime, self._control)
+
+    async def adopt(self, command: InstanceAdoptCommand) -> LifecycleOperationResult:
+        """Take an existing instance over, preserving its identity, storage and webhook URL."""
+        preview = await preflight(command, self.registry, self._runtime, self._control)
+        stopped = blocker(preview)
+        if stopped is not None:
+            raise AdoptionBlocked(f"This instance was not adopted. {stopped.detail}")
+        active = self.registry.active_operation(preview.instance_id)
+        if active is not None:
+            raise LifecycleOperationInFlight(
+                f'Lifecycle operation "{active}" is still running for this instance.'
+            )
+        record = ManagedInstance(
+            instance_id=preview.instance_id,
+            path=preview.path,
+            manifest_id=preview.manifest_id,
+            persona_name=preview.persona_name,
+            requested_revision="",
+            source_revision=None,
+            image_id=preview.image_id,
+            intended_state=await self._observed_state(preview.runtime_id),
+            runtime_id=preview.runtime_id,
+            prepared=False,
+            storage=tuple(preview.storage),
+        )
+        operation_id = uuid4()
+        self.registry.begin_adoption(record, operation_id)
+        self._schedule(self._adopt(operation_id, record, command))
+        return LifecycleOperationResult(
+            operation_id=operation_id,
+            instance_id=record.instance_id,
+        )
+
+    async def _observed_state(self, runtime_id: str) -> IntendedState:
+        """The state the instance is in now becomes the state the hub keeps it in."""
+        running = (await self._runtime.status(runtime_id)).state not in _RUNTIME_STOPPED
+        return IntendedState.RUNNING if running else IntendedState.STOPPED
+
+    async def _adopt(
+        self,
+        operation_id: UUID,
+        record: ManagedInstance,
+        command: InstanceAdoptCommand,
+    ) -> None:
+        try:
+            async with self._locks.setdefault(record.instance_id, asyncio.Lock()):
+                try:
+                    await self._hand_over(operation_id, record, command)
+                except Exception as exc:
+                    self._fail(operation_id, record, str(exc) or type(exc).__name__)
+                    return
+                self.registry.finish_operation(
+                    operation_id,
+                    OperationState.SUCCEEDED,
+                    "The hub owns this instance.",
+                )
+        except asyncio.CancelledError:
+            self._fail_if_unfinished(operation_id)
+            raise
+
+    async def _hand_over(
+        self,
+        operation_id: UUID,
+        record: ManagedInstance,
+        command: InstanceAdoptCommand,
+    ) -> None:
+        """Take the previous runtime down, then bring the same storage up under this hub.
+
+        Ownership moves in one recorded step, once the previous runtime is down and
+        before its container goes. From there on the data is this hub's, so an
+        interruption leaves a missing container rather than an unclaimed instance.
+        """
+        await self._relinquish(operation_id, record, command)
+        self._record(operation_id, "configure", "Writing this hub's control token beside it.")
+        self._replace_secrets(record.path, {CONTROL_TOKEN_VARIABLE: new_control_token()})
+        self._record(operation_id, "claim", "The previous runtime is down. The hub owns this now.")
+        self.registry.mark_prepared(record.instance_id)
+        self._record(operation_id, "remove", "Removing the previous container, keeping storage.")
+        await self._runtime.remove(record.runtime_id)
+        self._record(operation_id, "create", "Creating the container under this hub.")
+        await self._runtime.create(
+            InstanceSpec(
+                instance_id=record.runtime_id,
+                image=record.image_id or "",
+                storage=record.storage,
+                env=self._environment(record.path),
+                port=_INSTANCE_PORT,
+            )
+        )
+        if record.intended_state is IntendedState.RUNNING:
+            self._record(operation_id, "start", "Starting the instance the hub now owns.")
+            await self._runtime.start(record.runtime_id)
+        if command.claim_signals:
+            self._record(operation_id, "signals", "Keeping the established webhook URL here.")
+            self.registry.set_signal_alias(record.instance_id)
+
+    async def _relinquish(
+        self,
+        operation_id: UUID,
+        record: ManagedInstance,
+        command: InstanceAdoptCommand,
+    ) -> None:
+        """Stop the previous runtime. It drains when it can, and is interrupted when it cannot.
+
+        The preflight already settled which of those the operator gets, so a graceful
+        handoff never quietly becomes the interrupting one.
+        """
+        if (await self._runtime.status(record.runtime_id)).state in _RUNTIME_STOPPED:
+            self._record(operation_id, "stopped", "The previous runtime was already stopped.")
+            return
+        self._record(operation_id, "probe", "Checking the previous runtime's endpoint.")
+        endpoint = await self._probe_endpoint(record)
+        probed = await self._control.probe(endpoint)
+        if Capability.DRAIN in probed.capabilities:
+            await self._take_down(record, PendingStop(operation_id, asyncio.Event()))
+            return
+        if not command.acknowledge_interrupting_stop:
+            raise IncompatibleLifecycleEndpoint(
+                "The previous runtime can no longer drain, and the interrupting stop was not "
+                "acknowledged, so it was left running."
+            )
+        self._record(operation_id, "interrupt", "The previous runtime cannot drain. Stopping it.")
+        await self._halt_container(record.runtime_id)
+
     async def recreate(self, command: InstanceRecreateCommand) -> LifecycleOperationResult:
         """Replace this instance's container from the image and secrets already recorded for it."""
         record = self._prepared_instance(command.instance_id)
@@ -442,6 +582,7 @@ class Hub:
             InstanceSpec(
                 instance_id=record.runtime_id,
                 image=image,
+                storage=record.storage,
                 env=self._environment(record.path),
                 port=_INSTANCE_PORT,
             )
@@ -461,7 +602,7 @@ class Hub:
         conflict = self.registry.conflicting_storage(record.instance_id, record.storage)
         if conflict is not None:
             raise ValueError(
-                f'Storage source "{conflict.source}" is owned by another instance, '
+                f'Storage source "{conflict.item.source}" is owned by another instance, '
                 "so this container was not replaced."
             )
         if not record.image_id:
@@ -494,14 +635,19 @@ class Hub:
         if (await self._runtime.status(record.runtime_id)).state in _RUNTIME_STOPPED:
             return "Instance was already stopped."
         self._record(operation_id, "probe", "Checking the instance's lifecycle endpoint.")
-        endpoint = await self._endpoint(record)
-        probed = await self._control.probe(endpoint)
+        probed = await self._control.probe(await self._endpoint(record))
         if Capability.DRAIN not in probed.capabilities:
             raise IncompatibleLifecycleEndpoint(
                 "The instance's lifecycle endpoint cannot drain, so it was left running. "
                 "Update the instance before stopping it."
             )
-        state = await self._drain(operation_id, endpoint, pending)
+        await self._take_down(record, pending)
+        return "Instance stopped."
+
+    async def _take_down(self, record: ManagedInstance, pending: PendingStop) -> None:
+        """Wait for the instance's own drain, then take its container down and watch it go."""
+        operation_id = pending.operation_id
+        state = await self._drain(operation_id, await self._endpoint(record), pending)
         self._record(
             operation_id,
             "result",
@@ -509,10 +655,13 @@ class Hub:
             if state is not None
             else "The instance did not report its drain. Terminating the container.",
         )
-        await self._runtime.stop(record.runtime_id, grace_seconds=STOP_GRACE_SECONDS)
-        await self._observe_stop(record.runtime_id)
+        await self._halt_container(record.runtime_id)
         self._record(operation_id, "container", "Stopping the container.")
-        return "Instance stopped."
+
+    async def _halt_container(self, runtime_id: str) -> None:
+        """A recorded interruption is not evidence that the process exited. Watch it stop."""
+        await self._runtime.stop(runtime_id, grace_seconds=STOP_GRACE_SECONDS)
+        await self._observe_stop(runtime_id)
 
     async def _drain(
         self,
@@ -592,12 +741,20 @@ class Hub:
                 "after it was told to stop."
             ) from exc
 
-    async def _endpoint(self, record: ManagedInstance) -> ControlEndpoint:
-        token = self._environment(record.path).get(CONTROL_TOKEN_VARIABLE)
+    async def _probe_endpoint(self, record: ManagedInstance) -> ControlEndpoint:
+        """Where the instance answers, with whatever token it holds: a health probe needs none."""
         address = await self._runtime.address(record.runtime_id)
-        if token is None or address is None:
+        if address is None:
             raise ControlUnreachable("The instance's lifecycle endpoint cannot be reached.")
+        token = self._environment(record.path).get(CONTROL_TOKEN_VARIABLE, "")
         return ControlEndpoint(address=address, token=ControlToken(token))
+
+    async def _endpoint(self, record: ManagedInstance) -> ControlEndpoint:
+        """The same endpoint, for the calls a token opens."""
+        endpoint = await self._probe_endpoint(record)
+        if not endpoint.token:
+            raise ControlUnreachable("The instance's lifecycle endpoint cannot be reached.")
+        return endpoint
 
     def _record(self, operation_id: UUID, step: str, detail: str) -> None:
         self.registry.advance_operation(operation_id, step, detail)
@@ -752,9 +909,10 @@ class Hub:
         return installed
 
     def _storage(self, instance_id: UUID, path: Path) -> tuple[StorageItem, ...]:
+        """What a created instance owns: its directory on the Docker host, and two volumes."""
         relative = path.relative_to(self.directory)
         host_path = self._docker_host_directory / relative
-        runtime_id = str(instance_id)
+        volume = f"kinby-{instance_id}"
         return (
             StorageItem(
                 kind=StorageKind.BIND,
@@ -764,13 +922,13 @@ class Hub:
             ),
             StorageItem(
                 kind=StorageKind.VOLUME,
-                source=f"kinby-{runtime_id}-workspace",
+                source=f"{volume}-workspace",
                 destination="/instance/workspace",
                 writable=True,
             ),
             StorageItem(
                 kind=StorageKind.VOLUME,
-                source=f"kinby-{runtime_id}-codex",
+                source=f"{volume}-codex",
                 destination="/root/.codex",
                 writable=True,
             ),

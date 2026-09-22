@@ -24,6 +24,14 @@ from kinby.hub.models import ImageArtifact
 
 
 @dataclass(frozen=True)
+class StorageConflict:
+    """Storage one instance would claim that another instance already owns."""
+
+    item: StorageItem
+    owner: UUID
+
+
+@dataclass(frozen=True)
 class ManagedInstance:
     instance_id: UUID
     path: Path
@@ -457,24 +465,9 @@ class HubRegistry:
     ) -> None:
         conflict = self.conflicting_storage(instance_id, storage)
         if conflict is not None:
-            raise ValueError(f'Storage source "{conflict.source}" is already owned.')
+            raise ValueError(f'Storage source "{conflict.item.source}" is already owned.')
         with self._connect() as connection:
-            connection.executemany(
-                """
-                INSERT INTO storage (instance_id, kind, source, destination, writable)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        str(instance_id),
-                        item.kind.value,
-                        item.source,
-                        item.destination,
-                        item.writable,
-                    )
-                    for item in storage
-                ],
-            )
+            self._insert_storage(connection, instance_id, storage)
             connection.execute(
                 """
                 UPDATE instances
@@ -482,6 +475,73 @@ class HubRegistry:
                 WHERE id = ?
                 """,
                 (artifact.revision, artifact.image_id, str(instance_id)),
+            )
+
+    @staticmethod
+    def _insert_storage(
+        connection: sqlite3.Connection,
+        instance_id: UUID,
+        storage: tuple[StorageItem, ...],
+    ) -> None:
+        connection.executemany(
+            """
+            INSERT INTO storage (instance_id, kind, source, destination, writable)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    str(instance_id),
+                    item.kind.value,
+                    item.source,
+                    item.destination,
+                    item.writable,
+                )
+                for item in storage
+            ],
+        )
+
+    def begin_adoption(self, instance: ManagedInstance, operation_id: UUID) -> None:
+        """Record the instance the hub observed before the handoff has any effect.
+
+        The identity is derived from the storage, so a handoff that was interrupted
+        writes over its own unfinished record instead of opening a second one.
+        """
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM storage WHERE instance_id = ?",
+                (str(instance.instance_id),),
+            )
+            connection.execute(
+                """
+                INSERT INTO instances (
+                    id, path, manifest_id, persona_name, requested_revision,
+                    image_id, intended_state, runtime_id, prepared
+                ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 0)
+                ON CONFLICT(id) DO UPDATE SET
+                    path = excluded.path,
+                    manifest_id = excluded.manifest_id,
+                    persona_name = excluded.persona_name,
+                    image_id = excluded.image_id,
+                    intended_state = excluded.intended_state,
+                    runtime_id = excluded.runtime_id
+                """,
+                (
+                    str(instance.instance_id),
+                    str(instance.path),
+                    instance.manifest_id,
+                    instance.persona_name,
+                    instance.image_id,
+                    instance.intended_state.value,
+                    instance.runtime_id,
+                ),
+            )
+            self._insert_storage(connection, instance.instance_id, instance.storage)
+            self._insert_operation(
+                connection,
+                operation_id,
+                instance.instance_id,
+                OperationKind.ADOPT,
+                "Adoption queued.",
             )
 
     def mark_prepared(self, instance_id: UUID) -> None:
@@ -505,7 +565,7 @@ class HubRegistry:
         self,
         instance_id: UUID,
         storage: tuple[StorageItem, ...],
-    ) -> StorageItem | None:
+    ) -> StorageConflict | None:
         """The first of these writable sources another instance already owns, if any."""
         with self._connect() as connection:
             rows = connection.execute(
@@ -518,7 +578,7 @@ class HubRegistry:
         for item in storage:
             if not item.writable:
                 continue
-            for _, kind, source in rows:
+            for owner, kind, source in rows:
                 conflict = (
                     item.kind is StorageKind.VOLUME
                     and kind == StorageKind.VOLUME.value
@@ -529,7 +589,7 @@ class HubRegistry:
                     and self._binds_overlap(item.source, source)
                 )
                 if conflict:
-                    return item
+                    return StorageConflict(item=item, owner=UUID(owner))
         return None
 
     def set_intended_state(self, instance_id: UUID, state: IntendedState) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Literal, NewType, TypeIs
 from uuid import UUID
 
@@ -677,12 +678,87 @@ class InstanceLogsResult(ContractModel):
     text: str
 
 
+class ContainerOwner(StrEnum):
+    """Who manages an existing container now, read from the labels it carries."""
+
+    HUB = "hub"
+    OTHER_HUB = "other-hub"
+    COMPOSE = "compose"
+    UNMANAGED = "unmanaged"
+
+
+class AdoptionFindingKind(StrEnum):
+    """What an adoption preflight found. Each one is a decision the operator has to take."""
+
+    PREVIOUS_MANAGER = "previous-manager"
+    LEGACY_RUNTIME = "legacy-runtime"
+    UNREACHABLE = "unreachable"
+    DUPLICATE_ADOPTION = "duplicate-adoption"
+    STORAGE_OWNED = "storage-owned"
+    RETAINED_STORAGE = "retained-storage"
+    INVALID_INSTANCE = "invalid-instance"
+    MANIFEST_ID_TAKEN = "manifest-id-taken"
+
+
+class AdoptionFinding(ContractModel):
+    """One observation of the preflight. A blocking finding stops the handoff."""
+
+    kind: AdoptionFindingKind
+    blocking: bool
+    detail: str
+
+
+class AdoptionHandoff(ContractModel):
+    """What the handoff costs and what the operator does first. The hub rewrites no Compose file."""
+
+    downtime: str
+    steps: list[str]
+    signals: str
+
+
+class InstanceAdoptPreviewCommand(ContractModel):
+    """Preview an adoption. It reads the instance and its container and changes neither."""
+
+    #: The instance directory as the hub sees it. Its storage is read from the container.
+    path: Path
+    runtime_id: Annotated[str, Field(min_length=1)]
+    #: The previous manager no longer recreates or updates this container.
+    relinquished: bool = False
+    #: A runtime that cannot drain may be interrupted. Never assumed.
+    acknowledge_interrupting_stop: bool = False
+
+
+class InstanceAdoptPreviewResult(ContractModel):
+    """What the hub would take over, and what stands in the way of taking it."""
+
+    instance_id: UUID
+    manifest_id: str
+    persona_name: str | None
+    path: Path
+    runtime_id: str
+    image_id: str
+    owner: ContainerOwner
+    owner_name: str
+    storage: list[StorageItem]
+    capabilities: list[Capability]
+    handoff: AdoptionHandoff
+    findings: list[AdoptionFinding]
+
+
+class InstanceAdoptCommand(InstanceAdoptPreviewCommand):
+    """Take ownership. The preflight runs again here, and a blocking finding stops it."""
+
+    #: Move the public signal path to this instance, so a webhook keeps the URL it was given.
+    claim_signals: bool = False
+
+
 class OperationKind(StrEnum):
     CREATE = "create"
     START = "start"
     STOP = "stop"
     SECRETS = "secrets"
     RECREATE = "recreate"
+    ADOPT = "adopt"
 
 
 class OperationState(StrEnum):

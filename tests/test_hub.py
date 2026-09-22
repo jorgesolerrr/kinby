@@ -26,6 +26,7 @@ from kinby.contracts import (
     INSTANCE_STOP,
     OPERATION_GET,
     Capability,
+    ContainerOwner,
     ControlToken,
     DrainState,
     ErrorCode,
@@ -52,6 +53,7 @@ from kinby.contracts import (
     StorageKind,
 )
 from kinby.hub import (
+    ContainerDescription,
     ControlConnectionLost,
     ControlEndpoint,
     ControlUnreachable,
@@ -105,11 +107,22 @@ class FakeRuntime:
         self.removed: list[tuple[str, bool]] = []
         self.states: dict[str, RuntimeStatus] = {}
         self.addresses: dict[str, str] = {}
+        self.descriptions: dict[str, ContainerDescription] = {}
         self.log_output = b"booted\n"
 
     async def create(self, spec: InstanceSpec) -> None:
         self.created.append(spec)
         self.states[spec.instance_id] = RuntimeStatus("created", None)
+        self.descriptions[spec.instance_id] = ContainerDescription(
+            runtime_id=spec.instance_id,
+            image=spec.image,
+            owner=ContainerOwner.HUB,
+            owner_name="this-hub",
+            storage=spec.storage,
+        )
+
+    async def describe(self, instance_id: str) -> ContainerDescription | None:
+        return self.descriptions.get(instance_id)
 
     async def start(self, instance_id: str) -> None:
         self.started.append(instance_id)
@@ -122,6 +135,7 @@ class FakeRuntime:
     async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
         self.removed.append((instance_id, delete_data))
         self.states.pop(instance_id, None)
+        self.descriptions.pop(instance_id, None)
 
     async def status(self, instance_id: str) -> RuntimeStatus:
         return self.states.get(instance_id, RuntimeStatus("absent", None))
@@ -216,6 +230,7 @@ class FakeControl:
         self,
         *,
         capabilities: list[Capability] | None = None,
+        contract_version: str = CONTRACT_VERSION,
         reachable: bool = True,
         holds: bool = False,
         answers: bool = True,
@@ -223,6 +238,7 @@ class FakeControl:
         refuses: bool = False,
     ) -> None:
         self.capabilities = capabilities or [Capability.WS, Capability.DRAIN]
+        self.contract_version = contract_version
         self.reachable = reachable
         self.answers = answers
         self.drops = drops
@@ -239,7 +255,7 @@ class FakeControl:
         if not self.reachable:
             raise ControlUnreachable("Cannot connect to host kinby-instance:8787")
         return InstanceProbeResult(
-            contract_version=CONTRACT_VERSION,
+            contract_version=self.contract_version,
             capabilities=self.capabilities,
         )
 
