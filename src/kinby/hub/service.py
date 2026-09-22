@@ -592,7 +592,7 @@ class Hub:
             return False
         try:
             await self._control.probe(await self._endpoint(record))
-        except ControlUnreachable, ControlConnectionLost:
+        except ControlUnreachable:
             return False
         return True
 
