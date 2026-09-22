@@ -102,6 +102,10 @@ class ContainerRuntime(Protocol):
 
     async def list(self) -> Sequence[str]: ...
 
+    async def has_image(self, image: str) -> bool: ...
+
+    async def has_volume(self, name: str) -> bool: ...
+
 
 class RecoveredState(StrEnum):
     """What a hub found for one managed instance when it opened its directory."""
@@ -112,6 +116,7 @@ class RecoveredState(StrEnum):
     UNSTOPPED = "unstopped"
     UNHEALTHY = "unhealthy"
     MISSING = "missing"
+    REMOVED = "removed"
     INCOMPLETE = "incomplete"
     CONFLICTED = "conflicted"
     UNAVAILABLE = "unavailable"

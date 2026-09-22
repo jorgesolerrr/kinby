@@ -387,6 +387,21 @@ class DockerRuntime:
             if "kinby.instance" in container.labels
         )
 
+    async def has_image(self, image: str) -> bool:
+        try:
+            await asyncio.to_thread(self._client.images.get, image)
+        except ImageNotFound:
+            return False
+        return True
+
+    async def has_volume(self, name: str) -> bool:
+        """Whether the named volume exists. Creating a container would make a new, empty one."""
+        try:
+            await asyncio.to_thread(self._client.volumes.get, name)
+        except NotFound:
+            return False
+        return True
+
     async def _container(self, instance_id: str) -> Container:
         """The recorded runtime id, or the kinby- prefixed name earlier releases used."""
         try:

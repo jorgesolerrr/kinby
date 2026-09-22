@@ -19,6 +19,8 @@ from kinby.contracts import (
     INSTANCE_LIST,
     INSTANCE_LOGS,
     INSTANCE_RECREATE,
+    INSTANCE_REMOVE,
+    INSTANCE_RESTORE,
     INSTANCE_SCOPES,
     INSTANCE_SECRETS_SET,
     INSTANCE_START,
@@ -110,6 +112,8 @@ class FakeRuntime:
         self.states: dict[str, RuntimeStatus] = {}
         self.addresses: dict[str, str] = {}
         self.descriptions: dict[str, ContainerDescription] = {}
+        #: Images and named volumes this runtime no longer has. Everything else is there.
+        self.missing: set[str] = set()
         self.log_output = b"booted\n"
 
     async def create(self, spec: InstanceSpec) -> None:
@@ -166,6 +170,12 @@ class FakeRuntime:
 
     async def list(self) -> Sequence[str]:
         return tuple(self.states)
+
+    async def has_image(self, image: str) -> bool:
+        return image not in self.missing
+
+    async def has_volume(self, name: str) -> bool:
+        return name not in self.missing
 
 
 class SerialRuntime(FakeRuntime):
@@ -1245,6 +1255,8 @@ def test_no_scope_an_instance_grants_carries_hub_authority():
         INSTANCE_START.scope,
         INSTANCE_STOP.scope,
         INSTANCE_RECREATE.scope,
+        INSTANCE_REMOVE.scope,
+        INSTANCE_RESTORE.scope,
         INSTANCE_SECRETS_SET.scope,
     } == {Scope.HUB_ADMIN}
 

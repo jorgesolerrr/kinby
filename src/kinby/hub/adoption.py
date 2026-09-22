@@ -223,7 +223,7 @@ def _ownership(
         findings.append(
             _finding(
                 AdoptionFindingKind.PREVIOUS_MANAGER,
-                _previous_manager(observed.described),
+                previous_manager(observed.described),
                 blocking=not command.relinquished,
             )
         )
@@ -239,7 +239,7 @@ def _ownership(
     conflict = registry.conflicting_storage(observed.instance_id, observed.described.storage)
     if conflict is not None:
         owner = registry.instance(conflict.owner)
-        retained = owner is None or not owner.prepared
+        retained = owner is None or not owner.active
         findings.append(
             _finding(
                 AdoptionFindingKind.RETAINED_STORAGE
@@ -270,7 +270,8 @@ def _ownership(
     return findings
 
 
-def _previous_manager(described: ContainerDescription) -> str:
+def previous_manager(described: ContainerDescription) -> str:
+    """Who still manages a container the hub did not label, and what that manager would do."""
     match described.owner:
         case ContainerOwner.COMPOSE:
             return (

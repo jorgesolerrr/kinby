@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from docker.errors import NotFound
+from docker.errors import ImageNotFound, NotFound
 
 from docker import DockerClient
 from kinby.contracts import StorageItem, StorageKind
@@ -93,10 +93,49 @@ class FakeContainers:
         ).encode()
 
 
+class FakeDockerImages:
+    def __init__(self, present: set[str]) -> None:
+        self.present = present
+
+    def get(self, name: str) -> object:
+        if name not in self.present:
+            raise ImageNotFound(name)
+        return object()
+
+
+class FakeDockerVolumes:
+    def __init__(self, present: set[str]) -> None:
+        self.present = present
+
+    def get(self, name: str) -> object:
+        if name not in self.present:
+            raise NotFound(name)
+        return object()
+
+
 class FakeDockerClient:
     def __init__(self) -> None:
         self.containers = FakeContainers()
         self.networks = FakeNetworks()
+        self.images = FakeDockerImages({"sha256:selected"})
+        self.volumes = FakeDockerVolumes({"kinby-alice-workspace"})
+
+
+def test_docker_runtime_reports_a_missing_image_or_volume_without_creating_either():
+    async def scenario() -> list[bool]:
+        runtime = DockerRuntime(
+            "hub-id",
+            network="kinby_private",
+            client=cast(DockerClient, FakeDockerClient()),
+        )
+        return [
+            await runtime.has_image("sha256:selected"),
+            await runtime.has_image("sha256:gone"),
+            await runtime.has_volume("kinby-alice-workspace"),
+            await runtime.has_volume("kinby-alice-codex"),
+        ]
+
+    assert asyncio.run(scenario()) == [True, False, True, False]
 
 
 def test_docker_runtime_mounts_the_recorded_storage_and_offloads_creation(tmp_path):

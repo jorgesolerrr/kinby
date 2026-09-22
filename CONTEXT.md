@@ -119,6 +119,16 @@ _Avoid_: rebuild, restart, update
 The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares, carrying the instance's **package** selection along. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path, keeps every storage the instance owns, and leaves the instance's own configuration alone. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
 _Avoid_: upgrade, rollout
 
+### Instance removal
+
+The **lifecycle operation** that takes one **instance**'s container down the drain-then-stop path and removes it. The instance's directory, named volumes, **instance secrets**, selected **image artifact**, and **instance registry** record all stay. A removed instance leaves the active list, but its record stays readable and its storage stays reserved until the instance is restored or permanently deleted.
+_Avoid_: delete, uninstall
+
+### Instance restoration
+
+The **lifecycle operation** that brings a removed **instance** back from its retained record. It checks the retained configuration, storage and selected image, then creates a container under the same **hub instance ID** and leaves it stopped. It reports a missing volume or image and never replaces it with a new one.
+_Avoid_: undelete, recreate
+
 ### Lifecycle recovery
 
 What the **hub** does with each managed **instance** when it opens its directory: it reads the **instance registry** and the containers labeled as its own, then restores the intended running or stopped state of the containers that are still there. It reports everything else — a missing container, an unfinished **lifecycle operation**, a container it does not own — and changes nothing.
