@@ -341,7 +341,8 @@ class DockerRuntime:
             return None
         # Containers created before this label existed listen on the spec default.
         port = container.labels.get("kinby.port", str(InstanceSpec.port))
-        return f"http://{instance_id}:{port}"
+        name = (container.name or instance_id).lstrip("/")
+        return f"http://{name}:{port}"
 
     async def logs(
         self,
@@ -387,7 +388,13 @@ class DockerRuntime:
         )
 
     async def _container(self, instance_id: str) -> Container:
-        return await asyncio.to_thread(self._client.containers.get, instance_id)
+        """The recorded runtime id, or the kinby- prefixed name earlier releases used."""
+        try:
+            return await asyncio.to_thread(self._client.containers.get, instance_id)
+        except NotFound:
+            if instance_id.startswith("kinby-"):
+                raise
+            return await asyncio.to_thread(self._client.containers.get, f"kinby-{instance_id}")
 
 
 def _mounted(attributes: dict[str, object]) -> tuple[StorageItem, ...]:
