@@ -800,7 +800,9 @@ class HubRegistry:
         Replacing secrets writes a file and leaves the container where it is. A
         queued operation that never started leaves the container where it is too.
         A removal counts even before its first step, because recovery finishes
-        one that the process died inside.
+        one that the process died inside. An adoption counts too. Recovery
+        reads it to tell an unfinished handoff from a create, because the
+        container it finds still belongs to the previous runtime.
         """
         with self._connect() as connection:
             row = connection.execute(
@@ -808,7 +810,7 @@ class HubRegistry:
                 SELECT operations.id FROM operations
                 WHERE instance_id = ? AND kind != ?
                   AND (
-                    kind = ?
+                    kind IN (?, ?)
                     OR state = ?
                     OR EXISTS (
                         SELECT 1 FROM operation_steps
@@ -821,6 +823,7 @@ class HubRegistry:
                     str(instance_id),
                     OperationKind.SECRETS.value,
                     OperationKind.REMOVE.value,
+                    OperationKind.ADOPT.value,
                     OperationState.SUCCEEDED.value,
                 ),
             ).fetchone()

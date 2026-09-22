@@ -506,6 +506,26 @@ class CrashOnStop(FakeRuntime):
         await super().stop(instance_id, grace_seconds=grace_seconds)
 
 
+class CrashBeforeHandoffStep(FakeRuntime):
+    """Die on the status read that opens the handoff, before any step is recorded.
+
+    ``adopt`` reads status once to choose the intended state. The handoff reads it
+    again, and that second read is the first thing the handoff does.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.crashed = asyncio.Event()
+        self._seen = 0
+
+    async def status(self, instance_id: str) -> RuntimeStatus:
+        self._seen += 1
+        if self._seen == 2:
+            self.crashed.set()
+            raise asyncio.CancelledError
+        return await super().status(instance_id)
+
+
 def test_a_handoff_interrupted_after_ownership_moved_leaves_a_container_to_recreate(tmp_path):
     async def scenario() -> None:
         runtime = CrashOnReplacement()
@@ -592,6 +612,52 @@ def test_a_handoff_interrupted_before_ownership_moved_names_the_owner_of_the_dat
         assert listed.instances == []
         assert adopted_again == interrupted.instance_id
         assert runtime.removed == [(CODER_CONTAINER, False)]
+
+    asyncio.run(scenario())
+
+
+def test_a_handoff_that_dies_before_its_first_step_does_not_claim_the_container(tmp_path):
+    async def scenario() -> None:
+        runtime = CrashBeforeHandoffStep()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
+        directory = existing_coder(runtime, tmp_path / "box" / "coder")
+        interrupted = await hub_client(hub).call(
+            INSTANCE_ADOPT,
+            InstanceAdoptCommand(
+                path=directory,
+                runtime_id=CODER_CONTAINER,
+                relinquished=True,
+            ),
+        )
+        assert isinstance(interrupted, LifecycleOperationResult)
+        await asyncio.wait_for(runtime.crashed.wait(), timeout=5)
+        await asyncio.sleep(0)
+        hub.close()
+
+        reopened = hub_at(
+            tmp_path / "hub",
+            runtime=runtime,
+            images=FakeImages(),
+            control=FakeControl(),
+        )
+        recovery = await reopened.recover()
+        client = hub_client(reopened)
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        failed = await client.call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=interrupted.operation_id),
+        )
+
+        assert not isinstance(failed, ErrorEnvelope)
+        assert failed.state is OperationState.FAILED
+        assert failed.steps == []
+        assert [instance.state for instance in recovery.instances] == [RecoveredState.INCOMPLETE]
+        assert COMPOSE_PROJECT in recovery.instances[0].detail
+        assert not isinstance(listed, ErrorEnvelope)
+        assert listed.instances == []
+        assert runtime.descriptions[CODER_CONTAINER].owner is ContainerOwner.COMPOSE
+        assert runtime.removed == []
+        assert runtime.created == []
 
     asyncio.run(scenario())
 
