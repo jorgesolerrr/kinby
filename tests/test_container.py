@@ -102,7 +102,7 @@ def test_image_runs_a_mounted_instance_with_the_container_contract() -> None:
         ("git", "git version "),
         ("gh", "gh version "),
         ("uv", "uv "),
-        ("claude", "2.1.268 (Claude Code)"),
+        ("claude", "2.1.280 (Claude Code)"),
         ("codex", "codex-cli 0.154.0"),
     ],
 )

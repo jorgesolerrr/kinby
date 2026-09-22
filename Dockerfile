@@ -1,7 +1,7 @@
 FROM python:3.14-slim
 
 ARG GH_VERSION=2.82.1
-ARG CLAUDE_CODE_VERSION=2.1.268
+ARG CLAUDE_CODE_VERSION=2.1.280
 ARG CODEX_VERSION=0.154.0
 
 # Workspace snapshots run git against a shadow repository under the instance.
