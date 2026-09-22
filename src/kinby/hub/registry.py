@@ -484,6 +484,24 @@ class HubRegistry:
                 (artifact.revision, artifact.image_id, str(instance_id)),
             )
 
+    def record_selection(self, instance_id: UUID, revision: str, artifact: ImageArtifact) -> None:
+        """Point this instance at the image its container was just built from.
+
+        The requested revision travels with it, so a later container comes from the
+        revision the user selected last rather than the one the instance was created
+        from. The image this one replaces keeps its artifact row, which is what an
+        explicit recovery reads.
+        """
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE instances
+                SET requested_revision = ?, source_revision = ?, image_id = ?
+                WHERE id = ?
+                """,
+                (revision, artifact.revision, artifact.image_id, str(instance_id)),
+            )
+
     def mark_prepared(self, instance_id: UUID) -> None:
         with self._connect() as connection:
             connection.execute(

@@ -78,11 +78,13 @@ class FakeImages:
         package: InstalledPackage | None = None,
     ) -> None:
         self.revisions: list[str] = []
+        self.selections: list[ImageSelection] = []
         self.failure = failure
         self.package = package
 
     async def prepare(self, selection: ImageSelection) -> PreparedImage:
         self.revisions.append(selection.revision)
+        self.selections.append(selection)
         if self.failure is not None:
             raise RuntimeError(self.failure)
         return PreparedImage(

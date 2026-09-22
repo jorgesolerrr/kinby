@@ -75,11 +75,7 @@ async def _recover(
     if not record.prepared:
         return _finish_create(record, registry, status)
     if status.state == "absent":
-        return _at(
-            record,
-            RecoveredState.MISSING,
-            "The container is gone. Recreate it to bring it back.",
-        )
+        return _missing(record, registry)
     if status.state not in _STOPPED_STATES:
         return _running(record, status)
     if record.intended_state is IntendedState.STOPPED:
@@ -102,6 +98,27 @@ def _running(record: ManagedInstance, status: RuntimeStatus) -> RecoveredInstanc
             "Stop it again to take it down.",
         )
     return _at(record, RecoveredState.RUNNING, "The container is still running.")
+
+
+def _missing(record: ManagedInstance, registry: HubRegistry) -> RecoveredInstance:
+    """A container that went missing under a failed operation names that operation.
+
+    A replacement the hub did not finish leaves no container behind, and recreating
+    one from the recorded image is not the operation the user asked for.
+    """
+    last = registry.last_operation(record.instance_id)
+    if last is not None and last.state is OperationState.FAILED:
+        return _at(
+            record,
+            RecoveredState.MISSING,
+            f"The container is gone and the last {last.kind.value} operation failed. "
+            "Ask for that operation again, or recreate the container from the recorded image.",
+        )
+    return _at(
+        record,
+        RecoveredState.MISSING,
+        "The container is gone. Recreate it to bring it back.",
+    )
 
 
 def _finish_create(

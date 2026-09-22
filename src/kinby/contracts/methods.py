@@ -24,6 +24,7 @@ from kinby.contracts.models import (
     InstanceStatusCommand,
     InstanceStatusResult,
     InstanceStopCommand,
+    InstanceUpdateCommand,
     LifecycleOperationResult,
     OperationGetCommand,
     OperationGetResult,
@@ -151,6 +152,9 @@ INSTANCE_STOP = Method(
 INSTANCE_RECREATE = Method(
     "instance.recreate", Scope.HUB_ADMIN, InstanceRecreateCommand, LifecycleOperationResult
 )
+INSTANCE_UPDATE = Method(
+    "instance.update", Scope.HUB_ADMIN, InstanceUpdateCommand, LifecycleOperationResult
+)
 INSTANCE_SECRETS_SET = Method(
     "instance.secrets.set", Scope.HUB_ADMIN, InstanceSecretsSetCommand, LifecycleOperationResult
 )
@@ -184,6 +188,7 @@ _METHODS = (
     INSTANCE_START,
     INSTANCE_STOP,
     INSTANCE_RECREATE,
+    INSTANCE_UPDATE,
     INSTANCE_SECRETS_SET,
     INSTANCE_LIST,
     INSTANCE_STATUS,

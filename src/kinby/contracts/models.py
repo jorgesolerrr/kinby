@@ -585,6 +585,13 @@ class InstanceRecreateCommand(ContractModel):
     instance_id: UUID
 
 
+class InstanceUpdateCommand(ContractModel):
+    """Move one instance to the image a revision prepares. Its package selection travels along."""
+
+    instance_id: UUID
+    revision: Annotated[str, Field(min_length=1)]
+
+
 class InstanceSecretsSetCommand(ContractModel):
     """Replace the named values in one instance's secrets. The result carries none of them back."""
 
@@ -683,6 +690,7 @@ class OperationKind(StrEnum):
     STOP = "stop"
     SECRETS = "secrets"
     RECREATE = "recreate"
+    UPDATE = "update"
 
 
 class OperationState(StrEnum):
