@@ -72,9 +72,11 @@ def test_opus_implements_and_repairs_checks_in_the_same_session(
     assert not any(record["command"] == "codex" for record in records)
     calls = [record for record in records if record["command"] == "claude"]
     assert len(calls) == (2 if check_failure else 1)
+    # The coder's routine names Opus 5.5; without it the pipeline falls back to its default.
+    model = "claude-opus-5-5" if client == "claude" else "claude-opus-5"
     for call in calls:
         arguments = _arguments(call)
-        assert arguments[arguments.index("--model") + 1] == "claude-opus-5"
+        assert arguments[arguments.index("--model") + 1] == model
         assert arguments[arguments.index("--effort") + 1] == "high"
         assert arguments[arguments.index("--output-format") + 1] == "json"
         assert arguments[arguments.index("--permission-mode") + 1] == "acceptEdits"
