@@ -188,7 +188,28 @@ def _identity(observed: _Observed) -> list[AdoptionFinding]:
                 f"{INSTANCE_MOUNT}, so the hub cannot tell which data it owns.",
             )
         ]
+    if not _same_directory(observed.path, observed.source):
+        return [
+            _finding(
+                AdoptionFindingKind.INVALID_INSTANCE,
+                f"Directory {observed.path} is not the instance mounted at {INSTANCE_MOUNT} on "
+                f'container "{observed.described.runtime_id}".',
+            )
+        ]
     return []
+
+
+def _same_directory(path: Path, host_source: str) -> bool:
+    """Whether the hub-visible directory is the data that container mounts.
+
+    When the Docker host path is not visible here, the hub cannot compare them
+    and treats the operator's pairing as the correspondence.
+    """
+    source = Path(host_source)
+    try:
+        return path.samefile(source)
+    except OSError:
+        return not source.exists()
 
 
 def _ownership(

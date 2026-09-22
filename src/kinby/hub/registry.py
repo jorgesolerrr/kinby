@@ -500,13 +500,45 @@ class HubRegistry:
             ],
         )
 
-    def begin_adoption(self, instance: ManagedInstance, operation_id: UUID) -> None:
-        """Record the instance the hub observed before the handoff has any effect.
+    def begin_adoption(self, instance: ManagedInstance, operation_id: UUID) -> UUID:
+        """Reserve the handoff, or return the unfinished operation already running.
 
         The identity is derived from the storage, so a handoff that was interrupted
-        writes over its own unfinished record instead of opening a second one.
+        writes over its own unfinished record instead of opening a second one. A
+        prepared instance, another active operation, or storage another record
+        already owns is refused here, in one writer transaction.
         """
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT prepared FROM instances WHERE id = ?",
+                (str(instance.instance_id),),
+            ).fetchone()
+            if existing is not None and existing[0]:
+                raise ValueError(
+                    f"This hub already manages the instance at {instance.path} as "
+                    f"{instance.instance_id}."
+                )
+            active = connection.execute(
+                """
+                SELECT id FROM operations
+                WHERE instance_id = ? AND state IN (?, ?)
+                ORDER BY rowid LIMIT 1
+                """,
+                (
+                    str(instance.instance_id),
+                    OperationState.PENDING.value,
+                    OperationState.RUNNING.value,
+                ),
+            ).fetchone()
+            if active is not None:
+                return UUID(active[0])
+            conflict = self._writable_conflict(connection, instance.instance_id, instance.storage)
+            if conflict is not None:
+                raise ValueError(
+                    f'Writable storage "{conflict.item.source}" is already recorded for instance '
+                    f"{conflict.owner}."
+                )
             connection.execute(
                 "DELETE FROM storage WHERE instance_id = ?",
                 (str(instance.instance_id),),
@@ -543,6 +575,7 @@ class HubRegistry:
                 OperationKind.ADOPT,
                 "Adoption queued.",
             )
+        return operation_id
 
     def mark_prepared(self, instance_id: UUID) -> None:
         with self._connect() as connection:
@@ -568,13 +601,21 @@ class HubRegistry:
     ) -> StorageConflict | None:
         """The first of these writable sources another instance already owns, if any."""
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT instance_id, kind, source FROM storage
-                WHERE writable = 1 AND instance_id != ?
-                """,
-                (str(instance_id),),
-            ).fetchall()
+            return self._writable_conflict(connection, instance_id, storage)
+
+    def _writable_conflict(
+        self,
+        connection: sqlite3.Connection,
+        instance_id: UUID,
+        storage: tuple[StorageItem, ...],
+    ) -> StorageConflict | None:
+        rows = connection.execute(
+            """
+            SELECT instance_id, kind, source FROM storage
+            WHERE writable = 1 AND instance_id != ?
+            """,
+            (str(instance_id),),
+        ).fetchall()
         for item in storage:
             if not item.writable:
                 continue

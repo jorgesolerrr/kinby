@@ -414,11 +414,6 @@ class Hub:
         stopped = blocker(preview)
         if stopped is not None:
             raise AdoptionBlocked(f"This instance was not adopted. {stopped.detail}")
-        active = self.registry.active_operation(preview.instance_id)
-        if active is not None:
-            raise LifecycleOperationInFlight(
-                f'Lifecycle operation "{active}" is still running for this instance.'
-            )
         record = ManagedInstance(
             instance_id=preview.instance_id,
             path=preview.path,
@@ -433,7 +428,14 @@ class Hub:
             storage=tuple(preview.storage),
         )
         operation_id = uuid4()
-        self.registry.begin_adoption(record, operation_id)
+        try:
+            opened = self.registry.begin_adoption(record, operation_id)
+        except ValueError as exc:
+            raise AdoptionBlocked(f"This instance was not adopted. {exc}") from exc
+        if opened != operation_id:
+            raise LifecycleOperationInFlight(
+                f'Lifecycle operation "{opened}" is still running for this instance.'
+            )
         self._schedule(self._adopt(operation_id, record, command))
         return LifecycleOperationResult(
             operation_id=operation_id,

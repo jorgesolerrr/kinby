@@ -655,6 +655,39 @@ def test_a_container_the_hub_cannot_see_is_previewed_as_unreachable(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_directory_that_is_not_the_container_s_instance_is_never_adopted(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
+        existing_coder(runtime, tmp_path / "box" / "coder")
+        other = coder_directory(tmp_path / "box" / "other", manifest_id="other", persona_name="Bea")
+
+        previewed = await hub_client(hub).call(
+            INSTANCE_ADOPT_PREVIEW,
+            InstanceAdoptPreviewCommand(
+                path=other,
+                runtime_id=CODER_CONTAINER,
+                relinquished=True,
+            ),
+        )
+        refused = await hub_client(hub).call(
+            INSTANCE_ADOPT,
+            InstanceAdoptCommand(path=other, runtime_id=CODER_CONTAINER, relinquished=True),
+        )
+
+        assert not isinstance(previewed, ErrorEnvelope)
+        assert previewed.findings[0].kind is AdoptionFindingKind.INVALID_INSTANCE
+        assert previewed.findings[0].blocking
+        assert str(other) in previewed.findings[0].detail
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert hub.registry.managed_instances() == []
+        assert runtime.stopped == []
+        assert runtime.removed == []
+
+    asyncio.run(scenario())
+
+
 def test_a_directory_that_holds_no_instance_is_never_adopted(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
@@ -748,6 +781,99 @@ def test_an_instance_stopped_before_the_handoff_is_adopted_without_interrupting_
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
         assert not isinstance(listed, ErrorEnvelope)
         assert listed.instances[0].intended_state is IntendedState.STOPPED
+
+    asyncio.run(scenario())
+
+
+class HoldStatus(FakeRuntime):
+    """Hold status so two adoptions can both finish preflight before either is recorded."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.waiting = 0
+        self.ready = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def status(self, instance_id: str) -> RuntimeStatus:
+        self.waiting += 1
+        if self.waiting >= 2:
+            self.ready.set()
+        await self.release.wait()
+        return await super().status(instance_id)
+
+
+def test_a_second_adoption_is_refused_while_the_handoff_is_being_recorded(tmp_path):
+    async def scenario() -> None:
+        runtime = HoldStatus()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
+        directory = existing_coder(runtime, tmp_path / "box" / "coder")
+        client = hub_client(hub)
+        command = InstanceAdoptCommand(
+            path=directory, runtime_id=CODER_CONTAINER, relinquished=True
+        )
+        first = asyncio.create_task(client.call(INSTANCE_ADOPT, command))
+        second = asyncio.create_task(client.call(INSTANCE_ADOPT, command))
+        await asyncio.wait_for(runtime.ready.wait(), timeout=5)
+        runtime.release.set()
+        outcomes = await asyncio.gather(first, second)
+
+        accepted = next(
+            result for result in outcomes if isinstance(result, LifecycleOperationResult)
+        )
+        refused = next(result for result in outcomes if isinstance(result, ErrorEnvelope))
+        finished = await finished_operation(client, accepted)
+
+        assert refused.code is ErrorCode.INSTANCE_BUSY
+        assert finished.state is OperationState.SUCCEEDED
+        assert len(runtime.created) == 1
+        assert len(hub.registry.managed_instances()) == 1
+        assert hub.registry.active_operation(accepted.instance_id) is None
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_adoptions_do_not_claim_the_same_writable_storage(tmp_path):
+    async def scenario() -> None:
+        runtime = HoldStatus()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
+        first = existing_coder(runtime, tmp_path / "one" / "coder")
+        second = tmp_path / "two" / "coder"
+        existing_coder(
+            runtime,
+            second,
+            container="kinby-spare-1",
+            storage=coder_storage(second, volumes="kinby_coder"),
+        )
+        client = hub_client(hub)
+        first_task = asyncio.create_task(
+            client.call(
+                INSTANCE_ADOPT,
+                InstanceAdoptCommand(path=first, runtime_id=CODER_CONTAINER, relinquished=True),
+            )
+        )
+        second_task = asyncio.create_task(
+            client.call(
+                INSTANCE_ADOPT,
+                InstanceAdoptCommand(path=second, runtime_id="kinby-spare-1", relinquished=True),
+            )
+        )
+        await asyncio.wait_for(runtime.ready.wait(), timeout=5)
+        runtime.release.set()
+        outcomes = await asyncio.gather(first_task, second_task)
+
+        accepted = next(
+            result for result in outcomes if isinstance(result, LifecycleOperationResult)
+        )
+        refused = next(result for result in outcomes if isinstance(result, ErrorEnvelope))
+        finished = await finished_operation(client, accepted)
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert "kinby_coder" in refused.message
+        assert finished.state is OperationState.SUCCEEDED
+        assert len(runtime.created) == 1
+        assert not isinstance(listed, ErrorEnvelope)
+        assert len(listed.instances) == 1
 
     asyncio.run(scenario())
 
