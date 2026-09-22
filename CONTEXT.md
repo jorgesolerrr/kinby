@@ -114,6 +114,11 @@ A user's request to stop an **instance** without waiting for its accepted work. 
 The **lifecycle operation** that replaces one **instance**'s container with a new one built from the **image artifact** and **instance secrets** already recorded for it. It is how replaced secrets reach a running instance, and the only way a container the **hub** has lost comes back; it never selects a different image and never touches the instance's storage.
 _Avoid_: rebuild, restart, update
 
+### Instance update
+
+The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares, carrying the instance's **package** selection along. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path, keeps every storage the instance owns, and leaves the instance's own configuration alone. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
+_Avoid_: upgrade, rollout
+
 ### Lifecycle recovery
 
 What the **hub** does with each managed **instance** when it opens its directory: it reads the **instance registry** and the containers labeled as its own, then restores the intended running or stopped state of the containers that are still there. It reports everything else — a missing container, an unfinished **lifecycle operation**, a container it does not own — and changes nothing.

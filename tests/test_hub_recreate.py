@@ -80,6 +80,7 @@ def test_a_recreation_applies_replaced_secrets_through_the_drain_and_stop_path(t
         assert len(runtime.created) == 2
         assert runtime.created[1].env["PROVIDER_TOKEN"] == _SENTINEL
         assert runtime.created[1].image == runtime.created[0].image
+        assert runtime.created[1].storage == runtime.created[0].storage
         assert images.revisions == ["HEAD"]
         assert runtime.removed == [(str(created.instance_id), False)]
         assert runtime.started == [str(created.instance_id)] * 2

@@ -26,6 +26,7 @@ from kinby.contracts import (
     INSTANCE_START,
     INSTANCE_STATUS,
     INSTANCE_STOP,
+    INSTANCE_UPDATE,
     OPERATION_GET,
     Capability,
     ControlToken,
@@ -44,6 +45,7 @@ from kinby.contracts import (
     InstanceStatusCommand,
     InstanceStatusResult,
     InstanceStopCommand,
+    InstanceUpdateCommand,
     IntendedState,
     LifecycleOperationResult,
     OperationGetCommand,
@@ -96,9 +98,10 @@ _INSTANCE_PORT = 8787
 STOP_GRACE_SECONDS = 30
 #: How long a forced instance may take to report its own drain before the container goes down.
 FORCE_ANSWER_SECONDS = 30
-#: How often the hub looks for the container to have actually stopped, and for how long.
-_STOP_POLL_SECONDS = 0.2
+#: How often the hub looks at a container, and how long it waits for a stop or for a boot.
+_POLL_SECONDS = 0.2
 _STOP_OBSERVE_SECONDS = 120
+READY_OBSERVE_SECONDS = 120
 #: Pause before calling a drain again, so a socket that closes immediately does not spin.
 _DRAIN_RETRY_SECONDS = 0.2
 _RUNTIME_STOPPED = frozenset({"absent", "created", "stopped", "failed"})
@@ -107,6 +110,10 @@ _INTERRUPTED_OPERATION = "The hub stopped before this operation finished."
 
 class HubAlreadyRunning(RuntimeError):
     """Another process holds this hub directory."""
+
+
+class ReplacementNotReady(RuntimeError):
+    """The replacement container never reported a booted instance behind it."""
 
 
 def _acquire_directory(directory: Path) -> IO[str]:
@@ -169,6 +176,7 @@ class Hub:
             self.dispatcher.register(INSTANCE_START, self.start)
             self.dispatcher.register(INSTANCE_STOP, self.stop)
             self.dispatcher.register(INSTANCE_RECREATE, self.recreate)
+            self.dispatcher.register(INSTANCE_UPDATE, self.update)
             self.dispatcher.register(INSTANCE_SECRETS_SET, self.set_secrets)
             self.dispatcher.register(INSTANCE_ADOPT_PREVIEW, self.adopt_preview)
             self.dispatcher.register(INSTANCE_ADOPT, self.adopt)
@@ -535,12 +543,7 @@ class Hub:
 
     async def recreate(self, command: InstanceRecreateCommand) -> LifecycleOperationResult:
         """Replace this instance's container from the image and secrets already recorded for it."""
-        record = self._prepared_instance(command.instance_id)
-        active = self.registry.active_operation(record.instance_id)
-        if active is not None:
-            raise LifecycleOperationInFlight(
-                f'Lifecycle operation "{active}" is still running for this instance.'
-            )
+        record = self._claimed(command.instance_id)
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id,
@@ -553,6 +556,16 @@ class Hub:
             operation_id=operation_id,
             instance_id=record.instance_id,
         )
+
+    def _claimed(self, instance_id: UUID) -> ManagedInstance:
+        """One replacement at a time: a client asks again once the running operation finishes."""
+        record = self._prepared_instance(instance_id)
+        active = self.registry.active_operation(record.instance_id)
+        if active is not None:
+            raise LifecycleOperationInFlight(
+                f'Lifecycle operation "{active}" is still running for this instance.'
+            )
+        return record
 
     async def _recreate(self, operation_id: UUID, instance_id: UUID) -> None:
         try:
@@ -574,27 +587,17 @@ class Hub:
 
     async def _replace_container(self, operation_id: UUID, record: ManagedInstance) -> None:
         """Take the existing container down the established way, then build its replacement."""
-        image = self._revalidated_image(operation_id, record)
-        if (await self._runtime.status(record.runtime_id)).state != "absent":
-            await self._stop_running(record, PendingStop(operation_id, asyncio.Event()))
-            self._record(operation_id, "remove", "Removing the container, keeping its storage.")
-            await self._runtime.remove(record.runtime_id)
-        self._record(operation_id, "create", f"Creating the container from image {image}.")
-        await self._runtime.create(
-            InstanceSpec(
-                instance_id=record.runtime_id,
-                image=image,
-                storage=record.storage,
-                env=self._environment(record.path),
-                port=_INSTANCE_PORT,
-            )
-        )
+        self._revalidate(operation_id, record)
+        if not record.image_id:
+            raise ValueError("This instance has no recorded image to recreate its container from.")
+        await self._remove_container(operation_id, record)
+        await self._create_container(operation_id, record, record.image_id)
         if record.intended_state is IntendedState.RUNNING:
             self._record(operation_id, "start", "Restoring the intended running state.")
             await self._runtime.start(record.runtime_id)
 
-    def _revalidated_image(self, operation_id: UUID, record: ManagedInstance) -> str:
-        """Revalidate what a replacement is built from. No revision is resolved here."""
+    def _revalidate(self, operation_id: UUID, record: ManagedInstance) -> None:
+        """Revalidate what a replacement is built on. No revision is resolved here."""
         self._record(
             operation_id,
             "validate",
@@ -607,9 +610,134 @@ class Hub:
                 f'Storage source "{conflict.item.source}" is owned by another instance, '
                 "so this container was not replaced."
             )
-        if not record.image_id:
-            raise ValueError("This instance has no recorded image to recreate its container from.")
-        return record.image_id
+
+    async def _remove_container(self, operation_id: UUID, record: ManagedInstance) -> None:
+        """Drain and remove the container that is there, keeping every storage it owns."""
+        if (await self._runtime.status(record.runtime_id)).state == "absent":
+            return
+        await self._stop_running(record, PendingStop(operation_id, asyncio.Event()))
+        self._record(operation_id, "remove", "Removing the container, keeping its storage.")
+        await self._runtime.remove(record.runtime_id)
+
+    async def _create_container(
+        self,
+        operation_id: UUID,
+        record: ManagedInstance,
+        image: str,
+    ) -> None:
+        self._record(operation_id, "create", f"Creating the container from image {image}.")
+        await self._runtime.create(
+            InstanceSpec(
+                instance_id=record.runtime_id,
+                image=image,
+                storage=record.storage,
+                env=self._environment(record.path),
+                port=_INSTANCE_PORT,
+            )
+        )
+
+    async def update(self, command: InstanceUpdateCommand) -> LifecycleOperationResult:
+        """Move this instance onto the image a selected revision prepares."""
+        record = self._claimed(command.instance_id)
+        operation_id = uuid4()
+        self.registry.record_operation(
+            operation_id,
+            record.instance_id,
+            OperationKind.UPDATE,
+            "Update queued.",
+        )
+        self._schedule(self._update(operation_id, record.instance_id, command.revision))
+        return LifecycleOperationResult(
+            operation_id=operation_id,
+            instance_id=record.instance_id,
+        )
+
+    async def _update(self, operation_id: UUID, instance_id: UUID, revision: str) -> None:
+        try:
+            # The lock serializes the replacement against every other lifecycle mutation.
+            async with self._locks.setdefault(instance_id, asyncio.Lock()):
+                record = self._prepared_instance(instance_id)
+                try:
+                    detail = await self._replace_image(operation_id, record, revision)
+                except Exception as exc:
+                    self._fail(operation_id, record, str(exc) or type(exc).__name__)
+                    return
+                self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, detail)
+        except asyncio.CancelledError:
+            self._fail_if_unfinished(operation_id)
+            raise
+
+    async def _replace_image(
+        self,
+        operation_id: UUID,
+        record: ManagedInstance,
+        revision: str,
+    ) -> str:
+        """Prepare the candidate before anything moves, then replace the container with it.
+
+        A failure before the replacement leaves the instance running on its selected
+        image. A failure after it stays a failure: the new image may already have
+        changed this instance's data, so nothing here starts an older one against it.
+        """
+        self._revalidate(operation_id, record)
+        self._record(operation_id, "image", f"Preparing the image {revision} selects.")
+        selection = ImageSelection(revision=revision, package=record.package)
+        prepared = await self._images.prepare(selection)
+        artifact = prepared.artifact
+        # The candidate must carry this instance's package selection. The configuration
+        # that package once copied is the instance's own and is never seeded again,
+        # so nothing of the instance directory is rewritten here. See ADR 0039.
+        self._package(prepared, selection, self._environment(record.path))
+        self._record(
+            operation_id,
+            "replace",
+            f"Replacing image {record.image_id} with {artifact.image_id}. "
+            "The previous image stays recorded for an explicit recovery.",
+        )
+        await self._remove_container(operation_id, record)
+        await self._create_container(operation_id, record, artifact.image_id)
+        self.registry.record_selection(record.instance_id, revision, artifact)
+        if record.intended_state is IntendedState.STOPPED:
+            return "Instance updated and left stopped."
+        self._record(operation_id, "start", "Starting the replacement.")
+        await self._runtime.start(record.runtime_id)
+        self._record(operation_id, "ready", "Waiting for the replacement to report itself ready.")
+        await self._observe_ready(record)
+        return "Instance updated."
+
+    async def _observe_ready(self, record: ManagedInstance) -> None:
+        """A container that runs is not an instance that booted.
+
+        The replacement answers its own lifecycle endpoint before the update reports
+        success, so an image that fails against the data it now owns fails the update.
+        """
+        try:
+            async with asyncio.timeout(READY_OBSERVE_SECONDS):
+                while not await self._ready(record):
+                    await asyncio.sleep(_POLL_SECONDS)
+        except TimeoutError as exc:
+            raise ReplacementNotReady(
+                "The replacement did not answer its lifecycle endpoint within "
+                f"{READY_OBSERVE_SECONDS} seconds."
+            ) from exc
+
+    async def _ready(self, record: ManagedInstance) -> bool:
+        """An instance still booting has no endpoint yet, and that is not a failure."""
+        status = await self._runtime.status(record.runtime_id)
+        if status.state in _RUNTIME_STOPPED:
+            raise ReplacementNotReady(
+                "The replacement container stopped before the instance answered: "
+                f"{status.detail or status.state}."
+            )
+        if status.healthy is False and status.state == "running":
+            raise ReplacementNotReady("The replacement container reports itself unhealthy.")
+        if status.state != "running":
+            return False
+        try:
+            await self._control.probe(await self._endpoint(record))
+        except ControlUnreachable:
+            return False
+        return True
 
     async def _stop(self, instance_id: UUID, pending: PendingStop) -> None:
         operation_id = pending.operation_id
@@ -736,7 +864,7 @@ class Hub:
         try:
             async with asyncio.timeout(_STOP_OBSERVE_SECONDS):
                 while (await self._runtime.status(runtime_id)).state not in _RUNTIME_STOPPED:
-                    await asyncio.sleep(_STOP_POLL_SECONDS)
+                    await asyncio.sleep(_POLL_SECONDS)
         except TimeoutError as exc:
             raise TimeoutError(
                 f"The container was still running {_STOP_OBSERVE_SECONDS} seconds "
