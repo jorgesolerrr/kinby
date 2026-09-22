@@ -2,6 +2,8 @@
 
 import asyncio
 import shutil
+import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +14,7 @@ from kinby.contracts import (
     INSTANCE_LIST,
     INSTANCE_REMOVE,
     INSTANCE_RESTORE,
+    INSTANCE_SECRETS_SET,
     INSTANCE_START,
     INSTANCE_STATUS,
     INSTANCE_STOP,
@@ -25,6 +28,7 @@ from kinby.contracts import (
     InstanceListCommand,
     InstanceRemoveCommand,
     InstanceRestoreCommand,
+    InstanceSecretsSetCommand,
     InstanceStartCommand,
     InstanceStatusCommand,
     InstanceStopCommand,
@@ -276,6 +280,46 @@ def test_a_start_queued_behind_a_removal_fails_instead_of_starting_it(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_secrets_replacement_queued_behind_a_removal_fails_and_restoration_proceeds(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(holds=True)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control, images=FakeImages())
+        client = hub_client(hub)
+        created = await started_instance(
+            client,
+            hub,
+            secrets={"PROVIDER_TOKEN": "first-value"},
+        )
+        removing = await client.call(
+            INSTANCE_REMOVE,
+            InstanceRemoveCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(removing, LifecycleOperationResult)
+        await asyncio.wait_for(control.asked.wait(), timeout=5)
+
+        replacing = await client.call(
+            INSTANCE_SECRETS_SET,
+            InstanceSecretsSetCommand(
+                instance_id=created.instance_id,
+                secrets={"PROVIDER_TOKEN": _SENTINEL},
+            ),
+        )
+        assert isinstance(replacing, LifecycleOperationResult)
+        control.release.set()
+        assert (await finished_operation(client, removing)).state is OperationState.SUCCEEDED
+        replaced = await finished_operation(client, replacing)
+        outcome = await restored(client, created)
+
+        assert replaced.state is OperationState.FAILED
+        assert "was not found" in replaced.detail
+        assert instance_environment(hub, created.instance_id)["PROVIDER_TOKEN"] == "first-value"
+        assert outcome.state is OperationState.SUCCEEDED
+        assert [summary.instance_id for summary in await listed(client)] == [created.instance_id]
+
+    asyncio.run(scenario())
+
+
 def test_a_removal_is_refused_while_another_operation_owns_the_instance(tmp_path):
     async def scenario() -> None:
         control = FakeControl(holds=True)
@@ -325,6 +369,37 @@ def test_a_removal_leaves_a_container_another_manager_labels(tmp_path):
         assert 'Compose project "kinby"' in outcome.detail
         assert runtime.removed == []
         assert [summary.instance_id for summary in await listed(client)] == [created.instance_id]
+
+    asyncio.run(scenario())
+
+
+def test_a_removal_that_failed_before_its_first_step_stays_unfinished_after_restart(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime)
+        client = hub_client(hub)
+        created = await created_instance(client)
+        runtime_id = str(created.instance_id)
+        runtime.descriptions[runtime_id] = ContainerDescription(
+            runtime_id=runtime_id,
+            image="sha256:selected-image",
+            owner=ContainerOwner.COMPOSE,
+            owner_name="kinby",
+            storage=(),
+        )
+        outcome = await removed(client, created)
+        assert outcome.state is OperationState.FAILED
+        hub.close()
+
+        reopened = hub_at(tmp_path / "hub", runtime=runtime)
+        recovery = await reopened.recover()
+
+        assert [instance.state for instance in recovery.instances] == [RecoveredState.INCOMPLETE]
+        assert "Remove the instance again" in recovery.instances[0].detail
+        assert [summary.instance_id for summary in await listed(hub_client(reopened))] == [
+            created.instance_id
+        ]
+        assert runtime.started == []
 
     asyncio.run(scenario())
 
@@ -657,6 +732,113 @@ class CrashingRestoration(FakeRuntime):
             await super().create(spec)
         self.crashed.set()
         raise asyncio.CancelledError
+
+
+def _snapshot(source: Path, destination: Path) -> None:
+    """Copy the registry the way a killed process leaves it on disk."""
+    destination.mkdir(parents=True)
+    database = source / "registry.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    shutil.copy(database, destination / "registry.sqlite")
+
+
+async def _drop_scheduled_work(*hubs: Hub | None) -> None:
+    """Cancel work still scheduled, then release each hub directory."""
+    current = asyncio.current_task()
+    pending = [task for task in asyncio.all_tasks() if task is not current]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    for hub in hubs:
+        if hub is not None:
+            hub.close()
+
+
+def test_a_start_accepted_during_a_removal_does_not_hide_the_running_container(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(holds=True)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        reopened: Hub | None = None
+        try:
+            client = hub_client(hub)
+            created = await started_instance(client, hub)
+            removing = await client.call(
+                INSTANCE_REMOVE,
+                InstanceRemoveCommand(instance_id=created.instance_id),
+            )
+            assert isinstance(removing, LifecycleOperationResult)
+            await asyncio.wait_for(control.asked.wait(), timeout=5)
+            starting = await client.call(
+                INSTANCE_START,
+                InstanceStartCommand(instance_id=created.instance_id),
+            )
+            assert isinstance(starting, LifecycleOperationResult)
+            _snapshot(hub.directory, tmp_path / "crashed")
+
+            runtime_id = str(created.instance_id)
+            restarted = FakeRuntime()
+            restarted.states[runtime_id] = RuntimeStatus("running", True)
+            restarted.addresses[runtime_id] = runtime.addresses[runtime_id]
+            restarted.descriptions[runtime_id] = runtime.descriptions[runtime_id]
+            reopened = hub_at(tmp_path / "crashed", runtime=restarted, control=FakeControl())
+            recovery = await reopened.recover()
+            again = await removed(hub_client(reopened), created)
+
+            assert [instance.state for instance in recovery.instances] == [
+                RecoveredState.INCOMPLETE
+            ]
+            assert "Remove the instance again" in recovery.instances[0].detail
+            assert restarted.started == []
+            assert again.state is OperationState.SUCCEEDED
+            assert [summary.instance_id for summary in await listed(hub_client(reopened))] == []
+        finally:
+            await _drop_scheduled_work(hub, reopened)
+
+    asyncio.run(scenario())
+
+
+def test_a_start_accepted_during_a_removal_does_not_hide_a_container_that_is_gone(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(holds=True)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        reopened: Hub | None = None
+        try:
+            client = hub_client(hub)
+            created = await started_instance(client, hub)
+            removing = await client.call(
+                INSTANCE_REMOVE,
+                InstanceRemoveCommand(instance_id=created.instance_id),
+            )
+            assert isinstance(removing, LifecycleOperationResult)
+            await asyncio.wait_for(control.asked.wait(), timeout=5)
+            starting = await client.call(
+                INSTANCE_START,
+                InstanceStartCommand(instance_id=created.instance_id),
+            )
+            assert isinstance(starting, LifecycleOperationResult)
+            _snapshot(hub.directory, tmp_path / "crashed")
+
+            restarted = FakeRuntime()
+            reopened = hub_at(tmp_path / "crashed", runtime=restarted)
+            recovery = await reopened.recover()
+            client = hub_client(reopened)
+
+            assert [instance.state for instance in recovery.instances] == [RecoveredState.REMOVED]
+            assert "Removal reached" in recovery.instances[0].detail
+            assert await listed(client) == []
+            assert [summary.instance_id for summary in await listed(client, removed=True)] == [
+                created.instance_id
+            ]
+            assert restarted.created == []
+            assert restarted.started == []
+        finally:
+            await _drop_scheduled_work(hub, reopened)
+
+    asyncio.run(scenario())
 
 
 def test_a_completed_removal_is_recovered_as_removed(tmp_path):

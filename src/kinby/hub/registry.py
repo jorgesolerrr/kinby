@@ -797,17 +797,32 @@ class HubRegistry:
     def last_operation(self, instance_id: UUID) -> OperationGetResult | None:
         """The latest operation that changed this instance's container.
 
-        Replacing secrets writes a file and leaves the container where it is, so a
-        later secrets operation does not hide an earlier start, stop, or recreation.
+        Replacing secrets writes a file and leaves the container where it is. A
+        queued operation that never started leaves the container where it is too.
+        A removal counts even before its first step, because recovery finishes
+        one that the process died inside.
         """
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT id FROM operations
+                SELECT operations.id FROM operations
                 WHERE instance_id = ? AND kind != ?
-                ORDER BY rowid DESC LIMIT 1
+                  AND (
+                    kind = ?
+                    OR state = ?
+                    OR EXISTS (
+                        SELECT 1 FROM operation_steps
+                        WHERE operation_steps.operation_id = operations.id
+                    )
+                  )
+                ORDER BY operations.rowid DESC LIMIT 1
                 """,
-                (str(instance_id), OperationKind.SECRETS.value),
+                (
+                    str(instance_id),
+                    OperationKind.SECRETS.value,
+                    OperationKind.REMOVE.value,
+                    OperationState.SUCCEEDED.value,
+                ),
             ).fetchone()
         return self.operation(UUID(row[0])) if row is not None else None
 

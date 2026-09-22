@@ -371,7 +371,11 @@ class Hub:
         try:
             # The lock serializes this write against every other lifecycle mutation.
             async with self._locks.setdefault(instance_id, asyncio.Lock()):
-                record = self._active_instance(instance_id)
+                try:
+                    record = self._active_instance(instance_id)
+                except ManagedInstanceNotFound as exc:
+                    self.registry.finish_operation(operation_id, OperationState.FAILED, str(exc))
+                    return
                 self.registry.advance_operation(
                     operation_id,
                     "secrets",
