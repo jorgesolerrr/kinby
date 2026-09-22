@@ -694,6 +694,7 @@ class Hub:
             f"Replacing image {record.image_id} with {artifact.image_id}. "
             "The previous image stays recorded for an explicit recovery.",
         )
+        self.registry.stage_candidate(record.instance_id, revision, artifact)
         await self._remove_container(operation_id, record)
         await self._create_container(operation_id, record, artifact.image_id)
         self.registry.record_selection(record.instance_id, revision, artifact)

@@ -76,6 +76,7 @@ async def _recover(
         return await _unclaimed(record, registry, runtime, status)
     if status.state == "absent":
         return _missing(record, registry)
+    await _accept_replacement(record, registry, runtime)
     if status.state not in _STOPPED_STATES:
         return _running(record, status)
     if record.intended_state is IntendedState.STOPPED:
@@ -133,6 +134,32 @@ async def _unfinished_handoff(
         f'"{described.owner_name}" still holds container "{record.runtime_id}". '
         "Adopt the instance again.",
     )
+
+
+async def _accept_replacement(
+    record: ManagedInstance,
+    registry: HubRegistry,
+    runtime: ContainerRuntime,
+) -> None:
+    """Record a prepared image once the container of that image is the one that exists.
+
+    The selection is written when the container is created, and a process can die
+    in the gap after that create. The container is the evidence. A staged image
+    the container does not have stays staged, and the recorded selection stays.
+    """
+    if registry.candidate_image(record.instance_id) is None:
+        return
+    last = registry.last_operation(record.instance_id)
+    if (
+        last is None
+        or last.kind is not OperationKind.UPDATE
+        or last.state is not OperationState.FAILED
+    ):
+        return
+    described = await runtime.describe(record.runtime_id)
+    if described is None:
+        return
+    registry.accept_candidate(record.instance_id, described.image)
 
 
 def _missing(record: ManagedInstance, registry: HubRegistry) -> RecoveredInstance:

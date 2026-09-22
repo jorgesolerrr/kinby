@@ -114,6 +114,12 @@ class HubRegistry:
                     dependencies TEXT NOT NULL,
                     package_selection TEXT
                 );
+                CREATE TABLE IF NOT EXISTS update_candidates (
+                    instance_id TEXT PRIMARY KEY REFERENCES instances(id),
+                    requested_revision TEXT NOT NULL,
+                    source_revision TEXT NOT NULL,
+                    image_id TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS hub_metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -586,14 +592,77 @@ class HubRegistry:
         explicit recovery reads.
         """
         with self._connect() as connection:
+            self._write_selection(
+                connection,
+                instance_id,
+                revision,
+                artifact.revision,
+                artifact.image_id,
+            )
+
+    def stage_candidate(self, instance_id: UUID, revision: str, artifact: ImageArtifact) -> None:
+        """Remember the image an update prepared, without selecting it yet.
+
+        The selection changes once a container of that image exists. Recovery reads
+        this row when the process dies after creating that container and before
+        the selection is recorded.
+        """
+        with self._connect() as connection:
             connection.execute(
                 """
-                UPDATE instances
-                SET requested_revision = ?, source_revision = ?, image_id = ?
-                WHERE id = ?
+                INSERT INTO update_candidates (
+                    instance_id, requested_revision, source_revision, image_id
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(instance_id) DO UPDATE SET
+                    requested_revision = excluded.requested_revision,
+                    source_revision = excluded.source_revision,
+                    image_id = excluded.image_id
                 """,
-                (revision, artifact.revision, artifact.image_id, str(instance_id)),
+                (str(instance_id), revision, artifact.revision, artifact.image_id),
             )
+
+    def candidate_image(self, instance_id: UUID) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT image_id FROM update_candidates WHERE instance_id = ?",
+                (str(instance_id),),
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def accept_candidate(self, instance_id: UUID, image_id: str) -> None:
+        """Select the staged image when the container that exists is that image."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT requested_revision, source_revision, image_id
+                FROM update_candidates WHERE instance_id = ?
+                """,
+                (str(instance_id),),
+            ).fetchone()
+            if row is None or row[2] != image_id:
+                return
+            self._write_selection(connection, instance_id, row[0], row[1], row[2])
+
+    @staticmethod
+    def _write_selection(
+        connection: sqlite3.Connection,
+        instance_id: UUID,
+        requested_revision: str,
+        source_revision: str,
+        image_id: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE instances
+            SET requested_revision = ?, source_revision = ?, image_id = ?
+            WHERE id = ?
+            """,
+            (requested_revision, source_revision, image_id, str(instance_id)),
+        )
+        connection.execute(
+            "DELETE FROM update_candidates WHERE instance_id = ?",
+            (str(instance_id),),
+        )
 
     def mark_prepared(self, instance_id: UUID) -> None:
         with self._connect() as connection:
