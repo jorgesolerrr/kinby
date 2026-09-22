@@ -7,6 +7,7 @@ from kinby.cli.client import ContractClient
 from kinby.contracts import (
     INSTANCE_CREATE,
     INSTANCE_LIST,
+    INSTANCE_RECREATE,
     INSTANCE_STATUS,
     INSTANCE_STOP,
     INSTANCE_UPDATE,
@@ -16,6 +17,7 @@ from kinby.contracts import (
     InstanceCreateCommand,
     InstanceListCommand,
     InstanceListResult,
+    InstanceRecreateCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
     InstanceStopCommand,
@@ -30,7 +32,7 @@ from kinby.contracts import (
     ProcessState,
     Scope,
 )
-from kinby.hub import ImageSelection, PreparedImage, RecoveredState, RuntimeStatus
+from kinby.hub import ImageSelection, InstanceSpec, PreparedImage, RecoveredState, RuntimeStatus
 from kinby.packages import InstalledPackage, PackageDescriptor, RequiredSecret
 from tests.test_hub import (
     FakeControl,
@@ -100,6 +102,7 @@ def test_an_update_drains_the_instance_and_replaces_it_with_the_prepared_image(t
         assert runtime.removed == [(str(created.instance_id), False)]
         assert len(runtime.created) == 2
         assert runtime.created[1].image == "sha256:v0.2.0-image"
+        assert runtime.created[1].storage == runtime.created[0].storage
         assert runtime.started == [str(created.instance_id)] * 2
         assert memory.read_text(encoding="utf-8") == "remembered\n"
 
@@ -308,6 +311,7 @@ def test_an_interruption_around_the_replacement_is_visible_and_the_update_can_be
         reopened = hub_at(tmp_path / "hub", runtime=runtime, images=images)
         recovery = await reopened.recover()
         client = hub_client(reopened)
+        before = await client.call(INSTANCE_LIST, InstanceListCommand())
         again = await client.call(
             INSTANCE_UPDATE,
             InstanceUpdateCommand(instance_id=created.instance_id, revision="v0.2.0"),
@@ -317,12 +321,66 @@ def test_an_interruption_around_the_replacement_is_visible_and_the_update_can_be
 
         assert [instance.state for instance in recovery.instances] == [RecoveredState.MISSING]
         assert "update" in recovery.instances[0].detail
+        assert isinstance(before, InstanceListResult)
+        assert before.instances[0].image_id == "sha256:HEAD-image"
         assert outcome.state is OperationState.SUCCEEDED
         assert [step.name for step in outcome.steps] == ["validate", "image", "replace", "create"]
         assert len(runtime.created) == 2
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
         assert isinstance(listed, InstanceListResult)
         assert listed.instances[0].image_id == "sha256:v0.2.0-image"
+
+    asyncio.run(scenario())
+
+
+class CrashAfterReplacement(FakeRuntime):
+    """Die once the replacement container exists and before its image is recorded."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.crashed = asyncio.Event()
+
+    async def create(self, spec: InstanceSpec) -> None:
+        await super().create(spec)
+        if len(self.created) > 1 and not self.crashed.is_set():
+            self.crashed.set()
+            raise asyncio.CancelledError
+
+
+def test_an_interruption_after_the_replacement_exists_keeps_that_image(tmp_path):
+    async def scenario() -> None:
+        runtime = CrashAfterReplacement()
+        images = CandidateImages()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images, control=FakeControl())
+        created = await started_instance(hub_client(hub), hub)
+        interrupted = await hub_client(hub).call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(instance_id=created.instance_id, revision="v0.2.0"),
+        )
+        assert isinstance(interrupted, LifecycleOperationResult)
+        await asyncio.wait_for(runtime.crashed.wait(), timeout=5)
+        await asyncio.sleep(0)
+        hub.close()
+
+        reopened = hub_at(tmp_path / "hub", runtime=runtime, images=images)
+        recovery = await reopened.recover()
+        client = hub_client(reopened)
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        again = await client.call(
+            INSTANCE_RECREATE,
+            InstanceRecreateCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(again, LifecycleOperationResult)
+        outcome = await finished_operation(client, again)
+
+        assert [instance.state for instance in recovery.instances] == [RecoveredState.FAILED]
+        assert "update" in recovery.instances[0].detail
+        assert isinstance(listed, InstanceListResult)
+        assert listed.instances[0].image_id == "sha256:v0.2.0-image"
+        assert listed.instances[0].source_revision == "v0.2.0-resolved"
+        assert outcome.state is OperationState.SUCCEEDED
+        assert runtime.created[-1].image == "sha256:v0.2.0-image"
+        assert runtime.created[-1].storage == runtime.created[0].storage
 
     asyncio.run(scenario())
 

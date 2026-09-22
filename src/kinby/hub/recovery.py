@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
-from kinby.contracts import IntendedState, OperationState
+from kinby.contracts import IntendedState, OperationKind, OperationState
 from kinby.hub.models import (
     ContainerRuntime,
     LifecycleRecovery,
@@ -62,7 +62,7 @@ async def _recover(
         return _at(
             record,
             RecoveredState.CONFLICTED,
-            f'Storage source "{conflict.source}" is owned by another instance.',
+            f'Storage source "{conflict.item.source}" is owned by instance {conflict.owner}.',
         )
     try:
         status = await runtime.status(record.runtime_id)
@@ -73,9 +73,10 @@ async def _recover(
             f"The container runtime could not be reached: {exc or type(exc).__name__}",
         )
     if not record.prepared:
-        return _finish_create(record, registry, status)
+        return await _unclaimed(record, registry, runtime, status)
     if status.state == "absent":
         return _missing(record, registry)
+    await _accept_replacement(record, registry, runtime)
     if status.state not in _STOPPED_STATES:
         return _running(record, status)
     if record.intended_state is IntendedState.STOPPED:
@@ -98,6 +99,67 @@ def _running(record: ManagedInstance, status: RuntimeStatus) -> RecoveredInstanc
             "Stop it again to take it down.",
         )
     return _at(record, RecoveredState.RUNNING, "The container is still running.")
+
+
+async def _unclaimed(
+    record: ManagedInstance,
+    registry: HubRegistry,
+    runtime: ContainerRuntime,
+    status: RuntimeStatus,
+) -> RecoveredInstance:
+    """An instance the hub never finished taking on. What that means depends on how it began."""
+    last = registry.last_operation(record.instance_id)
+    if last is not None and last.kind is OperationKind.ADOPT:
+        return await _unfinished_handoff(record, runtime)
+    return _finish_create(record, registry, status)
+
+
+async def _unfinished_handoff(
+    record: ManagedInstance,
+    runtime: ContainerRuntime,
+) -> RecoveredInstance:
+    """Ownership never moved, so say who holds the data instead of guessing that it is ours."""
+    described = await runtime.describe(record.runtime_id)
+    if described is None:
+        return _at(
+            record,
+            RecoveredState.INCOMPLETE,
+            f'The handoff did not take ownership, and container "{record.runtime_id}" is gone. '
+            "Adopt the instance again from the container that runs it.",
+        )
+    return _at(
+        record,
+        RecoveredState.INCOMPLETE,
+        f"The handoff did not take ownership: {described.owner.value} "
+        f'"{described.owner_name}" still holds container "{record.runtime_id}". '
+        "Adopt the instance again.",
+    )
+
+
+async def _accept_replacement(
+    record: ManagedInstance,
+    registry: HubRegistry,
+    runtime: ContainerRuntime,
+) -> None:
+    """Record a prepared image once the container of that image is the one that exists.
+
+    The selection is written when the container is created, and a process can die
+    in the gap after that create. The container is the evidence. A staged image
+    the container does not have stays staged, and the recorded selection stays.
+    """
+    if registry.candidate_image(record.instance_id) is None:
+        return
+    last = registry.last_operation(record.instance_id)
+    if (
+        last is None
+        or last.kind is not OperationKind.UPDATE
+        or last.state is not OperationState.FAILED
+    ):
+        return
+    described = await runtime.describe(record.runtime_id)
+    if described is None:
+        return
+    registry.accept_candidate(record.instance_id, described.image)
 
 
 def _missing(record: ManagedInstance, registry: HubRegistry) -> RecoveredInstance:

@@ -12,6 +12,7 @@ import pytest
 from docker.errors import NotFound
 
 from docker import DockerClient
+from kinby.contracts import StorageItem, StorageKind
 from kinby.hub import (
     DockerImageBackend,
     DockerRuntime,
@@ -36,7 +37,9 @@ class FakeNetworks:
 
 
 class FakeContainer:
-    def __init__(self, status: str, labels: dict[str, str]) -> None:
+    def __init__(self, status: str, labels: dict[str, str], name: str = "") -> None:
+        self.name = name
+        self.status = status
         self.attrs: dict[str, object] = {"State": {"Status": status}}
         self.labels = labels
         self.stop_timeout: int | None = None
@@ -51,6 +54,7 @@ class FakeContainer:
 class FakeContainers:
     def __init__(self) -> None:
         self.container: FakeContainer | None = None
+        self.named: dict[str, FakeContainer] = {}
         self.arguments: tuple[object, object] | None = None
         self.options: dict[str, object] = {}
         self.thread_id: int | None = None
@@ -64,9 +68,12 @@ class FakeContainers:
         return object()
 
     def get(self, name: str) -> FakeContainer:
-        if self.container is None:
+        found = self.named.get(name, self.container)
+        if found is None:
             raise NotFound(name)
-        return self.container
+        if not found.name:
+            found.name = name
+        return found
 
     def run(self, image: object, command: object, **options: object) -> bytes:
         self.run_arguments = (image, command)
@@ -92,15 +99,12 @@ class FakeDockerClient:
         self.networks = FakeNetworks()
 
 
-def test_docker_runtime_translates_the_host_mount_and_offloads_creation(tmp_path):
+def test_docker_runtime_mounts_the_recorded_storage_and_offloads_creation(tmp_path):
     async def scenario() -> tuple[FakeDockerClient, int]:
         client = FakeDockerClient()
         instance_id = str(uuid.uuid4())
-        (tmp_path / "inside" / "instances" / instance_id).mkdir(parents=True)
         runtime = DockerRuntime(
             "hub-id",
-            tmp_path / "inside",
-            Path("/srv/kinby"),
             network="kinby_private",
             client=cast(DockerClient, client),
         )
@@ -109,6 +113,26 @@ def test_docker_runtime_translates_the_host_mount_and_offloads_creation(tmp_path
             InstanceSpec(
                 instance_id=instance_id,
                 image="sha256:selected",
+                storage=(
+                    StorageItem(
+                        kind=StorageKind.BIND,
+                        source=f"/srv/kinby/instances/{instance_id}",
+                        destination="/instance",
+                        writable=True,
+                    ),
+                    StorageItem(
+                        kind=StorageKind.VOLUME,
+                        source=f"kinby-{instance_id}-workspace",
+                        destination="/instance/workspace",
+                        writable=True,
+                    ),
+                    StorageItem(
+                        kind=StorageKind.BIND,
+                        source="/home/jorge/.config/Anthropic",
+                        destination="/anthropic-profile",
+                        writable=False,
+                    ),
+                ),
                 env={"TOKEN": "value"},
             )
         )
@@ -122,7 +146,7 @@ def test_docker_runtime_translates_the_host_mount_and_offloads_creation(tmp_path
     assert isinstance(name, str)
     assert client.containers.options["labels"] == {
         "kinby.hub": "hub-id",
-        "kinby.instance": name.removeprefix("kinby-"),
+        "kinby.instance": name,
         # The hub reads the port back off the container when it routes to the instance.
         "kinby.port": "8787",
     }
@@ -130,6 +154,9 @@ def test_docker_runtime_translates_the_host_mount_and_offloads_creation(tmp_path
     assert isinstance(mounts, list)
     assert mounts[0]["Source"].startswith("/srv/kinby/instances/")
     assert mounts[0]["Target"] == "/instance"
+    assert mounts[0]["ReadOnly"] is False
+    assert mounts[1]["Type"] == "volume"
+    assert mounts[2]["ReadOnly"] is True
     assert client.containers.options["network"] == "kinby_private"
     assert client.containers.options["restart_policy"] == {"Name": "unless-stopped"}
 
@@ -241,13 +268,7 @@ def test_real_docker_runtime_labels_stopped_and_independent_instances(tmp_path):
         network_name = f"kinby-test-{uuid.uuid4().hex}"
         await asyncio.to_thread(client.networks.create, network_name, internal=False)
         hub_id = str(uuid.uuid4())
-        runtime = DockerRuntime(
-            hub_id,
-            tmp_path,
-            tmp_path,
-            network=network_name,
-            client=client,
-        )
+        runtime = DockerRuntime(hub_id, network=network_name, client=client)
         first = str(uuid.uuid4())
         second = str(uuid.uuid4())
         try:
@@ -260,7 +281,7 @@ def test_real_docker_runtime_labels_stopped_and_independent_instances(tmp_path):
                         command=("sh", "-c", "sleep 60"),
                     )
                 )
-            first_container = await asyncio.to_thread(client.containers.get, f"kinby-{first}")
+            first_container = await asyncio.to_thread(client.containers.get, first)
             assert first_container.status == "created"
             assert first_container.labels == {
                 "kinby.hub": hub_id,
@@ -271,15 +292,13 @@ def test_real_docker_runtime_labels_stopped_and_independent_instances(tmp_path):
             del runtime
             await asyncio.sleep(0.1)
             for instance_id in (first, second):
-                container = await asyncio.to_thread(client.containers.get, f"kinby-{instance_id}")
+                container = await asyncio.to_thread(client.containers.get, instance_id)
                 await asyncio.to_thread(container.reload)
                 assert container.status == "running"
         finally:
             for instance_id in (first, second):
                 try:
-                    container = await asyncio.to_thread(
-                        client.containers.get, f"kinby-{instance_id}"
-                    )
+                    container = await asyncio.to_thread(client.containers.get, instance_id)
                 except Exception:
                     continue
                 await asyncio.to_thread(container.remove, force=True, v=True)
@@ -346,8 +365,8 @@ def test_a_real_docker_hub_restart_keeps_one_instance_up_and_starts_the_other_ag
             runtime_ids.append(str(first.instance_id))
             second = await started_instance(hub_client(hub), hub)
             runtime_ids.append(str(second.instance_id))
-            running = await asyncio.to_thread(client.containers.get, f"kinby-{first.instance_id}")
-            stopping = await asyncio.to_thread(client.containers.get, f"kinby-{second.instance_id}")
+            running = await asyncio.to_thread(client.containers.get, str(first.instance_id))
+            stopping = await asyncio.to_thread(client.containers.get, str(second.instance_id))
             await asyncio.to_thread(stopping.stop, timeout=1)
             hub.close()
 
@@ -360,11 +379,11 @@ def test_a_real_docker_hub_restart_keeps_one_instance_up_and_starts_the_other_ag
                 first.instance_id: RecoveredState.RUNNING,
                 second.instance_id: RecoveredState.STARTED,
             }
-            kept = await asyncio.to_thread(client.containers.get, f"kinby-{first.instance_id}")
+            kept = await asyncio.to_thread(client.containers.get, str(first.instance_id))
             assert kept.id == running.id
             await asyncio.to_thread(kept.reload)
             assert kept.status == "running"
-            started = await asyncio.to_thread(client.containers.get, f"kinby-{second.instance_id}")
+            started = await asyncio.to_thread(client.containers.get, str(second.instance_id))
             await asyncio.to_thread(started.reload)
             assert started.status == "running"
         finally:
@@ -386,22 +405,19 @@ def _docker_hub(
     registry = HubRegistry(directory)
     return Hub(
         directory,
-        runtime=DockerRuntime(
-            registry.hub_id(),
-            directory,
-            directory,
-            network=network,
-            client=client,
-        ),
+        runtime=DockerRuntime(registry.hub_id(), network=network, client=client),
         images=images,
     )
 
 
 async def _discard(client: DockerClient, runtime_id: str) -> None:
-    try:
-        container = await asyncio.to_thread(client.containers.get, f"kinby-{runtime_id}")
-    except Exception:
-        container = None
+    container = None
+    for name in (runtime_id, f"kinby-{runtime_id}"):
+        try:
+            container = await asyncio.to_thread(client.containers.get, name)
+        except Exception:
+            continue
+        break
     if container is not None:
         await asyncio.to_thread(container.remove, force=True, v=True)
     for suffix in ("workspace", "codex"):
@@ -415,22 +431,16 @@ async def _discard(client: DockerClient, runtime_id: str) -> None:
 @pytest.mark.parametrize(
     ("status", "labels", "expected"),
     [
-        ("running", {"kinby.port": "8787"}, "http://kinby-abc:8787"),
-        ("running", {"kinby.port": "9000"}, "http://kinby-abc:9000"),
+        ("running", {"kinby.port": "8787"}, "http://abc:8787"),
+        ("running", {"kinby.port": "9000"}, "http://abc:9000"),
         ("exited", {"kinby.port": "8787"}, None),
-        ("running", {}, "http://kinby-abc:8787"),
+        ("running", {}, "http://abc:8787"),
     ],
 )
 def test_the_docker_runtime_addresses_only_a_running_instance(tmp_path, status, labels, expected):
     client = FakeDockerClient()
     client.containers.container = FakeContainer(status, labels)
-    runtime = DockerRuntime(
-        "hub-id",
-        tmp_path,
-        tmp_path,
-        network="kinby_private",
-        client=cast(DockerClient, client),
-    )
+    runtime = DockerRuntime("hub-id", network="kinby_private", client=cast(DockerClient, client))
 
     assert asyncio.run(runtime.address("abc")) == expected
 
@@ -438,13 +448,31 @@ def test_the_docker_runtime_addresses_only_a_running_instance(tmp_path, status, 
 def test_the_docker_runtime_has_no_address_for_a_container_that_is_gone(tmp_path):
     runtime = DockerRuntime(
         "hub-id",
-        tmp_path,
-        tmp_path,
         network="kinby_private",
         client=cast(DockerClient, FakeDockerClient()),
     )
 
     assert asyncio.run(runtime.address("abc")) is None
+
+
+def test_the_docker_runtime_reaches_a_container_that_still_uses_the_legacy_name():
+    """Hub records store the unprefixed id; earlier releases named the container kinby-<id>."""
+    client = FakeDockerClient()
+    client.containers.named["kinby-abc"] = FakeContainer("running", {"kinby.port": "8787"})
+    runtime = DockerRuntime(
+        "hub-id",
+        network="kinby_private",
+        client=cast(DockerClient, client),
+    )
+
+    async def scenario() -> tuple[str, str | None]:
+        status = await runtime.status("abc")
+        return status.state, await runtime.address("abc")
+
+    state, address = asyncio.run(scenario())
+
+    assert state == "running"
+    assert address == "http://kinby-abc:8787"
 
 
 def test_docker_runtime_stops_within_the_grace_period(tmp_path):
@@ -453,8 +481,6 @@ def test_docker_runtime_stops_within_the_grace_period(tmp_path):
         client.containers.container = FakeContainer("running", {"kinby.port": "8787"})
         runtime = DockerRuntime(
             "hub-id",
-            tmp_path,
-            tmp_path,
             network="kinby_private",
             client=cast(DockerClient, client),
         )
@@ -596,8 +622,6 @@ def _runtime_on(tmp_path: Path, networks: _RecordingNetworks) -> DockerRuntime:
     (tmp_path / "instances" / "abc").mkdir(parents=True)
     return DockerRuntime(
         "hub-id",
-        tmp_path,
-        tmp_path,
         network="kinby_private",
         client=cast(DockerClient, _Client()),
     )

@@ -1,6 +1,7 @@
 """Create, start, and inspect containerized kinby instances."""
 
 from kinby.hub.access import HubAccess
+from kinby.hub.adoption import hub_instance_id, preflight
 from kinby.hub.control import (
     ControlConnectionLost,
     ControlEndpoint,
@@ -14,6 +15,7 @@ from kinby.hub.factory import build_docker_hub
 from kinby.hub.images import ImagePreparer
 from kinby.hub.models import (
     BuildResult,
+    ContainerDescription,
     ContainerRuntime,
     ImageArtifact,
     ImageBackend,
@@ -29,12 +31,13 @@ from kinby.hub.models import (
     RecoveredState,
     RuntimeStatus,
 )
-from kinby.hub.registry import HubRegistry
+from kinby.hub.registry import HubRegistry, StorageConflict
 from kinby.hub.server import HubContractServer
 from kinby.hub.service import Hub
 
 __all__ = [
     "BuildResult",
+    "ContainerDescription",
     "ContainerRuntime",
     "ControlConnectionLost",
     "ControlEndpoint",
@@ -62,5 +65,8 @@ __all__ = [
     "RecoveredInstance",
     "RecoveredState",
     "RuntimeStatus",
+    "StorageConflict",
     "build_docker_hub",
+    "hub_instance_id",
+    "preflight",
 ]

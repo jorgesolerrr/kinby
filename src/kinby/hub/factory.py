@@ -22,13 +22,7 @@ def build_docker_hub(
     directory = Path(directory).resolve()
     registry = HubRegistry(directory)
     client = docker.from_env()
-    runtime = DockerRuntime(
-        registry.hub_id(),
-        directory,
-        docker_host_directory,
-        network=network,
-        client=client,
-    )
+    runtime = DockerRuntime(registry.hub_id(), network=network, client=client)
     images = ImagePreparer(
         source_directory,
         registry,

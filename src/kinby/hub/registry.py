@@ -24,6 +24,14 @@ from kinby.hub.models import ImageArtifact
 
 
 @dataclass(frozen=True)
+class StorageConflict:
+    """Storage one instance would claim that another instance already owns."""
+
+    item: StorageItem
+    owner: UUID
+
+
+@dataclass(frozen=True)
 class ManagedInstance:
     instance_id: UUID
     path: Path
@@ -105,6 +113,12 @@ class HubRegistry:
                     base_images TEXT NOT NULL,
                     dependencies TEXT NOT NULL,
                     package_selection TEXT
+                );
+                CREATE TABLE IF NOT EXISTS update_candidates (
+                    instance_id TEXT PRIMARY KEY REFERENCES instances(id),
+                    requested_revision TEXT NOT NULL,
+                    source_revision TEXT NOT NULL,
+                    image_id TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS hub_metadata (
                     key TEXT PRIMARY KEY,
@@ -457,24 +471,9 @@ class HubRegistry:
     ) -> None:
         conflict = self.conflicting_storage(instance_id, storage)
         if conflict is not None:
-            raise ValueError(f'Storage source "{conflict.source}" is already owned.')
+            raise ValueError(f'Storage source "{conflict.item.source}" is already owned.')
         with self._connect() as connection:
-            connection.executemany(
-                """
-                INSERT INTO storage (instance_id, kind, source, destination, writable)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        str(instance_id),
-                        item.kind.value,
-                        item.source,
-                        item.destination,
-                        item.writable,
-                    )
-                    for item in storage
-                ],
-            )
+            self._insert_storage(connection, instance_id, storage)
             connection.execute(
                 """
                 UPDATE instances
@@ -483,6 +482,106 @@ class HubRegistry:
                 """,
                 (artifact.revision, artifact.image_id, str(instance_id)),
             )
+
+    @staticmethod
+    def _insert_storage(
+        connection: sqlite3.Connection,
+        instance_id: UUID,
+        storage: tuple[StorageItem, ...],
+    ) -> None:
+        connection.executemany(
+            """
+            INSERT INTO storage (instance_id, kind, source, destination, writable)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    str(instance_id),
+                    item.kind.value,
+                    item.source,
+                    item.destination,
+                    item.writable,
+                )
+                for item in storage
+            ],
+        )
+
+    def begin_adoption(self, instance: ManagedInstance, operation_id: UUID) -> UUID:
+        """Reserve the handoff, or return the unfinished operation already running.
+
+        The identity is derived from the storage, so a handoff that was interrupted
+        writes over its own unfinished record instead of opening a second one. A
+        prepared instance, another active operation, or storage another record
+        already owns is refused here, in one writer transaction.
+        """
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT prepared FROM instances WHERE id = ?",
+                (str(instance.instance_id),),
+            ).fetchone()
+            if existing is not None and existing[0]:
+                raise ValueError(
+                    f"This hub already manages the instance at {instance.path} as "
+                    f"{instance.instance_id}."
+                )
+            active = connection.execute(
+                """
+                SELECT id FROM operations
+                WHERE instance_id = ? AND state IN (?, ?)
+                ORDER BY rowid LIMIT 1
+                """,
+                (
+                    str(instance.instance_id),
+                    OperationState.PENDING.value,
+                    OperationState.RUNNING.value,
+                ),
+            ).fetchone()
+            if active is not None:
+                return UUID(active[0])
+            conflict = self._writable_conflict(connection, instance.instance_id, instance.storage)
+            if conflict is not None:
+                raise ValueError(
+                    f'Writable storage "{conflict.item.source}" is already recorded for instance '
+                    f"{conflict.owner}."
+                )
+            connection.execute(
+                "DELETE FROM storage WHERE instance_id = ?",
+                (str(instance.instance_id),),
+            )
+            connection.execute(
+                """
+                INSERT INTO instances (
+                    id, path, manifest_id, persona_name, requested_revision,
+                    image_id, intended_state, runtime_id, prepared
+                ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 0)
+                ON CONFLICT(id) DO UPDATE SET
+                    path = excluded.path,
+                    manifest_id = excluded.manifest_id,
+                    persona_name = excluded.persona_name,
+                    image_id = excluded.image_id,
+                    intended_state = excluded.intended_state,
+                    runtime_id = excluded.runtime_id
+                """,
+                (
+                    str(instance.instance_id),
+                    str(instance.path),
+                    instance.manifest_id,
+                    instance.persona_name,
+                    instance.image_id,
+                    instance.intended_state.value,
+                    instance.runtime_id,
+                ),
+            )
+            self._insert_storage(connection, instance.instance_id, instance.storage)
+            self._insert_operation(
+                connection,
+                operation_id,
+                instance.instance_id,
+                OperationKind.ADOPT,
+                "Adoption queued.",
+            )
+        return operation_id
 
     def record_selection(self, instance_id: UUID, revision: str, artifact: ImageArtifact) -> None:
         """Point this instance at the image its container was just built from.
@@ -493,14 +592,77 @@ class HubRegistry:
         explicit recovery reads.
         """
         with self._connect() as connection:
+            self._write_selection(
+                connection,
+                instance_id,
+                revision,
+                artifact.revision,
+                artifact.image_id,
+            )
+
+    def stage_candidate(self, instance_id: UUID, revision: str, artifact: ImageArtifact) -> None:
+        """Remember the image an update prepared, without selecting it yet.
+
+        The selection changes once a container of that image exists. Recovery reads
+        this row when the process dies after creating that container and before
+        the selection is recorded.
+        """
+        with self._connect() as connection:
             connection.execute(
                 """
-                UPDATE instances
-                SET requested_revision = ?, source_revision = ?, image_id = ?
-                WHERE id = ?
+                INSERT INTO update_candidates (
+                    instance_id, requested_revision, source_revision, image_id
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(instance_id) DO UPDATE SET
+                    requested_revision = excluded.requested_revision,
+                    source_revision = excluded.source_revision,
+                    image_id = excluded.image_id
                 """,
-                (revision, artifact.revision, artifact.image_id, str(instance_id)),
+                (str(instance_id), revision, artifact.revision, artifact.image_id),
             )
+
+    def candidate_image(self, instance_id: UUID) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT image_id FROM update_candidates WHERE instance_id = ?",
+                (str(instance_id),),
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def accept_candidate(self, instance_id: UUID, image_id: str) -> None:
+        """Select the staged image when the container that exists is that image."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT requested_revision, source_revision, image_id
+                FROM update_candidates WHERE instance_id = ?
+                """,
+                (str(instance_id),),
+            ).fetchone()
+            if row is None or row[2] != image_id:
+                return
+            self._write_selection(connection, instance_id, row[0], row[1], row[2])
+
+    @staticmethod
+    def _write_selection(
+        connection: sqlite3.Connection,
+        instance_id: UUID,
+        requested_revision: str,
+        source_revision: str,
+        image_id: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE instances
+            SET requested_revision = ?, source_revision = ?, image_id = ?
+            WHERE id = ?
+            """,
+            (requested_revision, source_revision, image_id, str(instance_id)),
+        )
+        connection.execute(
+            "DELETE FROM update_candidates WHERE instance_id = ?",
+            (str(instance_id),),
+        )
 
     def mark_prepared(self, instance_id: UUID) -> None:
         with self._connect() as connection:
@@ -523,20 +685,28 @@ class HubRegistry:
         self,
         instance_id: UUID,
         storage: tuple[StorageItem, ...],
-    ) -> StorageItem | None:
+    ) -> StorageConflict | None:
         """The first of these writable sources another instance already owns, if any."""
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT instance_id, kind, source FROM storage
-                WHERE writable = 1 AND instance_id != ?
-                """,
-                (str(instance_id),),
-            ).fetchall()
+            return self._writable_conflict(connection, instance_id, storage)
+
+    def _writable_conflict(
+        self,
+        connection: sqlite3.Connection,
+        instance_id: UUID,
+        storage: tuple[StorageItem, ...],
+    ) -> StorageConflict | None:
+        rows = connection.execute(
+            """
+            SELECT instance_id, kind, source FROM storage
+            WHERE writable = 1 AND instance_id != ?
+            """,
+            (str(instance_id),),
+        ).fetchall()
         for item in storage:
             if not item.writable:
                 continue
-            for _, kind, source in rows:
+            for owner, kind, source in rows:
                 conflict = (
                     item.kind is StorageKind.VOLUME
                     and kind == StorageKind.VOLUME.value
@@ -547,7 +717,7 @@ class HubRegistry:
                     and self._binds_overlap(item.source, source)
                 )
                 if conflict:
-                    return item
+                    return StorageConflict(item=item, owner=UUID(owner))
         return None
 
     def set_intended_state(self, instance_id: UUID, state: IntendedState) -> None:

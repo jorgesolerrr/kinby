@@ -50,6 +50,12 @@ class ManagedInstanceNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class AdoptionBlocked(CoreError):
+    """The adoption preflight found something the operator has to settle first."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class LifecycleOperationNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
