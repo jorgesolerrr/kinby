@@ -215,7 +215,7 @@ def test_a_recreation_is_refused_when_another_instance_owns_the_storage(tmp_path
 
         assert outcome.state is OperationState.FAILED
         assert volume.source in outcome.detail
-        assert "was not replaced" in outcome.detail
+        assert "so nothing was changed" in outcome.detail
         assert len(runtime.created) == 1
         assert runtime.removed == []
 

@@ -505,6 +505,8 @@ class ThreadListResult(ContractModel):
 class IntendedState(StrEnum):
     STOPPED = "stopped"
     RUNNING = "running"
+    #: The container is gone on purpose. The data and the record stay for a restoration.
+    REMOVED = "removed"
 
 
 class ProcessState(StrEnum):
@@ -566,7 +568,8 @@ class InstanceCreateCommand(ContractModel):
 
 
 class InstanceListCommand(ContractModel):
-    pass
+    #: List the removed instances whose records and storage the hub retains, not the active ones.
+    removed: bool = False
 
 
 class InstanceStartCommand(ContractModel):
@@ -583,6 +586,18 @@ class InstanceStopCommand(ContractModel):
 
 
 class InstanceRecreateCommand(ContractModel):
+    instance_id: UUID
+
+
+class InstanceRemoveCommand(ContractModel):
+    """Drain and remove one instance's container. Its data and its record stay behind."""
+
+    instance_id: UUID
+
+
+class InstanceRestoreCommand(ContractModel):
+    """Bring a removed instance back from its retained record, stopped."""
+
     instance_id: UUID
 
 
@@ -767,6 +782,8 @@ class OperationKind(StrEnum):
     RECREATE = "recreate"
     ADOPT = "adopt"
     UPDATE = "update"
+    REMOVE = "remove"
+    RESTORE = "restore"
 
 
 class OperationState(StrEnum):

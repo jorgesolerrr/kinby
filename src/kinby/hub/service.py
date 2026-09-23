@@ -22,6 +22,8 @@ from kinby.contracts import (
     INSTANCE_LIST,
     INSTANCE_LOGS,
     INSTANCE_RECREATE,
+    INSTANCE_REMOVE,
+    INSTANCE_RESTORE,
     INSTANCE_SECRETS_SET,
     INSTANCE_START,
     INSTANCE_STATUS,
@@ -29,6 +31,7 @@ from kinby.contracts import (
     INSTANCE_UPDATE,
     OPERATION_GET,
     Capability,
+    ContainerOwner,
     ControlToken,
     DrainState,
     InstanceAdoptCommand,
@@ -40,6 +43,8 @@ from kinby.contracts import (
     InstanceLogsCommand,
     InstanceLogsResult,
     InstanceRecreateCommand,
+    InstanceRemoveCommand,
+    InstanceRestoreCommand,
     InstanceSecretsSetCommand,
     InstanceStartCommand,
     InstanceStatusCommand,
@@ -66,7 +71,7 @@ from kinby.core.errors import (
     ManagedInstanceNotFound,
 )
 from kinby.hub.access import HubAccess, new_control_token
-from kinby.hub.adoption import blocker, preflight
+from kinby.hub.adoption import blocker, preflight, previous_manager
 from kinby.hub.control import (
     ControlConnectionLost,
     ControlEndpoint,
@@ -88,7 +93,7 @@ from kinby.hub.models import (
 )
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import HubRegistry, ManagedInstance
-from kinby.instance import init_instance, inspect_instance
+from kinby.instance import Instance, init_instance, inspect_instance
 from kinby.packages import InstalledPackage
 
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -176,6 +181,8 @@ class Hub:
             self.dispatcher.register(INSTANCE_START, self.start)
             self.dispatcher.register(INSTANCE_STOP, self.stop)
             self.dispatcher.register(INSTANCE_RECREATE, self.recreate)
+            self.dispatcher.register(INSTANCE_REMOVE, self.remove)
+            self.dispatcher.register(INSTANCE_RESTORE, self.restore)
             self.dispatcher.register(INSTANCE_UPDATE, self.update)
             self.dispatcher.register(INSTANCE_SECRETS_SET, self.set_secrets)
             self.dispatcher.register(INSTANCE_ADOPT_PREVIEW, self.adopt_preview)
@@ -290,7 +297,7 @@ class Hub:
             )
 
     async def start(self, command: InstanceStartCommand) -> LifecycleOperationResult:
-        record = self._prepared_instance(command.instance_id)
+        record = self._active_instance(command.instance_id)
         operation_id = uuid4()
         opened = self.registry.begin_operation(
             operation_id,
@@ -315,7 +322,11 @@ class Hub:
     async def _run_start(self, operation_id: UUID, instance_id: UUID) -> None:
         lock = self._locks.setdefault(instance_id, asyncio.Lock())
         async with lock:
-            record = self._prepared_instance(instance_id)
+            try:
+                record = self._active_instance(instance_id)
+            except ManagedInstanceNotFound as exc:
+                self.registry.finish_operation(operation_id, OperationState.FAILED, str(exc))
+                return
             secrets = self._environment(record.path).values()
             self.registry.advance_operation(operation_id, "start", "Starting selected image.")
             self.registry.set_intended_state(instance_id, IntendedState.RUNNING)
@@ -336,7 +347,7 @@ class Hub:
 
     async def set_secrets(self, command: InstanceSecretsSetCommand) -> LifecycleOperationResult:
         """Replace the named values in this instance's secrets. No value travels back out."""
-        record = self._prepared_instance(command.instance_id)
+        record = self._active_instance(command.instance_id)
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
         operation_id = uuid4()
         self.registry.record_operation(
@@ -360,7 +371,7 @@ class Hub:
         try:
             # The lock serializes this write against every other lifecycle mutation.
             async with self._locks.setdefault(instance_id, asyncio.Lock()):
-                record = self._prepared_instance(instance_id)
+                record = self._active_instance(instance_id)
                 self.registry.advance_operation(
                     operation_id,
                     "secrets",
@@ -388,7 +399,7 @@ class Hub:
 
     async def stop(self, command: InstanceStopCommand) -> LifecycleOperationResult:
         """Stop the instance gracefully, or escalate the stop already running to a force stop."""
-        record = self._prepared_instance(command.instance_id)
+        record = self._active_instance(command.instance_id)
         pending = self._stopping.get(record.instance_id)
         if pending is None:
             operation_id = uuid4()
@@ -543,7 +554,7 @@ class Hub:
 
     async def recreate(self, command: InstanceRecreateCommand) -> LifecycleOperationResult:
         """Replace this instance's container from the image and secrets already recorded for it."""
-        record = self._claimed(command.instance_id)
+        record = self._claimed(self._active_instance(command.instance_id))
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id,
@@ -557,9 +568,8 @@ class Hub:
             instance_id=record.instance_id,
         )
 
-    def _claimed(self, instance_id: UUID) -> ManagedInstance:
-        """One replacement at a time: a client asks again once the running operation finishes."""
-        record = self._prepared_instance(instance_id)
+    def _claimed(self, record: ManagedInstance) -> ManagedInstance:
+        """One container change at a time: a client asks again once the running one finishes."""
         active = self.registry.active_operation(record.instance_id)
         if active is not None:
             raise LifecycleOperationInFlight(
@@ -570,7 +580,7 @@ class Hub:
     async def _recreate(self, operation_id: UUID, instance_id: UUID) -> None:
         try:
             async with self._locks.setdefault(instance_id, asyncio.Lock()):
-                record = self._prepared_instance(instance_id)
+                record = self._active_instance(instance_id)
                 try:
                     await self._replace_container(operation_id, record)
                 except Exception as exc:
@@ -590,33 +600,34 @@ class Hub:
         self._revalidate(operation_id, record)
         if not record.image_id:
             raise ValueError("This instance has no recorded image to recreate its container from.")
-        await self._remove_container(operation_id, record)
+        await self._remove_container(record, PendingStop(operation_id, asyncio.Event()))
         await self._create_container(operation_id, record, record.image_id)
         if record.intended_state is IntendedState.RUNNING:
             self._record(operation_id, "start", "Restoring the intended running state.")
             await self._runtime.start(record.runtime_id)
 
-    def _revalidate(self, operation_id: UUID, record: ManagedInstance) -> None:
-        """Revalidate what a replacement is built on. No revision is resolved here."""
+    def _revalidate(self, operation_id: UUID, record: ManagedInstance) -> Instance:
+        """Revalidate what a container is built on. No revision is resolved here."""
         self._record(
             operation_id,
             "validate",
             f"Revalidating the retained configuration of instance {record.instance_id}.",
         )
-        inspect_instance(record.path)
+        instance = inspect_instance(record.path)
         conflict = self.registry.conflicting_storage(record.instance_id, record.storage)
         if conflict is not None:
             raise ValueError(
-                f'Storage source "{conflict.item.source}" is owned by another instance, '
-                "so this container was not replaced."
+                f'Storage source "{conflict.item.source}" is owned by instance {conflict.owner}, '
+                "so nothing was changed."
             )
+        return instance
 
-    async def _remove_container(self, operation_id: UUID, record: ManagedInstance) -> None:
+    async def _remove_container(self, record: ManagedInstance, pending: PendingStop) -> None:
         """Drain and remove the container that is there, keeping every storage it owns."""
         if (await self._runtime.status(record.runtime_id)).state == "absent":
             return
-        await self._stop_running(record, PendingStop(operation_id, asyncio.Event()))
-        self._record(operation_id, "remove", "Removing the container, keeping its storage.")
+        await self._stop_running(record, pending)
+        self._record(pending.operation_id, "remove", "Removing the container, keeping its storage.")
         await self._runtime.remove(record.runtime_id)
 
     async def _create_container(
@@ -638,7 +649,7 @@ class Hub:
 
     async def update(self, command: InstanceUpdateCommand) -> LifecycleOperationResult:
         """Move this instance onto the image a selected revision prepares."""
-        record = self._claimed(command.instance_id)
+        record = self._claimed(self._active_instance(command.instance_id))
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id,
@@ -656,7 +667,7 @@ class Hub:
         try:
             # The lock serializes the replacement against every other lifecycle mutation.
             async with self._locks.setdefault(instance_id, asyncio.Lock()):
-                record = self._prepared_instance(instance_id)
+                record = self._active_instance(instance_id)
                 try:
                     detail = await self._replace_image(operation_id, record, revision)
                 except Exception as exc:
@@ -695,7 +706,7 @@ class Hub:
             "The previous image stays recorded for an explicit recovery.",
         )
         self.registry.stage_candidate(record.instance_id, revision, artifact)
-        await self._remove_container(operation_id, record)
+        await self._remove_container(record, PendingStop(operation_id, asyncio.Event()))
         await self._create_container(operation_id, record, artifact.image_id)
         self.registry.record_selection(record.instance_id, revision, artifact)
         if record.intended_state is IntendedState.STOPPED:
@@ -705,6 +716,128 @@ class Hub:
         self._record(operation_id, "ready", "Waiting for the replacement to report itself ready.")
         await self._observe_ready(record)
         return "Instance updated."
+
+    async def remove(self, command: InstanceRemoveCommand) -> LifecycleOperationResult:
+        """Drain and remove the container. The data and the record stay for a restoration."""
+        record = self._claimed(self._active_instance(command.instance_id))
+        operation_id = uuid4()
+        self.registry.record_operation(
+            operation_id,
+            record.instance_id,
+            OperationKind.REMOVE,
+            "Removal queued.",
+        )
+        # A force stop escalates this drain the way it escalates a stop's.
+        pending = PendingStop(operation_id, asyncio.Event())
+        self._stopping[record.instance_id] = pending
+        self._schedule(self._remove(record.instance_id, pending))
+        return LifecycleOperationResult(
+            operation_id=operation_id,
+            instance_id=record.instance_id,
+        )
+
+    async def _remove(self, instance_id: UUID, pending: PendingStop) -> None:
+        operation_id = pending.operation_id
+        try:
+            try:
+                async with self._locks.setdefault(instance_id, asyncio.Lock()):
+                    record = self._active_instance(instance_id)
+                    try:
+                        await self._take_away(record, pending)
+                    except Exception as exc:
+                        self._fail(operation_id, record, str(exc) or type(exc).__name__)
+                        return
+                    self.registry.finish_operation(
+                        operation_id,
+                        OperationState.SUCCEEDED,
+                        "Instance removed. Its data and record are retained.",
+                    )
+            except asyncio.CancelledError:
+                self._fail_if_unfinished(operation_id)
+                raise
+        finally:
+            self._stopping.pop(instance_id, None)
+
+    async def _take_away(self, record: ManagedInstance, pending: PendingStop) -> None:
+        """Remove only a container this hub labeled, and record the removal once it is gone.
+
+        The record says removed only after the container is, so an interruption before
+        that leaves an instance the user can still see and remove again.
+        """
+        described = await self._runtime.describe(record.runtime_id)
+        if described is not None and described.owner is not ContainerOwner.HUB:
+            raise ValueError(
+                f"{previous_manager(described)} The hub removes only a container it labeled, "
+                "so the instance was left as it is."
+            )
+        self.registry.set_intended_state(record.instance_id, IntendedState.STOPPED)
+        await self._remove_container(record, pending)
+        self.registry.set_intended_state(record.instance_id, IntendedState.REMOVED)
+
+    async def restore(self, command: InstanceRestoreCommand) -> LifecycleOperationResult:
+        """Bring a removed instance back from its retained record, and leave it stopped."""
+        record = self._claimed(self._removed_instance(command.instance_id))
+        operation_id = uuid4()
+        self.registry.record_operation(
+            operation_id,
+            record.instance_id,
+            OperationKind.RESTORE,
+            "Restoration queued.",
+        )
+        self._schedule(self._restore(operation_id, record.instance_id))
+        return LifecycleOperationResult(
+            operation_id=operation_id,
+            instance_id=record.instance_id,
+        )
+
+    async def _restore(self, operation_id: UUID, instance_id: UUID) -> None:
+        try:
+            async with self._locks.setdefault(instance_id, asyncio.Lock()):
+                record = self._removed_instance(instance_id)
+                try:
+                    await self._bring_back(operation_id, record)
+                except Exception as exc:
+                    self._fail(operation_id, record, str(exc) or type(exc).__name__)
+                    return
+                self.registry.finish_operation(
+                    operation_id,
+                    OperationState.SUCCEEDED,
+                    "Instance restored and left stopped. Start it to run it.",
+                )
+        except asyncio.CancelledError:
+            self._fail_if_unfinished(operation_id)
+            raise
+
+    async def _bring_back(self, operation_id: UUID, record: ManagedInstance) -> None:
+        """Check that everything the record retains is still there, then create the container.
+
+        Nothing missing is replaced. Docker would mount a new, empty volume under a
+        retained volume's name, and another image would be an update.
+        """
+        manifest_id = self._revalidate(operation_id, record).manifest.id
+        if manifest_id != record.manifest_id:
+            raise ValueError(
+                f'{record.path} now holds instance "{manifest_id}", not "{record.manifest_id}".'
+            )
+        image = record.image_id
+        if not image or not await self._runtime.has_image(image):
+            raise ValueError(
+                f"The selected image {image} is no longer available, and restoration selects "
+                "no other."
+            )
+        for item in record.storage:
+            if item.kind is StorageKind.VOLUME and not await self._runtime.has_volume(item.source):
+                raise ValueError(
+                    f'Named volume "{item.source}" is missing, and restoration does not replace '
+                    "it with an empty one."
+                )
+        if await self._runtime.describe(record.runtime_id) is not None:
+            raise ValueError(
+                f'A container "{record.runtime_id}" already exists, so the instance was not '
+                "restored over it."
+            )
+        await self._create_container(operation_id, record, image)
+        self.registry.set_intended_state(record.instance_id, IntendedState.STOPPED)
 
     async def _observe_ready(self, record: ManagedInstance) -> None:
         """A container that runs is not an instance that booted.
@@ -746,7 +879,7 @@ class Hub:
             try:
                 # The lock serializes stops against other mutations; escalation never takes it.
                 async with self._locks.setdefault(instance_id, asyncio.Lock()):
-                    record = self._prepared_instance(instance_id)
+                    record = self._active_instance(instance_id)
                     self.registry.set_intended_state(instance_id, IntendedState.STOPPED)
                     try:
                         detail = await self._stop_running(record, pending)
@@ -931,10 +1064,10 @@ class Hub:
         return finished.state if finished is not None else OperationState.FAILED
 
     async def list(self, command: InstanceListCommand) -> InstanceListResult:
-        return InstanceListResult(instances=self.registry.list_instances())
+        return InstanceListResult(instances=self.registry.list_instances(removed=command.removed))
 
     async def status(self, command: InstanceStatusCommand) -> InstanceStatusResult:
-        record = self._prepared_instance(command.instance_id)
+        record = self._active_instance(command.instance_id)
         active = self.registry.active_operation(record.instance_id)
         try:
             status = await self._runtime.status(record.runtime_id)
@@ -959,7 +1092,7 @@ class Hub:
         )
 
     async def logs(self, command: InstanceLogsCommand) -> InstanceLogsResult:
-        record = self._prepared_instance(command.instance_id)
+        record = self._active_instance(command.instance_id)
         chunks = [
             chunk
             async for chunk in self._runtime.logs(
@@ -977,7 +1110,7 @@ class Hub:
     async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable:
         """Answer where a public route may reach one instance, and with which control token."""
         record = self.registry.instance(instance_id)
-        if record is None or not record.prepared:
+        if record is None or not record.active:
             return InstanceUnreachable.MISSING
         try:
             address = await self._runtime.address(record.runtime_id)
@@ -1003,10 +1136,16 @@ class Hub:
             )
         return result
 
-    def _prepared_instance(self, instance_id: UUID) -> ManagedInstance:
+    def _active_instance(self, instance_id: UUID) -> ManagedInstance:
         record = self.registry.instance(instance_id)
-        if record is None or not record.prepared:
+        if record is None or not record.active:
             raise ManagedInstanceNotFound(f'Instance "{instance_id}" was not found.')
+        return record
+
+    def _removed_instance(self, instance_id: UUID) -> ManagedInstance:
+        record = self.registry.instance(instance_id)
+        if record is None or record.intended_state is not IntendedState.REMOVED:
+            raise ManagedInstanceNotFound(f'Removed instance "{instance_id}" was not found.')
         return record
 
     @staticmethod

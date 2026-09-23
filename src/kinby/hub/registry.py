@@ -46,6 +46,11 @@ class ManagedInstance:
     storage: tuple[StorageItem, ...]
     package: PackageSelection | None = None
 
+    @property
+    def active(self) -> bool:
+        """Prepared and not removed: the instances the hub lists, routes, and operates."""
+        return self.prepared and self.intended_state is not IntendedState.REMOVED
+
 
 class HubRegistry:
     """One durable owner of hub management state."""
@@ -806,7 +811,8 @@ class HubRegistry:
             ).fetchone()
         return self.operation(UUID(row[0])) if row is not None else None
 
-    def list_instances(self) -> list[InstanceSummary]:
+    def list_instances(self, *, removed: bool = False) -> list[InstanceSummary]:
+        """The active instances, or the removed ones whose records and storage the hub retains."""
         with self._connect() as connection:
             ids = [
                 UUID(row[0])
@@ -814,7 +820,12 @@ class HubRegistry:
                     "SELECT id FROM instances WHERE prepared = 1 ORDER BY rowid"
                 ).fetchall()
             ]
-        records = [self.instance(instance_id) for instance_id in ids]
+        records = [
+            record
+            for instance_id in ids
+            if (record := self.instance(instance_id)) is not None
+            and (record.intended_state is IntendedState.REMOVED) == removed
+        ]
         return [
             InstanceSummary(
                 instance_id=record.instance_id,
@@ -836,7 +847,6 @@ class HubRegistry:
                 ),
             )
             for record in records
-            if record is not None
         ]
 
     def image_artifact(self, input_key: str) -> ImageArtifact | None:

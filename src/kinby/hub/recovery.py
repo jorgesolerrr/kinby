@@ -4,7 +4,9 @@ Recovery inspects before it acts, and acts on one case only: an existing contain
 instance is recorded as intended running and whose last operation that changed the
 container succeeded. A secrets replacement leaves the container where it is, so it does
 not count. Recovery never adopts a container it does not know, never creates one, and
-never repeats an operation that failed. See ADR 0051.
+never repeats an operation that failed. It does record an effect that already happened:
+a container a create or restoration made, or a container a removal took away. See ADR 0051
+and ADR 0053.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
-from kinby.contracts import IntendedState, OperationKind, OperationState
+from kinby.contracts import ContainerOwner, IntendedState, OperationKind, OperationState
 from kinby.hub.models import (
     ContainerRuntime,
     LifecycleRecovery,
@@ -74,6 +76,11 @@ async def _recover(
         )
     if not record.prepared:
         return await _unclaimed(record, registry, runtime, status)
+    if record.intended_state is IntendedState.REMOVED:
+        return await _retained(record, registry, runtime, status)
+    last = registry.last_operation(record.instance_id)
+    if last is not None and last.kind is OperationKind.REMOVE:
+        return _unfinished_removal(record, registry, status)
     if status.state == "absent":
         return _missing(record, registry)
     await _accept_replacement(record, registry, runtime)
@@ -160,6 +167,69 @@ async def _accept_replacement(
     if described is None:
         return
     registry.accept_candidate(record.instance_id, described.image)
+
+
+def _unfinished_removal(
+    record: ManagedInstance,
+    registry: HubRegistry,
+    status: RuntimeStatus,
+) -> RecoveredInstance:
+    """A removal the record does not show as done. The container says how far it got."""
+    if status.state == "absent":
+        registry.set_intended_state(record.instance_id, IntendedState.REMOVED)
+        return _at(
+            record,
+            RecoveredState.REMOVED,
+            "Removal reached this instance's container before the hub stopped. "
+            "The record now says so, and the data is retained.",
+        )
+    return _at(
+        record,
+        RecoveredState.INCOMPLETE,
+        "The removal did not finish, and the container is still there. Remove the instance again.",
+    )
+
+
+async def _retained(
+    record: ManagedInstance,
+    registry: HubRegistry,
+    runtime: ContainerRuntime,
+    status: RuntimeStatus,
+) -> RecoveredInstance:
+    """A removed instance has no container, unless a restoration made one before the hub stopped.
+
+    Only a container this hub labeled counts as that restoration's. Any other one is
+    reported and left alone.
+    """
+    if status.state != "absent":
+        described = await runtime.describe(record.runtime_id)
+        if described is None or described.owner is not ContainerOwner.HUB:
+            return _at(
+                record,
+                RecoveredState.CONFLICTED,
+                f'Container "{record.runtime_id}" stands where this removed instance\'s would, '
+                "and this hub did not create it.",
+            )
+        registry.set_intended_state(record.instance_id, IntendedState.STOPPED)
+        return _at(
+            record,
+            RecoveredState.STOPPED,
+            "Restoration reached this instance's container before the hub stopped. "
+            "The record now says so.",
+        )
+    last = registry.last_operation(record.instance_id)
+    if last is not None and last.kind is OperationKind.RESTORE:
+        return _at(
+            record,
+            RecoveredState.REMOVED,
+            "The last restore operation failed before it created the container. "
+            "The data is retained. Restore the instance again.",
+        )
+    return _at(
+        record,
+        RecoveredState.REMOVED,
+        "The instance was removed. Its data and record are retained for a restoration.",
+    )
 
 
 def _missing(record: ManagedInstance, registry: HubRegistry) -> RecoveredInstance:

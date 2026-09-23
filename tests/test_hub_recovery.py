@@ -430,7 +430,13 @@ def test_a_failed_secrets_replacement_does_not_block_restoring_a_stopped_contain
     asyncio.run(scenario())
 
 
-def claim_storage(registry_path: Path, source: str, *, prepared: bool = True) -> None:
+def claim_storage(
+    registry_path: Path,
+    source: str,
+    *,
+    prepared: bool = True,
+    intended_state: str = "stopped",
+) -> None:
     """Let a second record own this source, the way a registry restored from a backup can."""
     other = uuid4()
     with sqlite3.connect(registry_path) as connection:
@@ -438,9 +444,9 @@ def claim_storage(registry_path: Path, source: str, *, prepared: bool = True) ->
             """
             INSERT INTO instances (
                 id, path, manifest_id, requested_revision, intended_state, runtime_id, prepared
-            ) VALUES (?, ?, 'other', 'HEAD', 'stopped', ?, ?)
+            ) VALUES (?, ?, 'other', 'HEAD', ?, ?, ?)
             """,
-            (str(other), f"/nowhere/{other}", str(other), int(prepared)),
+            (str(other), f"/nowhere/{other}", intended_state, str(other), int(prepared)),
         )
         connection.execute(
             """
