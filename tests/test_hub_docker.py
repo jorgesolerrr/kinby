@@ -103,14 +103,25 @@ class FakeDockerImages:
         return object()
 
 
+class FakeDockerVolume:
+    def __init__(self, volumes: FakeDockerVolumes, name: str) -> None:
+        self._volumes = volumes
+        self._name = name
+
+    def remove(self) -> None:
+        self._volumes.present.discard(self._name)
+        self._volumes.removed.append(self._name)
+
+
 class FakeDockerVolumes:
     def __init__(self, present: set[str]) -> None:
         self.present = present
+        self.removed: list[str] = []
 
-    def get(self, name: str) -> object:
+    def get(self, name: str) -> FakeDockerVolume:
         if name not in self.present:
             raise NotFound(name)
-        return object()
+        return FakeDockerVolume(self, name)
 
 
 class FakeDockerClient:
@@ -136,6 +147,20 @@ def test_docker_runtime_reports_a_missing_image_or_volume_without_creating_eithe
         ]
 
     assert asyncio.run(scenario()) == [True, False, True, False]
+
+
+def test_docker_runtime_deletes_a_named_volume_and_takes_a_missing_one_as_deleted():
+    client = FakeDockerClient()
+    runtime = DockerRuntime("hub-id", network="kinby_private", client=cast(DockerClient, client))
+
+    async def scenario() -> None:
+        await runtime.delete_volume("kinby-alice-workspace")
+        await runtime.delete_volume("kinby-alice-codex")
+
+    asyncio.run(scenario())
+
+    assert client.volumes.removed == ["kinby-alice-workspace"]
+    assert client.volumes.present == set()
 
 
 def test_docker_runtime_mounts_the_recorded_storage_and_offloads_creation(tmp_path):

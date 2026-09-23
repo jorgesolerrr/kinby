@@ -106,6 +106,8 @@ class ContainerRuntime(Protocol):
 
     async def has_volume(self, name: str) -> bool: ...
 
+    async def delete_volume(self, name: str) -> None: ...
+
 
 class RecoveredState(StrEnum):
     """What a hub found for one managed instance when it opened its directory."""

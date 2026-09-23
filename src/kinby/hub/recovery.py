@@ -5,8 +5,8 @@ instance is recorded as intended running and whose last operation that changed t
 container succeeded. A secrets replacement leaves the container where it is, so it does
 not count. Recovery never adopts a container it does not know, never creates one, and
 never repeats an operation that failed. It does record an effect that already happened:
-a container a create or restoration made, or a container a removal took away. See ADR 0051
-and ADR 0053.
+a container a create or restoration made, or a container a removal took away. A deleted
+instance has nothing left to recover. See ADR 0051, ADR 0053 and ADR 0054.
 """
 
 from __future__ import annotations
@@ -218,6 +218,13 @@ async def _retained(
             "The record now says so.",
         )
     last = registry.last_operation(record.instance_id)
+    if last is not None and last.kind is OperationKind.DELETE:
+        return _at(
+            record,
+            RecoveredState.REMOVED,
+            "The last delete operation failed. What it deleted has left the retained "
+            "inventory, and the rest is retained. Preview the deletion again.",
+        )
     if last is not None and last.kind is OperationKind.RESTORE:
         return _at(
             record,

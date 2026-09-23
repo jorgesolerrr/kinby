@@ -129,6 +129,11 @@ _Avoid_: delete, uninstall
 The **lifecycle operation** that brings a removed **instance** back from its retained record. It checks the retained configuration, storage and selected image, then creates a container under the same **hub instance ID** and leaves it stopped. It reports a missing volume or image and never replaces it with a new one.
 _Avoid_: undelete, recreate
 
+### Instance deletion
+
+The **lifecycle operation** that permanently deletes a removed **instance**'s owned storage: the directories and named volumes its **storage inventory** records as writable, and nothing its **manifest** merely references. A preview lists those targets first. The deletion checks them again and refuses if they changed or if another record shares them. Each target leaves the inventory once it is gone, so a retry continues with what is left. Once nothing owned remains, the hub marks the record deleted and it leaves both lists. Its operations stay readable.
+_Avoid_: purge, destroy, remove
+
 ### Lifecycle recovery
 
 What the **hub** does with each managed **instance** when it opens its directory: it reads the **instance registry** and the containers labeled as its own, then restores the intended running or stopped state of the containers that are still there. It reports everything else — a missing container, an unfinished **lifecycle operation**, a container it does not own — and changes nothing.

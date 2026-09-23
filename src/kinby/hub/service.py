@@ -19,6 +19,8 @@ from kinby.contracts import (
     INSTANCE_ADOPT,
     INSTANCE_ADOPT_PREVIEW,
     INSTANCE_CREATE,
+    INSTANCE_DELETE,
+    INSTANCE_DELETE_PREVIEW,
     INSTANCE_LIST,
     INSTANCE_LOGS,
     INSTANCE_RECREATE,
@@ -38,6 +40,9 @@ from kinby.contracts import (
     InstanceAdoptPreviewCommand,
     InstanceAdoptPreviewResult,
     InstanceCreateCommand,
+    InstanceDeleteCommand,
+    InstanceDeletePreviewCommand,
+    InstanceDeletePreviewResult,
     InstanceListCommand,
     InstanceListResult,
     InstanceLogsCommand,
@@ -71,7 +76,7 @@ from kinby.core.errors import (
     ManagedInstanceNotFound,
 )
 from kinby.hub.access import HubAccess, new_control_token
-from kinby.hub.adoption import blocker, preflight, previous_manager
+from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
 from kinby.hub.control import (
     ControlConnectionLost,
     ControlEndpoint,
@@ -136,6 +141,14 @@ def _acquire_directory(directory: Path) -> IO[str]:
     return handle
 
 
+def _delete_directory(directory: Path) -> None:
+    """A retry finds a directory an interrupted attempt already deleted, and that is done."""
+    try:
+        shutil.rmtree(directory)
+    except FileNotFoundError:
+        return
+
+
 @dataclass(frozen=True)
 class PendingStop:
     """The stop running on one instance, and the way a later request escalates it."""
@@ -183,6 +196,8 @@ class Hub:
             self.dispatcher.register(INSTANCE_RECREATE, self.recreate)
             self.dispatcher.register(INSTANCE_REMOVE, self.remove)
             self.dispatcher.register(INSTANCE_RESTORE, self.restore)
+            self.dispatcher.register(INSTANCE_DELETE_PREVIEW, self.delete_preview)
+            self.dispatcher.register(INSTANCE_DELETE, self.delete)
             self.dispatcher.register(INSTANCE_UPDATE, self.update)
             self.dispatcher.register(INSTANCE_SECRETS_SET, self.set_secrets)
             self.dispatcher.register(INSTANCE_ADOPT_PREVIEW, self.adopt_preview)
@@ -842,6 +857,134 @@ class Hub:
             )
         await self._create_container(operation_id, record, image)
         self.registry.set_intended_state(record.instance_id, IntendedState.STOPPED)
+
+    async def delete_preview(
+        self,
+        command: InstanceDeletePreviewCommand,
+    ) -> InstanceDeletePreviewResult:
+        """Name exactly what a permanent deletion would take. Nothing is touched here."""
+        return self._deletion_targets(self._removed_instance(command.instance_id))
+
+    async def delete(self, command: InstanceDeleteCommand) -> LifecycleOperationResult:
+        """Permanently delete the previewed directories and named volumes of a removed instance."""
+        record = self._claimed(self._removed_instance(command.instance_id))
+        operation_id = uuid4()
+        self.registry.record_operation(
+            operation_id,
+            record.instance_id,
+            OperationKind.DELETE,
+            "Deletion queued.",
+        )
+        self._schedule(self._delete(operation_id, command))
+        return LifecycleOperationResult(
+            operation_id=operation_id,
+            instance_id=record.instance_id,
+        )
+
+    async def _delete(self, operation_id: UUID, command: InstanceDeleteCommand) -> None:
+        try:
+            # The lock serializes the deletion against restoration and every other mutation.
+            async with self._locks.setdefault(command.instance_id, asyncio.Lock()):
+                try:
+                    record = self._removed_instance(command.instance_id)
+                except ManagedInstanceNotFound as exc:
+                    self.registry.finish_operation(operation_id, OperationState.FAILED, str(exc))
+                    return
+                try:
+                    await self._erase(operation_id, record, command)
+                except Exception as exc:
+                    self._fail(operation_id, record, str(exc) or type(exc).__name__)
+                    return
+                self.registry.finish_operation(
+                    operation_id,
+                    OperationState.SUCCEEDED,
+                    "Instance deleted. Its directories and named volumes are gone.",
+                )
+        except asyncio.CancelledError:
+            self._fail_if_unfinished(operation_id)
+            raise
+
+    async def _erase(
+        self,
+        operation_id: UUID,
+        record: ManagedInstance,
+        command: InstanceDeleteCommand,
+    ) -> None:
+        """Revalidate the preview, then delete each target and release it from the inventory.
+
+        A target leaves the inventory only once it is gone. A retry therefore picks up
+        a target that failed, and never reaches for one that was already deleted, even
+        when something unrelated appears in its place later.
+        """
+        self._record(
+            operation_id,
+            "validate",
+            "Revalidating the retained inventory against the preview.",
+        )
+        targets = self._deletion_targets(record)
+        if (targets.directories, targets.volumes) != (command.directories, command.volumes):
+            raise ValueError(
+                "The deletion targets changed since the preview, so nothing was deleted. "
+                "Preview the deletion again."
+            )
+        shared = self.registry.shared_storage(record.instance_id, record.storage)
+        if shared is not None:
+            raise ValueError(
+                f'Storage "{shared.item.source}" is shared with instance {shared.owner}, '
+                "so nothing was deleted."
+            )
+        if await self._runtime.describe(record.runtime_id) is not None:
+            raise ValueError(
+                f'A container "{record.runtime_id}" still exists and may mount this storage, '
+                "so nothing was deleted."
+            )
+        owned = [item for item in record.storage if item.writable]
+        for directory in targets.directories:
+            entries = [
+                item
+                for item in owned
+                if item.kind is StorageKind.BIND and self._directory(record, item) == directory
+            ]
+            self._record(operation_id, f"directory {directory}", f"Deleting {directory}.")
+            await asyncio.to_thread(_delete_directory, directory)
+            self.registry.release_storage(record.instance_id, entries)
+        for volume in targets.volumes:
+            entries = [
+                item for item in owned if item.kind is StorageKind.VOLUME and item.source == volume
+            ]
+            self._record(operation_id, f"volume {volume}", f'Deleting named volume "{volume}".')
+            await self._runtime.delete_volume(volume)
+            self.registry.release_storage(record.instance_id, entries)
+        self.registry.mark_deleted(record.instance_id)
+
+    def _deletion_targets(self, record: ManagedInstance) -> InstanceDeletePreviewResult:
+        """The writable storage the retained inventory records, and nothing it does not.
+
+        A read-only mount was never reserved against other instances, so it is not
+        this instance's to delete. Neither is anything the manifest merely references.
+        """
+        owned = [item for item in record.storage if item.writable]
+        return InstanceDeletePreviewResult(
+            instance_id=record.instance_id,
+            directories=list(
+                dict.fromkeys(
+                    self._directory(record, item) for item in owned if item.kind is StorageKind.BIND
+                )
+            ),
+            volumes=list(
+                dict.fromkeys(item.source for item in owned if item.kind is StorageKind.VOLUME)
+            ),
+        )
+
+    def _directory(self, record: ManagedInstance, item: StorageItem) -> Path:
+        """Where this hub sees a bind source.
+
+        A bind source names a path on the Docker host. The instance directory is
+        where the record keeps it as the hub sees it, wherever the host mounts it from.
+        """
+        if item.destination == INSTANCE_MOUNT:
+            return record.path.resolve()
+        return Path(item.source).resolve()
 
     async def _observe_ready(self, record: ManagedInstance) -> None:
         """A container that runs is not an instance that booted.

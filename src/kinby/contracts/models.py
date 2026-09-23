@@ -507,6 +507,8 @@ class IntendedState(StrEnum):
     RUNNING = "running"
     #: The container is gone on purpose. The data and the record stay for a restoration.
     REMOVED = "removed"
+    #: The owned storage is gone too. The record stays so its operations remain readable.
+    DELETED = "deleted"
 
 
 class ProcessState(StrEnum):
@@ -599,6 +601,29 @@ class InstanceRestoreCommand(ContractModel):
     """Bring a removed instance back from its retained record, stopped."""
 
     instance_id: UUID
+
+
+class InstanceDeletePreviewCommand(ContractModel):
+    """Preview a removed instance's permanent deletion. It reads the retained inventory only."""
+
+    instance_id: UUID
+
+
+class InstanceDeletePreviewResult(ContractModel):
+    """Exactly what a deletion removes: the removed instance's owned directories and volumes."""
+
+    instance_id: UUID
+    #: As the hub sees them, with every symlink resolved.
+    directories: list[Path]
+    volumes: list[str]
+
+
+class InstanceDeleteCommand(ContractModel):
+    """Delete the previewed targets. A target that changed since the preview stops it."""
+
+    instance_id: UUID
+    directories: list[Path]
+    volumes: list[str]
 
 
 class InstanceUpdateCommand(ContractModel):
@@ -784,6 +809,7 @@ class OperationKind(StrEnum):
     UPDATE = "update"
     REMOVE = "remove"
     RESTORE = "restore"
+    DELETE = "delete"
 
 
 class OperationState(StrEnum):
