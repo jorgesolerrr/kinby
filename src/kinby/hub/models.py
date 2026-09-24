@@ -163,7 +163,17 @@ class PreparedImage:
 
 
 class ImagePreparation(Protocol):
-    async def prepare(self, selection: ImageSelection) -> PreparedImage: ...
+    async def prepare(
+        self,
+        selection: ImageSelection,
+        instance: StorageItem | None = None,
+    ) -> PreparedImage:
+        """Prepare the image, then run the candidate check inside it.
+
+        *instance* is an existing instance's directory, or that directory's
+        package.yaml. The check validates the file and mounts nothing else.
+        """
+        ...
 
 
 @dataclass(frozen=True)
@@ -183,4 +193,5 @@ class ImageBackend(Protocol):
         self,
         image_id: str,
         package_id: str,
+        instance: StorageItem | None = None,
     ) -> InstalledPackage: ...

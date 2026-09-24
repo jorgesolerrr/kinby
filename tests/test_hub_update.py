@@ -1,13 +1,20 @@
 """Updating a managed instance from an explicitly selected, prepared immutable image."""
 
 import asyncio
+import os
+import subprocess
+import sys
 from dataclasses import replace
+from pathlib import Path
+
+import pytest
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
     INSTANCE_CREATE,
     INSTANCE_LIST,
     INSTANCE_RECREATE,
+    INSTANCE_START,
     INSTANCE_STATUS,
     INSTANCE_STOP,
     INSTANCE_UPDATE,
@@ -18,6 +25,7 @@ from kinby.contracts import (
     InstanceListCommand,
     InstanceListResult,
     InstanceRecreateCommand,
+    InstanceStartCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
     InstanceStopCommand,
@@ -31,9 +39,16 @@ from kinby.contracts import (
     PackageSelection,
     ProcessState,
     Scope,
+    StorageItem,
 )
 from kinby.hub import ImageSelection, InstanceSpec, PreparedImage, RecoveredState, RuntimeStatus
-from kinby.packages import InstalledPackage, PackageDescriptor, RequiredSecret
+from kinby.packages import (
+    InstalledPackage,
+    PackageDescriptor,
+    RequiredSecret,
+    installed_package_from_json,
+)
+from tests.fake_package import VALID_CONFIG, install_fake_package
 from tests.test_hub import (
     FakeControl,
     FakeImages,
@@ -50,8 +65,12 @@ from tests.test_hub_recreate import CrashOnReplacement
 class CandidateImages(FakeImages):
     """One distinct immutable image per selected revision, so a replacement is visible."""
 
-    async def prepare(self, selection: ImageSelection) -> PreparedImage:
-        prepared = await super().prepare(selection)
+    async def prepare(
+        self,
+        selection: ImageSelection,
+        instance: StorageItem | None = None,
+    ) -> PreparedImage:
+        prepared = await super().prepare(selection, instance)
         return replace(
             prepared,
             artifact=replace(
@@ -248,11 +267,15 @@ class CrashOnCandidate(CandidateImages):
         super().__init__()
         self.crashed = asyncio.Event()
 
-    async def prepare(self, selection: ImageSelection) -> PreparedImage:
+    async def prepare(
+        self,
+        selection: ImageSelection,
+        instance: StorageItem | None = None,
+    ) -> PreparedImage:
         if self.selections:
             self.crashed.set()
             raise asyncio.CancelledError
-        return await super().prepare(selection)
+        return await super().prepare(selection, instance)
 
 
 def test_an_interruption_while_the_candidate_is_prepared_leaves_the_instance_running(tmp_path):
@@ -475,6 +498,123 @@ def test_a_candidate_without_the_instance_package_leaves_the_container_alone(tmp
 
         assert outcome.state is OperationState.FAILED
         assert outcome.detail == 'Package "writer" was not found in the prepared image.'
+        assert runtime.removed == []
+        assert len(runtime.created) == 1
+
+    asyncio.run(scenario())
+
+
+class CheckedCandidates(CandidateImages):
+    """Run the candidate check as the image does: another Python with the package installed.
+
+    The instance directory stands in for the read-only mount the Docker backend adds.
+    """
+
+    def __init__(self, site: Path, bin_directory: Path) -> None:
+        super().__init__()
+        self.environment = {
+            **os.environ,
+            "PATH": f"{bin_directory}:{os.path.dirname(sys.executable)}",
+            "PYTHONPATH": str(site),
+        }
+
+    def _check(self, mounted: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "kinby.packages", "writer", *mounted],
+            capture_output=True,
+            text=True,
+            env=self.environment,
+            check=False,
+        )
+
+    async def prepare(
+        self,
+        selection: ImageSelection,
+        instance: StorageItem | None = None,
+    ) -> PreparedImage:
+        prepared = await super().prepare(selection, instance)
+        mounted = [] if instance is None else [_checked_directory(instance)]
+        checked = await asyncio.to_thread(self._check, mounted)
+        if checked.returncode != 0:
+            raise ValueError(checked.stderr.strip())
+        return replace(prepared, package=installed_package_from_json(checked.stdout))
+
+
+def _checked_directory(instance: StorageItem) -> str:
+    """The directory the check reads, when the hub handed it only package.yaml."""
+    source = Path(instance.source)
+    if source.name == "package.yaml":
+        return str(source.parent)
+    return instance.source
+
+
+async def _checked(
+    client: ContractClient,
+    accepted: LifecycleOperationResult,
+) -> OperationGetResult:
+    """Wait out an operation whose candidate check starts a separate Python."""
+    async with asyncio.timeout(60):
+        while True:
+            result = await client.call(
+                OPERATION_GET,
+                OperationGetCommand(operation_id=accepted.operation_id),
+            )
+            assert isinstance(result, OperationGetResult)
+            if result.state in {OperationState.SUCCEEDED, OperationState.FAILED}:
+                return result
+            await asyncio.sleep(0.05)
+
+
+@pytest.mark.parametrize("failure", ["edited config", "candidate check"])
+def test_a_failing_candidate_stops_the_update_before_the_container_stops(tmp_path, failure):
+    async def scenario() -> None:
+        package = install_fake_package(tmp_path / "site", executables=("kinby-fake-editor",))
+        editor = tmp_path / "bin" / "kinby-fake-editor"
+        editor.parent.mkdir()
+        editor.write_text("#!/bin/sh\n", encoding="utf-8")
+        editor.chmod(0o755)
+        control = FakeControl()
+        runtime = FakeRuntime()
+        images = CheckedCandidates(package.site, editor.parent)
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images, control=control)
+        client = hub_client(hub)
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="editor",
+                model="openai:gpt-5",
+                package=PackageSelection(id="writer", distribution=package.module, version="1.4.2"),
+                secrets={"EDITOR_TOKEN": "private-editor-token"},
+            ),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        assert (await _checked(client, created)).state is OperationState.SUCCEEDED
+        started = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
+        config = hub.instances_directory / str(created.instance_id) / "package.yaml"
+        assert config.read_text(encoding="utf-8") == VALID_CONFIG
+        if failure == "edited config":
+            config.write_text(f"{VALID_CONFIG}tonne: formal\n", encoding="utf-8")
+            expected = f"{config}: tonne: Extra inputs are not permitted"
+        else:
+            editor.unlink()
+            expected = 'Executable "kinby-fake-editor" is not on PATH.'
+
+        accepted = await client.call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(instance_id=created.instance_id, revision="v0.2.0"),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await _checked(client, accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == expected
+        assert [step.name for step in outcome.steps] == ["validate", "image"]
+        assert control.forces == []
         assert runtime.removed == []
         assert len(runtime.created) == 1
 

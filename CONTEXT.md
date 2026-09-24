@@ -406,6 +406,16 @@ A reusable starting configuration for an **instance**, together with the **plugi
 
 The initial behavior and configuration a **package** supplies for a new **instance**. Once copied, that configuration belongs to the instance.
 
+### Package config
+
+The one editable settings file, `package.yaml`, that a **package** may declare for its **instances**. The instance owns its copy, and the package's validator checks it every time kinby reads it. It names **instance secrets** by their variables and never holds their values. A **vanilla instance** has none.
+_Avoid_: package settings, routine arguments (for package settings)
+
+### Package check
+
+kinby's own install path run against one installed **package**, reporting every problem it finds without running a **routine** or calling a model. The **hub** runs the same check on a candidate image before an **instance update** disturbs the running container.
+_Avoid_: package lint, package validation
+
 ### Vanilla instance
 
 An **instance** created from kinby's built-in defaults with no **package** selected.

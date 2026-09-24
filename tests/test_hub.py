@@ -88,7 +88,11 @@ class FakeImages:
         self.failure = failure
         self.package = package
 
-    async def prepare(self, selection: ImageSelection) -> PreparedImage:
+    async def prepare(
+        self,
+        selection: ImageSelection,
+        instance: StorageItem | None = None,
+    ) -> PreparedImage:
         self.revisions.append(selection.revision)
         self.selections.append(selection)
         if self.failure is not None:

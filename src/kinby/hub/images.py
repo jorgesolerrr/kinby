@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from kinby.contracts import StorageItem
 from kinby.hub.models import (
     BuildResult,
     ImageArtifact,
@@ -48,7 +49,11 @@ class ImagePreparer:
         self._registry = registry
         self._backend = backend
 
-    async def prepare(self, selection: ImageSelection) -> PreparedImage:
+    async def prepare(
+        self,
+        selection: ImageSelection,
+        instance: StorageItem | None = None,
+    ) -> PreparedImage:
         resolved = await asyncio.to_thread(self._resolve, selection.revision)
         with TemporaryDirectory(prefix="kinby-build-") as temporary:
             context = Path(temporary)
@@ -60,7 +65,7 @@ class ImagePreparer:
             input_key = self._input_key(resolved, dependency_id, base_images, selection)
             recorded = self._registry.image_artifact(input_key)
             if recorded is not None and await self._backend.exists(recorded.image_id):
-                package = await self._inspect_package(recorded)
+                package = await self._inspect_package(recorded, instance)
                 return PreparedImage(artifact=recorded, package=package)
             built = await self._backend.build(context, base_images)
         artifact = ImageArtifact(
@@ -72,13 +77,17 @@ class ImagePreparer:
             package=selection.package,
         )
         self._registry.record_image_artifact(input_key, artifact)
-        package = await self._inspect_package(artifact)
+        package = await self._inspect_package(artifact, instance)
         return PreparedImage(artifact=artifact, package=package)
 
-    async def _inspect_package(self, artifact: ImageArtifact) -> InstalledPackage | None:
+    async def _inspect_package(
+        self,
+        artifact: ImageArtifact,
+        instance: StorageItem | None,
+    ) -> InstalledPackage | None:
         if artifact.package is None:
             return None
-        return await self._backend.inspect_package(artifact.image_id, artifact.package.id)
+        return await self._backend.inspect_package(artifact.image_id, artifact.package.id, instance)
 
     @staticmethod
     def _install_package(dockerfile: Path, selection: ImageSelection) -> None:
