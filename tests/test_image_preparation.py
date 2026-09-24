@@ -1,10 +1,14 @@
 import asyncio
+import json
+import shutil
 import subprocess
+import sys
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
-from kinby.contracts import PackageSelection, StorageItem, StorageKind
+from kinby.contracts import PackageCommit, PackageSelection, StorageItem, StorageKind
 from kinby.hub import BuildResult, HubRegistry, ImagePreparer, ImageSelection
 from kinby.packages import InstalledPackage, PackageDescriptor
 
@@ -193,3 +197,175 @@ def test_image_preparation_records_no_artifact_when_the_build_fails(tmp_path):
         assert registry.image_artifacts() == []
 
     asyncio.run(scenario())
+
+
+#: A PEP 517 backend inside the package repository, so building it downloads nothing.
+_IN_TREE_BACKEND = dedent(
+    """
+    import base64
+    import hashlib
+    import zipfile
+    from pathlib import Path
+
+    DIST = "kinby_writer-2.0.0.dist-info"
+    METADATA = (
+        "Metadata-Version: 2.1\\nName: kinby-writer\\nVersion: 2.0.0\\n"
+        "Requires-Dist: kinby\\n"
+    )
+    WHEEL = "Wheel-Version: 1.0\\nGenerator: test\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n"
+
+
+    def _line(name, data):
+        digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=")
+        return f"{name},sha256={digest.decode()},{len(data)}"
+
+
+    def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+        files = {
+            "kinby_writer/__init__.py": Path("kinby_writer.py").read_bytes(),
+            f"{DIST}/METADATA": METADATA.encode(),
+            f"{DIST}/WHEEL": WHEEL.encode(),
+        }
+        record = [_line(name, data) for name, data in files.items()] + [f"{DIST}/RECORD,,"]
+        name = "kinby_writer-2.0.0-py3-none-any.whl"
+        with zipfile.ZipFile(Path(wheel_directory) / name, "w") as wheel:
+            for path, data in files.items():
+                wheel.writestr(path, data)
+            wheel.writestr(f"{DIST}/RECORD", "\\n".join(record) + "\\n")
+        return name
+    """
+)
+
+
+def _package_repo(path: Path) -> tuple[str, str]:
+    """Two commits of package distribution kinby-writer, which depends on kinby unpinned."""
+    path.mkdir()
+    (path / "backend.py").write_text(_IN_TREE_BACKEND, encoding="utf-8")
+    (path / "pyproject.toml").write_text(
+        dedent(
+            """
+            [project]
+            name = "kinby-writer"
+            version = "2.0.0"
+            dependencies = ["kinby"]
+
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+            """
+        ),
+        encoding="utf-8",
+    )
+    _git(path, "init")
+    _git(path, "config", "user.email", "test@example.com")
+    _git(path, "config", "user.name", "Test")
+    commits = []
+    for edition in ("first", "second"):
+        (path / "kinby_writer.py").write_text(f"EDITION = {edition!r}\n", encoding="utf-8")
+        _git(path, "add", ".")
+        _git(path, "commit", "-m", edition)
+        commits.append(_git(path, "rev-parse", "HEAD"))
+    return commits[0], commits[1]
+
+
+class ImageEnvironment:
+    """A Python environment standing in for the image, with kinby already installed."""
+
+    KINBY = "kinby-0.1.0.dist-info"
+
+    def __init__(self, path: Path) -> None:
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(path)], check=True)
+        self.python = path / "bin" / "python"
+        self.site = next(path.glob("lib/python*/site-packages"))
+        (self.site / "kinby").mkdir()
+        (self.site / "kinby" / "__init__.py").write_text("IMAGE = True\n", encoding="utf-8")
+        dist = self.site / self.KINBY
+        dist.mkdir()
+        (dist / "METADATA").write_text(
+            "Metadata-Version: 2.1\nName: kinby\nVersion: 0.1.0\n", encoding="utf-8"
+        )
+        (dist / "RECORD").write_text(
+            f"kinby/__init__.py,,\n{self.KINBY}/METADATA,,\n{self.KINBY}/RECORD,,\n",
+            encoding="utf-8",
+        )
+
+    def edition(self) -> str:
+        return (self.site / "kinby_writer" / "__init__.py").read_text(encoding="utf-8")
+
+    def installed_commit(self) -> str:
+        direct_url = self.site / "kinby_writer-2.0.0.dist-info" / "direct_url.json"
+        return str(json.loads(direct_url.read_text(encoding="utf-8"))["vcs_info"]["commit_id"])
+
+    def kinby(self) -> tuple[list[str], str]:
+        return (
+            sorted(path.name for path in self.site.glob("kinby-*.dist-info")),
+            (self.site / "kinby" / "__init__.py").read_text(encoding="utf-8"),
+        )
+
+
+class InstallingBackend(FakeImageBackend):
+    """Build by running the recipe's package install against the stand-in image."""
+
+    def __init__(self, image: ImageEnvironment) -> None:
+        super().__init__()
+        self.image = image
+
+    async def build(self, context: Path, base_images: tuple[str, ...]) -> BuildResult:
+        built = await super().build(context, base_images)
+        install = json.loads(self.dockerfiles[-1].splitlines()[-1].removeprefix("RUN "))
+        command = [
+            *install[: install.index("--system")],
+            "--python",
+            str(self.image.python),
+            *install[install.index("--system") + 1 :],
+        ]
+        subprocess.run(command, check=True, capture_output=True)
+        return built
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="uv is not on PATH")
+def test_a_package_commit_pin_installs_that_commit_and_keeps_the_kinby_in_the_image(tmp_path):
+    async def scenario() -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        _source_repo(source)
+        first, second = _package_repo(tmp_path / "writer")
+        image = ImageEnvironment(tmp_path / "image")
+        kinby = image.kinby()
+        backend = InstallingBackend(image)
+        registry = HubRegistry(tmp_path / "hub")
+        preparer = ImagePreparer(source, registry, backend)
+        url = (tmp_path / "writer").as_uri()
+
+        def pinned(commit: str) -> PackageSelection:
+            return PackageSelection(
+                id="writer",
+                distribution="kinby-writer",
+                version=PackageCommit(url=url, sha=commit),
+            )
+
+        prepared = await preparer.prepare(ImageSelection("HEAD", pinned(first)))
+        installed_first = (image.edition(), image.installed_commit())
+        reused = await preparer.prepare(ImageSelection("HEAD", pinned(first)))
+        await preparer.prepare(ImageSelection("HEAD", pinned(second)))
+
+        install = f'RUN ["uv", "pip", "install", "--system", "--no-cache", "git+{url}@{first}"]'
+        assert install in backend.dockerfiles[0]
+        assert installed_first == ("EDITION = 'first'\n", first)
+        assert (image.edition(), image.installed_commit()) == ("EDITION = 'second'\n", second)
+        assert image.kinby() == kinby
+        assert reused == prepared
+        assert len(backend.builds) == 2
+        assert [artifact.package for artifact in registry.image_artifacts()] == [
+            pinned(first),
+            pinned(second),
+        ]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("sha", ["abc123", "A" * 40, "g" * 40, ""])
+def test_a_package_commit_names_one_full_commit_sha(sha):
+    with pytest.raises(ValueError, match="sha"):
+        PackageCommit(url="https://github.com/example/writer", sha=sha)

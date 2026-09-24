@@ -176,7 +176,7 @@ INSTANCE_DELETE = Method(
     "instance.delete", Scope.HUB_ADMIN, InstanceDeleteCommand, LifecycleOperationResult
 )
 INSTANCE_UPDATE = Method(
-    "instance.update", Scope.HUB_ADMIN, InstanceUpdateCommand, LifecycleOperationResult
+    "instance.update", Scope.HUB_UPDATE, InstanceUpdateCommand, LifecycleOperationResult
 )
 INSTANCE_SECRETS_SET = Method(
     "instance.secrets.set", Scope.HUB_ADMIN, InstanceSecretsSetCommand, LifecycleOperationResult
@@ -195,7 +195,7 @@ INSTANCE_STATUS = Method(
     "instance.status", Scope.HUB_READ, InstanceStatusCommand, InstanceStatusResult
 )
 INSTANCE_LOGS = Method("instance.logs", Scope.HUB_READ, InstanceLogsCommand, InstanceLogsResult)
-OPERATION_GET = Method("operation.get", Scope.HUB_READ, OperationGetCommand, OperationGetResult)
+OPERATION_GET = Method("operation.get", Scope.HUB_UPDATE, OperationGetCommand, OperationGetResult)
 
 _METHODS = (
     THREAD_CREATE,

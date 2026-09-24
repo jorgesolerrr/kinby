@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from kinby.contracts import StorageItem
+from kinby.contracts import PackageCommit, PackageSelection, StorageItem
 from kinby.hub.models import (
     BuildResult,
     ImageArtifact,
@@ -34,6 +34,15 @@ def _git(repository: Path, *arguments: str) -> bytes:
 
 def _included(path: str) -> bool:
     return path in _ROOT_FILES or path.startswith("src/") or path == "docker/entrypoint.sh"
+
+
+def _requirement(package: PackageSelection) -> str:
+    """What uv installs. The kinby already in the image satisfies the package's own kinby."""
+    match package.version:
+        case PackageCommit(url=url, sha=sha):
+            return f"git+{url}@{sha}"
+        case version:
+            return f"{package.distribution}=={version}"
 
 
 class ImagePreparer:
@@ -97,14 +106,7 @@ class ImagePreparer:
         body = dockerfile.read_text(encoding="utf-8").rstrip() + "\n"
         if package.image_recipe:
             body += package.image_recipe.rstrip() + "\n"
-        command = [
-            "uv",
-            "pip",
-            "install",
-            "--system",
-            "--no-cache",
-            f"{package.distribution}=={package.version}",
-        ]
+        command = ["uv", "pip", "install", "--system", "--no-cache", _requirement(package)]
         dockerfile.write_text(f"{body}RUN {json.dumps(command)}\n", encoding="utf-8")
 
     def _resolve(self, revision: str) -> str:

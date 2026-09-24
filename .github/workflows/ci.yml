@@ -1,0 +1,49 @@
+# Checks every pull request and every push to main. A green push to main then updates
+# the coder through the hub, with a token that can only run instance updates.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run ty check
+      - run: uv run pytest
+
+  update-coder:
+    needs: checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # One update at a time, in push order. An update the hub is running is never cancelled.
+    concurrency:
+      group: update-coder
+      cancel-in-progress: false
+    env:
+      # The hub's contract URL, ending /ws.
+      KINBY_HUB_URL: ${{ secrets.KINBY_HUB_URL }}
+    steps:
+      - name: Skip until the coder runs under the hub
+        if: env.KINBY_HUB_URL == ''
+        run: echo "::notice::KINBY_HUB_URL is not set, so this push updates nothing."
+      - if: env.KINBY_HUB_URL != ''
+        uses: actions/checkout@v5
+      - if: env.KINBY_HUB_URL != ''
+        uses: astral-sh/setup-uv@v6
+      - name: Update the coder to this commit
+        if: env.KINBY_HUB_URL != ''
+        env:
+          KINBY_TOKEN: ${{ secrets.KINBY_HUB_UPDATE_TOKEN }}
+          KINBY_CODER_INSTANCE_ID: ${{ secrets.KINBY_CODER_INSTANCE_ID }}
+        run: >-
+          uv run --locked --no-dev kinby hub update
+          --connect "$KINBY_HUB_URL" "$KINBY_CODER_INSTANCE_ID"
+          --revision "$GITHUB_SHA"

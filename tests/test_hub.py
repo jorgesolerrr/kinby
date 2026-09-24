@@ -15,6 +15,7 @@ from kinby.cli.client import ContractClient
 from kinby.contracts import (
     CONTRACT_VERSION,
     CONTROL_SCOPES,
+    HUB_SCOPES,
     INSTANCE_CREATE,
     INSTANCE_DELETE,
     INSTANCE_DELETE_PREVIEW,
@@ -28,6 +29,7 @@ from kinby.contracts import (
     INSTANCE_START,
     INSTANCE_STATUS,
     INSTANCE_STOP,
+    INSTANCE_UPDATE,
     OPERATION_GET,
     Capability,
     ContainerOwner,
@@ -226,7 +228,7 @@ def _client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
     return ContractClient(
         hub.dispatcher.dispatch,
         hub.dispatcher.subscribe,
-        scopes if scopes is not None else {Scope.HUB_READ, Scope.HUB_ADMIN},
+        scopes if scopes is not None else HUB_SCOPES,
     )
 
 
@@ -1256,7 +1258,7 @@ def test_hub_reads_and_mutations_ask_for_different_scopes(tmp_path):
 
 
 def test_no_scope_an_instance_grants_carries_hub_authority():
-    hub_scopes = {Scope.HUB_READ, Scope.HUB_ADMIN}
+    hub_scopes = {Scope.HUB_READ, Scope.HUB_ADMIN, Scope.HUB_UPDATE}
 
     assert INSTANCE_SCOPES & hub_scopes == set()
     assert CONTROL_SCOPES & hub_scopes == set()
@@ -1276,6 +1278,7 @@ def test_no_scope_an_instance_grants_carries_hub_authority():
         INSTANCE_DELETE.scope,
         INSTANCE_SECRETS_SET.scope,
     } == {Scope.HUB_ADMIN}
+    assert {INSTANCE_UPDATE.scope, OPERATION_GET.scope} == {Scope.HUB_UPDATE}
 
 
 def test_stop_drains_the_instance_then_observes_the_container_stop(tmp_path):

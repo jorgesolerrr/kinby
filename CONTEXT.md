@@ -116,7 +116,7 @@ _Avoid_: rebuild, restart, update
 
 ### Instance update
 
-The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares, carrying the instance's **package** selection along. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path, keeps every storage the instance owns, and leaves the instance's own configuration alone. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
+The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares, carrying the instance's **package** selection along, or moving it with a **package pin**. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path, keeps every storage the instance owns, and leaves the instance's own configuration alone. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
 _Avoid_: upgrade, rollout
 
 ### Instance removal
@@ -394,6 +394,11 @@ _Avoid_: auth cookie, login token
 
 The secret a **hub** presents to one **instance**'s **contract server**. Each instance has its own. It reaches that instance only, and grants no hub **scope**.
 
+### Update token
+
+The second secret a **hub** holds, for CI. It runs an **instance update** and reads its **lifecycle operation**, and every other hub method refuses it. Rotating it leaves the **access token** alone.
+_Avoid_: CI token, deploy token
+
 ### Signal alias
 
 The **hub**'s record of which managed **instance** answers the public **signal** path, so a webhook registered before the hub existed keeps its URL after adoption. At most one instance holds it.
@@ -415,6 +420,11 @@ _Avoid_: package settings, routine arguments (for package settings)
 
 kinby's own install path run against one installed **package**, reporting every problem it finds without running a **routine** or calling a model. The **hub** runs the same check on a candidate image before an **instance update** disturbs the running container.
 _Avoid_: package lint, package validation
+
+### Package pin
+
+The part of an **instance update** that moves the instance's **package** to another commit of the git repository it already comes from. It names the package it moves, which must be the instance's own. The **instance registry** records the new commit only once the replacement is up.
+_Avoid_: package upgrade
 
 ### Vanilla instance
 
