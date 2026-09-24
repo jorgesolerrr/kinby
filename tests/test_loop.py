@@ -234,7 +234,7 @@ class StallingChatModel(CoreSkillModel):
 
     async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
         self.calls += 1
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(1.0)
         yield AIMessageChunk(content="Too late")
 
 
@@ -598,13 +598,13 @@ def test_parked_turn_interrupt_closes_with_the_recorded_model_call_tally(
 def test_seconds_budget_fails_a_stalled_model_call(tmp_path: Path) -> None:
     async def scenario() -> None:
         model = StallingChatModel()
-        dispatcher, thread_id = await _budget_session(tmp_path, model, "seconds = 0.1")
+        dispatcher, thread_id = await _budget_session(tmp_path, model, "seconds = 0.5")
 
         events = await _budget_turn_events(dispatcher, thread_id, "Wait")
 
         assert events[-1].payload == TurnFailed(
             code=ErrorCode.BUDGET_EXCEEDED,
-            message="The turn exceeded the seconds budget of 0.1.",
+            message="The turn exceeded the seconds budget of 0.5.",
         )
         assert model.calls == 1
 
@@ -666,10 +666,10 @@ def test_steps_budget_does_not_reset_after_approval(tmp_path: Path) -> None:
 
 def test_seconds_budget_does_not_reset_after_approval(tmp_path: Path) -> None:
     async def scenario() -> None:
-        model = ApprovalChatModel(delay=0.12)
-        dispatcher, thread_id = await _budget_session(tmp_path, model, "seconds = 0.2")
+        model = ApprovalChatModel(delay=0.6)
+        dispatcher, thread_id = await _budget_session(tmp_path, model, "seconds = 1.0")
         requested = await _park_budget_turn(dispatcher, thread_id)
-        resumed_model = DelayedCompletingChatModel(delay=0.12)
+        resumed_model = DelayedCompletingChatModel(delay=0.6)
         instance = load_instance(tmp_path / "bounded")
         runner = LangGraphRunner(instance, model_factory=lambda _: resumed_model)
         restarted = build_dispatcher(
@@ -685,7 +685,7 @@ def test_seconds_budget_does_not_reset_after_approval(tmp_path: Path) -> None:
 
         assert events[-1].payload == TurnFailed(
             code=ErrorCode.BUDGET_EXCEEDED,
-            message="The turn exceeded the seconds budget of 0.2.",
+            message="The turn exceeded the seconds budget of 1.0.",
             input_tokens=5,
             output_tokens=1,
             cache_read_tokens=3,
