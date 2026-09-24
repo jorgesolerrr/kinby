@@ -159,12 +159,14 @@ def test_compose_persists_codex_login_and_passes_claude_token() -> None:
             env_file.unlink()
     config = json.loads(result.stdout)
     coder = config["services"]["coder"]
+    recipe = _mapping(_mapping(_compose("compose.yaml")["services"])["coder"])
 
     assert {volume["source"]: volume["target"] for volume in coder["volumes"]}[
         "coder-codex"
     ] == "/root/.codex"
     assert "coder-codex" in config["volumes"]
-    assert coder["env_file"] == [{"path": "instances/coder/.env"}]
+    # `docker compose config` drops env_file once it has loaded the file.
+    assert recipe["env_file"] == "instances/coder/.env"
     assert "CLAUDE_CODE_OAUTH_TOKEN=" in (
         PROJECT_ROOT / "instances" / "coder" / ".env.example"
     ).read_text(encoding="utf-8")
