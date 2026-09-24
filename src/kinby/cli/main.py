@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from kinby.cli.client import ContractClient, format_error
 from kinby.cli.contract_socket import TOKEN_VARIABLE, InsecureContractUrl, contract_client
+from kinby.cli.hub_adopt import adopt_on_hub
 from kinby.cli.hub_update import update_on_hub
 from kinby.cli.repl import render_event, run_repl
 from kinby.cli.routines import show_routines
@@ -442,7 +443,7 @@ async def _serve_instance(instance: Instance) -> int:
                 ContractServer.from_environment(runtime.dispatcher),
             )
             address = await receiver.start()
-            print(f"listen: {address.host}:{address.port}")
+            print(f"listen: {address.host}:{address.port}", flush=True)
         client = _contract_client_for(runtime.dispatcher)
         status = await show_routines(client, sys.stdout, sys.stderr)
         if status:
@@ -520,7 +521,8 @@ def _announce(token: AccessToken | None) -> None:
     if token is None:
         return
     print("This hub's access token is shown once. Store it now:")
-    print(f"access token: {token}")
+    # A container's stdout is a pipe, which Python buffers until the hub exits.
+    print(f"access token: {token}", flush=True)
 
 
 def _set_signal_alias(directory: Path, instance_id: str) -> int:
@@ -678,10 +680,13 @@ def main(
     today: Callable[[], date] = utc_today,
 ) -> int:
     arguments = sys.argv[1:] if argv is None else argv
-    # `hub update` drives a hub over the network and takes no hub directory. argparse
-    # cannot let a subcommand stand where `hub` expects that directory, so it parses alone.
+    # `hub update` and `hub adopt` drive a hub over the network and take no hub directory.
+    # argparse cannot let a subcommand stand where `hub` expects that directory, so each
+    # parses alone.
     if arguments[:2] == ["hub", "update"]:
         return update_on_hub(arguments[2:])
+    if arguments[:2] == ["hub", "adopt"]:
+        return adopt_on_hub(arguments[2:])
     parser = argparse.ArgumentParser(prog="kinby")
     parser.set_defaults(verbose=False)
     parser.add_argument(
@@ -708,7 +713,10 @@ def main(
     hub_parser = subparsers.add_parser(
         "hub",
         help="run the instance management hub",
-        epilog="kinby hub update --help: update one instance on a running hub, as CI does.",
+        epilog=(
+            "kinby hub update --help: update one instance on a running hub, as CI does. "
+            "kinby hub adopt --help: preview or adopt an existing instance."
+        ),
     )
     hub_parser.add_argument("directory", type=Path, help="hub state directory")
     hub_parser.add_argument(

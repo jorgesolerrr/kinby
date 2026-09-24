@@ -14,6 +14,7 @@ from kinby.contracts import (
     INSTANCE_ADOPT_PREVIEW,
     INSTANCE_LIST,
     INSTANCE_RECREATE,
+    INSTANCE_UPDATE,
     OPERATION_GET,
     AdoptionFindingKind,
     Capability,
@@ -24,11 +25,15 @@ from kinby.contracts import (
     InstanceAdoptPreviewCommand,
     InstanceListCommand,
     InstanceRecreateCommand,
+    InstanceUpdateCommand,
     IntendedState,
     LifecycleOperationResult,
     OperationGetCommand,
     OperationKind,
     OperationState,
+    PackageCommit,
+    PackagePin,
+    PackageSelection,
     StorageItem,
     StorageKind,
 )
@@ -969,5 +974,118 @@ def test_the_preview_reports_the_bind_source_the_docker_host_knows(tmp_path):
         assert previewed.path == directory
         assert previewed.storage[0].source == host_source
         assert str(directory) not in {item.source for item in previewed.storage}
+
+    asyncio.run(scenario())
+
+
+FACTORY_URL = "https://github.com/jorgesolerrr/kinby-code-factory"
+FACTORY = PackageSelection(
+    id="coder",
+    distribution="kinby-code-factory",
+    version=PackageCommit(url=FACTORY_URL, sha="a" * 40),
+    image_recipe="RUN echo coding clients\n",
+)
+
+
+def declare_package(directory: Path, package_id: str = "coder") -> None:
+    """Migrate the manifest by hand, as the coder's migration does before adoption."""
+    with (directory / "kinby.toml").open("a", encoding="utf-8") as manifest:
+        manifest.write(
+            f'\n[package]\nid = "{package_id}"\n'
+            'distribution = "kinby-code-factory"\nversion = "0.1.0"\n'
+        )
+
+
+def test_an_adopted_instance_keeps_its_package_so_a_later_update_can_pin_it(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        images = FakeImages()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images, control=FakeControl())
+        directory = existing_coder(runtime, tmp_path / "box" / "coder")
+        declare_package(directory)
+        client = hub_client(hub)
+
+        previewed = await client.call(
+            INSTANCE_ADOPT_PREVIEW,
+            InstanceAdoptPreviewCommand(
+                path=directory, runtime_id=CODER_CONTAINER, relinquished=True, package=FACTORY
+            ),
+        )
+        accepted = await client.call(
+            INSTANCE_ADOPT,
+            InstanceAdoptCommand(
+                path=directory, runtime_id=CODER_CONTAINER, relinquished=True, package=FACTORY
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
+        # Adoption keeps the running image. The package image is the next update's.
+        assert runtime.created[0].image == CODER_IMAGE
+        assert images.selections == []
+        pinned = await client.call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(
+                instance_id=accepted.instance_id,
+                revision="main",
+                package=PackagePin(id="coder", sha="b" * 40),
+            ),
+        )
+
+        assert not isinstance(previewed, ErrorEnvelope)
+        assert all(not finding.blocking for finding in previewed.findings)
+        assert isinstance(pinned, LifecycleOperationResult)
+        await finished_operation(client, pinned)
+        assert images.selections[0].package == FACTORY.model_copy(
+            update={"version": PackageCommit(url=FACTORY_URL, sha="b" * 40)}
+        )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("declared", "selection", "expected"),
+    [
+        (None, FACTORY, 'declares no package, not "coder"'),
+        ("coder", None, 'declares package "coder"'),
+        ("writer", FACTORY, 'declares package "writer"'),
+    ],
+)
+def test_a_package_that_disagrees_with_the_manifest_blocks_the_adoption(
+    tmp_path, declared, selection, expected
+):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
+        directory = existing_coder(runtime, tmp_path / "box" / "coder")
+        if declared is not None:
+            declare_package(directory, declared)
+        client = hub_client(hub)
+
+        previewed = await client.call(
+            INSTANCE_ADOPT_PREVIEW,
+            InstanceAdoptPreviewCommand(
+                path=directory, runtime_id=CODER_CONTAINER, relinquished=True, package=selection
+            ),
+        )
+        refused = await client.call(
+            INSTANCE_ADOPT,
+            InstanceAdoptCommand(
+                path=directory, runtime_id=CODER_CONTAINER, relinquished=True, package=selection
+            ),
+        )
+
+        assert not isinstance(previewed, ErrorEnvelope)
+        mismatch = [
+            finding
+            for finding in previewed.findings
+            if finding.kind is AdoptionFindingKind.PACKAGE_MISMATCH
+        ]
+        assert len(mismatch) == 1
+        assert mismatch[0].blocking
+        assert expected in mismatch[0].detail
+        assert isinstance(refused, ErrorEnvelope)
+        assert "not adopted" in refused.message
+        assert hub.registry.managed_instances() == []
+        assert runtime.removed == []
 
     asyncio.run(scenario())

@@ -27,7 +27,7 @@ from kinby.contracts import (
 from kinby.hub.control import ControlEndpoint, ControlUnreachable, InstanceControl
 from kinby.hub.models import ContainerDescription, ContainerRuntime
 from kinby.hub.registry import HubRegistry
-from kinby.instance import ManifestError, inspect_instance
+from kinby.instance import ManifestError, PackageProvenance, inspect_instance
 
 #: Where an adopted instance's own directory lives inside its container.
 INSTANCE_MOUNT = "/instance"
@@ -78,6 +78,7 @@ async def preflight(
             *_identity(observed),
             *_ownership(command, observed, registry),
             *_compatibility(command, observed),
+            *_package(command, observed),
         ],
     )
 
@@ -105,7 +106,7 @@ class _Observed:
         self.path = path
         self.described = described
         self.probe = probe
-        self.manifest_id, self.persona_name = _inspected(path)
+        self.manifest_id, self.persona_name, self.package = _inspected(path)
         self.source = next(
             (
                 item.source
@@ -117,13 +118,13 @@ class _Observed:
         self.instance_id = hub_instance_id(self.source) if self.source else NO_INSTANCE
 
 
-def _inspected(path: Path) -> tuple[str, str | None]:
+def _inspected(path: Path) -> tuple[str, str | None, PackageProvenance | None]:
     """The identity in the directory. Metadata only: adoption reads no instance secret."""
     try:
         manifest = inspect_instance(path).manifest
     except ManifestError, OSError:
-        return "", None
-    return manifest.id, manifest.persona_name
+        return "", None, None
+    return manifest.id, manifest.persona_name, manifest.package
 
 
 async def _probe(
@@ -311,6 +312,40 @@ def _compatibility(
     ]
 
 
+def _package(
+    command: InstanceAdoptPreviewCommand,
+    observed: _Observed,
+) -> list[AdoptionFinding]:
+    """The package the hub records has to be the one the manifest says supplied it.
+
+    Only the id and distribution are compared. A git commit names no version, and
+    the manifest's version is the one its copied configuration came from.
+    """
+    if not observed.manifest_id:
+        return []
+    match command.package, observed.package:
+        case None, None:
+            return []
+        case selected, None:
+            detail = f'The manifest declares no package, not "{selected.id}".'
+        case None, declared:
+            detail = (
+                f'The manifest declares package "{declared.id}". Adopt with its package '
+                "selection, so updates keep building it."
+            )
+        case selected, declared if (selected.id, selected.distribution) != (
+            declared.id,
+            declared.distribution,
+        ):
+            detail = (
+                f'The manifest declares package "{declared.id}" from {declared.distribution}, '
+                f'not "{selected.id}" from {selected.distribution}.'
+            )
+        case _:
+            return []
+    return [_finding(AdoptionFindingKind.PACKAGE_MISMATCH, detail)]
+
+
 def _handoff(observed: _Observed, registry: HubRegistry) -> AdoptionHandoff:
     """What the operator does first, what the handoff costs, and what keeps the webhook URL."""
     alias = registry.signal_alias()
@@ -356,7 +391,7 @@ def _downtime(probe: _Probe) -> str:
 def _unseen(command: InstanceAdoptPreviewCommand, detail: str) -> InstanceAdoptPreviewResult:
     """A preview of an instance whose container the hub cannot see: identity, and one finding."""
     path = Path(command.path).resolve()
-    manifest_id, persona_name = _inspected(path)
+    manifest_id, persona_name, _ = _inspected(path)
     return InstanceAdoptPreviewResult(
         instance_id=NO_INSTANCE,
         manifest_id=manifest_id,

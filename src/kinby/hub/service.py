@@ -492,6 +492,8 @@ class Hub:
             runtime_id=preview.runtime_id,
             prepared=False,
             storage=tuple(preview.storage),
+            # The running image stays. The next update builds this package (ADR 0058).
+            package=command.package,
         )
         operation_id = uuid4()
         try:
