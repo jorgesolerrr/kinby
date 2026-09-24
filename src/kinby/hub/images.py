@@ -24,8 +24,10 @@ _ROOT_FILES = frozenset({"Dockerfile", "pyproject.toml", "uv.lock", "README.md",
 
 
 def _git(repository: Path, *arguments: str) -> bytes:
+    # The hub runs as root in its container and the host user owns the mounted checkout,
+    # so git would refuse it as dubious. The hub only reads that checkout.
     return subprocess.run(
-        ["git", *arguments],
+        ["git", "-c", f"safe.directory={repository}", *arguments],
         cwd=repository,
         check=True,
         capture_output=True,

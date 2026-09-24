@@ -443,7 +443,7 @@ async def _serve_instance(instance: Instance) -> int:
                 ContractServer.from_environment(runtime.dispatcher),
             )
             address = await receiver.start()
-            print(f"listen: {address.host}:{address.port}")
+            print(f"listen: {address.host}:{address.port}", flush=True)
         client = _contract_client_for(runtime.dispatcher)
         status = await show_routines(client, sys.stdout, sys.stderr)
         if status:
@@ -521,7 +521,8 @@ def _announce(token: AccessToken | None) -> None:
     if token is None:
         return
     print("This hub's access token is shown once. Store it now:")
-    print(f"access token: {token}")
+    # A container's stdout is a pipe, which Python buffers until the hub exits.
+    print(f"access token: {token}", flush=True)
 
 
 def _set_signal_alias(directory: Path, instance_id: str) -> int:

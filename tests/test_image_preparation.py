@@ -121,6 +121,23 @@ def test_image_preparation_resolves_revision_restricts_context_and_reuses_artifa
     asyncio.run(scenario())
 
 
+def test_image_preparation_reads_a_source_checkout_another_user_owns(tmp_path, monkeypatch):
+    """The hub runs as root in its container, and the bind-mounted checkout is the host user's."""
+
+    async def scenario() -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        revision = _source_repo(source)
+        monkeypatch.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+        preparer = ImagePreparer(source, HubRegistry(tmp_path / "hub"), FakeImageBackend())
+
+        prepared = await preparer.prepare(ImageSelection("HEAD"))
+
+        assert prepared.artifact.revision == revision
+
+    asyncio.run(scenario())
+
+
 def test_pinned_package_is_installed_in_the_image_and_part_of_artifact_reuse(tmp_path):
     async def scenario() -> None:
         source = tmp_path / "source"
