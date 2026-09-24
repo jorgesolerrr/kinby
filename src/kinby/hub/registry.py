@@ -590,15 +590,23 @@ class HubRegistry:
                     """
                     INSERT INTO instances (
                         id, path, manifest_id, persona_name, requested_revision,
-                        image_id, intended_state, runtime_id, prepared
-                    ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 0)
+                        image_id, intended_state, runtime_id, prepared,
+                        package_id, package_distribution, package_version,
+                        package_image_recipe, package_commit_url, package_commit_sha
+                    ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         path = excluded.path,
                         manifest_id = excluded.manifest_id,
                         persona_name = excluded.persona_name,
                         image_id = excluded.image_id,
                         intended_state = excluded.intended_state,
-                        runtime_id = excluded.runtime_id
+                        runtime_id = excluded.runtime_id,
+                        package_id = excluded.package_id,
+                        package_distribution = excluded.package_distribution,
+                        package_version = excluded.package_version,
+                        package_image_recipe = excluded.package_image_recipe,
+                        package_commit_url = excluded.package_commit_url,
+                        package_commit_sha = excluded.package_commit_sha
                     """,
                     (
                         str(instance.instance_id),
@@ -608,6 +616,7 @@ class HubRegistry:
                         instance.image_id,
                         instance.intended_state.value,
                         instance.runtime_id,
+                        *_package_columns(instance.package),
                     ),
                 )
             except sqlite3.IntegrityError as exc:
