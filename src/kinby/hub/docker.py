@@ -17,7 +17,7 @@ from docker.types import Mount
 import docker
 from kinby.contracts import ContainerOwner, StorageItem, StorageKind
 from kinby.hub.models import BuildResult, ContainerDescription, InstanceSpec, RuntimeStatus
-from kinby.packages import InstalledPackage, installed_package_from_json
+from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage, installed_package_from_json
 
 _FROM = re.compile(r"^(FROM\s+)(\S+)(.*)$", re.MULTILINE | re.IGNORECASE)
 _END = object()
@@ -95,21 +95,17 @@ class DockerImageBackend:
     ) -> InstalledPackage:
         """Run the candidate check in the image and read the package it describes.
 
-        An existing instance directory is mounted read-only, so its package.yaml
-        is validated by the code that will run it and nothing in it changes.
+        An existing instance contributes its package.yaml only, mounted read-only.
+        The check has no network. Candidate code cannot read the rest of the
+        instance, including .env, and cannot send what it can read out.
         """
         command = ["-m", "kinby.packages", package_id]
         mounts = []
         if instance is not None:
-            command.append(instance.destination)
-            mounts.append(
-                Mount(
-                    target=instance.destination,
-                    source=instance.source,
-                    type=instance.kind.value,
-                    read_only=True,
-                )
-            )
+            command.append(_check_directory(instance))
+            config = _config_mount(instance)
+            if config is not None:
+                mounts.append(config)
         try:
             output = await asyncio.to_thread(
                 self._client.containers.run,
@@ -118,6 +114,7 @@ class DockerImageBackend:
                 entrypoint="python",
                 remove=True,
                 mounts=mounts,
+                network_mode="none",
             )
         except ContainerError as exc:
             printed = cast(bytes, exc.stderr or b"").decode(errors="replace").strip()
@@ -443,6 +440,34 @@ class DockerRuntime:
             if instance_id.startswith("kinby-"):
                 raise
             return await asyncio.to_thread(self._client.containers.get, f"kinby-{instance_id}")
+
+
+def _check_directory(instance: StorageItem) -> str:
+    """The directory the check reads package.yaml from."""
+    destination = Path(instance.destination)
+    if destination.name == PACKAGE_CONFIG_NAME:
+        return str(destination.parent)
+    return instance.destination
+
+
+def _config_mount(instance: StorageItem) -> Mount | None:
+    """The one file the check needs. A missing file is left unmounted, never created."""
+    destination = Path(instance.destination)
+    source = Path(instance.source)
+    if destination.name == PACKAGE_CONFIG_NAME:
+        file_source = source
+        file_target = destination
+    else:
+        file_source = source / PACKAGE_CONFIG_NAME
+        file_target = destination / PACKAGE_CONFIG_NAME
+        if not file_source.is_file():
+            return None
+    return Mount(
+        target=str(file_target),
+        source=str(file_source),
+        type=instance.kind.value,
+        read_only=True,
+    )
 
 
 def _mounted(attributes: dict[str, object]) -> tuple[StorageItem, ...]:

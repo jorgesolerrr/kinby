@@ -533,11 +533,19 @@ class CheckedCandidates(CandidateImages):
         instance: StorageItem | None = None,
     ) -> PreparedImage:
         prepared = await super().prepare(selection, instance)
-        mounted = [] if instance is None else [instance.source]
+        mounted = [] if instance is None else [_checked_directory(instance)]
         checked = await asyncio.to_thread(self._check, mounted)
         if checked.returncode != 0:
             raise ValueError(checked.stderr.strip())
         return replace(prepared, package=installed_package_from_json(checked.stdout))
+
+
+def _checked_directory(instance: StorageItem) -> str:
+    """The directory the check reads, when the hub handed it only package.yaml."""
+    source = Path(instance.source)
+    if source.name == "package.yaml":
+        return str(source.parent)
+    return instance.source
 
 
 async def _checked(

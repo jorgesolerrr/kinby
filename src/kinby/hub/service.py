@@ -99,7 +99,7 @@ from kinby.hub.models import (
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import HubRegistry, ManagedInstance
 from kinby.instance import Instance, init_instance, inspect_instance
-from kinby.packages import InstalledPackage
+from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage
 
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _INSTANCE_HOST = "0.0.0.0"
@@ -713,15 +713,7 @@ class Hub:
         self._record(operation_id, "image", f"Preparing the image {revision} selects.")
         selection = ImageSelection(revision=revision, package=record.package)
         # The candidate validates this instance's own package.yaml before anything moves.
-        instance_mount = next(
-            (
-                item
-                for item in record.storage
-                if item.kind is StorageKind.BIND and item.destination == INSTANCE_MOUNT
-            ),
-            None,
-        )
-        prepared = await self._images.prepare(selection, instance_mount)
+        prepared = await self._images.prepare(selection, self._candidate_config(record))
         artifact = prepared.artifact
         # The candidate must carry this instance's package selection. The configuration
         # that package once copied is the instance's own and is never seeded again,
@@ -983,6 +975,31 @@ class Hub:
             volumes=list(
                 dict.fromkeys(item.source for item in owned if item.kind is StorageKind.VOLUME)
             ),
+        )
+
+    def _candidate_config(self, record: ManagedInstance) -> StorageItem | None:
+        """The instance file the candidate check may see, on the Docker host.
+
+        The check reads package.yaml and nothing else. When the file exists, the
+        mount source is that file's host path, so the hub does not hand the
+        candidate the directory that holds .env. A missing file stays a directory
+        mount with nothing attached, and the check reports the absence.
+        """
+        mount = next(
+            (
+                item
+                for item in record.storage
+                if item.kind is StorageKind.BIND and item.destination == INSTANCE_MOUNT
+            ),
+            None,
+        )
+        if mount is None or not (record.path / PACKAGE_CONFIG_NAME).is_file():
+            return mount
+        return StorageItem(
+            kind=StorageKind.BIND,
+            source=str(Path(mount.source) / PACKAGE_CONFIG_NAME),
+            destination=f"{mount.destination.rstrip('/')}/{PACKAGE_CONFIG_NAME}",
+            writable=False,
         )
 
     def _directory(self, record: ManagedInstance, item: StorageItem) -> Path:

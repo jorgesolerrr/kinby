@@ -170,8 +170,8 @@ class ImagePreparation(Protocol):
     ) -> PreparedImage:
         """Prepare the image, then run the candidate check inside it.
 
-        *instance* is the directory mount of an existing instance, whose
-        package.yaml the check validates in the candidate.
+        *instance* is an existing instance's directory, or that directory's
+        package.yaml. The check validates the file and mounts nothing else.
         """
         ...
 

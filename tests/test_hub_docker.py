@@ -245,13 +245,22 @@ def test_docker_image_backend_inspects_the_authoritative_package_in_the_image():
         "sha256:selected",
         ["-m", "kinby.packages", "writer"],
     )
-    assert client.containers.run_options == {"entrypoint": "python", "remove": True, "mounts": []}
+    assert client.containers.run_options == {
+        "entrypoint": "python",
+        "remove": True,
+        "mounts": [],
+        "network_mode": "none",
+    }
 
 
-def test_the_candidate_check_reads_the_instance_config_through_a_read_only_mount():
+def test_the_candidate_check_mounts_package_yaml_and_not_instance_secrets(tmp_path):
+    instance_dir = tmp_path / "alice"
+    instance_dir.mkdir()
+    (instance_dir / ".env").write_text("KINBY_CONTROL_TOKEN=secret\n", encoding="utf-8")
+    (instance_dir / "package.yaml").write_text("tone: plain\n", encoding="utf-8")
     instance = StorageItem(
         kind=StorageKind.BIND,
-        source="/srv/kinby/instances/alice",
+        source=str(instance_dir),
         destination="/instance",
         writable=True,
     )
@@ -268,14 +277,73 @@ def test_the_candidate_check_reads_the_instance_config_through_a_read_only_mount
         "sha256:selected",
         ["-m", "kinby.packages", "writer", "/instance"],
     )
+    assert client.containers.run_options["network_mode"] == "none"
     assert client.containers.run_options["mounts"] == [
         Mount(
-            target="/instance",
-            source="/srv/kinby/instances/alice",
+            target="/instance/package.yaml",
+            source=str(instance_dir / "package.yaml"),
             type="bind",
             read_only=True,
         )
     ]
+
+
+def test_the_candidate_check_mounts_a_host_config_file_the_hub_cannot_see():
+    instance = StorageItem(
+        kind=StorageKind.BIND,
+        source="/var/lib/kinby/instances/alice/package.yaml",
+        destination="/instance/package.yaml",
+        writable=False,
+    )
+
+    async def scenario() -> FakeDockerClient:
+        client = FakeDockerClient()
+        backend = DockerImageBackend(cast(DockerClient, client))
+        await backend.inspect_package("sha256:selected", "writer", instance)
+        return client
+
+    client = asyncio.run(scenario())
+
+    assert client.containers.run_arguments == (
+        "sha256:selected",
+        ["-m", "kinby.packages", "writer", "/instance"],
+    )
+    assert client.containers.run_options["mounts"] == [
+        Mount(
+            target="/instance/package.yaml",
+            source="/var/lib/kinby/instances/alice/package.yaml",
+            type="bind",
+            read_only=True,
+        )
+    ]
+
+
+def test_a_missing_package_yaml_is_not_created_for_the_candidate_check(tmp_path):
+    instance_dir = tmp_path / "alice"
+    instance_dir.mkdir()
+    (instance_dir / ".env").write_text("KINBY_CONTROL_TOKEN=secret\n", encoding="utf-8")
+    instance = StorageItem(
+        kind=StorageKind.BIND,
+        source=str(instance_dir),
+        destination="/instance",
+        writable=True,
+    )
+
+    async def scenario() -> FakeDockerClient:
+        client = FakeDockerClient()
+        backend = DockerImageBackend(cast(DockerClient, client))
+        await backend.inspect_package("sha256:selected", "writer", instance)
+        return client
+
+    client = asyncio.run(scenario())
+
+    assert client.containers.run_arguments == (
+        "sha256:selected",
+        ["-m", "kinby.packages", "writer", "/instance"],
+    )
+    assert client.containers.run_options["mounts"] == []
+    assert client.containers.run_options["network_mode"] == "none"
+    assert not (instance_dir / "package.yaml").exists()
 
 
 def test_a_failing_candidate_check_reports_what_the_check_printed():
