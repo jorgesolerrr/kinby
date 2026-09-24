@@ -132,6 +132,44 @@ def test_malformed_secret_declarations_fail_the_check(tmp_path, monkeypatch, cap
     ]
 
 
+def test_a_bad_permissions_file_is_reported_with_the_other_failures(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    package = _install(tmp_path, monkeypatch, executables=("kinby-fake-editor",))
+    (package.template / "permissions.toml").write_text("mode = [\n", encoding="utf-8")
+
+    status = main(["package", "check", "writer"])
+
+    assert status == 1
+    errors = capsys.readouterr().err.splitlines()
+    assert 'Executable "kinby-fake-editor" is not on PATH.' in errors
+    assert any(error.startswith("permissions.toml:") for error in errors)
+
+
+def test_a_skill_entry_that_fails_to_load_is_reported_with_the_other_failures(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    package = _install(tmp_path, monkeypatch, executables=("kinby-fake-editor",))
+    entry_points = next(package.site.glob("*.dist-info")) / "entry_points.txt"
+    entry_points.write_text(
+        entry_points.read_text(encoding="utf-8").replace(
+            f"writer = {package.module}:SKILLS",
+            f"writer = {package.module}:MISSING",
+        ),
+        encoding="utf-8",
+    )
+
+    status = main(["package", "check", "writer"])
+
+    assert status == 1
+    errors = capsys.readouterr().err.splitlines()
+    assert 'Executable "kinby-fake-editor" is not on PATH.' in errors
+    assert any(
+        error.startswith(f'Skill entry point "{package.module}:MISSING" failed to load:')
+        for error in errors
+    )
+
+
 def test_an_unknown_package_fails_the_check(capsys):
     status = main(["package", "check", "no-such-package"])
 

@@ -17,6 +17,7 @@ from tempfile import TemporaryDirectory
 
 from kinby.contracts import Warning
 from kinby.instance import Instance, InstanceExistsError, init_instance, load_instance
+from kinby.instance.permissions import PermissionsError
 from kinby.packages import (
     PACKAGE_CONFIG_NAME,
     LoadedPackage,
@@ -27,6 +28,7 @@ from kinby.packages import (
     read_package_config,
     readable_template_files,
 )
+from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.routines import SharedCodeStep, load_routines, resolve_code_step
 from kinby.plugins.skills import load_skills
@@ -149,7 +151,13 @@ def _initialization_failures(loaded: LoadedPackage) -> list[str]:
 
 def _routine_failures(instance: Instance, package: Package) -> Iterator[str]:
     with _placeholder_secrets(package):
-        routines, warnings = load_routines(instance)
+        try:
+            routines, warnings = load_routines(instance)
+        except PermissionsError as exc:
+            # load_permissions runs before the per-routine handler, so a bad
+            # permissions.toml would otherwise abort the whole check.
+            yield str(exc)
+            return
     yield from _instance_warnings(instance, warnings)
     tools, _ = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults).refresh()
     for routine in routines:
@@ -186,7 +194,11 @@ def _skill_failures(instance: Instance, loaded: LoadedPackage) -> Iterator[str]:
     for entry in entry_points(group="kinby.skills"):
         if entry.dist is None or entry.dist.name != loaded.distribution.name:
             continue
-        root = entry.load()
+        try:
+            root = entry.load()
+        except Exception as exc:
+            yield f'Skill entry point "{entry.value}" failed to load: {exception_message(exc)}'
+            continue
         if not isinstance(root, Path) or not root.is_dir():
             yield f'Skill entry point "{entry.value}" does not export a skill directory Path.'
             continue
