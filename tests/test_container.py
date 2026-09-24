@@ -103,10 +103,7 @@ def test_image_runs_a_mounted_instance_with_the_container_contract() -> None:
     ("program", "prefix"),
     [
         ("git", "git version "),
-        ("gh", "gh version "),
         ("uv", "uv "),
-        ("claude", "2.1.280 (Claude Code)"),
-        ("codex", "codex-cli 0.154.0"),
     ],
 )
 def test_image_ships_the_workspace_programs(program: str, prefix: str) -> None:
@@ -134,99 +131,48 @@ def _compose_cli() -> bool:
     return result.returncode == 0
 
 
-@pytest.mark.skipif(not _compose_cli(), reason="Docker Compose is not available")
-def test_compose_persists_codex_login_and_passes_claude_token() -> None:
-    env_file = PROJECT_ROOT / "instances" / "coder" / ".env"
-    created = False
-    if not env_file.exists():
-        env_file.write_text(
-            (env_file.parent / ".env.example").read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
-        created = True
-    try:
-        result = _docker(
-            "compose",
-            "config",
-            "--format",
-            "json",
-            "--no-env-resolution",
-            "--no-path-resolution",
-            env={**os.environ, "ANTHROPIC_CONFIG_DIR": "/tmp/anthropic"},
-        )
-    finally:
-        if created:
-            env_file.unlink()
-    config = json.loads(result.stdout)
-    coder = config["services"]["coder"]
-    recipe = _mapping(_mapping(_compose("compose.yaml")["services"])["coder"])
-
-    assert {volume["source"]: volume["target"] for volume in coder["volumes"]}[
-        "coder-codex"
-    ] == "/root/.codex"
-    assert "coder-codex" in config["volumes"]
-    # `docker compose config` drops env_file once it has loaded the file.
-    assert recipe["env_file"] == "instances/coder/.env"
-    assert "CLAUDE_CODE_OAUTH_TOKEN=" in (
-        PROJECT_ROOT / "instances" / "coder" / ".env.example"
-    ).read_text(encoding="utf-8")
-
-
 @pytest.mark.skipif(not _docker_is_available(), reason="Docker daemon is not available")
-def test_entrypoint_writes_codex_skill_config_once(tmp_path: Path) -> None:
+def test_base_image_boots_without_coding_clients_even_with_a_github_token(tmp_path: Path) -> None:
     image = f"kinby-container-test-{uuid.uuid4().hex}"
     instance = tmp_path / "instance"
-    instance.mkdir()
+    skills = instance / "workspace" / ".claude" / "skills" / "tdd"
+    skills.mkdir(parents=True)
+    (skills / "SKILL.md").write_text("# tdd\n", encoding="utf-8")
     (instance / "kinby.toml").write_text(
-        'id = "coder"\n[models]\nmain = "openai:gpt-5"\n',
+        'id = "vanilla"\n[models]\nmain = "openai:gpt-5"\n',
         encoding="utf-8",
     )
-    skills = instance / "workspace" / ".claude" / "skills"
-    for name in ("implement-ticket", "tdd"):
-        skill = skills / name
-        skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
-    codex_home = tmp_path / "codex"
-    codex_home.mkdir()
-    mounts = (
-        "--mount",
-        f"type=bind,src={instance},dst=/instance",
-        "--mount",
-        f"type=bind,src={codex_home},dst=/root/.codex",
-    )
+    mounts = ("--mount", f"type=bind,src={instance},dst=/instance")
 
     try:
         _docker("build", "--quiet", "--tag", image, ".")
 
-        first = _docker("run", "--rm", *mounts, image, "instance", "show", check=False)
-
-        assert first.returncode == 0, first.stderr
-        assert (codex_home / "config.toml").read_text(encoding="utf-8") == (
-            '[[skills.config]]\npath = "/instance/workspace/.claude/skills/implement-ticket"\n'
-            "enabled = true\n\n"
-            '[[skills.config]]\npath = "/instance/workspace/.claude/skills/tdd"\n'
-            "enabled = true\n"
-        )
-        assert (instance / "workspace" / ".agents" / "skills").readlink() == Path(
-            "../.claude/skills"
-        )
-
-        _docker(
+        installed = [
+            program
+            for program in ("gh", "claude", "codex")
+            if _docker(
+                "run", "--rm", "--entrypoint", "which", image, program, check=False
+            ).returncode
+            == 0
+        ]
+        result = _docker(
             "run",
             "--rm",
+            "--env",
+            "GH_TOKEN=token",
             *mounts,
-            "--entrypoint",
-            "sh",
             image,
-            "-c",
-            "printf 'edited = true\\n' > /root/.codex/config.toml",
+            "instance",
+            "show",
+            check=False,
         )
-        second = _docker("run", "--rm", *mounts, image, "instance", "show", check=False)
 
-        assert second.returncode == 0, second.stderr
-        assert (codex_home / "config.toml").read_text(encoding="utf-8") == "edited = true\n"
+        assert installed == []
+        assert result.returncode == 0, result.stderr
+        assert "id: vanilla" in result.stdout
+        assert not (instance / "workspace" / ".agents").exists()
     finally:
-        _allow_temp_mount_cleanup(image, mounts, "/instance", "/root/.codex")
+        _allow_temp_mount_cleanup(image, mounts, "/instance")
         _docker("image", "rm", "--force", image, check=False)
 
 

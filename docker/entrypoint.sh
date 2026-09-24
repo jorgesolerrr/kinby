@@ -12,8 +12,8 @@ fi
 if [ -n "${GIT_USER_EMAIL:-}" ]; then
     git config --global user.email "$GIT_USER_EMAIL"
 fi
-# git pushes through gh when a GitHub token is present.
-if [ -n "${GH_TOKEN:-}" ]; then
+# git pushes through gh when a GitHub token is present and a package's image ships gh.
+if [ -n "${GH_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
     gh auth setup-git
 fi
 
@@ -47,10 +47,10 @@ if [ -n "${workspace_source:-}" ] && [ -z "$(ls -A "$workspace_path" 2>/dev/null
     git clone "$workspace_source" "$workspace_path"
 fi
 
-# Share the workspace's Claude skills with Codex. Codex config addresses one skill
-# directory at a time, while repository discovery uses .agents/skills.
+# When a package's image ships Codex, share the workspace's Claude skills with it. Codex
+# config addresses one skill directory at a time, while repository discovery uses .agents/skills.
 codex_home="${CODEX_HOME:-/root/.codex}"
-if [ -n "${workspace_path:-}" ]; then
+if [ -n "${workspace_path:-}" ] && command -v codex >/dev/null 2>&1; then
     python - "$workspace_path" "$codex_home" <<'PY'
 import json
 import sys

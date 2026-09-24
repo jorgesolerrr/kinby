@@ -42,7 +42,6 @@ evals = [
 ]
 
 [tool.pytest.ini_options]
-# An instance workspace under instances/ may be another checkout with its own tests.
 testpaths = ["tests"]
 
 [tool.ruff]

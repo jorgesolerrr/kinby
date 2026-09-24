@@ -43,7 +43,7 @@ An instance that already exists can move under the hub. `instance.adopt.preview`
 
 ## Run an instance
 
-The reference deployment is Docker Compose: `compose.yaml` runs the instances under `instances/`, one container each. [`docs/container.md`](docs/container.md) has the container contract, the entrypoint, and the webhook setup for a coding instance.
+The reference deployment is the hub in `compose.hub.yaml`, which runs each instance in its own container. [`docs/container.md`](docs/container.md) has the container contract and the entrypoint. The software factory, the coder that implements kinby's own issues, is the package in [kinby-code-factory](https://github.com/jorgesolerrr/kinby-code-factory).
 
 ## Validate `kinby.toml` in an editor
 
