@@ -18,6 +18,7 @@ from kinby.cli.contract_socket import TOKEN_VARIABLE, InsecureContractUrl, contr
 from kinby.contracts import (
     INSTANCE_UPDATE,
     OPERATION_GET,
+    ErrorCode,
     ErrorEnvelope,
     InstanceUpdateCommand,
     OperationGetCommand,
@@ -95,6 +96,11 @@ async def _follow(client: ContractClient, command: OperationGetCommand) -> int:
     while True:
         operation = await client.call(OPERATION_GET, command)
         if isinstance(operation, ErrorEnvelope):
+            # The hub keeps the update running when the socket drops. The next poll
+            # reads the same operation once the client has reconnected.
+            if operation.code is ErrorCode.CONNECTION_LOST:
+                await asyncio.sleep(POLL_SECONDS)
+                continue
             print(format_error(operation), file=sys.stderr)
             return 1
         for step in operation.steps[printed:]:

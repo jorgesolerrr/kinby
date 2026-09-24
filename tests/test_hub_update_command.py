@@ -1,12 +1,23 @@
 """`kinby hub update`: the command CI runs to update one instance through a hub."""
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 
 from kinby.cli import main
-from kinby.cli.contract_socket import TOKEN_VARIABLE
+from kinby.cli.client import ContractClient
+from kinby.cli.contract_socket import CONNECTION_LOST, TOKEN_VARIABLE, contract_client
+from kinby.contracts import (
+    OPERATION_GET,
+    ContractModel,
+    ErrorCode,
+    ErrorEnvelope,
+    Method,
+    UpdateToken,
+)
 from kinby.hub import Hub
 from tests.test_hub import FakeControl, hub_at, hub_client, started_instance
 from tests.test_hub_server import served, url
@@ -66,6 +77,91 @@ def test_hub_update_follows_the_update_and_prints_its_steps(
         "succeeded",
     ]
     assert printed[-1] == "succeeded: Instance updated."
+
+
+class _LoseOnePoll:
+    """Answer the first ``operation.get`` the way a socket drop does, then the hub."""
+
+    def __init__(self, client: ContractClient) -> None:
+        self._client = client
+        self._lost = False
+
+    async def call[Command: ContractModel, Result: ContractModel](
+        self,
+        method: Method[Command, Result],
+        command: Command,
+    ) -> Result | ErrorEnvelope:
+        if method is OPERATION_GET and not self._lost:
+            self._lost = True
+            return CONNECTION_LOST
+        return await self._client.call(method, command)
+
+
+def test_hub_update_keeps_following_when_a_poll_loses_the_socket(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    hub = hub_at(tmp_path / "hub", images=CandidateImages(), control=FakeControl())
+    instance_id = _started(hub)
+    monkeypatch.setenv(TOKEN_VARIABLE, hub.access.rotate_update_token())
+    monkeypatch.setattr("kinby.cli.hub_update.POLL_SECONDS", 0)
+    monkeypatch.setattr("kinby.cli.hub_update.contract_client", _drop_one_poll)
+
+    exit_code = _update(hub, instance_id, "--revision", "v0.2.0")
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "CONNECTION_LOST" not in captured.err
+    assert captured.out.splitlines()[-1] == "succeeded: Instance updated."
+
+
+class _RefusePoll:
+    """Answer ``operation.get`` with an error the hub actually sent."""
+
+    def __init__(self, client: ContractClient) -> None:
+        self._client = client
+
+    async def call[Command: ContractModel, Result: ContractModel](
+        self,
+        method: Method[Command, Result],
+        command: Command,
+    ) -> Result | ErrorEnvelope:
+        if method is OPERATION_GET:
+            return ErrorEnvelope(
+                code=ErrorCode.NOT_FOUND,
+                message="No such operation.",
+                retryable=False,
+            )
+        return await self._client.call(method, command)
+
+
+def test_hub_update_stops_when_the_hub_rejects_the_poll(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    hub = hub_at(tmp_path / "hub", images=CandidateImages(), control=FakeControl())
+    instance_id = _started(hub)
+    monkeypatch.setenv(TOKEN_VARIABLE, hub.access.rotate_update_token())
+    monkeypatch.setattr("kinby.cli.hub_update.contract_client", _refuse_poll)
+
+    exit_code = _update(hub, instance_id, "--revision", "v0.2.0")
+
+    assert exit_code == 1
+    assert "NOT_FOUND: No such operation." in capsys.readouterr().err.splitlines()
+
+
+@asynccontextmanager
+async def _drop_one_poll(url: str, token: UpdateToken) -> AsyncIterator[_LoseOnePoll]:
+    async with contract_client(url, token) as client:
+        yield _LoseOnePoll(client)
+
+
+@asynccontextmanager
+async def _refuse_poll(url: str, token: UpdateToken) -> AsyncIterator[_RefusePoll]:
+    async with contract_client(url, token) as client:
+        yield _RefusePoll(client)
 
 
 def test_hub_update_exits_non_zero_when_the_update_fails(
