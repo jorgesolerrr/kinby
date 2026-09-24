@@ -15,6 +15,7 @@ from kinby.contracts import (
     OperationKind,
     OperationState,
     OperationStep,
+    PackageCommit,
     PackageSelection,
     PackageSummary,
     StorageItem,
@@ -88,7 +89,9 @@ class HubRegistry:
                     package_id TEXT,
                     package_distribution TEXT,
                     package_version TEXT,
-                    package_image_recipe TEXT
+                    package_image_recipe TEXT,
+                    package_commit_url TEXT,
+                    package_commit_sha TEXT
                 );
                 CREATE TABLE IF NOT EXISTS storage (
                     instance_id TEXT NOT NULL REFERENCES instances(id),
@@ -145,6 +148,8 @@ class HubRegistry:
                     "package_distribution": "TEXT",
                     "package_version": "TEXT",
                     "package_image_recipe": "TEXT",
+                    "package_commit_url": "TEXT",
+                    "package_commit_sha": "TEXT",
                 },
             )
             self._add_columns(
@@ -227,6 +232,23 @@ class HubRegistry:
             )
             connection.execute("DELETE FROM sessions")
 
+    def update_token_hash(self) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM hub_metadata WHERE key = 'update_token_hash'"
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def replace_update_token_hash(self, token_hash: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO hub_metadata (key, value)
+                VALUES ('update_token_hash', ?)
+                """,
+                (token_hash,),
+            )
+
     def open_session(self, token_hash: str) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -268,8 +290,9 @@ class HubRegistry:
                 INSERT INTO instances (
                     id, path, manifest_id, persona_name, requested_revision,
                     intended_state, runtime_id, prepared, package_id,
-                    package_distribution, package_version, package_image_recipe
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+                    package_distribution, package_version, package_image_recipe,
+                    package_commit_url, package_commit_sha
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(instance.instance_id),
@@ -279,10 +302,7 @@ class HubRegistry:
                     instance.requested_revision,
                     instance.intended_state.value,
                     instance.runtime_id,
-                    instance.package.id if instance.package is not None else None,
-                    instance.package.distribution if instance.package is not None else None,
-                    instance.package.version if instance.package is not None else None,
-                    instance.package.image_recipe if instance.package is not None else None,
+                    *_package_columns(instance.package),
                 ),
             )
             self._insert_operation(
@@ -691,6 +711,19 @@ class HubRegistry:
             (str(instance_id),),
         )
 
+    def record_package(self, instance_id: UUID, package: PackageSelection | None) -> None:
+        """Point this instance at the package its running replacement carries."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE instances
+                SET package_id = ?, package_distribution = ?, package_version = ?,
+                    package_image_recipe = ?, package_commit_url = ?, package_commit_sha = ?
+                WHERE id = ?
+                """,
+                (*_package_columns(package), str(instance_id)),
+            )
+
     def mark_prepared(self, instance_id: UUID) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -836,7 +869,7 @@ class HubRegistry:
                 SELECT id, path, manifest_id, persona_name, requested_revision,
                        source_revision, image_id, intended_state, runtime_id, prepared,
                        package_id, package_distribution, package_version,
-                       package_image_recipe
+                       package_image_recipe, package_commit_url, package_commit_sha
                 FROM instances WHERE id = ?
                 """,
                 (str(instance_id),),
@@ -874,7 +907,9 @@ class HubRegistry:
                 PackageSelection(
                     id=row[10],
                     distribution=row[11],
-                    version=row[12],
+                    version=(
+                        PackageCommit(url=row[14], sha=row[15]) if row[15] is not None else row[12]
+                    ),
                     image_recipe=row[13],
                 )
                 if row[10] is not None
@@ -1020,3 +1055,17 @@ class HubRegistry:
                 ).fetchall()
             ]
         return [artifact for key in keys if (artifact := self.image_artifact(key)) is not None]
+
+
+type _PackageColumns = tuple[str | None, str | None, str | None, str | None, str | None, str | None]
+
+
+def _package_columns(package: PackageSelection | None) -> _PackageColumns:
+    """The id, distribution, index version, recipe, and git commit columns of one selection."""
+    if package is None:
+        return (None, None, None, None, None, None)
+    match package.version:
+        case PackageCommit(url=url, sha=sha):
+            return (package.id, package.distribution, None, package.image_recipe, url, sha)
+        case version:
+            return (package.id, package.distribution, version, package.image_recipe, None, None)

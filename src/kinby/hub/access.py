@@ -1,4 +1,4 @@
-"""The hub's one secret, and the browser sessions it opens."""
+"""The hub's secrets, the scopes each one holds, and the browser sessions it opens."""
 
 from __future__ import annotations
 
@@ -7,7 +7,14 @@ from hashlib import sha256
 from secrets import token_urlsafe
 from typing import NewType
 
-from kinby.contracts import AccessToken, ControlToken
+from kinby.contracts import (
+    HUB_SCOPES,
+    UPDATE_SCOPES,
+    AccessToken,
+    ControlToken,
+    Scope,
+    UpdateToken,
+)
 from kinby.hub.registry import HubRegistry
 
 #: The cookie a browser carries after it exchanges the access token at POST /auth/login.
@@ -22,13 +29,17 @@ def _hashed(secret: str) -> str:
     return sha256(secret.encode()).hexdigest()
 
 
+def _matches(stored: str | None, token: str) -> bool:
+    return stored is not None and hmac.compare_digest(stored, _hashed(token))
+
+
 def new_control_token() -> ControlToken:
     """Mint the secret the hub presents to one instance. The access token never goes there."""
     return ControlToken(token_urlsafe(_TOKEN_BYTES))
 
 
 class HubAccess:
-    """Authenticate the hub's one user, by access token or by the session it opened."""
+    """Authenticate the hub's one user by access token or session, and CI by update token."""
 
     def __init__(self, registry: HubRegistry) -> None:
         self._registry = registry
@@ -48,10 +59,21 @@ class HubAccess:
 
     def accepts(self, token: AccessToken) -> bool:
         """Compare in constant time, so a failed login tells an attacker nothing."""
-        stored = self._registry.access_token_hash()
-        if stored is None:
-            return False
-        return hmac.compare_digest(stored, _hashed(token))
+        return _matches(self._registry.access_token_hash(), token)
+
+    def rotate_update_token(self) -> UpdateToken:
+        """Issue the update token, replacing any earlier one. The access token stays."""
+        token = UpdateToken(token_urlsafe(_TOKEN_BYTES))
+        self._registry.replace_update_token_hash(_hashed(token))
+        return token
+
+    def bearer_scopes(self, token: str) -> frozenset[Scope] | None:
+        """What a bearer token holds: every scope, the update scopes, or nothing at all."""
+        if self.accepts(AccessToken(token)):
+            return HUB_SCOPES
+        if _matches(self._registry.update_token_hash(), token):
+            return UPDATE_SCOPES
+        return None
 
     def login(self, token: AccessToken) -> SessionId | None:
         """Open a session if the token is still current after rotation."""

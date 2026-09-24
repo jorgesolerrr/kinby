@@ -9,7 +9,7 @@ from uuid import UUID
 
 from aiohttp import web
 
-from kinby.contracts import CONTRACT_VERSION, HUB_SCOPES, AccessToken
+from kinby.contracts import CONTRACT_VERSION, HUB_SCOPES, AccessToken, Scope
 from kinby.core.contract_server import serve_contract
 from kinby.core.dispatcher import Dispatcher
 from kinby.hub.access import SESSION_COOKIE, HubAccess, SessionId
@@ -84,13 +84,14 @@ class HubContractServer:
         return response
 
     async def _socket(self, request: web.Request) -> web.WebSocketResponse:
-        if not self._authenticated(request):
+        scopes = self._scopes(request)
+        if scopes is None:
             raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
-        return await serve_contract(request, self._dispatcher, HUB_SCOPES)
+        return await serve_contract(request, self._dispatcher, scopes)
 
     async def _instance_socket(self, request: web.Request) -> web.WebSocketResponse:
         """Relay to the instance's own ``/ws``, which grants no lifecycle authority."""
-        if not self._authenticated(request):
+        if self._scopes(request) != HUB_SCOPES:
             raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
         return await relay_socket(request, await self._reach(request))
 
@@ -117,17 +118,17 @@ class HubContractServer:
             raise unreachable(InstanceUnreachable.MISSING) from exc
         return _reached(await self._routing.endpoint(instance_id))
 
-    def _authenticated(self, request: web.Request) -> bool:
+    def _scopes(self, request: web.Request) -> frozenset[Scope] | None:
         """A bearer token authenticates any client; a cookie only from the hub's own page."""
         header = request.headers.get("Authorization")
         if header is not None:
-            return header.startswith("Bearer ") and self._access.accepts(
-                AccessToken(header.removeprefix("Bearer "))
-            )
+            if not header.startswith("Bearer "):
+                return None
+            return self._access.bearer_scopes(header.removeprefix("Bearer "))
         session = request.cookies.get(SESSION_COOKIE)
-        if session is None:
-            return False
-        return _same_origin(request) and self._access.session_open(SessionId(session))
+        if session is None or not _same_origin(request):
+            return None
+        return HUB_SCOPES if self._access.session_open(SessionId(session)) else None
 
 
 def _reached(endpoint: InstanceEndpoint | InstanceUnreachable) -> InstanceEndpoint:

@@ -36,12 +36,22 @@ from kinby.contracts import (
     OperationGetResult,
     OperationKind,
     OperationState,
+    PackageCommit,
+    PackagePin,
     PackageSelection,
+    PackageSummary,
     ProcessState,
     Scope,
     StorageItem,
 )
-from kinby.hub import ImageSelection, InstanceSpec, PreparedImage, RecoveredState, RuntimeStatus
+from kinby.hub import (
+    Hub,
+    ImageSelection,
+    InstanceSpec,
+    PreparedImage,
+    RecoveredState,
+    RuntimeStatus,
+)
 from kinby.packages import (
     InstalledPackage,
     PackageDescriptor,
@@ -408,7 +418,7 @@ def test_an_interruption_after_the_replacement_exists_keeps_that_image(tmp_path)
     asyncio.run(scenario())
 
 
-def _writer_package() -> InstalledPackage:
+def writer_package() -> InstalledPackage:
     return InstalledPackage(
         descriptor=PackageDescriptor(
             id="writer",
@@ -450,7 +460,7 @@ async def _packaged_instance(
 def test_an_update_carries_the_package_selection_and_keeps_the_owned_configuration(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        images = CandidateImages(package=_writer_package())
+        images = CandidateImages(package=writer_package())
         hub = hub_at(tmp_path / "hub", runtime=runtime, images=images)
         client = hub_client(hub)
         selection = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
@@ -480,7 +490,7 @@ def test_an_update_carries_the_package_selection_and_keeps_the_owned_configurati
 def test_a_candidate_without_the_instance_package_leaves_the_container_alone(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        images = CandidateImages(package=_writer_package())
+        images = CandidateImages(package=writer_package())
         hub = hub_at(tmp_path / "hub", runtime=runtime, images=images)
         client = hub_client(hub)
         created = await _packaged_instance(
@@ -668,6 +678,171 @@ def test_an_unauthorized_update_has_no_effect(tmp_path):
         assert isinstance(refused, ErrorEnvelope)
         assert refused.code is ErrorCode.PERMISSION_DENIED
         assert images.selections == [ImageSelection(revision="HEAD")]
+        assert len(runtime.created) == 1
+
+    asyncio.run(scenario())
+
+
+WRITER_REPOSITORY = "https://github.com/example/kinby-writer"
+FIRST_COMMIT = "1" * 40
+NEXT_COMMIT = "2" * 40
+
+
+def writer_at(sha: str) -> PackageSelection:
+    return PackageSelection(
+        id="writer",
+        distribution="kinby-writer",
+        version=PackageCommit(url=WRITER_REPOSITORY, sha=sha),
+        image_recipe="RUN install-writing-client\n",
+    )
+
+
+async def started_writer(client: ContractClient, hub: Hub) -> LifecycleOperationResult:
+    created = await _packaged_instance(client, writer_at(FIRST_COMMIT))
+    started = await client.call(
+        INSTANCE_START, InstanceStartCommand(instance_id=created.instance_id)
+    )
+    assert isinstance(started, LifecycleOperationResult)
+    assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
+    runtime = hub._runtime
+    assert isinstance(runtime, FakeRuntime)
+    runtime.addresses[str(created.instance_id)] = f"http://kinby-{created.instance_id}:8787"
+    return created
+
+
+async def _package_of(client: ContractClient) -> PackageSummary | None:
+    listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+    assert isinstance(listed, InstanceListResult)
+    return listed.instances[0].package
+
+
+def test_a_package_pin_moves_the_package_to_that_commit_once_the_replacement_is_up(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        images = CandidateImages(package=writer_package())
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images, control=FakeControl())
+        client = hub_client(hub)
+        created = await started_writer(client, hub)
+        behavior = hub.instances_directory / str(created.instance_id) / "SYSTEM.md"
+        behavior.write_text("Write the way I taught you.\n", encoding="utf-8")
+
+        accepted = await client.call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(
+                instance_id=created.instance_id,
+                revision="v0.2.0",
+                package=PackagePin(id="writer", sha=NEXT_COMMIT),
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+        hub.close()
+        reopened = hub_client(hub_at(tmp_path / "hub", runtime=runtime, images=images))
+
+        assert outcome.state is OperationState.SUCCEEDED, outcome.detail
+        assert outcome.detail == "Instance updated."
+        assert images.selections[-1] == ImageSelection("v0.2.0", writer_at(NEXT_COMMIT))
+        assert runtime.created[-1].image == "sha256:v0.2.0-image"
+        assert behavior.read_text(encoding="utf-8") == "Write the way I taught you.\n"
+        package = await _package_of(reopened)
+        assert package is not None
+        assert package.version == PackageCommit(url=WRITER_REPOSITORY, sha=NEXT_COMMIT)
+
+    asyncio.run(scenario())
+
+
+def test_an_update_without_a_pin_carries_the_package_commit_along(tmp_path):
+    async def scenario() -> None:
+        images = CandidateImages(package=writer_package())
+        hub = hub_at(tmp_path / "hub", images=images, control=FakeControl())
+        client = hub_client(hub)
+        created = await started_writer(client, hub)
+
+        accepted = await client.call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(instance_id=created.instance_id, revision="v0.2.0"),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert outcome.state is OperationState.SUCCEEDED, outcome.detail
+        assert images.selections[-1] == ImageSelection("v0.2.0", writer_at(FIRST_COMMIT))
+        package = await _package_of(client)
+        assert package is not None
+        assert package.version == PackageCommit(url=WRITER_REPOSITORY, sha=FIRST_COMMIT)
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_update_keeps_the_previous_pin(tmp_path):
+    async def scenario() -> None:
+        runtime = FailingBoot()
+        images = CandidateImages(package=writer_package())
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images, control=FakeControl())
+        client = hub_client(hub)
+        created = await started_writer(client, hub)
+
+        accepted = await client.call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(
+                instance_id=created.instance_id,
+                revision="v0.2.0",
+                package=PackagePin(id="writer", sha=NEXT_COMMIT),
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert "exited (1)" in outcome.detail
+        assert images.selections[-1].package == writer_at(NEXT_COMMIT)
+        package = await _package_of(client)
+        assert package is not None
+        assert package.version == PackageCommit(url=WRITER_REPOSITORY, sha=FIRST_COMMIT)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("selection", "pin", "refusal"),
+    [
+        (
+            writer_at(FIRST_COMMIT),
+            PackagePin(id="coder", sha=NEXT_COMMIT),
+            'runs package "writer", not "coder"',
+        ),
+        (
+            None,
+            PackagePin(id="writer", sha=NEXT_COMMIT),
+            'runs no package, not "writer"',
+        ),
+        (
+            PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2"),
+            PackagePin(id="writer", sha=NEXT_COMMIT),
+            'Package "writer" is installed from the package index',
+        ),
+    ],
+)
+def test_a_pin_must_move_the_instances_current_git_package(tmp_path, selection, pin, refusal):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        images = CandidateImages(package=writer_package() if selection else None)
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images)
+        client = hub_client(hub)
+        if selection is None:
+            created = await created_instance(client)
+        else:
+            created = await _packaged_instance(client, selection)
+
+        refused = await client.call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(instance_id=created.instance_id, revision="v0.2.0", package=pin),
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert refusal in refused.message
+        assert len(images.selections) == 1
         assert len(runtime.created) == 1
 
     asyncio.run(scenario())

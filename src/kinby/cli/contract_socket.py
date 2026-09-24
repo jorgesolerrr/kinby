@@ -19,6 +19,7 @@ from kinby.cli.client import ContractClient
 from kinby.contracts import (
     INSTANCE_SCOPES,
     RESULT_MODELS,
+    AccessToken,
     CallFrame,
     CancelFrame,
     ClientFrame,
@@ -35,6 +36,7 @@ from kinby.contracts import (
     Stream,
     SubscribedFrame,
     SubscribeFrame,
+    UpdateToken,
     parse_server_frame,
 )
 
@@ -317,8 +319,11 @@ class ContractSocket:
 
 
 @asynccontextmanager
-async def contract_client(url: str, token: ControlToken) -> AsyncIterator[ContractClient]:
-    """Open a client on a contract server, authenticated with a bearer token."""
+async def contract_client(
+    url: str,
+    token: ControlToken | AccessToken | UpdateToken,
+) -> AsyncIterator[ContractClient]:
+    """Open a client on an instance's or a hub's contract server, with a bearer token."""
     protected = protected_contract_url(url)
     headers = {"Authorization": f"Bearer {token}"}
     async with aiohttp.ClientSession(headers=headers) as session:

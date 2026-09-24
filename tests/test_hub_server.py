@@ -6,11 +6,30 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from http.cookies import SimpleCookie
 from pathlib import Path
+from uuid import uuid4
 
 import aiohttp
 import pytest
 
-from kinby.contracts import CONTRACT_VERSION, AccessToken, FrameType
+from kinby.contracts import (
+    CONTRACT_VERSION,
+    INSTANCE_ADOPT,
+    INSTANCE_ADOPT_PREVIEW,
+    INSTANCE_CREATE,
+    INSTANCE_DELETE,
+    INSTANCE_DELETE_PREVIEW,
+    INSTANCE_LIST,
+    INSTANCE_LOGS,
+    INSTANCE_RECREATE,
+    INSTANCE_REMOVE,
+    INSTANCE_RESTORE,
+    INSTANCE_SECRETS_SET,
+    INSTANCE_START,
+    INSTANCE_STATUS,
+    INSTANCE_STOP,
+    AccessToken,
+    FrameType,
+)
 from kinby.hub import Hub, HubAccess, HubContractServer, HubRegistry
 from kinby.hub.access import SessionId
 from kinby.instance import Serve
@@ -507,5 +526,98 @@ def test_a_reconnecting_client_finds_the_operation_whose_answer_it_lost(tmp_path
         assert [step["name"] for step in running["result"]["steps"]] == ["start"]
         assert state == "succeeded"
         assert runtime.started == [instance_id]
+
+    asyncio.run(scenario())
+
+
+#: Every hub method the update token must not reach.
+NOT_AN_UPDATE = (
+    INSTANCE_CREATE,
+    INSTANCE_START,
+    INSTANCE_STOP,
+    INSTANCE_RECREATE,
+    INSTANCE_REMOVE,
+    INSTANCE_RESTORE,
+    INSTANCE_DELETE_PREVIEW,
+    INSTANCE_DELETE,
+    INSTANCE_SECRETS_SET,
+    INSTANCE_ADOPT_PREVIEW,
+    INSTANCE_ADOPT,
+    INSTANCE_LIST,
+    INSTANCE_STATUS,
+    INSTANCE_LOGS,
+)
+
+
+def test_an_update_token_runs_an_update_and_reads_its_operation_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        assert hub.access.issue() is not None
+        token = hub.access.rotate_update_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        async with served(hub) as address, aiohttp.ClientSession() as session:
+            async with session.ws_connect(
+                url(address, "/ws"),
+                headers={"Authorization": f"Bearer {hub.access.rotate()}"},
+            ) as admin:
+                instance_id = await created_instance(admin)
+            async with session.ws_connect(url(address, "/ws"), headers=headers) as socket:
+                await call(socket, "instance.update", instance_id=instance_id, revision="v0.2.0")
+                accepted = await frame(socket)
+                assert isinstance(accepted["result"], dict), accepted
+                state = await finished(socket, str(accepted["result"]["operation_id"]))
+                refused: dict[str, object] = {}
+                for method in NOT_AN_UPDATE:
+                    await call(socket, method.name, instance_id=instance_id)
+                    answered = await frame(socket)
+                    assert isinstance(answered["error"], dict), answered
+                    refused[method.name] = answered["error"]["code"]
+            signed_in = await login(session, address, AccessToken(token))
+            with pytest.raises(aiohttp.WSServerHandshakeError) as relayed:
+                async with session.ws_connect(
+                    url(address, f"/instances/{instance_id}/ws"),
+                    headers=headers,
+                ):
+                    pass
+
+        assert state == "succeeded"
+        assert refused == {method.name: "PERMISSION_DENIED" for method in NOT_AN_UPDATE}
+        assert signed_in.status == 401
+        assert relayed.value.status == 401
+
+    asyncio.run(scenario())
+
+
+def test_rotating_the_update_token_refuses_the_previous_one_and_keeps_the_access_token(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        access = hub.access.issue()
+        assert access is not None
+        previous = hub.access.rotate_update_token()
+        current = hub.access.rotate_update_token()
+        async with served(hub) as address, aiohttp.ClientSession() as session:
+            with pytest.raises(aiohttp.WSServerHandshakeError) as rotated:
+                async with session.ws_connect(
+                    url(address, "/ws"),
+                    headers={"Authorization": f"Bearer {previous}"},
+                ):
+                    pass
+            for token in (current, access):
+                async with session.ws_connect(
+                    url(address, "/ws"),
+                    headers={"Authorization": f"Bearer {token}"},
+                ) as socket:
+                    await call(socket, "operation.get", operation_id=str(uuid4()))
+                    answered = await frame(socket)
+                    assert isinstance(answered["error"], dict), answered
+                    assert answered["error"]["code"] == "NOT_FOUND"
+
+        stored = (tmp_path / "hub" / "registry.sqlite").read_bytes().decode(errors="ignore")
+        assert rotated.value.status == 401
+        assert current not in stored
 
     asyncio.run(scenario())

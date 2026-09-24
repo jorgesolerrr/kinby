@@ -56,6 +56,12 @@ class AdoptionBlocked(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class PackagePinRefused(CoreError):
+    """A package pin names a package the instance does not run, or one not from git."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class LifecycleOperationNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 

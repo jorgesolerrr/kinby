@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from kinby.cli.client import ContractClient, format_error
 from kinby.cli.contract_socket import TOKEN_VARIABLE, InsecureContractUrl, contract_client
+from kinby.cli.hub_update import update_on_hub
 from kinby.cli.repl import render_event, run_repl
 from kinby.cli.routines import show_routines
 from kinby.contracts import (
@@ -543,6 +544,14 @@ def _rotate_access_token(directory: Path) -> int:
     return 0
 
 
+def _rotate_update_token(directory: Path) -> int:
+    from kinby.hub import HubAccess, HubRegistry
+
+    print("This token can only run instance updates. Any previous update token is now refused:")
+    print(f"update token: {HubAccess(HubRegistry(directory)).rotate_update_token()}")
+    return 0
+
+
 async def _thread_for_session(
     client: ContractClient,
     thread_id: UUID | None,
@@ -668,6 +677,11 @@ def main(
     *,
     today: Callable[[], date] = utc_today,
 ) -> int:
+    arguments = sys.argv[1:] if argv is None else argv
+    # `hub update` drives a hub over the network and takes no hub directory. argparse
+    # cannot let a subcommand stand where `hub` expects that directory, so it parses alone.
+    if arguments[:2] == ["hub", "update"]:
+        return update_on_hub(arguments[2:])
     parser = argparse.ArgumentParser(prog="kinby")
     parser.set_defaults(verbose=False)
     parser.add_argument(
@@ -694,6 +708,7 @@ def main(
     hub_parser = subparsers.add_parser(
         "hub",
         help="run the instance management hub",
+        epilog="kinby hub update --help: update one instance on a running hub, as CI does.",
     )
     hub_parser.add_argument("directory", type=Path, help="hub state directory")
     hub_parser.add_argument(
@@ -730,6 +745,14 @@ def main(
     hub_token_parser.add_subparsers(dest="token_command", required=True).add_parser(
         "rotate",
         help="replace the access token and end open sessions",
+    )
+    hub_update_token_parser = hub_subparsers.add_parser(
+        "update-token",
+        help="manage the token that can only run instance updates",
+    )
+    hub_update_token_parser.add_subparsers(dest="token_command", required=True).add_parser(
+        "rotate",
+        help="issue the update token, refusing any previous one",
     )
     hub_signals_parser = hub_subparsers.add_parser(
         "signals",
@@ -844,7 +867,7 @@ def main(
         default="day",
         help="group turns by UTC day or Monday-starting week",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s %(message)s",
@@ -870,6 +893,8 @@ def main(
     if args.command == "hub":
         if args.hub_command == "token":
             return _rotate_access_token(args.directory)
+        if args.hub_command == "update-token":
+            return _rotate_update_token(args.directory)
         if args.hub_command == "signals":
             return _set_signal_alias(args.directory, args.instance_id)
         try:

@@ -38,6 +38,7 @@ class Scope(StrEnum):
     INSTANCE_LIFECYCLE = "instance:lifecycle"
     HUB_READ = "hub:read"
     HUB_ADMIN = "hub:admin"
+    HUB_UPDATE = "hub:update"
 
 
 #: What a client driving one instance holds. Lifecycle is granted by the control route alone.
@@ -55,12 +56,17 @@ CONTROL_SCOPES = INSTANCE_SCOPES | {Scope.INSTANCE_LIFECYCLE}
 
 #: What a client authenticated against the hub holds: a hub has one user.
 HUB_SCOPES = frozenset(Scope)
+#: What the update token holds: run an instance update and follow its operation.
+UPDATE_SCOPES = frozenset({Scope.HUB_UPDATE})
 
 #: The secret a hub presents to one instance's contract server.
 ControlToken = NewType("ControlToken", str)
 
 #: The single secret the user presents to the hub's contract server.
 AccessToken = NewType("AccessToken", str)
+
+#: The secret CI presents to the hub's contract server. It holds the update scopes only.
+UpdateToken = NewType("UpdateToken", str)
 
 
 class ErrorCode(StrEnum):
@@ -541,17 +547,39 @@ class StorageItem(ContractModel):
     writable: bool
 
 
+#: A full git commit SHA, so a pin names one commit and never a branch or a tag.
+type CommitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+
+
+class PackageCommit(ContractModel):
+    """One commit of a package's git repository, installed in place of an index version."""
+
+    url: Annotated[str, Field(min_length=1)]
+    sha: CommitSha
+
+
+class PackagePin(ContractModel):
+    """Move an instance's package to another commit of the git repository it comes from.
+
+    It names the package it moves, which must be the instance's own (ADR 0040).
+    """
+
+    id: Annotated[str, Field(min_length=1)]
+    sha: CommitSha
+
+
 class PackageSelection(ContractModel):
     id: Annotated[str, Field(min_length=1)]
     distribution: Annotated[str, Field(min_length=1)]
-    version: Annotated[str, Field(min_length=1)]
+    #: A version from the package index, or a git commit.
+    version: Annotated[str, Field(min_length=1)] | PackageCommit
     image_recipe: str = ""
 
 
 class PackageSummary(ContractModel):
     id: str
     distribution: str
-    version: str
+    version: str | PackageCommit
 
 
 class InstanceCreateCommand(ContractModel):
@@ -627,10 +655,14 @@ class InstanceDeleteCommand(ContractModel):
 
 
 class InstanceUpdateCommand(ContractModel):
-    """Move one instance to the image a revision prepares. Its package selection travels along."""
+    """Move one instance to the image a revision prepares.
+
+    Its package selection travels along, moved to another commit when a pin names one.
+    """
 
     instance_id: UUID
     revision: Annotated[str, Field(min_length=1)]
+    package: PackagePin | None = None
 
 
 class InstanceSecretsSetCommand(ContractModel):

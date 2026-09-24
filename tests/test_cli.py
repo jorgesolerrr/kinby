@@ -6,7 +6,7 @@ from uuid import UUID
 import pytest
 
 from kinby.cli import main
-from kinby.contracts import AccessToken
+from kinby.contracts import HUB_SCOPES, UPDATE_SCOPES, AccessToken
 from kinby.hub import (
     HubAccess,
     HubRegistry,
@@ -121,6 +121,23 @@ def test_a_starting_hub_reports_what_lifecycle_recovery_found(capsys):
         f"recovered: {instance_id} missing: The container is gone. Recreate it to bring it back.",
         "unowned container: a-stranger",
     ]
+
+
+def test_hub_update_token_rotate_issues_a_token_that_only_runs_updates(tmp_path, capsys):
+    directory = tmp_path / "hub"
+    access = HubAccess(HubRegistry(directory))
+    token = access.issue()
+    assert token is not None
+
+    issued = main(["hub", str(directory), "update-token", "rotate"])
+    first = capsys.readouterr().out.strip().splitlines()[-1].split()[-1]
+    rotated = main(["hub", str(directory), "update-token", "rotate"])
+    second = capsys.readouterr().out.strip().splitlines()[-1].split()[-1]
+
+    assert issued == rotated == 0
+    assert access.bearer_scopes(first) is None
+    assert access.bearer_scopes(second) == UPDATE_SCOPES
+    assert access.bearer_scopes(token) == HUB_SCOPES
 
 
 def test_hub_token_rotate_replaces_the_token_and_ends_sessions(tmp_path, capsys):

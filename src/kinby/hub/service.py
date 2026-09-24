@@ -62,6 +62,9 @@ from kinby.contracts import (
     OperationGetResult,
     OperationKind,
     OperationState,
+    PackageCommit,
+    PackagePin,
+    PackageSelection,
     ProcessState,
     Readiness,
     StorageItem,
@@ -74,6 +77,7 @@ from kinby.core.errors import (
     LifecycleOperationInFlight,
     LifecycleOperationNotFound,
     ManagedInstanceNotFound,
+    PackagePinRefused,
 )
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
@@ -139,6 +143,30 @@ def _acquire_directory(directory: Path) -> IO[str]:
         handle.close()
         raise HubAlreadyRunning(f"Another hub is already running for {directory}.") from None
     return handle
+
+
+def _pinned_package(record: ManagedInstance, pin: PackagePin | None) -> PackageSelection | None:
+    """The package an update carries: the instance's own, moved to the pinned commit if any.
+
+    A pin never switches packages (ADR 0040), and it moves only a package that comes from git.
+    """
+    current = record.package
+    if pin is None:
+        return current
+    if current is None or current.id != pin.id:
+        running = f'package "{current.id}"' if current is not None else "no package"
+        raise PackagePinRefused(
+            f'Instance "{record.instance_id}" runs {running}, not "{pin.id}". '
+            "An update never switches packages."
+        )
+    match current.version:
+        case PackageCommit(url=url):
+            return current.model_copy(update={"version": PackageCommit(url=url, sha=pin.sha)})
+        case version:
+            raise PackagePinRefused(
+                f'Package "{pin.id}" is installed from the package index at version {version}, '
+                "so there is no git repository to move to another commit."
+            )
 
 
 def _delete_directory(directory: Path) -> None:
@@ -669,6 +697,7 @@ class Hub:
     async def update(self, command: InstanceUpdateCommand) -> LifecycleOperationResult:
         """Move this instance onto the image a selected revision prepares."""
         record = self._claimed(self._active_instance(command.instance_id))
+        selection = ImageSelection(command.revision, _pinned_package(record, command.package))
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id,
@@ -676,19 +705,24 @@ class Hub:
             OperationKind.UPDATE,
             "Update queued.",
         )
-        self._schedule(self._update(operation_id, record.instance_id, command.revision))
+        self._schedule(self._update(operation_id, record.instance_id, selection))
         return LifecycleOperationResult(
             operation_id=operation_id,
             instance_id=record.instance_id,
         )
 
-    async def _update(self, operation_id: UUID, instance_id: UUID, revision: str) -> None:
+    async def _update(
+        self,
+        operation_id: UUID,
+        instance_id: UUID,
+        selection: ImageSelection,
+    ) -> None:
         try:
             # The lock serializes the replacement against every other lifecycle mutation.
             async with self._locks.setdefault(instance_id, asyncio.Lock()):
                 record = self._active_instance(instance_id)
                 try:
-                    detail = await self._replace_image(operation_id, record, revision)
+                    detail = await self._replace_image(operation_id, record, selection)
                 except Exception as exc:
                     self._fail(operation_id, record, str(exc) or type(exc).__name__)
                     return
@@ -701,7 +735,7 @@ class Hub:
         self,
         operation_id: UUID,
         record: ManagedInstance,
-        revision: str,
+        selection: ImageSelection,
     ) -> str:
         """Prepare the candidate before anything moves, then replace the container with it.
 
@@ -709,9 +743,9 @@ class Hub:
         image. A failure after it stays a failure: the new image may already have
         changed this instance's data, so nothing here starts an older one against it.
         """
+        revision = selection.revision
         self._revalidate(operation_id, record)
         self._record(operation_id, "image", f"Preparing the image {revision} selects.")
-        selection = ImageSelection(revision=revision, package=record.package)
         # The candidate validates this instance's own package.yaml before anything moves.
         prepared = await self._images.prepare(selection, self._candidate_config(record))
         artifact = prepared.artifact
@@ -729,13 +763,17 @@ class Hub:
         await self._remove_container(record, PendingStop(operation_id, asyncio.Event()))
         await self._create_container(operation_id, record, artifact.image_id)
         self.registry.record_selection(record.instance_id, revision, artifact)
-        if record.intended_state is IntendedState.STOPPED:
-            return "Instance updated and left stopped."
-        self._record(operation_id, "start", "Starting the replacement.")
-        await self._runtime.start(record.runtime_id)
-        self._record(operation_id, "ready", "Waiting for the replacement to report itself ready.")
-        await self._observe_ready(record)
-        return "Instance updated."
+        running = record.intended_state is IntendedState.RUNNING
+        if running:
+            self._record(operation_id, "start", "Starting the replacement.")
+            await self._runtime.start(record.runtime_id)
+            self._record(
+                operation_id, "ready", "Waiting for the replacement to report itself ready."
+            )
+            await self._observe_ready(record)
+        # A failed update keeps the previous pin: the package moves once the replacement is up.
+        self.registry.record_package(record.instance_id, selection.package)
+        return "Instance updated." if running else "Instance updated and left stopped."
 
     async def remove(self, command: InstanceRemoveCommand) -> LifecycleOperationResult:
         """Drain and remove the container. The data and the record stay for a restoration."""
@@ -1336,13 +1374,19 @@ class Hub:
         if installed is None:
             raise ValueError(f'Package "{selected.id}" was not found in the prepared image.')
         descriptor = installed.descriptor
-        expected = (selected.id, selected.distribution, selected.version)
+        match selected.version:
+            case PackageCommit(url=url, sha=sha):
+                # A commit names no version before it is built; its own metadata reports one.
+                version, source = descriptor.version, f"git+{url}@{sha}"
+            case index_version:
+                version, source = index_version, index_version
+        expected = (selected.id, selected.distribution, version)
         actual = (descriptor.id, descriptor.distribution, descriptor.version)
         if actual != expected:
             raise ValueError(
                 f"Prepared package was {descriptor.id} from "
                 f"{descriptor.distribution} {descriptor.version}; expected "
-                f"{selected.id} from {selected.distribution} {selected.version}."
+                f"{selected.id} from {selected.distribution} {source}."
             )
         missing = [
             secret.name for secret in descriptor.required_secrets if secret.name not in secrets
