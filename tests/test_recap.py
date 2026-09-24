@@ -7,7 +7,7 @@ from threading import get_ident
 from typing import Self
 from uuid import UUID, uuid4
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from kinby.contracts import (
     AcceptedResult,
@@ -235,7 +235,7 @@ def test_kept_draft_writes_narrative_episode_and_token_marker(tmp_path: Path) ->
     asyncio.run(scenario())
 
 
-def test_recap_model_receives_the_harness_owned_turn_frame(tmp_path: Path) -> None:
+def test_recap_model_receives_the_turn_frame_as_a_user_message(tmp_path: Path) -> None:
     class FrameRunner:
         async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
             await emit(MessageDelta(text="Compared "))
@@ -307,7 +307,9 @@ def test_recap_model_receives_the_harness_owned_turn_frame(tmp_path: Path) -> No
         await asyncio.wait_for(recap.drain(), timeout=1)
 
         assert len(model.calls) == 1
-        prompt = model.calls[0][0].text
+        (message,) = model.calls[0]
+        assert isinstance(message, HumanMessage)
+        prompt = message.text
         assert _EXPECTED_DEFAULT_RECAP_LENS in prompt
         assert "# User message\nCompare Quito and Cuenca" in prompt
         assert "# Assistant text\nCompared both cities." in prompt
