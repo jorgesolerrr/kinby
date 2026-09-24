@@ -21,6 +21,7 @@ from kinby.contracts import (
     SignalReceived,
     TurnStarted,
 )
+from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import TurnConfig
 from kinby.core.events import EventLog
 from kinby.core.receiver import Receiver
@@ -343,6 +344,7 @@ def test_serve_listens_reports_paths_and_stops_on_process_signal(
     tmp_path, monkeypatch, capsys, shutdown_signal, has_signal
 ) -> None:
     monkeypatch.setenv("SIGNAL_SECRET", "secret")
+    monkeypatch.delenv(CONTROL_TOKEN_VARIABLE, raising=False)
     instance = instance_at(tmp_path)
     if has_signal:
         routine_file(instance, "description: Issues\nsignal:\n  secret: SIGNAL_SECRET")
