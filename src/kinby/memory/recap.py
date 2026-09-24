@@ -11,7 +11,7 @@ from datetime import date
 from typing import TYPE_CHECKING, Protocol, cast
 from uuid import UUID
 
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel, ConfigDict, Field  # noqa: TID251 - model output boundary
 
 from kinby.contracts import (
@@ -266,7 +266,7 @@ class RecapWriter:
         model = self._model_factory(model_name)
         runnable = model.with_structured_output(RecapDraft, include_raw=True)
         started_at = asyncio.get_running_loop().time()
-        result = await runnable.ainvoke((SystemMessage(content=_recap_frame(events, calls, lens)),))
+        result = await runnable.ainvoke((HumanMessage(content=_recap_frame(events, calls, lens)),))
         if not isinstance(result, Mapping):
             raise TypeError("The recap model returned an invalid structured response.")
         raw = result.get("raw")
