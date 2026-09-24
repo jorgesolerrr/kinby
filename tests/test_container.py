@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import uuid
@@ -14,6 +15,7 @@ def _docker(
     *args: str,
     check: bool = True,
     timeout: int | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["docker", *args],
@@ -22,6 +24,7 @@ def _docker(
         text=True,
         check=check,
         timeout=timeout,
+        env=env,
     )
 
 
@@ -120,16 +123,40 @@ def test_image_ships_the_workspace_programs(program: str, prefix: str) -> None:
         _docker("image", "rm", "--force", image, check=False)
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker CLI is not available")
+def _compose_cli() -> bool:
+    """True when ``docker compose`` can run. The daemon is a separate check."""
+    if shutil.which("docker") is None:
+        return False
+    try:
+        result = _docker("compose", "version", check=False, timeout=10)
+    except OSError, subprocess.TimeoutExpired:
+        return False
+    return result.returncode == 0
+
+
+@pytest.mark.skipif(not _compose_cli(), reason="Docker Compose is not available")
 def test_compose_persists_codex_login_and_passes_claude_token() -> None:
-    result = _docker(
-        "compose",
-        "config",
-        "--format",
-        "json",
-        "--no-env-resolution",
-        "--no-path-resolution",
-    )
+    env_file = PROJECT_ROOT / "instances" / "coder" / ".env"
+    created = False
+    if not env_file.exists():
+        env_file.write_text(
+            (env_file.parent / ".env.example").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        created = True
+    try:
+        result = _docker(
+            "compose",
+            "config",
+            "--format",
+            "json",
+            "--no-env-resolution",
+            "--no-path-resolution",
+            env={**os.environ, "ANTHROPIC_CONFIG_DIR": "/tmp/anthropic"},
+        )
+    finally:
+        if created:
+            env_file.unlink()
     config = json.loads(result.stdout)
     coder = config["services"]["coder"]
 
@@ -299,17 +326,21 @@ def test_the_hub_recipe_keeps_instances_private_and_maps_the_docker_host_path() 
     assert f"reverse_proxy hub:{flags['--listen'].rsplit(':', 1)[1]}" in caddyfile
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker CLI is not available")
+@pytest.mark.skipif(not _compose_cli(), reason="Docker Compose is not available")
 def test_the_hub_recipe_is_a_valid_compose_project() -> None:
     result = _docker(
         "compose",
         "--file",
         "compose.hub.yaml",
         "config",
-        "--no-env-resolution",
         "--no-path-resolution",
         "--quiet",
         check=False,
+        env={
+            **os.environ,
+            "KINBY_HUB_DIR": "/tmp/hub",
+            "KINBY_DOMAIN": "kinby.example",
+        },
     )
 
     assert result.returncode == 0, result.stderr
