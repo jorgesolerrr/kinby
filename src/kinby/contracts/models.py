@@ -778,6 +778,7 @@ class AdoptionFindingKind(StrEnum):
     INVALID_INSTANCE = "invalid-instance"
     MANIFEST_ID_TAKEN = "manifest-id-taken"
     RETAINED_IDENTITY = "retained-identity"
+    PACKAGE_MISMATCH = "package-mismatch"
 
 
 class AdoptionFinding(ContractModel):
@@ -806,6 +807,8 @@ class InstanceAdoptPreviewCommand(ContractModel):
     relinquished: bool = False
     #: A runtime that cannot drain may be interrupted. Never assumed.
     acknowledge_interrupting_stop: bool = False
+    #: The package the manifest's [package] names, recorded so later updates build and pin it.
+    package: PackageSelection | None = None
 
 
 class InstanceAdoptPreviewResult(ContractModel):

@@ -87,10 +87,12 @@ async def _update(url: str, token: UpdateToken, command: InstanceUpdateCommand) 
         if isinstance(accepted, ErrorEnvelope):
             print(format_error(accepted), file=sys.stderr)
             return 1
-        return await _follow(client, OperationGetCommand(operation_id=accepted.operation_id))
+        return await follow_operation(
+            client, OperationGetCommand(operation_id=accepted.operation_id)
+        )
 
 
-async def _follow(client: ContractClient, command: OperationGetCommand) -> int:
+async def follow_operation(client: ContractClient, command: OperationGetCommand) -> int:
     """Print each step once, as it appears, then the outcome. Only success exits zero."""
     printed = 0
     while True:

@@ -144,7 +144,10 @@ def test_pinned_package_is_installed_in_the_image_and_part_of_artifact_reuse(tmp
         assert first.package.descriptor.id == "writer"
         assert first.artifact.package == package
         assert len(backend.builds) == 1
-        install = 'RUN ["uv", "pip", "install", "--system", "--no-cache", "kinby-writer==1.4.2"]'
+        install = (
+            'RUN ["uv", "pip", "install", "--system", "--no-cache", "--no-sources", '
+            '"kinby-writer==1.4.2"]'
+        )
         assert install in backend.dockerfiles[0]
         assert "RUN install-writing-client" in backend.dockerfiles[0]
         assert registry.image_artifacts()[0].package == package
@@ -350,7 +353,10 @@ def test_a_package_commit_pin_installs_that_commit_and_keeps_the_kinby_in_the_im
         reused = await preparer.prepare(ImageSelection("HEAD", pinned(first)))
         await preparer.prepare(ImageSelection("HEAD", pinned(second)))
 
-        install = f'RUN ["uv", "pip", "install", "--system", "--no-cache", "git+{url}@{first}"]'
+        install = (
+            'RUN ["uv", "pip", "install", "--system", "--no-cache", "--no-sources", '
+            f'"git+{url}@{first}"]'
+        )
         assert install in backend.dockerfiles[0]
         assert installed_first == ("EDITION = 'first'\n", first)
         assert (image.edition(), image.installed_commit()) == ("EDITION = 'second'\n", second)

@@ -106,7 +106,16 @@ class ImagePreparer:
         body = dockerfile.read_text(encoding="utf-8").rstrip() + "\n"
         if package.image_recipe:
             body += package.image_recipe.rstrip() + "\n"
-        command = ["uv", "pip", "install", "--system", "--no-cache", _requirement(package)]
+        # A package's own [tool.uv.sources] never replaces the kinby already in the image.
+        command = [
+            "uv",
+            "pip",
+            "install",
+            "--system",
+            "--no-cache",
+            "--no-sources",
+            _requirement(package),
+        ]
         dockerfile.write_text(f"{body}RUN {json.dumps(command)}\n", encoding="utf-8")
 
     def _resolve(self, revision: str) -> str:
