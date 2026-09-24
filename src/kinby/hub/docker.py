@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 from pathlib import Path
 from typing import cast
 
-from docker.errors import DockerException, ImageNotFound, NotFound
+from docker.errors import ContainerError, DockerException, ImageNotFound, NotFound
 from docker.models.containers import Container
 from docker.models.images import Image
 from docker.models.networks import Network
@@ -91,14 +91,39 @@ class DockerImageBackend:
         self,
         image_id: str,
         package_id: str,
+        instance: StorageItem | None = None,
     ) -> InstalledPackage:
-        output = await asyncio.to_thread(
-            self._client.containers.run,
-            image_id,
-            command=["-m", "kinby.packages", package_id],
-            entrypoint="python",
-            remove=True,
-        )
+        """Run the candidate check in the image and read the package it describes.
+
+        An existing instance directory is mounted read-only, so its package.yaml
+        is validated by the code that will run it and nothing in it changes.
+        """
+        command = ["-m", "kinby.packages", package_id]
+        mounts = []
+        if instance is not None:
+            command.append(instance.destination)
+            mounts.append(
+                Mount(
+                    target=instance.destination,
+                    source=instance.source,
+                    type=instance.kind.value,
+                    read_only=True,
+                )
+            )
+        try:
+            output = await asyncio.to_thread(
+                self._client.containers.run,
+                image_id,
+                command=command,
+                entrypoint="python",
+                remove=True,
+                mounts=mounts,
+            )
+        except ContainerError as exc:
+            printed = cast(bytes, exc.stderr or b"").decode(errors="replace").strip()
+            raise ValueError(
+                f'Package "{package_id}" failed its check in image {image_id}.\n{printed}'
+            ) from exc
         return installed_package_from_json(cast(bytes, output).decode())
 
 

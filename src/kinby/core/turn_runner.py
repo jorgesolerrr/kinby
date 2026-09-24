@@ -94,6 +94,7 @@ from kinby.instance.permissions import (
     load_permissions,
     validate_bash_regexes,
 )
+from kinby.packages import instance_package_config
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
@@ -591,9 +592,12 @@ class LangGraphRunner:
         started_at = asyncio.get_running_loop().time()
         try:
             async with timeout:
-                output = await code_step.ainvoke_raw(
-                    call.arguments, ToolContext(instance=self._instance, thread_id=thread_id)
+                context = ToolContext(
+                    instance=self._instance,
+                    thread_id=thread_id,
+                    package_config=instance_package_config(self._instance),
                 )
+                output = await code_step.ainvoke_raw(call.arguments, context)
         except Exception as exc:
             failure = (
                 BudgetExceeded("seconds", budgets.seconds)

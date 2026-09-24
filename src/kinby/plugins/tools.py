@@ -13,16 +13,21 @@ from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import JsonValue
 
 from kinby.instance import Instance
+from kinby.packages import PackageConfig
 
 ToolFunction = Callable[..., object]
 
 
 @dataclass(frozen=True)
 class ToolContext:
-    """Instance-owned values supplied by kinby when a tool runs."""
+    """Instance-owned values supplied by kinby when a tool runs.
+
+    A code step receives its instance's validated package config, read for that run.
+    """
 
     instance: Instance
     thread_id: UUID
+    package_config: PackageConfig | None = None
 
     @property
     def workspace(self) -> Path:

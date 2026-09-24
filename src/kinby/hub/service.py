@@ -712,7 +712,16 @@ class Hub:
         self._revalidate(operation_id, record)
         self._record(operation_id, "image", f"Preparing the image {revision} selects.")
         selection = ImageSelection(revision=revision, package=record.package)
-        prepared = await self._images.prepare(selection)
+        # The candidate validates this instance's own package.yaml before anything moves.
+        instance_mount = next(
+            (
+                item
+                for item in record.storage
+                if item.kind is StorageKind.BIND and item.destination == INSTANCE_MOUNT
+            ),
+            None,
+        )
+        prepared = await self._images.prepare(selection, instance_mount)
         artifact = prepared.artifact
         # The candidate must carry this instance's package selection. The configuration
         # that package once copied is the instance's own and is never seeded again,

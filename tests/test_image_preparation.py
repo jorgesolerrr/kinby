@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from kinby.contracts import PackageSelection
+from kinby.contracts import PackageSelection, StorageItem, StorageKind
 from kinby.hub import BuildResult, HubRegistry, ImagePreparer, ImageSelection
 from kinby.packages import InstalledPackage, PackageDescriptor
 
@@ -14,6 +14,7 @@ class FakeImageBackend:
         self.builds: list[set[str]] = []
         self.images: set[str] = set()
         self.dockerfiles: list[str] = []
+        self.inspected: list[StorageItem | None] = []
 
     async def resolve_base_images(self, dockerfile: Path) -> tuple[str, ...]:
         return ("python:3.14@sha256:resolved-base",)
@@ -31,7 +32,13 @@ class FakeImageBackend:
     async def exists(self, image_id: str) -> bool:
         return image_id in self.images
 
-    async def inspect_package(self, image_id: str, package_id: str) -> InstalledPackage:
+    async def inspect_package(
+        self,
+        image_id: str,
+        package_id: str,
+        instance: StorageItem | None = None,
+    ) -> InstalledPackage:
+        self.inspected.append(instance)
         return InstalledPackage(
             descriptor=PackageDescriptor(
                 id=package_id,
@@ -141,6 +148,29 @@ def test_pinned_package_is_installed_in_the_image_and_part_of_artifact_reuse(tmp
         newer = package.model_copy(update={"version": "1.5.0"})
         await preparer.prepare(ImageSelection("HEAD", newer))
         assert len(backend.builds) == 2
+
+    asyncio.run(scenario())
+
+
+def test_the_candidate_check_reads_the_instance_the_preparation_is_for(tmp_path):
+    async def scenario() -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        _source_repo(source)
+        backend = FakeImageBackend()
+        preparer = ImagePreparer(source, HubRegistry(tmp_path / "hub"), backend)
+        package = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
+        instance = StorageItem(
+            kind=StorageKind.BIND,
+            source=str(tmp_path / "alice"),
+            destination="/instance",
+            writable=True,
+        )
+
+        await preparer.prepare(ImageSelection("HEAD", package))
+        await preparer.prepare(ImageSelection("HEAD", package), instance)
+
+        assert backend.inspected == [None, instance]
 
     asyncio.run(scenario())
 

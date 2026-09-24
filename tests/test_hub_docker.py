@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from docker.errors import ImageNotFound, NotFound
+from docker.errors import ContainerError, ImageNotFound, NotFound
+from docker.types import Mount
 
 from docker import DockerClient
 from kinby.contracts import StorageItem, StorageKind
@@ -60,6 +61,7 @@ class FakeContainers:
         self.thread_id: int | None = None
         self.run_arguments: tuple[object, object] | None = None
         self.run_options: dict[str, object] = {}
+        self.run_failure: bytes | None = None
 
     def create(self, image: object, command: object, **options: object) -> object:
         self.arguments = (image, command)
@@ -78,6 +80,8 @@ class FakeContainers:
     def run(self, image: object, command: object, **options: object) -> bytes:
         self.run_arguments = (image, command)
         self.run_options = options
+        if self.run_failure is not None:
+            raise ContainerError(object(), 1, command, image, self.run_failure)
         return package_json(
             InstalledPackage(
                 descriptor=PackageDescriptor(
@@ -241,7 +245,56 @@ def test_docker_image_backend_inspects_the_authoritative_package_in_the_image():
         "sha256:selected",
         ["-m", "kinby.packages", "writer"],
     )
-    assert client.containers.run_options == {"entrypoint": "python", "remove": True}
+    assert client.containers.run_options == {"entrypoint": "python", "remove": True, "mounts": []}
+
+
+def test_the_candidate_check_reads_the_instance_config_through_a_read_only_mount():
+    instance = StorageItem(
+        kind=StorageKind.BIND,
+        source="/srv/kinby/instances/alice",
+        destination="/instance",
+        writable=True,
+    )
+
+    async def scenario() -> FakeDockerClient:
+        client = FakeDockerClient()
+        backend = DockerImageBackend(cast(DockerClient, client))
+        await backend.inspect_package("sha256:selected", "writer", instance)
+        return client
+
+    client = asyncio.run(scenario())
+
+    assert client.containers.run_arguments == (
+        "sha256:selected",
+        ["-m", "kinby.packages", "writer", "/instance"],
+    )
+    assert client.containers.run_options["mounts"] == [
+        Mount(
+            target="/instance",
+            source="/srv/kinby/instances/alice",
+            type="bind",
+            read_only=True,
+        )
+    ]
+
+
+def test_a_failing_candidate_check_reports_what_the_check_printed():
+    async def scenario() -> None:
+        client = FakeDockerClient()
+        client.containers.run_failure = (
+            b'Executable "claude" is not on PATH.\n/instance/package.yaml: tone: Field required\n'
+        )
+        backend = DockerImageBackend(cast(DockerClient, client))
+        await backend.inspect_package("sha256:selected", "writer")
+
+    with pytest.raises(ValueError) as failure:
+        asyncio.run(scenario())
+
+    assert str(failure.value) == (
+        'Package "writer" failed its check in image sha256:selected.\n'
+        'Executable "claude" is not on PATH.\n'
+        "/instance/package.yaml: tone: Field required"
+    )
 
 
 def docker_available() -> bool:
@@ -387,7 +440,11 @@ class PulledImage:
     def __init__(self, image_id: str) -> None:
         self._image_id = image_id
 
-    async def prepare(self, selection: ImageSelection) -> PreparedImage:
+    async def prepare(
+        self,
+        selection: ImageSelection,
+        instance: StorageItem | None = None,
+    ) -> PreparedImage:
         return PreparedImage(
             artifact=ImageArtifact(
                 image_id=self._image_id,

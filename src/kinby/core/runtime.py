@@ -23,6 +23,7 @@ from kinby.core.events import EventLog
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.instance import Instance
 from kinby.memory import RecapWriter
+from kinby.packages import instance_package_config
 
 
 class InstanceRuntime:
@@ -85,7 +86,11 @@ async def boot_instance(
     model_override: str | None = None,
     clock: Callable[[], datetime] = utc_now,
 ) -> InstanceRuntime:
-    """Start one runtime that owns an instance's turns and routine fires."""
+    """Start one runtime that owns an instance's turns and routine fires.
+
+    An instance whose package.yaml fails its package's validator does not boot.
+    """
+    instance_package_config(instance)
     event_log = EventLog(instance.manifest.state_dir)
     turns = await turn_config(instance, event_log=event_log, model_override=model_override)
     if turns.recap is not None:
