@@ -8,17 +8,24 @@ import pytest
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
+    INSTANCE_ADOPT,
+    INSTANCE_ADOPT_PREVIEW,
     INSTANCE_DELETE,
     INSTANCE_DELETE_PREVIEW,
     INSTANCE_RESTORE,
+    OPERATION_GET,
+    AdoptionFindingKind,
     ContainerOwner,
     ErrorCode,
     ErrorEnvelope,
+    InstanceAdoptCommand,
+    InstanceAdoptPreviewCommand,
     InstanceDeleteCommand,
     InstanceDeletePreviewCommand,
     InstanceDeletePreviewResult,
     InstanceRestoreCommand,
     LifecycleOperationResult,
+    OperationGetCommand,
     OperationGetResult,
     OperationKind,
     OperationState,
@@ -611,5 +618,110 @@ def test_a_restoration_in_flight_refuses_a_deletion(tmp_path):
         assert restored.state is OperationState.SUCCEEDED
         assert all(path.is_dir() for path in preview.directories)
         assert runtime.deleted_volumes == []
+
+    asyncio.run(scenario())
+
+
+def test_a_deleted_container_name_blocks_a_replacement_adoption_as_a_finding(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
+        client = hub_client(hub)
+        original = existing_coder(runtime, tmp_path / "box" / "coder")
+        instance_id = await adopted(client, original, CODER_CONTAINER)
+        instance = LifecycleOperationResult(operation_id=uuid4(), instance_id=instance_id)
+        await removed(client, instance)
+        deletion = await deleted(client, await previewed(client, instance))
+        replacement = existing_coder(runtime, tmp_path / "box" / "replacement")
+
+        preview = await client.call(
+            INSTANCE_ADOPT_PREVIEW,
+            InstanceAdoptPreviewCommand(
+                path=replacement,
+                runtime_id=CODER_CONTAINER,
+                relinquished=True,
+            ),
+        )
+        refused = await client.call(
+            INSTANCE_ADOPT,
+            InstanceAdoptCommand(
+                path=replacement,
+                runtime_id=CODER_CONTAINER,
+                relinquished=True,
+            ),
+        )
+        still_there = await client.call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=deletion.operation_id),
+        )
+
+        assert not isinstance(preview, ErrorEnvelope)
+        identity = next(
+            finding
+            for finding in preview.findings
+            if finding.kind is AdoptionFindingKind.RETAINED_IDENTITY
+        )
+        assert CODER_CONTAINER in identity.detail
+        assert str(instance_id) in identity.detail
+        assert identity.blocking
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert refused.code is not ErrorCode.INTERNAL
+        assert isinstance(still_there, OperationGetResult)
+        assert still_there.state is OperationState.SUCCEEDED
+
+    asyncio.run(scenario())
+
+
+def test_a_deleted_hub_path_blocks_a_replacement_with_a_new_id_as_a_finding(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
+        client = hub_client(hub)
+        directory = existing_coder(runtime, tmp_path / "view" / "coder")
+        instance_id = await adopted(client, directory, CODER_CONTAINER)
+        instance = LifecycleOperationResult(operation_id=uuid4(), instance_id=instance_id)
+        await removed(client, instance)
+        await deleted(client, await previewed(client, instance))
+        unseen_host = "/srv/docker/replacement-coder"
+        existing_coder(
+            runtime,
+            directory,
+            container="kinby-coder-2",
+            storage=coder_storage(unseen_host),
+        )
+
+        preview = await client.call(
+            INSTANCE_ADOPT_PREVIEW,
+            InstanceAdoptPreviewCommand(
+                path=directory,
+                runtime_id="kinby-coder-2",
+                relinquished=True,
+            ),
+        )
+        refused = await client.call(
+            INSTANCE_ADOPT,
+            InstanceAdoptCommand(
+                path=directory,
+                runtime_id="kinby-coder-2",
+                relinquished=True,
+            ),
+        )
+
+        assert not isinstance(preview, ErrorEnvelope)
+        assert preview.instance_id != instance_id
+        assert AdoptionFindingKind.RETAINED_IDENTITY in {
+            finding.kind for finding in preview.findings
+        }
+        identity = next(
+            finding
+            for finding in preview.findings
+            if finding.kind is AdoptionFindingKind.RETAINED_IDENTITY
+        )
+        assert str(directory.resolve()) in identity.detail
+        assert str(instance_id) in identity.detail
+        assert identity.blocking
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
 
     asyncio.run(scenario())

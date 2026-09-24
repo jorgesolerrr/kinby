@@ -131,7 +131,7 @@ _Avoid_: undelete, recreate
 
 ### Instance deletion
 
-The **lifecycle operation** that permanently deletes a removed **instance**'s owned storage: the directories and named volumes its **storage inventory** records as writable, and nothing its **manifest** merely references. A preview lists those targets first. The deletion checks them again and refuses if they changed or if another record shares them. Each target leaves the inventory once it is gone, so a retry continues with what is left. Once nothing owned remains, the hub marks the record deleted and it leaves both lists. Its operations stay readable.
+The **lifecycle operation** that permanently deletes a removed **instance**'s owned storage: the directories and named volumes its **storage inventory** records as writable, and nothing its **manifest** merely references. A preview lists those targets first. The deletion checks them again and refuses if they changed or if another record shares them. Each target leaves the inventory once it is gone, so a retry continues with what is left. Once nothing owned remains, the hub marks the record deleted and it leaves both lists. Its operations stay readable. The path and container name stay on that record, and both are unique, so adopting a replacement that reuses either one is a blocking adoption finding.
 _Avoid_: purge, destroy, remove
 
 ### Lifecycle recovery

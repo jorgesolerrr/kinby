@@ -745,6 +745,7 @@ class AdoptionFindingKind(StrEnum):
     RETAINED_STORAGE = "retained-storage"
     INVALID_INSTANCE = "invalid-instance"
     MANIFEST_ID_TAKEN = "manifest-id-taken"
+    RETAINED_IDENTITY = "retained-identity"
 
 
 class AdoptionFinding(ContractModel):
