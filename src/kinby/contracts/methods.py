@@ -13,6 +13,9 @@ from kinby.contracts.models import (
     InstanceAdoptPreviewCommand,
     InstanceAdoptPreviewResult,
     InstanceCreateCommand,
+    InstanceDeleteCommand,
+    InstanceDeletePreviewCommand,
+    InstanceDeletePreviewResult,
     InstanceDrainCommand,
     InstanceDrainResult,
     InstanceListCommand,
@@ -163,6 +166,15 @@ INSTANCE_REMOVE = Method(
 INSTANCE_RESTORE = Method(
     "instance.restore", Scope.HUB_ADMIN, InstanceRestoreCommand, LifecycleOperationResult
 )
+INSTANCE_DELETE_PREVIEW = Method(
+    "instance.delete.preview",
+    Scope.HUB_READ,
+    InstanceDeletePreviewCommand,
+    InstanceDeletePreviewResult,
+)
+INSTANCE_DELETE = Method(
+    "instance.delete", Scope.HUB_ADMIN, InstanceDeleteCommand, LifecycleOperationResult
+)
 INSTANCE_UPDATE = Method(
     "instance.update", Scope.HUB_ADMIN, InstanceUpdateCommand, LifecycleOperationResult
 )
@@ -210,6 +222,8 @@ _METHODS = (
     INSTANCE_RECREATE,
     INSTANCE_REMOVE,
     INSTANCE_RESTORE,
+    INSTANCE_DELETE_PREVIEW,
+    INSTANCE_DELETE,
     INSTANCE_UPDATE,
     INSTANCE_SECRETS_SET,
     INSTANCE_ADOPT_PREVIEW,

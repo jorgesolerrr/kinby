@@ -402,6 +402,14 @@ class DockerRuntime:
             return False
         return True
 
+    async def delete_volume(self, name: str) -> None:
+        """Delete the named volume. Docker refuses one a container still mounts."""
+        try:
+            volume = await asyncio.to_thread(self._client.volumes.get, name)
+        except NotFound:
+            return
+        await asyncio.to_thread(volume.remove)
+
     async def _container(self, instance_id: str) -> Container:
         """The recorded runtime id, or the kinby- prefixed name earlier releases used."""
         try:

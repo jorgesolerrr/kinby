@@ -4,7 +4,7 @@ import asyncio
 import os
 import sqlite3
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from kinby.contracts import (
     INSTANCE_CREATE,
@@ -436,7 +436,9 @@ def claim_storage(
     *,
     prepared: bool = True,
     intended_state: str = "stopped",
-) -> None:
+    kind: StorageKind = StorageKind.VOLUME,
+    writable: bool = True,
+) -> UUID:
     """Let a second record own this source, the way a registry restored from a backup can."""
     other = uuid4()
     with sqlite3.connect(registry_path) as connection:
@@ -451,7 +453,8 @@ def claim_storage(
         connection.execute(
             """
             INSERT INTO storage (instance_id, kind, source, destination, writable)
-            VALUES (?, 'volume', ?, '/instance/workspace', 1)
+            VALUES (?, ?, ?, '/instance/workspace', ?)
             """,
-            (str(other), source),
+            (str(other), kind.value, source, int(writable)),
         )
+    return other

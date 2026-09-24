@@ -249,6 +249,13 @@ def _ownership(
                 f"{conflict.owner}" + (", which this hub is not running." if retained else "."),
             )
         )
+    held = registry.held_identity(
+        observed.instance_id,
+        observed.path,
+        observed.described.runtime_id,
+    )
+    if held is not None:
+        findings.append(_finding(AdoptionFindingKind.RETAINED_IDENTITY, held))
     namesake = next(
         (
             record.instance_id

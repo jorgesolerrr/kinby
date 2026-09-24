@@ -25,7 +25,7 @@ from kinby.hub.models import ImageArtifact
 
 @dataclass(frozen=True)
 class StorageConflict:
-    """Storage one instance would claim that another instance already owns."""
+    """Storage of one instance that another record already names."""
 
     item: StorageItem
     owner: UUID
@@ -48,8 +48,11 @@ class ManagedInstance:
 
     @property
     def active(self) -> bool:
-        """Prepared and not removed: the instances the hub lists, routes, and operates."""
-        return self.prepared and self.intended_state is not IntendedState.REMOVED
+        """Prepared and neither removed nor deleted: what the hub lists, routes, and operates."""
+        return self.prepared and self.intended_state in {
+            IntendedState.STOPPED,
+            IntendedState.RUNNING,
+        }
 
 
 class HubRegistry:
@@ -550,34 +553,53 @@ class HubRegistry:
                     f'Writable storage "{conflict.item.source}" is already recorded for instance '
                     f"{conflict.owner}."
                 )
+            held = self._held_identity(
+                connection,
+                instance.instance_id,
+                instance.path,
+                instance.runtime_id,
+            )
+            if held is not None:
+                raise ValueError(held)
             connection.execute(
                 "DELETE FROM storage WHERE instance_id = ?",
                 (str(instance.instance_id),),
             )
-            connection.execute(
-                """
-                INSERT INTO instances (
-                    id, path, manifest_id, persona_name, requested_revision,
-                    image_id, intended_state, runtime_id, prepared
-                ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 0)
-                ON CONFLICT(id) DO UPDATE SET
-                    path = excluded.path,
-                    manifest_id = excluded.manifest_id,
-                    persona_name = excluded.persona_name,
-                    image_id = excluded.image_id,
-                    intended_state = excluded.intended_state,
-                    runtime_id = excluded.runtime_id
-                """,
-                (
-                    str(instance.instance_id),
-                    str(instance.path),
-                    instance.manifest_id,
-                    instance.persona_name,
-                    instance.image_id,
-                    instance.intended_state.value,
-                    instance.runtime_id,
-                ),
-            )
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO instances (
+                        id, path, manifest_id, persona_name, requested_revision,
+                        image_id, intended_state, runtime_id, prepared
+                    ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 0)
+                    ON CONFLICT(id) DO UPDATE SET
+                        path = excluded.path,
+                        manifest_id = excluded.manifest_id,
+                        persona_name = excluded.persona_name,
+                        image_id = excluded.image_id,
+                        intended_state = excluded.intended_state,
+                        runtime_id = excluded.runtime_id
+                    """,
+                    (
+                        str(instance.instance_id),
+                        str(instance.path),
+                        instance.manifest_id,
+                        instance.persona_name,
+                        instance.image_id,
+                        instance.intended_state.value,
+                        instance.runtime_id,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(
+                    self._held_identity(
+                        connection,
+                        instance.instance_id,
+                        instance.path,
+                        instance.runtime_id,
+                    )
+                    or "This path or container name is already recorded for another instance."
+                ) from exc
             self._insert_storage(connection, instance.instance_id, instance.storage)
             self._insert_operation(
                 connection,
@@ -695,6 +717,19 @@ class HubRegistry:
         with self._connect() as connection:
             return self._writable_conflict(connection, instance_id, storage)
 
+    def shared_storage(
+        self,
+        instance_id: UUID,
+        storage: tuple[StorageItem, ...],
+    ) -> StorageConflict | None:
+        """The first of these writable sources any other record mounts, even read only."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT instance_id, kind, source FROM storage WHERE instance_id != ?",
+                (str(instance_id),),
+            ).fetchall()
+        return self._overlap(storage, rows)
+
     def _writable_conflict(
         self,
         connection: sqlite3.Connection,
@@ -708,6 +743,13 @@ class HubRegistry:
             """,
             (str(instance_id),),
         ).fetchall()
+        return self._overlap(storage, rows)
+
+    def _overlap(
+        self,
+        storage: tuple[StorageItem, ...],
+        rows: list[tuple[str, str, str]],
+    ) -> StorageConflict | None:
         for item in storage:
             if not item.writable:
                 continue
@@ -731,6 +773,61 @@ class HubRegistry:
                 "UPDATE instances SET intended_state = ? WHERE id = ?",
                 (state.value, str(instance_id)),
             )
+
+    def release_storage(self, instance_id: UUID, items: list[StorageItem]) -> None:
+        """Drop inventory entries whose storage is gone, so no retry reaches for it again."""
+        with self._connect() as connection:
+            connection.executemany(
+                "DELETE FROM storage WHERE instance_id = ? AND destination = ?",
+                [(str(instance_id), item.destination) for item in items],
+            )
+
+    def mark_deleted(self, instance_id: UUID) -> None:
+        """Record that nothing owned is left. The read-only references it mounted go too.
+
+        The row stays so its operations remain readable. Its path and container
+        name stay too, and both columns are unique. A later adoption that reuses
+        either one is a finding, not a second row.
+        """
+        with self._connect() as connection:
+            connection.execute("DELETE FROM storage WHERE instance_id = ?", (str(instance_id),))
+            connection.execute(
+                "UPDATE instances SET intended_state = ? WHERE id = ?",
+                (IntendedState.DELETED.value, str(instance_id)),
+            )
+
+    def held_identity(self, instance_id: UUID, path: Path, runtime_id: str) -> str | None:
+        """Why another record already holds this path or container name, if one does."""
+        with self._connect() as connection:
+            return self._held_identity(connection, instance_id, path, runtime_id)
+
+    @staticmethod
+    def _held_identity(
+        connection: sqlite3.Connection,
+        instance_id: UUID,
+        path: Path,
+        runtime_id: str,
+    ) -> str | None:
+        row = connection.execute(
+            """
+            SELECT id, path, runtime_id FROM instances
+            WHERE id != ? AND (path = ? OR runtime_id = ?)
+            ORDER BY rowid LIMIT 1
+            """,
+            (str(instance_id), str(path), runtime_id),
+        ).fetchone()
+        if row is None:
+            return None
+        owner, held_path, held_runtime = row
+        if held_runtime == runtime_id:
+            return (
+                f'Container "{runtime_id}" is still recorded for instance {owner}, '
+                "so this hub will not adopt another instance under that name."
+            )
+        return (
+            f"Directory {held_path} is still recorded for instance {owner}, "
+            "so this hub will not adopt another instance at that path."
+        )
 
     def instance(self, instance_id: UUID) -> ManagedInstance | None:
         with self._connect() as connection:
@@ -786,11 +883,17 @@ class HubRegistry:
         )
 
     def managed_instances(self) -> list[ManagedInstance]:
-        """Every record the hub owns, in creation order, including creations that never finished."""
+        """Every record the hub owns, in creation order, including creations that never finished.
+
+        A deleted instance owns nothing any more. Its record stays only for its operations.
+        """
         with self._connect() as connection:
             ids = [
                 UUID(row[0])
-                for row in connection.execute("SELECT id FROM instances ORDER BY rowid").fetchall()
+                for row in connection.execute(
+                    "SELECT id FROM instances WHERE intended_state != ? ORDER BY rowid",
+                    (IntendedState.DELETED.value,),
+                ).fetchall()
             ]
         return [record for instance_id in ids if (record := self.instance(instance_id)) is not None]
 
@@ -842,7 +945,7 @@ class HubRegistry:
             record
             for instance_id in ids
             if (record := self.instance(instance_id)) is not None
-            and (record.intended_state is IntendedState.REMOVED) == removed
+            and (record.intended_state is IntendedState.REMOVED if removed else record.active)
         ]
         return [
             InstanceSummary(
