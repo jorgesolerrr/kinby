@@ -256,13 +256,27 @@ The input and output tokens attributed to a turn, with totals rolled up for its 
 
 The table of input, output, cache read, and cache write prices per million tokens, keyed by exact `provider:model` names.
 
+### Usage source
+
+The account that pays for a model's tokens: the API, a Claude subscription, or a ChatGPT subscription. Only API use is priced; subscription use is counted.
+_Avoid_: provider, client
+
+### Plan window
+
+The rolling period over which a subscription limits use, such as five hours or one week. The window belongs to the account, so every **instance**, and any use outside kinby, draws from the same one.
+
+### Delegated run
+
+One run of an outside agent that a **tool** starts on a subscription **usage source** during a **turn**. It is reported with its tokens, duration, and outcome, and sits beside the turn's **token usage**, never inside it. A run stopped by the subscription's limit is limited, and records when its **plan window** resets.
+_Avoid_: subagent, model call
+
 ### Daily cost
 
 The priced spend attributed to turns closed during one UTC day.
 
 ### Time range
 
-Optional, inclusive `since` and `until` bounds applied to a timestamp. `usage.get` and `stats.get` both apply it to a turn's closing timestamp.
+Optional, inclusive `since` and `until` bounds applied to a timestamp. `usage.get` and `stats.get` both apply it to a turn's closing timestamp, and to a **delegated run**'s own timestamp.
 
 ### Turn metrics
 
@@ -524,7 +538,7 @@ _Avoid_: model, subagent
 
 ### Coding run
 
-One invocation of a **coding client**, identified by its client session and recorded with its token usage and duration. A later invocation can resume that session to repair the change.
+A **delegated run** of a **coding client**, identified by its client session. A later invocation can resume that session to repair the change.
 
 ### Delegated pipeline
 
