@@ -98,12 +98,12 @@ def stats_buckets(
     runs: Iterable[ReportedRun],
     by: StatsBucketSize,
 ) -> list[StatsBucket]:
-    """Group turn records by their UTC closing date and delegated runs by their own."""
+    """Group turns by their UTC close and subscription runs by their own timestamp."""
     totals_by_start: dict[date, _BucketTotals] = {}
     for record in records:
         start = _bucket_start(record.closed_at, by)
         totals_by_start.setdefault(start, _BucketTotals()).add(record)
-    for reported in runs:
+    for reported in _subscription_runs(runs):
         start = _bucket_start(reported.timestamp, by)
         totals_by_start.setdefault(start, _BucketTotals()).delegated_runs.append(reported.run)
 
@@ -111,12 +111,16 @@ def stats_buckets(
 
 
 def stats_summary(records: Iterable[TurnMetrics], runs: Iterable[ReportedRun]) -> StatsSummary:
-    """Aggregate records and runs without a date boundary for a report total."""
+    """Aggregate turns and subscription runs without a date boundary."""
     totals = _BucketTotals()
     for record in records:
         totals.add(record)
-    totals.delegated_runs.extend(reported.run for reported in runs)
+    totals.delegated_runs.extend(reported.run for reported in _subscription_runs(runs))
     return _stats_summary(totals)
+
+
+def _subscription_runs(runs: Iterable[ReportedRun]) -> Iterable[ReportedRun]:
+    return (reported for reported in runs if reported.run.usage_source in _SUBSCRIPTION_SOURCES)
 
 
 def _bucket_start(timestamp: datetime, by: StatsBucketSize) -> date:
