@@ -1,4 +1,4 @@
-import type { Socket, SocketEvents, Transport } from "./client"
+import type { Clock, Socket, SocketEvents, Transport } from "./client"
 
 /** The one token the fake hub accepts at its login route. */
 export const ACCESS_TOKEN = "the-access-token"
@@ -55,6 +55,43 @@ export function fakeHub({ signedIn = true } = {}): FakeHub {
     },
   }
   return hub
+}
+
+export interface FakeClock extends Clock {
+  /** What every random draw returns. Full jitter scales the backoff ceiling by it. */
+  draw: number
+  /** Let the client settle, then let `ms` pass, running each callback as it falls due. */
+  advance(ms: number): Promise<void>
+}
+
+/** A clock that stands still until the test moves it, drawing the same number every time. */
+export function fakeClock({ draw = 0.5 } = {}): FakeClock {
+  let now = 0
+  const timers = new Set<{ at: number; callback: () => void }>()
+  // The fake hub answers in microtasks, so one real macrotask lets them all run.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+  return {
+    draw,
+    random() {
+      return this.draw
+    },
+    after(ms, callback) {
+      const timer = { at: now + ms, callback }
+      timers.add(timer)
+      return () => timers.delete(timer)
+    },
+    async advance(ms) {
+      await settle()
+      now += ms
+      for (;;) {
+        const [due] = [...timers].filter((timer) => timer.at <= now).sort((a, b) => a.at - b.at)
+        if (due === undefined) return
+        timers.delete(due)
+        due.callback()
+        await settle()
+      }
+    },
+  }
 }
 
 function fakeSocket(url: string, events: SocketEvents): FakeSocket & { accept(): void } {

@@ -19,7 +19,7 @@ export default function App({ client }: { client: Client }) {
         <SidebarInset>
           <header className="flex h-12 items-center gap-2 px-2">
             <SidebarTrigger />
-            {state === "disconnected" && <Badge variant="destructive">Disconnected</Badge>}
+            {state === "reconnecting" && <Badge variant="destructive">Reconnecting</Badge>}
           </header>
         </SidebarInset>
       </SidebarProvider>
