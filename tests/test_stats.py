@@ -10,6 +10,8 @@ from kinby.contracts import (
     AcceptedResult,
     ApprovalRequested,
     CompletionOutcome,
+    DelegatedRun,
+    DelegatedRunOutcome,
     DenyCounts,
     ErrorCode,
     ErrorEnvelope,
@@ -21,6 +23,7 @@ from kinby.contracts import (
     ModelCompleted,
     Navigation,
     NavigationMeans,
+    RunDelegated,
     Scope,
     StatsBucket,
     StatsBucketSize,
@@ -1221,6 +1224,59 @@ def test_stats_get_aggregates_closed_turns_by_utc_day(tmp_path: Path) -> None:
     )
 
 
+def test_stats_get_skips_a_day_and_week_that_only_an_api_run_touches(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    api_day = datetime(2026, 8, 24, 15, tzinfo=UTC)
+    closed_at = datetime(2026, 9, 1, 11, tzinfo=UTC)
+    api_run = DelegatedRun(
+        usage_source=UsageSource.API,
+        client="codex",
+        models=["gpt-5"],
+        input_tokens=9000,
+        output_tokens=800,
+        duration_ms=50_000,
+        client_turns=4,
+        outcome=DelegatedRunOutcome.COMPLETED,
+    )
+    events = [
+        _event(
+            1, thread_id, turn_id, api_day, TurnStarted(message="delegate", model="openai:gpt-5")
+        ),
+        _event(2, thread_id, turn_id, api_day + timedelta(minutes=1), RunDelegated(run=api_run)),
+        _event(
+            3,
+            thread_id,
+            turn_id,
+            closed_at,
+            RunDelegated(run=api_run.model_copy(update={"input_tokens": 4000})),
+        ),
+        _event(
+            4,
+            thread_id,
+            turn_id,
+            closed_at + timedelta(seconds=20),
+            TurnCompleted(input_tokens=11, output_tokens=7),
+        ),
+    ]
+    dispatcher = build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events))
+
+    daily = asyncio.run(dispatcher.dispatch("stats.get", {}, {Scope.INSTANCE_READ}))
+    weekly = asyncio.run(dispatcher.dispatch("stats.get", {"by": "week"}, {Scope.INSTANCE_READ}))
+
+    assert isinstance(daily, StatsGetResult)
+    assert isinstance(weekly, StatsGetResult)
+    assert [bucket.start for bucket in daily.buckets] == [closed_at.date()]
+    assert [bucket.start for bucket in weekly.buckets] == [datetime(2026, 8, 31, tzinfo=UTC).date()]
+    for summary in (daily.buckets[0], daily.total, weekly.buckets[0], weekly.total):
+        assert summary.completed == 1
+        assert summary.input_tokens == 11
+        assert summary.output_tokens == 7
+        assert summary.cost == 0.00008375
+        assert summary.subscriptions == NO_SUBSCRIPTION_USE
+        assert summary.navigation == NavigationMeans()
+
+
 def test_stats_get_keeps_recap_latest_rating_and_every_closing_kind(tmp_path: Path) -> None:
     thread_id = uuid4()
     completed_id = uuid4()
@@ -1648,6 +1704,65 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         tokens_before_first_write=0.0,
         repeat_opens=0.0,
     )
+
+
+def test_cli_stats_omits_a_zero_row_for_an_api_run_on_an_empty_day(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path)
+    instance = load_instance(instance_path)
+    api_day = datetime(2026, 8, 24, 15, tzinfo=UTC)
+    closed_at = datetime(2026, 9, 1, 11, tzinfo=UTC)
+    timestamps = iter((api_day, api_day + timedelta(minutes=1), closed_at, closed_at))
+    event_log = EventLog(instance.manifest.state_dir, clock=lambda: next(timestamps))
+    thread_id = uuid4()
+    turn_id = uuid4()
+    api_run = DelegatedRun(
+        usage_source=UsageSource.API,
+        client="codex",
+        models=["gpt-5"],
+        input_tokens=9000,
+        output_tokens=800,
+        duration_ms=50_000,
+        client_turns=4,
+        outcome=DelegatedRunOutcome.COMPLETED,
+    )
+
+    async def append_turn() -> None:
+        await event_log.append(
+            thread_id, turn_id, TurnStarted(message="delegate", model="openai:gpt-5")
+        )
+        await event_log.append(thread_id, turn_id, RunDelegated(run=api_run))
+        await event_log.append(
+            thread_id,
+            turn_id,
+            RunDelegated(run=api_run.model_copy(update={"input_tokens": 4000})),
+        )
+        await event_log.append(thread_id, turn_id, TurnCompleted(input_tokens=11, output_tokens=7))
+
+    asyncio.run(append_turn())
+
+    day_code = main(["stats", str(instance_path)])
+    day_output = capsys.readouterr()
+    week_code = main(["stats", str(instance_path), "--by", "week"])
+    week_output = capsys.readouterr()
+
+    assert day_code == 0
+    assert week_code == 0
+    assert day_output.err == ""
+    assert week_output.err == ""
+    day_lines = day_output.out.splitlines()
+    week_lines = week_output.out.splitlines()
+    assert [line.split("\t")[0] for line in day_lines] == ["bucket", "2026-09-01", "total"]
+    assert [line.split("\t")[0] for line in week_lines] == ["bucket", "2026-08-31", "total"]
+    cost_column = day_lines[0].split("\t").index("cost")
+    for line in (*day_lines[1:], *week_lines[1:]):
+        fields = line.split("\t")
+        assert fields[cost_column] == "0.00008375"
+        assert fields[1:5] == ["1", "0", "0", "11"]
+        assert fields[-12:] == ["0"] * 12
 
 
 def test_cli_stats_prints_navigation_from_a_hand_written_log(
