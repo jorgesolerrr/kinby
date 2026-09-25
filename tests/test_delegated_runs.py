@@ -225,6 +225,51 @@ def test_a_tool_context_without_a_turn_refuses_a_report(tmp_path: Path) -> None:
         asyncio.run(context.report_run(COMPLETED_RUN))
 
 
+def test_a_report_after_an_interrupt_is_refused_and_records_nothing(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        path = routine_file(instance, "description: News")
+        (path.parent / "run.py").write_text(
+            "import asyncio\n"
+            "from kinby.plugins import ToolContext, tool\n"
+            "from tests.test_delegated_runs import LEAKED_CONTEXTS\n"
+            "@tool(write=False)\n"
+            "async def code(context: ToolContext) -> None:\n"
+            '    """Keep the context past an interrupt."""\n'
+            "    LEAKED_CONTEXTS.append(context)\n"
+            "    await asyncio.Event().wait()\n"
+        )
+        dispatcher = runtime(instance)
+        accepted = await call(dispatcher, "routine.run", name="news")
+        assert isinstance(accepted, AcceptedResult)
+        async with asyncio.timeout(5):
+            while not LEAKED_CONTEXTS:
+                await asyncio.sleep(0)
+        leaked = LEAKED_CONTEXTS.pop()
+
+        interrupted = await call(dispatcher, "thread.turn.interrupt", thread_id=accepted.thread_id)
+        assert isinstance(interrupted, AcceptedResult)
+
+        with pytest.raises(NoActiveTurn):
+            await leaked.report_run(COMPLETED_RUN)
+        await asyncio.sleep(0)
+        with pytest.raises(NoActiveTurn):
+            await leaked.report_run(COMPLETED_RUN)
+
+        stream = await thread_events(dispatcher, {"thread_id": accepted.thread_id}, set(Scope))
+        events: list[Event] = []
+        async with asyncio.timeout(5):
+            async for event in stream:
+                assert isinstance(event, Event)
+                events.append(event)
+                if is_turn_closing(event.payload):
+                    break
+        await stream.aclose()
+        assert not any(isinstance(event.payload, RunDelegated) for event in events)
+
+    asyncio.run(scenario())
+
+
 def test_a_report_after_the_turn_closed_is_refused_and_records_nothing(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)

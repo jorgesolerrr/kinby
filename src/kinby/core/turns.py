@@ -728,6 +728,10 @@ class Turns:
                 raise _no_active_turn(turn.thread_id)
             running = self._owned_running_turn(turn)
             if running is None:
+                # interrupt appends turn.interrupted outside this closure.
+                closed = _turn_closed(self._log.stored(turn.thread_id), turn.turn_id)
+                if closed:
+                    raise _no_active_turn(turn.thread_id)
                 raise TurnInterruptedError
             event = await self._log.append(turn.thread_id, turn.turn_id, payload)
             closed = is_turn_closing(payload)
@@ -888,6 +892,10 @@ def _thread_busy(thread_id: UUID) -> ThreadBusy:
 
 def _snapshot_unavailable(turn_id: UUID) -> SnapshotUnavailable:
     return SnapshotUnavailable(f'Workspace snapshots are unavailable for turn "{turn_id}".')
+
+
+def _turn_closed(events: Sequence[Event], turn_id: UUID) -> bool:
+    return any(event.turn_id == turn_id and is_turn_closing(event.payload) for event in events)
 
 
 def _no_active_turn(thread_id: UUID) -> NoActiveTurn:
