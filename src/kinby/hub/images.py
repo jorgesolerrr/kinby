@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -21,6 +22,7 @@ from kinby.hub.registry import HubRegistry
 from kinby.packages import InstalledPackage
 
 _ROOT_FILES = frozenset({"Dockerfile", "pyproject.toml", "uv.lock", "README.md", "LICENSE"})
+_STAGE = re.compile(r"^FROM\s", re.MULTILINE | re.IGNORECASE)
 
 
 def _git(repository: Path, *arguments: str) -> bytes:
@@ -69,6 +71,7 @@ class ImagePreparer:
         with TemporaryDirectory(prefix="kinby-build-") as temporary:
             context = Path(temporary)
             await asyncio.to_thread(self._export, resolved, context)
+            self._keep_instance_stage(context / "Dockerfile")
             if selection.package is not None:
                 self._install_package(context / "Dockerfile", selection)
             dependency_id = self._dependency_id(context, selection)
@@ -99,6 +102,18 @@ class ImagePreparer:
         if artifact.package is None:
             return None
         return await self._backend.inspect_package(artifact.image_id, artifact.package.id, instance)
+
+    @staticmethod
+    def _keep_instance_stage(dockerfile: Path) -> None:
+        """An instance image is the Dockerfile's first stage; the stages after it build the hub.
+
+        They need web app sources this context never carries, and the classic builder the
+        Docker SDK drives runs every stage up to its target, needed or not.
+        """
+        body = dockerfile.read_text(encoding="utf-8")
+        stages = [match.start() for match in _STAGE.finditer(body)]
+        if len(stages) > 1:
+            dockerfile.write_text(body[: stages[1]], encoding="utf-8")
 
     @staticmethod
     def _install_package(dockerfile: Path, selection: ImageSelection) -> None:

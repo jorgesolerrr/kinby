@@ -176,6 +176,45 @@ def test_pinned_package_is_installed_in_the_image_and_part_of_artifact_reuse(tmp
     asyncio.run(scenario())
 
 
+def test_an_instance_image_builds_the_first_stage_and_leaves_the_web_build_out(tmp_path):
+    """The hub's builder would run every stage, and the context carries no web app sources."""
+
+    async def scenario() -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        _source_repo(source)
+        (source / "Dockerfile").write_text(
+            dedent(
+                """\
+                FROM python:3.14 AS instance
+                COPY src /app/src
+
+                FROM oven/bun:1.4.2 AS web
+                RUN bun run build
+
+                FROM instance AS hub
+                COPY --from=web /web/dist /usr/local/share/kinby/web
+                """
+            ),
+            encoding="utf-8",
+        )
+        _git(source, "commit", "--all", "--message", "hub stages")
+        backend = FakeImageBackend()
+        preparer = ImagePreparer(source, HubRegistry(tmp_path / "hub"), backend)
+        package = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
+
+        await preparer.prepare(ImageSelection("HEAD", package))
+
+        assert backend.dockerfiles == [
+            "FROM python:3.14 AS instance\n"
+            "COPY src /app/src\n"
+            'RUN ["uv", "pip", "install", "--system", "--no-cache", "--no-sources", '
+            '"kinby-writer==1.4.2"]\n'
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_the_candidate_check_reads_the_instance_the_preparation_is_for(tmp_path):
     async def scenario() -> None:
         source = tmp_path / "source"

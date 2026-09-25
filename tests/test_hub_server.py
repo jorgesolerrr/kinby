@@ -390,7 +390,58 @@ def test_the_web_app_serves_assets_and_falls_back_to_index(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
-def test_a_hub_without_a_built_app_still_serves_the_contract(tmp_path: Path) -> None:
+def test_the_hub_serves_the_app_its_image_carries_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kinby.hub.server.WEB_APP", built_web_app(tmp_path / "image"))
+
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        async with served(hub) as address, aiohttp.ClientSession() as session:
+            page = await session.get(url(address, "/"))
+            page_body = await page.text()
+            asset = await session.get(url(address, "/assets/app-1a2b.js"))
+            asset_body = await asset.text()
+
+        assert page.status == 200
+        assert page_body == "<title>kinby</title>\n"
+        assert page.headers["Cache-Control"] == "no-cache"
+        assert asset.status == 200
+        assert asset_body == "console.log('kinby')\n"
+
+    asyncio.run(scenario())
+
+
+def test_an_explicit_web_app_replaces_the_one_the_image_carries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kinby.hub.server.WEB_APP", built_web_app(tmp_path / "image"))
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    (explicit / "index.html").write_text("<title>kinby dev</title>\n", encoding="utf-8")
+
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        async with (
+            served(hub, web_app=explicit) as address,
+            aiohttp.ClientSession() as session,
+        ):
+            page = await session.get(url(address, "/"))
+            page_body = await page.text()
+
+        assert page_body == "<title>kinby dev</title>\n"
+
+    asyncio.run(scenario())
+
+
+def test_a_hub_without_a_built_app_still_serves_the_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kinby.hub.server.WEB_APP", tmp_path / "missing")
+
     async def scenario() -> None:
         hub = hub_at(tmp_path / "hub")
         token = hub.access.issue()

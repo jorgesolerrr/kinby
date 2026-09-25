@@ -2,6 +2,8 @@
 
 The root `Dockerfile` builds one image for every kinby instance. Instance identity, behavior, workspace configuration, and state do not belong in the image.
 
+The instance image is the Dockerfile's first stage and its default target. The hub builds instances from that stage alone. The `hub` target adds the built web app at `/usr/local/share/kinby/web`, from a Bun stage that runs only for that target. The Python wheel does not carry the app, and instances never serve it.
+
 ## Runtime contract
 
 - Mount one instance directory at `/instance`. The image declares this path as a volume.
@@ -61,7 +63,7 @@ The hub serves these routes:
 | `GET /instances/{instance_id}/ws` | One instance's contract, relayed frame for frame to its private `/ws`. A stopped instance answers 503, an unknown one 404. |
 | `POST /instances/{instance_id}/signals/{routine}` | A webhook, forwarded byte for byte. The instance authenticates it and answers it; the hub queues nothing. |
 | `POST /signals/{routine}` | The same, for the instance holding the signal alias. |
-| `/assets`, `/{tail:.*}` | The built web app, with the `index.html` fallback. |
+| `/assets`, `/{tail:.*}` | The built web app, with the `index.html` fallback. The hub serves the app the image carries, or the directory `--web-app` names. With neither, these routes are absent. |
 
 The relay reaches an instance's `/ws` only, never its `/control`, so no client that arrives through the hub holds `instance:lifecycle`. Adoption keeps an established webhook URL by claiming the bare signal path:
 

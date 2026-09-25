@@ -19,6 +19,9 @@ from kinby.instance import Serve
 
 _UNAUTHORIZED = "authentication failed"
 
+WEB_APP = Path("/usr/local/share/kinby/web")
+"""Where the hub image carries the built web app."""
+
 
 class HubContractServer:
     """Serve the hub's contract at ``/ws``, the login that opens a session, and the web app."""
@@ -30,10 +33,11 @@ class HubContractServer:
         routing: InstanceRouting,
         web_app: Path | None = None,
     ) -> None:
+        """Serve ``web_app``, or else the app the hub image carries, when that directory exists."""
         self._dispatcher = dispatcher
         self._access = access
         self._routing = routing
-        self._web_app = web_app
+        self._web_app = web_app or WEB_APP
         self._runner: web.AppRunner | None = None
 
     async def start(self, listen: Serve) -> Serve:
@@ -65,7 +69,7 @@ class HubContractServer:
             self._instance_signal,
         )
         application.router.add_post("/signals/{routine}", self._aliased_signal)
-        if self._web_app is not None:
+        if self._web_app.is_dir():
             _add_web_app(application, self._web_app)
 
     async def _login(self, request: web.Request) -> web.Response:

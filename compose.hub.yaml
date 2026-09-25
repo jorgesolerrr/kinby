@@ -3,7 +3,10 @@
 #   docker compose -f compose.hub.yaml up --build --detach
 services:
   hub:
-    build: .
+    # The hub target adds the built web app to the instance image.
+    build:
+      context: .
+      target: hub
     entrypoint: ["kinby"]
     command:
       - hub

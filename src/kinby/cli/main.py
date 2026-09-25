@@ -743,7 +743,7 @@ def main(
     hub_parser.add_argument(
         "--web-app",
         type=Path,
-        help="directory holding the built web app",
+        help="directory holding the built web app (default: the one the hub image carries)",
     )
     hub_subparsers = hub_parser.add_subparsers(dest="hub_command")
     hub_token_parser = hub_subparsers.add_parser(
