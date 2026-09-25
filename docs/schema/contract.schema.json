@@ -233,6 +233,82 @@
       "title": "ContainerOwner",
       "type": "string"
     },
+    "DelegatedRun": {
+      "additionalProperties": false,
+      "description": "One run of an outside agent that a tool started, with that run's own tokens.\n\nA client that reports a running total across resumes, like a Codex thread, needs its\nprevious reading subtracted. Only a limited run has ``resets_at``: when its plan window resets.",
+      "properties": {
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "client": {
+          "type": "string"
+        },
+        "client_turns": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "models": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "outcome": {
+          "$ref": "#/$defs/DelegatedRunOutcome"
+        },
+        "output_tokens": {
+          "type": "integer"
+        },
+        "resets_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "usage_source": {
+          "$ref": "#/$defs/UsageSource"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "usage_source",
+        "client",
+        "models",
+        "duration_ms",
+        "client_turns",
+        "outcome"
+      ],
+      "title": "DelegatedRun",
+      "type": "object"
+    },
+    "DelegatedRunOutcome": {
+      "enum": [
+        "completed",
+        "failed",
+        "limited"
+      ],
+      "title": "DelegatedRunOutcome",
+      "type": "string"
+    },
     "Delivery": {
       "additionalProperties": false,
       "properties": {
@@ -401,6 +477,7 @@
               "mode.pinned": "#/$defs/ModePinned",
               "model.completed": "#/$defs/ModelCompleted",
               "routine.failure.handled": "#/$defs/RoutineFailureHandled",
+              "run.delegated": "#/$defs/RunDelegated",
               "signal.received": "#/$defs/SignalReceived",
               "tool.call": "#/$defs/ToolCall",
               "tool.gated": "#/$defs/ToolGated",
@@ -454,6 +531,9 @@
             },
             {
               "$ref": "#/$defs/TurnRated"
+            },
+            {
+              "$ref": "#/$defs/RunDelegated"
             },
             {
               "$ref": "#/$defs/MemoryRecapped"
@@ -1757,6 +1837,25 @@
       "title": "Readiness",
       "type": "string"
     },
+    "ReportedRun": {
+      "additionalProperties": false,
+      "description": "A delegated run and the time it was recorded, which places it in a time range.",
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/DelegatedRun"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "timestamp",
+        "run"
+      ],
+      "title": "ReportedRun",
+      "type": "object"
+    },
     "ResultFrame": {
       "additionalProperties": false,
       "properties": {
@@ -2104,6 +2203,25 @@
       ],
       "title": "RoutineTrigger",
       "type": "string"
+    },
+    "RunDelegated": {
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/DelegatedRun"
+        },
+        "type": {
+          "const": "run.delegated",
+          "default": "run.delegated",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run",
+        "type"
+      ],
+      "title": "RunDelegated",
+      "type": "object"
     },
     "ServerFrame": {
       "discriminator": {
@@ -3191,6 +3309,12 @@
           ],
           "default": null
         },
+        "delegated_runs": {
+          "items": {
+            "$ref": "#/$defs/ReportedRun"
+          },
+          "type": "array"
+        },
         "denies": {
           "$ref": "#/$defs/DenyCounts"
         },
@@ -3443,6 +3567,12 @@
           "default": 0,
           "type": "integer"
         },
+        "delegated_runs": {
+          "items": {
+            "$ref": "#/$defs/ReportedRun"
+          },
+          "type": "array"
+        },
         "input_tokens": {
           "type": "integer"
         },
@@ -3524,6 +3654,15 @@
       ],
       "title": "UsageGetResult",
       "type": "object"
+    },
+    "UsageSource": {
+      "enum": [
+        "api",
+        "claude-subscription",
+        "chatgpt-subscription"
+      ],
+      "title": "UsageSource",
+      "type": "string"
     },
     "UserOrigin": {
       "additionalProperties": false,

@@ -51,6 +51,11 @@ def usage_totals(
             cache_creation_tokens=record.cache_creation_tokens,
             recap_input_tokens=record.recap_input_tokens,
             recap_output_tokens=record.recap_output_tokens,
+            delegated_runs=[
+                reported
+                for reported in record.delegated_runs
+                if time_range.includes(reported.timestamp)
+            ],
         )
         turns_by_thread.setdefault(record.thread_id, []).append(turn)
 

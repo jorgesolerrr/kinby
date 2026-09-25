@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Literal, NewType, TypeIs
+from typing import Annotated, Literal, NewType, Self, TypeIs
 from uuid import UUID
 
 from pydantic import (
@@ -16,6 +16,7 @@ from pydantic import (
     JsonValue,
     SecretStr,
     field_serializer,
+    model_validator,
 )
 
 NodeId = NewType("NodeId", str)
@@ -125,6 +126,7 @@ class EventType(StrEnum):
     TURN_FAILED = "turn.failed"
     TURN_INTERRUPTED = "turn.interrupted"
     TURN_RATED = "turn.rated"
+    RUN_DELEGATED = "run.delegated"
     MEMORY_RECAPPED = "memory.recapped"
     ROUTINE_FAILURE_HANDLED = "routine.failure.handled"
     SIGNAL_RECEIVED = "signal.received"
@@ -291,6 +293,55 @@ class TurnInterrupted(TokenTotals):
 type TurnClosingPayload = TurnCompleted | TurnFailed | TurnInterrupted
 
 
+class UsageSource(StrEnum):
+    API = "api"
+    CLAUDE_SUBSCRIPTION = "claude-subscription"
+    CHATGPT_SUBSCRIPTION = "chatgpt-subscription"
+
+
+class DelegatedRunOutcome(StrEnum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+    LIMITED = "limited"
+
+
+class DelegatedRun(TokenTotals):
+    """One run of an outside agent that a tool started, with that run's own tokens.
+
+    A client that reports a running total across resumes, like a Codex thread, needs its
+    previous reading subtracted. Only a limited run has ``resets_at``: when its plan window resets.
+    """
+
+    usage_source: UsageSource
+    client: str
+    models: list[str]
+    duration_ms: Annotated[int, Field(ge=0)]
+    client_turns: Annotated[int, Field(ge=0)]
+    outcome: DelegatedRunOutcome
+    resets_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def _resets_at_only_when_limited(self) -> Self:
+        limited = self.outcome is DelegatedRunOutcome.LIMITED
+        if limited and self.resets_at is None:
+            raise ValueError("A limited run needs resets_at, the time its plan window resets.")
+        if not limited and self.resets_at is not None:
+            raise ValueError(f"A {self.outcome} run has no resets_at; only a limited run has one.")
+        return self
+
+
+class RunDelegated(ContractModel):
+    type: Literal[EventType.RUN_DELEGATED] = EventType.RUN_DELEGATED
+    run: DelegatedRun
+
+
+class ReportedRun(ContractModel):
+    """A delegated run and the time it was recorded, which places it in a time range."""
+
+    timestamp: datetime
+    run: DelegatedRun
+
+
 class WorkspaceReverted(ContractModel):
     """The workspace went from ``previous`` back to ``restored``, the target's before tree."""
 
@@ -363,6 +414,7 @@ Payload = Annotated[
     | TurnFailed
     | TurnInterrupted
     | TurnRated
+    | RunDelegated
     | MemoryRecapped
     | RoutineFailureHandled
     | SignalReceived
@@ -883,6 +935,7 @@ class TurnUsage(TokenTotals):
     turn_id: UUID
     recap_input_tokens: int
     recap_output_tokens: int
+    delegated_runs: list[ReportedRun] = Field(default_factory=list)
 
 
 class ThreadUsage(TokenTotals):
@@ -961,6 +1014,7 @@ class TurnMetrics(TokenTotals):
     memory_tokens: float
     rating: TurnRated | None
     navigation: Navigation = Field(default_factory=Navigation)
+    delegated_runs: list[ReportedRun] = Field(default_factory=list)
 
 
 class StatsSummary(TokenTotals):

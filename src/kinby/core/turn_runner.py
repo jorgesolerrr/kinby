@@ -42,6 +42,7 @@ from kinby.contracts import (
     PermissionMode,
     RoutineOrigin,
     RoutineTrigger,
+    RunDelegated,
     SignalReceived,
     ToolCall,
     ToolGated,
@@ -105,7 +106,7 @@ from kinby.plugins.routines import (
     strip_signal_credentials,
 )
 from kinby.plugins.skills import load_skills
-from kinby.plugins.tools import Tool, ToolContext
+from kinby.plugins.tools import RunReporter, Tool, ToolContext
 
 _TOOL_ARGUMENTS = TypeAdapter(dict[str, JsonValue])
 _CHECKPOINTS_NAME = "checkpoints.sqlite"
@@ -429,6 +430,7 @@ class LangGraphRunner:
                             tool_context=ToolContext(
                                 instance=self._instance,
                                 thread_id=turn.thread_id,
+                                run_reporter=_run_reporter(emit),
                             ),
                             user_message=HumanMessage(
                                 content=render_wake(turn.origin, prepared.message, prepared.payload)
@@ -596,6 +598,7 @@ class LangGraphRunner:
                     instance=self._instance,
                     thread_id=thread_id,
                     package_config=instance_package_config(self._instance),
+                    run_reporter=_run_reporter(emit),
                 )
                 output = await code_step.ainvoke_raw(call.arguments, context)
         except Exception as exc:
@@ -896,6 +899,10 @@ class LangGraphRunner:
 
 def _elapsed_ms(started_at: float) -> int:
     return round((asyncio.get_running_loop().time() - started_at) * 1000)
+
+
+def _run_reporter(emit: Emit) -> RunReporter:
+    return lambda run: emit(RunDelegated(run=run))
 
 
 def _gate_outcome(action: GateAction) -> GateOutcome:

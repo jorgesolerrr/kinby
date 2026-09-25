@@ -719,11 +719,18 @@ class Turns:
         budgets: Budgets,
         run: Callable[[TurnContext], Awaitable[TurnResult]],
     ) -> None:
+        closed = False
+
         async def emit(payload: Payload) -> Event:
+            nonlocal closed
+            # A tool can keep its context, and report through it, after the turn has closed.
+            if closed:
+                raise _no_active_turn(turn.thread_id)
             running = self._owned_running_turn(turn)
             if running is None:
                 raise TurnInterruptedError
             event = await self._log.append(turn.thread_id, turn.turn_id, payload)
+            closed = is_turn_closing(payload)
             if isinstance(payload, ModelCompleted):
                 running.has_model_calls = True
                 running.usage = _sum_model_calls((running.usage, payload))

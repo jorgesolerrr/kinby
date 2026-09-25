@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, cast, get_args, get_origin, get_type_hints
@@ -12,10 +12,12 @@ from uuid import UUID
 from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import JsonValue
 
+from kinby.contracts import DelegatedRun
 from kinby.instance import Instance
 from kinby.packages import PackageConfig
 
 ToolFunction = Callable[..., object]
+RunReporter = Callable[[DelegatedRun], Awaitable[object]]
 
 
 @dataclass(frozen=True)
@@ -28,10 +30,20 @@ class ToolContext:
     instance: Instance
     thread_id: UUID
     package_config: PackageConfig | None = None
+    run_reporter: RunReporter | None = field(default=None, repr=False)
 
     @property
     def workspace(self) -> Path:
         return self.instance.manifest.workspace.path
+
+    async def report_run(self, run: DelegatedRun) -> None:
+        """Record *run* in the turn that invoked the tool, as soon as the run finishes."""
+        if self.run_reporter is None:
+            # kinby.core imports this module, so its errors load on first use.
+            from kinby.core.errors import NoActiveTurn
+
+            raise NoActiveTurn(f'Thread "{self.thread_id}" has no open turn to report a run in.')
+        await self.run_reporter(run)
 
 
 @dataclass(frozen=True)
