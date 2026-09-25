@@ -1,12 +1,38 @@
-import type { Contract, ErrorCode, ErrorEnvelope, ErrorFrame, ResultFrame } from "./contract"
+import {
+  type ConnectionEvent,
+  type ConnectionState,
+  INITIAL_CONNECTION,
+  project,
+} from "./connection"
+import type {
+  Contract,
+  EndFrame,
+  ErrorCode,
+  ErrorEnvelope,
+  ErrorFrame,
+  ResultFrame,
+} from "./contract"
 
 type Methods = Contract["methods"]
 export type Method = keyof Methods
 export type Command<M extends Method> = Methods[M]["command"]
 export type Result<M extends Method> = Methods[M]["result"]
 
-/** Where the client stands with the hub. */
-export type ConnectionState = "connecting" | "connected" | "disconnected" | "signed-out"
+type Subscriptions = Contract["subscriptions"]
+export type SubscriptionMethod = keyof Subscriptions
+export type SubscriptionCommand<M extends SubscriptionMethod> = Subscriptions[M]["command"]
+export type Item<M extends SubscriptionMethod> = Subscriptions[M]["item"]
+
+/** A subscription's items, in order. They end on the hub's end frame, or on cancel. */
+export interface Subscription<M extends SubscriptionMethod> extends AsyncIterable<Item<M>> {
+  cancel(): void
+}
+
+/** The first backoff ceiling. It doubles with each drop, up to the last. */
+const FIRST_BACKOFF_MS = 500
+const LAST_BACKOFF_MS = 16_000
+/** How long the socket stays up before its drops are forgotten. */
+const STEADY_MS = 30_000
 
 export interface SocketEvents {
   open(): void
@@ -25,8 +51,21 @@ export interface Transport {
   fetch(url: string, init?: RequestInit): Promise<Response>
 }
 
+/** When the client tries again: its timer, and the jitter it draws. */
+export interface Clock {
+  /** Call back after `ms`. The returned function cancels the call. */
+  after(ms: number, callback: () => void): () => void
+  /** A draw in [0, 1). */
+  random(): number
+}
+
 export interface Client {
   call: <M extends Method>(method: M, params: Command<M>) => Promise<Result<M>>
+  /** Follow a subscription across reconnects, resuming after the last item it delivered. */
+  subscribe: <M extends SubscriptionMethod>(
+    method: M,
+    params: SubscriptionCommand<M>,
+  ) => Subscription<M>
   /** Exchange the access token for a browser session, then connect. False when the hub refuses it. */
   signIn: (token: string) => Promise<boolean>
   signOut: () => Promise<void>
@@ -50,6 +89,15 @@ export class CallError extends Error {
 interface PendingCall {
   resolve(result: unknown): void
   reject(error: CallError): void
+}
+
+interface OpenSubscription {
+  readonly method: SubscriptionMethod
+  readonly params: object
+  /** The sequence of the last item delivered. A resubscribe asks for what comes after it. */
+  lastSequence: number | undefined
+  deliver(sequence: number, item: object): void
+  end(error?: CallError): void
 }
 
 // Never retried: the call may have run. Its outcome shows in the events or the instance status.
@@ -77,18 +125,33 @@ export const browserTransport: Transport = {
   fetch: (url, init) => fetch(url, init),
 }
 
+export const browserClock: Clock = {
+  after(ms, callback) {
+    const timer = setTimeout(callback, ms)
+    return () => clearTimeout(timer)
+  },
+  random: () => Math.random(),
+}
+
 /** The app's one connection to the hub whose page it was loaded from. */
-export function createClient(origin: string, transport: Transport): Client {
-  let state: ConnectionState = "connecting"
+export function createClient(
+  origin: string,
+  transport: Transport,
+  clock: Clock = browserClock,
+): Client {
+  let connection = INITIAL_CONNECTION
   let socket: Socket | undefined
   let nextId = 1
   const pending = new Map<string, PendingCall>()
+  const subscriptions = new Map<string, OpenSubscription>()
   const listeners = new Set<() => void>()
   let settleGeneration = 0
+  // Either the wait before the next try, or the one until an open socket counts as steady.
+  let cancelTimer = () => {}
   const route = (path: string) => new URL(path, origin).href
 
-  const setState = (next: ConnectionState) => {
-    state = next
+  const dispatch = (event: ConnectionEvent) => {
+    connection = project(connection, event)
     for (const listener of listeners) listener()
   }
 
@@ -101,26 +164,57 @@ export function createClient(origin: string, transport: Transport): Client {
       () => false,
     )
     if (generation !== settleGeneration || socket !== undefined) return
-    setState(ended ? "signed-out" : "disconnected")
+    cancelTimer()
+    if (ended) return dispatch("session-ended")
+    dispatch("dropped")
+    // Full jitter: anywhere from no wait to the ceiling, so clients never retry in step.
+    const ceiling = Math.min(LAST_BACKOFF_MS, FIRST_BACKOFF_MS * 2 ** (connection.drops - 1))
+    cancelTimer = clock.after(clock.random() * ceiling, connect)
+  }
+
+  const sendSubscribe = (id: string, { method, params, lastSequence }: OpenSubscription) => {
+    const resumed =
+      lastSequence === undefined ? params : { ...params, after_sequence: lastSequence }
+    socket?.send(JSON.stringify({ type: "subscribe", id, method, params: resumed }))
+  }
+
+  const answer = (frame: Reply) => {
+    const call = pending.get(frame.id)
+    const subscription = subscriptions.get(frame.id)
+    switch (frame.type) {
+      case "item":
+        return subscription?.deliver(frame.sequence, frame.item)
+      case "result":
+        pending.delete(frame.id)
+        return call?.resolve(frame.result)
+      case "error":
+        pending.delete(frame.id)
+        subscriptions.delete(frame.id)
+        call?.reject(new CallError(frame.error))
+        return subscription?.end(new CallError(frame.error))
+      case "end":
+        subscriptions.delete(frame.id)
+        return subscription?.end()
+    }
   }
 
   const connect = () => {
-    setState("connecting")
+    cancelTimer()
     const opened = transport.openSocket(socketUrl(origin), {
       open: () => {
-        if (socket === opened) setState("connected")
+        if (socket !== opened) return
+        for (const [id, subscription] of subscriptions) sendSubscribe(id, subscription)
+        dispatch("opened")
+        cancelTimer = clock.after(STEADY_MS, () => dispatch("steady"))
       },
       message: (data) => {
         const frame = parseReply(data)
-        const call = frame === undefined ? undefined : pending.get(frame.id)
-        if (frame === undefined || call === undefined) return
-        pending.delete(frame.id)
-        if (frame.type === "result") call.resolve(frame.result)
-        else call.reject(new CallError(frame.error))
+        if (frame !== undefined) answer(frame)
       },
       close: () => {
         if (socket !== opened) return
         socket = undefined
+        cancelTimer()
         for (const call of pending.values()) call.reject(new CallError(CONNECTION_LOST))
         pending.clear()
         void settle()
@@ -133,7 +227,7 @@ export function createClient(origin: string, transport: Transport): Client {
 
   return {
     call(method, params) {
-      if (state !== "connected" || socket === undefined) {
+      if (connection.state !== "connected" || socket === undefined) {
         return Promise.reject(new CallError(NOT_CONNECTED))
       }
       const id = String(nextId++)
@@ -147,6 +241,38 @@ export function createClient(origin: string, transport: Transport): Client {
         sent.send(JSON.stringify({ type: "call", id, method, params }))
       })
     },
+    subscribe(method, params) {
+      const id = String(nextId++)
+      const stop = () => {
+        if (subscriptions.delete(id) && connection.state === "connected") {
+          socket?.send(JSON.stringify({ type: "cancel", id }))
+        }
+      }
+      const items = itemQueue<Item<typeof method>>(stop)
+      const subscription: OpenSubscription = {
+        method,
+        params,
+        lastSequence: undefined,
+        deliver(sequence, item) {
+          // A resubscribe can replay what was already delivered.
+          if (subscription.lastSequence !== undefined && sequence <= subscription.lastSequence) {
+            return
+          }
+          subscription.lastSequence = sequence
+          // The generated contract types come from the hub's models, and a test keeps them in step.
+          items.push(item as Item<typeof method>)
+        },
+        end: items.end,
+      }
+      subscriptions.set(id, subscription)
+      if (connection.state === "connected") sendSubscribe(id, subscription)
+      return Object.assign(items.read, {
+        cancel: () => {
+          stop()
+          items.drop()
+        },
+      })
+    },
     async signIn(token) {
       const login = await transport
         .fetch(route("/auth/login"), {
@@ -156,7 +282,10 @@ export function createClient(origin: string, transport: Transport): Client {
         })
         .catch(() => undefined)
       if (!login?.ok) return false
-      if (socket === undefined) connect()
+      if (socket === undefined) {
+        dispatch("signed-in")
+        connect()
+      }
       return true
     },
     async signOut() {
@@ -165,7 +294,7 @@ export function createClient(origin: string, transport: Transport): Client {
       if (socket === undefined) await settle()
       else socket.close()
     },
-    state: () => state,
+    state: () => connection.state,
     onStateChange: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -179,8 +308,53 @@ function socketUrl(origin: string): string {
   return url.href
 }
 
+/** Items handed from the socket to one reader, in order, until they end or the reader stops. */
+function itemQueue<T>(onStop: () => void) {
+  const queued: T[] = []
+  let ended = false
+  let failure: CallError | undefined
+  let wake = () => {}
+
+  async function* read(): AsyncGenerator<T, void> {
+    try {
+      for (;;) {
+        const next = queued.shift()
+        if (next !== undefined) yield next
+        else if (failure !== undefined) throw failure
+        else if (ended) return
+        else await new Promise<void>((resolve) => (wake = resolve))
+      }
+    } finally {
+      onStop()
+    }
+  }
+
+  const end = (error?: CallError) => {
+    ended = true
+    failure = error
+    wake()
+  }
+  return {
+    read: read(),
+    push: (item: T) => {
+      queued.push(item)
+      wake()
+    },
+    end,
+    /** End now, dropping what the reader has not read yet. */
+    drop: () => {
+      queued.length = 0
+      end()
+    },
+  }
+}
+
+type Reply =
+  | ((ResultFrame | ErrorFrame | EndFrame) & { id: string })
+  | { type: "item"; id: string; sequence: number; item: Record<string, unknown> }
+
 /** Read a frame off the socket. Anything that is not a reply the client can route is dropped. */
-function parseReply(data: unknown): ((ResultFrame | ErrorFrame) & { id: string }) | undefined {
+function parseReply(data: unknown): Reply | undefined {
   if (typeof data !== "string") return undefined
   const frame = parseJson(data)
   if (!isRecord(frame) || typeof frame.id !== "string") return undefined
@@ -190,6 +364,11 @@ function parseReply(data: unknown): ((ResultFrame | ErrorFrame) & { id: string }
   if (frame.type === "error" && isErrorEnvelope(frame.error)) {
     return { type: "error", id: frame.id, error: frame.error }
   }
+  // Every subscription's items are events, and the sequence is how a resubscribe resumes.
+  if (frame.type === "item" && isRecord(frame.item) && typeof frame.item.sequence === "number") {
+    return { type: "item", id: frame.id, sequence: frame.item.sequence, item: frame.item }
+  }
+  if (frame.type === "end") return { type: "end", id: frame.id }
   return undefined
 }
 
