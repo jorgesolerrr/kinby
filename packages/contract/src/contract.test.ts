@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url"
 import { compileFromFile } from "json-schema-to-typescript"
 import { expect, expectTypeOf, test } from "vitest"
 import type {
+  ApiUse,
   Contract,
   EndFrame,
   ErrorFrame,
@@ -14,6 +15,8 @@ import type {
   ResultFrame,
   RunDelegated,
   ServerFrame,
+  StatsBucket,
+  StatsGetCommand,
   SubscribedFrame,
   SubscriptionUse,
 } from "./index"
@@ -82,4 +85,16 @@ test("stats.get names each subscription source's plan windows and active limits"
 
   expectTypeOf<Stats["plan_windows"]>().toEqualTypeOf<PlanWindow[]>()
   expectTypeOf<Stats["limits"]>().toEqualTypeOf<PlanLimit[]>()
+})
+
+test("stats.summary takes stats.get's range and names each instance it counted or left out", () => {
+  type Summary = Contract["methods"]["stats.summary"]
+
+  expectTypeOf<Summary["command"]>().toEqualTypeOf<StatsGetCommand>()
+  expectTypeOf<Summary["result"]["buckets"]>().toEqualTypeOf<Record<string, StatsBucket[]>>()
+  expectTypeOf<Summary["result"]["api"]>().toEqualTypeOf<ApiUse>()
+  expectTypeOf<Summary["result"]["subscriptions"]>().toEqualTypeOf<SubscriptionUse[]>()
+  expectTypeOf<Summary["result"]["limits"]>().toEqualTypeOf<PlanLimit[]>()
+  expectTypeOf<Summary["result"]["skipped"]>().toEqualTypeOf<string[]>()
+  expectTypeOf<Summary["result"]["unreachable"]>().toEqualTypeOf<string[]>()
 })

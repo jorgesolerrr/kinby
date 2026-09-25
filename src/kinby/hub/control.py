@@ -10,17 +10,21 @@ from pydantic import ValidationError
 
 from kinby.contracts import (
     INSTANCE_DRAIN,
+    STATS_GET,
     CallFrame,
     Capability,
+    ContractModel,
     ControlToken,
     DrainState,
     ErrorEnvelope,
     ErrorFrame,
     FrameId,
     InstanceDrainCommand,
-    InstanceDrainResult,
     InstanceProbeResult,
+    Method,
     ResultFrame,
+    StatsGetCommand,
+    StatsGetResult,
     parse_server_frame,
 )
 
@@ -60,6 +64,10 @@ class InstanceControl(Protocol):
 
     async def drain(self, endpoint: ControlEndpoint, *, force: bool) -> DrainState: ...
 
+    async def stats(
+        self, endpoint: ControlEndpoint, command: StatsGetCommand
+    ) -> StatsGetResult: ...
+
 
 class HttpInstanceControl:
     """Speak the contract to an instance over its own HTTP server, one connection per call."""
@@ -81,35 +89,50 @@ class HttpInstanceControl:
 
     async def drain(self, endpoint: ControlEndpoint, *, force: bool) -> DrainState:
         """Wait for the instance to finish draining. A drain has no deadline of its own."""
-        call = CallFrame(
-            id=_FRAME_ID,
-            method=INSTANCE_DRAIN.name,
-            params=InstanceDrainCommand(force=force).model_dump(mode="json"),
+        drained = await _call(
+            endpoint, INSTANCE_DRAIN, InstanceDrainCommand(force=force), "the drain"
         )
-        try:
-            async with (
-                aiohttp.ClientSession(
-                    headers={"Authorization": f"Bearer {endpoint.token}"},
-                    timeout=aiohttp.ClientTimeout(total=None, sock_connect=PROBE_SECONDS),
-                ) as session,
-                session.ws_connect(
-                    f"{endpoint.address}/control",
-                    heartbeat=_HEARTBEAT_SECONDS,
-                ) as socket,
-            ):
-                await socket.send_str(call.model_dump_json())
-                return await _finished(socket)
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            raise ControlUnreachable(str(exc) or type(exc).__name__) from exc
+        return drained.state
+
+    async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
+        """Read the instance's stats. The caller decides how long to wait."""
+        return await _call(endpoint, STATS_GET, command, "the stats call")
 
 
-async def _finished(socket: aiohttp.ClientWebSocketResponse) -> DrainState:
-    """Read the drain answer. A socket that dies after the call was sent is a lost connection."""
+async def _call[Command: ContractModel, Result: ContractModel](
+    endpoint: ControlEndpoint,
+    method: Method[Command, Result],
+    command: Command,
+    named: str,
+) -> Result:
+    """Send one call on the control socket and wait for its answer, however long it takes.
+
+    *named* is how an error names the call to the operator, like "the drain".
+    """
+    call = CallFrame(id=_FRAME_ID, method=method.name, params=command.model_dump(mode="json"))
     try:
-        message = await _answer(socket)
+        async with (
+            aiohttp.ClientSession(
+                headers={"Authorization": f"Bearer {endpoint.token}"},
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=PROBE_SECONDS),
+            ) as session,
+            session.ws_connect(
+                f"{endpoint.address}/control",
+                heartbeat=_HEARTBEAT_SECONDS,
+            ) as socket,
+        ):
+            await socket.send_str(call.model_dump_json())
+            return _result(await _finished(socket), method.result, named)
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        raise ControlUnreachable(str(exc) or type(exc).__name__) from exc
+
+
+async def _finished(socket: aiohttp.ClientWebSocketResponse) -> str:
+    """Read the answer. A socket that dies after the call was sent is a lost connection."""
+    try:
+        return await _answer(socket)
     except (aiohttp.ClientError, TimeoutError) as exc:
         raise ControlConnectionLost(str(exc) or type(exc).__name__) from exc
-    return _drained(message)
 
 
 async def _answer(socket: aiohttp.ClientWebSocketResponse) -> str:
@@ -135,16 +158,18 @@ def _probed(body: object) -> InstanceProbeResult:
     )
 
 
-def _drained(message: str) -> DrainState:
+def _result[Result: ContractModel](message: str, result: type[Result], named: str) -> Result:
     match parse_server_frame(message):
-        case ResultFrame() as result:
+        case ResultFrame() as answered:
             try:
-                return InstanceDrainResult.model_validate(result.result).state
+                return result.model_validate(answered.result)
             except ValidationError as exc:
-                raise ControlUnreachable(f"The drain answer could not be read: {exc}") from exc
+                raise ControlUnreachable(f"The answer to {named} could not be read: {exc}") from exc
         case ErrorFrame() as error:
-            raise ControlUnreachable(f"The instance refused to drain: {error.error.message}")
+            raise ControlUnreachable(f"The instance refused {named}: {error.error.message}")
         case ErrorEnvelope() as unreadable:
-            raise ControlUnreachable(f"The drain answer could not be read: {unreadable.message}")
+            raise ControlUnreachable(
+                f"The answer to {named} could not be read: {unreadable.message}"
+            )
         case other:
-            raise ControlUnreachable(f'The instance answered the drain with "{other.type.value}".')
+            raise ControlUnreachable(f'The instance answered {named} with "{other.type.value}".')

@@ -28,7 +28,8 @@ from kinby.contracts import (
     UsageSource,
 )
 
-_SUBSCRIPTION_SOURCES = tuple(source for source in UsageSource if source is not UsageSource.API)
+#: Every usage source that is counted, never priced, in the order results list them.
+SUBSCRIPTION_SOURCES = tuple(source for source in UsageSource if source is not UsageSource.API)
 _PLAN_WINDOW_LENGTHS = {
     UsageSource.CLAUDE_SUBSCRIPTION: (timedelta(hours=5), timedelta(days=7)),
     UsageSource.CHATGPT_SUBSCRIPTION: (timedelta(hours=5), timedelta(days=7)),
@@ -144,18 +145,18 @@ def active_limits(events: Iterable[Event], now: datetime) -> list[PlanLimit]:
             continue
         run = event.payload.run
         if (
-            run.usage_source in _SUBSCRIPTION_SOURCES
+            run.usage_source in SUBSCRIPTION_SOURCES
             and run.resets_at is not None
             and run.resets_at > now
         ):
             latest[run.usage_source] = PlanLimit(
                 usage_source=run.usage_source, resets_at=run.resets_at
             )
-    return [latest[source] for source in _SUBSCRIPTION_SOURCES if source in latest]
+    return [latest[source] for source in SUBSCRIPTION_SOURCES if source in latest]
 
 
 def _subscription_runs(runs: Iterable[ReportedRun]) -> Iterable[ReportedRun]:
-    return (reported for reported in runs if reported.run.usage_source in _SUBSCRIPTION_SOURCES)
+    return (reported for reported in runs if reported.run.usage_source in SUBSCRIPTION_SOURCES)
 
 
 def _bucket_start(timestamp: datetime, by: StatsBucketSize) -> date:
@@ -221,6 +222,6 @@ def _stats_summary(totals: _BucketTotals) -> StatsSummary:
         bad_ratings=totals.bad_ratings,
         navigation=_navigation_means(totals),
         subscriptions=[
-            _subscription_use(source, totals.delegated_runs) for source in _SUBSCRIPTION_SOURCES
+            _subscription_use(source, totals.delegated_runs) for source in SUBSCRIPTION_SOURCES
         ],
     )

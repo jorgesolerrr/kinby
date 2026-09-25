@@ -160,6 +160,10 @@ export interface Contract {
       command: StatsGetCommand;
       result: StatsGetResult;
     };
+    "stats.summary": {
+      command: StatsGetCommand;
+      result: StatsSummaryResult;
+    };
     "thread.approval.respond": {
       command: ThreadApprovalRespondCommand;
       result: AcceptedResult;
@@ -709,6 +713,31 @@ export interface StatsSummary {
 export interface ModelCallMismatch {
   thread_id: string;
   turn_id: string;
+}
+/**
+ * Usage across the hub's running instances, read live from each one and stored nowhere.
+ *
+ * A total leaves out every instance in ``skipped`` or ``unreachable``.
+ */
+export interface StatsSummaryResult {
+  api: ApiUse;
+  buckets: {
+    [k: string]: StatsBucket[];
+  };
+  limits: PlanLimit[];
+  skipped: string[];
+  subscriptions: SubscriptionUse[];
+  unreachable: string[];
+}
+/**
+ * The model calls the API usage source paid for, priced where the model is known.
+ */
+export interface ApiUse {
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  cost?: number | null;
+  input_tokens: number;
+  output_tokens: number;
 }
 export interface ThreadApprovalRespondCommand {
   answer: string;

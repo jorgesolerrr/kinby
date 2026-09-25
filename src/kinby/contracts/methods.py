@@ -42,6 +42,7 @@ from kinby.contracts.models import (
     Scope,
     StatsGetCommand,
     StatsGetResult,
+    StatsSummaryResult,
     ThreadApprovalRespondCommand,
     ThreadCreateCommand,
     ThreadCreateResult,
@@ -196,6 +197,8 @@ INSTANCE_STATUS = Method(
 )
 INSTANCE_LOGS = Method("instance.logs", Scope.HUB_READ, InstanceLogsCommand, InstanceLogsResult)
 OPERATION_GET = Method("operation.get", Scope.HUB_UPDATE, OperationGetCommand, OperationGetResult)
+#: The same time range and bucket size as stats.get, asked of every running instance.
+STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
 
 METHODS = (
     THREAD_CREATE,
@@ -232,6 +235,7 @@ METHODS = (
     INSTANCE_STATUS,
     INSTANCE_LOGS,
     OPERATION_GET,
+    STATS_SUMMARY,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE,)
 
