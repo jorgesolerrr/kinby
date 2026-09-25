@@ -1,4 +1,5 @@
 import type { Socket, SocketEvents, Transport } from "./client"
+import type { InstanceSummary } from "./contract"
 
 /** The one token the fake hub accepts at its login route. */
 export const ACCESS_TOKEN = "the-access-token"
@@ -21,17 +22,25 @@ export interface FakeHub {
   signedIn: boolean
   /** False while the hub is down, as during a restart: no upgrade and no route answers. */
   reachable: boolean
+  /** What `instance.list` answers with. */
+  instances: InstanceSummary[]
 }
 
 /** A hub that answers like the real one: the socket upgrades only while the browser session is open. */
-export function fakeHub({ signedIn = true } = {}): FakeHub {
+export function fakeHub({
+  signedIn = true,
+  instances = [],
+}: { signedIn?: boolean; instances?: InstanceSummary[] } = {}): FakeHub {
   const hub: FakeHub = {
     signedIn,
     reachable: true,
+    instances,
     sockets: [],
     transport: {
       openSocket(url, events) {
-        const socket = fakeSocket(url, events)
+        const socket = fakeSocket(url, events, (method) =>
+          method === "instance.list" ? { instances: hub.instances } : undefined,
+        )
         hub.sockets.push(socket)
         queueMicrotask(() => (hub.reachable && hub.signedIn ? socket.accept() : socket.drop()))
         return socket
@@ -57,21 +66,51 @@ export function fakeHub({ signedIn = true } = {}): FakeHub {
   return hub
 }
 
-function fakeSocket(url: string, events: SocketEvents): FakeSocket & { accept(): void } {
+/** Build an instance as `instance.list` reports it, filling in what a test does not care about. */
+export function instanceSummary(
+  fields: Pick<InstanceSummary, "instance_id"> & Partial<InstanceSummary>,
+): InstanceSummary {
+  return {
+    image_id: "sha256:image",
+    intended_state: "running",
+    manifest_id: fields.instance_id,
+    persona_name: null,
+    runtime_id: "runtime",
+    source_revision: "revision",
+    storage: [],
+    ...fields,
+  }
+}
+
+function fakeSocket(
+  url: string,
+  events: SocketEvents,
+  answer: (method: unknown) => object | undefined,
+): FakeSocket & { accept(): void } {
   let closed = false
   const close = () => {
     if (closed) return
     closed = true
     events.close()
   }
+  const receive = (frame: unknown) =>
+    events.message(typeof frame === "string" ? frame : JSON.stringify(frame))
   return {
     url,
     sent: [],
+    // A call the hub knows is answered on the next tick, unless the socket drops first.
     send(data) {
-      this.sent.push(JSON.parse(data))
+      const frame: unknown = JSON.parse(data)
+      this.sent.push(frame)
+      if (!isRecord(frame) || frame.type !== "call") return
+      const result = answer(frame.method)
+      if (result === undefined) return
+      queueMicrotask(() => {
+        if (!closed) receive({ type: "result", id: frame.id, result })
+      })
     },
     close,
-    receive: (frame) => events.message(typeof frame === "string" ? frame : JSON.stringify(frame)),
+    receive,
     drop: close,
     accept: () => {
       if (!closed) events.open()
@@ -85,4 +124,8 @@ function carriesAccessToken(body: unknown): boolean {
   return (
     typeof login === "object" && login !== null && "token" in login && login.token === ACCESS_TOKEN
   )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
 }

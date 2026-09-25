@@ -1,13 +1,20 @@
 import { createClient } from "@kinby/contract"
-import { ACCESS_TOKEN, fakeHub } from "@kinby/contract/testing"
-import { act, render, screen } from "@testing-library/react"
+import type { InstanceSummary } from "@kinby/contract"
+import { ACCESS_TOKEN, fakeHub, instanceSummary } from "@kinby/contract/testing"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 
 import App from "@/App"
 
-function openApp({ signedIn }: { signedIn: boolean }) {
-  const hub = fakeHub({ signedIn })
+function openApp({
+  signedIn,
+  instances = [],
+}: {
+  signedIn: boolean
+  instances?: InstanceSummary[]
+}) {
+  const hub = fakeHub({ signedIn, instances })
   render(<App client={createClient("http://hub.test", hub.transport)} />)
   return hub
 }
@@ -66,5 +73,75 @@ describe("the app", () => {
 
     expect(await screen.findByText("Disconnected")).toBeDefined()
     expect(await userMenu()).toBeDefined()
+  })
+})
+
+const ada = instanceSummary({
+  instance_id: "hub-ada",
+  persona_name: "Ada",
+  intended_state: "running",
+})
+const unnamed = instanceSummary({
+  instance_id: "hub-unnamed",
+  manifest_id: "research",
+  intended_state: "stopped",
+})
+
+const instanceLink = (name: string) => screen.findByRole("link", { name })
+
+async function instanceState(name: string) {
+  const row = (await instanceLink(name)).closest("li")
+  if (row === null) throw new Error(`${name} is not in a sidebar list`)
+  return within(row)
+}
+
+describe("the instances", () => {
+  beforeEach(() => window.history.replaceState(null, "", "/"))
+
+  it("lists every instance in the sidebar with its name and state", async () => {
+    openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    expect((await instanceState("Ada")).getByText("running")).toBeDefined()
+    expect((await instanceState("research")).getByText("stopped")).toBeDefined()
+  })
+
+  it("marks the instance the user selects and puts it in the URL", async () => {
+    openApp({ signedIn: true, instances: [ada, unnamed] })
+    const user = userEvent.setup()
+
+    await user.click(await instanceLink("Ada"))
+
+    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBe("page")
+    expect((await instanceLink("research")).getAttribute("aria-current")).toBeNull()
+    expect(window.location.pathname).toBe("/instances/hub-ada")
+    expect(await screen.findByText("Nothing here yet")).toBeDefined()
+  })
+
+  it("restores the selection from the URL on a reload or an opened link", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+
+    openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBe("page")
+    expect(await screen.findByText("Nothing here yet")).toBeDefined()
+  })
+
+  it("selects nothing when the URL names an instance the hub does not have", async () => {
+    window.history.replaceState(null, "", "/instances/hub-gone")
+
+    openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    expect(await screen.findByText("No instance selected")).toBeDefined()
+    expect(screen.queryByText("Nothing here yet")).toBeNull()
+    for (const link of screen.getAllByRole("link")) {
+      expect(link.getAttribute("aria-current")).toBeNull()
+    }
+  })
+
+  it("says the hub has no instances yet", async () => {
+    openApp({ signedIn: true })
+
+    expect(await screen.findByText("No instances yet")).toBeDefined()
+    expect(screen.queryByRole("link")).toBeNull()
   })
 })
