@@ -8,3 +8,7 @@ __pycache__/
 dist/
 /logs/
 .scratch/
+node_modules/
+apps/web/dist/
+*.tsbuildinfo
+.claude/worktrees/

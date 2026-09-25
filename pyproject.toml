@@ -60,6 +60,10 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "RUF", "ANN", "FBT", "TID"
 "src/kinby/instance/manifest.py" = ["TID251"] # declares the manifest schema
 "tests/**" = ["ANN", "FBT", "TID251"]
 
+[tool.ty.environment]
+# kinby runs on Linux (AGENTS.md), so ty checks for it on any host.
+python-platform = "linux"
+
 [tool.ty.rules]
 blanket-ignore-comment = "error"
 possibly-unresolved-reference = "error"

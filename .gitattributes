@@ -2,3 +2,6 @@
 docker/entrypoint.sh text eol=lf
 # Preserve the vendored skill sources byte for byte on every checkout.
 .claude/skills/** -text
+# oxfmt checks for LF, so the TypeScript workspaces keep it on Windows checkouts too.
+/apps/** text eol=lf
+/packages/** text eol=lf
