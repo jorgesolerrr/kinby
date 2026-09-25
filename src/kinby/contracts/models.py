@@ -566,6 +566,8 @@ class PackagePin(ContractModel):
 
     id: Annotated[str, Field(min_length=1)]
     sha: CommitSha
+    #: The image recipe of that commit. None keeps the recipe the instance records (ADR 0061).
+    image_recipe: str | None = None
 
 
 class PackageSelection(ContractModel):

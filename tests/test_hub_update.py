@@ -774,6 +774,38 @@ def test_an_update_without_a_pin_carries_the_package_commit_along(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_pin_with_an_image_recipe_builds_with_that_recipe_from_then_on(tmp_path):
+    async def scenario() -> None:
+        images = CandidateImages(package=writer_package())
+        hub = hub_at(tmp_path / "hub", images=images, control=FakeControl())
+        client = hub_client(hub)
+        created = await started_writer(client, hub)
+        recipe = "RUN install-writing-client\nRUN install-bun\n"
+
+        pinned = await client.call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(
+                instance_id=created.instance_id,
+                revision="v0.2.0",
+                package=PackagePin(id="writer", sha=NEXT_COMMIT, image_recipe=recipe),
+            ),
+        )
+        assert isinstance(pinned, LifecycleOperationResult)
+        assert (await finished_operation(client, pinned)).state is OperationState.SUCCEEDED
+        unpinned = await client.call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(instance_id=created.instance_id, revision="v0.3.0"),
+        )
+        assert isinstance(unpinned, LifecycleOperationResult)
+        assert (await finished_operation(client, unpinned)).state is OperationState.SUCCEEDED
+
+        with_recipe = writer_at(NEXT_COMMIT).model_copy(update={"image_recipe": recipe})
+        assert images.selections[-2] == ImageSelection("v0.2.0", with_recipe)
+        assert images.selections[-1] == ImageSelection("v0.3.0", with_recipe)
+
+    asyncio.run(scenario())
+
+
 def test_a_failed_update_keeps_the_previous_pin(tmp_path):
     async def scenario() -> None:
         runtime = FailingBoot()

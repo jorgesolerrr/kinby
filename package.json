@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "dev": "bun run --filter @kinby/web dev",
-    "check": "uv run ruff check . && uv run ruff format . && uv run ty check && uv run pytest && bun run check:web",
+    "check": "uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest && bun run check:web",
     "check:web": "bun run --workspaces --sequential check && knip"
   },
   "devDependencies": {

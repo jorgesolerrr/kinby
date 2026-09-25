@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import os
 import sys
+from pathlib import Path
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -50,15 +51,27 @@ def update_on_hub(argv: list[str]) -> int:
     parser.add_argument(
         "--package-commit", metavar="SHA", help="git commit to move the instance's package to"
     )
+    parser.add_argument(
+        "--image-recipe",
+        type=Path,
+        metavar="FILE",
+        help="the pinned commit's image recipe, replacing the one the instance records",
+    )
     args = parser.parse_args(argv)
     if (args.package is None) != (args.package_commit is None):
         parser.error("--package and --package-commit go together")
+    if args.image_recipe is not None and args.package is None:
+        parser.error("--image-recipe goes with --package and --package-commit")
+    try:
+        recipe = None if args.image_recipe is None else args.image_recipe.read_text("utf-8")
+    except OSError as exc:
+        parser.error(f"--image-recipe: {exc}")
     try:
         command = InstanceUpdateCommand(
             instance_id=args.instance_id,
             revision=args.revision,
             package=(
-                PackagePin(id=args.package, sha=args.package_commit)
+                PackagePin(id=args.package, sha=args.package_commit, image_recipe=recipe)
                 if args.package is not None
                 else None
             ),
