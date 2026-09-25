@@ -65,7 +65,7 @@ from kinby.core.events import EventLog
 from kinby.core.pricing import price_map
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
-from kinby.core.stats import stats_buckets
+from kinby.core.stats import stats_buckets, stats_summary
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
@@ -301,10 +301,17 @@ def build_dispatcher(
         metrics = turn_metrics(event_log.all_events(), prices)
         time_range = TimeRange(command.since, command.until)
         records = [record for record in metrics.records if time_range.includes(record.closed_at)]
+        runs = [
+            reported
+            for record in metrics.records
+            for reported in record.delegated_runs
+            if time_range.includes(reported.timestamp)
+        ]
         selected_turns = {TurnKey(record.thread_id, record.turn_id) for record in records}
         return StatsGetResult(
             records=records,
-            buckets=stats_buckets(records, command.by),
+            buckets=stats_buckets(records, runs, command.by),
+            total=stats_summary(records, runs),
             unpriced_models=sorted(
                 {
                     model

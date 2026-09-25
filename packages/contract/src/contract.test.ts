@@ -13,6 +13,7 @@ import type {
   RunDelegated,
   ServerFrame,
   SubscribedFrame,
+  SubscriptionUse,
 } from "./index"
 
 test("the committed types are a fresh generation of the contract schema", async () => {
@@ -65,4 +66,11 @@ test("an event payload narrows to a delegated run on its type", () => {
   }
 
   narrow({ type: "message.delta", text: "" })
+})
+
+test("stats.get splits every bucket and its total by subscription source", () => {
+  type Stats = Contract["methods"]["stats.get"]["result"]
+
+  expectTypeOf<Stats["buckets"][number]["subscriptions"]>().toEqualTypeOf<SubscriptionUse[]>()
+  expectTypeOf<Stats["total"]["subscriptions"]>().toEqualTypeOf<SubscriptionUse[]>()
 })

@@ -61,7 +61,6 @@ from kinby.core.clock import utc_today
 from kinby.core.contract_server import ContractServer
 from kinby.core.receiver import Receiver
 from kinby.core.runtime_lock import InstanceBusyError, runtime_lock
-from kinby.core.stats import stats_summary
 from kinby.instance import (
     PLACEHOLDER_MODEL,
     FeedbackPolicy,
@@ -293,6 +292,18 @@ def _stats_row(label: str, summary: StatsSummary) -> str:
             _optional_mean(summary.navigation.duration_ms),
             _optional_mean(summary.navigation.tokens_before_first_write),
             _optional_mean(summary.navigation.repeat_opens),
+            *(
+                str(value)
+                for use in summary.subscriptions
+                for value in (
+                    use.runs,
+                    use.input_tokens,
+                    use.output_tokens,
+                    use.cache_read_tokens,
+                    use.cache_creation_tokens,
+                    use.duration_ms,
+                )
+            ),
         )
     )
 
@@ -350,6 +361,18 @@ async def _show_stats(
                 "nav ms",
                 "nav tokens",
                 "nav repeats",
+                *(
+                    f"{use.usage_source} {column}"
+                    for use in result.total.subscriptions
+                    for column in (
+                        "runs",
+                        "input",
+                        "output",
+                        "cache read",
+                        "cache creation",
+                        "ms",
+                    )
+                ),
             )
         )
     )
@@ -362,7 +385,7 @@ async def _show_stats(
         print(_model_call_mismatch(mismatch), file=sys.stderr)
     for bucket in result.buckets:
         print(_stats_row(bucket.start.isoformat(), bucket))
-    print(_stats_row("total", stats_summary(result.records)))
+    print(_stats_row("total", result.total))
     state_dir.mkdir(parents=True, exist_ok=True)
     (state_dir / "stats.json").write_text(
         f"{result.model_dump_json(indent=2)}\n",

@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,8 +18,11 @@ from kinby.contracts import (
     RunDelegated,
     Scope,
     StatsGetResult,
+    SubscriptionUse,
     ThreadCreateResult,
     TurnCompleted,
+    TurnFailed,
+    TurnInterrupted,
     UsageGetResult,
     UsageSource,
     is_turn_closing,
@@ -189,8 +192,8 @@ def test_completed_failed_and_limited_runs_are_events_in_the_turn_and_listed_in_
 class TickingClock:
     """Stamp each event one minute after the last."""
 
-    def __init__(self) -> None:
-        self.now = datetime(2026, 9, 25, 9, tzinfo=UTC)
+    def __init__(self, start: datetime = datetime(2026, 9, 25, 9, tzinfo=UTC)) -> None:
+        self.now = start
 
     def __call__(self) -> datetime:
         self.now += timedelta(minutes=1)
@@ -407,6 +410,165 @@ def test_turn_tokens_the_mismatch_check_and_budgets_ignore_delegated_runs(
     asyncio.run(scenario())
 
 
+def test_stats_get_splits_each_bucket_and_the_total_by_usage_source(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        code_step(instance, COMPLETED_RUN, FAILED_RUN, LIMITED_RUN, result='"Headlines"')
+        dispatcher = runtime(instance)
+
+        await fire_routine(dispatcher)
+        stats = await call(dispatcher, "stats.get")
+
+        assert isinstance(stats, StatsGetResult)
+        subscriptions = [
+            SubscriptionUse(
+                usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+                runs=2,
+                input_tokens=1290,
+                output_tokens=300,
+                cache_read_tokens=800,
+                cache_creation_tokens=100,
+                duration_ms=42_800,
+            ),
+            SubscriptionUse(
+                usage_source=UsageSource.CHATGPT_SUBSCRIPTION,
+                runs=1,
+                input_tokens=500,
+                output_tokens=20,
+                duration_ms=3_000,
+            ),
+        ]
+        [bucket] = stats.buckets
+        assert bucket.subscriptions == subscriptions
+        assert stats.total.subscriptions == subscriptions
+        for summary in (bucket, stats.total):
+            assert (summary.input_tokens, summary.output_tokens) == (4, 2)
+            assert summary.cost is not None
+            assert summary.cost > 0
+
+    asyncio.run(scenario())
+
+
+CLAUDE_RUN_USE = SubscriptionUse(
+    usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+    runs=1,
+    input_tokens=1200,
+    output_tokens=300,
+    cache_read_tokens=800,
+    cache_creation_tokens=100,
+    duration_ms=42_000,
+)
+CHATGPT_RUN_USE = SubscriptionUse(
+    usage_source=UsageSource.CHATGPT_SUBSCRIPTION,
+    runs=1,
+    input_tokens=500,
+    output_tokens=20,
+    duration_ms=3_000,
+)
+NO_CLAUDE_USE = SubscriptionUse(usage_source=UsageSource.CLAUDE_SUBSCRIPTION)
+NO_CHATGPT_USE = SubscriptionUse(usage_source=UsageSource.CHATGPT_SUBSCRIPTION)
+
+
+def test_stats_get_buckets_a_run_by_its_own_timestamp_not_its_turns_close(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        code_step(instance, COMPLETED_RUN, FAILED_RUN)
+        clock = TickingClock(datetime(2026, 9, 24, 23, 55, tzinfo=UTC))
+        dispatcher = runtime(instance, clock=clock)
+
+        events = await fire_routine(dispatcher)
+        first, second = (event for event in events if isinstance(event.payload, RunDelegated))
+        stats = await call(dispatcher, "stats.get")
+        before_the_edge = await call(
+            dispatcher, "stats.get", until=datetime(2026, 9, 24, 23, 59, 59, tzinfo=UTC)
+        )
+
+        assert first.timestamp.date() == date(2026, 9, 24)
+        assert second.timestamp.date() == events[-1].timestamp.date() == date(2026, 9, 25)
+        assert isinstance(stats, StatsGetResult)
+        assert [
+            (bucket.start, bucket.completed, bucket.subscriptions) for bucket in stats.buckets
+        ] == [
+            (date(2026, 9, 24), 0, [CLAUDE_RUN_USE, NO_CHATGPT_USE]),
+            (date(2026, 9, 25), 1, [NO_CLAUDE_USE, CHATGPT_RUN_USE]),
+        ]
+        assert stats.total.subscriptions == [CLAUDE_RUN_USE, CHATGPT_RUN_USE]
+        assert isinstance(before_the_edge, StatsGetResult)
+        assert before_the_edge.records == []
+        assert [
+            (bucket.start, bucket.completed, bucket.subscriptions)
+            for bucket in before_the_edge.buckets
+        ] == [(date(2026, 9, 24), 0, [CLAUDE_RUN_USE, NO_CHATGPT_USE])]
+        assert before_the_edge.total.subscriptions == [CLAUDE_RUN_USE, NO_CHATGPT_USE]
+
+    asyncio.run(scenario())
+
+
+def reporting_code_step(instance: Instance, ending: str) -> None:
+    """Write routine ``news`` whose code step reports the completed run, then runs *ending*."""
+    path = routine_file(instance, "description: News")
+    (path.parent / "run.py").write_text(
+        "import asyncio\n"
+        "from kinby.contracts import DelegatedRun\n"
+        "from kinby.plugins import ToolContext, tool\n"
+        "@tool(write=False)\n"
+        "async def code(context: ToolContext) -> None:\n"
+        '    """Delegate the news, then stop."""\n'
+        "    await context.report_run(\n"
+        f"        DelegatedRun.model_validate_json({COMPLETED_RUN.model_dump_json()!r})\n"
+        "    )\n"
+        f"    {ending}\n"
+    )
+
+
+def test_stats_get_counts_a_run_from_a_failed_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        reporting_code_step(instance, 'raise RuntimeError("The feed is down")')
+        dispatcher = runtime(instance)
+
+        events = await fire_routine(dispatcher)
+        stats = await call(dispatcher, "stats.get")
+
+        assert isinstance(events[-1].payload, TurnFailed)
+        assert isinstance(stats, StatsGetResult)
+        assert stats.total.failed == 1
+        assert stats.total.subscriptions == [CLAUDE_RUN_USE, NO_CHATGPT_USE]
+
+    asyncio.run(scenario())
+
+
+def test_stats_get_counts_a_run_from_an_interrupted_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        reporting_code_step(instance, "await asyncio.Event().wait()")
+        dispatcher = runtime(instance)
+        accepted = await call(dispatcher, "routine.run", name="news")
+        assert isinstance(accepted, AcceptedResult)
+        stream = await thread_events(dispatcher, {"thread_id": accepted.thread_id}, set(Scope))
+        async with asyncio.timeout(5):
+            async for event in stream:
+                assert isinstance(event, Event)
+                if isinstance(event.payload, RunDelegated):
+                    interrupted = await call(
+                        dispatcher, "thread.turn.interrupt", thread_id=accepted.thread_id
+                    )
+                    assert isinstance(interrupted, AcceptedResult)
+                if is_turn_closing(event.payload):
+                    assert isinstance(event.payload, TurnInterrupted)
+                    break
+        await stream.aclose()
+        stats = await call(dispatcher, "stats.get")
+
+        assert isinstance(stats, StatsGetResult)
+        assert stats.total.interrupted == 1
+        assert stats.total.subscriptions == [CLAUDE_RUN_USE, NO_CHATGPT_USE]
+
+    asyncio.run(scenario())
+
+
 def test_cli_usage_shows_delegated_runs_under_their_turn(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -442,3 +604,56 @@ def test_cli_usage_shows_delegated_runs_under_their_turn(
             "duration_ms=800 client_turns=0 resets_at=2026-09-25T18:40:00+00:00"
         ),
     ]
+
+
+SUBSCRIPTION_COLUMNS = [
+    "claude-subscription runs",
+    "claude-subscription input",
+    "claude-subscription output",
+    "claude-subscription cache read",
+    "claude-subscription cache creation",
+    "claude-subscription ms",
+    "chatgpt-subscription runs",
+    "chatgpt-subscription input",
+    "chatgpt-subscription output",
+    "chatgpt-subscription cache read",
+    "chatgpt-subscription cache creation",
+    "chatgpt-subscription ms",
+]
+
+
+def test_cli_stats_prints_per_source_columns_and_writes_the_full_result(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "alice"
+    init_instance(path)
+    instance = load_instance(path)
+    code_step(instance, COMPLETED_RUN, FAILED_RUN)
+    clock = TickingClock(datetime(2026, 9, 24, 23, 55, tzinfo=UTC))
+    asyncio.run(fire_routine(runtime(instance, clock=clock)))
+
+    exit_code = main(["stats", str(path)])
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    assert output.err == ""
+    header, *rows = (line.split("\t") for line in output.out.splitlines())
+    assert header[-12:] == SUBSCRIPTION_COLUMNS
+    assert [(row[0], row[1], row[-12:]) for row in rows] == [
+        ("2026-09-24", "0", ["1", "1200", "300", "800", "100", "42000", *["0"] * 6]),
+        ("2026-09-25", "1", [*["0"] * 6, "1", "500", "20", "0", "0", "3000"]),
+        (
+            "total",
+            "1",
+            ["1", "1200", "300", "800", "100", "42000", "1", "500", "20", "0", "0", "3000"],
+        ),
+    ]
+    report = StatsGetResult.model_validate_json(
+        (instance.manifest.state_dir / "stats.json").read_text()
+    )
+    assert [bucket.subscriptions for bucket in report.buckets] == [
+        [CLAUDE_RUN_USE, NO_CHATGPT_USE],
+        [NO_CLAUDE_USE, CHATGPT_RUN_USE],
+    ]
+    assert report.total.subscriptions == [CLAUDE_RUN_USE, CHATGPT_RUN_USE]

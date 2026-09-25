@@ -1017,6 +1017,16 @@ class TurnMetrics(TokenTotals):
     delegated_runs: list[ReportedRun] = Field(default_factory=list)
 
 
+class SubscriptionUse(TokenTotals):
+    """The delegated runs one subscription usage source paid for, counted and never priced."""
+
+    usage_source: UsageSource
+    runs: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    duration_ms: int = 0
+
+
 class StatsSummary(TokenTotals):
     completed: int
     failed: int
@@ -1034,6 +1044,7 @@ class StatsSummary(TokenTotals):
     good_ratings: int
     bad_ratings: int
     navigation: NavigationMeans = Field(default_factory=NavigationMeans)
+    subscriptions: list[SubscriptionUse]
 
 
 class StatsBucket(StatsSummary):
@@ -1054,6 +1065,7 @@ class StatsGetCommand(ContractModel):
 class StatsGetResult(ContractModel):
     records: list[TurnMetrics]
     buckets: list[StatsBucket]
+    total: StatsSummary
     unpriced_models: list[str]
     warnings: list[ModelCallMismatch] = Field(default_factory=list)
 
