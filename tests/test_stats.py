@@ -25,6 +25,8 @@ from kinby.contracts import (
     StatsBucket,
     StatsBucketSize,
     StatsGetResult,
+    StatsSummary,
+    SubscriptionUse,
     ThreadCreateResult,
     ToolCall,
     ToolGated,
@@ -36,6 +38,7 @@ from kinby.contracts import (
     TurnRated,
     TurnStarted,
     TurnVerdict,
+    UsageSource,
 )
 from kinby.core import turn_metrics
 from kinby.core.budgets import daily_cost
@@ -1081,6 +1084,12 @@ def _turn_events(
     ]
 
 
+NO_SUBSCRIPTION_USE = [
+    SubscriptionUse(usage_source=UsageSource.CLAUDE_SUBSCRIPTION),
+    SubscriptionUse(usage_source=UsageSource.CHATGPT_SUBSCRIPTION),
+]
+
+
 def test_stats_get_marks_missing_start_metadata_as_unknown(tmp_path: Path) -> None:
     thread_id = uuid4()
     turn_id = uuid4()
@@ -1170,6 +1179,7 @@ def test_stats_get_aggregates_closed_turns_by_utc_day(tmp_path: Path) -> None:
             mean_duration_seconds=20,
             good_ratings=0,
             bad_ratings=0,
+            subscriptions=NO_SUBSCRIPTION_USE,
         ),
         StatsBucket(
             start=tuesday.date(),
@@ -1188,8 +1198,27 @@ def test_stats_get_aggregates_closed_turns_by_utc_day(tmp_path: Path) -> None:
             mean_duration_seconds=30,
             good_ratings=0,
             bad_ratings=0,
+            subscriptions=NO_SUBSCRIPTION_USE,
         ),
     ]
+    assert result.total == StatsSummary(
+        completed=1,
+        failed=1,
+        interrupted=0,
+        input_tokens=11,
+        output_tokens=7,
+        recap_input_tokens=0,
+        recap_output_tokens=0,
+        cost=None,
+        tool_calls={"bash": 1},
+        memory_calls={},
+        turns_without_memory=2,
+        approvals_requested=0,
+        mean_duration_seconds=25,
+        good_ratings=0,
+        bad_ratings=0,
+        subscriptions=NO_SUBSCRIPTION_USE,
+    )
 
 
 def test_stats_get_keeps_recap_latest_rating_and_every_closing_kind(tmp_path: Path) -> None:
@@ -1547,6 +1576,18 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "nav ms",
         "nav tokens",
         "nav repeats",
+        "claude-subscription runs",
+        "claude-subscription input",
+        "claude-subscription output",
+        "claude-subscription cache read",
+        "claude-subscription cache creation",
+        "claude-subscription ms",
+        "chatgpt-subscription runs",
+        "chatgpt-subscription input",
+        "chatgpt-subscription output",
+        "chatgpt-subscription cache read",
+        "chatgpt-subscription cache creation",
+        "chatgpt-subscription ms",
     ]
     bucket_fields = lines[1].split("\t")
     assert bucket_fields[:22] == [
@@ -1574,7 +1615,16 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         "10",
     ]
     assert float(bucket_fields[22]) >= 0
-    assert bucket_fields[23:] == ["0", "0", "1", "0.000", "0.000", "0.000", "0.000"]
+    assert bucket_fields[23:] == [
+        "0",
+        "0",
+        "1",
+        "0.000",
+        "0.000",
+        "0.000",
+        "0.000",
+        *["0"] * 12,
+    ]
     total_fields = lines[2].split("\t")
     assert total_fields[0] == "total"
     assert total_fields[1:] == bucket_fields[1:]
@@ -1642,8 +1692,8 @@ def test_cli_stats_prints_navigation_from_a_hand_written_log(
     assert exit_code == 0
     header = output.out.splitlines()[0].split("\t")
     bucket = output.out.splitlines()[1].split("\t")
-    assert header[-5:] == ["nav turns", "nav reads", "nav ms", "nav tokens", "nav repeats"]
-    assert bucket[-5:] == ["1", "2.000", "10.000", "15.000", "1.000"]
+    assert header[25:30] == ["nav turns", "nav reads", "nav ms", "nav tokens", "nav repeats"]
+    assert bucket[25:30] == ["1", "2.000", "10.000", "15.000", "1.000"]
     report = StatsGetResult.model_validate_json(
         (instance.manifest.state_dir / "stats.json").read_text()
     )

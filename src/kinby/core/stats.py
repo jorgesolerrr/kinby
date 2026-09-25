@@ -5,21 +5,26 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from kinby.contracts import (
+    DelegatedRun,
     DenyCounts,
     MemoryCallCounts,
     NavigationMeans,
+    ReportedRun,
     StatsBucket,
     StatsBucketSize,
     StatsSummary,
+    SubscriptionUse,
     ToolTime,
     TurnClosingKind,
     TurnMetrics,
     TurnVerdict,
+    UsageSource,
 )
-from kinby.core.turn_metrics import closing_day
+
+_SUBSCRIPTION_SOURCES = tuple(source for source in UsageSource if source is not UsageSource.API)
 
 
 @dataclass
@@ -49,6 +54,7 @@ class _BucketTotals:
     navigation_duration_ms: int = 0
     tokens_before_first_write: int = 0
     navigation_repeat_opens: int = 0
+    delegated_runs: list[DelegatedRun] = field(default_factory=list)
 
     def add(self, record: TurnMetrics) -> None:
         match record.closing_kind:
@@ -89,25 +95,35 @@ class _BucketTotals:
 
 def stats_buckets(
     records: Iterable[TurnMetrics],
+    runs: Iterable[ReportedRun],
     by: StatsBucketSize,
 ) -> list[StatsBucket]:
-    """Group turn records by their UTC closing date."""
+    """Group turn records by their UTC closing date and delegated runs by their own."""
     totals_by_start: dict[date, _BucketTotals] = {}
     for record in records:
-        start = closing_day(record)
-        if by is StatsBucketSize.WEEK:
-            start -= timedelta(days=start.weekday())
+        start = _bucket_start(record.closed_at, by)
         totals_by_start.setdefault(start, _BucketTotals()).add(record)
+    for reported in runs:
+        start = _bucket_start(reported.timestamp, by)
+        totals_by_start.setdefault(start, _BucketTotals()).delegated_runs.append(reported.run)
 
     return [_stats_bucket(start, totals_by_start[start]) for start in sorted(totals_by_start)]
 
 
-def stats_summary(records: Iterable[TurnMetrics]) -> StatsSummary:
-    """Aggregate records without a date boundary for a report total."""
+def stats_summary(records: Iterable[TurnMetrics], runs: Iterable[ReportedRun]) -> StatsSummary:
+    """Aggregate records and runs without a date boundary for a report total."""
     totals = _BucketTotals()
     for record in records:
         totals.add(record)
+    totals.delegated_runs.extend(reported.run for reported in runs)
     return _stats_summary(totals)
+
+
+def _bucket_start(timestamp: datetime, by: StatsBucketSize) -> date:
+    start = timestamp.astimezone(UTC).date()
+    if by is StatsBucketSize.WEEK:
+        start -= timedelta(days=start.weekday())
+    return start
 
 
 def _stats_bucket(start: date, totals: _BucketTotals) -> StatsBucket:
@@ -125,6 +141,19 @@ def _navigation_means(totals: _BucketTotals) -> NavigationMeans:
         duration_ms=totals.navigation_duration_ms / counted,
         tokens_before_first_write=totals.tokens_before_first_write / counted,
         repeat_opens=totals.navigation_repeat_opens / counted,
+    )
+
+
+def _subscription_use(source: UsageSource, runs: Iterable[DelegatedRun]) -> SubscriptionUse:
+    paid = [run for run in runs if run.usage_source is source]
+    return SubscriptionUse(
+        usage_source=source,
+        runs=len(paid),
+        input_tokens=sum(run.input_tokens for run in paid),
+        output_tokens=sum(run.output_tokens for run in paid),
+        cache_read_tokens=sum(run.cache_read_tokens for run in paid),
+        cache_creation_tokens=sum(run.cache_creation_tokens for run in paid),
+        duration_ms=sum(run.duration_ms for run in paid),
     )
 
 
@@ -152,4 +181,7 @@ def _stats_summary(totals: _BucketTotals) -> StatsSummary:
         good_ratings=totals.good_ratings,
         bad_ratings=totals.bad_ratings,
         navigation=_navigation_means(totals),
+        subscriptions=[
+            _subscription_use(source, totals.delegated_runs) for source in _SUBSCRIPTION_SOURCES
+        ],
     )

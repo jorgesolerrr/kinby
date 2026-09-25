@@ -46,9 +46,9 @@ export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
 export type RoutineNoticeKind = "first-failure" | "disabled";
 export type SignalAuth = "token" | "hmac-sha256";
 export type StatsBucketSize = "day" | "week";
+export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
 export type TurnClosingKind = "completed" | "failed" | "interrupted";
 export type DelegatedRunOutcome = "completed" | "failed" | "limited";
-export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
 export type TurnVerdict = "good" | "bad";
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
 export type ServerFrame = ResultFrame | ErrorFrame | SubscribedFrame | ItemFrame | EndFrame;
@@ -533,6 +533,7 @@ export interface StatsGetCommand {
 export interface StatsGetResult {
   buckets: StatsBucket[];
   records: TurnMetrics[];
+  total: StatsSummary;
   unpriced_models: string[];
   warnings?: ModelCallMismatch[];
 }
@@ -555,6 +556,7 @@ export interface StatsBucket {
   recap_input_tokens: number;
   recap_output_tokens: number;
   start: string;
+  subscriptions: SubscriptionUse[];
   tool_calls: {
     [k: string]: number;
   };
@@ -577,6 +579,18 @@ export interface NavigationMeans {
   repeat_opens?: number | null;
   tokens_before_first_write?: number | null;
   turns?: number;
+}
+/**
+ * The delegated runs one subscription usage source paid for, counted and never priced.
+ */
+export interface SubscriptionUse {
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  duration_ms?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  runs?: number;
+  usage_source: UsageSource;
 }
 export interface ToolTime {
   read_ms?: number;
@@ -650,6 +664,31 @@ export interface TurnRated {
   reason?: string | null;
   type: "turn.rated";
   verdict: TurnVerdict;
+}
+export interface StatsSummary {
+  approvals_requested: number;
+  bad_ratings: number;
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  completed: number;
+  cost?: number | null;
+  denies?: DenyCounts;
+  failed: number;
+  good_ratings: number;
+  input_tokens: number;
+  interrupted: number;
+  mean_duration_seconds: number | null;
+  memory_calls: MemoryCallCounts;
+  navigation?: NavigationMeans;
+  output_tokens: number;
+  recap_input_tokens: number;
+  recap_output_tokens: number;
+  subscriptions: SubscriptionUse[];
+  tool_calls: {
+    [k: string]: number;
+  };
+  tool_duration?: ToolTime;
+  turns_without_memory: number;
 }
 export interface ModelCallMismatch {
   thread_id: string;

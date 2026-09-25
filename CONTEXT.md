@@ -280,11 +280,12 @@ Optional, inclusive `since` and `until` bounds applied to a timestamp. `usage.ge
 
 ### Turn metrics
 
-The derived record of one closed **turn**. It describes the outcome, duration, tokens, tool and memory calls, approvals, and current **turn rating**.
+The derived record of one closed **turn**. It describes the outcome, duration, tokens, tool and memory calls, approvals, current **turn rating**, and the turn's **delegated runs**.
 
 ### Instance statistics
 
 Per-turn measures of one **instance** aggregated by UTC day or week. Derived from the **transcript store** through **turn metrics**, `kinby stats` recomputes the totals and writes `stats.json`.
+Each bucket and the total split by **usage source**: API use keeps its tokens and cost, and each subscription counts its **delegated runs**, tokens, and duration. A turn lands in the bucket of its close, a delegated run in the bucket of its own timestamp.
 
 ### Model call
 

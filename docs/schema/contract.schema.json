@@ -2375,6 +2375,12 @@
           "format": "date",
           "type": "string"
         },
+        "subscriptions": {
+          "items": {
+            "$ref": "#/$defs/SubscriptionUse"
+          },
+          "type": "array"
+        },
         "tool_calls": {
           "additionalProperties": {
             "type": "integer"
@@ -2403,6 +2409,7 @@
         "mean_duration_seconds",
         "good_ratings",
         "bad_ratings",
+        "subscriptions",
         "start"
       ],
       "title": "StatsBucket",
@@ -2466,6 +2473,9 @@
           },
           "type": "array"
         },
+        "total": {
+          "$ref": "#/$defs/StatsSummary"
+        },
         "unpriced_models": {
           "items": {
             "type": "string"
@@ -2482,9 +2492,120 @@
       "required": [
         "records",
         "buckets",
+        "total",
         "unpriced_models"
       ],
       "title": "StatsGetResult",
+      "type": "object"
+    },
+    "StatsSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "approvals_requested": {
+          "type": "integer"
+        },
+        "bad_ratings": {
+          "type": "integer"
+        },
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "completed": {
+          "type": "integer"
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "denies": {
+          "$ref": "#/$defs/DenyCounts"
+        },
+        "failed": {
+          "type": "integer"
+        },
+        "good_ratings": {
+          "type": "integer"
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "interrupted": {
+          "type": "integer"
+        },
+        "mean_duration_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "memory_calls": {
+          "$ref": "#/$defs/MemoryCallCounts"
+        },
+        "navigation": {
+          "$ref": "#/$defs/NavigationMeans"
+        },
+        "output_tokens": {
+          "type": "integer"
+        },
+        "recap_input_tokens": {
+          "type": "integer"
+        },
+        "recap_output_tokens": {
+          "type": "integer"
+        },
+        "subscriptions": {
+          "items": {
+            "$ref": "#/$defs/SubscriptionUse"
+          },
+          "type": "array"
+        },
+        "tool_calls": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "tool_duration": {
+          "$ref": "#/$defs/ToolTime"
+        },
+        "turns_without_memory": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "completed",
+        "failed",
+        "interrupted",
+        "recap_input_tokens",
+        "recap_output_tokens",
+        "tool_calls",
+        "memory_calls",
+        "turns_without_memory",
+        "approvals_requested",
+        "mean_duration_seconds",
+        "good_ratings",
+        "bad_ratings",
+        "subscriptions"
+      ],
+      "title": "StatsSummary",
       "type": "object"
     },
     "StorageItem": {
@@ -2571,6 +2692,44 @@
         "type"
       ],
       "title": "SubscribedFrame",
+      "type": "object"
+    },
+    "SubscriptionUse": {
+      "additionalProperties": false,
+      "description": "The delegated runs one subscription usage source paid for, counted and never priced.",
+      "properties": {
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "duration_ms": {
+          "default": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "output_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "runs": {
+          "default": 0,
+          "type": "integer"
+        },
+        "usage_source": {
+          "$ref": "#/$defs/UsageSource"
+        }
+      },
+      "required": [
+        "usage_source"
+      ],
+      "title": "SubscriptionUse",
       "type": "object"
     },
     "ThreadApprovalRespondCommand": {
