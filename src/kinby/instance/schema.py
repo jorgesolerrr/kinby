@@ -7,22 +7,13 @@ from pathlib import Path
 
 from pydantic import JsonValue
 
+from kinby.checkout import checkout_path
 from kinby.instance.manifest import RawManifest
 
 
 def checkout_schema_path() -> Path:
-    """The generated schema file in this repo.
-
-    This module is a checkout-only generator. An installed wheel has no
-    ``docs/schema`` to write.
-    """
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "pyproject.toml").is_file() and (parent / "src" / "kinby").is_dir():
-            return parent / "docs" / "schema" / "kinby.schema.json"
-    raise RuntimeError(
-        "schema generation writes docs/schema/kinby.schema.json "
-        "and only runs from a source checkout"
-    )
+    """The generated schema file in this repo."""
+    return checkout_path("docs/schema/kinby.schema.json")
 
 
 def manifest_schema() -> dict[str, JsonValue]:

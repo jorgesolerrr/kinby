@@ -1,0 +1,4228 @@
+{
+  "$defs": {
+    "AcceptedResult": {
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {
+          "type": "integer"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "turn_id",
+        "sequence"
+      ],
+      "title": "AcceptedResult",
+      "type": "object"
+    },
+    "AdoptionFinding": {
+      "additionalProperties": false,
+      "description": "One observation of the preflight. A blocking finding stops the handoff.",
+      "properties": {
+        "blocking": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AdoptionFindingKind"
+        }
+      },
+      "required": [
+        "kind",
+        "blocking",
+        "detail"
+      ],
+      "title": "AdoptionFinding",
+      "type": "object"
+    },
+    "AdoptionFindingKind": {
+      "description": "What an adoption preflight found. Each one is a decision the operator has to take.",
+      "enum": [
+        "previous-manager",
+        "legacy-runtime",
+        "unreachable",
+        "duplicate-adoption",
+        "storage-owned",
+        "retained-storage",
+        "invalid-instance",
+        "manifest-id-taken",
+        "retained-identity",
+        "package-mismatch"
+      ],
+      "title": "AdoptionFindingKind",
+      "type": "string"
+    },
+    "AdoptionHandoff": {
+      "additionalProperties": false,
+      "description": "What the handoff costs and what the operator does first. The hub rewrites no Compose file.",
+      "properties": {
+        "downtime": {
+          "type": "string"
+        },
+        "signals": {
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "downtime",
+        "steps",
+        "signals"
+      ],
+      "title": "AdoptionHandoff",
+      "type": "object"
+    },
+    "ApprovalRequested": {
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "type": {
+          "const": "approval.requested",
+          "default": "approval.requested",
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "name",
+        "arguments",
+        "rule",
+        "type"
+      ],
+      "title": "ApprovalRequested",
+      "type": "object"
+    },
+    "CallFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "call",
+          "default": "call",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "type"
+      ],
+      "title": "CallFrame",
+      "type": "object"
+    },
+    "CancelFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "cancel",
+          "default": "cancel",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "title": "CancelFrame",
+      "type": "object"
+    },
+    "Capability": {
+      "description": "What an instance's contract server can do. A hub reads it before acting on the instance.",
+      "enum": [
+        "ws",
+        "drain"
+      ],
+      "title": "Capability",
+      "type": "string"
+    },
+    "ChangeStatus": {
+      "enum": [
+        "added",
+        "modified",
+        "deleted",
+        "renamed"
+      ],
+      "title": "ChangeStatus",
+      "type": "string"
+    },
+    "ClientFrame": {
+      "discriminator": {
+        "mapping": {
+          "call": "#/$defs/CallFrame",
+          "cancel": "#/$defs/CancelFrame",
+          "subscribe": "#/$defs/SubscribeFrame"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/CallFrame"
+        },
+        {
+          "$ref": "#/$defs/SubscribeFrame"
+        },
+        {
+          "$ref": "#/$defs/CancelFrame"
+        }
+      ]
+    },
+    "CommitSha": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "CompletionOutcome": {
+      "enum": [
+        "work",
+        "no-work"
+      ],
+      "title": "CompletionOutcome",
+      "type": "string"
+    },
+    "ContainerOwner": {
+      "description": "Who manages an existing container now, read from the labels it carries.",
+      "enum": [
+        "hub",
+        "other-hub",
+        "compose",
+        "unmanaged"
+      ],
+      "title": "ContainerOwner",
+      "type": "string"
+    },
+    "Delivery": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "delivery_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "received_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "headers",
+        "content_type",
+        "body",
+        "received_at"
+      ],
+      "title": "Delivery",
+      "type": "object"
+    },
+    "DenyCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "policy": {
+          "default": 0,
+          "type": "integer"
+        },
+        "user": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "title": "DenyCounts",
+      "type": "object"
+    },
+    "DrainState": {
+      "description": "How an instance's accepted work ended when it drained.",
+      "enum": [
+        "drained",
+        "interrupted"
+      ],
+      "title": "DrainState",
+      "type": "string"
+    },
+    "EndFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "end",
+          "default": "end",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "title": "EndFrame",
+      "type": "object"
+    },
+    "ErrorCode": {
+      "enum": [
+        "NOT_FOUND",
+        "THREAD_BUSY",
+        "INSTANCE_BUSY",
+        "INSTANCE_DRAINING",
+        "TURN_OPEN",
+        "NO_ACTIVE_TURN",
+        "PARKED_TURN_UNAVAILABLE",
+        "PERMISSION_DENIED",
+        "BUDGET_EXCEEDED",
+        "MODEL_UNPRICED",
+        "SNAPSHOT_UNAVAILABLE",
+        "RESOURCE_EXHAUSTED",
+        "INVALID_ARGUMENT",
+        "CONNECTION_LOST",
+        "INTERNAL"
+      ],
+      "title": "ErrorCode",
+      "type": "string"
+    },
+    "ErrorEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "title": "ErrorEnvelope",
+      "type": "object"
+    },
+    "ErrorFrame": {
+      "additionalProperties": false,
+      "description": "A frame the server could not read carries no id.",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorEnvelope"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "error",
+          "default": "error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "type"
+      ],
+      "title": "ErrorFrame",
+      "type": "object"
+    },
+    "Event": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "discriminator": {
+            "mapping": {
+              "approval.requested": "#/$defs/ApprovalRequested",
+              "memory.recapped": "#/$defs/MemoryRecapped",
+              "message.delta": "#/$defs/MessageDelta",
+              "mode.pinned": "#/$defs/ModePinned",
+              "model.completed": "#/$defs/ModelCompleted",
+              "routine.failure.handled": "#/$defs/RoutineFailureHandled",
+              "signal.received": "#/$defs/SignalReceived",
+              "tool.call": "#/$defs/ToolCall",
+              "tool.gated": "#/$defs/ToolGated",
+              "tool.result": "#/$defs/ToolResult",
+              "turn.completed": "#/$defs/TurnCompleted",
+              "turn.failed": "#/$defs/TurnFailed",
+              "turn.interrupted": "#/$defs/TurnInterrupted",
+              "turn.rated": "#/$defs/TurnRated",
+              "turn.started": "#/$defs/TurnStarted",
+              "warning": "#/$defs/Warning",
+              "workspace.reverted": "#/$defs/WorkspaceReverted"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ModePinned"
+            },
+            {
+              "$ref": "#/$defs/TurnStarted"
+            },
+            {
+              "$ref": "#/$defs/MessageDelta"
+            },
+            {
+              "$ref": "#/$defs/ModelCompleted"
+            },
+            {
+              "$ref": "#/$defs/ToolCall"
+            },
+            {
+              "$ref": "#/$defs/ToolGated"
+            },
+            {
+              "$ref": "#/$defs/ToolResult"
+            },
+            {
+              "$ref": "#/$defs/Warning"
+            },
+            {
+              "$ref": "#/$defs/ApprovalRequested"
+            },
+            {
+              "$ref": "#/$defs/TurnCompleted"
+            },
+            {
+              "$ref": "#/$defs/TurnFailed"
+            },
+            {
+              "$ref": "#/$defs/TurnInterrupted"
+            },
+            {
+              "$ref": "#/$defs/TurnRated"
+            },
+            {
+              "$ref": "#/$defs/MemoryRecapped"
+            },
+            {
+              "$ref": "#/$defs/RoutineFailureHandled"
+            },
+            {
+              "$ref": "#/$defs/SignalReceived"
+            },
+            {
+              "$ref": "#/$defs/WorkspaceReverted"
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence",
+        "thread_id",
+        "turn_id",
+        "payload",
+        "timestamp"
+      ],
+      "title": "Event",
+      "type": "object"
+    },
+    "FileChange": {
+      "additionalProperties": false,
+      "properties": {
+        "additions": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deletions": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ChangeStatus"
+        }
+      },
+      "required": [
+        "path",
+        "status",
+        "additions",
+        "deletions"
+      ],
+      "title": "FileChange",
+      "type": "object"
+    },
+    "GateDecider": {
+      "enum": [
+        "policy",
+        "user"
+      ],
+      "title": "GateDecider",
+      "type": "string"
+    },
+    "GateOutcome": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "title": "GateOutcome",
+      "type": "string"
+    },
+    "InstanceAdoptCommand": {
+      "additionalProperties": false,
+      "description": "Take ownership. The preflight runs again here, and a blocking finding stops it.",
+      "properties": {
+        "acknowledge_interrupting_stop": {
+          "default": false,
+          "type": "boolean"
+        },
+        "claim_signals": {
+          "default": false,
+          "type": "boolean"
+        },
+        "package": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackageSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "path": {
+          "format": "path",
+          "type": "string"
+        },
+        "relinquished": {
+          "default": false,
+          "type": "boolean"
+        },
+        "runtime_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "runtime_id"
+      ],
+      "title": "InstanceAdoptCommand",
+      "type": "object"
+    },
+    "InstanceAdoptPreviewCommand": {
+      "additionalProperties": false,
+      "description": "Preview an adoption. It reads the instance and its container and changes neither.",
+      "properties": {
+        "acknowledge_interrupting_stop": {
+          "default": false,
+          "type": "boolean"
+        },
+        "package": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackageSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "path": {
+          "format": "path",
+          "type": "string"
+        },
+        "relinquished": {
+          "default": false,
+          "type": "boolean"
+        },
+        "runtime_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "runtime_id"
+      ],
+      "title": "InstanceAdoptPreviewCommand",
+      "type": "object"
+    },
+    "InstanceAdoptPreviewResult": {
+      "additionalProperties": false,
+      "description": "What the hub would take over, and what stands in the way of taking it.",
+      "properties": {
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "type": "array"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/AdoptionFinding"
+          },
+          "type": "array"
+        },
+        "handoff": {
+          "$ref": "#/$defs/AdoptionHandoff"
+        },
+        "image_id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "manifest_id": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/$defs/ContainerOwner"
+        },
+        "owner_name": {
+          "type": "string"
+        },
+        "path": {
+          "format": "path",
+          "type": "string"
+        },
+        "persona_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtime_id": {
+          "type": "string"
+        },
+        "storage": {
+          "items": {
+            "$ref": "#/$defs/StorageItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "instance_id",
+        "manifest_id",
+        "persona_name",
+        "path",
+        "runtime_id",
+        "image_id",
+        "owner",
+        "owner_name",
+        "storage",
+        "capabilities",
+        "handoff",
+        "findings"
+      ],
+      "title": "InstanceAdoptPreviewResult",
+      "type": "object"
+    },
+    "InstanceCreateCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "manifest_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "package": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackageSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "persona_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "revision": {
+          "default": "HEAD",
+          "minLength": 1,
+          "type": "string"
+        },
+        "secrets": {
+          "additionalProperties": {
+            "format": "password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "manifest_id",
+        "model"
+      ],
+      "title": "InstanceCreateCommand",
+      "type": "object"
+    },
+    "InstanceDeleteCommand": {
+      "additionalProperties": false,
+      "description": "Delete the previewed targets. A target that changed since the preview stops it.",
+      "properties": {
+        "directories": {
+          "items": {
+            "format": "path",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "volumes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "instance_id",
+        "directories",
+        "volumes"
+      ],
+      "title": "InstanceDeleteCommand",
+      "type": "object"
+    },
+    "InstanceDeletePreviewCommand": {
+      "additionalProperties": false,
+      "description": "Preview a removed instance's permanent deletion. It reads the retained inventory only.",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "InstanceDeletePreviewCommand",
+      "type": "object"
+    },
+    "InstanceDeletePreviewResult": {
+      "additionalProperties": false,
+      "description": "Exactly what a deletion removes: the removed instance's owned directories and volumes.",
+      "properties": {
+        "directories": {
+          "items": {
+            "format": "path",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "volumes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "instance_id",
+        "directories",
+        "volumes"
+      ],
+      "title": "InstanceDeletePreviewResult",
+      "type": "object"
+    },
+    "InstanceDrainCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "force": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "title": "InstanceDrainCommand",
+      "type": "object"
+    },
+    "InstanceDrainResult": {
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/DrainState"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "title": "InstanceDrainResult",
+      "type": "object"
+    },
+    "InstanceListCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "removed": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "title": "InstanceListCommand",
+      "type": "object"
+    },
+    "InstanceListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "instances": {
+          "items": {
+            "$ref": "#/$defs/InstanceSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "instances"
+      ],
+      "title": "InstanceListResult",
+      "type": "object"
+    },
+    "InstanceLogsCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "tail": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "InstanceLogsCommand",
+      "type": "object"
+    },
+    "InstanceLogsResult": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id",
+        "text"
+      ],
+      "title": "InstanceLogsResult",
+      "type": "object"
+    },
+    "InstanceProbeCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "InstanceProbeCommand",
+      "type": "object"
+    },
+    "InstanceProbeResult": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "type": "array"
+        },
+        "contract_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract_version",
+        "capabilities"
+      ],
+      "title": "InstanceProbeResult",
+      "type": "object"
+    },
+    "InstanceRecreateCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "InstanceRecreateCommand",
+      "type": "object"
+    },
+    "InstanceRemoveCommand": {
+      "additionalProperties": false,
+      "description": "Drain and remove one instance's container. Its data and its record stay behind.",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "InstanceRemoveCommand",
+      "type": "object"
+    },
+    "InstanceRestoreCommand": {
+      "additionalProperties": false,
+      "description": "Bring a removed instance back from its retained record, stopped.",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "InstanceRestoreCommand",
+      "type": "object"
+    },
+    "InstanceSecretsSetCommand": {
+      "additionalProperties": false,
+      "description": "Replace the named values in one instance's secrets. The result carries none of them back.",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "secrets": {
+          "additionalProperties": {
+            "format": "password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "minProperties": 1,
+          "type": "object"
+        }
+      },
+      "required": [
+        "instance_id",
+        "secrets"
+      ],
+      "title": "InstanceSecretsSetCommand",
+      "type": "object"
+    },
+    "InstanceStartCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "InstanceStartCommand",
+      "type": "object"
+    },
+    "InstanceStatusCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "InstanceStatusCommand",
+      "type": "object"
+    },
+    "InstanceStatusResult": {
+      "additionalProperties": false,
+      "properties": {
+        "active_operation_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "detail": {
+          "default": "",
+          "type": "string"
+        },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessState"
+        },
+        "readiness": {
+          "$ref": "#/$defs/Readiness"
+        }
+      },
+      "required": [
+        "instance_id",
+        "process",
+        "readiness"
+      ],
+      "title": "InstanceStatusResult",
+      "type": "object"
+    },
+    "InstanceStopCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "force": {
+          "default": false,
+          "type": "boolean"
+        },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "InstanceStopCommand",
+      "type": "object"
+    },
+    "InstanceSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "image_id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "intended_state": {
+          "$ref": "#/$defs/IntendedState"
+        },
+        "manifest_id": {
+          "type": "string"
+        },
+        "package": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackageSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "persona_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtime_id": {
+          "type": "string"
+        },
+        "source_revision": {
+          "type": "string"
+        },
+        "storage": {
+          "items": {
+            "$ref": "#/$defs/StorageItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "instance_id",
+        "manifest_id",
+        "persona_name",
+        "source_revision",
+        "image_id",
+        "intended_state",
+        "runtime_id",
+        "storage"
+      ],
+      "title": "InstanceSummary",
+      "type": "object"
+    },
+    "InstanceUpdateCommand": {
+      "additionalProperties": false,
+      "description": "Move one instance to the image a revision prepares.\n\nIts package selection travels along, moved to another commit when a pin names one.",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "package": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackagePin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "revision": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id",
+        "revision"
+      ],
+      "title": "InstanceUpdateCommand",
+      "type": "object"
+    },
+    "IntendedState": {
+      "enum": [
+        "stopped",
+        "running",
+        "removed",
+        "deleted"
+      ],
+      "title": "IntendedState",
+      "type": "string"
+    },
+    "ItemFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "item": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "item",
+          "default": "item",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "item",
+        "type"
+      ],
+      "title": "ItemFrame",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "LifecycleOperationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "instance_id"
+      ],
+      "title": "LifecycleOperationResult",
+      "type": "object"
+    },
+    "MemoryCallCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "forget": {
+          "default": 0,
+          "type": "integer"
+        },
+        "open": {
+          "default": 0,
+          "type": "integer"
+        },
+        "remember": {
+          "default": 0,
+          "type": "integer"
+        },
+        "search": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "title": "MemoryCallCounts",
+      "type": "object"
+    },
+    "MemoryRecapped": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "node": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_tokens": {
+          "type": "integer"
+        },
+        "type": {
+          "const": "memory.recapped",
+          "default": "memory.recapped",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "node",
+        "type"
+      ],
+      "title": "MemoryRecapped",
+      "type": "object"
+    },
+    "MessageDelta": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "message.delta",
+          "default": "message.delta",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "type"
+      ],
+      "title": "MessageDelta",
+      "type": "object"
+    },
+    "ModePinned": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "type": {
+          "const": "mode.pinned",
+          "default": "mode.pinned",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "type"
+      ],
+      "title": "ModePinned",
+      "type": "object"
+    },
+    "ModelCallMismatch": {
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "turn_id"
+      ],
+      "title": "ModelCallMismatch",
+      "type": "object"
+    },
+    "ModelCompleted": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "duration_ms": {
+          "type": "integer"
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "output_tokens": {
+          "type": "integer"
+        },
+        "type": {
+          "const": "model.completed",
+          "default": "model.completed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "model",
+        "duration_ms",
+        "type"
+      ],
+      "title": "ModelCompleted",
+      "type": "object"
+    },
+    "Navigation": {
+      "additionalProperties": false,
+      "properties": {
+        "distinct_paths": {
+          "default": 0,
+          "type": "integer"
+        },
+        "duration_ms": {
+          "default": 0,
+          "type": "integer"
+        },
+        "read_calls": {
+          "default": 0,
+          "type": "integer"
+        },
+        "reads_before_first_write": {
+          "default": 0,
+          "type": "integer"
+        },
+        "repeat_opens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "tokens_before_first_write": {
+          "default": 0,
+          "type": "integer"
+        },
+        "write_calls": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "title": "Navigation",
+      "type": "object"
+    },
+    "NavigationMeans": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "read_calls": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "repeat_opens": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tokens_before_first_write": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "turns": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "title": "NavigationMeans",
+      "type": "object"
+    },
+    "OperationGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "title": "OperationGetCommand",
+      "type": "object"
+    },
+    "OperationGetResult": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/OperationKind"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/OperationStep"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation_id",
+        "instance_id",
+        "kind",
+        "state",
+        "detail"
+      ],
+      "title": "OperationGetResult",
+      "type": "object"
+    },
+    "OperationKind": {
+      "enum": [
+        "create",
+        "start",
+        "stop",
+        "secrets",
+        "recreate",
+        "adopt",
+        "update",
+        "remove",
+        "restore",
+        "delete"
+      ],
+      "title": "OperationKind",
+      "type": "string"
+    },
+    "OperationState": {
+      "enum": [
+        "pending",
+        "running",
+        "succeeded",
+        "failed"
+      ],
+      "title": "OperationState",
+      "type": "string"
+    },
+    "OperationStep": {
+      "additionalProperties": false,
+      "description": "One named stage of a lifecycle operation, in the order the hub ran it.",
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        }
+      },
+      "required": [
+        "name",
+        "state",
+        "detail"
+      ],
+      "title": "OperationStep",
+      "type": "object"
+    },
+    "PackageCommit": {
+      "additionalProperties": false,
+      "description": "One commit of a package's git repository, installed in place of an index version.",
+      "properties": {
+        "sha": {
+          "$ref": "#/$defs/CommitSha"
+        },
+        "url": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "sha"
+      ],
+      "title": "PackageCommit",
+      "type": "object"
+    },
+    "PackagePin": {
+      "additionalProperties": false,
+      "description": "Move an instance's package to another commit of the git repository it comes from.\n\nIt names the package it moves, which must be the instance's own (ADR 0040).",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "image_recipe": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sha": {
+          "$ref": "#/$defs/CommitSha"
+        }
+      },
+      "required": [
+        "id",
+        "sha"
+      ],
+      "title": "PackagePin",
+      "type": "object"
+    },
+    "PackageSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "distribution": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "image_recipe": {
+          "default": "",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/PackageCommit"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "distribution",
+        "version"
+      ],
+      "title": "PackageSelection",
+      "type": "object"
+    },
+    "PackageSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "distribution": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/PackageCommit"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "distribution",
+        "version"
+      ],
+      "title": "PackageSummary",
+      "type": "object"
+    },
+    "PermissionMode": {
+      "enum": [
+        "read-only",
+        "ask",
+        "auto",
+        "full-access"
+      ],
+      "title": "PermissionMode",
+      "type": "string"
+    },
+    "ProcessState": {
+      "enum": [
+        "missing",
+        "created",
+        "starting",
+        "running",
+        "stopped",
+        "failed",
+        "unavailable"
+      ],
+      "title": "ProcessState",
+      "type": "string"
+    },
+    "Readiness": {
+      "enum": [
+        "not-running",
+        "starting",
+        "ready",
+        "unhealthy",
+        "unknown"
+      ],
+      "title": "Readiness",
+      "type": "string"
+    },
+    "ResultFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "result": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "result",
+          "default": "result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "result",
+        "type"
+      ],
+      "title": "ResultFrame",
+      "type": "object"
+    },
+    "RoutineFailureHandled": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "notice": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutineNotice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "routine.failure.handled",
+          "default": "routine.failure.handled",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "title": "RoutineFailureHandled",
+      "type": "object"
+    },
+    "RoutineLastRun": {
+      "additionalProperties": false,
+      "properties": {
+        "first_line": {
+          "default": "",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/RoutineRunOutcome"
+        },
+        "started_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "turn_id",
+        "started_at",
+        "outcome"
+      ],
+      "title": "RoutineLastRun",
+      "type": "object"
+    },
+    "RoutineListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "RoutineListCommand",
+      "type": "object"
+    },
+    "RoutineListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "routines": {
+          "items": {
+            "$ref": "#/$defs/RoutineSummary"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "routines",
+        "warnings"
+      ],
+      "title": "RoutineListResult",
+      "type": "object"
+    },
+    "RoutineNotice": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/RoutineNoticeKind"
+        },
+        "message": {
+          "type": "string"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message",
+        "thread_id",
+        "turn_id"
+      ],
+      "title": "RoutineNotice",
+      "type": "object"
+    },
+    "RoutineNoticeKind": {
+      "enum": [
+        "first-failure",
+        "disabled"
+      ],
+      "title": "RoutineNoticeKind",
+      "type": "string"
+    },
+    "RoutineOrigin": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
+          "const": "routine",
+          "default": "routine",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "trigger": {
+          "$ref": "#/$defs/RoutineTrigger"
+        }
+      },
+      "required": [
+        "name",
+        "trigger",
+        "kind"
+      ],
+      "title": "RoutineOrigin",
+      "type": "object"
+    },
+    "RoutinePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "content_type": {
+          "enum": [
+            "application/json",
+            "text/plain"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "body",
+        "content_type"
+      ],
+      "title": "RoutinePayload",
+      "type": "object"
+    },
+    "RoutineRunCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutinePayload"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "RoutineRunCommand",
+      "type": "object"
+    },
+    "RoutineRunOutcome": {
+      "enum": [
+        "running",
+        "parked",
+        "work",
+        "no-work",
+        "failed",
+        "interrupted"
+      ],
+      "title": "RoutineRunOutcome",
+      "type": "string"
+    },
+    "RoutineSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "failure_count": {
+          "default": 0,
+          "type": "integer"
+        },
+        "last_failure": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "last_run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutineLastRun"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "name": {
+          "type": "string"
+        },
+        "next_run": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notices": {
+          "items": {
+            "$ref": "#/$defs/RoutineNotice"
+          },
+          "type": "array"
+        },
+        "pending": {
+          "type": "integer"
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "signal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignalSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "schedule",
+        "enabled",
+        "mode",
+        "last_run",
+        "next_run",
+        "pending"
+      ],
+      "title": "RoutineSummary",
+      "type": "object"
+    },
+    "RoutineTrigger": {
+      "enum": [
+        "scheduled",
+        "manual",
+        "catch-up",
+        "signal"
+      ],
+      "title": "RoutineTrigger",
+      "type": "string"
+    },
+    "ServerFrame": {
+      "discriminator": {
+        "mapping": {
+          "end": "#/$defs/EndFrame",
+          "error": "#/$defs/ErrorFrame",
+          "item": "#/$defs/ItemFrame",
+          "result": "#/$defs/ResultFrame",
+          "subscribed": "#/$defs/SubscribedFrame"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ResultFrame"
+        },
+        {
+          "$ref": "#/$defs/ErrorFrame"
+        },
+        {
+          "$ref": "#/$defs/SubscribedFrame"
+        },
+        {
+          "$ref": "#/$defs/ItemFrame"
+        },
+        {
+          "$ref": "#/$defs/EndFrame"
+        }
+      ]
+    },
+    "SignalAuth": {
+      "enum": [
+        "token",
+        "hmac-sha256"
+      ],
+      "title": "SignalAuth",
+      "type": "string"
+    },
+    "SignalReceived": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        },
+        "origin": {
+          "$ref": "#/$defs/RoutineOrigin"
+        },
+        "type": {
+          "const": "signal.received",
+          "default": "signal.received",
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "delivery",
+        "type"
+      ],
+      "title": "SignalReceived",
+      "type": "object"
+    },
+    "SignalSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "auth": {
+          "$ref": "#/$defs/SignalAuth"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "auth"
+      ],
+      "title": "SignalSummary",
+      "type": "object"
+    },
+    "StatsBucket": {
+      "additionalProperties": false,
+      "properties": {
+        "approvals_requested": {
+          "type": "integer"
+        },
+        "bad_ratings": {
+          "type": "integer"
+        },
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "completed": {
+          "type": "integer"
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "denies": {
+          "$ref": "#/$defs/DenyCounts"
+        },
+        "failed": {
+          "type": "integer"
+        },
+        "good_ratings": {
+          "type": "integer"
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "interrupted": {
+          "type": "integer"
+        },
+        "mean_duration_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "memory_calls": {
+          "$ref": "#/$defs/MemoryCallCounts"
+        },
+        "navigation": {
+          "$ref": "#/$defs/NavigationMeans"
+        },
+        "output_tokens": {
+          "type": "integer"
+        },
+        "recap_input_tokens": {
+          "type": "integer"
+        },
+        "recap_output_tokens": {
+          "type": "integer"
+        },
+        "start": {
+          "format": "date",
+          "type": "string"
+        },
+        "tool_calls": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "tool_duration": {
+          "$ref": "#/$defs/ToolTime"
+        },
+        "turns_without_memory": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "completed",
+        "failed",
+        "interrupted",
+        "recap_input_tokens",
+        "recap_output_tokens",
+        "tool_calls",
+        "memory_calls",
+        "turns_without_memory",
+        "approvals_requested",
+        "mean_duration_seconds",
+        "good_ratings",
+        "bad_ratings",
+        "start"
+      ],
+      "title": "StatsBucket",
+      "type": "object"
+    },
+    "StatsBucketSize": {
+      "enum": [
+        "day",
+        "week"
+      ],
+      "title": "StatsBucketSize",
+      "type": "string"
+    },
+    "StatsGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/StatsBucketSize",
+          "default": "day"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "StatsGetCommand",
+      "type": "object"
+    },
+    "StatsGetResult": {
+      "additionalProperties": false,
+      "properties": {
+        "buckets": {
+          "items": {
+            "$ref": "#/$defs/StatsBucket"
+          },
+          "type": "array"
+        },
+        "records": {
+          "items": {
+            "$ref": "#/$defs/TurnMetrics"
+          },
+          "type": "array"
+        },
+        "unpriced_models": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ModelCallMismatch"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "records",
+        "buckets",
+        "unpriced_models"
+      ],
+      "title": "StatsGetResult",
+      "type": "object"
+    },
+    "StorageItem": {
+      "additionalProperties": false,
+      "properties": {
+        "destination": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/StorageKind"
+        },
+        "source": {
+          "type": "string"
+        },
+        "writable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "source",
+        "destination",
+        "writable"
+      ],
+      "title": "StorageItem",
+      "type": "object"
+    },
+    "StorageKind": {
+      "enum": [
+        "bind",
+        "volume"
+      ],
+      "title": "StorageKind",
+      "type": "string"
+    },
+    "SubscribeFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "subscribe",
+          "default": "subscribe",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "type"
+      ],
+      "title": "SubscribeFrame",
+      "type": "object"
+    },
+    "SubscribedFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "head_sequence": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "subscribed",
+          "default": "subscribed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "head_sequence",
+        "type"
+      ],
+      "title": "SubscribedFrame",
+      "type": "object"
+    },
+    "ThreadApprovalRespondCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "type": "string"
+        },
+        "approval_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "approval_id",
+        "answer"
+      ],
+      "title": "ThreadApprovalRespondCommand",
+      "type": "object"
+    },
+    "ThreadCreateCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "ThreadCreateCommand",
+      "type": "object"
+    },
+    "ThreadCreateResult": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "created_at"
+      ],
+      "title": "ThreadCreateResult",
+      "type": "object"
+    },
+    "ThreadListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "ThreadListCommand",
+      "type": "object"
+    },
+    "ThreadListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "threads": {
+          "items": {
+            "$ref": "#/$defs/ThreadSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "threads"
+      ],
+      "title": "ThreadListResult",
+      "type": "object"
+    },
+    "ThreadModeSetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "mode"
+      ],
+      "title": "ThreadModeSetCommand",
+      "type": "object"
+    },
+    "ThreadSubscribeCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "after_sequence": {
+          "default": 0,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id"
+      ],
+      "title": "ThreadSubscribeCommand",
+      "type": "object"
+    },
+    "ThreadSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "created_at"
+      ],
+      "title": "ThreadSummary",
+      "type": "object"
+    },
+    "ThreadTurnDiffCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "turn_id"
+      ],
+      "title": "ThreadTurnDiffCommand",
+      "type": "object"
+    },
+    "ThreadTurnDiffResult": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": "string"
+        },
+        "before": {
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/FileChange"
+          },
+          "type": "array"
+        },
+        "patch": {
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "before",
+        "after",
+        "files",
+        "patch"
+      ],
+      "title": "ThreadTurnDiffResult",
+      "type": "object"
+    },
+    "ThreadTurnInterruptCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id"
+      ],
+      "title": "ThreadTurnInterruptCommand",
+      "type": "object"
+    },
+    "ThreadTurnListCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id"
+      ],
+      "title": "ThreadTurnListCommand",
+      "type": "object"
+    },
+    "ThreadTurnListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "turn_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "turn_ids"
+      ],
+      "title": "ThreadTurnListResult",
+      "type": "object"
+    },
+    "ThreadTurnRateCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/TurnVerdict"
+        }
+      },
+      "required": [
+        "thread_id",
+        "turn_id",
+        "verdict"
+      ],
+      "title": "ThreadTurnRateCommand",
+      "type": "object"
+    },
+    "ThreadTurnRevertCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "turn_id"
+      ],
+      "title": "ThreadTurnRevertCommand",
+      "type": "object"
+    },
+    "ThreadTurnRevertPreviewCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "turn_id"
+      ],
+      "title": "ThreadTurnRevertPreviewCommand",
+      "type": "object"
+    },
+    "ThreadTurnRevertPreviewResult": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/$defs/FileChange"
+          },
+          "type": "array"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "files"
+      ],
+      "title": "ThreadTurnRevertPreviewResult",
+      "type": "object"
+    },
+    "ThreadTurnStartCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "message"
+      ],
+      "title": "ThreadTurnStartCommand",
+      "type": "object"
+    },
+    "ThreadTurnTargetListCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id"
+      ],
+      "title": "ThreadTurnTargetListCommand",
+      "type": "object"
+    },
+    "ThreadTurnTargetListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/TurnTarget"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "targets"
+      ],
+      "title": "ThreadTurnTargetListResult",
+      "type": "object"
+    },
+    "ThreadUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "output_tokens": {
+          "type": "integer"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "turns": {
+          "items": {
+            "$ref": "#/$defs/TurnUsage"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "thread_id",
+        "turns"
+      ],
+      "title": "ThreadUsage",
+      "type": "object"
+    },
+    "ToolCall": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "const": "tool.call",
+          "default": "tool.call",
+          "type": "string"
+        },
+        "write": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "call_id",
+        "name",
+        "arguments",
+        "type"
+      ],
+      "title": "ToolCall",
+      "type": "object"
+    },
+    "ToolGated": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/GateOutcome"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "decided_by": {
+          "$ref": "#/$defs/GateDecider"
+        },
+        "name": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "type": {
+          "const": "tool.gated",
+          "default": "tool.gated",
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "name",
+        "action",
+        "rule",
+        "decided_by",
+        "type"
+      ],
+      "title": "ToolGated",
+      "type": "object"
+    },
+    "ToolResult": {
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "type": {
+          "const": "tool.result",
+          "default": "tool.result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "name",
+        "output",
+        "error",
+        "type"
+      ],
+      "title": "ToolResult",
+      "type": "object"
+    },
+    "ToolTime": {
+      "additionalProperties": false,
+      "properties": {
+        "read_ms": {
+          "default": 0,
+          "type": "integer"
+        },
+        "write_ms": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "title": "ToolTime",
+      "type": "object"
+    },
+    "TurnClosingKind": {
+      "enum": [
+        "completed",
+        "failed",
+        "interrupted"
+      ],
+      "title": "TurnClosingKind",
+      "type": "string"
+    },
+    "TurnCompleted": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/CompletionOutcome",
+          "default": "work"
+        },
+        "output_tokens": {
+          "type": "integer"
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "turn.completed",
+          "default": "turn.completed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "type"
+      ],
+      "title": "TurnCompleted",
+      "type": "object"
+    },
+    "TurnFailed": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "input_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "output_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "turn.failed",
+          "default": "turn.failed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "type"
+      ],
+      "title": "TurnFailed",
+      "type": "object"
+    },
+    "TurnInterrupted": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "output_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "turn.interrupted",
+          "default": "turn.interrupted",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "TurnInterrupted",
+      "type": "object"
+    },
+    "TurnMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "approvals_requested": {
+          "type": "integer"
+        },
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "closed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "closing_kind": {
+          "$ref": "#/$defs/TurnClosingKind"
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "denies": {
+          "$ref": "#/$defs/DenyCounts"
+        },
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "memory_calls": {
+          "$ref": "#/$defs/MemoryCallCounts"
+        },
+        "memory_consulted": {
+          "type": "boolean"
+        },
+        "memory_tokens": {
+          "type": "number"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "navigation": {
+          "$ref": "#/$defs/Navigation"
+        },
+        "output_tokens": {
+          "type": "integer"
+        },
+        "prompt_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rating": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnRated"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recap_input_tokens": {
+          "type": "integer"
+        },
+        "recap_output_tokens": {
+          "type": "integer"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "tool_calls": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "tool_duration": {
+          "$ref": "#/$defs/ToolTime"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "thread_id",
+        "turn_id",
+        "model",
+        "prompt_version",
+        "closing_kind",
+        "started_at",
+        "closed_at",
+        "duration_seconds",
+        "recap_input_tokens",
+        "recap_output_tokens",
+        "tool_calls",
+        "memory_calls",
+        "memory_consulted",
+        "approvals_requested",
+        "memory_tokens",
+        "rating"
+      ],
+      "title": "TurnMetrics",
+      "type": "object"
+    },
+    "TurnRated": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "turn.rated",
+          "default": "turn.rated",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/TurnVerdict"
+        }
+      },
+      "required": [
+        "verdict",
+        "type"
+      ],
+      "title": "TurnRated",
+      "type": "object"
+    },
+    "TurnStarted": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "origin": {
+          "discriminator": {
+            "mapping": {
+              "routine": "#/$defs/RoutineOrigin",
+              "user": "#/$defs/UserOrigin"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/UserOrigin"
+            },
+            {
+              "$ref": "#/$defs/RoutineOrigin"
+            }
+          ]
+        },
+        "permission_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "prompt_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "turn.started",
+          "default": "turn.started",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "model",
+        "type"
+      ],
+      "title": "TurnStarted",
+      "type": "object"
+    },
+    "TurnTarget": {
+      "additionalProperties": false,
+      "description": "One turn or workspace revert that a workspace operation can target.",
+      "properties": {
+        "closed": {
+          "type": "boolean"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "closed"
+      ],
+      "title": "TurnTarget",
+      "type": "object"
+    },
+    "TurnUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "output_tokens": {
+          "type": "integer"
+        },
+        "recap_input_tokens": {
+          "type": "integer"
+        },
+        "recap_output_tokens": {
+          "type": "integer"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "turn_id",
+        "recap_input_tokens",
+        "recap_output_tokens"
+      ],
+      "title": "TurnUsage",
+      "type": "object"
+    },
+    "TurnVerdict": {
+      "enum": [
+        "good",
+        "bad"
+      ],
+      "title": "TurnVerdict",
+      "type": "string"
+    },
+    "UsageGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "since": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "UsageGetCommand",
+      "type": "object"
+    },
+    "UsageGetResult": {
+      "additionalProperties": false,
+      "properties": {
+        "threads": {
+          "items": {
+            "$ref": "#/$defs/ThreadUsage"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "threads"
+      ],
+      "title": "UsageGetResult",
+      "type": "object"
+    },
+    "UserOrigin": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "user",
+          "default": "user",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "UserOrigin",
+      "type": "object"
+    },
+    "Warning": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": {
+          "const": "warning",
+          "default": "warning",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sources",
+        "message",
+        "type"
+      ],
+      "title": "Warning",
+      "type": "object"
+    },
+    "WorkspaceReverted": {
+      "additionalProperties": false,
+      "description": "The workspace went from ``previous`` back to ``restored``, the target's before tree.",
+      "properties": {
+        "previous": {
+          "type": "string"
+        },
+        "restored": {
+          "type": "string"
+        },
+        "target_turn_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "type": {
+          "const": "workspace.reverted",
+          "default": "workspace.reverted",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_turn_id",
+        "previous",
+        "restored",
+        "type"
+      ],
+      "title": "WorkspaceReverted",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "client_frame": {
+      "$ref": "#/$defs/ClientFrame"
+    },
+    "methods": {
+      "additionalProperties": false,
+      "properties": {
+        "instance.adopt": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceAdoptCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LifecycleOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.adopt.preview": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceAdoptPreviewCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstanceAdoptPreviewResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.create": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceCreateCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LifecycleOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LifecycleOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.delete.preview": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceDeletePreviewCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstanceDeletePreviewResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.drain": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceDrainCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstanceDrainResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstanceListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.logs": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceLogsCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstanceLogsResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.probe": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceProbeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstanceProbeResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.recreate": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceRecreateCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LifecycleOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.remove": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceRemoveCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LifecycleOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.restore": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceRestoreCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LifecycleOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.secrets.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceSecretsSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LifecycleOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.start": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceStartCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LifecycleOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.status": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceStatusCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstanceStatusResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.stop": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceStopCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LifecycleOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.update": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceUpdateCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LifecycleOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "operation.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/OperationGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/OperationGetResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "routine.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "routine.run": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineRunCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "stats.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/StatsGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/StatsGetResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.approval.respond": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadApprovalRespondCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.create": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadCreateCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadCreateResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.mode.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadModeSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.turn.diff": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTurnDiffCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadTurnDiffResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.turn.interrupt": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTurnInterruptCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.turn.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTurnListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadTurnListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.turn.rate": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTurnRateCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.turn.revert": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTurnRevertCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.turn.revert.preview": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTurnRevertPreviewCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadTurnRevertPreviewResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.turn.start": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTurnStartCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.turn.target.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTurnTargetListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadTurnTargetListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "usage.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/UsageGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/UsageGetResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "thread.create",
+        "thread.list",
+        "thread.mode.set",
+        "thread.turn.start",
+        "thread.turn.diff",
+        "thread.turn.revert",
+        "thread.turn.revert.preview",
+        "thread.turn.list",
+        "thread.turn.target.list",
+        "thread.turn.interrupt",
+        "thread.turn.rate",
+        "thread.approval.respond",
+        "usage.get",
+        "stats.get",
+        "instance.probe",
+        "instance.drain",
+        "routine.list",
+        "routine.run",
+        "instance.create",
+        "instance.start",
+        "instance.stop",
+        "instance.recreate",
+        "instance.remove",
+        "instance.restore",
+        "instance.delete.preview",
+        "instance.delete",
+        "instance.update",
+        "instance.secrets.set",
+        "instance.adopt.preview",
+        "instance.adopt",
+        "instance.list",
+        "instance.status",
+        "instance.logs",
+        "operation.get"
+      ],
+      "type": "object"
+    },
+    "server_frame": {
+      "$ref": "#/$defs/ServerFrame"
+    },
+    "subscriptions": {
+      "additionalProperties": false,
+      "properties": {
+        "thread.subscribe": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadSubscribeCommand"
+            },
+            "item": {
+              "$ref": "#/$defs/Event"
+            }
+          },
+          "required": [
+            "command",
+            "item"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "thread.subscribe"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "client_frame",
+    "server_frame",
+    "methods",
+    "subscriptions"
+  ],
+  "title": "Contract",
+  "type": "object"
+}

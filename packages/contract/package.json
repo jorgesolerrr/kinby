@@ -5,9 +5,12 @@
   "type": "module",
   "exports": "./src/index.ts",
   "scripts": {
-    "check": "tsc -b && oxlint && oxfmt --check && vitest run --passWithNoTests"
+    "generate": "json2ts -i ../../docs/schema/contract.schema.json -o src/contract.ts",
+    "check": "tsc -b && oxlint && oxfmt --check && vitest run"
   },
   "devDependencies": {
+    "@types/node": "^24.13.3",
+    "json-schema-to-typescript": "16.0.0",
     "oxfmt": "0.70.0",
     "oxlint": "1.85.0",
     "oxlint-tsgolint": "7.0.2003",
