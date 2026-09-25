@@ -208,6 +208,36 @@ def test_hub_update_pins_the_package_to_a_commit(
     assert images.selections[0].package == writer_at(FIRST_COMMIT)
 
 
+def test_hub_update_sends_the_image_recipe_of_the_pinned_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    images = CandidateImages(package=writer_package())
+    hub = hub_at(tmp_path / "hub", images=images, control=FakeControl())
+    created = asyncio.run(started_writer(hub_client(hub), hub))
+    monkeypatch.setenv(TOKEN_VARIABLE, hub.access.rotate_update_token())
+    recipe = tmp_path / "recipe.Dockerfile"
+    recipe.write_text("RUN install-bun\n", encoding="utf-8")
+
+    exit_code = _update(
+        hub,
+        str(created.instance_id),
+        "--revision",
+        "v0.2.0",
+        "--package",
+        "writer",
+        "--package-commit",
+        NEXT_COMMIT,
+        "--image-recipe",
+        str(recipe),
+    )
+
+    assert exit_code == 0
+    package = images.selections[-1].package
+    assert package is not None
+    assert package.image_recipe == "RUN install-bun\n"
+
+
 def test_hub_update_reports_a_refused_update(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -265,3 +295,24 @@ def test_hub_update_needs_the_token_and_a_package_for_its_commit(
     assert TOKEN_VARIABLE in missing_token
     assert packageless.value.code == 2
     assert "--package" in capsys.readouterr().err
+
+
+def test_hub_update_takes_an_image_recipe_only_with_a_package_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(TOKEN_VARIABLE, "token")
+    recipe = tmp_path / "recipe.Dockerfile"
+    recipe.write_text("RUN install-bun\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as unpinned:
+        main(
+            [
+                *("hub", "update", "--connect", "http://127.0.0.1:1/ws", "0" * 32),
+                *("--revision", "v0.2.0", "--image-recipe", str(recipe)),
+            ]
+        )
+
+    assert unpinned.value.code == 2
+    assert "--image-recipe" in capsys.readouterr().err

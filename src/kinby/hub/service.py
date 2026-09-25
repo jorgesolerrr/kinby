@@ -149,6 +149,7 @@ def _pinned_package(record: ManagedInstance, pin: PackagePin | None) -> PackageS
     """The package an update carries: the instance's own, moved to the pinned commit if any.
 
     A pin never switches packages (ADR 0040), and it moves only a package that comes from git.
+    A pin that carries an image recipe replaces the recorded one (ADR 0061).
     """
     current = record.package
     if pin is None:
@@ -161,7 +162,10 @@ def _pinned_package(record: ManagedInstance, pin: PackagePin | None) -> PackageS
         )
     match current.version:
         case PackageCommit(url=url):
-            return current.model_copy(update={"version": PackageCommit(url=url, sha=pin.sha)})
+            recipe = current.image_recipe if pin.image_recipe is None else pin.image_recipe
+            return current.model_copy(
+                update={"version": PackageCommit(url=url, sha=pin.sha), "image_recipe": recipe}
+            )
         case version:
             raise PackagePinRefused(
                 f'Package "{pin.id}" is installed from the package index at version {version}, '
