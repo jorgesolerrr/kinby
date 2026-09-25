@@ -99,6 +99,7 @@ async def boot_instance(
         instance.manifest.state_dir,
         event_log=event_log,
         turns=ScheduledTurnConfig(turns, SchedulerConfig(instance, clock)),
+        clock=clock,
     )
     runtime = InstanceRuntime(dispatcher, turns.recap)
     dispatcher.register(INSTANCE_DRAIN, runtime.drain)

@@ -9,6 +9,8 @@ import type {
   Event,
   InstanceListResult,
   ItemFrame,
+  PlanLimit,
+  PlanWindow,
   ResultFrame,
   RunDelegated,
   ServerFrame,
@@ -73,4 +75,11 @@ test("stats.get splits every bucket and its total by subscription source", () =>
 
   expectTypeOf<Stats["buckets"][number]["subscriptions"]>().toEqualTypeOf<SubscriptionUse[]>()
   expectTypeOf<Stats["total"]["subscriptions"]>().toEqualTypeOf<SubscriptionUse[]>()
+})
+
+test("stats.get names each subscription source's plan windows and active limits", () => {
+  type Stats = Contract["methods"]["stats.get"]["result"]
+
+  expectTypeOf<Stats["plan_windows"]>().toEqualTypeOf<PlanWindow[]>()
+  expectTypeOf<Stats["limits"]>().toEqualTypeOf<PlanLimit[]>()
 })

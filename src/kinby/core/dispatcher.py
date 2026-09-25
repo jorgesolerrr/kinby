@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping
 from contextlib import aclosing
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import cast, overload
 from uuid import UUID
@@ -60,12 +61,13 @@ from kinby.contracts import (
     accepted,
     is_turn_closing,
 )
+from kinby.core.clock import utc_now
 from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
 from kinby.core.pricing import price_map
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
-from kinby.core.stats import stats_buckets, stats_summary
+from kinby.core.stats import active_limits, plan_windows, stats_buckets, stats_summary
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
@@ -238,6 +240,7 @@ def build_dispatcher(
     turns: ScheduledTurnConfig,
     event_log: EventLog | None = None,
     price_overrides: Mapping[str, ModelPrice] | None = None,
+    clock: Callable[[], datetime] = utc_now,
 ) -> ScheduledDispatcher: ...
 
 
@@ -248,6 +251,7 @@ def build_dispatcher(
     turns: TurnConfig | None = None,
     event_log: EventLog | None = None,
     price_overrides: Mapping[str, ModelPrice] | None = None,
+    clock: Callable[[], datetime] = utc_now,
 ) -> Dispatcher: ...
 
 
@@ -257,6 +261,7 @@ def build_dispatcher(
     event_log: EventLog | None = None,
     turns: TurnConfig | ScheduledTurnConfig | None = None,
     price_overrides: Mapping[str, ModelPrice] | None = None,
+    clock: Callable[[], datetime] = utc_now,
 ) -> Dispatcher:
     store = ThreadStore(state_dir)
     event_log = event_log or EventLog(state_dir)
@@ -298,7 +303,8 @@ def build_dispatcher(
         )
 
     async def get_stats(command: StatsGetCommand) -> StatsGetResult:
-        metrics = turn_metrics(event_log.all_events(), prices)
+        events = list(event_log.all_events())
+        metrics = turn_metrics(events, prices)
         time_range = TimeRange(command.since, command.until)
         records = [record for record in metrics.records if time_range.includes(record.closed_at)]
         runs = [
@@ -312,6 +318,8 @@ def build_dispatcher(
             records=records,
             buckets=stats_buckets(records, runs, command.by),
             total=stats_summary(records, runs),
+            plan_windows=plan_windows(),
+            limits=active_limits(events, clock()),
             unpriced_models=sorted(
                 {
                     model

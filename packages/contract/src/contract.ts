@@ -532,6 +532,8 @@ export interface StatsGetCommand {
 }
 export interface StatsGetResult {
   buckets: StatsBucket[];
+  limits: PlanLimit[];
+  plan_windows: PlanWindow[];
   records: TurnMetrics[];
   total: StatsSummary;
   unpriced_models: string[];
@@ -595,6 +597,20 @@ export interface SubscriptionUse {
 export interface ToolTime {
   read_ms?: number;
   write_ms?: number;
+}
+/**
+ * A subscription usage source whose plan stopped a delegated run, until its window resets.
+ */
+export interface PlanLimit {
+  resets_at: string;
+  usage_source: UsageSource;
+}
+/**
+ * A rolling period over which a subscription usage source limits use.
+ */
+export interface PlanWindow {
+  duration_seconds: number;
+  usage_source: UsageSource;
 }
 export interface TurnMetrics {
   approvals_requested: number;

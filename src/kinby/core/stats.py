@@ -1,4 +1,4 @@
-"""Aggregate per-turn metrics into UTC reporting buckets."""
+"""Aggregate per-turn metrics into UTC reporting buckets, and find active plan limits."""
 
 from __future__ import annotations
 
@@ -10,9 +10,13 @@ from datetime import UTC, date, datetime, timedelta
 from kinby.contracts import (
     DelegatedRun,
     DenyCounts,
+    Event,
     MemoryCallCounts,
     NavigationMeans,
+    PlanLimit,
+    PlanWindow,
     ReportedRun,
+    RunDelegated,
     StatsBucket,
     StatsBucketSize,
     StatsSummary,
@@ -25,6 +29,10 @@ from kinby.contracts import (
 )
 
 _SUBSCRIPTION_SOURCES = tuple(source for source in UsageSource if source is not UsageSource.API)
+_PLAN_WINDOW_LENGTHS = {
+    UsageSource.CLAUDE_SUBSCRIPTION: (timedelta(hours=5), timedelta(days=7)),
+    UsageSource.CHATGPT_SUBSCRIPTION: (timedelta(hours=5), timedelta(days=7)),
+}
 
 
 @dataclass
@@ -117,6 +125,33 @@ def stats_summary(records: Iterable[TurnMetrics], runs: Iterable[ReportedRun]) -
         totals.add(record)
     totals.delegated_runs.extend(reported.run for reported in _subscription_runs(runs))
     return _stats_summary(totals)
+
+
+def plan_windows() -> list[PlanWindow]:
+    """The plan windows of every subscription source, which every client asks stats for."""
+    return [
+        PlanWindow(usage_source=source, duration_seconds=int(length.total_seconds()))
+        for source, lengths in _PLAN_WINDOW_LENGTHS.items()
+        for length in lengths
+    ]
+
+
+def active_limits(events: Iterable[Event], now: datetime) -> list[PlanLimit]:
+    """Each subscription source's latest limited run whose plan window resets after *now*."""
+    latest: dict[UsageSource, PlanLimit] = {}
+    for event in events:
+        if not isinstance(event.payload, RunDelegated):
+            continue
+        run = event.payload.run
+        if (
+            run.usage_source in _SUBSCRIPTION_SOURCES
+            and run.resets_at is not None
+            and run.resets_at > now
+        ):
+            latest[run.usage_source] = PlanLimit(
+                usage_source=run.usage_source, resets_at=run.resets_at
+            )
+    return [latest[source] for source in _SUBSCRIPTION_SOURCES if source in latest]
 
 
 def _subscription_runs(runs: Iterable[ReportedRun]) -> Iterable[ReportedRun]:
