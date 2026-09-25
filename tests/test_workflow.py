@@ -34,7 +34,7 @@ def test_a_green_push_to_main_updates_the_coder_to_that_commit():
     steps = job["steps"]
     assert isinstance(steps, list)
 
-    assert job["needs"] == "checks"
+    assert job["needs"] == ["checks", "web"]
     assert job["if"] == "github.event_name == 'push' && github.ref == 'refs/heads/main'"
     assert _runs(job)[-1] == (
         'uv run --locked --no-dev kinby hub update --connect "$KINBY_HUB_URL" '
