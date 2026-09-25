@@ -8,3 +8,12 @@
 !src/**
 !docker/
 !docker/entrypoint.sh
+!package.json
+!bun.lock
+!apps/
+!apps/**
+!packages/
+!packages/**
+**/node_modules
+**/dist
+**/*.tsbuildinfo

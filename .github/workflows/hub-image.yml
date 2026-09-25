@@ -1,0 +1,25 @@
+# Builds the hub image on every pull request that changes what goes into it. The build is
+# the check that the Dockerfile's web stage still builds the app.
+name: Hub image
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - package.json
+      - bun.lock
+      - apps/**
+      - packages/**
+      - .github/workflows/hub-image.yml
+
+jobs:
+  hub-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build --target hub --tag kinby-hub .
+      - name: The image carries the built app and no Bun
+        run: >-
+          docker run --rm --entrypoint sh kinby-hub -c
+          'test -f /usr/local/share/kinby/web/index.html && ! command -v bun'
