@@ -40,6 +40,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     ModelCallMismatch,
+    ReportedRun,
     RoutineName,
     RoutinePayload,
     RoutineRunCommand,
@@ -183,6 +184,20 @@ def _turn_token_totals(usage: TurnUsage) -> str:
     )
 
 
+def _delegated_run(reported: ReportedRun) -> str:
+    run = reported.run
+    line = (
+        f"delegated run {reported.timestamp.isoformat()}: source={run.usage_source} "
+        f"client={run.client} models={','.join(run.models)} outcome={run.outcome} "
+        f"input={run.input_tokens} output={run.output_tokens} "
+        f"cache_read={run.cache_read_tokens} cache_creation={run.cache_creation_tokens} "
+        f"total={run.total} duration_ms={run.duration_ms} client_turns={run.client_turns}"
+    )
+    if run.resets_at is None:
+        return line
+    return f"{line} resets_at={run.resets_at.isoformat()}"
+
+
 def _usage_command(args: argparse.Namespace) -> UsageGetCommand:
     return UsageGetCommand.model_validate({"since": args.since, "until": args.until})
 
@@ -235,6 +250,8 @@ async def _show_usage(client: ContractClient, command: UsageGetCommand) -> int:
         print(f"thread {thread.thread_id}: {_token_totals(thread)}")
         for turn in thread.turns:
             print(f"  turn {turn.turn_id}: {_turn_token_totals(turn)}")
+            for reported in turn.delegated_runs:
+                print(f"    {_delegated_run(reported)}")
     return 0
 
 

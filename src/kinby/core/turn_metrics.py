@@ -21,6 +21,8 @@ from kinby.contracts import (
     ModelCompleted,
     Navigation,
     PromptVersion,
+    ReportedRun,
+    RunDelegated,
     TokenTotals,
     ToolCall,
     ToolGated,
@@ -80,6 +82,7 @@ class _TurnEvents:
     opened_paths: Counter[str] = field(default_factory=Counter)
     read_call_ids: set[str] = field(default_factory=set)
     tokens_before_first_write: int = 0
+    delegated_runs: list[ReportedRun] = field(default_factory=list)
 
 
 def estimate_memory_tokens(character_count: int) -> float:
@@ -160,6 +163,10 @@ def turn_metrics(
             if turn is not None:
                 turn.approvals_requested += 1
             continue
+        if isinstance(payload, RunDelegated):
+            if turn is not None:
+                turn.delegated_runs.append(ReportedRun(timestamp=event.timestamp, run=payload.run))
+            continue
         if isinstance(payload, TurnCompleted | TurnFailed | TurnInterrupted):
             turn = open_turns.pop(key, None)
             input_tokens = payload.input_tokens
@@ -224,6 +231,7 @@ def turn_metrics(
                 memory_tokens=(estimate_memory_tokens(turn.memory_characters) if turn else 0),
                 rating=None,
                 navigation=_navigation(turn) if turn else Navigation(),
+                delegated_runs=turn.delegated_runs if turn else [],
             )
             records.append(record)
             closed_turns[key] = record

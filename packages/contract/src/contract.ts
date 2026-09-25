@@ -47,6 +47,8 @@ export type RoutineNoticeKind = "first-failure" | "disabled";
 export type SignalAuth = "token" | "hmac-sha256";
 export type StatsBucketSize = "day" | "week";
 export type TurnClosingKind = "completed" | "failed" | "interrupted";
+export type DelegatedRunOutcome = "completed" | "failed" | "limited";
+export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
 export type TurnVerdict = "good" | "bad";
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
 export type ServerFrame = ResultFrame | ErrorFrame | SubscribedFrame | ItemFrame | EndFrame;
@@ -587,6 +589,7 @@ export interface TurnMetrics {
   closed_at: string;
   closing_kind: TurnClosingKind;
   cost?: number | null;
+  delegated_runs?: ReportedRun[];
   denies?: DenyCounts;
   duration_seconds: number | null;
   input_tokens: number;
@@ -607,6 +610,32 @@ export interface TurnMetrics {
   };
   tool_duration?: ToolTime;
   turn_id: string;
+}
+/**
+ * A delegated run and the time it was recorded, which places it in a time range.
+ */
+export interface ReportedRun {
+  run: DelegatedRun;
+  timestamp: string;
+}
+/**
+ * One run of an outside agent that a tool started, with that run's own tokens.
+ *
+ * A client that reports a running total across resumes, like a Codex thread, needs its
+ * previous reading subtracted. Only a limited run has ``resets_at``: when its plan window resets.
+ */
+export interface DelegatedRun {
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  client: string;
+  client_turns: number;
+  duration_ms: number;
+  input_tokens: number;
+  models: string[];
+  outcome: DelegatedRunOutcome;
+  output_tokens: number;
+  resets_at?: string | null;
+  usage_source: UsageSource;
 }
 export interface Navigation {
   distinct_paths?: number;
@@ -730,6 +759,7 @@ export interface ThreadUsage {
 export interface TurnUsage {
   cache_creation_tokens?: number;
   cache_read_tokens?: number;
+  delegated_runs?: ReportedRun[];
   input_tokens: number;
   output_tokens: number;
   recap_input_tokens: number;
@@ -791,6 +821,7 @@ export interface Event {
     | TurnFailed
     | TurnInterrupted
     | TurnRated
+    | RunDelegated
     | MemoryRecapped
     | RoutineFailureHandled
     | SignalReceived
@@ -895,6 +926,10 @@ export interface TurnInterrupted {
   output_tokens?: number;
   snapshot?: string | null;
   type: "turn.interrupted";
+}
+export interface RunDelegated {
+  run: DelegatedRun;
+  type: "run.delegated";
 }
 export interface MemoryRecapped {
   cache_creation_tokens?: number;

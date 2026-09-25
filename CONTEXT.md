@@ -250,7 +250,7 @@ The **instance** setting that chooses whether to ask for a **turn rating** after
 ### Token usage
 
 The input and output tokens attributed to a turn, with totals rolled up for its thread. Input tokens include the cached tokens the provider reports, recorded as a split so a lost prompt cache is visible.
-`usage.get` includes completed turns whose closing timestamp falls within its **time range**.
+`usage.get` includes completed turns whose closing timestamp falls within its **time range**, and lists beside each one its **delegated runs** whose own timestamp falls within it.
 
 ### Price map
 

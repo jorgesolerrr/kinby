@@ -6,9 +6,11 @@ import type {
   Contract,
   EndFrame,
   ErrorFrame,
+  Event,
   InstanceListResult,
   ItemFrame,
   ResultFrame,
+  RunDelegated,
   ServerFrame,
   SubscribedFrame,
 } from "./index"
@@ -53,4 +55,14 @@ test("a server frame narrows to one frame on its type", () => {
 
 test("a method's result type follows from its name", () => {
   expectTypeOf<Contract["methods"]["instance.list"]["result"]>().toEqualTypeOf<InstanceListResult>()
+})
+
+test("an event payload narrows to a delegated run on its type", () => {
+  const narrow = (payload: Event["payload"]) => {
+    if (payload.type === "run.delegated") {
+      expectTypeOf(payload).toEqualTypeOf<RunDelegated>()
+    }
+  }
+
+  narrow({ type: "message.delta", text: "" })
 })
