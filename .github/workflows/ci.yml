@@ -19,8 +19,17 @@ jobs:
       - run: uv run ty check
       - run: uv run pytest
 
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run check:web
+      - run: bun run --filter @kinby/web build
+
   update-coder:
-    needs: checks
+    needs: [checks, web]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # One update at a time, in push order. An update the hub is running is never cancelled.

@@ -28,6 +28,17 @@ The maintainer's note in `AGENTS.md` is the standard. Everything below puts it i
 - Modules mirror the domain (`instance/`, `memory/`, `cli/`, `core/`) and stay small. Names come from `CONTEXT.md`.
 - Runtime dependencies are a decision, not a convenience. Prefer the stdlib. kinby core stays lean; argue each new one in the PR, or in an ADR if it shapes architecture.
 
+## TypeScript
+
+The web app and the packages beside it follow the same approach. `bun run check` enforces the mechanical part; each workspace's `package.json` and `.oxlintrc.json` are the source of truth for tooling.
+
+- **Parse at the boundary.** A frame off the socket or a value out of `localStorage` becomes a typed value in the one function that reads it, through a type guard or a parser. Code past that point trusts the type.
+- **No `any`.** Use `unknown` at the boundary and narrow it. oxlint fails on `any`.
+- **State is a pure projector behind `useSyncExternalStore`.** `project(state, event) => state` holds the logic and is tested without React. A small store owns the current value and its listeners, and a hook reads it with `useSyncExternalStore`. `useState` is for state that belongs to one component.
+- **No state library until a flow needs one.** Zustand, TanStack Query, and their kind wait for a flow the store above cannot carry, and that flow's ticket argues for them.
+- **Components come from the registry.** Add them with the `shadcn` CLI, compose them, and style through their variants and the theme tokens. `className` is for layout. Files under `src/components/ui` are generated; change them only through the CLI or when a variant is missing.
+- **Tests exercise behaviour.** Vitest, next to the code as `*.test.ts`. Test the projector, the stores, and the connection through their public functions with fakes injected. Render a component only when the behaviour lives in the component.
+
 ## Interfaces
 
 An interface exists to decouple. The layer above depends on a behavior and knows nothing about how it is implemented. Whether the behavior arrives as a `Callable`, a `Protocol`, or an ABC, the caller only needs an object that acts the way the interface says.

@@ -10,7 +10,9 @@ I'm a passionate programmer who likes complex things done in a simple way. That 
 
 ## How to work here
 
-- **Code.** Lean and pythonic: approach, book, PEP 8, Protocol, Callable, tests, type checking, and lint live in `CODING-STANDARD.md`. Checks pass before any commit: `uv run ruff check .`, `uv run ruff format .`, `uv run ty check`, `uv run pytest`.
+- **Code.** Lean and pythonic: approach, book, PEP 8, Protocol, Callable, tests, type checking, and lint live in `CODING-STANDARD.md`. `bun run check` passes before any commit: the four uv checks (`ruff check`, `ruff format`, `ty check`, `pytest`), then each workspace's `tsc -b`, oxlint, oxfmt, and `vitest run`, then knip. It stops at the first failure.
+- **The gate runs on Linux.** The runtime and hub locks use `fcntl`, so pytest cannot import them on Windows. On Windows, run `bun run check` inside WSL or a container. `bun run dev` works on any platform.
+- **Web UI.** The web app lives in `apps/web` and is built from shadcn/ui (Base UI, preset `nova`). Use the `shadcn` skill for UI work there. Add components with `bunx --bun shadcn@latest add` from `apps/web` and never hand-write one the registry has. Fix every `shadcn/*` lint error with a variant or a theme token, not by disabling the rule.
 - **User-facing communication.** Run the `unslop` skill (`/unslop`) over anything the user reads: replies, PR descriptions, issue comments, README and doc prose. Plain and specific.
 - **Architecture decisions.** Record them as ADRs in `docs/adr/`, one decision per file.
 

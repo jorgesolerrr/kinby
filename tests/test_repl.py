@@ -937,14 +937,14 @@ def test_repl_does_not_print_recap_events(tmp_path: Path) -> None:
                 stderr=stderr,
             )
         )
-        for _ in range(20):
-            if any(
+
+        async def first_recap() -> None:
+            while not any(
                 isinstance(event.payload, MemoryRecapped) for event in event_log.stored(created.id)
             ):
-                break
-            await asyncio.sleep(0)
-        else:
-            raise AssertionError("the first recap did not finish")
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(first_recap(), timeout=1)
 
         stdin.send("Again\n")
         stdin.send("")
