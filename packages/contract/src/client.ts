@@ -84,6 +84,7 @@ export function createClient(origin: string, transport: Transport): Client {
   let nextId = 1
   const pending = new Map<string, PendingCall>()
   const listeners = new Set<() => void>()
+  let settleGeneration = 0
   const route = (path: string) => new URL(path, origin).href
 
   const setState = (next: ConnectionState) => {
@@ -92,12 +93,15 @@ export function createClient(origin: string, transport: Transport): Client {
   }
 
   // A browser never sees the status of a refused upgrade, so the hub's session route says why.
+  // A newer check invalidates one already in flight, so a late 204 cannot undo sign-out.
   const settle = async () => {
+    const generation = ++settleGeneration
     const ended = await transport.fetch(route("/auth/session")).then(
       (response) => response.status === 401,
       () => false,
     )
-    if (socket === undefined) setState(ended ? "signed-out" : "disconnected")
+    if (generation !== settleGeneration || socket !== undefined) return
+    setState(ended ? "signed-out" : "disconnected")
   }
 
   const connect = () => {

@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest"
 
-import { CallError, createClient } from "./client"
+import { CallError, createClient, type Transport } from "./client"
 import type { InstanceListResult, InstanceStatusResult } from "./index"
 import { fakeHub } from "./testing"
 
@@ -95,5 +95,41 @@ describe("client", () => {
     socket.drop()
 
     await vi.waitFor(() => expect(client.state()).toBe("disconnected"))
+  })
+
+  it("keeps signed-out when a session check started by a drop returns after sign-out", async () => {
+    const hub = fakeHub()
+    let releaseDroppedCheck: (response: Response) => void = () => {}
+    let sessionChecks = 0
+    const transport: Transport = {
+      openSocket: (url, events) => hub.transport.openSocket(url, events),
+      fetch: (url, init) => {
+        const sessionCheck =
+          (init?.method ?? "GET") === "GET" && new URL(url).pathname === "/auth/session"
+        if (sessionCheck && sessionChecks++ === 0) {
+          return new Promise((resolve) => {
+            releaseDroppedCheck = resolve
+          })
+        }
+        return hub.transport.fetch(url, init)
+      },
+    }
+    const client = createClient(ORIGIN, transport)
+    await vi.waitFor(() => expect(client.state()).toBe("connected"))
+    const socket = hub.sockets[0]
+    if (socket === undefined) throw new Error("the client opened no socket")
+
+    socket.drop()
+    expect(client.state()).toBe("connected")
+
+    const signingOut = client.signOut()
+    await vi.waitFor(() => expect(sessionChecks).toBe(2))
+    await signingOut
+
+    expect(client.state()).toBe("signed-out")
+    releaseDroppedCheck(new Response(null, { status: 204 }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(client.state()).toBe("signed-out")
+    expect(hub.signedIn).toBe(false)
   })
 })
