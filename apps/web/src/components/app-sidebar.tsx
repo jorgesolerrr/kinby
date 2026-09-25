@@ -21,7 +21,10 @@ const entries = [
   { title: "Usage", icon: <ChartColumnIcon /> },
 ]
 
-export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
+export function AppSidebar({
+  onSignOut,
+  ...props
+}: React.ComponentProps<typeof Sidebar> & { onSignOut: () => void }) {
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
@@ -38,7 +41,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         <NavMain entries={entries} />
       </SidebarContent>
       <SidebarFooter>
-        <NavUser />
+        <NavUser onSignOut={onSignOut} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

@@ -3,7 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
   "scripts": {
     "generate": "json2ts -i ../../docs/schema/contract.schema.json -o src/contract.ts",
     "check": "tsc -b && oxlint && oxfmt --check && vitest run"

@@ -23,7 +23,9 @@
       "rules": {
         "shadcn/no-restyle": "off",
         "shadcn/no-arbitrary-values": "off",
-        "react/only-export-components": "off"
+        "react/only-export-components": "off",
+        "jsx-a11y/label-has-associated-control": "off",
+        "jsx-a11y/prefer-tag-over-role": "off"
       }
     }
   ]

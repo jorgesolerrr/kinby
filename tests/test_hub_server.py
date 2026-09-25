@@ -268,6 +268,65 @@ def test_a_session_survives_a_hub_restart(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_the_session_route_tells_the_browser_whether_its_session_is_open(tmp_path: Path) -> None:
+    """A browser cannot read why an upgrade failed, so it asks here."""
+
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        token = hub.access.issue()
+        assert token is not None
+        async with served(hub) as address, aiohttp.ClientSession() as session:
+            cookie = await session_cookie(session, address, token)
+            headers = {"Cookie": f"kinby_session={cookie['kinby_session'].value}"}
+            opened = await session.get(url(address, "/auth/session"), headers=headers)
+            without_cookie = await session.get(url(address, "/auth/session"))
+            hub.access.rotate()
+            rotated = await session.get(url(address, "/auth/session"), headers=headers)
+
+        assert opened.status == 204
+        assert without_cookie.status == 401
+        assert rotated.status == 401
+
+    asyncio.run(scenario())
+
+
+def test_logout_ends_the_session_and_clears_its_cookie(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        token = hub.access.issue()
+        assert token is not None
+        async with served(hub) as address, aiohttp.ClientSession() as session:
+            ended = await session_cookie(session, address, token)
+            kept = await session_cookie(session, address, token)
+            logout = await session.post(
+                url(address, "/auth/logout"),
+                headers={"Cookie": f"kinby_session={ended['kinby_session'].value}"},
+            )
+            cleared = SimpleCookie()
+            cleared.load(logout.headers["Set-Cookie"])
+            with pytest.raises(aiohttp.WSServerHandshakeError) as refused:
+                async with session.ws_connect(
+                    url(address, "/ws"),
+                    headers={
+                        "Cookie": f"kinby_session={ended['kinby_session'].value}",
+                        "Origin": f"http://{address.host}:{address.port}",
+                    },
+                ):
+                    pass
+            other = await session.get(
+                url(address, "/auth/session"),
+                headers={"Cookie": f"kinby_session={kept['kinby_session'].value}"},
+            )
+
+        assert logout.status == 204
+        assert cleared["kinby_session"].value == ""
+        assert cleared["kinby_session"]["max-age"] == "0"
+        assert refused.value.status == 401
+        assert other.status == 204
+
+    asyncio.run(scenario())
+
+
 async def created_instance(socket: aiohttp.ClientWebSocketResponse) -> str:
     await call(
         socket,

@@ -24,7 +24,7 @@ WEB_APP = Path("/usr/local/share/kinby/web")
 
 
 class HubContractServer:
-    """Serve the hub's contract at ``/ws``, the login that opens a session, and the web app."""
+    """Serve the hub's contract at ``/ws``, the browser session's routes, and the web app."""
 
     def __init__(
         self,
@@ -58,6 +58,8 @@ class HubContractServer:
     def add_routes(self, application: web.Application) -> None:
         """Register the contract first: aiohttp resolves routes in order, and the app is last."""
         application.router.add_post("/auth/login", self._login)
+        application.router.add_get("/auth/session", self._session, allow_head=False)
+        application.router.add_post("/auth/logout", self._logout)
         application.router.add_get("/ws", self._socket, allow_head=False)
         application.router.add_get(
             "/instances/{instance_id}/ws",
@@ -85,6 +87,21 @@ class HubContractServer:
             samesite="Strict",
             path="/",
         )
+        return response
+
+    async def _session(self, request: web.Request) -> web.Response:
+        """A browser cannot read why an upgrade failed, so it asks whether its session is open."""
+        session = request.cookies.get(SESSION_COOKIE)
+        if session is None or not self._access.session_open(SessionId(session)):
+            raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
+        return web.Response(status=204)
+
+    async def _logout(self, request: web.Request) -> web.Response:
+        session = request.cookies.get(SESSION_COOKIE)
+        if session is not None:
+            self._access.logout(SessionId(session))
+        response = web.Response(status=204)
+        response.del_cookie(SESSION_COOKIE, path="/")
         return response
 
     async def _socket(self, request: web.Request) -> web.WebSocketResponse:

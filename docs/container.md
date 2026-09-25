@@ -59,6 +59,8 @@ The hub serves these routes:
 | Route | Purpose |
 | --- | --- |
 | `POST /auth/login` | Exchange the access token for the session cookie the browser carries. |
+| `GET /auth/session` | 204 while the cookie's browser session is open, 401 once it has ended. A browser cannot read why a socket upgrade failed, so the web app asks here. |
+| `POST /auth/logout` | End the cookie's browser session and clear the cookie. |
 | `GET /ws` | The hub's own contract: instances, lifecycle operations. |
 | `GET /instances/{instance_id}/ws` | One instance's contract, relayed frame for frame to its private `/ws`. A stopped instance answers 503, an unknown one 404. |
 | `POST /instances/{instance_id}/signals/{routine}` | A webhook, forwarded byte for byte. The instance authenticates it and answers it; the hub queues nothing. |
