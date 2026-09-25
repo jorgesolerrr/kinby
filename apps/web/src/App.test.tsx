@@ -1,6 +1,6 @@
 import { createClient } from "@kinby/contract"
 import type { InstanceSummary } from "@kinby/contract"
-import { ACCESS_TOKEN, fakeHub, instanceSummary } from "@kinby/contract/testing"
+import { ACCESS_TOKEN, fakeClock, fakeHub, instanceSummary } from "@kinby/contract/testing"
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it } from "vitest"
@@ -15,8 +15,9 @@ function openApp({
   instances?: InstanceSummary[]
 }) {
   const hub = fakeHub({ signedIn, instances })
-  render(<App client={createClient("http://hub.test", hub.transport)} />)
-  return hub
+  const clock = fakeClock()
+  render(<App client={createClient("http://hub.test", hub.transport, clock)} />)
+  return { hub, clock }
 }
 
 const userMenu = () => screen.findByRole("button", { name: /You/ })
@@ -29,7 +30,7 @@ async function signIn(token: string) {
 
 describe("the app", () => {
   it("loads the shell once the hub accepts the access token", async () => {
-    const hub = openApp({ signedIn: false })
+    const { hub } = openApp({ signedIn: false })
 
     await signIn(ACCESS_TOKEN)
 
@@ -55,7 +56,7 @@ describe("the app", () => {
   })
 
   it("signs out from the user menu, ending the browser session", async () => {
-    const hub = openApp({ signedIn: true })
+    const { hub } = openApp({ signedIn: true })
     const user = userEvent.setup()
 
     await user.click(await userMenu())
@@ -65,14 +66,17 @@ describe("the app", () => {
     expect(hub.signedIn).toBe(false)
   })
 
-  it("shows it is disconnected when the socket drops", async () => {
-    const hub = openApp({ signedIn: true })
+  it("shows it is reconnecting while the socket is down, and stops once it is back", async () => {
+    const { hub, clock } = openApp({ signedIn: true })
     await userMenu()
 
     act(() => hub.sockets[0]?.drop())
 
-    expect(await screen.findByText("Disconnected")).toBeDefined()
+    expect(await screen.findByText("Reconnecting")).toBeDefined()
     expect(await userMenu()).toBeDefined()
+    await act(() => clock.advance(16_000))
+    expect(screen.queryByText("Reconnecting")).toBeNull()
+    expect(hub.sockets).toHaveLength(2)
   })
 })
 
@@ -136,6 +140,17 @@ describe("the instances", () => {
     for (const link of screen.getAllByRole("link")) {
       expect(link.getAttribute("aria-current")).toBeNull()
     }
+  })
+
+  it("lists the instances again once the connection is back", async () => {
+    const { hub, clock } = openApp({ signedIn: true, instances: [ada] })
+    expect(await instanceLink("Ada")).toBeDefined()
+
+    act(() => hub.sockets[0]?.drop())
+    hub.instances = [ada, unnamed]
+    await act(() => clock.advance(16_000))
+
+    expect(await instanceLink("research")).toBeDefined()
   })
 
   it("says the hub has no instances yet", async () => {
