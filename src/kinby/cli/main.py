@@ -12,7 +12,7 @@ import signal
 import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -57,7 +57,7 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core import Dispatcher, assemble_system_prompt, boot_instance, build_dispatcher
-from kinby.core.clock import utc_today
+from kinby.core.clock import utc_now, utc_today
 from kinby.core.contract_server import ContractServer
 from kinby.core.receiver import Receiver
 from kinby.core.runtime_lock import InstanceBusyError, runtime_lock
@@ -228,10 +228,11 @@ def _load_selected_instance(
     return discover_instance(model_override=model_override)
 
 
-def _contract_client(instance: Instance) -> ContractClient:
+def _contract_client(instance: Instance, clock: Callable[[], datetime]) -> ContractClient:
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
         price_overrides=instance.manifest.prices,
+        clock=clock,
     )
     return _contract_client_for(dispatcher)
 
@@ -386,6 +387,8 @@ async def _show_stats(
     for bucket in result.buckets:
         print(_stats_row(bucket.start.isoformat(), bucket))
     print(_stats_row("total", result.total))
+    for limit in result.limits:
+        print(f"limit {limit.usage_source}: resets_at={limit.resets_at.isoformat()}")
     state_dir.mkdir(parents=True, exist_ok=True)
     (state_dir / "stats.json").write_text(
         f"{result.model_dump_json(indent=2)}\n",
@@ -718,6 +721,7 @@ def main(
     argv: list[str] | None = None,
     *,
     today: Callable[[], date] = utc_today,
+    now: Callable[[], datetime] = utc_now,
 ) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     # `hub update` and `hub adopt` drive a hub over the network and take no hub directory.
@@ -1001,7 +1005,7 @@ def main(
                 with runtime_lock(instance.manifest.state_dir):
                     return asyncio.run(_serve_instance(instance))
             case "thread" if args.thread_command in {"create", "list"}:
-                client = _contract_client(_load_selected_instance(args))
+                client = _contract_client(_load_selected_instance(args), now)
                 if args.thread_command == "create":
                     return asyncio.run(_create_thread(client, args.title))
                 return asyncio.run(_list_threads(client))
@@ -1014,14 +1018,14 @@ def main(
                 command = _range_command(lambda: _usage_command(args))
                 if command is None:
                     return 1
-                client = _contract_client(_load_selected_instance(args))
+                client = _contract_client(_load_selected_instance(args), now)
                 return asyncio.run(_show_usage(client, command))
             case "stats":
                 command = _range_command(lambda: _stats_command(args))
                 if command is None:
                     return 1
                 instance = _load_selected_instance(args)
-                client = _contract_client(instance)
+                client = _contract_client(instance, now)
                 return asyncio.run(_show_stats(client, command, instance.manifest.state_dir))
     except (
         InstanceNotFoundError,

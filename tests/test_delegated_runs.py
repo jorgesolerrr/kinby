@@ -15,6 +15,7 @@ from kinby.contracts import (
     DelegatedRun,
     DelegatedRunOutcome,
     Event,
+    PlanLimit,
     RunDelegated,
     Scope,
     StatsGetResult,
@@ -38,6 +39,7 @@ from kinby.plugins import ToolContext
 from tests.helpers import thread_events
 from tests.test_gate import ScriptedModel
 from tests.test_routines import RoutineModel, instance_at, routine_file
+from tests.test_scheduler import FakeClock
 
 #: Tool contexts a code step hands out, to report through once its turn has closed.
 LEAKED_CONTEXTS: list[ToolContext] = []
@@ -107,7 +109,9 @@ def runtime(
     instance: Instance,
     model: RoutineModel | ScriptedModel | None = None,
     clock: Callable[[], datetime] = utc_now,
+    now: Callable[[], datetime] = utc_now,
 ) -> Dispatcher:
+    """Stamp events with *clock*, and answer stats.get as of *now*."""
     log = EventLog(instance.manifest.state_dir, clock=clock)
     runner = LangGraphRunner(
         instance, event_log=log, model_factory=lambda _: model or RoutineModel()
@@ -115,6 +119,7 @@ def runtime(
     return build_dispatcher(
         instance.manifest.state_dir,
         event_log=log,
+        clock=now,
         turns=ScheduledTurnConfig(
             TurnConfig(runner.prepare_for_turn, runner.permission_ceiling, runner),
             SchedulerConfig(instance),
@@ -657,3 +662,128 @@ def test_cli_stats_prints_per_source_columns_and_writes_the_full_result(
         [NO_CLAUDE_USE, CHATGPT_RUN_USE],
     ]
     assert report.total.subscriptions == [CLAUDE_RUN_USE, CHATGPT_RUN_USE]
+    assert report.limits == []
+
+
+def test_cli_stats_prints_one_line_per_active_limit(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "alice"
+    init_instance(path)
+    instance = load_instance(path)
+    code_step(
+        instance,
+        LIMITED_RUN,
+        limited(UsageSource.CHATGPT_SUBSCRIPTION, datetime(2026, 10, 1, 9, tzinfo=UTC)),
+        limited(UsageSource.CHATGPT_SUBSCRIPTION, datetime(2026, 9, 25, 9, 30, tzinfo=UTC)),
+    )
+    asyncio.run(fire_routine(runtime(instance, clock=TickingClock())))
+
+    exit_code = main(["stats", str(path)], now=lambda: datetime(2026, 9, 25, 10, tzinfo=UTC))
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    assert output.err == ""
+    assert output.out.splitlines()[-2:] == [
+        "limit claude-subscription: resets_at=2026-09-25T18:40:00+00:00",
+        "limit chatgpt-subscription: resets_at=2026-10-01T09:00:00+00:00",
+    ]
+
+
+CLAUDE_LIMIT = PlanLimit(
+    usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+    resets_at=datetime(2026, 9, 25, 18, 40, tzinfo=UTC),
+)
+
+
+def test_stats_get_shows_a_limit_until_its_plan_window_resets(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        code_step(instance, LIMITED_RUN)
+        now = FakeClock(datetime(2026, 9, 25, 10, tzinfo=UTC))
+        dispatcher = runtime(instance, clock=TickingClock(), now=now)
+
+        await fire_routine(dispatcher)
+        active = await call(dispatcher, "stats.get")
+        now.now = datetime(2026, 9, 25, 18, 40, tzinfo=UTC)
+        reset = await call(dispatcher, "stats.get")
+
+        assert isinstance(active, StatsGetResult)
+        assert active.limits == [CLAUDE_LIMIT]
+        assert isinstance(reset, StatsGetResult)
+        assert reset.limits == []
+
+    asyncio.run(scenario())
+
+
+def test_stats_get_shows_an_active_limit_reported_before_its_time_range(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        code_step(instance, LIMITED_RUN)
+        dispatcher = runtime(
+            instance,
+            clock=TickingClock(datetime(2026, 9, 24, 9, tzinfo=UTC)),
+            now=FakeClock(datetime(2026, 9, 25, 10, tzinfo=UTC)),
+        )
+
+        await fire_routine(dispatcher)
+        stats = await call(dispatcher, "stats.get", since=datetime(2026, 9, 25, tzinfo=UTC))
+
+        assert isinstance(stats, StatsGetResult)
+        assert stats.records == []
+        assert stats.limits == [CLAUDE_LIMIT]
+
+    asyncio.run(scenario())
+
+
+def test_stats_get_names_five_hour_and_seven_day_windows_for_each_subscription_source(
+    tmp_path: Path,
+) -> None:
+    stats = asyncio.run(call(runtime(instance_at(tmp_path)), "stats.get"))
+
+    assert isinstance(stats, StatsGetResult)
+    assert [(window.usage_source, window.duration_seconds) for window in stats.plan_windows] == [
+        (UsageSource.CLAUDE_SUBSCRIPTION, 5 * 60 * 60),
+        (UsageSource.CLAUDE_SUBSCRIPTION, 7 * 24 * 60 * 60),
+        (UsageSource.CHATGPT_SUBSCRIPTION, 5 * 60 * 60),
+        (UsageSource.CHATGPT_SUBSCRIPTION, 7 * 24 * 60 * 60),
+    ]
+
+
+def limited(source: UsageSource, resets_at: datetime) -> DelegatedRun:
+    return LIMITED_RUN.model_copy(update={"usage_source": source, "resets_at": resets_at})
+
+
+def test_stats_get_shows_the_latest_active_limit_of_each_subscription_source(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        code_step(
+            instance,
+            limited(UsageSource.CHATGPT_SUBSCRIPTION, datetime(2026, 10, 1, 9, tzinfo=UTC)),
+            limited(UsageSource.CLAUDE_SUBSCRIPTION, datetime(2026, 10, 2, 9, tzinfo=UTC)),
+            LIMITED_RUN,
+            limited(UsageSource.CHATGPT_SUBSCRIPTION, datetime(2026, 9, 25, 9, 30, tzinfo=UTC)),
+            limited(UsageSource.API, datetime(2026, 9, 25, 20, tzinfo=UTC)),
+        )
+        dispatcher = runtime(
+            instance,
+            clock=TickingClock(),
+            now=FakeClock(datetime(2026, 9, 25, 10, tzinfo=UTC)),
+        )
+
+        await fire_routine(dispatcher)
+        stats = await call(dispatcher, "stats.get")
+
+        assert isinstance(stats, StatsGetResult)
+        assert stats.limits == [
+            CLAUDE_LIMIT,
+            PlanLimit(
+                usage_source=UsageSource.CHATGPT_SUBSCRIPTION,
+                resets_at=datetime(2026, 10, 1, 9, tzinfo=UTC),
+            ),
+        ]
+
+    asyncio.run(scenario())

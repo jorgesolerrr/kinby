@@ -1813,6 +1813,43 @@
       "title": "PermissionMode",
       "type": "string"
     },
+    "PlanLimit": {
+      "additionalProperties": false,
+      "description": "A subscription usage source whose plan stopped a delegated run, until its window resets.",
+      "properties": {
+        "resets_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "usage_source": {
+          "$ref": "#/$defs/UsageSource"
+        }
+      },
+      "required": [
+        "usage_source",
+        "resets_at"
+      ],
+      "title": "PlanLimit",
+      "type": "object"
+    },
+    "PlanWindow": {
+      "additionalProperties": false,
+      "description": "A rolling period over which a subscription usage source limits use.",
+      "properties": {
+        "duration_seconds": {
+          "type": "integer"
+        },
+        "usage_source": {
+          "$ref": "#/$defs/UsageSource"
+        }
+      },
+      "required": [
+        "usage_source",
+        "duration_seconds"
+      ],
+      "title": "PlanWindow",
+      "type": "object"
+    },
     "ProcessState": {
       "enum": [
         "missing",
@@ -2467,6 +2504,18 @@
           },
           "type": "array"
         },
+        "limits": {
+          "items": {
+            "$ref": "#/$defs/PlanLimit"
+          },
+          "type": "array"
+        },
+        "plan_windows": {
+          "items": {
+            "$ref": "#/$defs/PlanWindow"
+          },
+          "type": "array"
+        },
         "records": {
           "items": {
             "$ref": "#/$defs/TurnMetrics"
@@ -2493,6 +2542,8 @@
         "records",
         "buckets",
         "total",
+        "plan_windows",
+        "limits",
         "unpriced_models"
       ],
       "title": "StatsGetResult",

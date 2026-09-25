@@ -1062,10 +1062,26 @@ class StatsGetCommand(ContractModel):
     by: StatsBucketSize = StatsBucketSize.DAY
 
 
+class PlanWindow(ContractModel):
+    """A rolling period over which a subscription usage source limits use."""
+
+    usage_source: UsageSource
+    duration_seconds: int
+
+
+class PlanLimit(ContractModel):
+    """A subscription usage source whose plan stopped a delegated run, until its window resets."""
+
+    usage_source: UsageSource
+    resets_at: AwareDatetime
+
+
 class StatsGetResult(ContractModel):
     records: list[TurnMetrics]
     buckets: list[StatsBucket]
     total: StatsSummary
+    plan_windows: list[PlanWindow]
+    limits: list[PlanLimit]
     unpriced_models: list[str]
     warnings: list[ModelCallMismatch] = Field(default_factory=list)
 
