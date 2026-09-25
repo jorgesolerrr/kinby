@@ -271,6 +271,10 @@ class HubRegistry:
             )
             return inserted.rowcount == 1
 
+    def close_session(self, token_hash: str) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+
     def session_open(self, token_hash: str) -> bool:
         with self._connect() as connection:
             row = connection.execute(

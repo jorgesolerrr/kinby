@@ -91,3 +91,6 @@ class HubAccess:
 
     def session_open(self, session: SessionId) -> bool:
         return self._registry.session_open(_hashed(session))
+
+    def logout(self, session: SessionId) -> None:
+        self._registry.close_session(_hashed(session))

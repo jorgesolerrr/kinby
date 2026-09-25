@@ -3,9 +3,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -16,9 +18,9 @@ import {
 } from "@/components/ui/sidebar"
 import { isTheme, useTheme } from "@/lib/theme"
 import { theme } from "@/theme"
-import { ChevronsUpDownIcon } from "lucide-react"
+import { ChevronsUpDownIcon, LogOutIcon } from "lucide-react"
 
-export function NavUser() {
+export function NavUser({ onSignOut }: { onSignOut: () => void }) {
   const { isMobile } = useSidebar()
   const current = useTheme(theme)
   return (
@@ -45,6 +47,13 @@ export function NavUser() {
                 <DropdownMenuRadioItem value="dark">Dark</DropdownMenuRadioItem>
                 <DropdownMenuRadioItem value="system">System</DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuItem onClick={onSignOut}>
+                <LogOutIcon />
+                Sign out
+              </DropdownMenuItem>
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
