@@ -29,7 +29,7 @@ jobs:
       - run: bun run --filter @kinby/web build
 
   update-coder:
-    needs: checks
+    needs: [checks, web]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # One update at a time, in push order. An update the hub is running is never cancelled.
