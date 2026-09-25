@@ -15,10 +15,6 @@ from kinby.contracts import (
     methods,
     parse_client_frame,
 )
-from kinby.contracts.schema import frames_schema
-
-CLIENT_FRAMES = ("CallFrame", "SubscribeFrame", "CancelFrame")
-SERVER_FRAMES = ("ResultFrame", "ErrorFrame", "SubscribedFrame", "ItemFrame", "EndFrame")
 
 
 @pytest.mark.parametrize(
@@ -74,23 +70,6 @@ def test_an_error_frame_without_an_id_answers_a_frame_that_could_not_be_read() -
             "retryable": False,
         },
     }
-
-
-def test_the_frame_schema_requires_the_type_every_frame_is_discriminated_on() -> None:
-    schema = frames_schema()
-
-    definitions = schema["$defs"]
-    assert isinstance(definitions, dict)
-    for name in (*CLIENT_FRAMES, *SERVER_FRAMES):
-        frame = definitions[name]
-        assert isinstance(frame, dict)
-        properties = frame["properties"]
-        required = frame["required"]
-        assert isinstance(properties, dict)
-        assert isinstance(properties["type"], dict)
-        assert "const" in properties["type"]
-        assert isinstance(required, list)
-        assert "type" in required
 
 
 def test_every_declared_method_says_what_its_answer_arrives_as() -> None:

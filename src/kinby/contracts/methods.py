@@ -197,7 +197,7 @@ INSTANCE_STATUS = Method(
 INSTANCE_LOGS = Method("instance.logs", Scope.HUB_READ, InstanceLogsCommand, InstanceLogsResult)
 OPERATION_GET = Method("operation.get", Scope.HUB_UPDATE, OperationGetCommand, OperationGetResult)
 
-_METHODS = (
+METHODS = (
     THREAD_CREATE,
     THREAD_LIST,
     THREAD_MODE_SET,
@@ -233,9 +233,9 @@ _METHODS = (
     INSTANCE_LOGS,
     OPERATION_GET,
 )
-_SUBSCRIPTIONS = (THREAD_SUBSCRIBE,)
+SUBSCRIPTIONS = (THREAD_SUBSCRIBE,)
 
 #: What a result or an item arrives as, by wire name, so a client off the socket parses it once.
 RESULT_MODELS: Mapping[str, type[ContractModel]] = {
-    method.name: method.result for method in _METHODS
-} | {subscription.name: subscription.item for subscription in _SUBSCRIPTIONS}
+    method.name: method.result for method in METHODS
+} | {subscription.name: subscription.item for subscription in SUBSCRIPTIONS}
