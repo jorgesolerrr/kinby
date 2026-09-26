@@ -109,6 +109,7 @@ export function instanceSummary(
   fields: Pick<InstanceSummary, "instance_id"> & Partial<InstanceSummary>,
 ): InstanceSummary {
   return {
+    avatar: { shape: "circle", color: "blue" },
     image_id: "sha256:image",
     intended_state: "running",
     manifest_id: fields.instance_id,

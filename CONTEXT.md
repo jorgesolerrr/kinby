@@ -165,6 +165,11 @@ _Avoid_: image build, warm-up
 One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. The built-in fields come first. Every instance asks for its model and API key, and a **vanilla instance** also asks for an optional **behavior prompt**. A package's own fields follow.
 _Avoid_: required input, form field
 
+### Avatar
+
+How clients draw an **instance**: a shape (circle, squircle, or square) and a color named from a fixed palette, which each client maps to its own theme. The user picks it at creation, and the **instance registry** keeps it, never the instance directory, so it shows before the instance ever starts. An instance nobody picked one for is a circle in the palette's first color.
+_Avoid_: icon, logo
+
 ### Container runtime
 
 The hub-facing interface that creates, starts, inspects, and reads logs from isolated instance containers. Docker is the first implementation; Docker-specific paths and identities stay behind the interface.

@@ -1,19 +1,34 @@
 import { browserClock } from "@kinby/contract"
 import type {
+  AvatarColor,
+  AvatarShape,
   Client,
   Clock,
   CuratedPackage,
+  InstanceCreateCommand,
   OperationState,
   OperationStep,
+  PackageDescription,
   PackageSelection,
   SetupField,
 } from "@kinby/contract"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type * as React from "react"
 
+import { InstanceAvatar } from "@/components/instance-avatar"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import {
   Item,
   ItemActions,
@@ -24,7 +39,18 @@ import {
   ItemTitle,
 } from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
+import { Textarea } from "@/components/ui/textarea"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import {
+  type Creation,
+  createCommand,
+  followCreation,
+  followStart,
+  type Identity,
+  type Starting,
+} from "@/lib/creation"
 import { followPreparation, type Preparation } from "@/lib/preparation"
+import { selectInstance } from "@/lib/selection"
 import {
   CircleCheckIcon,
   CircleXIcon,
@@ -41,73 +67,194 @@ const STATES: Record<OperationState, { label: string; icon: React.ReactNode }> =
   failed: { label: "Failed", icon: <CircleXIcon /> },
 }
 
+const SHAPES: Record<AvatarShape, string> = {
+  circle: "Circle",
+  squircle: "Squircle",
+  square: "Square",
+}
+
+// In palette order: the hub draws an avatar nobody chose in the first one.
+const COLORS: Record<AvatarColor, string> = {
+  blue: "Blue",
+  violet: "Violet",
+  green: "Green",
+  amber: "Amber",
+  red: "Red",
+  gray: "Gray",
+}
+
+const NEW_IDENTITY: Identity = { name: "", avatar: { shape: "circle", color: "blue" } }
+
+const CREATING: Creation = { state: "creating", steps: [] }
+
+type Stage = "package" | "identity" | "setup"
+
+const HINTS: Record<Stage | "create", string> = {
+  package: "Package: pick what the instance starts from.",
+  identity: "Identity: name the instance and pick its avatar.",
+  setup: "Setup: fill in what the image asks for.",
+  create: "Create: the hub builds the instance, then you start it or leave it stopped.",
+}
+
+const noop = () => {}
+
 /** The icons the curated entries name. An icon the app does not know draws as a package. */
 const ICONS: Record<string, LucideIcon> = { code: CodeIcon }
-
-/** One click on a card. A new pick of the same card prepares it again. */
-type CardPick = { selection: PackageSelection | null }
 
 type CuratedList =
   | { state: "loading" }
   | { state: "failed"; detail: string }
   | { state: "loaded"; packages: CuratedPackage[] }
 
-/** Create an instance. Its package step picks what the instance starts from and prepares it. */
+type PackagePick = { package: PackageSelection | null }
+
+/**
+ * Create an instance: pick a package, name it, fill in its setup fields, create it, then start it.
+ * `onPublished` hears when the hub lists the new instance.
+ */
 export function CreateWizard({
   caller,
   clock = browserClock,
+  onPublished = noop,
 }: {
   caller: Pick<Client, "call">
   clock?: Clock
+  onPublished?: () => void
 }) {
   const curated = useCuratedList(caller)
-  const [pick, setPick] = useState<CardPick>()
-  const preparation = usePreparation(caller, pick, clock)
-  // A card being prepared, or already prepared, waits; any other card can still be picked.
-  const busy = (selection: PackageSelection | null) =>
-    pick?.selection === selection &&
-    (preparation?.state === "preparing" || preparation?.state === "prepared")
+  const [pick, setPick] = useState<PackagePick>()
+  const [stage, setStage] = useState<Stage>("package")
+  const [identity, setIdentity] = useState(NEW_IDENTITY)
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [submitted, setSubmitted] = useState<InstanceCreateCommand>()
+  const [declared, setDeclared] = useState<PackageDescription>()
+  // A later read wins. The one from the failed validate can still be in flight when
+  // the hub answers invalid_setup.
+  const declarationRead = useRef(0)
+
+  const prepare = useCallback(
+    (picked: PackagePick, report: (preparation: Preparation) => void) =>
+      followPreparation(caller, picked.package, report, clock),
+    [caller, clock],
+  )
+  const create = useCallback(
+    (command: InstanceCreateCommand, report: (creation: Creation) => void) =>
+      followCreation(caller, command, report, clock),
+    [caller, clock],
+  )
+  const preparation =
+    useFollowing(pick, prepare) ??
+    (pick === undefined ? undefined : { state: "preparing", steps: [] })
+  const creation =
+    useFollowing(submitted, create) ?? (submitted === undefined ? undefined : CREATING)
+
+  const createdId = creation?.state === "created" ? creation.instanceId : undefined
+  useEffect(() => {
+    if (createdId !== undefined) onPublished()
+  }, [createdId, onPublished])
+
+  const preparedDescription =
+    preparation?.state === "prepared" ? preparation.description : undefined
+  const description = declared ?? preparedDescription
+  // A rebuilt image stores a new descriptor, then validate fails. Preparation still holds the
+  // fields the user was shown, and Prepare stays disabled, so read the stored descriptor.
+  useEffect(() => {
+    if (pick === undefined || submitted?.package !== pick.package || !setupWasRefused(creation)) {
+      return
+    }
+    const selection = pick.package
+    const request = ++declarationRead.current
+    void caller.call("package.describe", { package: selection }).then(
+      (next) => {
+        if (request === declarationRead.current) setDeclared(next)
+      },
+      // Keep the fields already on the form if the hub cannot be read.
+      () => {},
+    )
+  }, [creation, caller, pick, submitted])
+  // A refused value sends the user back to the form, with each refusal on its field.
+  const refused = creation?.state === "invalid" ? creation.fields : {}
+  const creating = creation !== undefined && creation.state !== "invalid"
 
   return (
     <div className="flex flex-col gap-6 p-6">
       <header className="flex flex-col gap-1">
         <h1 className="text-lg font-medium">New instance</h1>
-        <p className="text-sm text-muted-foreground">
-          Package: pick what the instance starts from.
-        </p>
+        <p className="text-sm text-muted-foreground">{HINTS[creating ? "create" : stage]}</p>
       </header>
-      <ItemGroup aria-label="Packages" className="max-w-2xl">
-        <PackageCard
-          name="Vanilla"
-          description="kinby's built-in defaults, with no package."
-          icon={SparklesIcon}
-          action="Prepare vanilla"
-          disabled={busy(null)}
-          onPick={() => setPick({ selection: null })}
+      {creating ? (
+        <CreationView
+          caller={caller}
+          clock={clock}
+          name={identity.name}
+          creation={creation}
+          onBack={() => setSubmitted(undefined)}
         />
-        {curated.state === "loaded" &&
-          curated.packages.map((entry) => (
-            <PackageCard
-              key={entry.id}
-              name={entry.display_name}
-              description={entry.description}
-              icon={ICONS[entry.icon] ?? PackageIcon}
-              version={versionOf(entry.selection)}
-              action={`Prepare ${entry.display_name}`}
-              disabled={busy(entry.selection)}
-              onPick={() => setPick({ selection: entry.selection })}
-            />
-          ))}
-      </ItemGroup>
-      {curated.state === "failed" && (
-        <Alert variant="destructive" className="max-w-2xl">
-          <CircleXIcon />
-          <AlertTitle>The curated packages could not be listed</AlertTitle>
-          <AlertDescription>{curated.detail}</AlertDescription>
-        </Alert>
+      ) : stage === "setup" && description !== undefined ? (
+        <SetupStep
+          fields={description.setup_fields}
+          values={values}
+          errors={refused}
+          onChange={(name, value) => setValues((current) => ({ ...current, [name]: value }))}
+          onBack={() => setStage("identity")}
+          onCreate={() =>
+            setSubmitted(
+              createCommand(pick?.package ?? null, description.setup_fields, values, identity),
+            )
+          }
+        />
+      ) : stage === "identity" ? (
+        <IdentityStep
+          identity={identity}
+          onChange={setIdentity}
+          onBack={() => setStage("package")}
+          onContinue={() => setStage("setup")}
+        />
+      ) : (
+        <PackageStep
+          curated={curated}
+          preparation={
+            preparation?.state === "prepared" && declared !== undefined
+              ? { ...preparation, description: declared }
+              : preparation
+          }
+          busy={(selection) =>
+            pick?.package === selection &&
+            (preparation?.state === "preparing" || preparation?.state === "prepared")
+          }
+          onPick={(selection) => {
+            setDeclared(undefined)
+            setPick({ package: selection })
+          }}
+          onContinue={() => setStage("identity")}
+        />
       )}
-      {preparation !== undefined && <PreparationView preparation={preparation} />}
     </div>
+  )
+}
+
+/**
+ * What following the latest request reported. A new request forgets the previous one's reports,
+ * and `follow` must keep its identity across renders, or it starts over.
+ */
+function useFollowing<Request, Report>(
+  request: Request | undefined,
+  follow: (request: Request, report: (report: Report) => void) => () => void,
+): Report | undefined {
+  const [followed, setFollowed] = useState<{ request: Request; report: Report }>()
+  useEffect(() => {
+    if (request === undefined) return
+    return follow(request, (report) => setFollowed({ request, report }))
+  }, [request, follow])
+  return request !== undefined && followed?.request === request ? followed.report : undefined
+}
+
+/** The hub refused the setup values, or the image it just built no longer takes them. */
+function setupWasRefused(creation: Creation | undefined): boolean {
+  if (creation?.state === "invalid") return true
+  return (
+    creation?.state === "failed" &&
+    creation.steps.some((step) => step.name === "validate" && step.state === "failed")
   )
 }
 
@@ -134,30 +281,6 @@ function useCuratedList(caller: Pick<Client, "call">): CuratedList {
     }
   }, [caller])
   return curated
-}
-
-/** The preparation of the picked card: nothing before a pick, then each poll of that pick. */
-function usePreparation(
-  caller: Pick<Client, "call">,
-  pick: CardPick | undefined,
-  clock: Clock,
-): Preparation | undefined {
-  const [followed, setFollowed] = useState<{ pick: CardPick; preparation: Preparation }>()
-  useEffect(() => {
-    if (pick === undefined) return
-    return followPreparation(
-      caller,
-      pick.selection,
-      (preparation) => {
-        setFollowed({ pick, preparation })
-      },
-      clock,
-    )
-  }, [caller, pick, clock])
-  if (pick === undefined) return undefined
-  // The previous pick's report stays stored until this one answers.
-  if (followed?.pick !== pick) return { state: "preparing", steps: [] }
-  return followed.preparation
 }
 
 /** A pinned commit reads as its short SHA, an index version as itself. */
@@ -205,33 +328,352 @@ function PackageCard({
   )
 }
 
-function PreparationView({ preparation }: { preparation: Preparation }) {
-  const failedOutsideAStep =
-    preparation.state === "failed" && !preparation.steps.some((step) => step.state === "failed")
+function PackageStep({
+  curated,
+  preparation,
+  busy,
+  onPick,
+  onContinue,
+}: {
+  curated: CuratedList
+  preparation: Preparation | undefined
+  busy: (selection: PackageSelection | null) => boolean
+  onPick: (selection: PackageSelection | null) => void
+  onContinue: () => void
+}) {
   return (
-    <section className="flex max-w-2xl flex-col gap-3">
-      <h2 className="font-medium">Preparing the image</h2>
-      <Steps steps={preparation.steps} />
-      {failedOutsideAStep && (
-        <Alert variant="destructive">
+    <>
+      <ItemGroup aria-label="Packages" className="max-w-2xl">
+        <PackageCard
+          name="Vanilla"
+          description="kinby's built-in defaults, with no package."
+          icon={SparklesIcon}
+          action="Prepare vanilla"
+          disabled={busy(null)}
+          onPick={() => onPick(null)}
+        />
+        {curated.state === "loaded" &&
+          curated.packages.map((entry) => (
+            <PackageCard
+              key={entry.id}
+              name={entry.display_name}
+              description={entry.description}
+              icon={ICONS[entry.icon] ?? PackageIcon}
+              version={versionOf(entry.selection)}
+              action={`Prepare ${entry.display_name}`}
+              disabled={busy(entry.selection)}
+              onPick={() => onPick(entry.selection)}
+            />
+          ))}
+      </ItemGroup>
+      {curated.state === "failed" && (
+        <Alert variant="destructive" className="max-w-2xl">
           <CircleXIcon />
-          <AlertTitle>The preparation failed</AlertTitle>
-          <AlertDescription>{preparation.detail}</AlertDescription>
+          <AlertTitle>The curated packages could not be listed</AlertTitle>
+          <AlertDescription>{curated.detail}</AlertDescription>
         </Alert>
       )}
-      {preparation.state === "prepared" && (
-        <>
-          <h2 className="font-medium">What it asks for</h2>
-          <Fields fields={preparation.description.setup_fields} />
-        </>
+      {preparation !== undefined && (
+        <section className="flex max-w-2xl flex-col gap-3">
+          <h2 className="font-medium">Preparing the image</h2>
+          <Progress
+            label="Preparation steps"
+            failure="The preparation failed"
+            operation={preparation}
+          />
+          {preparation.state === "prepared" && (
+            <>
+              <h2 className="font-medium">What it asks for</h2>
+              <Fields fields={preparation.description.setup_fields} />
+              <div>
+                <Button onClick={onContinue}>Continue</Button>
+              </div>
+            </>
+          )}
+        </section>
+      )}
+    </>
+  )
+}
+
+function IdentityStep({
+  identity,
+  onChange,
+  onBack,
+  onContinue,
+}: {
+  identity: Identity
+  onChange: (identity: Identity) => void
+  onBack: () => void
+  onContinue: () => void
+}) {
+  const { name, avatar } = identity
+  return (
+    <section className="flex max-w-md flex-col gap-6">
+      <InstanceAvatar avatar={avatar} name={name} size="lg" label={`Avatar of ${name}`} />
+      <FieldGroup>
+        <Field>
+          <FieldLabel htmlFor="instance-name">Name</FieldLabel>
+          <Input
+            id="instance-name"
+            value={name}
+            onChange={(event) => onChange({ ...identity, name: event.target.value })}
+          />
+        </Field>
+        <FieldSet>
+          <FieldLegend variant="label">Shape</FieldLegend>
+          <ToggleGroup
+            value={[avatar.shape]}
+            onValueChange={([shape]) => {
+              if (isShape(shape)) onChange({ ...identity, avatar: { ...avatar, shape } })
+            }}
+          >
+            {Object.entries(SHAPES).map(([shape, label]) => (
+              <ToggleGroupItem key={shape} value={shape} aria-label={label}>
+                <InstanceAvatar avatar={{ ...avatar, shape: shape as AvatarShape }} name={name} />
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </FieldSet>
+        <FieldSet>
+          <FieldLegend variant="label">Color</FieldLegend>
+          <ToggleGroup
+            value={[avatar.color]}
+            onValueChange={([color]) => {
+              if (isColor(color)) onChange({ ...identity, avatar: { ...avatar, color } })
+            }}
+          >
+            {Object.entries(COLORS).map(([color, label]) => (
+              <ToggleGroupItem key={color} value={color} aria-label={label}>
+                <InstanceAvatar
+                  avatar={{ ...avatar, color: color as AvatarColor }}
+                  name={name}
+                  size="sm"
+                />
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </FieldSet>
+      </FieldGroup>
+      <div className="flex gap-2">
+        <Button variant="outline" onClick={onBack}>
+          Back
+        </Button>
+        <Button disabled={name.trim() === ""} onClick={onContinue}>
+          Continue
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+function isShape(value: unknown): value is AvatarShape {
+  return typeof value === "string" && Object.hasOwn(SHAPES, value)
+}
+
+function isColor(value: unknown): value is AvatarColor {
+  return typeof value === "string" && Object.hasOwn(COLORS, value)
+}
+
+function SetupStep({
+  fields,
+  values,
+  errors,
+  onChange,
+  onBack,
+  onCreate,
+}: {
+  fields: SetupField[]
+  values: Record<string, string>
+  errors: Record<string, string>
+  onChange: (name: string, value: string) => void
+  onBack: () => void
+  onCreate: () => void
+}) {
+  const inputs = (kind: SetupField["kind"]) =>
+    fields
+      .filter((field) => field.kind === kind)
+      .map((field) => (
+        <SetupInput
+          key={field.name}
+          field={field}
+          value={values[field.name] ?? ""}
+          error={errors[field.name]}
+          onChange={(value) => onChange(field.name, value)}
+        />
+      ))
+  return (
+    <section className="flex max-w-xl flex-col gap-6">
+      <FieldGroup>
+        <FieldSet>
+          <FieldLegend>Configuration</FieldLegend>
+          {inputs("config")}
+        </FieldSet>
+        <FieldSet>
+          <FieldLegend>Secrets</FieldLegend>
+          <FieldDescription>
+            Write-only. The hub keeps them with the instance and never sends them back.
+          </FieldDescription>
+          {inputs("secret")}
+        </FieldSet>
+      </FieldGroup>
+      <div className="flex gap-2">
+        <Button variant="outline" onClick={onBack}>
+          Back
+        </Button>
+        <Button onClick={onCreate}>Create instance</Button>
+      </div>
+    </section>
+  )
+}
+
+function SetupInput({
+  field,
+  value,
+  error,
+  onChange,
+}: {
+  field: SetupField
+  value: string
+  error: string | undefined
+  onChange: (value: string) => void
+}) {
+  const id = `setup-${field.name}`
+  const invalid = error !== undefined || undefined
+  return (
+    <Field data-invalid={invalid}>
+      <FieldLabel htmlFor={id}>
+        {field.label}
+        {!field.required && <span className="text-muted-foreground">(optional)</span>}
+      </FieldLabel>
+      {field.type === "multiline" ? (
+        <Textarea
+          id={id}
+          value={value}
+          aria-invalid={invalid}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      ) : (
+        <Input
+          id={id}
+          type={field.kind === "secret" ? "password" : "text"}
+          autoComplete={field.kind === "secret" ? "new-password" : "off"}
+          value={value}
+          aria-invalid={invalid}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      )}
+      <FieldDescription>{field.description}</FieldDescription>
+      <FieldError>{error}</FieldError>
+    </Field>
+  )
+}
+
+function CreationView({
+  caller,
+  clock,
+  name,
+  creation,
+  onBack,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  name: string
+  creation: Exclude<Creation, { state: "invalid" }>
+  onBack: () => void
+}) {
+  return (
+    <section className="flex max-w-2xl flex-col gap-3">
+      <h2 className="font-medium">Creating {name.trim()}</h2>
+      <Progress label="Creation steps" failure="The creation failed" operation={creation} />
+      {creation.state === "failed" && (
+        <div>
+          <Button variant="outline" onClick={onBack}>
+            Back to setup
+          </Button>
+        </div>
+      )}
+      {creation.state === "created" && (
+        <StartStep caller={caller} clock={clock} instanceId={creation.instanceId} />
       )}
     </section>
   )
 }
 
-function Steps({ steps }: { steps: OperationStep[] }) {
+function StartStep({
+  caller,
+  clock,
+  instanceId,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  instanceId: string
+}) {
+  const [request, setRequest] = useState<{ instanceId: string }>()
+  const start = useCallback(
+    (asked: { instanceId: string }, report: (starting: Starting) => void) =>
+      followStart(
+        caller,
+        asked.instanceId,
+        (starting) => {
+          report(starting)
+          if (starting.state === "started") selectInstance(asked.instanceId)
+        },
+        clock,
+      ),
+    [caller, clock],
+  )
+  const starting = useFollowing(request, start)
+  const busy = request !== undefined && starting?.state !== "failed"
   return (
-    <ItemGroup aria-label="Preparation steps">
+    <>
+      <h2 className="font-medium">Start</h2>
+      <p className="text-sm text-muted-foreground">The instance is listed and stopped.</p>
+      {starting !== undefined && starting.state !== "started" && (
+        <Progress label="Start steps" failure="The start failed" operation={starting} />
+      )}
+      <div className="flex gap-2">
+        <Button disabled={busy} onClick={() => setRequest({ instanceId })}>
+          {busy && <Spinner data-icon="inline-start" />}
+          Start and chat
+        </Button>
+        <Button variant="outline" disabled={busy} onClick={() => selectInstance(instanceId)}>
+          Leave it stopped
+        </Button>
+      </div>
+    </>
+  )
+}
+
+/** An operation's steps, and why it failed when no step says so. */
+function Progress({
+  label,
+  failure,
+  operation,
+}: {
+  label: string
+  failure: string
+  operation: { state: string; steps: OperationStep[]; detail?: string }
+}) {
+  const failedOutsideAStep =
+    operation.state === "failed" && !operation.steps.some((step) => step.state === "failed")
+  return (
+    <>
+      <Steps label={label} steps={operation.steps} />
+      {failedOutsideAStep && (
+        <Alert variant="destructive">
+          <CircleXIcon />
+          <AlertTitle>{failure}</AlertTitle>
+          <AlertDescription>{operation.detail}</AlertDescription>
+        </Alert>
+      )}
+    </>
+  )
+}
+
+function Steps({ label, steps }: { label: string; steps: OperationStep[] }) {
+  return (
+    <ItemGroup aria-label={label}>
       {steps.map((step) => (
         <Item key={step.name} render={<li />} aria-label={step.name} variant="outline" size="sm">
           <ItemMedia variant="icon">{STATES[step.state].icon}</ItemMedia>

@@ -1,8 +1,9 @@
+import { CallError } from "@kinby/contract"
 import type { CuratedPackage, OperationGetResult, PackageDescription } from "@kinby/contract"
-import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
+import { type Answers, type StubCaller, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen, within } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import userEvent, { type UserEvent } from "@testing-library/user-event"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { CreateWizard } from "@/components/create-wizard"
 
@@ -282,5 +283,346 @@ describe("the create wizard's package step", () => {
       { method: "image.prepare", params: { package: null } },
       { method: "image.prepare", params: { package: null } },
     ])
+  })
+})
+
+const prepared = operationAnswer({
+  state: "succeeded",
+  steps: [
+    { name: "image", state: "succeeded", detail: "Building the image." },
+    { name: "describe", state: "succeeded", detail: "Reading what it declares." },
+  ],
+})
+
+const creating = operationAnswer({
+  operation_id: "op-create",
+  instance_id: "instance-1",
+  kind: "create",
+  state: "running",
+  steps: [{ name: "image", state: "running", detail: "Preparing the selected image." }],
+})
+
+function operationAnswer(fields: Partial<OperationGetResult>): OperationGetResult {
+  return {
+    operation_id: "op-1",
+    instance_id: null,
+    kind: "prepare",
+    state: "running",
+    detail: "",
+    steps: [],
+    ...fields,
+  }
+}
+
+/** A hub that prepared vanilla, and answers the create operation's polls with `created`. */
+function hub(answers: Answers, created: OperationGetResult = creating) {
+  return stubCaller({
+    "package.list": () => ({ packages: [] }),
+    "image.prepare": () => ({ operation_id: "op-1" }),
+    "package.describe": () => vanilla,
+    "instance.create": () => ({ operation_id: "op-create", instance_id: "instance-1" }),
+    "operation.get": ({ operation_id }) => (operation_id === "op-1" ? prepared : created),
+    ...answers,
+  })
+}
+
+async function openWizard(caller: StubCaller, onPublished = () => {}) {
+  const clock = fakeClock()
+  const user = userEvent.setup()
+  render(<CreateWizard caller={caller} clock={clock} onPublished={onPublished} />)
+  await user.click(screen.getByRole("button", { name: "Prepare vanilla" }))
+  await act(() => clock.advance(0))
+  await user.click(await screen.findByRole("button", { name: "Continue" }))
+  return { user, clock }
+}
+
+async function nameIt(user: UserEvent, name = "Ada") {
+  await user.type(screen.getByLabelText("Name"), name)
+  await user.click(screen.getByRole("button", { name: "Continue" }))
+}
+
+async function fillSetup(user: UserEvent) {
+  await user.type(screen.getByLabelText("Model"), "openai:gpt-5")
+  await user.type(screen.getByLabelText("API key"), "sk-private")
+  await user.type(screen.getByLabelText(/Behavior prompt/), "Answer in haiku.")
+}
+
+describe("the create wizard's identity step", () => {
+  it("names the instance and draws the avatar picked for it", async () => {
+    const { user } = await openWizard(hub({}))
+
+    const next = screen.getByRole("button", { name: "Continue" })
+    expect(next.hasAttribute("disabled")).toBe(true)
+    await user.type(screen.getByLabelText("Name"), "Ada")
+    await user.click(screen.getByRole("button", { name: "Squircle" }))
+    await user.click(screen.getByRole("button", { name: "Green" }))
+
+    const preview = screen.getByRole("img", { name: "Avatar of Ada" })
+    expect(preview.getAttribute("data-shape")).toBe("squircle")
+    expect(preview.querySelector("[data-slot=avatar-fallback]")?.getAttribute("data-variant")).toBe(
+      "green",
+    )
+    expect(next.hasAttribute("disabled")).toBe(false)
+  })
+
+  it("starts from a circle in the palette's first color", async () => {
+    const { user } = await openWizard(hub({}))
+
+    await user.type(screen.getByLabelText("Name"), "Ada")
+
+    const preview = screen.getByRole("img", { name: "Avatar of Ada" })
+    expect(preview.getAttribute("data-shape")).toBe("circle")
+    expect(preview.querySelector("[data-slot=avatar-fallback]")?.getAttribute("data-variant")).toBe(
+      "blue",
+    )
+  })
+})
+
+describe("the create wizard's setup step", () => {
+  it("asks for each declared field, and never shows a secret it was given", async () => {
+    const { user } = await openWizard(hub({}))
+    await nameIt(user)
+
+    const configuration = within(screen.getByRole("group", { name: "Configuration" }))
+    const secrets = within(screen.getByRole("group", { name: "Secrets" }))
+    expect(configuration.getByLabelText("Model").tagName).toBe("INPUT")
+    expect(configuration.getByLabelText(/Behavior prompt/).tagName).toBe("TEXTAREA")
+    expect(configuration.getByText("The model the instance calls.")).toBeDefined()
+    expect(secrets.getByLabelText("API key").getAttribute("type")).toBe("password")
+  })
+
+  it("creates the instance from the values and the identity", async () => {
+    const caller = hub({})
+    const { user } = await openWizard(caller)
+    await user.type(screen.getByLabelText("Name"), "Ada")
+    await user.click(screen.getByRole("button", { name: "Square" }))
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await fillSetup(user)
+
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toEqual({
+      manifest_id: "Ada",
+      persona_name: "Ada",
+      model: "openai:gpt-5",
+      package: null,
+      config: { behavior_prompt: "Answer in haiku." },
+      secrets: { api_key: "sk-private" },
+      avatar: { shape: "square", color: "blue" },
+    })
+    const steps = within(await screen.findByRole("list", { name: "Creation steps" }))
+    expect(steps.getByText("Preparing the selected image.")).toBeDefined()
+  })
+
+  it("creates the instance from the curated package that was prepared", async () => {
+    const caller = hub({ "package.list": () => ({ packages: [coder] }) })
+    const clock = fakeClock()
+    const user = userEvent.setup()
+    render(<CreateWizard caller={caller} clock={clock} />)
+
+    await user.click(await screen.findByRole("button", { name: "Prepare Software factory" }))
+    await act(() => clock.advance(0))
+    await user.click(await screen.findByRole("button", { name: "Continue" }))
+    await nameIt(user)
+    await fillSetup(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
+      manifest_id: "Ada",
+      package: coder.selection,
+    })
+  })
+
+  it("marks each field the hub refused, on that field", async () => {
+    const caller = hub({
+      "instance.create": () => {
+        throw new CallError({
+          code: "INVALID_SETUP",
+          message: "Some setup values are missing or invalid.",
+          retryable: false,
+          fields: { model: "Name the provider and the model, like openai:gpt-5." },
+        })
+      },
+    })
+    const { user } = await openWizard(caller)
+    await nameIt(user)
+    await fillSetup(user)
+
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    const model = await screen.findByLabelText("Model")
+    expect(model.getAttribute("aria-invalid")).toBe("true")
+    expect(
+      within(screen.getByRole("group", { name: "Configuration" })).getByRole("alert").textContent,
+    ).toBe("Name the provider and the model, like openai:gpt-5.")
+    expect(screen.getByLabelText("API key").getAttribute("aria-invalid")).toBeNull()
+    expect(screen.queryByRole("list", { name: "Creation steps" })).toBeNull()
+  })
+
+  it("shows the fields a rebuilt image stored, and a retry sends the new one", async () => {
+    let described = 0
+    let creates = 0
+    const rebuilt: PackageDescription = {
+      ...vanilla,
+      setup_fields: [
+        ...vanilla.setup_fields,
+        {
+          name: "SEARCH_TOKEN",
+          label: "Search token",
+          description: "Reaches the search service.",
+          kind: "secret",
+          type: "text",
+          required: true,
+        },
+      ],
+    }
+    const validateFailed = operationAnswer({
+      operation_id: "op-create",
+      kind: "create",
+      state: "failed",
+      detail: "The image asks for other setup values now. SEARCH_TOKEN: Search token is required.",
+      steps: [
+        { name: "image", state: "succeeded", detail: "Preparing the selected image." },
+        {
+          name: "validate",
+          state: "failed",
+          detail: "Checking the setup values against what the image declares.",
+        },
+      ],
+    })
+    const caller = hub({
+      "package.describe": () => {
+        described += 1
+        return described === 1 ? vanilla : rebuilt
+      },
+      "instance.create": () => {
+        creates += 1
+        if (creates === 1) return { operation_id: "op-create", instance_id: "instance-1" }
+        if (creates === 2) {
+          throw new CallError({
+            code: "INVALID_SETUP",
+            message: "Some setup values are missing or invalid.",
+            retryable: false,
+            fields: { SEARCH_TOKEN: "Search token is required." },
+          })
+        }
+        return { operation_id: "op-create-2", instance_id: "instance-2" }
+      },
+      "operation.get": ({ operation_id }) => (operation_id === "op-1" ? prepared : validateFailed),
+    })
+    const { user } = await openWizard(caller)
+    await nameIt(user)
+    await fillSetup(user)
+
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await user.click(await screen.findByRole("button", { name: "Back to setup" }))
+
+    expect((await screen.findByLabelText("Search token")).getAttribute("type")).toBe("password")
+    await user.click(screen.getByRole("button", { name: "Back" }))
+    await user.click(screen.getByRole("button", { name: "Back" }))
+    const asked = within(screen.getByRole("list", { name: "Setup fields" }))
+    expect(asked.getByRole("listitem", { name: "Search token" })).toBeDefined()
+    expect(screen.getByRole("button", { name: "Prepare vanilla" }).hasAttribute("disabled")).toBe(
+      true,
+    )
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    const refused = await screen.findByLabelText("Search token")
+    const secrets = within(screen.getByRole("group", { name: "Secrets" }))
+    expect(refused.getAttribute("aria-invalid")).toBe("true")
+    expect(secrets.getByRole("alert").textContent).toBe("Search token is required.")
+
+    await user.type(refused, "search-token")
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    const sent = caller.calls.filter((call) => call.method === "instance.create")
+    expect(sent).toHaveLength(3)
+    expect(sent[2]?.params).toMatchObject({
+      secrets: { api_key: "sk-private", SEARCH_TOKEN: "search-token" },
+    })
+  })
+})
+
+describe("the create wizard's start step", () => {
+  const published = operationAnswer({
+    operation_id: "op-create",
+    instance_id: "instance-1",
+    kind: "create",
+    state: "succeeded",
+    steps: [{ name: "publish", state: "succeeded", detail: "Instance prepared and stopped." }],
+  })
+
+  beforeEach(() => window.history.replaceState(null, "", "/new"))
+
+  async function createdAda(caller: StubCaller, onPublished = () => {}) {
+    const { user, clock } = await openWizard(caller, onPublished)
+    await nameIt(user)
+    await fillSetup(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await act(() => clock.advance(0))
+    return { user, clock }
+  }
+
+  it("lists the instance once the hub published it", async () => {
+    const onPublished = vi.fn()
+
+    await createdAda(hub({}, published), onPublished)
+
+    expect(await screen.findByRole("button", { name: "Start and chat" })).toBeDefined()
+    expect(onPublished).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not list an instance whose creation failed", async () => {
+    const onPublished = vi.fn()
+    const failed = operationAnswer({
+      operation_id: "op-create",
+      kind: "create",
+      state: "failed",
+      detail: "Cannot connect to the Docker daemon.",
+      steps: [{ name: "image", state: "failed", detail: "Cannot connect to the Docker daemon." }],
+    })
+
+    await createdAda(hub({}, failed), onPublished)
+
+    expect(await screen.findByRole("button", { name: "Back to setup" })).toBeDefined()
+    expect(screen.queryByRole("button", { name: "Start and chat" })).toBeNull()
+    expect(onPublished).not.toHaveBeenCalled()
+  })
+
+  it("starts the instance and opens it", async () => {
+    const caller = hub(
+      {
+        "instance.start": () => ({ operation_id: "op-start", instance_id: "instance-1" }),
+        "operation.get": ({ operation_id }) =>
+          operation_id === "op-1"
+            ? prepared
+            : operation_id === "op-create"
+              ? published
+              : operationAnswer({ operation_id, kind: "start", state: "succeeded" }),
+      },
+      published,
+    )
+    const { user, clock } = await createdAda(caller)
+
+    await user.click(await screen.findByRole("button", { name: "Start and chat" }))
+    await act(() => clock.advance(0))
+
+    expect(caller.calls.filter((call) => call.method === "instance.start")).toEqual([
+      { method: "instance.start", params: { instance_id: "instance-1" } },
+    ])
+    expect(window.location.pathname).toBe("/instances/instance-1")
+  })
+
+  it("leaves the instance stopped and opens it", async () => {
+    const caller = hub({}, published)
+    const { user } = await createdAda(caller)
+
+    await user.click(await screen.findByRole("button", { name: "Leave it stopped" }))
+
+    expect(caller.calls.some((call) => call.method === "instance.start")).toBe(false)
+    expect(window.location.pathname).toBe("/instances/instance-1")
   })
 })

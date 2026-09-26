@@ -32,6 +32,11 @@ export type AdoptionFindingKind =
 export type ContainerOwner = "hub" | "other-hub" | "compose" | "unmanaged";
 export type StorageKind = "bind" | "volume";
 /**
+ * A name from a fixed palette. A client maps each name to colors of its own theme.
+ */
+export type AvatarColor = "blue" | "violet" | "green" | "amber" | "red" | "gray";
+export type AvatarShape = "circle" | "squircle" | "square";
+/**
  * How an instance's accepted work ended when it drained.
  */
 export type DrainState = "drained" | "interrupted";
@@ -85,6 +90,7 @@ export type ErrorCode =
   | "RESOURCE_EXHAUSTED"
   | "INVALID_ARGUMENT"
   | "NOT_PREPARED"
+  | "INVALID_SETUP"
   | "CONNECTION_LOST"
   | "INTERNAL";
 export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
@@ -363,6 +369,10 @@ export interface StorageItem {
   writable: boolean;
 }
 export interface InstanceCreateCommand {
+  avatar?: Avatar;
+  config?: {
+    [k: string]: string;
+  };
   manifest_id: string;
   model: string;
   package?: PackageSelection | null;
@@ -371,6 +381,13 @@ export interface InstanceCreateCommand {
   secrets?: {
     [k: string]: string;
   };
+}
+/**
+ * How a client draws an instance. The hub keeps it, not the instance directory.
+ */
+export interface Avatar {
+  color: AvatarColor;
+  shape: AvatarShape;
 }
 /**
  * Delete the previewed targets. A target that changed since the preview stops it.
@@ -407,6 +424,7 @@ export interface InstanceListResult {
   instances: InstanceSummary[];
 }
 export interface InstanceSummary {
+  avatar: Avatar;
   image_id: string;
   instance_id: string;
   intended_state: IntendedState;
@@ -952,6 +970,9 @@ export interface ErrorFrame {
 }
 export interface ErrorEnvelope {
   code: ErrorCode;
+  fields?: {
+    [k: string]: string;
+  };
   message: string;
   retryable: boolean;
 }

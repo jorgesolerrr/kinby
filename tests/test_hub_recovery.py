@@ -42,6 +42,7 @@ from tests.test_hub import (
     finished_operation,
     hub_at,
     hub_client,
+    prepared,
     started_instance,
 )
 
@@ -244,9 +245,12 @@ def test_a_create_interrupted_after_its_container_is_recorded_not_repeated(tmp_p
     async def scenario() -> None:
         runtime = CrashingRuntime(after_create=True)
         hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        await prepared(hub_client(hub), None)
         accepted = await hub_client(hub).call(
             INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+            InstanceCreateCommand(
+                manifest_id="alice", model="openai:gpt-5", secrets={"api_key": "sk-test"}
+            ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
         await asyncio.wait_for(runtime.crashed.wait(), timeout=5)
@@ -269,7 +273,12 @@ def test_a_create_interrupted_after_its_container_is_recorded_not_repeated(tmp_p
         assert [summary.instance_id for summary in listed.instances] == [accepted.instance_id]
         assert not isinstance(interrupted, ErrorEnvelope)
         assert interrupted.state is OperationState.FAILED
-        assert [step.name for step in interrupted.steps] == ["configure", "image", "container"]
+        assert [step.name for step in interrupted.steps] == [
+            "image",
+            "validate",
+            "initialize",
+            "publish",
+        ]
 
     asyncio.run(scenario())
 
@@ -278,9 +287,12 @@ def test_a_create_interrupted_before_its_container_stays_incomplete(tmp_path):
     async def scenario() -> None:
         runtime = CrashingRuntime(after_create=False)
         hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        await prepared(hub_client(hub), None)
         await hub_client(hub).call(
             INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+            InstanceCreateCommand(
+                manifest_id="alice", model="openai:gpt-5", secrets={"api_key": "sk-test"}
+            ),
         )
         await asyncio.wait_for(runtime.crashed.wait(), timeout=5)
         await asyncio.sleep(0)
