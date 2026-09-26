@@ -125,6 +125,9 @@ describe("the create wizard's package step", () => {
     expect(step("describe").getByText('Executable "claude" is not on PATH.')).toBeDefined()
     expect(step("image").getByText("Done")).toBeDefined()
     expect(screen.queryByRole("list", { name: "Setup fields" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Prepare vanilla" }).hasAttribute("disabled")).toBe(
+      false,
+    )
   })
 
   it("says why when the preparation could not start", async () => {
@@ -133,5 +136,69 @@ describe("the create wizard's package step", () => {
     expect((await screen.findByRole("alert")).textContent).toContain(
       "The stub has no answer for image.prepare.",
     )
+    expect(screen.getByRole("button", { name: "Prepare vanilla" }).hasAttribute("disabled")).toBe(
+      false,
+    )
+  })
+
+  it("prepares vanilla again after the preparation failed", async () => {
+    let prepares = 0
+    const caller = stubCaller({
+      "image.prepare": () => {
+        prepares += 1
+        return { operation_id: prepares === 1 ? "op-1" : "op-2" }
+      },
+      "operation.get": () =>
+        prepares === 1
+          ? {
+              operation_id: "op-1",
+              instance_id: null,
+              kind: "prepare",
+              state: "failed",
+              detail: "Cannot connect to the Docker daemon.",
+              steps: [
+                {
+                  name: "image",
+                  state: "failed",
+                  detail: "Cannot connect to the Docker daemon.",
+                },
+              ],
+            }
+          : {
+              operation_id: "op-2",
+              instance_id: null,
+              kind: "prepare",
+              state: "running",
+              detail: "",
+              steps: [
+                {
+                  name: "image",
+                  state: "running",
+                  detail: "Building the image, or reusing the one prepared.",
+                },
+              ],
+            },
+    })
+    const clock = fakeClock()
+    render(<CreateWizard caller={caller} clock={clock} />)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole("button", { name: "Prepare vanilla" }))
+    await act(() => clock.advance(0))
+
+    const again = screen.getByRole("button", { name: "Prepare vanilla" })
+    expect(again.hasAttribute("disabled")).toBe(false)
+    await user.click(again)
+    await act(() => clock.advance(0))
+
+    expect(
+      step("image").getByText("Building the image, or reusing the one prepared."),
+    ).toBeDefined()
+    expect(step("image").getByText("Running")).toBeDefined()
+    expect(again.hasAttribute("disabled")).toBe(true)
+    expect(caller.calls.filter((call) => call.method === "image.prepare")).toEqual([
+      { method: "image.prepare", params: { package: null } },
+      { method: "image.prepare", params: { package: null } },
+    ])
   })
 })

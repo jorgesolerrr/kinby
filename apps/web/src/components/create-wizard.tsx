@@ -35,8 +35,8 @@ export function CreateWizard({
   caller: Pick<Client, "call">
   clock?: Clock
 }) {
-  const [picked, setPicked] = useState(false)
-  const preparation = usePreparation(caller, picked, clock)
+  const [pick, setPick] = useState(0)
+  const preparation = usePreparation(caller, pick, clock)
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -52,7 +52,10 @@ export function CreateWizard({
           <CardDescription>kinby's built-in defaults, with no package.</CardDescription>
         </CardHeader>
         <CardFooter>
-          <Button disabled={picked} onClick={() => setPicked(true)}>
+          <Button
+            disabled={preparation?.state === "preparing" || preparation?.state === "prepared"}
+            onClick={() => setPick((current) => current + 1)}
+          >
             Prepare vanilla
           </Button>
         </CardFooter>
@@ -62,19 +65,28 @@ export function CreateWizard({
   )
 }
 
-/** The preparation of the picked card: nothing before a pick, then each poll of the hub. */
+/** The preparation of the picked card: nothing before a pick, then each poll of that pick. */
 function usePreparation(
   caller: Pick<Client, "call">,
-  picked: boolean,
+  pick: number,
   clock: Clock,
 ): Preparation | undefined {
-  const [preparation, setPreparation] = useState<Preparation>()
+  const [followed, setFollowed] = useState<{ pick: number; preparation: Preparation }>()
   useEffect(() => {
-    if (!picked) return
-    return followPreparation(caller, null, setPreparation, clock)
-  }, [caller, picked, clock])
-  // The hub has not answered yet: the preparation is starting.
-  return preparation ?? (picked ? { state: "preparing", steps: [] } : undefined)
+    if (pick === 0) return
+    return followPreparation(
+      caller,
+      null,
+      (preparation) => {
+        setFollowed({ pick, preparation })
+      },
+      clock,
+    )
+  }, [caller, pick, clock])
+  if (pick === 0) return undefined
+  // The previous pick's report stays stored until this one answers.
+  if (followed?.pick !== pick) return { state: "preparing", steps: [] }
+  return followed.preparation
 }
 
 function PreparationView({ preparation }: { preparation: Preparation }) {
