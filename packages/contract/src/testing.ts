@@ -1,4 +1,14 @@
-import type { Clock, Socket, SocketEvents, Transport } from "./client"
+import {
+  CallError,
+  type Client,
+  type Clock,
+  type Command,
+  type Method,
+  type Result,
+  type Socket,
+  type SocketEvents,
+  type Transport,
+} from "./client"
 import type { InstanceSummary } from "./contract"
 
 /** The one token the fake hub accepts at its login route. */
@@ -64,6 +74,34 @@ export function fakeHub({
     },
   }
   return hub
+}
+
+/** How a stub answers each method. An answer that throws a `CallError` answers with that error. */
+export type Answers = { [M in Method]?: (params: Command<M>) => Result<M> }
+
+export interface StubCaller extends Pick<Client, "call"> {
+  /** Every call, oldest first. */
+  readonly calls: { method: Method; params: unknown }[]
+}
+
+/** A client that answers from `answers` without a hub, and refuses any method it has no answer for. */
+export function stubCaller(answers: Answers): StubCaller {
+  const calls: StubCaller["calls"] = []
+  return {
+    calls,
+    async call(method, params) {
+      calls.push({ method, params })
+      const answer = answers[method]
+      if (answer === undefined) {
+        throw new CallError({
+          code: "NOT_FOUND",
+          message: `The stub has no answer for ${method}.`,
+          retryable: false,
+        })
+      }
+      return answer(params)
+    },
+  }
 }
 
 /** Build an instance as `instance.list` reports it, filling in what a test does not care about. */

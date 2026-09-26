@@ -15,7 +15,7 @@ from docker.models.networks import Network
 from docker.types import Mount
 
 import docker
-from kinby.contracts import ContainerOwner, StorageItem, StorageKind
+from kinby.contracts import ContainerOwner, PackageDescription, StorageItem, StorageKind
 from kinby.hub.models import BuildResult, ContainerDescription, InstanceSpec, RuntimeStatus
 from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage, installed_package_from_json
 
@@ -122,6 +122,22 @@ class DockerImageBackend:
                 f'Package "{package_id}" failed its check in image {image_id}.\n{printed}'
             ) from exc
         return installed_package_from_json(cast(bytes, output).decode())
+
+    async def inspect_vanilla(self, image_id: str) -> PackageDescription:
+        """Ask the kinby in the image what a vanilla instance declares. It has no network."""
+        try:
+            output = await asyncio.to_thread(
+                self._client.containers.run,
+                image_id,
+                command=["-m", "kinby.packages"],
+                entrypoint="python",
+                remove=True,
+                network_mode="none",
+            )
+        except ContainerError as exc:
+            printed = cast(bytes, exc.stderr or b"").decode(errors="replace").strip()
+            raise ValueError(f"The vanilla check failed in image {image_id}.\n{printed}") from exc
+        return PackageDescription.model_validate_json(cast(bytes, output))
 
 
 class DockerRuntime:

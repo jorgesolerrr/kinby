@@ -13,7 +13,7 @@ from docker.errors import ContainerError, ImageNotFound, NotFound
 from docker.types import Mount
 
 from docker import DockerClient
-from kinby.contracts import StorageItem, StorageKind
+from kinby.contracts import PackageDescription, StorageItem, StorageKind
 from kinby.hub import (
     DockerImageBackend,
     DockerRuntime,
@@ -26,7 +26,7 @@ from kinby.hub import (
     PreparedImage,
     RecoveredState,
 )
-from kinby.packages import InstalledPackage, PackageDescriptor, package_json
+from kinby.packages import InstalledPackage, PackageDescriptor, package_json, vanilla_description
 from tests.test_hub import hub_client, started_instance
 
 
@@ -62,6 +62,8 @@ class FakeContainers:
         self.run_arguments: tuple[object, object] | None = None
         self.run_options: dict[str, object] = {}
         self.run_failure: bytes | None = None
+        #: What the check prints. The package check's output unless a test sets another.
+        self.run_output: bytes | None = None
 
     def create(self, image: object, command: object, **options: object) -> object:
         self.arguments = (image, command)
@@ -82,6 +84,8 @@ class FakeContainers:
         self.run_options = options
         if self.run_failure is not None:
             raise ContainerError(object(), 1, command, image, self.run_failure)
+        if self.run_output is not None:
+            return self.run_output
         return package_json(
             InstalledPackage(
                 descriptor=PackageDescriptor(
@@ -346,6 +350,40 @@ def test_a_missing_package_yaml_is_not_created_for_the_candidate_check(tmp_path)
     assert not (instance_dir / "package.yaml").exists()
 
 
+def test_docker_image_backend_asks_the_kinby_in_the_image_what_vanilla_declares():
+    async def scenario() -> tuple[FakeDockerClient, PackageDescription]:
+        client = FakeDockerClient()
+        client.containers.run_output = vanilla_description().model_dump_json().encode()
+        backend = DockerImageBackend(cast(DockerClient, client))
+        return client, await backend.inspect_vanilla("sha256:selected")
+
+    client, described = asyncio.run(scenario())
+
+    assert described == vanilla_description()
+    assert client.containers.run_arguments == ("sha256:selected", ["-m", "kinby.packages"])
+    assert client.containers.run_options == {
+        "entrypoint": "python",
+        "remove": True,
+        "network_mode": "none",
+    }
+
+
+def test_a_failing_vanilla_check_reports_what_it_printed():
+    async def scenario() -> None:
+        client = FakeDockerClient()
+        client.containers.run_failure = b"usage: python -m kinby.packages <package-id>\n"
+        backend = DockerImageBackend(cast(DockerClient, client))
+        await backend.inspect_vanilla("sha256:selected")
+
+    with pytest.raises(ValueError) as failure:
+        asyncio.run(scenario())
+
+    assert str(failure.value) == (
+        "The vanilla check failed in image sha256:selected.\n"
+        "usage: python -m kinby.packages <package-id>"
+    )
+
+
 def test_a_failing_candidate_check_reports_what_the_check_printed():
     async def scenario() -> None:
         client = FakeDockerClient()
@@ -513,14 +551,18 @@ class PulledImage:
         selection: ImageSelection,
         instance: StorageItem | None = None,
     ) -> PreparedImage:
-        return PreparedImage(
-            artifact=ImageArtifact(
-                image_id=self._image_id,
-                revision="a" * 40,
-                dependency_id="sha256:dependencies",
-                base_images=("busybox:1.36",),
-            )
+        return PreparedImage(artifact=await self.build(selection))
+
+    async def build(self, selection: ImageSelection) -> ImageArtifact:
+        return ImageArtifact(
+            image_id=self._image_id,
+            revision="a" * 40,
+            dependency_id="sha256:dependencies",
+            base_images=("busybox:1.36",),
         )
+
+    async def describe(self, artifact: ImageArtifact) -> PackageDescription:
+        return vanilla_description()
 
 
 @pytest.mark.skipif(not docker_available(), reason="Docker daemon is not available")

@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from kinby.contracts import PackageCommit, PackageSelection, StorageItem
+from kinby.contracts import PackageCommit, PackageDescription, PackageSelection, StorageItem
 from kinby.hub.models import (
     BuildResult,
     ImageArtifact,
@@ -19,7 +19,7 @@ from kinby.hub.models import (
     PreparedImage,
 )
 from kinby.hub.registry import HubRegistry
-from kinby.packages import InstalledPackage
+from kinby.packages import InstalledPackage, package_description
 
 _ROOT_FILES = frozenset({"Dockerfile", "pyproject.toml", "uv.lock", "README.md", "LICENSE"})
 _STAGE = re.compile(r"^FROM\s", re.MULTILINE | re.IGNORECASE)
@@ -67,6 +67,13 @@ class ImagePreparer:
         selection: ImageSelection,
         instance: StorageItem | None = None,
     ) -> PreparedImage:
+        artifact = await self.build(selection)
+        return PreparedImage(
+            artifact=artifact,
+            package=await self._inspect_package(artifact, instance),
+        )
+
+    async def build(self, selection: ImageSelection) -> ImageArtifact:
         resolved = await asyncio.to_thread(self._resolve, selection.revision)
         with TemporaryDirectory(prefix="kinby-build-") as temporary:
             context = Path(temporary)
@@ -79,8 +86,7 @@ class ImagePreparer:
             input_key = self._input_key(resolved, dependency_id, base_images, selection)
             recorded = self._registry.image_artifact(input_key)
             if recorded is not None and await self._backend.exists(recorded.image_id):
-                package = await self._inspect_package(recorded, instance)
-                return PreparedImage(artifact=recorded, package=package)
+                return recorded
             built = await self._backend.build(context, base_images)
         artifact = ImageArtifact(
             image_id=built.image_id,
@@ -91,8 +97,13 @@ class ImagePreparer:
             package=selection.package,
         )
         self._registry.record_image_artifact(input_key, artifact)
-        package = await self._inspect_package(artifact, instance)
-        return PreparedImage(artifact=artifact, package=package)
+        return artifact
+
+    async def describe(self, artifact: ImageArtifact) -> PackageDescription:
+        installed = await self._inspect_package(artifact, None)
+        if installed is None:
+            return await self._backend.inspect_vanilla(artifact.image_id)
+        return package_description(installed)
 
     async def _inspect_package(
         self,

@@ -9,6 +9,8 @@ from kinby.contracts.models import (
     AcceptedResult,
     ContractModel,
     Event,
+    ImagePrepareCommand,
+    ImagePrepareResult,
     InstanceAdoptCommand,
     InstanceAdoptPreviewCommand,
     InstanceAdoptPreviewResult,
@@ -36,6 +38,8 @@ from kinby.contracts.models import (
     LifecycleOperationResult,
     OperationGetCommand,
     OperationGetResult,
+    PackageDescribeCommand,
+    PackageDescription,
     RoutineListCommand,
     RoutineListResult,
     RoutineRunCommand,
@@ -75,6 +79,8 @@ class Method[Command: ContractModel, Result: ContractModel]:
     scope: Scope
     command: type[Command]
     result: type[Result]
+    #: A second scope that reaches this method, for a token that holds no other.
+    alternative_scope: Scope | None = None
 
 
 @dataclass(frozen=True)
@@ -196,7 +202,18 @@ INSTANCE_STATUS = Method(
     "instance.status", Scope.HUB_READ, InstanceStatusCommand, InstanceStatusResult
 )
 INSTANCE_LOGS = Method("instance.logs", Scope.HUB_READ, InstanceLogsCommand, InstanceLogsResult)
-OPERATION_GET = Method("operation.get", Scope.HUB_UPDATE, OperationGetCommand, OperationGetResult)
+OPERATION_GET = Method(
+    "operation.get",
+    Scope.HUB_READ,
+    OperationGetCommand,
+    OperationGetResult,
+    # The update token follows the update it started and reads nothing else (ADR 0057).
+    alternative_scope=Scope.HUB_UPDATE,
+)
+IMAGE_PREPARE = Method("image.prepare", Scope.HUB_ADMIN, ImagePrepareCommand, ImagePrepareResult)
+PACKAGE_DESCRIBE = Method(
+    "package.describe", Scope.HUB_READ, PackageDescribeCommand, PackageDescription
+)
 #: The same time range and bucket size as stats.get, asked of every running instance.
 STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
 
@@ -235,6 +252,8 @@ METHODS = (
     INSTANCE_STATUS,
     INSTANCE_LOGS,
     OPERATION_GET,
+    IMAGE_PREPARE,
+    PACKAGE_DESCRIBE,
     STATS_SUMMARY,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE,)

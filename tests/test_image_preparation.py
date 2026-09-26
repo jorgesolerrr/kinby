@@ -8,9 +8,16 @@ from textwrap import dedent
 
 import pytest
 
-from kinby.contracts import PackageCommit, PackageSelection, StorageItem, StorageKind
+from kinby.contracts import (
+    PackageCommit,
+    PackageDescription,
+    PackageSelection,
+    SetupFieldKind,
+    StorageItem,
+    StorageKind,
+)
 from kinby.hub import BuildResult, HubRegistry, ImagePreparer, ImageSelection
-from kinby.packages import InstalledPackage, PackageDescriptor
+from kinby.packages import InstalledPackage, PackageDescriptor, vanilla_description
 
 
 class FakeImageBackend:
@@ -19,6 +26,7 @@ class FakeImageBackend:
         self.images: set[str] = set()
         self.dockerfiles: list[str] = []
         self.inspected: list[StorageItem | None] = []
+        self.vanilla_checks: list[str] = []
 
     async def resolve_base_images(self, dockerfile: Path) -> tuple[str, ...]:
         return ("python:3.14@sha256:resolved-base",)
@@ -54,6 +62,10 @@ class FakeImageBackend:
             ),
             files={"SYSTEM.md": "Write clearly.\n"},
         )
+
+    async def inspect_vanilla(self, image_id: str) -> PackageDescription:
+        self.vanilla_checks.append(image_id)
+        return vanilla_description()
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -117,6 +129,50 @@ def test_image_preparation_resolves_revision_restricts_context_and_reuses_artifa
         rebuilt = await preparer.prepare(ImageSelection("HEAD"))
         assert rebuilt.artifact.image_id == "sha256:image-2"
         assert len(backend.builds) == 2
+
+    asyncio.run(scenario())
+
+
+def test_preparing_vanilla_again_reuses_its_image_and_describes_it_from_inside(tmp_path):
+    async def scenario() -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        _source_repo(source)
+        backend = FakeImageBackend()
+        preparer = ImagePreparer(source, HubRegistry(tmp_path / "hub"), backend)
+
+        first = await preparer.build(ImageSelection("HEAD"))
+        again = await preparer.build(ImageSelection("HEAD"))
+        described = await preparer.describe(again)
+
+        assert again == first
+        assert len(backend.builds) == 1
+        assert backend.vanilla_checks == [first.image_id]
+        assert described == vanilla_description()
+
+    asyncio.run(scenario())
+
+
+def test_describing_a_package_image_checks_it_and_puts_the_built_in_fields_first(tmp_path):
+    async def scenario() -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        _source_repo(source)
+        backend = FakeImageBackend()
+        preparer = ImagePreparer(source, HubRegistry(tmp_path / "hub"), backend)
+        package = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
+
+        artifact = await preparer.build(ImageSelection("HEAD", package))
+        assert backend.inspected == []
+        described = await preparer.describe(artifact)
+
+        assert backend.inspected == [None]
+        assert backend.vanilla_checks == []
+        assert (described.display_name, described.version) == ("Writing teammate", "1.4.2")
+        assert [(field.name, field.kind) for field in described.setup_fields] == [
+            ("model", SetupFieldKind.CONFIG),
+            ("api_key", SetupFieldKind.SECRET),
+        ]
 
     asyncio.run(scenario())
 

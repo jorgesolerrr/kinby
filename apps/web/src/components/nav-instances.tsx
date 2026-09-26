@@ -9,15 +9,17 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import { instanceName } from "@/lib/instances"
-import { instancePath, selectInstance } from "@/lib/selection"
-import { BotIcon } from "lucide-react"
+import { CREATE_PATH, instancePath, openCreateWizard, selectInstance } from "@/lib/selection"
+import { BotIcon, PlusIcon } from "lucide-react"
 
 export function NavInstances({
   instances,
   selected,
+  creating,
 }: {
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
+  creating: boolean
 }) {
   return (
     <SidebarGroup>
@@ -47,6 +49,23 @@ export function NavInstances({
             </SidebarMenuItem>
           )
         })}
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            tooltip="New instance"
+            isActive={creating}
+            aria-current={creating ? "page" : undefined}
+            onClick={(event) => {
+              event.preventDefault()
+              openCreateWizard()
+            }}
+            render={
+              <a href={CREATE_PATH}>
+                <PlusIcon />
+                <span>New instance</span>
+              </a>
+            }
+          />
+        </SidebarMenuItem>
       </SidebarMenu>
     </SidebarGroup>
   )

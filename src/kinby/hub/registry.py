@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from pydantic import TypeAdapter
+
 from kinby.contracts import (
     InstanceSummary,
     IntendedState,
@@ -16,6 +18,7 @@ from kinby.contracts import (
     OperationState,
     OperationStep,
     PackageCommit,
+    PackageDescription,
     PackageSelection,
     PackageSummary,
     StorageItem,
@@ -103,10 +106,11 @@ class HubRegistry:
                 );
                 CREATE TABLE IF NOT EXISTS operations (
                     id TEXT PRIMARY KEY,
-                    instance_id TEXT NOT NULL REFERENCES instances(id),
+                    instance_id TEXT REFERENCES instances(id),
                     kind TEXT NOT NULL,
                     state TEXT NOT NULL,
-                    detail TEXT NOT NULL
+                    detail TEXT NOT NULL,
+                    selection TEXT
                 );
                 CREATE TABLE IF NOT EXISTS operation_steps (
                     operation_id TEXT NOT NULL REFERENCES operations(id),
@@ -124,6 +128,11 @@ class HubRegistry:
                     base_images TEXT NOT NULL,
                     dependencies TEXT NOT NULL,
                     package_selection TEXT
+                );
+                CREATE TABLE IF NOT EXISTS package_descriptions (
+                    selection TEXT PRIMARY KEY,
+                    image_id TEXT NOT NULL,
+                    description TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS update_candidates (
                     instance_id TEXT PRIMARY KEY REFERENCES instances(id),
@@ -157,6 +166,40 @@ class HubRegistry:
                 "image_artifacts",
                 {"package_selection": "TEXT"},
             )
+        self._let_operations_stand_alone()
+
+    def _let_operations_stand_alone(self) -> None:
+        """Rebuild an operations table from before preparations, whose rows all name an instance.
+
+        SQLite cannot drop a NOT NULL constraint in place. The copy keeps every row in order.
+        """
+        connection = sqlite3.connect(self.path)
+        try:
+            columns = {
+                row[1]: row[3] for row in connection.execute("PRAGMA table_info(operations)")
+            }
+            if not columns["instance_id"]:
+                return
+            connection.executescript(
+                """
+                BEGIN;
+                CREATE TABLE operations_standing_alone (
+                    id TEXT PRIMARY KEY,
+                    instance_id TEXT REFERENCES instances(id),
+                    kind TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    selection TEXT
+                );
+                INSERT INTO operations_standing_alone (id, instance_id, kind, state, detail)
+                SELECT id, instance_id, kind, state, detail FROM operations ORDER BY rowid;
+                DROP TABLE operations;
+                ALTER TABLE operations_standing_alone RENAME TO operations;
+                COMMIT;
+                """
+            )
+        finally:
+            connection.close()
 
     @staticmethod
     def _add_columns(
@@ -350,6 +393,72 @@ class HubRegistry:
             ),
         )
 
+    def begin_preparation(
+        self,
+        operation_id: UUID,
+        package: PackageSelection | None,
+        detail: str,
+    ) -> UUID:
+        """Open this image preparation, or return the unfinished one of the same selection."""
+        selection = _selection_key(package)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT id FROM operations
+                WHERE kind = ? AND selection = ? AND state IN (?, ?)
+                ORDER BY rowid
+                LIMIT 1
+                """,
+                (
+                    OperationKind.PREPARE.value,
+                    selection,
+                    OperationState.PENDING.value,
+                    OperationState.RUNNING.value,
+                ),
+            ).fetchone()
+            if existing is not None:
+                return UUID(existing[0])
+            connection.execute(
+                """
+                INSERT INTO operations (id, kind, state, detail, selection)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(operation_id),
+                    OperationKind.PREPARE.value,
+                    OperationState.PENDING.value,
+                    detail,
+                    selection,
+                ),
+            )
+        return operation_id
+
+    def record_description(
+        self,
+        package: PackageSelection | None,
+        image_id: str,
+        description: PackageDescription,
+    ) -> None:
+        """Keep what this selection's image declares, so describing it never builds."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO package_descriptions (selection, image_id, description)
+                VALUES (?, ?, ?)
+                """,
+                (_selection_key(package), image_id, description.model_dump_json()),
+            )
+
+    def description(self, package: PackageSelection | None) -> PackageDescription | None:
+        """What the image last prepared for this selection declares, if one was prepared."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT description FROM package_descriptions WHERE selection = ?",
+                (_selection_key(package),),
+            ).fetchone()
+        return PackageDescription.model_validate_json(row[0]) if row is not None else None
+
     def fail_interrupted_operations(self, detail: str) -> None:
         """Fail operations the previous process left unfinished.
 
@@ -485,7 +594,7 @@ class HubRegistry:
             return None
         return OperationGetResult(
             operation_id=UUID(row[0]),
-            instance_id=UUID(row[1]),
+            instance_id=UUID(row[1]) if row[1] is not None else None,
             kind=OperationKind(row[2]),
             state=OperationState(row[3]),
             detail=row[4],
@@ -1068,6 +1177,14 @@ class HubRegistry:
                 ).fetchall()
             ]
         return [artifact for key in keys if (artifact := self.image_artifact(key)) is not None]
+
+
+_SELECTION = TypeAdapter(PackageSelection | None)
+
+
+def _selection_key(package: PackageSelection | None) -> str:
+    """One selection, as the JSON a client sends for it. Vanilla is null."""
+    return _SELECTION.dump_json(package).decode()
 
 
 type _PackageColumns = tuple[str | None, str | None, str | None, str | None, str | None, str | None]

@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from kinby.cli import main
+from kinby.contracts import PackageDescription, SetupFieldKind, SetupFieldType
 from kinby.packages.__main__ import main as candidate_check
 from tests.fake_package import install_fake_package
 
@@ -185,6 +186,27 @@ def test_the_candidate_check_prints_the_package_only_when_it_passes(tmp_path, mo
     printed = json.loads(capsys.readouterr().out)
     assert printed["descriptor"]["id"] == "writer"
     assert printed["files"]["package.yaml"] == "tone: plain\ntoken: EDITOR_TOKEN\n"
+
+
+def test_the_candidate_check_without_a_package_describes_a_vanilla_instance(capsys):
+    assert candidate_check([]) == 0
+
+    printed = PackageDescription.model_validate_json(capsys.readouterr().out)
+    assert (printed.display_name, printed.icon) == ("Vanilla", "sparkles")
+    assert [
+        (field.name, field.label, field.kind, field.type, field.required)
+        for field in printed.setup_fields
+    ] == [
+        ("model", "Model", SetupFieldKind.CONFIG, SetupFieldType.TEXT, True),
+        ("api_key", "API key", SetupFieldKind.SECRET, SetupFieldType.TEXT, True),
+        (
+            "behavior_prompt",
+            "Behavior prompt",
+            SetupFieldKind.CONFIG,
+            SetupFieldType.MULTILINE,
+            False,
+        ),
+    ]
 
 
 def test_the_candidate_check_validates_an_existing_instance_config(tmp_path, monkeypatch, capsys):

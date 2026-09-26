@@ -25,11 +25,13 @@ const entries = [
 export function AppSidebar({
   instances,
   selected,
+  creating,
   onSignOut,
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
+  creating: boolean
   onSignOut: () => void
 }) {
   return (
@@ -46,7 +48,7 @@ export function AppSidebar({
       </SidebarHeader>
       <SidebarContent>
         <NavMain entries={entries} />
-        <NavInstances instances={instances} selected={selected} />
+        <NavInstances instances={instances} selected={selected} creating={creating} />
       </SidebarContent>
       <SidebarFooter>
         <NavUser onSignOut={onSignOut} />

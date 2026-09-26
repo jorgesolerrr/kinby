@@ -99,7 +99,7 @@ _Avoid_: credentials, env vars
 
 ### Lifecycle operation
 
-One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. Its identity and outcome remain available after the requesting client disconnects.
+One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. An **image preparation** is one too, and it belongs to no instance. Its identity and outcome remain available after the requesting client disconnects.
 
 ### Operation step
 
@@ -154,6 +154,16 @@ One thing an **adoption preflight** observed about an instance and its container
 ### Image artifact
 
 An immutable container image together with the resolved source revision, dependency identity, and base-image identities that produced it. An instance keeps its selected image artifact until an explicit lifecycle operation changes it.
+
+### Image preparation
+
+The **lifecycle operation** that builds or reuses the **image artifact** for a **package** selection, or for a **vanilla instance**, before any instance exists. It then runs the **package check** inside the image and stores what the image declares, its card, version, and **setup fields**, with the artifact. Preparing a selection that is already being prepared returns the preparation that is running.
+_Avoid_: image build, warm-up
+
+### Setup field
+
+One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. The built-in fields come first. Every instance asks for its model and API key, and a **vanilla instance** also asks for an optional **behavior prompt**. A package's own fields follow.
+_Avoid_: required input, form field
 
 ### Container runtime
 

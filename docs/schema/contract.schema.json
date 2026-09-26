@@ -444,6 +444,7 @@
         "SNAPSHOT_UNAVAILABLE",
         "RESOURCE_EXHAUSTED",
         "INVALID_ARGUMENT",
+        "NOT_PREPARED",
         "CONNECTION_LOST",
         "INTERNAL"
       ],
@@ -654,6 +655,41 @@
       ],
       "title": "GateOutcome",
       "type": "string"
+    },
+    "ImagePrepareCommand": {
+      "additionalProperties": false,
+      "description": "Prepare a package selection's image. No package prepares kinby's base image.",
+      "properties": {
+        "package": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackageSelection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "package"
+      ],
+      "title": "ImagePrepareCommand",
+      "type": "object"
+    },
+    "ImagePrepareResult": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "title": "ImagePrepareResult",
+      "type": "object"
     },
     "InstanceAdoptCommand": {
       "additionalProperties": false,
@@ -1650,8 +1686,15 @@
           "type": "string"
         },
         "instance_id": {
-          "format": "uuid",
-          "type": "string"
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "kind": {
           "$ref": "#/$defs/OperationKind"
@@ -1691,7 +1734,8 @@
         "update",
         "remove",
         "restore",
-        "delete"
+        "delete",
+        "prepare"
       ],
       "title": "OperationKind",
       "type": "string"
@@ -1745,6 +1789,60 @@
         "sha"
       ],
       "title": "PackageCommit",
+      "type": "object"
+    },
+    "PackageDescribeCommand": {
+      "additionalProperties": false,
+      "description": "Read what a prepared selection declares. It never builds.",
+      "properties": {
+        "package": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackageSelection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "package"
+      ],
+      "title": "PackageDescribeCommand",
+      "type": "object"
+    },
+    "PackageDescription": {
+      "additionalProperties": false,
+      "description": "What a prepared image declares: its card, its version, and its setup fields.\n\nThe built-in fields come first, then the package's own.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "setup_fields": {
+          "items": {
+            "$ref": "#/$defs/SetupField"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "display_name",
+        "description",
+        "icon",
+        "version",
+        "setup_fields"
+      ],
+      "title": "PackageDescription",
       "type": "object"
     },
     "PackagePin": {
@@ -2325,6 +2423,58 @@
           "$ref": "#/$defs/EndFrame"
         }
       ]
+    },
+    "SetupField": {
+      "additionalProperties": false,
+      "description": "One value a prepared image asks for before an instance is created from it.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SetupFieldKind"
+        },
+        "label": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/SetupFieldType"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "description",
+        "kind",
+        "type",
+        "required"
+      ],
+      "title": "SetupField",
+      "type": "object"
+    },
+    "SetupFieldKind": {
+      "description": "Where a setup field's value lands: the instance's configuration, or its secrets.",
+      "enum": [
+        "config",
+        "secret"
+      ],
+      "title": "SetupFieldKind",
+      "type": "string"
+    },
+    "SetupFieldType": {
+      "description": "How a client asks for a setup field's value.",
+      "enum": [
+        "text",
+        "multiline"
+      ],
+      "title": "SetupFieldType",
+      "type": "string"
     },
     "SignalAuth": {
       "enum": [
@@ -4048,6 +4198,22 @@
     "methods": {
       "additionalProperties": false,
       "properties": {
+        "image.prepare": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ImagePrepareCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ImagePrepareResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "instance.adopt": {
           "additionalProperties": false,
           "properties": {
@@ -4328,6 +4494,22 @@
             },
             "result": {
               "$ref": "#/$defs/OperationGetResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "package.describe": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PackageDescribeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/PackageDescription"
             }
           },
           "required": [
@@ -4644,6 +4826,8 @@
         "instance.status",
         "instance.logs",
         "operation.get",
+        "image.prepare",
+        "package.describe",
         "stats.summary"
       ],
       "type": "object"

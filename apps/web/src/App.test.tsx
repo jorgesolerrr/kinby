@@ -157,6 +157,24 @@ describe("the instances", () => {
     openApp({ signedIn: true })
 
     expect(await screen.findByText("No instances yet")).toBeDefined()
-    expect(screen.queryByRole("link")).toBeNull()
+    expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual(["New instance"])
+  })
+})
+
+describe("creating an instance", () => {
+  beforeEach(() => window.history.replaceState(null, "", "/"))
+
+  it("opens the create wizard from the sidebar, at its package step", async () => {
+    openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+
+    await user.click(await instanceLink("Ada"))
+    await user.click(await screen.findByRole("link", { name: "New instance" }))
+
+    expect(await screen.findByRole("heading", { name: "New instance" })).toBeDefined()
+    expect(screen.getByRole("button", { name: "Prepare vanilla" })).toBeDefined()
+    expect(window.location.pathname).toBe("/new")
+    expect((await instanceLink("New instance")).getAttribute("aria-current")).toBe("page")
+    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBeNull()
   })
 })

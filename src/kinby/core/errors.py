@@ -62,6 +62,12 @@ class PackagePinRefused(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class SelectionNotPrepared(CoreError):
+    """No image preparation stored a descriptor for this selection, and describing never builds."""
+
+    code = ErrorCode.NOT_PREPARED
+
+
 class LifecycleOperationNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
