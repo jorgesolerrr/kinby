@@ -904,7 +904,7 @@
         },
         "config": {
           "additionalProperties": {
-            "type": "string"
+            "$ref": "#/$defs/SetupValue"
           },
           "type": "object"
         },
@@ -2487,6 +2487,31 @@
       "additionalProperties": false,
       "description": "One value a prepared image asks for before an instance is created from it.",
       "properties": {
+        "choices": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SetupValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "description": {
           "type": "string"
         },
@@ -2501,6 +2526,17 @@
         },
         "required": {
           "type": "boolean"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SetupTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "type": {
           "$ref": "#/$defs/SetupFieldType"
@@ -2527,13 +2563,47 @@
       "type": "string"
     },
     "SetupFieldType": {
-      "description": "How a client asks for a setup field's value.",
+      "description": "How a client asks for a setup field's value, and so what the value is.",
       "enum": [
         "text",
-        "multiline"
+        "multiline",
+        "boolean",
+        "integer",
+        "choice"
       ],
       "title": "SetupFieldType",
       "type": "string"
+    },
+    "SetupTarget": {
+      "additionalProperties": false,
+      "description": "Where a configuration value lands: a file, and a dotted key inside it.",
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/TargetFile"
+        },
+        "key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "key"
+      ],
+      "title": "SetupTarget",
+      "type": "object"
+    },
+    "SetupValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ]
     },
     "SignalAuth": {
       "enum": [
@@ -3085,6 +3155,15 @@
       ],
       "title": "SubscriptionUse",
       "type": "object"
+    },
+    "TargetFile": {
+      "description": "The instance file a package's configuration field lands in.",
+      "enum": [
+        "kinby.toml",
+        "package.yaml"
+      ],
+      "title": "TargetFile",
+      "type": "string"
     },
     "ThreadApprovalRespondCommand": {
       "additionalProperties": false,

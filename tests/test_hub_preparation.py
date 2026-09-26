@@ -57,12 +57,12 @@ def writer_package() -> InstalledPackage:
             icon="pen",
             distribution="kinby-writer",
             version="1.4.2",
-            required_secrets=(
+            setup_fields=(
                 RequiredSecret(
                     name="EDITOR_TOKEN",
                     label="Editor token",
                     description="Publishes drafts.",
-                ),
+                ).setup_field(),
             ),
         ),
         files={"SYSTEM.md": "Write clearly.\n"},

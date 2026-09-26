@@ -73,6 +73,7 @@ from kinby.contracts import (
     PackageSelection,
     ProcessState,
     Readiness,
+    SetupFieldKind,
     StatsGetCommand,
     StatsGetResult,
     StatsSummaryResult,
@@ -113,13 +114,20 @@ from kinby.hub.models import (
 )
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import HubRegistry, ManagedInstance
-from kinby.hub.setup import ENVIRONMENT_NAME, api_key_variable, setup_errors
+from kinby.hub.setup import (
+    ENVIRONMENT_NAME,
+    api_key_variable,
+    configuration,
+    setup_errors,
+    targeted,
+)
 from kinby.hub.usage import Uncounted, summed_usage
 from kinby.instance import Instance, init_instance, inspect_instance
 from kinby.instance.layout import SYSTEM_NAME
 from kinby.packages import (
     API_KEY_FIELD,
     BEHAVIOR_PROMPT_FIELD,
+    MODEL_FIELD,
     PACKAGE_CONFIG_NAME,
     InstalledPackage,
 )
@@ -327,8 +335,9 @@ class Hub:
                 "validate",
                 "Checking the setup values against what the image declares.",
             )
+            description = await self._declared(selection, prepared)
             errors = setup_errors(
-                await self._declared(selection, prepared),
+                description,
                 model=command.model,
                 config=command.config,
                 secrets=secrets,
@@ -343,13 +352,21 @@ class Hub:
                 "initialize",
                 "Writing the instance's configuration and secrets.",
             )
-            init_instance(staging, model=command.model, package=package)
+            configured = configuration(description, model=command.model, config=command.config)
+            model = str(configured[MODEL_FIELD.name])
+            init_instance(
+                staging,
+                model=model,
+                package=package,
+                config=targeted(description, configured),
+            )
             self._write_configuration(staging, record.manifest_id, record.persona_name)
-            behavior_prompt = command.config.get(BEHAVIOR_PROMPT_FIELD.name, "")
-            if behavior_prompt.strip():
+            behavior_prompt = configured.get(BEHAVIOR_PROMPT_FIELD.name)
+            if package is None and isinstance(behavior_prompt, str):
                 (staging / SYSTEM_NAME).write_text(behavior_prompt, encoding="utf-8")
-            self._write_secrets(staging / ".env", self._instance_secrets(command.model, secrets))
+            self._write_secrets(staging / ".env", self._instance_secrets(model, secrets))
             inspect_instance(staging)
+            await self._check_written_config(selection, package, staging)
             self._record(
                 operation_id, "publish", "Creating the container and listing the instance."
             )
@@ -382,6 +399,31 @@ class Hub:
                 OperationState.FAILED,
                 self._redact(str(exc) or type(exc).__name__, secrets.values()),
             )
+
+    async def _check_written_config(
+        self,
+        selection: ImageSelection,
+        package: InstalledPackage | None,
+        staging: Path,
+    ) -> None:
+        """The package's validator has the last word on a package.yaml the setup values changed.
+
+        The file the package ships passed the check when the image was prepared.
+        """
+        path = staging / PACKAGE_CONFIG_NAME
+        if package is None or not path.is_file():
+            return
+        if path.read_text(encoding="utf-8") == package.files.get(PACKAGE_CONFIG_NAME):
+            return
+        await self._images.prepare(
+            selection,
+            StorageItem(
+                kind=StorageKind.BIND,
+                source=str(self._docker_host_directory / path.relative_to(self.directory)),
+                destination=f"{INSTANCE_MOUNT}/{PACKAGE_CONFIG_NAME}",
+                writable=False,
+            ),
+        )
 
     async def prepare_image(self, command: ImagePrepareCommand) -> ImagePrepareResult:
         """Build or reuse a selection's image before any instance exists, and describe it."""
@@ -1521,8 +1563,12 @@ class Hub:
     @staticmethod
     def _require_secrets(package: InstalledPackage | None, secrets: dict[str, str]) -> None:
         """An update's candidate may ask for a secret this instance does not hold yet."""
-        required = package.descriptor.required_secrets if package is not None else ()
-        missing = [secret.name for secret in required if secret.name not in secrets]
+        declared = package.descriptor.setup_fields if package is not None else ()
+        missing = [
+            field.name
+            for field in declared
+            if field.kind is SetupFieldKind.SECRET and field.required and field.name not in secrets
+        ]
         if missing:
             raise ValueError(f'Missing required secret: "{missing[0]}".')
 

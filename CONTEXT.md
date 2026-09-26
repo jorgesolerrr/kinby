@@ -162,7 +162,7 @@ _Avoid_: image build, warm-up
 
 ### Setup field
 
-One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. The built-in fields come first. Every instance asks for its model and API key, and a **vanilla instance** also asks for an optional **behavior prompt**. A package's own fields follow.
+One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. Each has a type (text, multiline, boolean, integer, or choice), may be required, and may have a default. A secret never has one. The built-in fields come first. Every instance asks for its model and API key, and a **vanilla instance** also asks for an optional **behavior prompt**. kinby writes those itself. A package's own fields follow, and each of its configuration fields names its target: `kinby.toml` or `package.yaml` and a dotted key inside it. A package may give a built-in field another default, but it cannot remove the field. Defaults resolve built-in first, then package, then the user's value. A package's required secrets read as required secret text fields.
 _Avoid_: required input, form field
 
 ### Avatar

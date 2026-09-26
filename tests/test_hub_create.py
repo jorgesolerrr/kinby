@@ -2,10 +2,12 @@
 
 import asyncio
 import sqlite3
+import tomllib
 from dataclasses import replace
 from uuid import UUID
 
 import pytest
+import yaml
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
@@ -24,12 +26,17 @@ from kinby.contracts import (
     OperationState,
     PackageDescribeCommand,
     PackageDescription,
+    PackageSelection,
     SetupField,
     SetupFieldKind,
     SetupFieldType,
+    SetupTarget,
+    SetupValue,
+    TargetFile,
 )
 from kinby.hub import ImageArtifact, ImageSelection
 from kinby.instance import init_instance, inspect_instance
+from kinby.packages import InstalledPackage, PackageDescriptor
 from tests.test_hub import (
     FakeImages,
     FakeRuntime,
@@ -304,6 +311,215 @@ def test_an_instance_created_before_avatars_lists_the_default_one(tmp_path):
         assert [(summary.instance_id, summary.avatar) for summary in listed.instances] == [
             (instance_id, Avatar(shape=AvatarShape.CIRCLE, color=AvatarColor.BLUE))
         ]
+
+    asyncio.run(scenario())
+
+
+WRITER = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
+PACKAGE_YAML = "# How drafts sound.\nstyle:\n  tone: plain\nreview:\n  enabled: false\n"
+
+
+def _config_field(name: str, label: str, type: SetupFieldType, **declared) -> SetupField:
+    return SetupField(
+        name=name,
+        label=label,
+        description=f"{label}.",
+        kind=SetupFieldKind.CONFIG,
+        type=type,
+        required=False,
+        **declared,
+    )
+
+
+WRITER_PACKAGE = InstalledPackage(
+    descriptor=PackageDescriptor(
+        id="writer",
+        display_name="Writing teammate",
+        description="Drafts articles.",
+        icon="pen",
+        distribution="kinby-writer",
+        version="1.4.2",
+        setup_fields=(
+            _config_field(
+                "model", "Model", SetupFieldType.TEXT, default="anthropic:claude-opus-5-5"
+            ),
+            _config_field(
+                "tone",
+                "Tone",
+                SetupFieldType.CHOICE,
+                default="plain",
+                choices=["plain", "formal"],
+                target=SetupTarget(file=TargetFile.PACKAGE_YAML, key="style.tone"),
+            ),
+            _config_field(
+                "review",
+                "Review",
+                SetupFieldType.BOOLEAN,
+                default=False,
+                target=SetupTarget(file=TargetFile.PACKAGE_YAML, key="review.enabled"),
+            ),
+            _config_field(
+                "steps",
+                "Steps per turn",
+                SetupFieldType.INTEGER,
+                default=7,
+                target=SetupTarget(file=TargetFile.KINBY_TOML, key="budgets.steps"),
+            ),
+            SetupField(
+                name="EDITOR_TOKEN",
+                label="Editor token",
+                description="Authenticates editing.",
+                kind=SetupFieldKind.SECRET,
+                type=SetupFieldType.TEXT,
+                required=True,
+            ),
+        ),
+    ),
+    files={"kinby.toml": '[feedback]\nask = "off"\n', "package.yaml": PACKAGE_YAML},
+)
+
+
+def test_config_values_land_at_their_targets_and_secrets_in_the_instance_secrets(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        images = FakeImages(package=WRITER_PACKAGE)
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images)
+        client = hub_client(hub)
+        await prepared(client, WRITER)
+
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="editor",
+                model="openai:gpt-5",
+                package=WRITER,
+                config={"tone": "formal", "review": True, "steps": 12},
+                secrets={"api_key": "sk-private", "EDITOR_TOKEN": "editor-private"},
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        instance_path = hub.instances_directory / str(accepted.instance_id)
+        manifest = inspect_instance(instance_path).manifest
+        assert manifest.models.main == "openai:gpt-5"
+        assert manifest.budgets.steps == 12
+        written = (instance_path / "package.yaml").read_text(encoding="utf-8")
+        assert yaml.safe_load(written) == {"style": {"tone": "formal"}, "review": {"enabled": True}}
+        assert images.checked_configs == [written]
+        environment = instance_environment(hub, accepted.instance_id)
+        assert environment["EDITOR_TOKEN"] == "editor-private"
+        assert environment["OPENAI_API_KEY"] == "sk-private"
+
+    asyncio.run(scenario())
+
+
+def test_defaults_fill_in_what_the_user_left_out_and_keep_the_file_as_shipped(tmp_path):
+    async def scenario() -> None:
+        images = FakeImages(package=WRITER_PACKAGE)
+        hub = hub_at(tmp_path / "hub", images=images)
+        client = hub_client(hub)
+        await prepared(client, WRITER)
+
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="editor",
+                model="",
+                package=WRITER,
+                config={"tone": ""},
+                secrets={"api_key": "sk-private", "EDITOR_TOKEN": "editor-private"},
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        instance_path = hub.instances_directory / str(accepted.instance_id)
+        manifest = tomllib.loads((instance_path / "kinby.toml").read_text(encoding="utf-8"))
+        assert manifest["models"]["main"] == "anthropic:claude-opus-5-5"
+        assert manifest["budgets"]["steps"] == 7
+        assert (instance_path / "package.yaml").read_text(encoding="utf-8") == PACKAGE_YAML
+        assert images.checked_configs == []
+        environment = instance_environment(hub, accepted.instance_id)
+        assert environment["ANTHROPIC_API_KEY"] == "sk-private"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("config", "fields"),
+    [
+        ({"tone": "loud"}, {"tone": "Tone is not one of plain, formal."}),
+        ({"review": "yes"}, {"review": "Review is not true or false."}),
+        ({"steps": "12"}, {"steps": "Steps per turn is not a whole number."}),
+        ({"steps": True}, {"steps": "Steps per turn is not a whole number."}),
+    ],
+    ids=["choice", "boolean", "integer-as-text", "integer-as-boolean"],
+)
+def test_a_value_of_the_wrong_type_is_refused_on_its_field(
+    tmp_path, config: dict[str, SetupValue], fields
+):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(package=WRITER_PACKAGE))
+        client = hub_client(hub)
+        await prepared(client, WRITER)
+
+        refused = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="editor",
+                model="openai:gpt-5",
+                package=WRITER,
+                config=config,
+                secrets={"api_key": "sk-private", "EDITOR_TOKEN": "editor-private"},
+            ),
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_SETUP
+        assert refused.fields == fields
+        assert runtime.created == []
+        assert list(hub.instances_directory.iterdir()) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_package_yaml_its_validator_refuses_fails_initialize_and_publishes_nothing(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        images = FakeImages(package=WRITER_PACKAGE, config_failure="review.enabled: not allowed")
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=images)
+        client = hub_client(hub)
+        await prepared(client, WRITER)
+
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="editor",
+                model="openai:gpt-5",
+                package=WRITER,
+                config={"review": True},
+                secrets={"api_key": "sk-private", "EDITOR_TOKEN": "editor-private"},
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert [(step.name, step.state) for step in outcome.steps] == [
+            ("image", OperationState.SUCCEEDED),
+            ("validate", OperationState.SUCCEEDED),
+            ("initialize", OperationState.FAILED),
+        ]
+        assert "review.enabled: not allowed" in outcome.detail
+        assert runtime.created == []
+        assert list(hub.instances_directory.iterdir()) == []
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        assert listed.instances == []
 
     asyncio.run(scenario())
 
