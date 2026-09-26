@@ -16,6 +16,7 @@ from kinby.contracts import (
     CONTRACT_VERSION,
     CONTROL_SCOPES,
     HUB_SCOPES,
+    IMAGE_PREPARE,
     INSTANCE_CREATE,
     INSTANCE_DELETE,
     INSTANCE_DELETE_PREVIEW,
@@ -31,6 +32,7 @@ from kinby.contracts import (
     INSTANCE_STOP,
     INSTANCE_UPDATE,
     OPERATION_GET,
+    PACKAGE_DESCRIBE,
     Capability,
     ContainerOwner,
     ControlToken,
@@ -52,6 +54,7 @@ from kinby.contracts import (
     OperationGetResult,
     OperationKind,
     OperationState,
+    PackageDescription,
     PackageSelection,
     Readiness,
     Scope,
@@ -77,7 +80,13 @@ from kinby.hub import (
 )
 from kinby.hub.service import HubAlreadyRunning
 from kinby.instance import inspect_instance
-from kinby.packages import InstalledPackage, PackageDescriptor, RequiredSecret
+from kinby.packages import (
+    InstalledPackage,
+    PackageDescriptor,
+    RequiredSecret,
+    package_description,
+    vanilla_description,
+)
 
 
 class FakeImages:
@@ -86,31 +95,44 @@ class FakeImages:
         *,
         failure: str | None = None,
         package: InstalledPackage | None = None,
+        check_failure: str | None = None,
     ) -> None:
         self.revisions: list[str] = []
         self.selections: list[ImageSelection] = []
         self.failure = failure
         self.package = package
+        self.check_failure = check_failure
+        self.described: list[ImageArtifact] = []
 
     async def prepare(
         self,
         selection: ImageSelection,
         instance: StorageItem | None = None,
     ) -> PreparedImage:
+        return PreparedImage(artifact=await self.build(selection), package=self.package)
+
+    async def build(self, selection: ImageSelection) -> ImageArtifact:
         self.revisions.append(selection.revision)
         self.selections.append(selection)
         if self.failure is not None:
             raise RuntimeError(self.failure)
-        return PreparedImage(
-            artifact=ImageArtifact(
-                image_id="sha256:selected-image",
-                revision="a" * 40,
-                dependency_id="sha256:dependencies",
-                base_images=("python@sha256:base",),
-                package=selection.package,
-            ),
-            package=self.package,
+        return ImageArtifact(
+            image_id="sha256:selected-image",
+            revision="a" * 40,
+            dependency_id="sha256:dependencies",
+            base_images=("python@sha256:base",),
+            package=selection.package,
         )
+
+    async def describe(self, artifact: ImageArtifact) -> PackageDescription:
+        """What the candidate check prints in the image: kinby's own, or the package's."""
+        self.described.append(artifact)
+        if self.check_failure is not None:
+            raise ValueError(self.check_failure)
+        if artifact.package is None:
+            return vanilla_description()
+        assert self.package is not None, "a package image needs the package it installs"
+        return package_description(self.package)
 
 
 class FakeRuntime:
@@ -1278,6 +1300,8 @@ def test_no_scope_an_instance_grants_carries_hub_authority():
         INSTANCE_STATUS.scope,
         INSTANCE_LOGS.scope,
         INSTANCE_DELETE_PREVIEW.scope,
+        OPERATION_GET.scope,
+        PACKAGE_DESCRIBE.scope,
     } == {Scope.HUB_READ}
     assert {
         INSTANCE_CREATE.scope,
@@ -1288,8 +1312,26 @@ def test_no_scope_an_instance_grants_carries_hub_authority():
         INSTANCE_RESTORE.scope,
         INSTANCE_DELETE.scope,
         INSTANCE_SECRETS_SET.scope,
+        IMAGE_PREPARE.scope,
     } == {Scope.HUB_ADMIN}
-    assert {INSTANCE_UPDATE.scope, OPERATION_GET.scope} == {Scope.HUB_UPDATE}
+    assert INSTANCE_UPDATE.scope is Scope.HUB_UPDATE
+
+
+def test_a_read_only_session_follows_an_operation(tmp_path):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        created = await created_instance(hub_client(hub))
+        reader = hub_client(hub, {Scope.HUB_READ})
+
+        followed = await reader.call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=created.operation_id),
+        )
+
+        assert not isinstance(followed, ErrorEnvelope)
+        assert followed.state is OperationState.SUCCEEDED
+
+    asyncio.run(scenario())
 
 
 def test_stop_drains_the_instance_then_observes_the_container_stop(tmp_path):

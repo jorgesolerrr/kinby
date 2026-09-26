@@ -39,8 +39,26 @@ export type IntendedState = "stopped" | "running" | "removed" | "deleted";
 export type ProcessState = "missing" | "created" | "starting" | "running" | "stopped" | "failed" | "unavailable";
 export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "unknown";
 export type OperationKind =
-  "create" | "start" | "stop" | "secrets" | "recreate" | "adopt" | "update" | "remove" | "restore" | "delete";
+  | "create"
+  | "start"
+  | "stop"
+  | "secrets"
+  | "recreate"
+  | "adopt"
+  | "update"
+  | "remove"
+  | "restore"
+  | "delete"
+  | "prepare";
 export type OperationState = "pending" | "running" | "succeeded" | "failed";
+/**
+ * Where a setup field's value lands: the instance's configuration, or its secrets.
+ */
+export type SetupFieldKind = "config" | "secret";
+/**
+ * How a client asks for a setup field's value.
+ */
+export type SetupFieldType = "text" | "multiline";
 export type RoutineRunOutcome = "running" | "parked" | "work" | "no-work" | "failed" | "interrupted";
 export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
 export type RoutineNoticeKind = "first-failure" | "disabled";
@@ -66,6 +84,7 @@ export type ErrorCode =
   | "SNAPSHOT_UNAVAILABLE"
   | "RESOURCE_EXHAUSTED"
   | "INVALID_ARGUMENT"
+  | "NOT_PREPARED"
   | "CONNECTION_LOST"
   | "INTERNAL";
 export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
@@ -76,6 +95,10 @@ export type CompletionOutcome = "work" | "no-work";
 export interface Contract {
   client_frame: ClientFrame;
   methods: {
+    "image.prepare": {
+      command: ImagePrepareCommand;
+      result: ImagePrepareResult;
+    };
     "instance.adopt": {
       command: InstanceAdoptCommand;
       result: LifecycleOperationResult;
@@ -147,6 +170,10 @@ export interface Contract {
     "operation.get": {
       command: OperationGetCommand;
       result: OperationGetResult;
+    };
+    "package.describe": {
+      command: PackageDescribeCommand;
+      result: PackageDescription;
     };
     "routine.list": {
       command: RoutineListCommand;
@@ -246,15 +273,10 @@ export interface CancelFrame {
   type: "cancel";
 }
 /**
- * Take ownership. The preflight runs again here, and a blocking finding stops it.
+ * Prepare a package selection's image. No package prepares kinby's base image.
  */
-export interface InstanceAdoptCommand {
-  acknowledge_interrupting_stop?: boolean;
-  claim_signals?: boolean;
-  package?: PackageSelection | null;
-  path: string;
-  relinquished?: boolean;
-  runtime_id: string;
+export interface ImagePrepareCommand {
+  package: PackageSelection | null;
 }
 export interface PackageSelection {
   distribution: string;
@@ -268,6 +290,20 @@ export interface PackageSelection {
 export interface PackageCommit {
   sha: CommitSha;
   url: string;
+}
+export interface ImagePrepareResult {
+  operation_id: string;
+}
+/**
+ * Take ownership. The preflight runs again here, and a blocking finding stops it.
+ */
+export interface InstanceAdoptCommand {
+  acknowledge_interrupting_stop?: boolean;
+  claim_signals?: boolean;
+  package?: PackageSelection | null;
+  path: string;
+  relinquished?: boolean;
+  runtime_id: string;
 }
 export interface LifecycleOperationResult {
   instance_id: string;
@@ -461,7 +497,7 @@ export interface OperationGetCommand {
 }
 export interface OperationGetResult {
   detail: string;
-  instance_id: string;
+  instance_id: string | null;
   kind: OperationKind;
   operation_id: string;
   state: OperationState;
@@ -474,6 +510,35 @@ export interface OperationStep {
   detail: string;
   name: string;
   state: OperationState;
+}
+/**
+ * Read what a prepared selection declares. It never builds.
+ */
+export interface PackageDescribeCommand {
+  package: PackageSelection | null;
+}
+/**
+ * What a prepared image declares: its card, its version, and its setup fields.
+ *
+ * The built-in fields come first, then the package's own.
+ */
+export interface PackageDescription {
+  description: string;
+  display_name: string;
+  icon: string;
+  setup_fields: SetupField[];
+  version: string;
+}
+/**
+ * One value a prepared image asks for before an instance is created from it.
+ */
+export interface SetupField {
+  description: string;
+  kind: SetupFieldKind;
+  label: string;
+  name: string;
+  required: boolean;
+  type: SetupFieldType;
 }
 export interface RoutineListCommand {}
 export interface RoutineListResult {

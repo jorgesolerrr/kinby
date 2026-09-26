@@ -9,7 +9,13 @@ from pathlib import Path
 from typing import Literal, Protocol
 from uuid import UUID
 
-from kinby.contracts import ContainerOwner, ControlToken, PackageSelection, StorageItem
+from kinby.contracts import (
+    ContainerOwner,
+    ControlToken,
+    PackageDescription,
+    PackageSelection,
+    StorageItem,
+)
 from kinby.packages import InstalledPackage
 
 
@@ -175,6 +181,17 @@ class ImagePreparation(Protocol):
         """
         ...
 
+    async def build(self, selection: ImageSelection) -> ImageArtifact:
+        """Build the selected image, or reuse the artifact already recorded for it.
+
+        Nothing runs inside the image.
+        """
+        ...
+
+    async def describe(self, artifact: ImageArtifact) -> PackageDescription:
+        """Run the candidate check inside the image and read what it declares."""
+        ...
+
 
 @dataclass(frozen=True)
 class BuildResult:
@@ -195,3 +212,5 @@ class ImageBackend(Protocol):
         package_id: str,
         instance: StorageItem | None = None,
     ) -> InstalledPackage: ...
+
+    async def inspect_vanilla(self, image_id: str) -> PackageDescription: ...

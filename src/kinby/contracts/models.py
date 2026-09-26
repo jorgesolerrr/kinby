@@ -84,6 +84,8 @@ class ErrorCode(StrEnum):
     SNAPSHOT_UNAVAILABLE = "SNAPSHOT_UNAVAILABLE"
     RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
+    #: No image preparation stored a descriptor for this selection yet.
+    NOT_PREPARED = "NOT_PREPARED"
     #: Raised by a client, never sent by a server: its connection dropped under a call.
     CONNECTION_LOST = "CONNECTION_LOST"
     INTERNAL = "INTERNAL"
@@ -636,6 +638,60 @@ class PackageSummary(ContractModel):
     version: str | PackageCommit
 
 
+class SetupFieldKind(StrEnum):
+    """Where a setup field's value lands: the instance's configuration, or its secrets."""
+
+    CONFIG = "config"
+    SECRET = "secret"
+
+
+class SetupFieldType(StrEnum):
+    """How a client asks for a setup field's value."""
+
+    TEXT = "text"
+    MULTILINE = "multiline"
+
+
+class SetupField(ContractModel):
+    """One value a prepared image asks for before an instance is created from it."""
+
+    name: str
+    label: str
+    description: str
+    kind: SetupFieldKind
+    type: SetupFieldType
+    required: bool
+
+
+class PackageDescription(ContractModel):
+    """What a prepared image declares: its card, its version, and its setup fields.
+
+    The built-in fields come first, then the package's own.
+    """
+
+    display_name: str
+    description: str
+    icon: str
+    version: str
+    setup_fields: list[SetupField]
+
+
+class ImagePrepareCommand(ContractModel):
+    """Prepare a package selection's image. No package prepares kinby's base image."""
+
+    package: PackageSelection | None
+
+
+class ImagePrepareResult(ContractModel):
+    operation_id: UUID
+
+
+class PackageDescribeCommand(ContractModel):
+    """Read what a prepared selection declares. It never builds."""
+
+    package: PackageSelection | None
+
+
 class InstanceCreateCommand(ContractModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
@@ -900,6 +956,8 @@ class OperationKind(StrEnum):
     REMOVE = "remove"
     RESTORE = "restore"
     DELETE = "delete"
+    #: An image preparation. It belongs to no instance.
+    PREPARE = "prepare"
 
 
 class OperationState(StrEnum):
@@ -919,7 +977,8 @@ class OperationStep(ContractModel):
 
 class OperationGetResult(ContractModel):
     operation_id: UUID
-    instance_id: UUID
+    #: None for an image preparation, which runs before any instance exists.
+    instance_id: UUID | None
     kind: OperationKind
     state: OperationState
     detail: str

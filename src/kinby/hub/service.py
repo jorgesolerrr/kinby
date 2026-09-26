@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 from dotenv import dotenv_values
 
 from kinby.contracts import (
+    IMAGE_PREPARE,
     INSTANCE_ADOPT,
     INSTANCE_ADOPT_PREVIEW,
     INSTANCE_CREATE,
@@ -32,11 +33,14 @@ from kinby.contracts import (
     INSTANCE_STOP,
     INSTANCE_UPDATE,
     OPERATION_GET,
+    PACKAGE_DESCRIBE,
     STATS_SUMMARY,
     Capability,
     ContainerOwner,
     ControlToken,
     DrainState,
+    ImagePrepareCommand,
+    ImagePrepareResult,
     InstanceAdoptCommand,
     InstanceAdoptPreviewCommand,
     InstanceAdoptPreviewResult,
@@ -64,6 +68,8 @@ from kinby.contracts import (
     OperationKind,
     OperationState,
     PackageCommit,
+    PackageDescribeCommand,
+    PackageDescription,
     PackagePin,
     PackageSelection,
     ProcessState,
@@ -82,6 +88,7 @@ from kinby.core.errors import (
     LifecycleOperationNotFound,
     ManagedInstanceNotFound,
     PackagePinRefused,
+    SelectionNotPrepared,
 )
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
@@ -127,6 +134,8 @@ STATS_SECONDS = 5
 _DRAIN_RETRY_SECONDS = 0.2
 _RUNTIME_STOPPED = frozenset({"absent", "created", "stopped", "failed"})
 _INTERRUPTED_OPERATION = "The hub stopped before this operation finished."
+#: What an image preparation builds on: the hub's own checkout, as `instance.create` defaults to.
+_PREPARED_REVISION = "HEAD"
 
 
 class HubAlreadyRunning(RuntimeError):
@@ -245,6 +254,8 @@ class Hub:
             self.dispatcher.register(INSTANCE_STATUS, self.status)
             self.dispatcher.register(INSTANCE_LOGS, self.logs)
             self.dispatcher.register(OPERATION_GET, self.operation)
+            self.dispatcher.register(IMAGE_PREPARE, self.prepare_image)
+            self.dispatcher.register(PACKAGE_DESCRIBE, self.describe_package)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
         except BaseException:
             self._directory_lock.close()
@@ -350,6 +361,50 @@ class Hub:
                 OperationState.FAILED,
                 self._redact(str(exc) or type(exc).__name__, secrets.values()),
             )
+
+    async def prepare_image(self, command: ImagePrepareCommand) -> ImagePrepareResult:
+        """Build or reuse a selection's image before any instance exists, and describe it."""
+        operation_id = uuid4()
+        opened = self.registry.begin_preparation(
+            operation_id,
+            command.package,
+            "Preparation queued.",
+        )
+        if opened == operation_id:
+            self._schedule(self._prepare_image(operation_id, command.package))
+        return ImagePrepareResult(operation_id=opened)
+
+    async def _prepare_image(self, operation_id: UUID, package: PackageSelection | None) -> None:
+        try:
+            self._record(operation_id, "image", "Building the image, or reusing the one prepared.")
+            artifact = await self._images.build(ImageSelection(_PREPARED_REVISION, package))
+            self._record(
+                operation_id,
+                "describe",
+                "Reading what the image declares with the candidate check.",
+            )
+            description = await self._images.describe(artifact)
+            self.registry.record_description(package, artifact.image_id, description)
+        except asyncio.CancelledError:
+            self._fail_if_unfinished(operation_id)
+            raise
+        except Exception as exc:
+            self.registry.finish_operation(
+                operation_id,
+                OperationState.FAILED,
+                str(exc) or type(exc).__name__,
+            )
+            return
+        self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, "Image prepared.")
+
+    async def describe_package(self, command: PackageDescribeCommand) -> PackageDescription:
+        """What the prepared selection declares, as its preparation stored it. It never builds."""
+        description = self.registry.description(command.package)
+        if description is None:
+            raise SelectionNotPrepared(
+                "This selection has not been prepared. Prepare its image first."
+            )
+        return description
 
     async def start(self, command: InstanceStartCommand) -> LifecycleOperationResult:
         record = self._active_instance(command.instance_id)

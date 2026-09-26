@@ -396,6 +396,7 @@ const ERROR_CODES: Record<ErrorCode, true> = {
   SNAPSHOT_UNAVAILABLE: true,
   RESOURCE_EXHAUSTED: true,
   INVALID_ARGUMENT: true,
+  NOT_PREPARED: true,
   CONNECTION_LOST: true,
   INTERNAL: true,
 }

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from importlib.metadata import Distribution, entry_points
+from importlib.metadata import Distribution, entry_points, version
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -18,10 +18,43 @@ from pydantic import (
     ValidationInfo,
 )
 
+from kinby.contracts import PackageDescription, SetupField, SetupFieldKind, SetupFieldType
+
 if TYPE_CHECKING:
     from kinby.instance import Instance
 
 PACKAGE_CONFIG_NAME = "package.yaml"
+
+#: What every instance asks for, whatever it starts from. kinby writes these values itself.
+BUILT_IN_FIELDS = (
+    SetupField(
+        name="model",
+        label="Model",
+        description="The model the instance calls, as provider:model, like openai:gpt-5.",
+        kind=SetupFieldKind.CONFIG,
+        type=SetupFieldType.TEXT,
+        required=True,
+    ),
+    SetupField(
+        name="api_key",
+        label="API key",
+        description="The key your model provider issued. The hub keeps it with the instance's "
+        "secrets and never shows it again.",
+        kind=SetupFieldKind.SECRET,
+        type=SetupFieldType.TEXT,
+        required=True,
+    ),
+)
+#: Only a vanilla instance asks for it. A package keeps the behavior prompt it ships.
+BEHAVIOR_PROMPT_FIELD = SetupField(
+    name="behavior_prompt",
+    label="Behavior prompt",
+    description="Instructions the instance follows in every turn. Leave it empty to keep "
+    "kinby's default.",
+    kind=SetupFieldKind.CONFIG,
+    type=SetupFieldType.MULTILINE,
+    required=False,
+)
 
 
 class PackageConfigError(ValueError):
@@ -186,6 +219,40 @@ def _validation_message(exc: ValidationError) -> str:
     return "; ".join(messages)
 
 
+def vanilla_description() -> PackageDescription:
+    """What kinby's base image declares: the kinby installed in it, and the built-in fields."""
+    return PackageDescription(
+        display_name="Vanilla",
+        description="kinby's built-in defaults, with no package.",
+        icon="sparkles",
+        version=version("kinby"),
+        setup_fields=[*BUILT_IN_FIELDS, BEHAVIOR_PROMPT_FIELD],
+    )
+
+
+def package_description(package: InstalledPackage) -> PackageDescription:
+    """A package's card and version, with the built-in fields before the secrets it requires."""
+    descriptor = package.descriptor
+    required = [
+        SetupField(
+            name=secret.name,
+            label=secret.label,
+            description=secret.description,
+            kind=SetupFieldKind.SECRET,
+            type=SetupFieldType.TEXT,
+            required=True,
+        )
+        for secret in descriptor.required_secrets
+    ]
+    return PackageDescription(
+        display_name=descriptor.display_name,
+        description=descriptor.description,
+        icon=descriptor.icon,
+        version=descriptor.version,
+        setup_fields=[*BUILT_IN_FIELDS, *required],
+    )
+
+
 def installed_package_from_json(body: str) -> InstalledPackage:
     """Parse package inspection output at the Docker boundary."""
     raw = json.loads(body)
@@ -264,7 +331,9 @@ __all__ = [
     "installed_package_from_json",
     "instance_package_config",
     "load_package",
+    "package_description",
     "package_json",
     "read_package_config",
     "readable_template_files",
+    "vanilla_description",
 ]

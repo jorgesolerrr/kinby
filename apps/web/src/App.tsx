@@ -2,12 +2,13 @@ import type { Client, InstanceSummary } from "@kinby/contract"
 import { useEffect, useState, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { CreateWizard } from "@/components/create-wizard"
 import { MainPanel } from "@/components/main-panel"
 import { SignIn } from "@/components/sign-in"
 import { Badge } from "@/components/ui/badge"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { useSelectedInstanceId } from "@/lib/selection"
+import { useCreating, useSelectedInstanceId } from "@/lib/selection"
 
 export default function App({ client }: { client: Client }) {
   const state = useSyncExternalStore(client.onStateChange, client.state)
@@ -20,6 +21,7 @@ export default function App({ client }: { client: Client }) {
 function Shell({ client, connected }: { client: Client; connected: boolean }) {
   const instances = useInstances(client, connected)
   const selectedId = useSelectedInstanceId()
+  const creating = useCreating()
   // An instance the hub does not have, or no longer has, selects nothing.
   const selected = instances?.find((instance) => instance.instance_id === selectedId)
 
@@ -29,6 +31,7 @@ function Shell({ client, connected }: { client: Client; connected: boolean }) {
         <AppSidebar
           instances={instances ?? []}
           selected={selected}
+          creating={creating}
           onSignOut={() => void client.signOut()}
         />
         <SidebarInset>
@@ -36,7 +39,11 @@ function Shell({ client, connected }: { client: Client; connected: boolean }) {
             <SidebarTrigger />
             {!connected && <Badge variant="destructive">Reconnecting</Badge>}
           </header>
-          <MainPanel instances={instances} selected={selected} />
+          {creating ? (
+            <CreateWizard caller={client} />
+          ) : (
+            <MainPanel instances={instances} selected={selected} />
+          )}
         </SidebarInset>
       </SidebarProvider>
     </TooltipProvider>

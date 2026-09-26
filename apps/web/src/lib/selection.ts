@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from "react"
 
-// The selected instance lives in the URL, so a reload or an opened link lands on it.
+// What the page shows lives in the URL, so a reload or an opened link lands on it.
 const SECTION = "instances"
+export const CREATE_PATH = "/new"
 
 const listeners = new Set<() => void>()
 
@@ -11,13 +12,27 @@ export function instancePath(instanceId: string): string {
 
 /** Select an instance without reloading the page, as a new entry in the browser's history. */
 export function selectInstance(instanceId: string): void {
-  window.history.pushState(null, "", instancePath(instanceId))
-  for (const listener of listeners) listener()
+  navigate(instancePath(instanceId))
+}
+
+/** Open the create wizard the same way. */
+export function openCreateWizard(): void {
+  navigate(CREATE_PATH)
 }
 
 /** The hub instance ID the URL names, if it names one. */
 export function useSelectedInstanceId(): string | undefined {
   return useSyncExternalStore(subscribe, selectedInstanceId)
+}
+
+/** Whether the URL opens the create wizard. */
+export function useCreating(): boolean {
+  return useSyncExternalStore(subscribe, () => window.location.pathname === CREATE_PATH)
+}
+
+function navigate(path: string): void {
+  window.history.pushState(null, "", path)
+  for (const listener of listeners) listener()
 }
 
 function selectedInstanceId(): string | undefined {

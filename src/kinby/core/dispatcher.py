@@ -100,6 +100,10 @@ class Route[RouteHandler]:
     scope: Scope
     command: type[ContractModel]
     handler: RouteHandler
+    alternative_scope: Scope | None = None
+
+    def admits(self, scopes: Collection[Scope]) -> bool:
+        return self.scope in scopes or self.alternative_scope in scopes
 
 
 @dataclass(frozen=True)
@@ -127,7 +131,12 @@ class Dispatcher:
         method: Method[Command, Result],
         handler: Callable[[Command], Awaitable[Result]],
     ) -> None:
-        self._routes[method.name] = Route(method.scope, method.command, cast(Handler, handler))
+        self._routes[method.name] = Route(
+            method.scope,
+            method.command,
+            cast(Handler, handler),
+            method.alternative_scope,
+        )
 
     def register_subscription[Command: ContractModel, Item: ContractModel](
         self,
@@ -154,7 +163,7 @@ class Dispatcher:
                 message=f'Method "{method}" was not found.',
                 retryable=False,
             )
-        if route.scope not in scopes:
+        if not route.admits(scopes):
             return ErrorEnvelope(
                 code=ErrorCode.PERMISSION_DENIED,
                 message=f'Missing required scope "{route.scope.value}".',
