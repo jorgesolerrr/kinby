@@ -198,3 +198,29 @@ export const LOGINS = [
   { name: "Codex", status: "complete" as const },
   { name: "Claude Code", status: "expired" as const },
 ]
+
+export const MODES = ["read-only", "ask", "auto", "full-access"] as const
+export type Mode = (typeof MODES)[number]
+export const MODE_HINT: Record<Mode, string> = {
+  "read-only": "reads only, never writes",
+  ask: "asks before every write",
+  auto: "writes inside the workspace, asks for the rest",
+  "full-access": "never asks",
+}
+export type Rule = "allow" | "ask" | "deny"
+
+export type Permissions = {
+  mode: Mode
+  ceiling: Mode
+  tools: Record<string, Rule>
+  bash: { deny: string[]; ask: string[] }
+}
+
+export const SHIPPED_BASH_DENY = ["rm -rf /*", "git push --force*", "sudo *"]
+
+export const PERMISSIONS: Permissions = {
+  mode: "ask",
+  ceiling: "auto",
+  tools: { shell: "ask", routine_write: "ask", remember: "allow" },
+  bash: { deny: [...SHIPPED_BASH_DENY, "gh pr merge*"], ask: ["git push*"] },
+}

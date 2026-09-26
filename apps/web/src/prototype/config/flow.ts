@@ -13,6 +13,8 @@ import {
   SECRETS,
   type Secret,
   SKILLS,
+  PERMISSIONS,
+  type Permissions,
   type Skill,
   TOOLS,
 } from "./stub"
@@ -116,6 +118,8 @@ export function useConfig() {
   const [revision, setRevision] = useState(INSTANCE.revision)
   const [preflightFails, setPreflightFails] = useState(false)
   const [calls, setCalls] = useState<Call[]>([])
+  const [permissions, setPermissionsState] = useState<Permissions>(PERMISSIONS)
+  const [permissionsVersion, setPermissionsVersion] = useState(1)
   const nextId = useRef(1)
 
   const log = (method: string, params: unknown, result: unknown, missing: boolean) =>
@@ -362,12 +366,40 @@ export function useConfig() {
   }
 
   const permissionRule = (tool: string): string => {
-    const match = files["permissions.toml"].content.match(
-      new RegExp(`^${tool}\\s*=\\s*"([^"]*)"`, "m"),
+    const rule = permissions.tools[tool]
+    return rule ? `${rule} (tools.${tool})` : `mode default (${permissions.mode})`
+  }
+
+  // Permissions are structured, not a file: the instance owns the TOML, the app sends values.
+  const readPermissions = () => {
+    log("permissions.get", {}, { ...permissions, hash: hashOf(permissionsVersion) }, true)
+    return hashOf(permissionsVersion)
+  }
+
+  const setPermissions = (
+    next: Permissions,
+    hash: string,
+  ): { kind: "ok" } | { kind: "conflict" } => {
+    if (hash !== hashOf(permissionsVersion)) {
+      log("permissions.set", { hash }, { error: "changed_since_read" }, true)
+      return { kind: "conflict" }
+    }
+    setPermissionsState(next)
+    setPermissionsVersion((v) => v + 1)
+    log(
+      "permissions.set",
+      { ...next, hash },
+      { hash: hashOf(permissionsVersion + 1), applies: "at the next turn" },
+      true,
     )
-    return match
-      ? `${match[1]} (tools.${tool})`
-      : `mode default (${valueOf(files["permissions.toml"].content, "mode") ?? "ask"})`
+    log("event config.changed", { file: "permissions.toml", by: "user (app)" }, "appended", true)
+    return { kind: "ok" }
+  }
+
+  const agentEditPermissions = () => {
+    setPermissionsState((p) => ({ ...p, tools: { ...p.tools, gh_issue: "deny" } }))
+    setPermissionsVersion((v) => v + 1)
+    log("(agent) tool.call", { file: "permissions.toml" }, "file changed on disk", false)
   }
 
   const models = () => ({
@@ -376,6 +408,10 @@ export function useConfig() {
   })
 
   return {
+    permissions,
+    readPermissions,
+    setPermissions,
+    agentEditPermissions,
     files,
     read,
     write,

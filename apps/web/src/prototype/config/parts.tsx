@@ -26,6 +26,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   BoxIcon,
   CheckIcon,
@@ -42,7 +43,17 @@ import {
 } from "lucide-react"
 
 import type { Config, Operation, WriteResult } from "./flow"
-import { type ConfigFile, FILE_LABEL, INSTANCE } from "./stub"
+import {
+  type ConfigFile,
+  FILE_LABEL,
+  INSTANCE,
+  MODE_HINT,
+  MODES,
+  type Mode,
+  type Permissions,
+  type Rule,
+  SHIPPED_BASH_DENY,
+} from "./stub"
 
 // ---------- file editor ----------
 
@@ -180,6 +191,253 @@ function ModelsSummary({ config }: { config: Config }) {
         </ItemContent>
       </Item>
     </ItemGroup>
+  )
+}
+
+// ---------- permissions ----------
+
+const RANK = (m: Mode) => MODES.indexOf(m)
+
+export function PermissionsSection({ config }: { config: Config }) {
+  const [draft, setDraft] = useState<Permissions>(config.permissions)
+  const [hash, setHash] = useState("")
+  const [status, setStatus] = useState<"idle" | "saved" | "conflict">("idle")
+  const [clamped, setClamped] = useState(false)
+
+  useEffect(() => {
+    setHash(config.readPermissions())
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- prototype: read once
+  }, [])
+
+  const change = (next: Permissions) => {
+    setDraft(next)
+    setStatus("idle")
+  }
+  const setCeiling = (ceiling: Mode) => {
+    const lowered = RANK(draft.mode) > RANK(ceiling)
+    setClamped(lowered)
+    change({ ...draft, ceiling, mode: lowered ? ceiling : draft.mode })
+  }
+  const setRule = (tool: string, rule: Rule | "default") => {
+    const tools = { ...draft.tools }
+    if (rule === "default") delete tools[tool]
+    else tools[tool] = rule
+    change({ ...draft, tools })
+  }
+  const dirty = JSON.stringify(draft) !== JSON.stringify(config.permissions)
+
+  return (
+    <div className="flex flex-col gap-6">
+      <FieldGroup>
+        <Field>
+          <FieldLabel>Ceiling</FieldLabel>
+          <ToggleGroup
+            variant="outline"
+            value={[draft.ceiling]}
+            onValueChange={(v) => v[0] && setCeiling(v[0] as Mode)}
+          >
+            {MODES.map((m) => (
+              <ToggleGroupItem key={m} value={m}>
+                {m}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+          <FieldDescription>
+            The most any thread or routine may use: {MODE_HINT[draft.ceiling]}.
+          </FieldDescription>
+        </Field>
+        <Field>
+          <FieldLabel>Default mode for new threads</FieldLabel>
+          <ToggleGroup
+            variant="outline"
+            value={[draft.mode]}
+            onValueChange={(v) => {
+              if (!v[0]) return
+              setClamped(false)
+              change({ ...draft, mode: v[0] as Mode })
+            }}
+          >
+            {MODES.map((m) => (
+              <ToggleGroupItem key={m} value={m} disabled={RANK(m) > RANK(draft.ceiling)}>
+                {m}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+          <FieldDescription>
+            {clamped
+              ? `Lowered to ${draft.mode} to stay within the ceiling.`
+              : `${MODE_HINT[draft.mode]}. Modes above the ceiling are off.`}
+          </FieldDescription>
+        </Field>
+      </FieldGroup>
+
+      <div className="flex flex-col gap-2">
+        <span className="text-sm font-medium">Tool rules</span>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Tool</TableHead>
+              <TableHead>Writes</TableHead>
+              <TableHead>Rule</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {config.tools.map((t) => (
+              <TableRow key={t.name}>
+                <TableCell>
+                  <code>{t.name}</code>
+                </TableCell>
+                <TableCell>{t.writes ? "yes" : "no"}</TableCell>
+                <TableCell>
+                  <ToggleGroup
+                    size="sm"
+                    variant="outline"
+                    value={[draft.tools[t.name] ?? "default"]}
+                    onValueChange={(v) => v[0] && setRule(t.name, v[0] as Rule | "default")}
+                  >
+                    <ToggleGroupItem value="default">follow mode</ToggleGroupItem>
+                    <ToggleGroupItem value="allow">allow</ToggleGroupItem>
+                    <ToggleGroupItem value="ask">ask</ToggleGroupItem>
+                    <ToggleGroupItem value="deny">deny</ToggleGroupItem>
+                  </ToggleGroup>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <PatternList
+          label="Shell commands always denied"
+          patterns={draft.bash.deny}
+          locked={SHIPPED_BASH_DENY}
+          onChange={(deny) => change({ ...draft, bash: { ...draft.bash, deny } })}
+        />
+        <PatternList
+          label="Shell commands that always ask"
+          patterns={draft.bash.ask}
+          locked={[]}
+          onChange={(ask) => change({ ...draft, bash: { ...draft.bash, ask } })}
+        />
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button
+          disabled={!dirty}
+          onClick={() => {
+            const r = config.setPermissions(draft, hash)
+            if (r.kind === "ok") {
+              setHash(config.readPermissions())
+              setStatus("saved")
+            } else setStatus("conflict")
+          }}
+        >
+          Save
+        </Button>
+        <Button variant="ghost" disabled={!dirty} onClick={() => change(config.permissions)}>
+          Discard
+        </Button>
+      </div>
+      {status === "saved" && (
+        <Alert>
+          <CheckIcon />
+          <AlertTitle>Saved</AlertTitle>
+          <AlertDescription>
+            Applies at the next turn. A running turn keeps its rules.
+          </AlertDescription>
+        </Alert>
+      )}
+      {status === "conflict" && (
+        <Alert variant="destructive">
+          <XIcon />
+          <AlertTitle>Permissions changed since you opened them</AlertTitle>
+          <AlertDescription>
+            Someone else saved permissions in between, most likely the agent.
+          </AlertDescription>
+          <AlertAction>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                change(config.permissions)
+                setHash(config.readPermissions())
+              }}
+            >
+              Load theirs
+            </Button>
+          </AlertAction>
+        </Alert>
+      )}
+    </div>
+  )
+}
+
+function PatternList({
+  label,
+  patterns,
+  locked,
+  onChange,
+}: {
+  label: string
+  patterns: string[]
+  locked: string[]
+  onChange: (patterns: string[]) => void
+}) {
+  const [value, setValue] = useState("")
+  const trimmed = value.trim()
+  const duplicate = patterns.includes(trimmed)
+  return (
+    <Field data-invalid={duplicate || undefined}>
+      <FieldLabel>{label}</FieldLabel>
+      <div className="flex flex-wrap gap-1">
+        {patterns.map((p) =>
+          locked.includes(p) ? (
+            <Badge key={p} variant="secondary">
+              <code>{p}</code> shipped
+            </Badge>
+          ) : (
+            <Badge
+              key={p}
+              variant="outline"
+              render={
+                <button
+                  type="button"
+                  aria-label={`Remove ${p}`}
+                  onClick={() => onChange(patterns.filter((x) => x !== p))}
+                />
+              }
+            >
+              <code>{p}</code>
+              <XIcon data-icon="inline-end" />
+            </Badge>
+          ),
+        )}
+      </div>
+      <div className="flex gap-2">
+        <Input
+          placeholder="e.g. npm publish*"
+          value={value}
+          aria-invalid={duplicate}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <Button
+          variant="outline"
+          disabled={!trimmed || duplicate}
+          onClick={() => {
+            onChange([...patterns, trimmed])
+            setValue("")
+          }}
+        >
+          Add
+        </Button>
+      </div>
+      <FieldDescription>
+        {duplicate
+          ? "Already in the list."
+          : "A command matches when it starts with the pattern; * matches anything."}
+      </FieldDescription>
+    </Field>
   )
 }
 
@@ -637,7 +895,13 @@ const fileSection = (
 export const SECTIONS: Section[] = [
   fileSection("SYSTEM.md", "behavior", "SYSTEM.md, the instructions to the model", FileTextIcon),
   fileSection("RECAP.md", "recap", "RECAP.md, how threads are summarized", FileTextIcon),
-  fileSection("permissions.toml", "permissions", "default mode, ceiling, tool rules", ShieldIcon),
+  {
+    key: "permissions",
+    label: "Permissions",
+    hint: "ceiling, default mode, tool rules, shell commands",
+    icon: ShieldIcon,
+    render: (config) => <PermissionsSection config={config} />,
+  },
   fileSection("kinby.toml", "manifest", "models, budgets, timezone", CpuIcon),
   {
     key: "routines",
@@ -705,6 +969,9 @@ export function StatePanel({ config }: { config: Config }) {
           <div className="flex flex-wrap gap-1">
             <Button size="xs" variant="outline" onClick={() => config.agentEdit("SYSTEM.md")}>
               Agent edits SYSTEM.md
+            </Button>
+            <Button size="xs" variant="outline" onClick={config.agentEditPermissions}>
+              Agent edits permissions
             </Button>
             <Button size="xs" variant="outline" onClick={() => config.agentEdit("kinby.toml")}>
               Agent edits kinby.toml
