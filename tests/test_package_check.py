@@ -9,7 +9,7 @@ from kinby.cli import main
 from kinby.contracts import PackageDescription, SetupFieldKind, SetupFieldType, SubscriptionLogin
 from kinby.packages import installed_package_from_json, package_description
 from kinby.packages.__main__ import main as candidate_check
-from tests.fake_package import EDITOR_LOGIN, install_fake_package
+from tests.fake_package import EDITOR_LOGIN, TONE_FIELD, install_fake_package
 
 
 def _executable(directory, name):
@@ -128,9 +128,9 @@ def test_malformed_secret_declarations_fail_the_check(tmp_path, monkeypatch, cap
 
     assert status == 1
     assert capsys.readouterr().err.splitlines() == [
-        'Required secret "EDITOR_TOKEN" is declared more than once.',
-        'Required secret "EDITOR-KEY" is not an environment variable name.',
-        'Required secret "EDITOR-KEY" has no label.',
+        'Setup field "EDITOR_TOKEN" is declared more than once.',
+        'Secret field "EDITOR-KEY" is not an environment variable name.',
+        'Setup field "EDITOR-KEY" has no label.',
     ]
 
 
@@ -165,6 +165,157 @@ def test_malformed_login_declarations_fail_the_check(tmp_path, monkeypatch, caps
         'and "-", starting with a letter or digit.',
         'Login "Mail box" mounts its volume at "mail", which is not an absolute path.',
     ]
+
+
+def _field(name="drafts", **options):
+    """The source of one setup field, a valid integer in package.yaml unless *options* say not."""
+    declared = {
+        "label": '"Drafts"',
+        "description": '"Drafts a day."',
+        "kind": "SetupFieldKind.CONFIG",
+        "type": "SetupFieldType.INTEGER",
+        "required": "False",
+        "target": 'SetupTarget(file=TargetFile.PACKAGE_YAML, key="tone")',
+    } | options
+    arguments = ", ".join(f"{key}={value}" for key, value in declared.items())
+    return f"SetupField(name={name!r}, {arguments}),"
+
+
+@pytest.mark.parametrize(
+    ("fields", "failure"),
+    [
+        (
+            TONE_FIELD + TONE_FIELD,
+            'Setup field "tone" is declared more than once.',
+        ),
+        (
+            _field(choices='["one", "two"]'),
+            'Setup field "drafts" has choices, but it is not a choice field.',
+        ),
+        (
+            _field(type="SetupFieldType.CHOICE"),
+            'Choice field "drafts" offers no choices.',
+        ),
+        (
+            _field(
+                "SEARCH_TOKEN",
+                kind="SetupFieldKind.SECRET",
+                type="SetupFieldType.TEXT",
+                target="None",
+                default='"sk-shipped"',
+            ),
+            'Secret field "SEARCH_TOKEN" has a default. A secret never ships in a package.',
+        ),
+        (
+            _field(
+                "SEARCH_TOKEN",
+                kind="SetupFieldKind.SECRET",
+                type="SetupFieldType.BOOLEAN",
+                target="None",
+            ),
+            'Secret field "SEARCH_TOKEN" is boolean. A secret is text or multiline.',
+        ),
+        (
+            _field(target="None"),
+            'Configuration field "drafts" names no target.',
+        ),
+        (
+            _field(
+                "SEARCH_TOKEN",
+                kind="SetupFieldKind.SECRET",
+                type="SetupFieldType.TEXT",
+            ),
+            'Secret field "SEARCH_TOKEN" has a target. A secret lands in the instance secrets.',
+        ),
+        (
+            _field(
+                "model",
+                type="SetupFieldType.TEXT",
+                default='"openai:gpt-5"',
+            ),
+            'Setup field "model" overrides a built-in field, which kinby writes itself, '
+            "so it takes no target.",
+        ),
+        (
+            _field("model", type="SetupFieldType.MULTILINE", target="None"),
+            'Setup field "model" overrides a built-in field, so it keeps its kind and type.',
+        ),
+        (
+            _field(default='"3"'),
+            'Setup field "drafts" has a default that is not a whole number.',
+        ),
+        (
+            _field(type="SetupFieldType.BOOLEAN", default="1"),
+            'Setup field "drafts" has a default that is not true or false.',
+        ),
+        (
+            _field(
+                type="SetupFieldType.CHOICE",
+                choices='["plain", "formal"]',
+                default='"loud"',
+            ),
+            'Setup field "drafts" has a default that is not one of plain, formal.',
+        ),
+    ],
+    ids=[
+        "duplicate-name",
+        "choices-on-a-non-choice",
+        "choice-without-choices",
+        "default-on-a-secret",
+        "secret-of-another-type",
+        "missing-target",
+        "target-on-a-secret",
+        "target-on-a-built-in",
+        "built-in-of-another-type",
+        "integer-default",
+        "boolean-default",
+        "choice-default",
+    ],
+)
+def test_each_malformed_setup_field_fails_the_check(tmp_path, monkeypatch, capsys, fields, failure):
+    _install(tmp_path, monkeypatch, setup_fields=fields)
+
+    status = main(["package", "check", "writer"])
+
+    assert status == 1
+    assert capsys.readouterr().err.splitlines() == [failure]
+
+
+def test_a_package_yaml_target_needs_a_config_validator(tmp_path, monkeypatch, capsys):
+    package = _install(tmp_path, monkeypatch, config=None)
+    source = package.root / "__init__.py"
+    source.write_text(
+        source.read_text(encoding="utf-8").replace("config=WriterConfig,", ""),
+        encoding="utf-8",
+    )
+
+    status = main(["package", "check", "writer"])
+
+    assert status == 1
+    assert capsys.readouterr().err.splitlines() == [
+        'Setup field "tone" lands in package.yaml, but the package declares no config validator.'
+    ]
+
+
+def test_a_default_the_package_validator_refuses_at_its_target_fails_the_check(
+    tmp_path, monkeypatch, capsys
+):
+    _install(
+        tmp_path,
+        monkeypatch,
+        setup_fields=_field(
+            "tone",
+            type="SetupFieldType.CHOICE",
+            choices='["plain", "formal", "loud"]',
+            default='"loud"',
+        ),
+    )
+
+    status = main(["package", "check", "writer"])
+
+    assert status == 1
+    [failure] = capsys.readouterr().err.splitlines()
+    assert failure.endswith("/package.yaml: tone: Input should be 'plain' or 'formal'")
 
 
 def test_a_bad_permissions_file_is_reported_with_the_other_failures(tmp_path, monkeypatch, capsys):

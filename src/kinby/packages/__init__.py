@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from importlib.metadata import Distribution, entry_points, version
 from pathlib import Path
@@ -23,7 +23,10 @@ from kinby.contracts import (
     SetupField,
     SetupFieldKind,
     SetupFieldType,
+    SetupTarget,
+    SetupValue,
     SubscriptionLogin,
+    TargetFile,
 )
 
 if TYPE_CHECKING:
@@ -84,26 +87,47 @@ SecretName = Annotated[str, AfterValidator(_declared_secret)]
 
 @dataclass(frozen=True)
 class RequiredSecret:
-    """One environment secret an instance package requires during setup."""
+    """One environment secret an instance package requires. It reads as a secret setup field."""
 
     name: str
     label: str
     description: str
 
+    def setup_field(self) -> SetupField:
+        return SetupField(
+            name=self.name,
+            label=self.label,
+            description=self.description,
+            kind=SetupFieldKind.SECRET,
+            type=SetupFieldType.TEXT,
+            required=True,
+        )
+
 
 @dataclass(frozen=True)
 class Package:
-    """The descriptor one installed distribution exports through ``kinby.packages``."""
+    """The descriptor one installed distribution exports through ``kinby.packages``.
+
+    A setup field named like a built-in field overrides that field's default and nothing else.
+    """
 
     display_name: str
     description: str
     icon: str
     template: Path
     required_secrets: tuple[RequiredSecret, ...] = ()
+    setup_fields: tuple[SetupField, ...] = ()
     validate: Callable[[Path], None] | None = None
     config: type[PackageConfig] | None = None
     executables: tuple[str, ...] = ()
     logins: tuple[SubscriptionLogin, ...] = ()
+
+    def declared_fields(self) -> tuple[SetupField, ...]:
+        """Its setup fields, then each required secret as a required secret text field."""
+        return (
+            *self.setup_fields,
+            *(secret.setup_field() for secret in self.required_secrets),
+        )
 
 
 @dataclass(frozen=True)
@@ -125,7 +149,8 @@ class PackageDescriptor:
     icon: str
     distribution: str
     version: str
-    required_secrets: tuple[RequiredSecret, ...] = ()
+    #: The package's own fields, required secrets included, as it declared them.
+    setup_fields: tuple[SetupField, ...] = ()
     logins: tuple[SubscriptionLogin, ...] = ()
 
 
@@ -164,7 +189,7 @@ def installed_package(loaded: LoadedPackage) -> InstalledPackage:
             icon=exported.icon,
             distribution=loaded.distribution.name,
             version=loaded.distribution.version,
-            required_secrets=exported.required_secrets,
+            setup_fields=exported.declared_fields(),
             logins=exported.logins,
         ),
         files=readable_template_files(exported.template),
@@ -199,7 +224,7 @@ def read_package_config(package: Package, directory: Path) -> PackageConfig | No
         raise PackageConfigError(f"{path}: the package requires this file.") from None
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         raise PackageConfigError(f"{path}: {exc}") from exc
-    declared = frozenset(secret.name for secret in package.required_secrets)
+    declared = secret_names(package.declared_fields())
     try:
         return package.config.model_validate(raw, context=declared)
     except ValidationError as exc:
@@ -239,27 +264,68 @@ def vanilla_description() -> PackageDescription:
 
 
 def package_description(package: InstalledPackage) -> PackageDescription:
-    """A package's card, version, and logins, with the built-in fields before its secrets."""
+    """A package's card, version, and logins, with the built-in fields before the package's own.
+
+    Defaults resolve built-in first, then package: a package field named like a built-in
+    one lends that field its default, and the field stays kinby's.
+    """
     descriptor = package.descriptor
-    required = [
-        SetupField(
-            name=secret.name,
-            label=secret.label,
-            description=secret.description,
-            kind=SetupFieldKind.SECRET,
-            type=SetupFieldType.TEXT,
-            required=True,
-        )
-        for secret in descriptor.required_secrets
+    overrides = {
+        field.name: field.default for field in descriptor.setup_fields if field.default is not None
+    }
+    built_in = [
+        field.model_copy(update={"default": overrides[field.name]})
+        if field.name in overrides
+        else field
+        for field in BUILT_IN_FIELDS
     ]
     return PackageDescription(
         display_name=descriptor.display_name,
         description=descriptor.description,
         icon=descriptor.icon,
         version=descriptor.version,
-        setup_fields=[*BUILT_IN_FIELDS, *required],
+        setup_fields=[*built_in, *package_fields(descriptor.setup_fields)],
         logins=list(descriptor.logins),
     )
+
+
+def package_fields(fields: Iterable[SetupField]) -> list[SetupField]:
+    """The fields a package adds, leaving out those that override a built-in field's default."""
+    built_in = {field.name for field in BUILT_IN_FIELDS}
+    return [field for field in fields if field.name not in built_in]
+
+
+def secret_names(fields: Iterable[SetupField]) -> frozenset[str]:
+    return frozenset(field.name for field in fields if field.kind is SetupFieldKind.SECRET)
+
+
+def value_problem(field: SetupField, value: SetupValue) -> str | None:
+    """Why *value* does not fit *field*'s type, worded to follow "the value". None when it fits."""
+    match field.type:
+        case SetupFieldType.TEXT | SetupFieldType.MULTILINE if not isinstance(value, str):
+            return "is not text"
+        case SetupFieldType.BOOLEAN if not isinstance(value, bool):
+            return "is not true or false"
+        case SetupFieldType.INTEGER if isinstance(value, bool) or not isinstance(value, int):
+            return "is not a whole number"
+        case SetupFieldType.CHOICE if value not in (field.choices or ()):
+            return f"is not one of {', '.join(field.choices or ())}"
+    return None
+
+
+def resolved_values(
+    fields: Iterable[SetupField],
+    values: Mapping[str, SetupValue],
+) -> dict[str, SetupValue]:
+    """Each field's value: the one sent, else its default. Blank text counts as nothing sent."""
+    resolved: dict[str, SetupValue] = {}
+    for field in fields:
+        value = values.get(field.name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            value = field.default
+        if value is not None:
+            resolved[field.name] = value
+    return resolved
 
 
 def installed_package_from_json(body: str) -> InstalledPackage:
@@ -274,13 +340,13 @@ def installed_package_from_json(body: str) -> InstalledPackage:
             icon=descriptor["icon"],
             distribution=descriptor["distribution"],
             version=descriptor["version"],
-            required_secrets=tuple(
-                RequiredSecret(
-                    name=secret["name"],
-                    label=secret["label"],
-                    description=secret["description"],
-                )
-                for secret in descriptor.get("required_secrets", [])
+            setup_fields=(
+                *(SetupField.model_validate(field) for field in descriptor.get("setup_fields", [])),
+                # An image prepared before setup fields prints its required secrets instead.
+                *(
+                    RequiredSecret(**secret).setup_field()
+                    for secret in descriptor.get("required_secrets", [])
+                ),
             ),
             logins=tuple(
                 SubscriptionLogin.model_validate(login) for login in descriptor.get("logins", [])
@@ -302,13 +368,9 @@ def package_json(package: InstalledPackage) -> str:
                 "icon": descriptor.icon,
                 "distribution": descriptor.distribution,
                 "version": descriptor.version,
-                "required_secrets": [
-                    {
-                        "name": secret.name,
-                        "label": secret.label,
-                        "description": secret.description,
-                    }
-                    for secret in descriptor.required_secrets
+                "setup_fields": [
+                    field.model_dump(mode="json", exclude_none=True)
+                    for field in descriptor.setup_fields
                 ],
                 "logins": [login.model_dump(mode="json") for login in descriptor.logins],
             },
@@ -332,6 +394,7 @@ def readable_template_files(template: Path) -> dict[str, str]:
 __all__ = [
     "API_KEY_FIELD",
     "BEHAVIOR_PROMPT_FIELD",
+    "BUILT_IN_FIELDS",
     "MODEL_FIELD",
     "PACKAGE_CONFIG_NAME",
     "InstalledPackage",
@@ -342,15 +405,25 @@ __all__ = [
     "PackageDescriptor",
     "RequiredSecret",
     "SecretName",
+    "SetupField",
+    "SetupFieldKind",
+    "SetupFieldType",
+    "SetupTarget",
+    "SetupValue",
     "SubscriptionLogin",
+    "TargetFile",
     "inspect_installed_package",
     "installed_package",
     "installed_package_from_json",
     "instance_package_config",
     "load_package",
     "package_description",
+    "package_fields",
     "package_json",
     "read_package_config",
     "readable_template_files",
+    "resolved_values",
+    "secret_names",
+    "value_problem",
     "vanilla_description",
 ]

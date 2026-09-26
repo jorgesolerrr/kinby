@@ -36,6 +36,7 @@ export type StorageKind = "bind" | "volume";
  */
 export type AvatarColor = "blue" | "violet" | "green" | "amber" | "red" | "gray";
 export type AvatarShape = "circle" | "squircle" | "square";
+export type SetupValue = boolean | number | string;
 /**
  * How an instance's accepted work ended when it drained.
  */
@@ -62,9 +63,13 @@ export type OperationState = "pending" | "running" | "succeeded" | "failed";
  */
 export type SetupFieldKind = "config" | "secret";
 /**
- * How a client asks for a setup field's value.
+ * The instance file a package's configuration field lands in.
  */
-export type SetupFieldType = "text" | "multiline";
+export type TargetFile = "kinby.toml" | "package.yaml";
+/**
+ * How a client asks for a setup field's value, and so what the value is.
+ */
+export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "choice";
 export type RoutineRunOutcome = "running" | "parked" | "work" | "no-work" | "failed" | "interrupted";
 export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
 export type RoutineNoticeKind = "first-failure" | "disabled";
@@ -376,7 +381,7 @@ export interface StorageItem {
 export interface InstanceCreateCommand {
   avatar?: Avatar;
   config?: {
-    [k: string]: string;
+    [k: string]: SetupValue;
   };
   manifest_id: string;
   model: string;
@@ -587,12 +592,22 @@ export interface SubscriptionLogin {
  * One value a prepared image asks for before an instance is created from it.
  */
 export interface SetupField {
+  choices?: string[] | null;
+  default?: SetupValue | null;
   description: string;
   kind: SetupFieldKind;
   label: string;
   name: string;
   required: boolean;
+  target?: SetupTarget | null;
   type: SetupFieldType;
+}
+/**
+ * Where a configuration value lands: a file, and a dotted key inside it.
+ */
+export interface SetupTarget {
+  file: TargetFile;
+  key: string;
 }
 export interface PackageListCommand {}
 export interface PackageListResult {

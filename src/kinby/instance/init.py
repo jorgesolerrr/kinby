@@ -6,10 +6,14 @@ import json
 import re
 import tomllib
 import unicodedata
+from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
 
+import yaml
+
+from kinby.contracts import SetupValue, TargetFile
 from kinby.instance.dataclasses import FeedbackPolicy, RecapPolicy
 from kinby.instance.errors import InstanceExistsError
 from kinby.instance.layout import (
@@ -30,7 +34,7 @@ from kinby.instance.layout import (
 )
 from kinby.instance.permissions import SHIPPED_BASH_DENY
 from kinby.instance.recap import DEFAULT_RECAP_LENS
-from kinby.packages import InstalledPackage
+from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage
 
 PLACEHOLDER_MODEL = "provider:model"
 README_NAME = "README.md"
@@ -126,9 +130,42 @@ def _copied_template_path(name: str) -> Path | None:
     return relative
 
 
-def _package_template_manifest(package: InstalledPackage) -> dict[str, TomlValue]:
+def _set_key(document: dict[str, TomlValue], key: str, value: SetupValue) -> None:
+    """Set a dotted key, making the tables on its way that do not exist yet."""
+    *tables, last = key.split(".")
+    for part in tables:
+        table = document.setdefault(part, {})
+        if not isinstance(table, dict):
+            raise ValueError(f'Setup target "{key}" runs through "{part}", which is not a table.')
+        document = table
+    document[last] = value
+
+
+def _targeted(
+    package: InstalledPackage,
+    config: Mapping[str, SetupValue],
+    file: TargetFile,
+) -> dict[str, SetupValue]:
+    """The values that land in *file*, by the dotted key each field targets."""
+    targets = {field.name: field.target for field in package.descriptor.setup_fields}
+    landed: dict[str, SetupValue] = {}
+    for name, value in config.items():
+        target = targets.get(name)
+        if target is None:
+            raise ValueError(f'Setup field "{name}" names no target to write its value at.')
+        if target.file is file:
+            landed[target.key] = value
+    return landed
+
+
+def _package_template_manifest(
+    package: InstalledPackage,
+    config: Mapping[str, SetupValue],
+) -> dict[str, TomlValue]:
     template_body = package.files.get(MANIFEST_NAME, "")
     template = cast(dict[str, TomlValue], tomllib.loads(template_body))
+    for key, value in _targeted(package, config, TargetFile.KINBY_TOML).items():
+        _set_key(template, key, value)
     forbidden = [key for key in _FORBIDDEN_TEMPLATE_MANIFEST_KEYS if key in template]
     if forbidden:
         raise ValueError(f'Package template cannot set "{forbidden[0]}".')
@@ -138,10 +175,13 @@ def _package_template_manifest(package: InstalledPackage) -> dict[str, TomlValue
     return template
 
 
-def _validate_package_template(package: InstalledPackage) -> None:
+def _validate_package_template(
+    package: InstalledPackage,
+    config: Mapping[str, SetupValue],
+) -> None:
     for name in package.files:
         _copied_template_path(name)
-    template = _package_template_manifest(package)
+    template = _package_template_manifest(package, config)
     try:
         _toml_document(template)
     except TypeError as exc:
@@ -153,10 +193,11 @@ def _package_manifest(
     package: InstalledPackage,
     *,
     model: str,
+    config: Mapping[str, SetupValue],
 ) -> None:
     path = directory / MANIFEST_NAME
     base = cast(dict[str, TomlValue], tomllib.loads(path.read_text(encoding="utf-8")))
-    _merge(base, _package_template_manifest(package))
+    _merge(base, _package_template_manifest(package, config))
     models = base["models"]
     if not isinstance(models, dict):
         raise ValueError("Package template [models] must be a table.")
@@ -181,6 +222,32 @@ def _copy_package_template(directory: Path, package: InstalledPackage) -> None:
             destination.write_text(body, encoding="utf-8")
         except IsADirectoryError, NotADirectoryError, FileExistsError:
             raise ValueError(f'Package template cannot copy "{name}".') from None
+
+
+def _package_config(
+    directory: Path,
+    package: InstalledPackage,
+    config: Mapping[str, SetupValue],
+) -> None:
+    """Write the values that land in package.yaml. A file they leave as it was keeps its comments.
+
+    The package's validator runs later, over the file this writes.
+    """
+    landed = _targeted(package, config, TargetFile.PACKAGE_YAML)
+    if not landed:
+        return
+    path = directory / PACKAGE_CONFIG_NAME
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    if document is None:
+        document = {}
+    if not isinstance(document, dict):
+        raise ValueError(f"{PACKAGE_CONFIG_NAME} must be a mapping to take setup values.")
+    before = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+    for key, value in landed.items():
+        _set_key(document, key, value)
+    after = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+    if after != before:
+        path.write_text(after, encoding="utf-8")
 
 
 def _write_starter_tree(directory: Path, model: str) -> None:
@@ -327,8 +394,14 @@ def init_instance(
     model: str = PLACEHOLDER_MODEL,
     *,
     package: InstalledPackage | None = None,
+    config: Mapping[str, SetupValue] | None = None,
 ) -> Path:
-    """Write a readable starter instance at *directory*."""
+    """Write a readable starter instance at *directory*.
+
+    *config* holds values for the package's configuration fields by name. Each lands at the
+    target its field declares, in kinby.toml or package.yaml.
+    """
+    config = config or {}
     directory = Path(directory).resolve()
     if package is not None and directory.is_dir() and any(directory.iterdir()):
         raise InstanceExistsError(f"instance directory is not empty: {directory}")
@@ -340,7 +413,7 @@ def init_instance(
         _write_starter_tree(directory, model)
         return directory.resolve()
 
-    _validate_package_template(package)
+    _validate_package_template(package, config)
     parent = directory.parent
     parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=parent, prefix=f".{directory.name}.creating-") as temporary:
@@ -348,6 +421,7 @@ def init_instance(
         staging.mkdir()
         _write_starter_tree(staging, model)
         _copy_package_template(staging, package)
-        _package_manifest(staging, package, model=model)
+        _package_config(staging, package, config)
+        _package_manifest(staging, package, model=model, config=config)
         _publish_directory(staging, directory)
     return directory.resolve()

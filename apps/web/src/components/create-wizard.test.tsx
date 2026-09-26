@@ -46,6 +46,42 @@ const vanilla: PackageDescription = {
   ],
 }
 
+/** An image that declares a field of every other type, each with a default. */
+const typed: PackageDescription = {
+  ...vanilla,
+  setup_fields: [
+    ...vanilla.setup_fields,
+    {
+      name: "tone",
+      label: "Tone",
+      description: "How drafts sound.",
+      kind: "config",
+      type: "choice",
+      required: true,
+      default: "plain",
+      choices: ["plain", "formal"],
+    },
+    {
+      name: "review",
+      label: "Review",
+      description: "Review each draft before it opens.",
+      kind: "config",
+      type: "boolean",
+      required: false,
+      default: true,
+    },
+    {
+      name: "steps",
+      label: "Steps per turn",
+      description: "How many steps one turn may take.",
+      kind: "config",
+      type: "integer",
+      required: false,
+      default: 7,
+    },
+  ],
+}
+
 const coder: CuratedPackage = {
   id: "coder",
   display_name: "Software factory",
@@ -418,6 +454,109 @@ describe("the create wizard's setup step", () => {
     })
     const steps = within(await screen.findByRole("list", { name: "Creation steps" }))
     expect(steps.getByText("Preparing the selected image.")).toBeDefined()
+  })
+
+  it("does not send an untouched boolean or a blank optional secret", async () => {
+    const untouched: PackageDescription = {
+      ...vanilla,
+      setup_fields: [
+        ...vanilla.setup_fields,
+        {
+          name: "share",
+          label: "Share",
+          description: "Share drafts.",
+          kind: "config",
+          type: "boolean",
+          required: false,
+        },
+        {
+          name: "DRAFT_TOKEN",
+          label: "Draft token",
+          description: "Optional token.",
+          kind: "secret",
+          type: "text",
+          required: false,
+        },
+      ],
+    }
+    const caller = hub({ "package.describe": () => untouched })
+    const { user } = await openWizard(caller)
+    await nameIt(user)
+    await fillSetup(user)
+
+    expect(screen.getByRole("switch", { name: /Share/ }).getAttribute("aria-checked")).toBe("false")
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toEqual({
+      manifest_id: "Ada",
+      persona_name: "Ada",
+      model: "openai:gpt-5",
+      package: null,
+      config: { behavior_prompt: "Answer in haiku." },
+      secrets: { api_key: "sk-private" },
+      avatar: { shape: "circle", color: "blue" },
+    })
+  })
+
+  it("sends a boolean once the user sets the switch", async () => {
+    const untouched: PackageDescription = {
+      ...vanilla,
+      setup_fields: [
+        ...vanilla.setup_fields,
+        {
+          name: "share",
+          label: "Share",
+          description: "Share drafts.",
+          kind: "config",
+          type: "boolean",
+          required: false,
+        },
+      ],
+    }
+    const caller = hub({ "package.describe": () => untouched })
+    const { user } = await openWizard(caller)
+    await nameIt(user)
+    await fillSetup(user)
+
+    await user.click(screen.getByRole("switch", { name: /Share/ }))
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
+      config: { share: true },
+    })
+  })
+
+  it("renders each field by its type, starting from its default", async () => {
+    const { user } = await openWizard(hub({ "package.describe": () => typed }))
+    await nameIt(user)
+
+    const configuration = within(screen.getByRole("group", { name: "Configuration" }))
+    expect(configuration.getByRole("combobox", { name: "Tone" }).textContent).toContain("plain")
+    expect(configuration.getByRole("switch", { name: /Review/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    )
+    const steps = configuration.getByRole("spinbutton", { name: /Steps per turn/ })
+    expect((steps as HTMLInputElement).value).toBe("7")
+    expect(configuration.getByLabelText(/Behavior prompt/).tagName).toBe("TEXTAREA")
+  })
+
+  it("sends a picked choice, a switch, and a whole number as typed values", async () => {
+    const caller = hub({ "package.describe": () => typed })
+    const { user } = await openWizard(caller)
+    await nameIt(user)
+    await fillSetup(user)
+
+    await user.click(screen.getByRole("combobox", { name: "Tone" }))
+    await user.click(await screen.findByRole("option", { name: "formal" }))
+    await user.click(screen.getByRole("switch", { name: /Review/ }))
+    const steps = screen.getByRole("spinbutton", { name: /Steps per turn/ })
+    await user.clear(steps)
+    await user.type(steps, "12")
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
+      config: { behavior_prompt: "Answer in haiku.", tone: "formal", review: false, steps: 12 },
+    })
   })
 
   it("creates the instance from the curated package that was prepared", async () => {
