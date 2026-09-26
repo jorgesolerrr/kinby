@@ -1,5 +1,5 @@
 import { CallError } from "@kinby/contract"
-import type { OperationGetResult, PackageDescription } from "@kinby/contract"
+import type { CuratedPackage, OperationGetResult, PackageDescription } from "@kinby/contract"
 import { type Answers, type StubCaller, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent, { type UserEvent } from "@testing-library/user-event"
@@ -76,8 +76,27 @@ const typed: PackageDescription = {
   ],
 }
 
+const coder: CuratedPackage = {
+  id: "coder",
+  display_name: "Software factory",
+  description: "Implements GitHub issues labeled ready-for-agent.",
+  icon: "code",
+  selection: {
+    id: "coder",
+    distribution: "kinby-code-factory",
+    version: {
+      url: "https://github.com/jorgesolerrr/kinby-code-factory",
+      sha: "3a68621643e4605d5be72a87f716181ec265ebf5",
+    },
+    image_recipe: "",
+  },
+}
+
+const noPackages: Answers = { "package.list": () => ({ packages: [] }) }
+
 function preparation(fields: Partial<OperationGetResult>): Answers {
   return {
+    ...noPackages,
     "image.prepare": () => ({ operation_id: "op-1" }),
     "operation.get": () => ({
       operation_id: "op-1",
@@ -102,6 +121,68 @@ async function pickVanilla(answers: Answers) {
 const step = (name: string) => within(screen.getByRole("listitem", { name }))
 
 describe("the create wizard's package step", () => {
+  it("offers each curated package as a card next to vanilla", async () => {
+    const { container } = render(
+      <CreateWizard caller={stubCaller({ "package.list": () => ({ packages: [coder] }) })} />,
+    )
+
+    const card = await screen.findByRole("listitem", { name: "Software factory" })
+    expect(
+      within(card).getByText("Implements GitHub issues labeled ready-for-agent."),
+    ).toBeDefined()
+    expect(within(card).getByText("3a68621")).toBeDefined()
+    expect(card.querySelector("svg.lucide-code")).not.toBeNull()
+    expect(within(card).getByRole("button", { name: "Prepare Software factory" })).toBeDefined()
+    expect(
+      within(screen.getByRole("listitem", { name: "Vanilla" })).getByRole("button", {
+        name: "Prepare vanilla",
+      }),
+    ).toBeDefined()
+    expect(container.querySelectorAll("[role=alert]")).toHaveLength(0)
+  })
+
+  it("prepares a curated package with the selection the list gave it", async () => {
+    const clock = fakeClock()
+    const caller = stubCaller({
+      ...preparation({
+        state: "succeeded",
+        steps: [{ name: "image", state: "succeeded", detail: "Building the image." }],
+      }),
+      "package.list": () => ({ packages: [coder] }),
+    })
+    render(<CreateWizard caller={caller} clock={clock} />)
+
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Prepare Software factory" }))
+    await act(() => clock.advance(0))
+
+    expect(await screen.findByRole("list", { name: "Setup fields" })).toBeDefined()
+    expect(
+      caller.calls.filter(
+        ({ method }) => method === "image.prepare" || method === "package.describe",
+      ),
+    ).toEqual([
+      { method: "image.prepare", params: { package: coder.selection } },
+      { method: "package.describe", params: { package: coder.selection } },
+    ])
+    expect(
+      screen.getByRole("button", { name: "Prepare Software factory" }).hasAttribute("disabled"),
+    ).toBe(true)
+    expect(screen.getByRole("button", { name: "Prepare vanilla" }).hasAttribute("disabled")).toBe(
+      false,
+    )
+  })
+
+  it("still offers vanilla when the curated list cannot be read", async () => {
+    render(<CreateWizard caller={stubCaller({})} />)
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "The stub has no answer for package.list.",
+    )
+    expect(screen.getByRole("button", { name: "Prepare vanilla" })).toBeDefined()
+  })
+
   it("prepares vanilla when it is picked and shows the step running", async () => {
     await pickVanilla(
       preparation({
@@ -168,7 +249,7 @@ describe("the create wizard's package step", () => {
   })
 
   it("says why when the preparation could not start", async () => {
-    await pickVanilla({})
+    await pickVanilla(noPackages)
 
     expect((await screen.findByRole("alert")).textContent).toContain(
       "The stub has no answer for image.prepare.",
@@ -181,6 +262,7 @@ describe("the create wizard's package step", () => {
   it("prepares vanilla again after the preparation failed", async () => {
     let prepares = 0
     const caller = stubCaller({
+      ...noPackages,
       "image.prepare": () => {
         prepares += 1
         return { operation_id: prepares === 1 ? "op-1" : "op-2" }
@@ -271,6 +353,7 @@ function operationAnswer(fields: Partial<OperationGetResult>): OperationGetResul
 /** A hub that prepared vanilla, and answers the create operation's polls with `created`. */
 function hub(answers: Answers, created: OperationGetResult = creating) {
   return stubCaller({
+    "package.list": () => ({ packages: [] }),
     "image.prepare": () => ({ operation_id: "op-1" }),
     "package.describe": () => vanilla,
     "instance.create": () => ({ operation_id: "op-create", instance_id: "instance-1" }),
@@ -397,6 +480,25 @@ describe("the create wizard's setup step", () => {
 
     expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
       config: { behavior_prompt: "Answer in haiku.", tone: "formal", review: false, steps: 12 },
+    })
+  })
+
+  it("creates the instance from the curated package that was prepared", async () => {
+    const caller = hub({ "package.list": () => ({ packages: [coder] }) })
+    const clock = fakeClock()
+    const user = userEvent.setup()
+    render(<CreateWizard caller={caller} clock={clock} />)
+
+    await user.click(await screen.findByRole("button", { name: "Prepare Software factory" }))
+    await act(() => clock.advance(0))
+    await user.click(await screen.findByRole("button", { name: "Continue" }))
+    await nameIt(user)
+    await fillSetup(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
+      manifest_id: "Ada",
+      package: coder.selection,
     })
   })
 

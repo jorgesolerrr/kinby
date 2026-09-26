@@ -4,10 +4,12 @@ import type {
   AvatarShape,
   Client,
   Clock,
+  CuratedPackage,
   InstanceCreateCommand,
   OperationState,
   OperationStep,
   PackageDescription,
+  PackageSelection,
   SetupField,
 } from "@kinby/contract"
 import { useCallback, useEffect, useRef, useState } from "react"
@@ -17,7 +19,6 @@ import { InstanceAvatar } from "@/components/instance-avatar"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Field,
   FieldContent,
@@ -62,7 +63,14 @@ import {
 } from "@/lib/creation"
 import { followPreparation, type Preparation } from "@/lib/preparation"
 import { selectInstance } from "@/lib/selection"
-import { CircleCheckIcon, CircleXIcon } from "lucide-react"
+import {
+  CircleCheckIcon,
+  CircleXIcon,
+  CodeIcon,
+  PackageIcon,
+  SparklesIcon,
+  type LucideIcon,
+} from "lucide-react"
 
 const STATES: Record<OperationState, { label: string; icon: React.ReactNode }> = {
   pending: { label: "Waiting", icon: <Spinner /> },
@@ -102,6 +110,16 @@ const HINTS: Record<Stage | "create", string> = {
 
 const noop = () => {}
 
+/** The icons the curated entries name. An icon the app does not know draws as a package. */
+const ICONS: Record<string, LucideIcon> = { code: CodeIcon }
+
+type CuratedList =
+  | { state: "loading" }
+  | { state: "failed"; detail: string }
+  | { state: "loaded"; packages: CuratedPackage[] }
+
+type PackagePick = { package: PackageSelection | null }
+
 /**
  * Create an instance: pick a package, name it, fill in its setup fields, create it, then start it.
  * `onPublished` hears when the hub lists the new instance.
@@ -115,7 +133,8 @@ export function CreateWizard({
   clock?: Clock
   onPublished?: () => void
 }) {
-  const [pick, setPick] = useState<{ package: null }>()
+  const curated = useCuratedList(caller)
+  const [pick, setPick] = useState<PackagePick>()
   const [stage, setStage] = useState<Stage>("package")
   const [identity, setIdentity] = useState(NEW_IDENTITY)
   const [values, setValues] = useState<Record<string, FieldInput>>({})
@@ -126,7 +145,7 @@ export function CreateWizard({
   const declarationRead = useRef(0)
 
   const prepare = useCallback(
-    (picked: { package: null }, report: (preparation: Preparation) => void) =>
+    (picked: PackagePick, report: (preparation: Preparation) => void) =>
       followPreparation(caller, picked.package, report, clock),
     [caller, clock],
   )
@@ -152,7 +171,9 @@ export function CreateWizard({
   // A rebuilt image stores a new descriptor, then validate fails. Preparation still holds the
   // fields the user was shown, and Prepare stays disabled, so read the stored descriptor.
   useEffect(() => {
-    if (pick === undefined || !setupWasRefused(creation)) return
+    if (pick === undefined || submitted?.package !== pick.package || !setupWasRefused(creation)) {
+      return
+    }
     const selection = pick.package
     const request = ++declarationRead.current
     void caller.call("package.describe", { package: selection }).then(
@@ -162,7 +183,7 @@ export function CreateWizard({
       // Keep the fields already on the form if the hub cannot be read.
       () => {},
     )
-  }, [creation, caller, pick])
+  }, [creation, caller, pick, submitted])
   // A refused value sends the user back to the form, with each refusal on its field.
   const refused = creation?.state === "invalid" ? creation.fields : {}
   const creating = creation !== undefined && creation.state !== "invalid"
@@ -189,7 +210,9 @@ export function CreateWizard({
           onChange={(name, value) => setValues((current) => ({ ...current, [name]: value }))}
           onBack={() => setStage("identity")}
           onCreate={() =>
-            setSubmitted(createCommand(null, description.setup_fields, values, identity))
+            setSubmitted(
+              createCommand(pick?.package ?? null, description.setup_fields, values, identity),
+            )
           }
         />
       ) : stage === "identity" ? (
@@ -201,12 +224,20 @@ export function CreateWizard({
         />
       ) : (
         <PackageStep
+          curated={curated}
           preparation={
             preparation?.state === "prepared" && declared !== undefined
               ? { ...preparation, description: declared }
               : preparation
           }
-          onPick={() => setPick({ package: null })}
+          busy={(selection) =>
+            pick?.package === selection &&
+            (preparation?.state === "preparing" || preparation?.state === "prepared")
+          }
+          onPick={(selection) => {
+            setDeclared(undefined)
+            setPick({ package: selection })
+          }}
           onContinue={() => setStage("identity")}
         />
       )}
@@ -239,31 +270,121 @@ function setupWasRefused(creation: Creation | undefined): boolean {
   )
 }
 
+/** The packages the hub curates, read once when the wizard opens. */
+function useCuratedList(caller: Pick<Client, "call">): CuratedList {
+  const [curated, setCurated] = useState<CuratedList>({ state: "loading" })
+  useEffect(() => {
+    let current = true
+    caller.call("package.list", {}).then(
+      ({ packages }) => {
+        if (current) setCurated({ state: "loaded", packages })
+      },
+      (error: unknown) => {
+        if (current) {
+          setCurated({
+            state: "failed",
+            detail: error instanceof Error ? error.message : String(error),
+          })
+        }
+      },
+    )
+    return () => {
+      current = false
+    }
+  }, [caller])
+  return curated
+}
+
+/** A pinned commit reads as its short SHA, an index version as itself. */
+function versionOf(selection: PackageSelection): string {
+  return typeof selection.version === "string"
+    ? selection.version
+    : selection.version.sha.slice(0, 7)
+}
+
+function PackageCard({
+  name,
+  description,
+  icon: Icon,
+  version,
+  action,
+  disabled,
+  onPick,
+}: {
+  name: string
+  description: string
+  icon: LucideIcon
+  version?: string
+  action: string
+  disabled: boolean
+  onPick: () => void
+}) {
+  return (
+    <Item render={<li />} aria-label={name} variant="outline">
+      <ItemMedia variant="icon">
+        <Icon />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle>
+          {name}
+          {version !== undefined && <Badge variant="outline">{version}</Badge>}
+        </ItemTitle>
+        <ItemDescription>{description}</ItemDescription>
+      </ItemContent>
+      <ItemActions>
+        <Button disabled={disabled} onClick={onPick}>
+          {action}
+        </Button>
+      </ItemActions>
+    </Item>
+  )
+}
+
 function PackageStep({
+  curated,
   preparation,
+  busy,
   onPick,
   onContinue,
 }: {
+  curated: CuratedList
   preparation: Preparation | undefined
-  onPick: () => void
+  busy: (selection: PackageSelection | null) => boolean
+  onPick: (selection: PackageSelection | null) => void
   onContinue: () => void
 }) {
   return (
     <>
-      <Card className="max-w-sm">
-        <CardHeader>
-          <CardTitle>Vanilla</CardTitle>
-          <CardDescription>kinby's built-in defaults, with no package.</CardDescription>
-        </CardHeader>
-        <CardFooter>
-          <Button
-            disabled={preparation?.state === "preparing" || preparation?.state === "prepared"}
-            onClick={onPick}
-          >
-            Prepare vanilla
-          </Button>
-        </CardFooter>
-      </Card>
+      <ItemGroup aria-label="Packages" className="max-w-2xl">
+        <PackageCard
+          name="Vanilla"
+          description="kinby's built-in defaults, with no package."
+          icon={SparklesIcon}
+          action="Prepare vanilla"
+          disabled={busy(null)}
+          onPick={() => onPick(null)}
+        />
+        {curated.state === "loaded" &&
+          curated.packages.map((entry) => (
+            <PackageCard
+              key={entry.id}
+              name={entry.display_name}
+              description={entry.description}
+              icon={ICONS[entry.icon] ?? PackageIcon}
+              version={versionOf(entry.selection)}
+              action={`Prepare ${entry.display_name}`}
+              disabled={busy(entry.selection)}
+              onPick={() => onPick(entry.selection)}
+            />
+          ))}
+      </ItemGroup>
+      {curated.state === "failed" && (
+        <Alert variant="destructive" className="max-w-2xl">
+          <CircleXIcon />
+          <AlertTitle>The curated packages could not be listed</AlertTitle>
+          <AlertDescription>{curated.detail}</AlertDescription>
+        </Alert>
+      )}
       {preparation !== undefined && (
         <section className="flex max-w-2xl flex-col gap-3">
           <h2 className="font-medium">Preparing the image</h2>

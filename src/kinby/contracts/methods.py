@@ -40,6 +40,8 @@ from kinby.contracts.models import (
     OperationGetResult,
     PackageDescribeCommand,
     PackageDescription,
+    PackageListCommand,
+    PackageListResult,
     RoutineListCommand,
     RoutineListResult,
     RoutineRunCommand,
@@ -214,6 +216,7 @@ IMAGE_PREPARE = Method("image.prepare", Scope.HUB_ADMIN, ImagePrepareCommand, Im
 PACKAGE_DESCRIBE = Method(
     "package.describe", Scope.HUB_READ, PackageDescribeCommand, PackageDescription
 )
+PACKAGE_LIST = Method("package.list", Scope.HUB_READ, PackageListCommand, PackageListResult)
 #: The same time range and bucket size as stats.get, asked of every running instance.
 STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
 
@@ -254,6 +257,7 @@ METHODS = (
     OPERATION_GET,
     IMAGE_PREPARE,
     PACKAGE_DESCRIBE,
+    PACKAGE_LIST,
     STATS_SUMMARY,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE,)

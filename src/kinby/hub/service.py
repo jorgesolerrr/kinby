@@ -33,6 +33,7 @@ from kinby.contracts import (
     INSTANCE_UPDATE,
     OPERATION_GET,
     PACKAGE_DESCRIBE,
+    PACKAGE_LIST,
     STATS_SUMMARY,
     Capability,
     ContainerOwner,
@@ -69,6 +70,8 @@ from kinby.contracts import (
     PackageCommit,
     PackageDescribeCommand,
     PackageDescription,
+    PackageListCommand,
+    PackageListResult,
     PackagePin,
     PackageSelection,
     ProcessState,
@@ -101,6 +104,7 @@ from kinby.hub.control import (
     IncompatibleLifecycleEndpoint,
     InstanceControl,
 )
+from kinby.hub.curated import curated_list, with_recipe
 from kinby.hub.models import (
     ContainerRuntime,
     ImagePreparation,
@@ -247,6 +251,7 @@ class Hub:
             self.access = HubAccess(self.registry)
             self._runtime = runtime
             self._images = images
+            self._curated = curated_list()
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._stopping: dict[UUID, PendingStop] = {}
@@ -270,6 +275,7 @@ class Hub:
             self.dispatcher.register(OPERATION_GET, self.operation)
             self.dispatcher.register(IMAGE_PREPARE, self.prepare_image)
             self.dispatcher.register(PACKAGE_DESCRIBE, self.describe_package)
+            self.dispatcher.register(PACKAGE_LIST, self.list_packages)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
         except BaseException:
             self._directory_lock.close()
@@ -310,7 +316,7 @@ class Hub:
             runtime_id=str(instance_id),
             prepared=False,
             storage=(),
-            package=command.package,
+            package=with_recipe(command.package, self._curated),
             avatar=command.avatar,
         )
         self.registry.begin_create(record, operation_id)
@@ -428,13 +434,10 @@ class Hub:
     async def prepare_image(self, command: ImagePrepareCommand) -> ImagePrepareResult:
         """Build or reuse a selection's image before any instance exists, and describe it."""
         operation_id = uuid4()
-        opened = self.registry.begin_preparation(
-            operation_id,
-            command.package,
-            "Preparation queued.",
-        )
+        package = with_recipe(command.package, self._curated)
+        opened = self.registry.begin_preparation(operation_id, package, "Preparation queued.")
         if opened == operation_id:
-            self._schedule(self._prepare_image(operation_id, command.package))
+            self._schedule(self._prepare_image(operation_id, package))
         return ImagePrepareResult(operation_id=opened)
 
     async def _prepare_image(self, operation_id: UUID, package: PackageSelection | None) -> None:
@@ -483,12 +486,16 @@ class Hub:
         return description
 
     def _prepared_description(self, package: PackageSelection | None) -> PackageDescription:
-        description = self.registry.description(package)
+        description = self.registry.description(with_recipe(package, self._curated))
         if description is None:
             raise SelectionNotPrepared(
                 "This selection has not been prepared. Prepare its image first."
             )
         return description
+
+    async def list_packages(self, command: PackageListCommand) -> PackageListResult:
+        """The curated list, each package with the selection that prepares it."""
+        return PackageListResult(packages=[entry.package for entry in self._curated])
 
     async def start(self, command: InstanceStartCommand) -> LifecycleOperationResult:
         record = self._active_instance(command.instance_id)
