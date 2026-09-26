@@ -36,7 +36,7 @@ const VARIANTS = [
 ]
 
 function currentVariant(): string {
-  return new URLSearchParams(window.location.search).get("variant") ?? "A"
+  return new URLSearchParams(window.location.search).get("variant") ?? "B"
 }
 
 export function DashboardPrototype() {

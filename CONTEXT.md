@@ -523,7 +523,7 @@ The start of a **turn** by anything other than the user typing. Every wake carri
 
 ### Origin
 
-What started a **turn**: the user, a **routine**, or a **signal**.
+What started a **turn**: the user or a **routine**. A routine turn also records its trigger: scheduled, manual, catch-up, or a **signal**'s delivery.
 
 ### Routine
 
