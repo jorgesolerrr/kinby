@@ -41,6 +41,7 @@ from kinby.contracts import (
     SubscriptionLogin,
 )
 from kinby.hub import Hub, SetupSpec
+from kinby.hub.curated import curated_list
 from kinby.packages import InstalledPackage, PackageDescriptor
 from tests.test_hub import (
     FakeControl,
@@ -68,6 +69,26 @@ CODEX = SubscriptionLogin(
     volume="/root/.codex",
     prompt_pattern=r"(?s)(?P<url>https://\S+).*?(?P<code>[A-Z0-9]{4}-[A-Z0-9]{5})",
 )
+
+
+def coder_package(*logins: SubscriptionLogin) -> InstalledPackage:
+    return InstalledPackage(
+        descriptor=PackageDescriptor(
+            id="coder",
+            display_name="Software factory",
+            description="Implements issues.",
+            icon="code",
+            distribution="kinby-code-factory",
+            version="1.0.0",
+            logins=logins,
+        ),
+        files={"SYSTEM.md": "Write clearly.\n"},
+    )
+
+
+def coder_selection() -> PackageSelection:
+    [coder] = [entry.package for entry in curated_list() if entry.package.id == "coder"]
+    return coder.selection
 
 
 def writer_package(*logins: SubscriptionLogin) -> InstalledPackage:
@@ -134,6 +155,68 @@ def test_each_declared_login_gets_a_named_volume_the_instance_owns_and_mounts(tm
         }
         assert volumes(listed.instances[0].storage) == owned
         assert volumes(runtime.created[0].storage) == owned
+
+    asyncio.run(scenario())
+
+
+async def created_coder(hub: Hub) -> LifecycleOperationResult:
+    """Prepare the pinned coder and create one instance from it."""
+    client = hub_client(hub)
+    selection = coder_selection()
+    accepted = await client.call(IMAGE_PREPARE, ImagePrepareCommand(package=selection))
+    assert isinstance(accepted, ImagePrepareResult)
+    assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
+    created = await client.call(
+        INSTANCE_CREATE,
+        InstanceCreateCommand(
+            manifest_id="coder",
+            model="openai:gpt-5",
+            package=selection,
+            secrets={"api_key": "sk-private"},
+        ),
+    )
+    assert isinstance(created, LifecycleOperationResult)
+    assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+    return created
+
+
+def test_a_new_coder_keeps_a_codex_volume_until_its_package_declares_one(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(
+            tmp_path / "hub",
+            runtime=runtime,
+            images=FakeImages(package=coder_package()),
+            control=FakeControl(),
+        )
+
+        instance_id = (await created_coder(hub)).instance_id
+
+        owned = {
+            (f"kinby-{instance_id}-workspace", "/instance/workspace"),
+            (f"kinby-{instance_id}-codex", "/root/.codex"),
+        }
+        assert volumes(runtime.created[0].storage) == owned
+
+    asyncio.run(scenario())
+
+
+def test_a_coder_that_declares_its_codex_login_gets_that_volume_once(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(
+            tmp_path / "hub",
+            runtime=runtime,
+            images=FakeImages(package=coder_package(CODEX)),
+            control=FakeControl(),
+        )
+
+        instance_id = (await created_coder(hub)).instance_id
+
+        assert volumes(runtime.created[0].storage) == {
+            (f"kinby-{instance_id}-workspace", "/instance/workspace"),
+            (f"kinby-{instance_id}-codex", "/root/.codex"),
+        }
 
     asyncio.run(scenario())
 
