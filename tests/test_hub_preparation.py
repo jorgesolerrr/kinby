@@ -4,26 +4,41 @@ import sqlite3
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
     IMAGE_PREPARE,
+    INSTANCE_CREATE,
     INSTANCE_LIST,
     OPERATION_GET,
     PACKAGE_DESCRIBE,
+    PACKAGE_LIST,
     ErrorCode,
     ErrorEnvelope,
     ImagePrepareCommand,
     ImagePrepareResult,
+    InstanceCreateCommand,
     InstanceListCommand,
+    LifecycleOperationResult,
     OperationGetCommand,
     OperationGetResult,
     OperationKind,
     OperationState,
+    PackageCommit,
     PackageDescribeCommand,
+    PackageListCommand,
     PackageSelection,
+    Scope,
     SetupFieldKind,
     SetupFieldType,
 )
 from kinby.hub import Hub, ImageArtifact, ImageSelection
+from kinby.hub.curated import CURATED_DIRECTORY
 from kinby.packages import InstalledPackage, PackageDescriptor, RequiredSecret
-from tests.test_hub import FakeImages, FakeRuntime, created_instance, hub_at, hub_client
+from tests.test_hub import (
+    FakeImages,
+    FakeRuntime,
+    created_instance,
+    finished_operation,
+    hub_at,
+    hub_client,
+)
 
 WRITER = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
 
@@ -238,6 +253,60 @@ def test_a_preparation_the_hub_did_not_finish_is_failed_when_it_opens_again(tmp_
         assert not isinstance(outcome, ErrorEnvelope)
         assert outcome.state is OperationState.FAILED
         assert outcome.detail == "The hub stopped before this operation finished."
+
+    asyncio.run(scenario())
+
+
+def test_the_package_list_offers_the_coder_pinned_to_a_commit_without_its_recipe(tmp_path):
+    async def scenario() -> None:
+        reader = hub_client(hub_at(tmp_path / "hub"), {Scope.HUB_READ})
+
+        listed = await reader.call(PACKAGE_LIST, PackageListCommand())
+
+        assert not isinstance(listed, ErrorEnvelope)
+        [coder] = [package for package in listed.packages if package.id == "coder"]
+        assert (coder.display_name, coder.icon) == ("Software factory", "code")
+        assert coder.description
+        assert (coder.selection.id, coder.selection.distribution) == ("coder", "kinby-code-factory")
+        assert isinstance(coder.selection.version, PackageCommit)
+        assert coder.selection.version.url == "https://github.com/jorgesolerrr/kinby-code-factory"
+        assert coder.selection.image_recipe == ""
+
+    asyncio.run(scenario())
+
+
+def test_a_curated_selection_is_prepared_described_and_created_with_its_entry_recipe(tmp_path):
+    async def scenario() -> None:
+        images = FakeImages(package=writer_package())
+        client = hub_client(hub_at(tmp_path / "hub", images=images))
+        listed = await client.call(PACKAGE_LIST, PackageListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        [coder] = [package for package in listed.packages if package.id == "coder"]
+
+        outcome = await prepared(client, coder.selection)
+        described = await client.call(
+            PACKAGE_DESCRIBE, PackageDescribeCommand(package=coder.selection)
+        )
+        created = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="coder",
+                model="openai:gpt-5",
+                package=coder.selection,
+                secrets={"EDITOR_TOKEN": "editor-secret"},
+            ),
+        )
+        assert isinstance(created, LifecycleOperationResult)
+        await finished_operation(client, created)
+
+        recipe = (CURATED_DIRECTORY / "coder.Dockerfile").read_text(encoding="utf-8")
+        with_recipe = coder.selection.model_copy(update={"image_recipe": recipe})
+        assert outcome.state is OperationState.SUCCEEDED
+        assert not isinstance(described, ErrorEnvelope)
+        assert images.selections == [
+            ImageSelection("HEAD", with_recipe),
+            ImageSelection("HEAD", with_recipe),
+        ]
 
     asyncio.run(scenario())
 

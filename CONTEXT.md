@@ -464,7 +464,7 @@ An **instance** created from kinby's built-in defaults with no **package** selec
 
 ### Curated list
 
-The selection of **packages** kinby recommends when creating an **instance**, with the information needed to present and prepare each choice.
+The selection of **packages** kinby recommends when creating an **instance**, with the information needed to present and prepare each choice. kinby ships it: one entry per package, with its card, a full commit of its repository, and its image recipe. A pin moves by editing the entry. The hub adds the entry's recipe when it prepares the entry's selection, so a client never sends it. A **vanilla instance** is not an entry.
 
 ### Plugin
 

@@ -9,15 +9,22 @@ from textwrap import dedent
 import pytest
 
 from kinby.contracts import (
+    PACKAGE_LIST,
+    ErrorEnvelope,
+    OperationState,
     PackageCommit,
     PackageDescription,
+    PackageListCommand,
     PackageSelection,
     SetupFieldKind,
     StorageItem,
     StorageKind,
 )
-from kinby.hub import BuildResult, HubRegistry, ImagePreparer, ImageSelection
+from kinby.hub import BuildResult, Hub, HubRegistry, ImagePreparer, ImageSelection
+from kinby.hub.curated import CURATED_DIRECTORY
 from kinby.packages import InstalledPackage, PackageDescriptor, vanilla_description
+from tests.test_hub import FakeRuntime, hub_client
+from tests.test_hub_preparation import prepared
 
 
 class FakeImageBackend:
@@ -487,3 +494,35 @@ def test_a_package_commit_pin_installs_that_commit_and_keeps_the_kinby_in_the_im
 def test_a_package_commit_names_one_full_commit_sha(sha):
     with pytest.raises(ValueError, match="sha"):
         PackageCommit(url="https://github.com/example/writer", sha=sha)
+
+
+def test_a_curated_selection_builds_with_its_entry_recipe_once_and_reuses_it(tmp_path):
+    async def scenario() -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        _source_repo(source)
+        directory = tmp_path / "hub"
+        backend = FakeImageBackend()
+        hub = Hub(
+            directory,
+            runtime=FakeRuntime(),
+            images=ImagePreparer(source, HubRegistry(directory), backend),
+        )
+        client = hub_client(hub)
+        listed = await client.call(PACKAGE_LIST, PackageListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        [coder] = [package for package in listed.packages if package.id == "coder"]
+
+        first = await prepared(client, coder.selection)
+        again = await prepared(client, coder.selection)
+
+        assert (first.state, again.state) == (OperationState.SUCCEEDED, OperationState.SUCCEEDED)
+        assert len(backend.builds) == 1
+        recipe = (CURATED_DIRECTORY / "coder.Dockerfile").read_text(encoding="utf-8")
+        assert isinstance(coder.selection.version, PackageCommit)
+        install = f"git+{coder.selection.version.url}@{coder.selection.version.sha}"
+        dockerfile = backend.dockerfiles[0]
+        assert recipe.rstrip() in dockerfile
+        assert dockerfile.index(recipe.rstrip()) < dockerfile.index(install)
+
+    asyncio.run(scenario())

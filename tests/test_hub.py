@@ -33,6 +33,7 @@ from kinby.contracts import (
     INSTANCE_UPDATE,
     OPERATION_GET,
     PACKAGE_DESCRIBE,
+    PACKAGE_LIST,
     Capability,
     ContainerOwner,
     ControlToken,
@@ -1302,6 +1303,7 @@ def test_no_scope_an_instance_grants_carries_hub_authority():
         INSTANCE_DELETE_PREVIEW.scope,
         OPERATION_GET.scope,
         PACKAGE_DESCRIBE.scope,
+        PACKAGE_LIST.scope,
     } == {Scope.HUB_READ}
     assert {
         INSTANCE_CREATE.scope,

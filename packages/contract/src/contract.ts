@@ -175,6 +175,10 @@ export interface Contract {
       command: PackageDescribeCommand;
       result: PackageDescription;
     };
+    "package.list": {
+      command: PackageListCommand;
+      result: PackageListResult;
+    };
     "routine.list": {
       command: RoutineListCommand;
       result: RoutineListResult;
@@ -539,6 +543,22 @@ export interface SetupField {
   name: string;
   required: boolean;
   type: SetupFieldType;
+}
+export interface PackageListCommand {}
+export interface PackageListResult {
+  packages: CuratedPackage[];
+}
+/**
+ * One package of the curated list: its card, and the selection a client prepares it with.
+ *
+ * The selection carries no image recipe. The hub adds the entry's recipe when it builds.
+ */
+export interface CuratedPackage {
+  description: string;
+  display_name: string;
+  icon: string;
+  id: string;
+  selection: PackageSelection;
 }
 export interface RoutineListCommand {}
 export interface RoutineListResult {

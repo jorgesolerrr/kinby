@@ -692,6 +692,27 @@ class PackageDescribeCommand(ContractModel):
     package: PackageSelection | None
 
 
+class PackageListCommand(ContractModel):
+    pass
+
+
+class CuratedPackage(ContractModel):
+    """One package of the curated list: its card, and the selection a client prepares it with.
+
+    The selection carries no image recipe. The hub adds the entry's recipe when it builds.
+    """
+
+    id: str
+    display_name: str
+    description: str
+    icon: str
+    selection: PackageSelection
+
+
+class PackageListResult(ContractModel):
+    packages: list[CuratedPackage]
+
+
 class InstanceCreateCommand(ContractModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
