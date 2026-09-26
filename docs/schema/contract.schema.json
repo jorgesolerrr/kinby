@@ -310,6 +310,36 @@
       "title": "ContainerOwner",
       "type": "string"
     },
+    "CuratedPackage": {
+      "additionalProperties": false,
+      "description": "One package of the curated list: its card, and the selection a client prepares it with.\n\nThe selection carries no image recipe. The hub adds the entry's recipe when it builds.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "selection": {
+          "$ref": "#/$defs/PackageSelection"
+        }
+      },
+      "required": [
+        "id",
+        "display_name",
+        "description",
+        "icon",
+        "selection"
+      ],
+      "title": "CuratedPackage",
+      "type": "object"
+    },
     "DelegatedRun": {
       "additionalProperties": false,
       "description": "One run of an outside agent that a tool started, with that run's own tokens.\n\nA client that reports a running total across resumes, like a Codex thread, needs its\nprevious reading subtracted. Only a limited run has ``resets_at``: when its plan window resets.",
@@ -1902,6 +1932,28 @@
         "setup_fields"
       ],
       "title": "PackageDescription",
+      "type": "object"
+    },
+    "PackageListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "PackageListCommand",
+      "type": "object"
+    },
+    "PackageListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "packages": {
+          "items": {
+            "$ref": "#/$defs/CuratedPackage"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "packages"
+      ],
+      "title": "PackageListResult",
       "type": "object"
     },
     "PackagePin": {
@@ -4577,6 +4629,22 @@
           ],
           "type": "object"
         },
+        "package.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PackageListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/PackageListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "routine.list": {
           "additionalProperties": false,
           "properties": {
@@ -4887,6 +4955,7 @@
         "operation.get",
         "image.prepare",
         "package.describe",
+        "package.list",
         "stats.summary"
       ],
       "type": "object"
