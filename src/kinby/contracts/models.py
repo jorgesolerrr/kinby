@@ -1086,6 +1086,30 @@ class StatsGetResult(ContractModel):
     warnings: list[ModelCallMismatch] = Field(default_factory=list)
 
 
+class ApiUse(TokenTotals):
+    """The model calls the API usage source paid for, priced where the model is known."""
+
+    cost: float | None = None
+
+
+class StatsSummaryResult(ContractModel):
+    """Usage across the hub's running instances, read live from each one and stored nowhere.
+
+    A total leaves out every instance in ``skipped`` or ``unreachable``.
+    """
+
+    #: Each counted instance's buckets, by hub instance ID.
+    buckets: dict[UUID, list[StatsBucket]]
+    api: ApiUse
+    subscriptions: list[SubscriptionUse]
+    #: The latest reset per subscription usage source, across instances.
+    limits: list[PlanLimit]
+    #: Instances not running, so not asked.
+    skipped: list[UUID]
+    #: Running instances that failed to answer, or did not answer in time.
+    unreachable: list[UUID]
+
+
 class RoutineListCommand(ContractModel):
     pass
 

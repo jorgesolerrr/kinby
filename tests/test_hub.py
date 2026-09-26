@@ -55,6 +55,8 @@ from kinby.contracts import (
     PackageSelection,
     Readiness,
     Scope,
+    StatsGetCommand,
+    StatsGetResult,
     StorageItem,
     StorageKind,
 )
@@ -270,6 +272,9 @@ class FakeControl:
         self.refuses = refuses
         self.endpoints: list[ControlEndpoint] = []
         self.forces: list[bool] = []
+        #: What each instance answers stats with, by address. A missing address never answers.
+        self.usage: dict[str, StatsGetResult] = {}
+        self.stats_asked: list[StatsGetCommand] = []
         self.asked = asyncio.Event()
         self.release = asyncio.Event()
         if not holds:
@@ -300,6 +305,12 @@ class FakeControl:
             await asyncio.Event().wait()
         await self.release.wait()
         return DrainState.INTERRUPTED if any(self.forces) else DrainState.DRAINED
+
+    async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
+        self.stats_asked.append(command)
+        if endpoint.address not in self.usage:
+            await asyncio.Event().wait()
+        return self.usage[endpoint.address]
 
 
 def hub_at(
@@ -1667,7 +1678,7 @@ def test_a_control_socket_that_closes_after_the_drain_is_sent_is_a_lost_connecti
 def test_a_drain_answer_that_refuses_is_not_a_lost_connection():
     async def scenario() -> None:
         async with _control_server(_refuse_drain) as endpoint:
-            with pytest.raises(ControlUnreachable, match="refused to drain") as raised:
+            with pytest.raises(ControlUnreachable, match="refused the drain") as raised:
                 await HttpInstanceControl().drain(endpoint, force=False)
             assert not isinstance(raised.value, ControlConnectionLost)
 

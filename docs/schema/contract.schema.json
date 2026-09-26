@@ -87,6 +87,43 @@
       "title": "AdoptionHandoff",
       "type": "object"
     },
+    "ApiUse": {
+      "additionalProperties": false,
+      "description": "The model calls the API usage source paid for, priced where the model is known.",
+      "properties": {
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "output_tokens": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens"
+      ],
+      "title": "ApiUse",
+      "type": "object"
+    },
     "ApprovalRequested": {
       "additionalProperties": false,
       "properties": {
@@ -2659,6 +2696,63 @@
       "title": "StatsSummary",
       "type": "object"
     },
+    "StatsSummaryResult": {
+      "additionalProperties": false,
+      "description": "Usage across the hub's running instances, read live from each one and stored nowhere.\n\nA total leaves out every instance in ``skipped`` or ``unreachable``.",
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/ApiUse"
+        },
+        "buckets": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/StatsBucket"
+            },
+            "type": "array"
+          },
+          "propertyNames": {
+            "format": "uuid"
+          },
+          "type": "object"
+        },
+        "limits": {
+          "items": {
+            "$ref": "#/$defs/PlanLimit"
+          },
+          "type": "array"
+        },
+        "skipped": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subscriptions": {
+          "items": {
+            "$ref": "#/$defs/SubscriptionUse"
+          },
+          "type": "array"
+        },
+        "unreachable": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "buckets",
+        "api",
+        "subscriptions",
+        "limits",
+        "skipped",
+        "unreachable"
+      ],
+      "title": "StatsSummaryResult",
+      "type": "object"
+    },
     "StorageItem": {
       "additionalProperties": false,
       "properties": {
@@ -4290,6 +4384,22 @@
           ],
           "type": "object"
         },
+        "stats.summary": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/StatsGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/StatsSummaryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "thread.approval.respond": {
           "additionalProperties": false,
           "properties": {
@@ -4533,7 +4643,8 @@
         "instance.list",
         "instance.status",
         "instance.logs",
-        "operation.get"
+        "operation.get",
+        "stats.summary"
       ],
       "type": "object"
     },

@@ -32,6 +32,7 @@ from kinby.contracts import (
     INSTANCE_STOP,
     INSTANCE_UPDATE,
     OPERATION_GET,
+    STATS_SUMMARY,
     Capability,
     ContainerOwner,
     ControlToken,
@@ -67,6 +68,9 @@ from kinby.contracts import (
     PackageSelection,
     ProcessState,
     Readiness,
+    StatsGetCommand,
+    StatsGetResult,
+    StatsSummaryResult,
     StorageItem,
     StorageKind,
 )
@@ -102,6 +106,7 @@ from kinby.hub.models import (
 )
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import HubRegistry, ManagedInstance
+from kinby.hub.usage import Uncounted, summed_usage
 from kinby.instance import Instance, init_instance, inspect_instance
 from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage
 
@@ -116,6 +121,8 @@ FORCE_ANSWER_SECONDS = 30
 _POLL_SECONDS = 0.2
 _STOP_OBSERVE_SECONDS = 120
 READY_OBSERVE_SECONDS = 120
+#: How long a stats summary waits for one instance before it counts it unreachable.
+STATS_SECONDS = 5
 #: Pause before calling a drain again, so a socket that closes immediately does not spin.
 _DRAIN_RETRY_SECONDS = 0.2
 _RUNTIME_STOPPED = frozenset({"absent", "created", "stopped", "failed"})
@@ -238,6 +245,7 @@ class Hub:
             self.dispatcher.register(INSTANCE_STATUS, self.status)
             self.dispatcher.register(INSTANCE_LOGS, self.logs)
             self.dispatcher.register(OPERATION_GET, self.operation)
+            self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
         except BaseException:
             self._directory_lock.close()
             raise
@@ -1344,6 +1352,26 @@ class Hub:
         if alias is None:
             return InstanceUnreachable.MISSING
         return await self.endpoint(alias)
+
+    async def stats_summary(self, command: StatsGetCommand) -> StatsSummaryResult:
+        """Ask every instance at once, and keep none of the answers (ADR 0063)."""
+        records = [record for record in self.registry.managed_instances() if record.active]
+        answers = await asyncio.gather(*(self._usage(record, command) for record in records))
+        return summed_usage(
+            dict(zip((record.instance_id for record in records), answers, strict=True))
+        )
+
+    async def _usage(
+        self, record: ManagedInstance, command: StatsGetCommand
+    ) -> StatsGetResult | Uncounted:
+        """A slow instance counts as unreachable, so it cannot hold up the others."""
+        try:
+            async with asyncio.timeout(STATS_SECONDS):
+                if (await self._runtime.status(record.runtime_id)).state != "running":
+                    return Uncounted.SKIPPED
+                return await self._control.stats(await self._endpoint(record), command)
+        except ControlUnreachable, TimeoutError:
+            return Uncounted.UNREACHABLE
 
     async def operation(self, command: OperationGetCommand) -> OperationGetResult:
         result = self.registry.operation(command.operation_id)

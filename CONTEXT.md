@@ -287,6 +287,7 @@ The derived record of one closed **turn**. It describes the outcome, duration, t
 Per-turn measures of one **instance** aggregated by UTC day or week. Derived from the **transcript store** through **turn metrics**, `kinby stats` recomputes the totals and writes `stats.json`.
 Each bucket and the total split by **usage source**: API use keeps its tokens and cost, and each subscription counts its **delegated runs**, tokens, and duration. A turn lands in the bucket of its close, a delegated run in the bucket of its own timestamp.
 They also name each subscription's **plan windows**, five hours and seven days, and its active limit: the latest limited **delegated run** whose reset is still ahead. The limit search ignores the **time range**, so a limit reported before `since` still shows.
+The **hub** adds them up across its running **instances** on request: each instance's buckets under its **hub instance ID**, the totals per **usage source**, and the latest reset per source. It stores none of it, and names every instance it left out because it was stopped or did not answer in time.
 
 ### Model call
 
