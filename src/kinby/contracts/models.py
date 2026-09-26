@@ -667,8 +667,22 @@ class SetupField(ContractModel):
     required: bool
 
 
+class SubscriptionLogin(ContractModel):
+    """One sign-in a package declares, which the hub runs in a setup container (ADR 0065)."""
+
+    id: str
+    label: str
+    description: str
+    #: What the setup container runs instead of kinby.
+    command: list[str]
+    #: Where the login's own named volume mounts, in the instance and in the setup container.
+    volume: str
+    #: Finds the URL and the one-time code in the command's output, as named groups.
+    prompt_pattern: str
+
+
 class PackageDescription(ContractModel):
-    """What a prepared image declares: its card, its version, and its setup fields.
+    """What a prepared image declares: its card, its version, its setup fields, and its logins.
 
     The built-in fields come first, then the package's own.
     """
@@ -678,6 +692,8 @@ class PackageDescription(ContractModel):
     icon: str
     version: str
     setup_fields: list[SetupField]
+    #: Descriptions stored before logins existed have none.
+    logins: list[SubscriptionLogin] = Field(default_factory=list)
 
 
 class ImagePrepareCommand(ContractModel):
@@ -853,6 +869,13 @@ class InstanceLogsCommand(ContractModel):
     tail: Annotated[int, Field(gt=0)] | None = None
 
 
+class InstanceLoginStartCommand(ContractModel):
+    """Run one of the instance's subscription logins in a setup container."""
+
+    instance_id: UUID
+    login_id: Annotated[str, Field(min_length=1)]
+
+
 #: The version of the contract an instance speaks, reported before a lifecycle operation.
 CONTRACT_VERSION = "1"
 
@@ -1019,6 +1042,8 @@ class OperationKind(StrEnum):
     DELETE = "delete"
     #: An image preparation. It belongs to no instance.
     PREPARE = "prepare"
+    #: A subscription login. It runs beside the instance's other operations, not after them.
+    LOGIN = "login"
 
 
 class OperationState(StrEnum):
@@ -1028,12 +1053,21 @@ class OperationState(StrEnum):
     FAILED = "failed"
 
 
+class LoginPrompt(ContractModel):
+    """Where the user finishes a subscription login, and the one-time code they enter there."""
+
+    url: str
+    code: str
+
+
 class OperationStep(ContractModel):
     """One named stage of a lifecycle operation, in the order the hub ran it."""
 
     name: str
     state: OperationState
     detail: str
+    #: What a login's sign-in step found in the setup container's output.
+    prompt: LoginPrompt | None = None
 
 
 class OperationGetResult(ContractModel):

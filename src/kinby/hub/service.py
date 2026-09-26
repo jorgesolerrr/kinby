@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import os
+import re
 import shutil
 from collections.abc import Collection, Coroutine
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from kinby.contracts import (
     INSTANCE_DELETE,
     INSTANCE_DELETE_PREVIEW,
     INSTANCE_LIST,
+    INSTANCE_LOGIN_START,
     INSTANCE_LOGS,
     INSTANCE_RECREATE,
     INSTANCE_REMOVE,
@@ -50,6 +52,7 @@ from kinby.contracts import (
     InstanceDeletePreviewResult,
     InstanceListCommand,
     InstanceListResult,
+    InstanceLoginStartCommand,
     InstanceLogsCommand,
     InstanceLogsResult,
     InstanceRecreateCommand,
@@ -63,6 +66,7 @@ from kinby.contracts import (
     InstanceUpdateCommand,
     IntendedState,
     LifecycleOperationResult,
+    LoginPrompt,
     OperationGetCommand,
     OperationGetResult,
     OperationKind,
@@ -81,6 +85,7 @@ from kinby.contracts import (
     StatsSummaryResult,
     StorageItem,
     StorageKind,
+    SubscriptionLogin,
 )
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
@@ -89,6 +94,7 @@ from kinby.core.errors import (
     InvalidSetup,
     LifecycleOperationInFlight,
     LifecycleOperationNotFound,
+    LoginNotFound,
     ManagedInstanceNotFound,
     PackagePinRefused,
     SelectionNotPrepared,
@@ -114,6 +120,7 @@ from kinby.hub.models import (
     LifecycleRecovery,
     PreparedImage,
     RuntimeStatus,
+    SetupSpec,
 )
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import HubRegistry, ManagedInstance
@@ -146,6 +153,10 @@ _RUNTIME_STOPPED = frozenset({"absent", "created", "stopped", "failed"})
 _INTERRUPTED_OPERATION = "The hub stopped before this operation finished."
 #: What an image preparation builds on: the hub's own checkout, as `instance.create` defaults to.
 _PREPARED_REVISION = "HEAD"
+#: How long a login waits for the user to sign in before its code counts as expired.
+LOGIN_SECONDS = 15 * 60
+#: Colors and cursor moves a command prints around its URL and code.
+_TERMINAL_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
 class HubAlreadyRunning(RuntimeError):
@@ -264,6 +275,7 @@ class Hub:
             self.dispatcher.register(INSTANCE_LIST, self.list)
             self.dispatcher.register(INSTANCE_STATUS, self.status)
             self.dispatcher.register(INSTANCE_LOGS, self.logs)
+            self.dispatcher.register(INSTANCE_LOGIN_START, self.start_login)
             self.dispatcher.register(OPERATION_GET, self.operation)
             self.dispatcher.register(IMAGE_PREPARE, self.prepare_image)
             self.dispatcher.register(PACKAGE_DESCRIBE, self.describe_package)
@@ -333,8 +345,9 @@ class Hub:
                 "validate",
                 "Checking the setup values against what the image declares.",
             )
+            declared = await self._declared(selection, prepared)
             errors = setup_errors(
-                await self._declared(selection, prepared),
+                declared,
                 model=command.model,
                 config=command.config,
                 secrets=secrets,
@@ -363,7 +376,7 @@ class Hub:
             if record.path.exists():
                 raise FileExistsError(f"Instance directory already exists: {record.path}")
             staging.replace(record.path)
-            storage = self._storage(record.instance_id, record.path)
+            storage = self._storage(record.instance_id, record.path, declared.logins)
             self.registry.record_preparation(record.instance_id, artifact, storage)
             await self._runtime.create(
                 InstanceSpec(
@@ -503,6 +516,108 @@ class Hub:
                 OperationState.SUCCEEDED,
                 "Instance started.",
             )
+
+    async def start_login(self, command: InstanceLoginStartCommand) -> LifecycleOperationResult:
+        """Sign one of the instance's subscription logins in, or return the one running.
+
+        A login takes no lifecycle lock, so the instance starts and stops meanwhile (ADR 0065).
+        """
+        record = self._active_instance(command.instance_id)
+        login = self._login(record, command.login_id)
+        operation_id = uuid4()
+        opened = self.registry.begin_login(
+            operation_id, record.instance_id, login.id, "Sign-in queued."
+        )
+        if opened == operation_id:
+            self._schedule(self._sign_in(operation_id, record, login))
+        return LifecycleOperationResult(operation_id=opened, instance_id=record.instance_id)
+
+    def _login(self, record: ManagedInstance, login_id: str) -> SubscriptionLogin:
+        description = self.registry.description(record.package)
+        logins = description.logins if description is not None else []
+        for login in logins:
+            if login.id == login_id:
+                return login
+        raise LoginNotFound(f'Instance "{record.instance_id}" declares no login "{login_id}".')
+
+    async def _sign_in(
+        self,
+        operation_id: UUID,
+        record: ManagedInstance,
+        login: SubscriptionLogin,
+    ) -> None:
+        """Run the login's command in a setup container until it exits, or its code expires.
+
+        The pattern is matched against everything printed so far, so a URL and a code on
+        separate lines are found too. The first match is the one shown.
+        """
+        printed: list[str] = []
+        prompt: LoginPrompt | None = None
+
+        def watch(line: str) -> None:
+            nonlocal prompt
+            if not printed:
+                self._record(
+                    operation_id, "sign-in", f"Waiting for you to sign in to {login.label}."
+                )
+            printed.append(_TERMINAL_ESCAPE.sub("", line))
+            if prompt is None and (found := pattern.search("\n".join(printed))) is not None:
+                prompt = LoginPrompt(url=found["url"], code=found["code"])
+                self.registry.record_prompt(operation_id, prompt)
+
+        try:
+            self._record(operation_id, "container", "Starting the setup container.")
+            pattern = re.compile(login.prompt_pattern)
+            volume = self._login_volume(record, login)
+            if not record.image_id:
+                raise ValueError("This instance has no recorded image to sign in from.")
+            async with asyncio.timeout(LOGIN_SECONDS):
+                exit_code = await self._runtime.run_setup(
+                    SetupSpec(
+                        instance_id=record.runtime_id,
+                        image=record.image_id,
+                        command=login.command,
+                        volume=volume,
+                    ),
+                    watch,
+                )
+            self._record(operation_id, "verify", "Checking how the sign-in ended.")
+        except TimeoutError:
+            self.registry.finish_operation(
+                operation_id,
+                OperationState.FAILED,
+                "The code expired. Sign in again for a new one.",
+            )
+            return
+        except asyncio.CancelledError:
+            self._fail_if_unfinished(operation_id)
+            raise
+        except Exception as exc:
+            self.registry.finish_operation(
+                operation_id, OperationState.FAILED, str(exc) or type(exc).__name__
+            )
+            return
+        if exit_code == 0:
+            self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, "Signed in.")
+            return
+        last = next((line for line in reversed(printed) if line.strip()), "")
+        self.registry.finish_operation(
+            operation_id,
+            OperationState.FAILED,
+            f"The sign-in exited with code {exit_code}. {last}".strip(),
+        )
+
+    @staticmethod
+    def _login_volume(record: ManagedInstance, login: SubscriptionLogin) -> StorageItem:
+        """The volume the instance mounts where the login keeps its credentials.
+
+        It is found by where it mounts, so a volume from before logins were declared, or
+        one an adopted instance brought along, is the one the login signs in.
+        """
+        for item in record.storage:
+            if item.kind is StorageKind.VOLUME and item.destination == login.volume:
+                return item
+        raise ValueError(f"This instance has no volume at {login.volume} for {login.label}.")
 
     async def set_secrets(self, command: InstanceSecretsSetCommand) -> LifecycleOperationResult:
         """Replace the named values in this instance's secrets. No value travels back out."""
@@ -742,6 +857,16 @@ class Hub:
             )
         return record
 
+    def _not_signing_in(self, record: ManagedInstance) -> ManagedInstance:
+        """No login is writing into this instance's storage while it is taken away."""
+        login = self.registry.running_login(record.instance_id)
+        if login is not None:
+            raise LifecycleOperationInFlight(
+                f'Login "{login}" is still running for this instance. '
+                "Finish the sign-in or let its code expire first."
+            )
+        return record
+
     async def _recreate(self, operation_id: UUID, instance_id: UUID) -> None:
         try:
             async with self._locks.setdefault(instance_id, asyncio.Lock()):
@@ -896,7 +1021,7 @@ class Hub:
 
     async def remove(self, command: InstanceRemoveCommand) -> LifecycleOperationResult:
         """Drain and remove the container. The data and the record stay for a restoration."""
-        record = self._claimed(self._active_instance(command.instance_id))
+        record = self._not_signing_in(self._claimed(self._active_instance(command.instance_id)))
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id,
@@ -1025,7 +1150,7 @@ class Hub:
 
     async def delete(self, command: InstanceDeleteCommand) -> LifecycleOperationResult:
         """Permanently delete the previewed directories and named volumes of a removed instance."""
-        record = self._claimed(self._removed_instance(command.instance_id))
+        record = self._not_signing_in(self._claimed(self._removed_instance(command.instance_id)))
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id,
@@ -1533,8 +1658,18 @@ class Hub:
         if missing:
             raise ValueError(f'Missing required secret: "{missing[0]}".')
 
-    def _storage(self, instance_id: UUID, path: Path) -> tuple[StorageItem, ...]:
-        """What a created instance owns: its directory on the Docker host, and two volumes."""
+    def _storage(
+        self,
+        instance_id: UUID,
+        path: Path,
+        logins: Collection[SubscriptionLogin],
+    ) -> tuple[StorageItem, ...]:
+        """What a created instance owns: its directory on the Docker host, its workspace
+        volume, and one volume per declared login.
+
+        A login's volume is named after its id, so the factory's `codex` login keeps the name
+        the hub gave the Codex volume before packages declared their logins.
+        """
         relative = path.relative_to(self.directory)
         host_path = self._docker_host_directory / relative
         volume = f"kinby-{instance_id}"
@@ -1551,11 +1686,14 @@ class Hub:
                 destination="/instance/workspace",
                 writable=True,
             ),
-            StorageItem(
-                kind=StorageKind.VOLUME,
-                source=f"{volume}-codex",
-                destination="/root/.codex",
-                writable=True,
+            *(
+                StorageItem(
+                    kind=StorageKind.VOLUME,
+                    source=f"{volume}-{login.id}",
+                    destination=login.volume,
+                    writable=True,
+                )
+                for login in logins
             ),
         )
 

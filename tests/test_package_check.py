@@ -6,9 +6,10 @@ import sys
 import pytest
 
 from kinby.cli import main
-from kinby.contracts import PackageDescription, SetupFieldKind, SetupFieldType
+from kinby.contracts import PackageDescription, SetupFieldKind, SetupFieldType, SubscriptionLogin
+from kinby.packages import installed_package_from_json, package_description
 from kinby.packages.__main__ import main as candidate_check
-from tests.fake_package import install_fake_package
+from tests.fake_package import EDITOR_LOGIN, install_fake_package
 
 
 def _executable(directory, name):
@@ -133,6 +134,39 @@ def test_malformed_secret_declarations_fail_the_check(tmp_path, monkeypatch, cap
     ]
 
 
+def test_malformed_login_declarations_fail_the_check(tmp_path, monkeypatch, capsys):
+    def login(login_id: str, pattern: str, volume: str = "/root/.editor") -> str:
+        return (
+            f'SubscriptionLogin(id="{login_id}", label="Editor", description="Signs in.", '
+            f'command=["editor", "login"], volume="{volume}", prompt_pattern=r"{pattern}")'
+        )
+
+    _install(
+        tmp_path,
+        monkeypatch,
+        logins=(
+            EDITOR_LOGIN,
+            login("editor", r"(?P<url>\S+) (?P<code>\S+)"),
+            login("reviewer", r"(?P<url>\S+"),
+            login("mailer", r"(?P<url>\S+) (?P<token>\S+)"),
+            login("Mail box", r"(?P<url>\S+) (?P<code>\S+)", volume="mail"),
+        ),
+    )
+
+    status = main(["package", "check", "writer"])
+
+    assert status == 1
+    assert capsys.readouterr().err.splitlines() == [
+        'Login "editor" is declared more than once.',
+        'Login "reviewer" has a prompt pattern that does not compile: '
+        "missing ), unterminated subpattern at position 0.",
+        'Login "mailer" has a prompt pattern without the named group "code".',
+        'Login "Mail box" has an id that cannot name a volume: use letters, digits, ".", "_" '
+        'and "-", starting with a letter or digit.',
+        'Login "Mail box" mounts its volume at "mail", which is not an absolute path.',
+    ]
+
+
 def test_a_bad_permissions_file_is_reported_with_the_other_failures(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     package = _install(tmp_path, monkeypatch, executables=("kinby-fake-editor",))
@@ -186,6 +220,24 @@ def test_the_candidate_check_prints_the_package_only_when_it_passes(tmp_path, mo
     printed = json.loads(capsys.readouterr().out)
     assert printed["descriptor"]["id"] == "writer"
     assert printed["files"]["package.yaml"] == "tone: plain\ntoken: EDITOR_TOKEN\n"
+
+
+def test_the_candidate_check_describes_the_logins_a_package_declares(tmp_path, monkeypatch, capsys):
+    _install(tmp_path, monkeypatch)
+
+    assert candidate_check(["writer"]) == 0
+    installed = installed_package_from_json(capsys.readouterr().out)
+
+    assert package_description(installed).logins == [
+        SubscriptionLogin(
+            id="editor",
+            label="Editor account",
+            description="Signs the editor in with your subscription.",
+            command=["editor", "login", "--device"],
+            volume="/root/.editor",
+            prompt_pattern=r"Open (?P<url>https://\S+) and enter (?P<code>[A-Z0-9-]+)",
+        )
+    ]
 
 
 def test_the_candidate_check_without_a_package_describes_a_vanilla_instance(capsys):

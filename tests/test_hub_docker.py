@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import threading
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -25,6 +26,7 @@ from kinby.hub import (
     InstanceSpec,
     PreparedImage,
     RecoveredState,
+    SetupSpec,
 )
 from kinby.packages import InstalledPackage, PackageDescriptor, package_json, vanilla_description
 from tests.test_hub import hub_client, started_instance
@@ -64,12 +66,14 @@ class FakeContainers:
         self.run_failure: bytes | None = None
         #: What the check prints. The package check's output unless a test sets another.
         self.run_output: bytes | None = None
+        #: What the next create returns: a container a test drives, or a bare placeholder.
+        self.creates: object | None = None
 
-    def create(self, image: object, command: object, **options: object) -> object:
+    def create(self, image: object, command: object = None, **options: object) -> object:
         self.arguments = (image, command)
         self.options = options
         self.thread_id = threading.get_ident()
-        return object()
+        return self.creates or object()
 
     def get(self, name: str) -> FakeContainer:
         found = self.named.get(name, self.container)
@@ -722,6 +726,109 @@ def test_docker_runtime_stops_within_the_grace_period(tmp_path):
 
     assert client.containers.container is not None
     assert client.containers.container.stop_timeout == 45
+
+
+class FakeSetupContainer:
+    """A setup container that prints its chunks, then exits, or keeps printing until removed."""
+
+    def __init__(self, chunks: list[bytes], exit_code: int | None = 0) -> None:
+        self.chunks = chunks
+        self.exit_code = exit_code
+        self.events: list[str] = []
+        self._gone = threading.Event()
+
+    def start(self) -> None:
+        self.events.append("start")
+
+    def logs(self, **options: object) -> Iterator[bytes]:
+        assert options == {"stdout": True, "stderr": True, "stream": True, "follow": True}
+        yield from self.chunks
+        if self.exit_code is None:
+            self._gone.wait(timeout=5)
+
+    def wait(self) -> dict[str, object]:
+        self.events.append("wait")
+        return {"StatusCode": self.exit_code, "Error": None}
+
+    def remove(self, *, force: bool = False) -> None:
+        self.events.append(f"remove force={force}")
+        self._gone.set()
+
+
+LOGIN_VOLUME = StorageItem(
+    kind=StorageKind.VOLUME,
+    source="kinby-alice-codex",
+    destination="/root/.codex",
+    writable=True,
+)
+
+
+def run_setup(
+    container: FakeSetupContainer, *, seconds: float = 5
+) -> tuple[FakeDockerClient, list[str], int | None]:
+    client = FakeDockerClient()
+    client.containers.creates = container
+    runtime = DockerRuntime("hub-id", network="kinby_private", client=cast(DockerClient, client))
+    lines: list[str] = []
+
+    async def scenario() -> int | None:
+        try:
+            async with asyncio.timeout(seconds):
+                return await runtime.run_setup(
+                    SetupSpec(
+                        instance_id="alice",
+                        image="sha256:selected",
+                        command=("codex", "login", "--device-auth"),
+                        volume=LOGIN_VOLUME,
+                    ),
+                    lines.append,
+                )
+        except TimeoutError:
+            return None
+
+    return client, lines, asyncio.run(scenario())
+
+
+def test_a_setup_container_runs_the_command_with_one_volume_and_the_hub_labels_then_goes():
+    container = FakeSetupContainer(
+        [b"Open https://auth.example/device and", b" enter AB12-C3D\r\nWaiting", b"\n"]
+    )
+
+    client, lines, exit_code = run_setup(container)
+
+    assert client.containers.arguments == ("sha256:selected", None)
+    assert client.containers.options == {
+        # The login command replaces the image's entrypoint, so kinby never starts.
+        "entrypoint": ["codex", "login", "--device-auth"],
+        "labels": {"kinby.hub": "hub-id", "kinby.setup": "alice"},
+        "mounts": [Mount(target="/root/.codex", source="kinby-alice-codex", type="volume")],
+    }
+    assert lines == [
+        "Open https://auth.example/device and enter AB12-C3D",
+        "Waiting",
+    ]
+    assert exit_code == 0
+    assert container.events == ["start", "wait", "remove force=True"]
+
+
+def test_a_setup_container_that_fails_reports_its_exit_code_and_goes():
+    container = FakeSetupContainer([b"error: no device code"], exit_code=1)
+
+    _, lines, exit_code = run_setup(container)
+
+    assert lines == ["error: no device code"]
+    assert exit_code == 1
+    assert container.events == ["start", "wait", "remove force=True"]
+
+
+def test_a_setup_container_that_outlives_its_timeout_goes():
+    container = FakeSetupContainer([b"Open https://auth.example/device and enter AB12-C3D\n"], None)
+
+    _, lines, exit_code = run_setup(container, seconds=0.1)
+
+    assert lines == ["Open https://auth.example/device and enter AB12-C3D"]
+    assert exit_code is None
+    assert container.events == ["start", "remove force=True"]
 
 
 class _RecordingNetwork:

@@ -22,6 +22,7 @@ from kinby.contracts.models import (
     InstanceDrainResult,
     InstanceListCommand,
     InstanceListResult,
+    InstanceLoginStartCommand,
     InstanceLogsCommand,
     InstanceLogsResult,
     InstanceProbeCommand,
@@ -204,6 +205,9 @@ INSTANCE_STATUS = Method(
     "instance.status", Scope.HUB_READ, InstanceStatusCommand, InstanceStatusResult
 )
 INSTANCE_LOGS = Method("instance.logs", Scope.HUB_READ, InstanceLogsCommand, InstanceLogsResult)
+INSTANCE_LOGIN_START = Method(
+    "instance.login.start", Scope.HUB_ADMIN, InstanceLoginStartCommand, LifecycleOperationResult
+)
 OPERATION_GET = Method(
     "operation.get",
     Scope.HUB_READ,
@@ -254,6 +258,7 @@ METHODS = (
     INSTANCE_LIST,
     INSTANCE_STATUS,
     INSTANCE_LOGS,
+    INSTANCE_LOGIN_START,
     OPERATION_GET,
     IMAGE_PREPARE,
     PACKAGE_DESCRIBE,

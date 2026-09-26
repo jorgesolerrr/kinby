@@ -44,6 +44,7 @@ from tests.test_hub import (
     hub_client,
 )
 from tests.test_hub_adoption import CODER_CONTAINER, adopted, coder_storage, existing_coder
+from tests.test_hub_logins import CODEX, created_writer, writer_package
 from tests.test_hub_recovery import claim_storage
 from tests.test_hub_removal import HeldCreate, listed, removed, storage_of
 
@@ -77,6 +78,13 @@ async def deleted(
     return await finished_operation(client, accepted)
 
 
+def login_hub(tmp_path, runtime: FakeRuntime) -> Hub:
+    """A hub whose instances declare the Codex login, so each owns a second named volume."""
+    return hub_at(
+        tmp_path / "hub", runtime=runtime, images=FakeImages(package=writer_package(CODEX))
+    )
+
+
 def volumes_of(hub: Hub, instance: LifecycleOperationResult) -> list[str]:
     return [item.source for item in storage_of(hub, instance) if item.kind is StorageKind.VOLUME]
 
@@ -84,8 +92,8 @@ def volumes_of(hub: Hub, instance: LifecycleOperationResult) -> list[str]:
 def test_a_preview_lists_the_removed_instance_s_resolved_directory_and_named_volumes(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        hub = hub_at(tmp_path / "hub", runtime=runtime)
-        created = await created_instance(hub_client(hub))
+        hub = login_hub(tmp_path, runtime)
+        created = await created_writer(hub)
         await removed(hub_client(hub), created)
         instance_path = hub.instances_directory / str(created.instance_id)
 
@@ -108,9 +116,9 @@ def test_a_deletion_deletes_exactly_the_previewed_targets_and_forgets_the_remove
 ):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        hub = hub_at(tmp_path / "hub", runtime=runtime)
+        hub = login_hub(tmp_path, runtime)
         client = hub_client(hub)
-        created = await created_instance(client)
+        created = await created_writer(hub)
         instance_path = hub.instances_directory / str(created.instance_id)
         external = tmp_path / "notes"
         external.mkdir()
@@ -242,7 +250,7 @@ def test_a_volume_another_active_or_removed_instance_retains_refuses_the_deletio
         client = hub_client(hub)
         created = await created_instance(client)
         await removed(client, created)
-        [workspace, _] = volumes_of(hub, created)
+        [workspace] = volumes_of(hub, created)
         owner = claim_storage(
             hub.directory / "registry.sqlite",
             workspace,
@@ -318,8 +326,8 @@ def test_a_partial_deletion_keeps_what_failed_and_a_retry_never_reaches_past_wha
 ):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        hub = hub_at(tmp_path / "hub", runtime=runtime)
-        created = await created_instance(hub_client(hub))
+        hub = login_hub(tmp_path, runtime)
+        created = await created_writer(hub)
         [workspace, codex] = volumes_of(hub, created)
         refusing = RefusingVolume(codex)
         hub.close()
@@ -414,8 +422,8 @@ class CrashingDeletion(FakeRuntime):
 def test_a_deletion_interrupted_by_a_restart_is_inspectable_and_finishes_on_retry(tmp_path):
     async def scenario() -> None:
         runtime = CrashingDeletion()
-        hub = hub_at(tmp_path / "hub", runtime=runtime)
-        created = await created_instance(hub_client(hub))
+        hub = login_hub(tmp_path, runtime)
+        created = await created_writer(hub)
         [workspace, codex] = volumes_of(hub, created)
         await removed(hub_client(hub), created)
         instance_path = hub.instances_directory / str(created.instance_id)

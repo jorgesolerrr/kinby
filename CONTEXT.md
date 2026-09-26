@@ -99,7 +99,7 @@ _Avoid_: credentials, env vars
 
 ### Lifecycle operation
 
-One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. An **image preparation** is one too, and it belongs to no instance. Its identity and outcome remain available after the requesting client disconnects.
+One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. An **image preparation** is one too, and it belongs to no instance. A **subscription login** is one too, and it runs beside the instance's other operations. Its identity and outcome remain available after the requesting client disconnects.
 
 ### Operation step
 
@@ -164,6 +164,16 @@ _Avoid_: image build, warm-up
 
 One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. The built-in fields come first. Every instance asks for its model and API key, and a **vanilla instance** also asks for an optional **behavior prompt**. A package's own fields follow.
 _Avoid_: required input, form field
+
+### Subscription login
+
+One sign-in a **package** declares for a command-line agent its **instances** run on a subscription: the command that signs in, where its credentials live, and how to find a URL and a one-time code in what the command prints. The **hub** runs it in a **setup container**, and the user finishes it in a browser. Each one keeps its credentials in a named volume the instance owns.
+_Avoid_: login, device flow, auth
+
+### Setup container
+
+The temporary container the **hub** runs on an instance's **image artifact** for one **subscription login**. It runs the login's command in place of kinby, mounts only that login's volume, holds none of the **instance secrets**, and is removed when the login ends, however it ends.
+_Avoid_: login container, helper container
 
 ### Avatar
 

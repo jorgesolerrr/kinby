@@ -17,6 +17,7 @@ from kinby.contracts import (
     AvatarShape,
     InstanceSummary,
     IntendedState,
+    LoginPrompt,
     OperationGetResult,
     OperationKind,
     OperationState,
@@ -117,7 +118,8 @@ class HubRegistry:
                     kind TEXT NOT NULL,
                     state TEXT NOT NULL,
                     detail TEXT NOT NULL,
-                    selection TEXT
+                    selection TEXT,
+                    login_id TEXT
                 );
                 CREATE TABLE IF NOT EXISTS operation_steps (
                     operation_id TEXT NOT NULL REFERENCES operations(id),
@@ -125,6 +127,8 @@ class HubRegistry:
                     name TEXT NOT NULL,
                     state TEXT NOT NULL,
                     detail TEXT NOT NULL,
+                    prompt_url TEXT,
+                    prompt_code TEXT,
                     PRIMARY KEY (operation_id, name)
                 );
                 CREATE TABLE IF NOT EXISTS image_artifacts (
@@ -175,7 +179,15 @@ class HubRegistry:
                 "image_artifacts",
                 {"package_selection": "TEXT"},
             )
+            self._add_columns(
+                connection,
+                "operation_steps",
+                {"prompt_url": "TEXT", "prompt_code": "TEXT"},
+            )
         self._let_operations_stand_alone()
+        # After the rebuild, which copies only the columns operations had before preparations.
+        with self._connect() as connection:
+            self._add_columns(connection, "operations", {"login_id": "TEXT"})
 
     def _let_operations_stand_alone(self) -> None:
         """Rebuild an operations table from before preparations, whose rows all name an instance.
@@ -445,6 +457,75 @@ class HubRegistry:
             )
         return operation_id
 
+    def begin_login(
+        self,
+        operation_id: UUID,
+        instance_id: UUID,
+        login_id: str,
+        detail: str,
+    ) -> UUID:
+        """Open this login, or return the unfinished one of the same login on this instance."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = self._running_login(connection, instance_id, login_id)
+            if existing is not None:
+                return existing
+            connection.execute(
+                """
+                INSERT INTO operations (id, instance_id, kind, state, detail, login_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(operation_id),
+                    str(instance_id),
+                    OperationKind.LOGIN.value,
+                    OperationState.PENDING.value,
+                    detail,
+                    login_id,
+                ),
+            )
+        return operation_id
+
+    def running_login(self, instance_id: UUID) -> UUID | None:
+        """A login of this instance that has not finished, if one is running."""
+        with self._connect() as connection:
+            return self._running_login(connection, instance_id)
+
+    @staticmethod
+    def _running_login(
+        connection: sqlite3.Connection,
+        instance_id: UUID,
+        login_id: str | None = None,
+    ) -> UUID | None:
+        row = connection.execute(
+            """
+            SELECT id FROM operations
+            WHERE instance_id = ? AND kind = ? AND state IN (?, ?)
+              AND (? IS NULL OR login_id = ?)
+            ORDER BY rowid LIMIT 1
+            """,
+            (
+                str(instance_id),
+                OperationKind.LOGIN.value,
+                OperationState.PENDING.value,
+                OperationState.RUNNING.value,
+                login_id,
+                login_id,
+            ),
+        ).fetchone()
+        return UUID(row[0]) if row is not None else None
+
+    def record_prompt(self, operation_id: UUID, prompt: LoginPrompt) -> None:
+        """Show the URL and the code on the step that is running."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE operation_steps SET prompt_url = ?, prompt_code = ?
+                WHERE operation_id = ? AND state = ?
+                """,
+                (prompt.url, prompt.code, str(operation_id), OperationState.RUNNING.value),
+            )
+
     def record_description(
         self,
         package: PackageSelection | None,
@@ -580,17 +661,19 @@ class HubRegistry:
         """The earliest lifecycle operation this instance has not finished.
 
         A client that lost a response finds that operation here. A later operation
-        does not take its place while this one is still running.
+        does not take its place while this one is still running. A login is not one
+        of them: it runs beside them, and may wait for the user for many minutes.
         """
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT id FROM operations
-                WHERE instance_id = ? AND state IN (?, ?)
+                WHERE instance_id = ? AND kind != ? AND state IN (?, ?)
                 ORDER BY rowid LIMIT 1
                 """,
                 (
                     str(instance_id),
+                    OperationKind.LOGIN.value,
                     OperationState.PENDING.value,
                     OperationState.RUNNING.value,
                 ),
@@ -605,7 +688,7 @@ class HubRegistry:
             ).fetchone()
             steps = connection.execute(
                 """
-                SELECT name, state, detail FROM operation_steps
+                SELECT name, state, detail, prompt_url, prompt_code FROM operation_steps
                 WHERE operation_id = ? ORDER BY position
                 """,
                 (str(operation_id),),
@@ -619,8 +702,13 @@ class HubRegistry:
             state=OperationState(row[3]),
             detail=row[4],
             steps=[
-                OperationStep(name=name, state=OperationState(state), detail=detail)
-                for name, state, detail in steps
+                OperationStep(
+                    name=name,
+                    state=OperationState(state),
+                    detail=detail,
+                    prompt=LoginPrompt(url=url, code=code) if url is not None else None,
+                )
+                for name, state, detail, url, code in steps
             ],
         )
 
@@ -1084,18 +1172,18 @@ class HubRegistry:
     def last_operation(self, instance_id: UUID) -> OperationGetResult | None:
         """The latest operation that changed this instance's container.
 
-        Replacing secrets writes a file and leaves the container where it is. A
-        queued operation that never started leaves the container where it is too.
-        A removal counts even before its first step, because recovery finishes
-        one that the process died inside. An adoption counts too. Recovery
-        reads it to tell an unfinished handoff from a create, because the
-        container it finds still belongs to the previous runtime.
+        Replacing secrets writes a file and leaves the container where it is, and a login
+        runs in a container of its own. A queued operation that never started leaves the
+        container where it is too. A removal counts even before its first step, because
+        recovery finishes one that the process died inside. An adoption counts too. Recovery
+        reads it to tell an unfinished handoff from a create, because the container it finds
+        still belongs to the previous runtime.
         """
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT operations.id FROM operations
-                WHERE instance_id = ? AND kind != ?
+                WHERE instance_id = ? AND kind NOT IN (?, ?)
                   AND (
                     kind IN (?, ?)
                     OR state = ?
@@ -1109,6 +1197,7 @@ class HubRegistry:
                 (
                     str(instance_id),
                     OperationKind.SECRETS.value,
+                    OperationKind.LOGIN.value,
                     OperationKind.REMOVE.value,
                     OperationKind.ADOPT.value,
                     OperationState.SUCCEEDED.value,

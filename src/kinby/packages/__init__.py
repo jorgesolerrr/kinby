@@ -18,7 +18,13 @@ from pydantic import (
     ValidationInfo,
 )
 
-from kinby.contracts import PackageDescription, SetupField, SetupFieldKind, SetupFieldType
+from kinby.contracts import (
+    PackageDescription,
+    SetupField,
+    SetupFieldKind,
+    SetupFieldType,
+    SubscriptionLogin,
+)
 
 if TYPE_CHECKING:
     from kinby.instance import Instance
@@ -97,6 +103,7 @@ class Package:
     validate: Callable[[Path], None] | None = None
     config: type[PackageConfig] | None = None
     executables: tuple[str, ...] = ()
+    logins: tuple[SubscriptionLogin, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,6 +126,7 @@ class PackageDescriptor:
     distribution: str
     version: str
     required_secrets: tuple[RequiredSecret, ...] = ()
+    logins: tuple[SubscriptionLogin, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -157,6 +165,7 @@ def installed_package(loaded: LoadedPackage) -> InstalledPackage:
             distribution=loaded.distribution.name,
             version=loaded.distribution.version,
             required_secrets=exported.required_secrets,
+            logins=exported.logins,
         ),
         files=readable_template_files(exported.template),
     )
@@ -230,7 +239,7 @@ def vanilla_description() -> PackageDescription:
 
 
 def package_description(package: InstalledPackage) -> PackageDescription:
-    """A package's card and version, with the built-in fields before the secrets it requires."""
+    """A package's card, version, and logins, with the built-in fields before its secrets."""
     descriptor = package.descriptor
     required = [
         SetupField(
@@ -249,6 +258,7 @@ def package_description(package: InstalledPackage) -> PackageDescription:
         icon=descriptor.icon,
         version=descriptor.version,
         setup_fields=[*BUILT_IN_FIELDS, *required],
+        logins=list(descriptor.logins),
     )
 
 
@@ -271,6 +281,9 @@ def installed_package_from_json(body: str) -> InstalledPackage:
                     description=secret["description"],
                 )
                 for secret in descriptor.get("required_secrets", [])
+            ),
+            logins=tuple(
+                SubscriptionLogin.model_validate(login) for login in descriptor.get("logins", [])
             ),
         ),
         files=dict(raw["files"]),
@@ -297,6 +310,7 @@ def package_json(package: InstalledPackage) -> str:
                     }
                     for secret in descriptor.required_secrets
                 ],
+                "logins": [login.model_dump(mode="json") for login in descriptor.logins],
             },
             "files": package.files,
         },
@@ -328,6 +342,7 @@ __all__ = [
     "PackageDescriptor",
     "RequiredSecret",
     "SecretName",
+    "SubscriptionLogin",
     "inspect_installed_package",
     "installed_package",
     "installed_package_from_json",
