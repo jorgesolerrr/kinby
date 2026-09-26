@@ -546,7 +546,7 @@ function SetupInput({
   onChange,
 }: {
   field: SetupField
-  value: FieldInput
+  value: FieldInput | undefined
   error: string | undefined
   onChange: (value: FieldInput) => void
 }) {

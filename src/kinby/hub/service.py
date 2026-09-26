@@ -1607,10 +1607,19 @@ class Hub:
 
     @staticmethod
     def _instance_secrets(model: str, secrets: dict[str, str]) -> dict[str, str]:
-        """The secrets as the instance reads them: the API key under its provider's variable."""
-        held = {name: value for name, value in secrets.items() if name != API_KEY_FIELD.name}
-        if API_KEY_FIELD.name in secrets:
-            held[api_key_variable(model)] = secrets[API_KEY_FIELD.name]
+        """The secrets as the instance reads them: the API key under its provider's variable.
+
+        Blank text counts as not sent, the same way setup validation reads it, so an optional
+        secret left empty stays unset.
+        """
+        held = {
+            name: value
+            for name, value in secrets.items()
+            if name != API_KEY_FIELD.name and value.strip()
+        }
+        api_key = secrets.get(API_KEY_FIELD.name)
+        if api_key is not None and api_key.strip():
+            held[api_key_variable(model)] = api_key
         held[CONTROL_TOKEN_VARIABLE] = new_control_token()
         return held
 

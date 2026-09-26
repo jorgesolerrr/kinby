@@ -450,6 +450,76 @@ describe("the create wizard's setup step", () => {
     expect(steps.getByText("Preparing the selected image.")).toBeDefined()
   })
 
+  it("does not send an untouched boolean or a blank optional secret", async () => {
+    const untouched: PackageDescription = {
+      ...vanilla,
+      setup_fields: [
+        ...vanilla.setup_fields,
+        {
+          name: "share",
+          label: "Share",
+          description: "Share drafts.",
+          kind: "config",
+          type: "boolean",
+          required: false,
+        },
+        {
+          name: "DRAFT_TOKEN",
+          label: "Draft token",
+          description: "Optional token.",
+          kind: "secret",
+          type: "text",
+          required: false,
+        },
+      ],
+    }
+    const caller = hub({ "package.describe": () => untouched })
+    const { user } = await openWizard(caller)
+    await nameIt(user)
+    await fillSetup(user)
+
+    expect(screen.getByRole("switch", { name: /Share/ }).getAttribute("aria-checked")).toBe("false")
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toEqual({
+      manifest_id: "Ada",
+      persona_name: "Ada",
+      model: "openai:gpt-5",
+      package: null,
+      config: { behavior_prompt: "Answer in haiku." },
+      secrets: { api_key: "sk-private" },
+      avatar: { shape: "circle", color: "blue" },
+    })
+  })
+
+  it("sends a boolean once the user sets the switch", async () => {
+    const untouched: PackageDescription = {
+      ...vanilla,
+      setup_fields: [
+        ...vanilla.setup_fields,
+        {
+          name: "share",
+          label: "Share",
+          description: "Share drafts.",
+          kind: "config",
+          type: "boolean",
+          required: false,
+        },
+      ],
+    }
+    const caller = hub({ "package.describe": () => untouched })
+    const { user } = await openWizard(caller)
+    await nameIt(user)
+    await fillSetup(user)
+
+    await user.click(screen.getByRole("switch", { name: /Share/ }))
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
+      config: { share: true },
+    })
+  })
+
   it("renders each field by its type, starting from its default", async () => {
     const { user } = await openWizard(hub({ "package.describe": () => typed }))
     await nameIt(user)

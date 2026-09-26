@@ -35,9 +35,14 @@ const MODEL_FIELD = "model"
 /** What a field's control holds: the text typed or picked, or whether a switch is on. */
 export type FieldInput = string | boolean
 
-/** What a field's control starts from: the field's default, or nothing yet. */
-export function initialInput(field: SetupField): FieldInput {
-  if (field.type === "boolean") return field.default === true
+/**
+ * What a field's control starts from: the field's default, or nothing yet.
+ * A boolean with no default stays unset, so an untouched switch is not a false.
+ */
+export function initialInput(field: SetupField): FieldInput | undefined {
+  if (field.type === "boolean") {
+    return typeof field.default === "boolean" ? field.default : undefined
+  }
   return field.default == null ? "" : String(field.default)
 }
 
@@ -65,10 +70,14 @@ export function createCommand(
   const secrets: Record<string, string> = {}
   let model = ""
   for (const field of fields) {
-    const value = setupValue(field, inputs[field.name] ?? initialInput(field))
+    const input = inputs[field.name] ?? initialInput(field)
+    if (input === undefined) continue
+    const value = setupValue(field, input)
     if (field.name === MODEL_FIELD) model = String(value)
-    else if (field.kind === "secret") secrets[field.name] = String(value)
-    else config[field.name] = value
+    else if (field.kind === "secret") {
+      const text = String(value)
+      if (text.trim() !== "") secrets[field.name] = text
+    } else config[field.name] = value
   }
   // The name is both the instance's manifest id and the persona it answers as.
   const trimmed = name.trim()

@@ -415,6 +415,79 @@ def test_config_values_land_at_their_targets_and_secrets_in_the_instance_secrets
     asyncio.run(scenario())
 
 
+SHIPPED_YAML = "share: true\n"
+
+
+def test_a_blank_optional_secret_stays_unset_and_an_omitted_boolean_keeps_the_shipped_value(
+    tmp_path,
+):
+    async def scenario() -> None:
+        package = InstalledPackage(
+            descriptor=PackageDescriptor(
+                id="writer",
+                display_name="Writing teammate",
+                description="Drafts articles.",
+                icon="pen",
+                distribution="kinby-writer",
+                version="1.4.2",
+                setup_fields=(
+                    SetupField(
+                        name="DRAFT_TOKEN",
+                        label="Draft token",
+                        description="Optional.",
+                        kind=SetupFieldKind.SECRET,
+                        type=SetupFieldType.TEXT,
+                        required=False,
+                    ),
+                    SetupField(
+                        name="LIVE_TOKEN",
+                        label="Live token",
+                        description="Optional.",
+                        kind=SetupFieldKind.SECRET,
+                        type=SetupFieldType.TEXT,
+                        required=False,
+                    ),
+                    _config_field(
+                        "share",
+                        "Share",
+                        SetupFieldType.BOOLEAN,
+                        target=SetupTarget(file=TargetFile.PACKAGE_YAML, key="share"),
+                    ),
+                ),
+            ),
+            files={"kinby.toml": '[feedback]\nask = "off"\n', "package.yaml": SHIPPED_YAML},
+        )
+        hub = hub_at(tmp_path / "hub", images=FakeImages(package=package))
+        client = hub_client(hub)
+        await prepared(client, WRITER)
+
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="editor",
+                model="openai:gpt-5",
+                package=WRITER,
+                secrets={
+                    "api_key": "sk-private",
+                    "DRAFT_TOKEN": "   ",
+                    "LIVE_TOKEN": "live-private",
+                },
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
+
+        instance_path = hub.instances_directory / str(accepted.instance_id)
+        environment = instance_environment(hub, accepted.instance_id)
+        assert environment["LIVE_TOKEN"] == "live-private"
+        assert environment["OPENAI_API_KEY"] == "sk-private"
+        assert "DRAFT_TOKEN" not in environment
+        assert "" not in environment.values()
+        assert (instance_path / "package.yaml").read_text(encoding="utf-8") == SHIPPED_YAML
+
+    asyncio.run(scenario())
+
+
 def test_defaults_fill_in_what_the_user_left_out_and_keep_the_file_as_shipped(tmp_path):
     async def scenario() -> None:
         images = FakeImages(package=WRITER_PACKAGE)

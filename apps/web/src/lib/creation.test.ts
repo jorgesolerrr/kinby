@@ -1,9 +1,84 @@
 import { CallError } from "@kinby/contract"
-import type { InstanceCreateCommand, OperationGetResult } from "@kinby/contract"
+import type { InstanceCreateCommand, OperationGetResult, SetupField } from "@kinby/contract"
 import { fakeClock, stubCaller } from "@kinby/contract/testing"
 import { describe, expect, it } from "vitest"
 
-import { type Creation, followCreation, followStart, type Starting } from "@/lib/creation"
+import {
+  type Creation,
+  createCommand,
+  followCreation,
+  followStart,
+  initialInput,
+  type Starting,
+} from "@/lib/creation"
+
+const identity = { name: "Ada", avatar: { shape: "circle" as const, color: "blue" as const } }
+
+function field(
+  declared: Pick<SetupField, "name" | "label" | "type"> & Partial<SetupField>,
+): SetupField {
+  return {
+    description: declared.label,
+    kind: "config",
+    required: false,
+    ...declared,
+  }
+}
+
+describe("the create command", () => {
+  const model = field({ name: "model", label: "Model", type: "text", required: true })
+  const apiKey = field({
+    name: "api_key",
+    label: "API key",
+    kind: "secret",
+    type: "text",
+    required: true,
+  })
+
+  it("leaves a blank optional secret unset", () => {
+    const command = createCommand(
+      null,
+      [
+        model,
+        apiKey,
+        field({ name: "DRAFT_TOKEN", label: "Draft token", kind: "secret", type: "text" }),
+      ],
+      { model: "openai:gpt-5", api_key: "sk-private", DRAFT_TOKEN: "   " },
+      identity,
+    )
+
+    expect(command.secrets).toEqual({ api_key: "sk-private" })
+    expect(command.model).toBe("openai:gpt-5")
+  })
+
+  it("omits a boolean the user never set when the field has no default", () => {
+    const share = field({ name: "share", label: "Share", type: "boolean" })
+
+    const command = createCommand(
+      null,
+      [model, apiKey, share],
+      { model: "openai:gpt-5", api_key: "sk-private" },
+      identity,
+    )
+
+    expect(initialInput(share)).toBeUndefined()
+    expect(command.config).not.toHaveProperty("share")
+  })
+
+  it("sends a boolean the user turned off, and one that starts from its default", () => {
+    const share = field({ name: "share", label: "Share", type: "boolean" })
+    const review = field({ name: "review", label: "Review", type: "boolean", default: true })
+
+    const command = createCommand(
+      null,
+      [model, apiKey, share, review],
+      { model: "openai:gpt-5", api_key: "sk-private", share: false },
+      identity,
+    )
+
+    expect(command.config).toMatchObject({ share: false, review: true })
+  })
+})
 
 const command: InstanceCreateCommand = {
   manifest_id: "Ada",
