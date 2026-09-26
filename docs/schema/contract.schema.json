@@ -159,6 +159,46 @@
       "title": "ApprovalRequested",
       "type": "object"
     },
+    "Avatar": {
+      "additionalProperties": false,
+      "description": "How a client draws an instance. The hub keeps it, not the instance directory.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/AvatarColor"
+        },
+        "shape": {
+          "$ref": "#/$defs/AvatarShape"
+        }
+      },
+      "required": [
+        "shape",
+        "color"
+      ],
+      "title": "Avatar",
+      "type": "object"
+    },
+    "AvatarColor": {
+      "description": "A name from a fixed palette. A client maps each name to colors of its own theme.",
+      "enum": [
+        "blue",
+        "violet",
+        "green",
+        "amber",
+        "red",
+        "gray"
+      ],
+      "title": "AvatarColor",
+      "type": "string"
+    },
+    "AvatarShape": {
+      "enum": [
+        "circle",
+        "squircle",
+        "square"
+      ],
+      "title": "AvatarShape",
+      "type": "string"
+    },
     "CallFrame": {
       "additionalProperties": false,
       "properties": {
@@ -445,6 +485,7 @@
         "RESOURCE_EXHAUSTED",
         "INVALID_ARGUMENT",
         "NOT_PREPARED",
+        "INVALID_SETUP",
         "CONNECTION_LOST",
         "INTERNAL"
       ],
@@ -456,6 +497,12 @@
       "properties": {
         "code": {
           "$ref": "#/$defs/ErrorCode"
+        },
+        "fields": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
         },
         "message": {
           "type": "string"
@@ -852,12 +899,20 @@
     "InstanceCreateCommand": {
       "additionalProperties": false,
       "properties": {
+        "avatar": {
+          "$ref": "#/$defs/Avatar"
+        },
+        "config": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
         "manifest_id": {
           "minLength": 1,
           "type": "string"
         },
         "model": {
-          "minLength": 1,
           "type": "string"
         },
         "package": {
@@ -1256,6 +1311,9 @@
     "InstanceSummary": {
       "additionalProperties": false,
       "properties": {
+        "avatar": {
+          "$ref": "#/$defs/Avatar"
+        },
         "image_id": {
           "type": "string"
         },
@@ -1311,7 +1369,8 @@
         "image_id",
         "intended_state",
         "runtime_id",
-        "storage"
+        "storage",
+        "avatar"
       ],
       "title": "InstanceSummary",
       "type": "object"

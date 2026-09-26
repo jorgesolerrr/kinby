@@ -77,12 +77,15 @@ export interface Client {
 export class CallError extends Error {
   readonly code: ErrorCode
   readonly retryable: boolean
+  /** What is wrong with each value the call sent, by field name. Only INVALID_SETUP fills it. */
+  readonly fields: Record<string, string>
 
-  constructor({ code, message, retryable }: ErrorEnvelope) {
+  constructor({ code, message, retryable, fields = {} }: ErrorEnvelope) {
     super(message)
     this.name = "CallError"
     this.code = code
     this.retryable = retryable
+    this.fields = fields
   }
 }
 
@@ -377,8 +380,13 @@ function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
     isRecord(value) &&
     isErrorCode(value.code) &&
     typeof value.message === "string" &&
-    typeof value.retryable === "boolean"
+    typeof value.retryable === "boolean" &&
+    (value.fields === undefined || isTextRecord(value.fields))
   )
+}
+
+function isTextRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((text) => typeof text === "string")
 }
 
 // A record rather than a list, so the type checker fails when the contract adds or drops a code.
@@ -397,6 +405,7 @@ const ERROR_CODES: Record<ErrorCode, true> = {
   RESOURCE_EXHAUSTED: true,
   INVALID_ARGUMENT: true,
   NOT_PREPARED: true,
+  INVALID_SETUP: true,
   CONNECTION_LOST: true,
   INTERNAL: true,
 }

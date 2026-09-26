@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import os
-import re
 import shutil
 from collections.abc import Collection, Coroutine
 from dataclasses import dataclass
@@ -84,6 +83,7 @@ from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import (
     AdoptionBlocked,
+    InvalidSetup,
     LifecycleOperationInFlight,
     LifecycleOperationNotFound,
     ManagedInstanceNotFound,
@@ -113,11 +113,17 @@ from kinby.hub.models import (
 )
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import HubRegistry, ManagedInstance
+from kinby.hub.setup import ENVIRONMENT_NAME, api_key_variable, setup_errors
 from kinby.hub.usage import Uncounted, summed_usage
 from kinby.instance import Instance, init_instance, inspect_instance
-from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage
+from kinby.instance.layout import SYSTEM_NAME
+from kinby.packages import (
+    API_KEY_FIELD,
+    BEHAVIOR_PROMPT_FIELD,
+    PACKAGE_CONFIG_NAME,
+    InstalledPackage,
+)
 
-_ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _INSTANCE_HOST = "0.0.0.0"
 _INSTANCE_PORT = 8787
 #: How long a forced container may take to exit before the runtime terminates it.
@@ -271,6 +277,16 @@ class Hub:
         task.add_done_callback(self._tasks.discard)
 
     async def create(self, command: InstanceCreateCommand) -> LifecycleOperationResult:
+        """Accept a creation only for a prepared selection whose setup values all check out."""
+        secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
+        errors = setup_errors(
+            self._prepared_description(command.package),
+            model=command.model,
+            config=command.config,
+            secrets=secrets,
+        )
+        if errors:
+            raise InvalidSetup(errors)
         instance_id = uuid4()
         operation_id = uuid4()
         instance_path = self.instances_directory / str(instance_id)
@@ -287,63 +303,68 @@ class Hub:
             prepared=False,
             storage=(),
             package=command.package,
+            avatar=command.avatar,
         )
         self.registry.begin_create(record, operation_id)
-        secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
-        self._schedule(self._create(operation_id, record, command.model, secrets))
+        self._schedule(self._create(operation_id, record, command, secrets))
         return LifecycleOperationResult(operation_id=operation_id, instance_id=instance_id)
 
     async def _create(
         self,
         operation_id: UUID,
         record: ManagedInstance,
-        model: str,
+        command: InstanceCreateCommand,
         secrets: dict[str, str],
     ) -> None:
         staging = record.path.with_name(f"{record.path.name}.creating")
-        self.registry.advance_operation(
-            operation_id,
-            "configure",
-            "Preparing instance configuration.",
-        )
         try:
-            self._validate_secret_names(secrets)
-            secrets[CONTROL_TOKEN_VARIABLE] = new_control_token()
-            selection = ImageSelection(
-                revision=record.requested_revision,
-                package=record.package,
-            )
-            if selection.package is None:
-                init_instance(staging, model=model)
-                self._write_configuration(staging, record.manifest_id, record.persona_name)
-                self._write_secrets(staging / ".env", secrets)
-                inspect_instance(staging)
-            self.registry.advance_operation(operation_id, "image", "Preparing selected image.")
+            self._record(operation_id, "image", "Preparing the selected image.")
+            selection = ImageSelection(revision=record.requested_revision, package=record.package)
             prepared = await self._images.prepare(selection)
-            package = self._package(prepared, selection, secrets)
-            if package is not None:
-                init_instance(staging, model=model, package=package)
-                self._write_configuration(staging, record.manifest_id, record.persona_name)
-                self._write_secrets(staging / ".env", secrets)
-                inspect_instance(staging)
+            package = self._package(prepared, selection)
+            self._record(
+                operation_id,
+                "validate",
+                "Checking the setup values against what the image declares.",
+            )
+            errors = setup_errors(
+                await self._declared(selection, prepared),
+                model=command.model,
+                config=command.config,
+                secrets=secrets,
+            )
+            if errors:
+                raise ValueError(
+                    "The image asks for other setup values now. "
+                    + " ".join(f"{name}: {message}" for name, message in errors.items())
+                )
+            self._record(
+                operation_id,
+                "initialize",
+                "Writing the instance's configuration and secrets.",
+            )
+            init_instance(staging, model=command.model, package=package)
+            self._write_configuration(staging, record.manifest_id, record.persona_name)
+            behavior_prompt = command.config.get(BEHAVIOR_PROMPT_FIELD.name, "")
+            if behavior_prompt.strip():
+                (staging / SYSTEM_NAME).write_text(behavior_prompt, encoding="utf-8")
+            self._write_secrets(staging / ".env", self._instance_secrets(command.model, secrets))
+            inspect_instance(staging)
+            self._record(
+                operation_id, "publish", "Creating the container and listing the instance."
+            )
             artifact = prepared.artifact
             if record.path.exists():
                 raise FileExistsError(f"Instance directory already exists: {record.path}")
             staging.replace(record.path)
             storage = self._storage(record.instance_id, record.path)
             self.registry.record_preparation(record.instance_id, artifact, storage)
-            self.registry.advance_operation(
-                operation_id,
-                "container",
-                "Creating the instance container.",
-            )
-            environment = self._environment(record.path)
             await self._runtime.create(
                 InstanceSpec(
                     instance_id=record.runtime_id,
                     image=artifact.image_id,
                     storage=storage,
-                    env=environment,
+                    env=self._environment(record.path),
                     port=_INSTANCE_PORT,
                 )
             )
@@ -399,7 +420,28 @@ class Hub:
 
     async def describe_package(self, command: PackageDescribeCommand) -> PackageDescription:
         """What the prepared selection declares, as its preparation stored it. It never builds."""
-        description = self.registry.description(command.package)
+        return self._prepared_description(command.package)
+
+    async def _declared(
+        self,
+        selection: ImageSelection,
+        prepared: PreparedImage,
+    ) -> PackageDescription:
+        """What the image just prepared declares.
+
+        A rebuilt image may declare other fields than the one the client was shown, so it is
+        described again, and that description is kept.
+        """
+        artifact = prepared.artifact
+        stored = self.registry.description(selection.package, artifact.image_id)
+        if stored is not None:
+            return stored
+        description = await self._images.describe(artifact)
+        self.registry.record_description(selection.package, artifact.image_id, description)
+        return description
+
+    def _prepared_description(self, package: PackageSelection | None) -> PackageDescription:
+        description = self.registry.description(package)
         if description is None:
             raise SelectionNotPrepared(
                 "This selection has not been prepared. Prepare its image first."
@@ -821,7 +863,8 @@ class Hub:
         # The candidate must carry this instance's package selection. The configuration
         # that package once copied is the instance's own and is never seeded again,
         # so nothing of the instance directory is rewritten here. See ADR 0039.
-        self._package(prepared, selection, self._environment(record.path))
+        package = self._package(prepared, selection)
+        self._require_secrets(package, self._environment(record.path))
         self._record(
             operation_id,
             "replace",
@@ -1449,11 +1492,7 @@ class Hub:
         return record
 
     @staticmethod
-    def _package(
-        prepared: PreparedImage,
-        selection: ImageSelection,
-        secrets: dict[str, str],
-    ) -> InstalledPackage | None:
+    def _package(prepared: PreparedImage, selection: ImageSelection) -> InstalledPackage | None:
         selected = selection.package
         installed = prepared.package
         if selected is None:
@@ -1477,12 +1516,15 @@ class Hub:
                 f"{descriptor.distribution} {descriptor.version}; expected "
                 f"{selected.id} from {selected.distribution} {source}."
             )
-        missing = [
-            secret.name for secret in descriptor.required_secrets if secret.name not in secrets
-        ]
+        return installed
+
+    @staticmethod
+    def _require_secrets(package: InstalledPackage | None, secrets: dict[str, str]) -> None:
+        """An update's candidate may ask for a secret this instance does not hold yet."""
+        required = package.descriptor.required_secrets if package is not None else ()
+        missing = [secret.name for secret in required if secret.name not in secrets]
         if missing:
             raise ValueError(f'Missing required secret: "{missing[0]}".')
-        return installed
 
     def _storage(self, instance_id: UUID, path: Path) -> tuple[StorageItem, ...]:
         """What a created instance owns: its directory on the Docker host, and two volumes."""
@@ -1511,8 +1553,17 @@ class Hub:
         )
 
     @staticmethod
+    def _instance_secrets(model: str, secrets: dict[str, str]) -> dict[str, str]:
+        """The secrets as the instance reads them: the API key under its provider's variable."""
+        held = {name: value for name, value in secrets.items() if name != API_KEY_FIELD.name}
+        if API_KEY_FIELD.name in secrets:
+            held[api_key_variable(model)] = secrets[API_KEY_FIELD.name]
+        held[CONTROL_TOKEN_VARIABLE] = new_control_token()
+        return held
+
+    @staticmethod
     def _validate_secret_names(secrets: dict[str, str]) -> None:
-        invalid = [name for name in secrets if _ENVIRONMENT_NAME.fullmatch(name) is None]
+        invalid = [name for name in secrets if ENVIRONMENT_NAME.fullmatch(name) is None]
         if invalid:
             raise ValueError(f'Invalid environment variable name: "{invalid[0]}".')
 

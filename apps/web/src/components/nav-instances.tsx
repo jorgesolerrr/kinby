@@ -1,5 +1,6 @@
 import type { InstanceSummary } from "@kinby/contract"
 
+import { InstanceAvatar } from "@/components/instance-avatar"
 import {
   SidebarGroup,
   SidebarGroupLabel,
@@ -10,7 +11,7 @@ import {
 } from "@/components/ui/sidebar"
 import { instanceName } from "@/lib/instances"
 import { CREATE_PATH, instancePath, openCreateWizard, selectInstance } from "@/lib/selection"
-import { BotIcon, PlusIcon } from "lucide-react"
+import { PlusIcon } from "lucide-react"
 
 export function NavInstances({
   instances,
@@ -31,6 +32,7 @@ export function NavInstances({
           return (
             <SidebarMenuItem key={instance.instance_id}>
               <SidebarMenuButton
+                size="lg"
                 tooltip={name}
                 isActive={isSelected}
                 aria-current={isSelected ? "page" : undefined}
@@ -40,7 +42,7 @@ export function NavInstances({
                 }}
                 render={
                   <a href={instancePath(instance.instance_id)}>
-                    <BotIcon />
+                    <InstanceAvatar avatar={instance.avatar} name={name} />
                     <span>{name}</span>
                   </a>
                 }

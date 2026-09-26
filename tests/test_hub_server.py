@@ -328,12 +328,18 @@ def test_logout_ends_the_session_and_clears_its_cookie(tmp_path: Path) -> None:
 
 
 async def created_instance(socket: aiohttp.ClientWebSocketResponse) -> str:
+    """Prepare vanilla, then create an instance from it, the way the create wizard does."""
+    await call(socket, "image.prepare", package=None)
+    preparation = await frame(socket)
+    assert isinstance(preparation["result"], dict), preparation
+    await finished(socket, str(preparation["result"]["operation_id"]))
     await call(
         socket,
         "instance.create",
         manifest_id="alice",
         model="openai:gpt-5",
         revision="main",
+        secrets={"api_key": "sk-test"},
     )
     accepted = await frame(socket)
     assert isinstance(accepted["result"], dict)

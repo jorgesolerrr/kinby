@@ -78,6 +78,28 @@ describe("client", () => {
       code: "NOT_FOUND",
       message: "no such instance",
       retryable: false,
+      fields: {},
+    })
+  })
+
+  it("carries what is wrong with each value the hub refused", async () => {
+    const { client, socket } = await connected()
+
+    const created = client.call("instance.create", { manifest_id: "Ada", model: "" })
+    socket.receive({
+      type: "error",
+      id: "1",
+      error: {
+        code: "INVALID_SETUP",
+        message: "Some setup values are missing or invalid.",
+        retryable: false,
+        fields: { model: "Model is required.", api_key: "API key is required." },
+      },
+    })
+
+    await expect(created).rejects.toMatchObject({
+      code: "INVALID_SETUP",
+      fields: { model: "Model is required.", api_key: "API key is required." },
     })
   })
 
