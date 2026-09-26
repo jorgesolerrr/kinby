@@ -7,9 +7,10 @@ import type {
   InstanceCreateCommand,
   OperationState,
   OperationStep,
+  PackageDescription,
   SetupField,
 } from "@kinby/contract"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type * as React from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
@@ -76,6 +77,8 @@ const COLORS: Record<AvatarColor, string> = {
 
 const NEW_IDENTITY: Identity = { name: "", avatar: { shape: "circle", color: "blue" } }
 
+const CREATING: Creation = { state: "creating", steps: [] }
+
 type Stage = "package" | "identity" | "setup"
 
 const HINTS: Record<Stage | "create", string> = {
@@ -105,6 +108,10 @@ export function CreateWizard({
   const [identity, setIdentity] = useState(NEW_IDENTITY)
   const [values, setValues] = useState<Record<string, string>>({})
   const [submitted, setSubmitted] = useState<InstanceCreateCommand>()
+  const [declared, setDeclared] = useState<PackageDescription>()
+  // A later read wins. The one from the failed validate can still be in flight when
+  // the hub answers invalid_setup.
+  const declarationRead = useRef(0)
 
   const prepare = useCallback(
     (picked: { package: null }, report: (preparation: Preparation) => void) =>
@@ -120,15 +127,30 @@ export function CreateWizard({
     useFollowing(pick, prepare) ??
     (pick === undefined ? undefined : { state: "preparing", steps: [] })
   const creation =
-    useFollowing(submitted, create) ??
-    (submitted === undefined ? undefined : { state: "creating", steps: [] })
+    useFollowing(submitted, create) ?? (submitted === undefined ? undefined : CREATING)
 
   const createdId = creation?.state === "created" ? creation.instanceId : undefined
   useEffect(() => {
     if (createdId !== undefined) onPublished()
   }, [createdId, onPublished])
 
-  const description = preparation?.state === "prepared" ? preparation.description : undefined
+  const preparedDescription =
+    preparation?.state === "prepared" ? preparation.description : undefined
+  const description = declared ?? preparedDescription
+  // A rebuilt image stores a new descriptor, then validate fails. Preparation still holds the
+  // fields the user was shown, and Prepare stays disabled, so read the stored descriptor.
+  useEffect(() => {
+    if (pick === undefined || !setupWasRefused(creation)) return
+    const selection = pick.package
+    const request = ++declarationRead.current
+    void caller.call("package.describe", { package: selection }).then(
+      (next) => {
+        if (request === declarationRead.current) setDeclared(next)
+      },
+      // Keep the fields already on the form if the hub cannot be read.
+      () => {},
+    )
+  }, [creation, caller, pick])
   // A refused value sends the user back to the form, with each refusal on its field.
   const refused = creation?.state === "invalid" ? creation.fields : {}
   const creating = creation !== undefined && creation.state !== "invalid"
@@ -167,7 +189,11 @@ export function CreateWizard({
         />
       ) : (
         <PackageStep
-          preparation={preparation}
+          preparation={
+            preparation?.state === "prepared" && declared !== undefined
+              ? { ...preparation, description: declared }
+              : preparation
+          }
           onPick={() => setPick({ package: null })}
           onContinue={() => setStage("identity")}
         />
@@ -190,6 +216,15 @@ function useFollowing<Request, Report>(
     return follow(request, (report) => setFollowed({ request, report }))
   }, [request, follow])
   return request !== undefined && followed?.request === request ? followed.report : undefined
+}
+
+/** The hub refused the setup values, or the image it just built no longer takes them. */
+function setupWasRefused(creation: Creation | undefined): boolean {
+  if (creation?.state === "invalid") return true
+  return (
+    creation?.state === "failed" &&
+    creation.steps.some((step) => step.name === "validate" && step.state === "failed")
+  )
 }
 
 function PackageStep({

@@ -356,6 +356,92 @@ describe("the create wizard's setup step", () => {
     expect(screen.getByLabelText("API key").getAttribute("aria-invalid")).toBeNull()
     expect(screen.queryByRole("list", { name: "Creation steps" })).toBeNull()
   })
+
+  it("shows the fields a rebuilt image stored, and a retry sends the new one", async () => {
+    let described = 0
+    let creates = 0
+    const rebuilt: PackageDescription = {
+      ...vanilla,
+      setup_fields: [
+        ...vanilla.setup_fields,
+        {
+          name: "SEARCH_TOKEN",
+          label: "Search token",
+          description: "Reaches the search service.",
+          kind: "secret",
+          type: "text",
+          required: true,
+        },
+      ],
+    }
+    const validateFailed = operationAnswer({
+      operation_id: "op-create",
+      kind: "create",
+      state: "failed",
+      detail: "The image asks for other setup values now. SEARCH_TOKEN: Search token is required.",
+      steps: [
+        { name: "image", state: "succeeded", detail: "Preparing the selected image." },
+        {
+          name: "validate",
+          state: "failed",
+          detail: "Checking the setup values against what the image declares.",
+        },
+      ],
+    })
+    const caller = hub({
+      "package.describe": () => {
+        described += 1
+        return described === 1 ? vanilla : rebuilt
+      },
+      "instance.create": () => {
+        creates += 1
+        if (creates === 1) return { operation_id: "op-create", instance_id: "instance-1" }
+        if (creates === 2) {
+          throw new CallError({
+            code: "INVALID_SETUP",
+            message: "Some setup values are missing or invalid.",
+            retryable: false,
+            fields: { SEARCH_TOKEN: "Search token is required." },
+          })
+        }
+        return { operation_id: "op-create-2", instance_id: "instance-2" }
+      },
+      "operation.get": ({ operation_id }) => (operation_id === "op-1" ? prepared : validateFailed),
+    })
+    const { user } = await openWizard(caller)
+    await nameIt(user)
+    await fillSetup(user)
+
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await user.click(await screen.findByRole("button", { name: "Back to setup" }))
+
+    expect((await screen.findByLabelText("Search token")).getAttribute("type")).toBe("password")
+    await user.click(screen.getByRole("button", { name: "Back" }))
+    await user.click(screen.getByRole("button", { name: "Back" }))
+    const asked = within(screen.getByRole("list", { name: "Setup fields" }))
+    expect(asked.getByRole("listitem", { name: "Search token" })).toBeDefined()
+    expect(screen.getByRole("button", { name: "Prepare vanilla" }).hasAttribute("disabled")).toBe(
+      true,
+    )
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    const refused = await screen.findByLabelText("Search token")
+    const secrets = within(screen.getByRole("group", { name: "Secrets" }))
+    expect(refused.getAttribute("aria-invalid")).toBe("true")
+    expect(secrets.getByRole("alert").textContent).toBe("Search token is required.")
+
+    await user.type(refused, "search-token")
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    const sent = caller.calls.filter((call) => call.method === "instance.create")
+    expect(sent).toHaveLength(3)
+    expect(sent[2]?.params).toMatchObject({
+      secrets: { api_key: "sk-private", SEARCH_TOKEN: "search-token" },
+    })
+  })
 })
 
 describe("the create wizard's start step", () => {
