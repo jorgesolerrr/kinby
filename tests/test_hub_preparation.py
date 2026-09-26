@@ -1,7 +1,6 @@
 import asyncio
 import sqlite3
 
-from kinby.cli.client import ContractClient
 from kinby.contracts import (
     IMAGE_PREPARE,
     INSTANCE_LIST,
@@ -13,7 +12,6 @@ from kinby.contracts import (
     ImagePrepareResult,
     InstanceListCommand,
     OperationGetCommand,
-    OperationGetResult,
     OperationKind,
     OperationState,
     PackageDescribeCommand,
@@ -23,7 +21,15 @@ from kinby.contracts import (
 )
 from kinby.hub import Hub, ImageArtifact, ImageSelection
 from kinby.packages import InstalledPackage, PackageDescriptor, RequiredSecret
-from tests.test_hub import FakeImages, FakeRuntime, created_instance, hub_at, hub_client
+from tests.test_hub import (
+    FakeImages,
+    FakeRuntime,
+    created_instance,
+    finished_operation,
+    hub_at,
+    hub_client,
+    prepared,
+)
 
 WRITER = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
 
@@ -61,24 +67,6 @@ def writer_package() -> InstalledPackage:
         ),
         files={"SYSTEM.md": "Write clearly.\n"},
     )
-
-
-async def prepared(client: ContractClient, package: PackageSelection | None) -> OperationGetResult:
-    accepted = await client.call(IMAGE_PREPARE, ImagePrepareCommand(package=package))
-    assert isinstance(accepted, ImagePrepareResult)
-    return await finished(client, accepted)
-
-
-async def finished(client: ContractClient, accepted: ImagePrepareResult) -> OperationGetResult:
-    for _ in range(100):
-        result = await client.call(
-            OPERATION_GET, OperationGetCommand(operation_id=accepted.operation_id)
-        )
-        assert not isinstance(result, ErrorEnvelope)
-        if result.state in {OperationState.SUCCEEDED, OperationState.FAILED}:
-            return result
-        await asyncio.sleep(0.01)
-    raise AssertionError("the preparation did not finish")
 
 
 def test_preparing_vanilla_builds_the_base_image_then_reads_its_descriptor(tmp_path):
@@ -188,8 +176,8 @@ def test_preparing_a_selection_already_being_prepared_returns_the_running_operat
         assert isinstance(other, ImagePrepareResult)
         assert again.operation_id == first.operation_id
         assert other.operation_id != first.operation_id
-        assert (await finished(client, first)).state is OperationState.SUCCEEDED
-        assert (await finished(client, other)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, first)).state is OperationState.SUCCEEDED
+        assert (await finished_operation(client, other)).state is OperationState.SUCCEEDED
         assert sorted(images.selections, key=lambda selection: selection.package is not None) == [
             ImageSelection("HEAD", None),
             ImageSelection("HEAD", WRITER),
@@ -259,7 +247,7 @@ def test_a_registry_from_before_preparations_keeps_its_operations_and_prepares(t
                     detail TEXT NOT NULL
                 );
                 INSERT INTO operations_before SELECT id, instance_id, kind, state, detail
-                FROM operations;
+                FROM operations WHERE instance_id IS NOT NULL;
                 DROP TABLE operations;
                 ALTER TABLE operations_before RENAME TO operations;
                 """

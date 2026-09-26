@@ -37,6 +37,7 @@ from kinby.contracts import (
     OperationKind,
     OperationState,
     PackageCommit,
+    PackageDescription,
     PackagePin,
     PackageSelection,
     PackageSummary,
@@ -46,6 +47,7 @@ from kinby.contracts import (
 )
 from kinby.hub import (
     Hub,
+    ImageArtifact,
     ImageSelection,
     InstanceSpec,
     PreparedImage,
@@ -57,6 +59,7 @@ from kinby.packages import (
     PackageDescriptor,
     RequiredSecret,
     installed_package_from_json,
+    package_description,
 )
 from tests.fake_package import VALID_CONFIG, install_fake_package
 from tests.test_hub import (
@@ -67,6 +70,7 @@ from tests.test_hub import (
     finished_operation,
     hub_at,
     hub_client,
+    prepared,
     started_instance,
 )
 from tests.test_hub_recreate import CrashOnReplacement
@@ -126,7 +130,12 @@ def test_an_update_drains_the_instance_and_replaces_it_with_the_prepared_image(t
             "start",
             "ready",
         ]
-        assert [selection.revision for selection in images.selections] == ["HEAD", "v0.2.0"]
+        # The preparation and the creation built HEAD, then the update built its revision.
+        assert [selection.revision for selection in images.selections] == [
+            "HEAD",
+            "HEAD",
+            "v0.2.0",
+        ]
         assert control.forces == [False]
         assert runtime.removed == [(str(created.instance_id), False)]
         assert len(runtime.created) == 2
@@ -282,7 +291,8 @@ class CrashOnCandidate(CandidateImages):
         selection: ImageSelection,
         instance: StorageItem | None = None,
     ) -> PreparedImage:
-        if self.selections:
+        # The instance was created from HEAD. The update's candidate is the first other revision.
+        if selection.revision != "HEAD":
             self.crashed.set()
             raise asyncio.CancelledError
         return await super().prepare(selection, instance)
@@ -443,13 +453,14 @@ async def _packaged_instance(
     client: ContractClient,
     selection: PackageSelection,
 ) -> LifecycleOperationResult:
+    await prepared(client, selection)
     created = await client.call(
         INSTANCE_CREATE,
         InstanceCreateCommand(
             manifest_id="editor",
             model="openai:gpt-5",
             package=selection,
-            secrets={"EDITOR_TOKEN": "private-editor-token"},
+            secrets={"api_key": "sk-test", "EDITOR_TOKEN": "private-editor-token"},
         ),
     )
     assert isinstance(created, LifecycleOperationResult)
@@ -537,6 +548,12 @@ class CheckedCandidates(CandidateImages):
             check=False,
         )
 
+    async def _checked(self, mounted: list[str]) -> InstalledPackage:
+        checked = await asyncio.to_thread(self._check, mounted)
+        if checked.returncode != 0:
+            raise ValueError(checked.stderr.strip())
+        return installed_package_from_json(checked.stdout)
+
     async def prepare(
         self,
         selection: ImageSelection,
@@ -544,10 +561,10 @@ class CheckedCandidates(CandidateImages):
     ) -> PreparedImage:
         prepared = await super().prepare(selection, instance)
         mounted = [] if instance is None else [_checked_directory(instance)]
-        checked = await asyncio.to_thread(self._check, mounted)
-        if checked.returncode != 0:
-            raise ValueError(checked.stderr.strip())
-        return replace(prepared, package=installed_package_from_json(checked.stdout))
+        return replace(prepared, package=await self._checked(mounted))
+
+    async def describe(self, artifact: ImageArtifact) -> PackageDescription:
+        return package_description(await self._checked([]))
 
 
 def _checked_directory(instance: StorageItem) -> str:
@@ -588,13 +605,15 @@ def test_a_failing_candidate_stops_the_update_before_the_container_stops(tmp_pat
         images = CheckedCandidates(package.site, editor.parent)
         hub = hub_at(tmp_path / "hub", runtime=runtime, images=images, control=control)
         client = hub_client(hub)
+        selection = PackageSelection(id="writer", distribution=package.module, version="1.4.2")
+        await prepared(client, selection)
         created = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
                 manifest_id="editor",
                 model="openai:gpt-5",
-                package=PackageSelection(id="writer", distribution=package.module, version="1.4.2"),
-                secrets={"EDITOR_TOKEN": "private-editor-token"},
+                package=selection,
+                secrets={"api_key": "sk-test", "EDITOR_TOKEN": "private-editor-token"},
             ),
         )
         assert isinstance(created, LifecycleOperationResult)
@@ -656,7 +675,7 @@ def test_an_update_is_refused_while_another_operation_owns_the_instance(tmp_path
         assert isinstance(refused, ErrorEnvelope)
         assert refused.code is ErrorCode.INSTANCE_BUSY
         assert refused.retryable
-        assert images.selections == [ImageSelection(revision="HEAD")]
+        assert images.selections == [ImageSelection(revision="HEAD")] * 2
         assert len(runtime.created) == 1
 
     asyncio.run(scenario())
@@ -677,7 +696,7 @@ def test_an_unauthorized_update_has_no_effect(tmp_path):
 
         assert isinstance(refused, ErrorEnvelope)
         assert refused.code is ErrorCode.PERMISSION_DENIED
-        assert images.selections == [ImageSelection(revision="HEAD")]
+        assert images.selections == [ImageSelection(revision="HEAD")] * 2
         assert len(runtime.created) == 1
 
     asyncio.run(scenario())
@@ -874,7 +893,7 @@ def test_a_pin_must_move_the_instances_current_git_package(tmp_path, selection, 
         assert isinstance(refused, ErrorEnvelope)
         assert refused.code is ErrorCode.INVALID_ARGUMENT
         assert refusal in refused.message
-        assert len(images.selections) == 1
+        assert len(images.selections) == 2
         assert len(runtime.created) == 1
 
     asyncio.run(scenario())

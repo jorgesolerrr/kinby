@@ -21,15 +21,18 @@ class ClientSchema(GenerateJsonSchema):
     """Shape each model the way a client's type generator reads it."""
 
     def model_schema(self, schema: core_schema.ModelSchema) -> JsonSchemaValue:
-        """Keep a ``const`` field required, and drop field titles.
+        """Keep a ``const`` field required, and drop field titles and model defaults.
 
         A client discriminates a union on the ``const`` field. The generator declares one type per
-        titled field, and the field's name already names it.
+        titled field, and the field's name already names it. It also declares a copy of a model
+        whose reference carries a default beside it.
         """
         generated = super().model_schema(schema)
         properties = generated.get("properties", {})
         for field in properties.values():
             field.pop("title", None)
+            if "$ref" in field and isinstance(field.get("default"), dict):
+                del field["default"]
         required = generated.get("required", [])
         missing = [
             name for name, field in properties.items() if "const" in field and name not in required

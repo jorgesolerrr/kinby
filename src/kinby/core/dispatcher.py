@@ -192,11 +192,7 @@ class Dispatcher:
         try:
             return await route.handler(command)
         except CoreError as exc:
-            return ErrorEnvelope(
-                code=exc.code,
-                message=str(exc),
-                retryable=exc.retryable,
-            )
+            return exc.envelope()
         except Exception:
             return ErrorEnvelope(
                 code=ErrorCode.INTERNAL,

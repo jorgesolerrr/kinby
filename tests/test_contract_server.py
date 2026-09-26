@@ -202,6 +202,7 @@ def test_the_control_route_alone_grants_the_lifecycle_scope(tmp_path: Path) -> N
             "code": ErrorCode.PERMISSION_DENIED.value,
             "message": 'Missing required scope "instance:lifecycle".',
             "retryable": False,
+            "fields": {},
         }
         assert granted["result"] == {
             "contract_version": CONTRACT_VERSION,
@@ -416,6 +417,7 @@ def test_a_connection_rejects_calls_past_its_limit_and_still_takes_an_interrupt(
                 f"This connection already has {CALL_LIMIT} calls in flight. Wait for one to finish."
             ),
             "retryable": True,
+            "fields": {},
         }
         assert answers["interrupt"]["type"] == FrameType.RESULT.value
         assert runner.cancelled.is_set() is True
@@ -463,6 +465,7 @@ def test_interrupt_calls_share_the_same_cap() -> None:
                     "Wait for one to finish."
                 ),
                 "retryable": True,
+                "fields": {},
             },
         }
         assert all(
