@@ -25,26 +25,25 @@ if TYPE_CHECKING:
 
 PACKAGE_CONFIG_NAME = "package.yaml"
 
-#: What every instance asks for, whatever it starts from. kinby writes these values itself.
-BUILT_IN_FIELDS = (
-    SetupField(
-        name="model",
-        label="Model",
-        description="The model the instance calls, as provider:model, like openai:gpt-5.",
-        kind=SetupFieldKind.CONFIG,
-        type=SetupFieldType.TEXT,
-        required=True,
-    ),
-    SetupField(
-        name="api_key",
-        label="API key",
-        description="The key your model provider issued. The hub keeps it with the instance's "
-        "secrets and never shows it again.",
-        kind=SetupFieldKind.SECRET,
-        type=SetupFieldType.TEXT,
-        required=True,
-    ),
+MODEL_FIELD = SetupField(
+    name="model",
+    label="Model",
+    description="The model the instance calls, as provider:model, like openai:gpt-5.",
+    kind=SetupFieldKind.CONFIG,
+    type=SetupFieldType.TEXT,
+    required=True,
 )
+API_KEY_FIELD = SetupField(
+    name="api_key",
+    label="API key",
+    description="The key your model provider issued. The hub keeps it with the instance's "
+    "secrets and never shows it again.",
+    kind=SetupFieldKind.SECRET,
+    type=SetupFieldType.TEXT,
+    required=True,
+)
+#: What every instance asks for, whatever it starts from. kinby writes these values itself.
+BUILT_IN_FIELDS = (MODEL_FIELD, API_KEY_FIELD)
 #: Only a vanilla instance asks for it. A package keeps the behavior prompt it ships.
 BEHAVIOR_PROMPT_FIELD = SetupField(
     name="behavior_prompt",
@@ -317,6 +316,9 @@ def readable_template_files(template: Path) -> dict[str, str]:
 
 
 __all__ = [
+    "API_KEY_FIELD",
+    "BEHAVIOR_PROMPT_FIELD",
+    "MODEL_FIELD",
     "PACKAGE_CONFIG_NAME",
     "InstalledPackage",
     "LoadedPackage",

@@ -81,7 +81,8 @@ def test_a_recreation_applies_replaced_secrets_through_the_drain_and_stop_path(t
         assert runtime.created[1].env["PROVIDER_TOKEN"] == _SENTINEL
         assert runtime.created[1].image == runtime.created[0].image
         assert runtime.created[1].storage == runtime.created[0].storage
-        assert images.revisions == ["HEAD"]
+        # The preparation and the creation built HEAD. Nothing since built another image.
+        assert images.revisions == ["HEAD", "HEAD"]
         assert runtime.removed == [(str(created.instance_id), False)]
         assert runtime.started == [str(created.instance_id)] * 2
         assert _SENTINEL not in outcome.model_dump_json()

@@ -6,7 +6,7 @@ import asyncio
 from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
 
-from kinby.contracts import ErrorCode
+from kinby.contracts import ErrorCode, ErrorEnvelope
 
 if TYPE_CHECKING:
     from kinby.core.turn_metrics import UnpricedModel
@@ -17,6 +17,10 @@ BudgetName = Literal["steps", "tokens", "seconds", "usd_per_day"]
 class CoreError(Exception):
     code: ErrorCode = ErrorCode.INTERNAL
     retryable: bool = False
+
+    def envelope(self) -> ErrorEnvelope:
+        """How a client hears about this error."""
+        return ErrorEnvelope(code=self.code, message=str(self), retryable=self.retryable)
 
 
 class CodeStepFailed(CoreError):
@@ -66,6 +70,21 @@ class SelectionNotPrepared(CoreError):
     """No image preparation stored a descriptor for this selection, and describing never builds."""
 
     code = ErrorCode.NOT_PREPARED
+
+
+class InvalidSetup(CoreError):
+    """Some setup values are missing or invalid, so nothing was created."""
+
+    code = ErrorCode.INVALID_SETUP
+
+    def __init__(self, fields: dict[str, str]) -> None:
+        super().__init__("Some setup values are missing or invalid.")
+        self.fields = fields
+
+    def envelope(self) -> ErrorEnvelope:
+        return ErrorEnvelope(
+            code=self.code, message=str(self), retryable=self.retryable, fields=self.fields
+        )
 
 
 class LifecycleOperationNotFound(CoreError):

@@ -1,5 +1,5 @@
 import type { Client, InstanceSummary } from "@kinby/contract"
-import { useEffect, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { CreateWizard } from "@/components/create-wizard"
@@ -19,7 +19,7 @@ export default function App({ client }: { client: Client }) {
 }
 
 function Shell({ client, connected }: { client: Client; connected: boolean }) {
-  const instances = useInstances(client, connected)
+  const [instances, listAgain] = useInstances(client, connected)
   const selectedId = useSelectedInstanceId()
   const creating = useCreating()
   // An instance the hub does not have, or no longer has, selects nothing.
@@ -40,7 +40,7 @@ function Shell({ client, connected }: { client: Client; connected: boolean }) {
             {!connected && <Badge variant="destructive">Reconnecting</Badge>}
           </header>
           {creating ? (
-            <CreateWizard caller={client} />
+            <CreateWizard caller={client} onPublished={listAgain} />
           ) : (
             <MainPanel instances={instances} selected={selected} />
           )}
@@ -50,9 +50,14 @@ function Shell({ client, connected }: { client: Client; connected: boolean }) {
   )
 }
 
-/** The hub's instances, listed again each time the connection comes back. */
-function useInstances(client: Client, connected: boolean): InstanceSummary[] | undefined {
+/** The hub's instances, listed again each time the connection comes back, or when asked to. */
+function useInstances(
+  client: Client,
+  connected: boolean,
+): [InstanceSummary[] | undefined, () => void] {
   const [instances, setInstances] = useState<InstanceSummary[]>()
+  const [listing, setListing] = useState(0)
+  const listAgain = useCallback(() => setListing((count) => count + 1), [])
   useEffect(() => {
     if (!connected) return
     let current = true
@@ -66,6 +71,6 @@ function useInstances(client: Client, connected: boolean): InstanceSummary[] | u
     return () => {
       current = false
     }
-  }, [client, connected])
-  return instances
+  }, [client, connected, listing])
+  return [instances, listAgain]
 }

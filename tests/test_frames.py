@@ -68,6 +68,7 @@ def test_an_error_frame_without_an_id_answers_a_frame_that_could_not_be_read() -
             "code": ErrorCode.INVALID_ARGUMENT.value,
             "message": "The frame could not be read.",
             "retryable": False,
+            "fields": {},
         },
     }
 

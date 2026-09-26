@@ -11,6 +11,10 @@ from uuid import UUID, uuid4
 from pydantic import TypeAdapter
 
 from kinby.contracts import (
+    DEFAULT_AVATAR,
+    Avatar,
+    AvatarColor,
+    AvatarShape,
     InstanceSummary,
     IntendedState,
     OperationGetResult,
@@ -49,6 +53,7 @@ class ManagedInstance:
     prepared: bool
     storage: tuple[StorageItem, ...]
     package: PackageSelection | None = None
+    avatar: Avatar = DEFAULT_AVATAR
 
     @property
     def active(self) -> bool:
@@ -94,7 +99,9 @@ class HubRegistry:
                     package_version TEXT,
                     package_image_recipe TEXT,
                     package_commit_url TEXT,
-                    package_commit_sha TEXT
+                    package_commit_sha TEXT,
+                    avatar_shape TEXT,
+                    avatar_color TEXT
                 );
                 CREATE TABLE IF NOT EXISTS storage (
                     instance_id TEXT NOT NULL REFERENCES instances(id),
@@ -159,6 +166,8 @@ class HubRegistry:
                     "package_image_recipe": "TEXT",
                     "package_commit_url": "TEXT",
                     "package_commit_sha": "TEXT",
+                    "avatar_shape": "TEXT",
+                    "avatar_color": "TEXT",
                 },
             )
             self._add_columns(
@@ -338,8 +347,8 @@ class HubRegistry:
                     id, path, manifest_id, persona_name, requested_revision,
                     intended_state, runtime_id, prepared, package_id,
                     package_distribution, package_version, package_image_recipe,
-                    package_commit_url, package_commit_sha
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+                    package_commit_url, package_commit_sha, avatar_shape, avatar_color
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(instance.instance_id),
@@ -350,6 +359,8 @@ class HubRegistry:
                     instance.intended_state.value,
                     instance.runtime_id,
                     *_package_columns(instance.package),
+                    instance.avatar.shape.value,
+                    instance.avatar.color.value,
                 ),
             )
             self._insert_operation(
@@ -450,14 +461,23 @@ class HubRegistry:
                 (_selection_key(package), image_id, description.model_dump_json()),
             )
 
-    def description(self, package: PackageSelection | None) -> PackageDescription | None:
-        """What the image last prepared for this selection declares, if one was prepared."""
+    def description(
+        self,
+        package: PackageSelection | None,
+        image_id: str | None = None,
+    ) -> PackageDescription | None:
+        """What the image last prepared for this selection declares, if one was prepared.
+
+        With an image id, only if that image is the one the description was read from.
+        """
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT description FROM package_descriptions WHERE selection = ?",
+                "SELECT image_id, description FROM package_descriptions WHERE selection = ?",
                 (_selection_key(package),),
             ).fetchone()
-        return PackageDescription.model_validate_json(row[0]) if row is not None else None
+        if row is None or image_id not in {None, row[0]}:
+            return None
+        return PackageDescription.model_validate_json(row[1])
 
     def fail_interrupted_operations(self, detail: str) -> None:
         """Fail operations the previous process left unfinished.
@@ -991,7 +1011,8 @@ class HubRegistry:
                 SELECT id, path, manifest_id, persona_name, requested_revision,
                        source_revision, image_id, intended_state, runtime_id, prepared,
                        package_id, package_distribution, package_version,
-                       package_image_recipe, package_commit_url, package_commit_sha
+                       package_image_recipe, package_commit_url, package_commit_sha,
+                       avatar_shape, avatar_color
                 FROM instances WHERE id = ?
                 """,
                 (str(instance_id),),
@@ -1036,6 +1057,12 @@ class HubRegistry:
                 )
                 if row[10] is not None
                 else None
+            ),
+            # Instances from before avatars have none recorded, and draw the default one.
+            avatar=(
+                Avatar(shape=AvatarShape(row[16]), color=AvatarColor(row[17]))
+                if row[16] is not None
+                else DEFAULT_AVATAR
             ),
         )
 
@@ -1114,6 +1141,7 @@ class HubRegistry:
                 intended_state=record.intended_state,
                 runtime_id=record.runtime_id,
                 storage=list(record.storage),
+                avatar=record.avatar,
                 package=(
                     PackageSummary(
                         id=record.package.id,

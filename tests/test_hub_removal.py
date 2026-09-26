@@ -54,6 +54,7 @@ from tests.test_hub import (
     hub_at,
     hub_client,
     instance_environment,
+    prepared,
     started_instance,
 )
 from tests.test_hub_adoption import CODER_CONTAINER, coder_storage, existing_coder
@@ -446,13 +447,14 @@ def test_a_removed_instance_is_restored_stopped_with_its_identity_data_and_secre
         images = FakeImages()
         hub = hub_at(tmp_path / "hub", runtime=runtime, images=images, control=FakeControl())
         client = hub_client(hub)
+        await prepared(client, None)
         accepted = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
                 manifest_id="alice",
                 persona_name="Ada",
                 model="openai:gpt-5",
-                secrets={"PROVIDER_TOKEN": _SENTINEL},
+                secrets={"api_key": "sk-test", "PROVIDER_TOKEN": _SENTINEL},
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
@@ -477,7 +479,8 @@ def test_a_removed_instance_is_restored_stopped_with_its_identity_data_and_secre
         assert len(runtime.created) == 2
         assert runtime.created[1] == runtime.created[0]
         assert runtime.started == []
-        assert images.revisions == ["HEAD"]
+        # The preparation and the creation built HEAD. Nothing since built another image.
+        assert images.revisions == ["HEAD", "HEAD"]
         assert memory.read_text(encoding="utf-8") == "remembered\n"
         assert instance_environment(hub, accepted.instance_id)["PROVIDER_TOKEN"] == _SENTINEL
         assert _SENTINEL not in outcome.model_dump_json()
@@ -555,7 +558,8 @@ def test_a_restoration_reports_a_missing_image_and_selects_no_other(tmp_path):
 
         assert outcome.state is OperationState.FAILED
         assert "sha256:selected-image" in outcome.detail
-        assert images.revisions == ["HEAD"]
+        # The preparation and the creation built HEAD. Nothing since built another image.
+        assert images.revisions == ["HEAD", "HEAD"]
         assert len(runtime.created) == 1
 
     asyncio.run(scenario())

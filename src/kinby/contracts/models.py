@@ -86,6 +86,8 @@ class ErrorCode(StrEnum):
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
     #: No image preparation stored a descriptor for this selection yet.
     NOT_PREPARED = "NOT_PREPARED"
+    #: Some setup values are missing or invalid. The envelope names each field.
+    INVALID_SETUP = "INVALID_SETUP"
     #: Raised by a client, never sent by a server: its connection dropped under a call.
     CONNECTION_LOST = "CONNECTION_LOST"
     INTERNAL = "INTERNAL"
@@ -95,6 +97,8 @@ class ErrorEnvelope(ContractModel):
     code: ErrorCode
     message: str
     retryable: bool
+    #: What is wrong with each value the client sent, by field name. Only INVALID_SETUP fills it.
+    fields: dict[str, str] = Field(default_factory=dict)
 
 
 class PermissionMode(StrEnum):
@@ -692,15 +696,50 @@ class PackageDescribeCommand(ContractModel):
     package: PackageSelection | None
 
 
+class AvatarShape(StrEnum):
+    CIRCLE = "circle"
+    SQUIRCLE = "squircle"
+    SQUARE = "square"
+
+
+class AvatarColor(StrEnum):
+    """A name from a fixed palette. A client maps each name to colors of its own theme."""
+
+    BLUE = "blue"
+    VIOLET = "violet"
+    GREEN = "green"
+    AMBER = "amber"
+    RED = "red"
+    GRAY = "gray"
+
+
+class Avatar(ContractModel):
+    """How a client draws an instance. The hub keeps it, not the instance directory."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    shape: AvatarShape
+    color: AvatarColor
+
+
+#: What an instance draws when nobody chose: a circle in the palette's first color.
+DEFAULT_AVATAR = Avatar(shape=AvatarShape.CIRCLE, color=AvatarColor.BLUE)
+
+
 class InstanceCreateCommand(ContractModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
     manifest_id: Annotated[str, Field(min_length=1)]
     persona_name: Annotated[str, Field(min_length=1)] | None = None
-    model: Annotated[str, Field(min_length=1)]
+    #: The value of the built-in model field. The hub checks it with the other setup values.
+    model: str
     revision: Annotated[str, Field(min_length=1)] = "HEAD"
     package: PackageSelection | None = None
+    #: Values for the configuration fields the prepared image declares, by field name.
+    config: dict[str, str] = Field(default_factory=dict)
+    #: Values for its secret fields, and any other variables the instance should hold.
     secrets: dict[str, SecretStr] = Field(default_factory=dict)
+    avatar: Avatar = DEFAULT_AVATAR
 
     @field_serializer("secrets", when_used="json")
     def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
@@ -846,6 +885,7 @@ class InstanceSummary(ContractModel):
     intended_state: IntendedState
     runtime_id: str
     storage: list[StorageItem]
+    avatar: Avatar
     package: PackageSummary | None = None
 
 

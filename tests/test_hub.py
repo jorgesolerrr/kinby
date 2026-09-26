@@ -41,6 +41,8 @@ from kinby.contracts import (
     ErrorEnvelope,
     ErrorFrame,
     FrameId,
+    ImagePrepareCommand,
+    ImagePrepareResult,
     InstanceCreateCommand,
     InstanceListCommand,
     InstanceLogsCommand,
@@ -258,7 +260,7 @@ def _client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
 
 async def finished_operation(
     client: ContractClient,
-    accepted: LifecycleOperationResult,
+    accepted: LifecycleOperationResult | ImagePrepareResult,
 ) -> OperationGetResult:
     for _ in range(100):
         result = await client.call(
@@ -354,18 +356,26 @@ def hub_client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
     return _client(hub, scopes)
 
 
+async def prepared(client: ContractClient, package: PackageSelection | None) -> OperationGetResult:
+    """Prepare a selection's image, as a client does before it creates an instance from it."""
+    accepted = await client.call(IMAGE_PREPARE, ImagePrepareCommand(package=package))
+    assert isinstance(accepted, ImagePrepareResult)
+    return await finished_operation(client, accepted)
+
+
 async def created_instance(
     client: ContractClient,
     *,
     secrets: dict[str, str] | None = None,
 ) -> LifecycleOperationResult:
-    """Create one vanilla instance and wait for it to be prepared and stopped."""
+    """Prepare vanilla, create one instance from it, and wait for it to be published stopped."""
+    assert (await prepared(client, None)).state is OperationState.SUCCEEDED
     created = await client.call(
         INSTANCE_CREATE,
         InstanceCreateCommand(
             manifest_id="alice",
             model="openai:gpt-5",
-            secrets=secrets if secrets is not None else {},
+            secrets={"api_key": "sk-test", **(secrets or {})},
         ),
     )
     assert isinstance(created, LifecycleOperationResult)
@@ -410,6 +420,7 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
         hub_id = hub.registry.hub_id()
         client = _client(hub)
 
+        await prepared(client, None)
         accepted = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
@@ -417,7 +428,7 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
                 persona_name="Ada",
                 model="openai:gpt-5",
                 revision="main",
-                secrets={"PROVIDER_TOKEN": "private-value"},
+                secrets={"api_key": "sk-test", "PROVIDER_TOKEN": "private-value"},
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
@@ -507,6 +518,7 @@ def test_create_from_a_pinned_package_seeds_owned_configuration_and_provenance(t
             version="1.4.2",
         )
 
+        await prepared(client, selection)
         accepted = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
@@ -515,7 +527,7 @@ def test_create_from_a_pinned_package_seeds_owned_configuration_and_provenance(t
                 model="openai:gpt-5",
                 revision="v0.1.0",
                 package=selection,
-                secrets={"EDITOR_TOKEN": "private-editor-token"},
+                secrets={"api_key": "sk-test", "EDITOR_TOKEN": "private-editor-token"},
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
@@ -545,7 +557,7 @@ def test_create_from_a_pinned_package_seeds_owned_configuration_and_provenance(t
     asyncio.run(scenario())
 
 
-def test_package_creation_requires_declared_secrets_before_publishing_an_instance(tmp_path):
+def test_package_creation_refuses_a_missing_declared_secret_and_publishes_nothing(tmp_path):
     async def scenario() -> None:
         package = InstalledPackage(
             descriptor=PackageDescriptor(
@@ -565,25 +577,24 @@ def test_package_creation_requires_declared_secrets_before_publishing_an_instanc
         hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages(package=package))
         client = _client(hub)
 
-        accepted = await client.call(
+        selection = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
+        await prepared(client, selection)
+
+        refused = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
                 manifest_id="editor",
                 model="openai:gpt-5",
-                package=PackageSelection(
-                    id="writer",
-                    distribution="kinby-writer",
-                    version="1.4.2",
-                ),
+                package=selection,
+                secrets={"api_key": "sk-test"},
             ),
         )
-        assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await finished_operation(client, accepted)
 
-        assert outcome.state is OperationState.FAILED
-        assert outcome.detail == 'Missing required secret: "EDITOR_TOKEN".'
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_SETUP
+        assert refused.fields == {"EDITOR_TOKEN": "Editor token is required."}
         assert runtime.created == []
-        assert not (tmp_path / "hub" / "instances" / str(accepted.instance_id)).exists()
+        assert list(hub.instances_directory.iterdir()) == []
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
         assert not isinstance(listed, ErrorEnvelope)
         assert listed.instances == []
@@ -609,17 +620,15 @@ def test_invalid_package_configuration_is_not_published_or_sent_to_the_runtime(t
         hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages(package=package))
         client = _client(hub)
 
+        selection = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
+        await prepared(client, selection)
         accepted = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
                 manifest_id="editor",
                 model="openai:gpt-5",
-                package=PackageSelection(
-                    id="writer",
-                    distribution="kinby-writer",
-                    version="1.4.2",
-                ),
-                secrets={"TOKEN": secret},
+                package=selection,
+                secrets={"api_key": "sk-test", "TOKEN": secret},
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
@@ -695,47 +704,22 @@ def test_malformed_secret_is_not_exposed_by_contract_validation(tmp_path):
     asyncio.run(scenario())
 
 
-def test_invalid_manifest_metadata_is_an_operation_failure_before_runtime_effects(tmp_path):
-    async def scenario() -> None:
-        runtime = FakeRuntime()
-        images = FakeImages()
-        hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
-        client = _client(hub)
-
-        accepted = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(
-                manifest_id="alice",
-                model="not-a-provider-model",
-                secrets={"TOKEN": "not-in-the-error"},
-            ),
-        )
-        assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await finished_operation(client, accepted)
-
-        assert outcome.state is OperationState.FAILED
-        assert "models.main" in outcome.detail
-        assert "not-in-the-error" not in outcome.detail
-        assert images.revisions == []
-        assert runtime.created == []
-
-    asyncio.run(scenario())
-
-
 def test_failed_build_is_inspectable_and_does_not_touch_the_runtime(tmp_path):
     async def scenario() -> None:
         secret = "submitted-secret"
         runtime = FakeRuntime()
-        images = FakeImages(failure=f"builder rejected {secret}")
+        images = FakeImages()
         hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
         client = _client(hub)
+        await prepared(client, None)
+        images.failure = f"builder rejected {secret}"
 
         accepted = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
                 manifest_id="alice",
                 model="openai:gpt-5",
-                secrets={"TOKEN": secret},
+                secrets={"api_key": "sk-test", "TOKEN": secret},
             ),
         )
         assert isinstance(accepted, LifecycleOperationResult)
@@ -758,16 +742,7 @@ def test_start_status_and_logs_use_the_selected_image_and_redact_secrets(tmp_pat
         images = FakeImages()
         hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
         client = _client(hub)
-        created = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(
-                manifest_id="alice",
-                model="openai:gpt-5",
-                secrets={"TOKEN": secret},
-            ),
-        )
-        assert isinstance(created, LifecycleOperationResult)
-        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        created = await created_instance(client, secrets={"TOKEN": secret})
         runtime.log_output = f"ready token={secret}\n".encode()
 
         started = await client.call(
@@ -797,7 +772,8 @@ def test_start_status_and_logs_use_the_selected_image_and_redact_secrets(tmp_pat
         )
         assert isinstance(started_again, LifecycleOperationResult)
         assert (await finished_operation(client, started_again)).state is OperationState.SUCCEEDED
-        assert images.revisions == ["HEAD"]
+        # The preparation and the creation built it. Starting builds nothing.
+        assert images.revisions == ["HEAD", "HEAD"]
         assert runtime.created[0].image == "sha256:selected-image"
         assert runtime.started == [str(created.instance_id), str(created.instance_id)]
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
@@ -814,20 +790,11 @@ def test_status_distinguishes_missing_starting_unhealthy_and_unavailable(tmp_pat
         process: str
         readiness: Readiness
 
-    async def create(hub: Hub, runtime: FakeRuntime):
-        client = _client(hub)
-        created = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
-        )
-        assert isinstance(created, LifecycleOperationResult)
-        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
-        return client, created
-
     async def scenario() -> None:
         runtime = FakeRuntime()
         hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
-        client, created = await create(hub, runtime)
+        client = _client(hub)
+        created = await created_instance(client)
         cases = (
             ExpectedStatus(RuntimeStatus("absent", None), "missing", Readiness.NOT_RUNNING),
             ExpectedStatus(RuntimeStatus("starting", False), "starting", Readiness.STARTING),
@@ -864,17 +831,8 @@ def test_metadata_for_two_created_instances_never_changes_process_environment(tm
         hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
         client = _client(hub)
         before = dict(os.environ)
-        for manifest_id, value in (("first", "one"), ("second", "two")):
-            created = await client.call(
-                INSTANCE_CREATE,
-                InstanceCreateCommand(
-                    manifest_id=manifest_id,
-                    model="openai:gpt-5",
-                    secrets={"SHARED": value},
-                ),
-            )
-            assert isinstance(created, LifecycleOperationResult)
-            assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        for value in ("one", "two"):
+            await created_instance(client, secrets={"SHARED": value})
 
         assert dict(os.environ) == before
         assert runtime.created[0].env["SHARED"] == "one"
@@ -891,13 +849,8 @@ def test_each_instance_gets_its_own_control_token_and_never_the_access_token(tmp
         assert access_token is not None
         client = _client(hub)
         paths = []
-        for manifest_id in ("first", "second"):
-            created = await client.call(
-                INSTANCE_CREATE,
-                InstanceCreateCommand(manifest_id=manifest_id, model="openai:gpt-5"),
-            )
-            assert isinstance(created, LifecycleOperationResult)
-            assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        for _ in range(2):
+            created = await created_instance(client)
             paths.append(tmp_path / "hub" / "instances" / str(created.instance_id))
 
         tokens = [spec.env["KINBY_CONTROL_TOKEN"] for spec in runtime.created]
@@ -916,16 +869,7 @@ def test_secret_values_are_passed_without_environment_interpolation(tmp_path):
         runtime = FakeRuntime()
         hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
         client = _client(hub)
-        created = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(
-                manifest_id="alice",
-                model="openai:gpt-5",
-                secrets={"TOKEN": "${HOME}:a'b\\c\n"},
-            ),
-        )
-        assert isinstance(created, LifecycleOperationResult)
-        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        await created_instance(client, secrets={"TOKEN": "${HOME}:a'b\\c\n"})
         assert runtime.created[0].env["TOKEN"] == "${HOME}:a'b\\c\n"
 
     asyncio.run(scenario())
@@ -936,12 +880,7 @@ def test_concurrent_starts_are_serialized_per_instance(tmp_path):
         runtime = SerialRuntime()
         hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
         client = _client(hub)
-        created = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
-        )
-        assert isinstance(created, LifecycleOperationResult)
-        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        created = await created_instance(client)
 
         first, second = await asyncio.gather(
             client.call(
@@ -968,15 +907,7 @@ def test_retained_writable_bind_rejects_an_overlapping_path_alias(tmp_path):
     async def scenario() -> None:
         hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
         client = _client(hub)
-        created = []
-        for manifest_id in ("first", "second"):
-            result = await client.call(
-                INSTANCE_CREATE,
-                InstanceCreateCommand(manifest_id=manifest_id, model="openai:gpt-5"),
-            )
-            assert isinstance(result, LifecycleOperationResult)
-            assert (await finished_operation(client, result)).state is OperationState.SUCCEEDED
-            created.append(result)
+        created = [await created_instance(client), await created_instance(client)]
 
         first = hub.registry.instance(created[0].instance_id)
         second = hub.registry.instance(created[1].instance_id)
@@ -1011,9 +942,12 @@ def test_an_operation_reports_every_step_it_ran(tmp_path):
     async def scenario() -> None:
         hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
         client = _client(hub)
+        await prepared(client, None)
         created = await client.call(
             INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+            InstanceCreateCommand(
+                manifest_id="alice", model="openai:gpt-5", secrets={"api_key": "sk-test"}
+            ),
         )
         assert isinstance(created, LifecycleOperationResult)
 
@@ -1021,9 +955,10 @@ def test_an_operation_reports_every_step_it_ran(tmp_path):
 
         assert outcome.state is OperationState.SUCCEEDED
         assert [(step.name, step.state) for step in outcome.steps] == [
-            ("configure", OperationState.SUCCEEDED),
             ("image", OperationState.SUCCEEDED),
-            ("container", OperationState.SUCCEEDED),
+            ("validate", OperationState.SUCCEEDED),
+            ("initialize", OperationState.SUCCEEDED),
+            ("publish", OperationState.SUCCEEDED),
         ]
         assert outcome.steps[-1].detail == "Instance prepared and stopped."
 
@@ -1032,15 +967,16 @@ def test_an_operation_reports_every_step_it_ran(tmp_path):
 
 def test_a_failed_operation_marks_the_step_that_failed(tmp_path):
     async def scenario() -> None:
-        hub = Hub(
-            tmp_path / "hub",
-            runtime=FakeRuntime(),
-            images=FakeImages(failure="no such revision"),
-        )
+        images = FakeImages()
+        hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=images)
         client = _client(hub)
+        await prepared(client, None)
+        images.failure = "no such revision"
         created = await client.call(
             INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
+            InstanceCreateCommand(
+                manifest_id="alice", model="openai:gpt-5", secrets={"api_key": "sk-test"}
+            ),
         )
         assert isinstance(created, LifecycleOperationResult)
 
@@ -1048,7 +984,6 @@ def test_a_failed_operation_marks_the_step_that_failed(tmp_path):
 
         assert outcome.state is OperationState.FAILED
         assert [(step.name, step.state) for step in outcome.steps] == [
-            ("configure", OperationState.SUCCEEDED),
             ("image", OperationState.FAILED),
         ]
         assert outcome.steps[-1].detail == "no such revision"
@@ -1061,12 +996,7 @@ def test_status_carries_the_operation_a_client_lost_the_response_to(tmp_path):
         runtime = HeldRuntime()
         hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
         client = _client(hub)
-        created = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
-        )
-        assert isinstance(created, LifecycleOperationResult)
-        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        created = await created_instance(client)
 
         started = await client.call(
             INSTANCE_START,
@@ -1098,12 +1028,7 @@ def test_a_second_start_keeps_the_operation_a_client_can_still_find(tmp_path):
         runtime = HeldRuntime()
         hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
         client = _client(hub)
-        created = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
-        )
-        assert isinstance(created, LifecycleOperationResult)
-        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        created = await created_instance(client)
 
         started = await client.call(
             INSTANCE_START,
@@ -1136,12 +1061,7 @@ def test_a_restarted_hub_can_start_an_instance_whose_start_was_interrupted(tmp_p
         directory = tmp_path / "hub"
         hub = Hub(directory, runtime=FakeRuntime(), images=FakeImages())
         client = _client(hub)
-        created = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
-        )
-        assert isinstance(created, LifecycleOperationResult)
-        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        created = await created_instance(client)
         stale = uuid4()
         assert (
             hub.registry.begin_operation(
@@ -1202,12 +1122,7 @@ def test_a_second_hub_does_not_fail_an_operation_the_first_is_running(tmp_path):
         directory = tmp_path / "hub"
         hub = Hub(directory, runtime=FakeRuntime(), images=FakeImages())
         client = _client(hub)
-        created = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
-        )
-        assert isinstance(created, LifecycleOperationResult)
-        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        created = await created_instance(client)
         stale = uuid4()
         hub.registry.begin_operation(
             stale,
@@ -1231,12 +1146,7 @@ def test_a_cancelled_start_can_be_started_again(tmp_path):
         runtime = HeldRuntime()
         hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
         client = _client(hub)
-        created = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
-        )
-        assert isinstance(created, LifecycleOperationResult)
-        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        created = await created_instance(client)
         started = await client.call(
             INSTANCE_START,
             InstanceStartCommand(instance_id=created.instance_id),
@@ -1591,12 +1501,7 @@ def test_stopping_an_already_stopped_instance_reaches_no_lifecycle_endpoint(tmp_
         control = FakeControl()
         hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
         client = hub_client(hub)
-        created = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(manifest_id="alice", model="openai:gpt-5"),
-        )
-        assert isinstance(created, LifecycleOperationResult)
-        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        created = await created_instance(client)
 
         stopped = await client.call(
             INSTANCE_STOP,

@@ -109,6 +109,19 @@ describe("the instances", () => {
     expect((await instanceState("research")).getByText("stopped")).toBeDefined()
   })
 
+  it("draws each instance's avatar in its shape and palette color", async () => {
+    const drawn = { ...ada, avatar: { shape: "squircle", color: "green" } } as const
+    openApp({ signedIn: true, instances: [drawn, unnamed] })
+
+    const avatar = (await instanceLink("Ada")).querySelector("[data-slot=avatar]")
+    const fallback = avatar?.querySelector("[data-slot=avatar-fallback]")
+    expect(avatar?.getAttribute("data-shape")).toBe("squircle")
+    expect(fallback?.getAttribute("data-variant")).toBe("green")
+    expect(fallback?.textContent).toBe("A")
+    const other = (await instanceLink("research")).querySelector("[data-slot=avatar]")
+    expect(other?.getAttribute("data-shape")).toBe("circle")
+  })
+
   it("marks the instance the user selects and puts it in the URL", async () => {
     openApp({ signedIn: true, instances: [ada, unnamed] })
     const user = userEvent.setup()
