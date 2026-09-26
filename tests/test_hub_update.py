@@ -437,12 +437,12 @@ def writer_package() -> InstalledPackage:
             icon="pen",
             distribution="kinby-writer",
             version="1.4.2",
-            required_secrets=(
+            setup_fields=(
                 RequiredSecret(
                     name="EDITOR_TOKEN",
                     label="Editor token",
                     description="Authenticates the editor service.",
-                ),
+                ).setup_field(),
             ),
         ),
         files={"SYSTEM.md": "You are an exacting editor.\n"},

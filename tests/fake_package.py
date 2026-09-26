@@ -6,6 +6,20 @@ from textwrap import dedent
 from uuid import uuid4
 
 VALID_CONFIG = "tone: plain\ntoken: EDITOR_TOKEN\n"
+#: The source of the setup fields the package declares by default: one choice in package.yaml.
+TONE_FIELD = """
+SetupField(
+    name="tone",
+    label="Tone",
+    description="How drafts sound.",
+    kind=SetupFieldKind.CONFIG,
+    type=SetupFieldType.CHOICE,
+    required=True,
+    default="plain",
+    choices=["plain", "formal"],
+    target=SetupTarget(file=TargetFile.PACKAGE_YAML, key="tone"),
+),
+"""
 
 
 @dataclass(frozen=True)
@@ -25,6 +39,7 @@ def install_fake_package(
     config: str | None = VALID_CONFIG,
     executables: tuple[str, ...] = (),
     record_template: bool = True,
+    setup_fields: str = TONE_FIELD,
 ) -> FakePackage:
     """Write package ``writer`` under *site* with a dist-info, entry points and RECORD.
 
@@ -64,7 +79,17 @@ def install_fake_package(
             from pathlib import Path
             from typing import Literal
 
-            from kinby.packages import Package, PackageConfig, RequiredSecret, SecretName
+            from kinby.packages import (
+                Package,
+                PackageConfig,
+                RequiredSecret,
+                SecretName,
+                SetupField,
+                SetupFieldKind,
+                SetupFieldType,
+                SetupTarget,
+                TargetFile,
+            )
             from kinby.plugins import ToolContext, tool
 
             ROOT = Path(__file__).parent
@@ -91,12 +116,13 @@ def install_fake_package(
                 required_secrets=(
                     RequiredSecret("EDITOR_TOKEN", "Editor token", "Authenticates editing."),
                 ),
+                setup_fields=({{setup_fields}}),
                 config=WriterConfig,
                 executables={executables!r},
             )
             SKILLS = ROOT / "skills"
             '''
-        ),
+        ).replace("{setup_fields}", setup_fields),
         encoding="utf-8",
     )
     dist_info = site / f"{module}-1.4.2.dist-info"

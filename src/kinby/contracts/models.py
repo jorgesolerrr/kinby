@@ -650,10 +650,31 @@ class SetupFieldKind(StrEnum):
 
 
 class SetupFieldType(StrEnum):
-    """How a client asks for a setup field's value."""
+    """How a client asks for a setup field's value, and so what the value is."""
 
     TEXT = "text"
     MULTILINE = "multiline"
+    BOOLEAN = "boolean"
+    INTEGER = "integer"
+    CHOICE = "choice"
+
+
+#: A setup value: text for text, multiline and choice fields, a bool, or a whole number.
+type SetupValue = bool | int | str
+
+
+class TargetFile(StrEnum):
+    """The instance file a package's configuration field lands in."""
+
+    KINBY_TOML = "kinby.toml"
+    PACKAGE_YAML = "package.yaml"
+
+
+class SetupTarget(ContractModel):
+    """Where a configuration value lands: a file, and a dotted key inside it."""
+
+    file: TargetFile
+    key: str
 
 
 class SetupField(ContractModel):
@@ -665,6 +686,12 @@ class SetupField(ContractModel):
     kind: SetupFieldKind
     type: SetupFieldType
     required: bool
+    #: What the field holds when the user sends nothing. A secret never has one.
+    default: SetupValue | None = None
+    #: The values a choice field offers. Only a choice field has them.
+    choices: list[str] | None = None
+    #: Where a package's own configuration field lands. kinby writes the built-in fields itself.
+    target: SetupTarget | None = None
 
 
 class PackageDescription(ContractModel):
@@ -757,7 +784,7 @@ class InstanceCreateCommand(ContractModel):
     revision: Annotated[str, Field(min_length=1)] = "HEAD"
     package: PackageSelection | None = None
     #: Values for the configuration fields the prepared image declares, by field name.
-    config: dict[str, str] = Field(default_factory=dict)
+    config: dict[str, SetupValue] = Field(default_factory=dict)
     #: Values for its secret fields, and any other variables the instance should hold.
     secrets: dict[str, SecretStr] = Field(default_factory=dict)
     avatar: Avatar = DEFAULT_AVATAR

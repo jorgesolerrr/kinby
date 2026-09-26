@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldError,
   FieldGroup,
@@ -38,15 +39,26 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   type Creation,
   createCommand,
+  type FieldInput,
   followCreation,
   followStart,
   type Identity,
+  initialInput,
   type Starting,
 } from "@/lib/creation"
 import { followPreparation, type Preparation } from "@/lib/preparation"
@@ -125,7 +137,7 @@ export function CreateWizard({
   const [pick, setPick] = useState<PackagePick>()
   const [stage, setStage] = useState<Stage>("package")
   const [identity, setIdentity] = useState(NEW_IDENTITY)
-  const [values, setValues] = useState<Record<string, string>>({})
+  const [values, setValues] = useState<Record<string, FieldInput>>({})
   const [submitted, setSubmitted] = useState<InstanceCreateCommand>()
   const [declared, setDeclared] = useState<PackageDescription>()
   // A later read wins. The one from the failed validate can still be in flight when
@@ -484,9 +496,9 @@ function SetupStep({
   onCreate,
 }: {
   fields: SetupField[]
-  values: Record<string, string>
+  values: Record<string, FieldInput>
   errors: Record<string, string>
-  onChange: (name: string, value: string) => void
+  onChange: (name: string, value: FieldInput) => void
   onBack: () => void
   onCreate: () => void
 }) {
@@ -497,7 +509,7 @@ function SetupStep({
         <SetupInput
           key={field.name}
           field={field}
-          value={values[field.name] ?? ""}
+          value={values[field.name] ?? initialInput(field)}
           error={errors[field.name]}
           onChange={(value) => onChange(field.name, value)}
         />
@@ -534,26 +546,109 @@ function SetupInput({
   onChange,
 }: {
   field: SetupField
-  value: string
+  value: FieldInput | undefined
   error: string | undefined
-  onChange: (value: string) => void
+  onChange: (value: FieldInput) => void
 }) {
   const id = `setup-${field.name}`
   const invalid = error !== undefined || undefined
+  const label = (
+    <FieldLabel htmlFor={id}>
+      {field.label}
+      {!field.required && <span className="text-muted-foreground">(optional)</span>}
+    </FieldLabel>
+  )
+  if (field.type === "boolean") {
+    return (
+      <Field orientation="horizontal" data-invalid={invalid}>
+        <Switch
+          id={id}
+          checked={value === true}
+          aria-invalid={invalid}
+          onCheckedChange={(checked) => onChange(checked)}
+        />
+        <FieldContent>
+          {label}
+          <FieldDescription>{field.description}</FieldDescription>
+          <FieldError>{error}</FieldError>
+        </FieldContent>
+      </Field>
+    )
+  }
+  const text = typeof value === "string" ? value : ""
   return (
     <Field data-invalid={invalid}>
-      <FieldLabel htmlFor={id}>
-        {field.label}
-        {!field.required && <span className="text-muted-foreground">(optional)</span>}
-      </FieldLabel>
-      {field.type === "multiline" ? (
+      {label}
+      <SetupControl
+        id={id}
+        field={field}
+        value={text}
+        invalid={invalid}
+        onChange={(next) => onChange(next)}
+      />
+      <FieldDescription>{field.description}</FieldDescription>
+      <FieldError>{error}</FieldError>
+    </Field>
+  )
+}
+
+/** The control for a field whose value is text: typed, picked from its choices, or a number. */
+function SetupControl({
+  id,
+  field,
+  value,
+  invalid,
+  onChange,
+}: {
+  id: string
+  field: SetupField
+  value: string
+  invalid: true | undefined
+  onChange: (value: string) => void
+}) {
+  switch (field.type) {
+    case "choice":
+      return (
+        <Select
+          value={value === "" ? null : value}
+          onValueChange={(picked) => onChange(typeof picked === "string" ? picked : "")}
+        >
+          <SelectTrigger id={id} aria-invalid={invalid}>
+            <SelectValue placeholder="Pick one" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {(field.choices ?? []).map((choice) => (
+                <SelectItem key={choice} value={choice}>
+                  {choice}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      )
+    case "multiline":
+      return (
         <Textarea
           id={id}
           value={value}
           aria-invalid={invalid}
           onChange={(event) => onChange(event.target.value)}
         />
-      ) : (
+      )
+    case "integer":
+      return (
+        <Input
+          id={id}
+          type="number"
+          step={1}
+          value={value}
+          aria-invalid={invalid}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      )
+    default:
+      return (
         <Input
           id={id}
           type={field.kind === "secret" ? "password" : "text"}
@@ -562,11 +657,8 @@ function SetupInput({
           aria-invalid={invalid}
           onChange={(event) => onChange(event.target.value)}
         />
-      )}
-      <FieldDescription>{field.description}</FieldDescription>
-      <FieldError>{error}</FieldError>
-    </Field>
-  )
+      )
+  }
 }
 
 function CreationView({

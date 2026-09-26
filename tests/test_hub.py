@@ -99,12 +99,17 @@ class FakeImages:
         failure: str | None = None,
         package: InstalledPackage | None = None,
         check_failure: str | None = None,
+        config_failure: str | None = None,
     ) -> None:
         self.revisions: list[str] = []
         self.selections: list[ImageSelection] = []
         self.failure = failure
         self.package = package
         self.check_failure = check_failure
+        #: What the package's validator says about any instance package.yaml it is shown.
+        self.config_failure = config_failure
+        #: Each instance package.yaml the candidate check read, as it read it.
+        self.checked_configs: list[str] = []
         self.described: list[ImageArtifact] = []
 
     async def prepare(
@@ -112,7 +117,14 @@ class FakeImages:
         selection: ImageSelection,
         instance: StorageItem | None = None,
     ) -> PreparedImage:
-        return PreparedImage(artifact=await self.build(selection), package=self.package)
+        artifact = await self.build(selection)
+        if instance is not None:
+            config = Path(instance.source)
+            if config.is_file():
+                self.checked_configs.append(config.read_text(encoding="utf-8"))
+            if self.config_failure is not None:
+                raise ValueError(self.config_failure)
+        return PreparedImage(artifact=artifact, package=self.package)
 
     async def build(self, selection: ImageSelection) -> ImageArtifact:
         self.revisions.append(selection.revision)
@@ -491,12 +503,12 @@ def test_create_from_a_pinned_package_seeds_owned_configuration_and_provenance(t
                 icon="pen",
                 distribution="kinby-writer",
                 version="1.4.2",
-                required_secrets=(
+                setup_fields=(
                     RequiredSecret(
                         name="EDITOR_TOKEN",
                         label="Editor token",
                         description="Authenticates the editor service.",
-                    ),
+                    ).setup_field(),
                 ),
             ),
             files={
@@ -568,8 +580,10 @@ def test_package_creation_refuses_a_missing_declared_secret_and_publishes_nothin
                 icon="pen",
                 distribution="kinby-writer",
                 version="1.4.2",
-                required_secrets=(
-                    RequiredSecret("EDITOR_TOKEN", "Editor token", "Authenticates editing."),
+                setup_fields=(
+                    RequiredSecret(
+                        "EDITOR_TOKEN", "Editor token", "Authenticates editing."
+                    ).setup_field(),
                 ),
             ),
             files={"SYSTEM.md": "Write clearly.\n"},

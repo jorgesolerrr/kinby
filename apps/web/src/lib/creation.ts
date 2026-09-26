@@ -7,6 +7,7 @@ import type {
   OperationStep,
   PackageSelection,
   SetupField,
+  SetupValue,
 } from "@kinby/contract"
 
 import { finished, lost, pace, reason, retried } from "@/lib/operation"
@@ -31,6 +32,27 @@ const CREATE_LOST =
 /** The built-in field whose value travels as the command's own model, not in its config. */
 const MODEL_FIELD = "model"
 
+/** What a field's control holds: the text typed or picked, or whether a switch is on. */
+export type FieldInput = string | boolean
+
+/**
+ * What a field's control starts from: the field's default, or nothing yet.
+ * A boolean with no default stays unset, so an untouched switch is not a false.
+ */
+export function initialInput(field: SetupField): FieldInput | undefined {
+  if (field.type === "boolean") {
+    return typeof field.default === "boolean" ? field.default : undefined
+  }
+  return field.default == null ? "" : String(field.default)
+}
+
+/** The value sent for a control's input. Text that is not a whole number goes as typed, and the hub marks it. */
+function setupValue(field: SetupField, input: FieldInput): SetupValue {
+  if (field.type !== "integer" || typeof input !== "string" || input.trim() === "") return input
+  const number = Number(input)
+  return Number.isInteger(number) ? number : input
+}
+
 /** What the user named the instance and how it is drawn. */
 export interface Identity {
   name: string
@@ -41,22 +63,28 @@ export interface Identity {
 export function createCommand(
   selection: PackageSelection | null,
   fields: SetupField[],
-  values: Record<string, string>,
+  inputs: Record<string, FieldInput>,
   { name, avatar }: Identity,
 ): InstanceCreateCommand {
-  const config: Record<string, string> = {}
+  const config: Record<string, SetupValue> = {}
   const secrets: Record<string, string> = {}
+  let model = ""
   for (const field of fields) {
-    if (field.name === MODEL_FIELD) continue
-    const sent = field.kind === "secret" ? secrets : config
-    sent[field.name] = values[field.name] ?? ""
+    const input = inputs[field.name] ?? initialInput(field)
+    if (input === undefined) continue
+    const value = setupValue(field, input)
+    if (field.name === MODEL_FIELD) model = String(value)
+    else if (field.kind === "secret") {
+      const text = String(value)
+      if (text.trim() !== "") secrets[field.name] = text
+    } else config[field.name] = value
   }
   // The name is both the instance's manifest id and the persona it answers as.
   const trimmed = name.trim()
   return {
     manifest_id: trimmed,
     persona_name: trimmed,
-    model: values[MODEL_FIELD] ?? "",
+    model,
     package: selection,
     config,
     secrets,
