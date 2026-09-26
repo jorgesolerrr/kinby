@@ -30,6 +30,7 @@ from kinby.hub.models import (
     RecoveredInstance,
     RecoveredState,
     RuntimeStatus,
+    SetupSpec,
 )
 from kinby.hub.registry import HubRegistry, StorageConflict
 from kinby.hub.server import HubContractServer
@@ -65,6 +66,7 @@ __all__ = [
     "RecoveredInstance",
     "RecoveredState",
     "RuntimeStatus",
+    "SetupSpec",
     "StorageConflict",
     "build_docker_hub",
     "hub_instance_id",

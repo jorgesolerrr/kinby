@@ -6,6 +6,13 @@ from textwrap import dedent
 from uuid import uuid4
 
 VALID_CONFIG = "tone: plain\ntoken: EDITOR_TOKEN\n"
+#: The editor's device sign-in, as the package declares it: source text of a SubscriptionLogin.
+EDITOR_LOGIN = (
+    'SubscriptionLogin(id="editor", label="Editor account", '
+    'description="Signs the editor in with your subscription.", '
+    'command=["editor", "login", "--device"], volume="/root/.editor", '
+    r'prompt_pattern=r"Open (?P<url>https://\S+) and enter (?P<code>[A-Z0-9-]+)")'
+)
 #: The source of the setup fields the package declares by default: one choice in package.yaml.
 TONE_FIELD = """
 SetupField(
@@ -39,11 +46,13 @@ def install_fake_package(
     config: str | None = VALID_CONFIG,
     executables: tuple[str, ...] = (),
     record_template: bool = True,
+    logins: tuple[str, ...] = (EDITOR_LOGIN,),
     setup_fields: str = TONE_FIELD,
 ) -> FakePackage:
     """Write package ``writer`` under *site* with a dist-info, entry points and RECORD.
 
-    The module name is unique, so each test imports its own copy.
+    The module name is unique, so each test imports its own copy. *logins* is the source
+    text of each login it declares. *setup_fields* is the source of its setup fields.
     """
     module = f"kinby_fake_writer_{uuid4().hex[:8]}"
     root = site / module
@@ -88,6 +97,7 @@ def install_fake_package(
                 SetupFieldKind,
                 SetupFieldType,
                 SetupTarget,
+                SubscriptionLogin,
                 TargetFile,
             )
             from kinby.plugins import ToolContext, tool
@@ -119,6 +129,7 @@ def install_fake_package(
                 setup_fields=({{setup_fields}}),
                 config=WriterConfig,
                 executables={executables!r},
+                logins=({"".join(f"{login}, " for login in logins)}),
             )
             SKILLS = ROOT / "skills"
             '''

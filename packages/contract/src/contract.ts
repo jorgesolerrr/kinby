@@ -55,7 +55,8 @@ export type OperationKind =
   | "remove"
   | "restore"
   | "delete"
-  | "prepare";
+  | "prepare"
+  | "login";
 export type OperationState = "pending" | "running" | "succeeded" | "failed";
 /**
  * Where a setup field's value lands: the instance's configuration, or its secrets.
@@ -137,6 +138,10 @@ export interface Contract {
     "instance.list": {
       command: InstanceListCommand;
       result: InstanceListResult;
+    };
+    "instance.login.start": {
+      command: InstanceLoginStartCommand;
+      result: LifecycleOperationResult;
     };
     "instance.logs": {
       command: InstanceLogsCommand;
@@ -445,6 +450,13 @@ export interface PackageSummary {
   id: string;
   version: string | PackageCommit;
 }
+/**
+ * Run one of the instance's subscription logins in a setup container.
+ */
+export interface InstanceLoginStartCommand {
+  instance_id: string;
+  login_id: string;
+}
 export interface InstanceLogsCommand {
   instance_id: string;
   tail?: number | null;
@@ -536,7 +548,15 @@ export interface OperationGetResult {
 export interface OperationStep {
   detail: string;
   name: string;
+  prompt?: LoginPrompt | null;
   state: OperationState;
+}
+/**
+ * Where the user finishes a subscription login, and the one-time code they enter there.
+ */
+export interface LoginPrompt {
+  code: string;
+  url: string;
 }
 /**
  * Read what a prepared selection declares. It never builds.
@@ -545,7 +565,7 @@ export interface PackageDescribeCommand {
   package: PackageSelection | null;
 }
 /**
- * What a prepared image declares: its card, its version, and its setup fields.
+ * What a prepared image declares: its card, its version, its setup fields, and its logins.
  *
  * The built-in fields come first, then the package's own.
  */
@@ -553,8 +573,20 @@ export interface PackageDescription {
   description: string;
   display_name: string;
   icon: string;
+  logins?: SubscriptionLogin[];
   setup_fields: SetupField[];
   version: string;
+}
+/**
+ * One sign-in a package declares, which the hub runs in a setup container (ADR 0065).
+ */
+export interface SubscriptionLogin {
+  command: string[];
+  description: string;
+  id: string;
+  label: string;
+  prompt_pattern: string;
+  volume: string;
 }
 /**
  * One value a prepared image asks for before an instance is created from it.

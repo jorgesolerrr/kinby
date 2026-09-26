@@ -1,5 +1,11 @@
 import { CallError } from "@kinby/contract"
-import type { CuratedPackage, OperationGetResult, PackageDescription } from "@kinby/contract"
+import type {
+  CuratedPackage,
+  OperationGetResult,
+  OperationStep,
+  PackageDescription,
+  SubscriptionLogin,
+} from "@kinby/contract"
 import { type Answers, type StubCaller, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent, { type UserEvent } from "@testing-library/user-event"
@@ -763,5 +769,141 @@ describe("the create wizard's start step", () => {
 
     expect(caller.calls.some((call) => call.method === "instance.start")).toBe(false)
     expect(window.location.pathname).toBe("/instances/instance-1")
+  })
+})
+
+describe("the create wizard's sign in step", () => {
+  const codex: SubscriptionLogin = {
+    id: "codex",
+    label: "Codex",
+    description: "Signs Codex in with your ChatGPT plan.",
+    command: ["codex", "login", "--device-auth"],
+    volume: "/root/.codex",
+    prompt_pattern: "(?P<url>https://\\S+)\\s+(?P<code>\\S+)",
+  }
+  const published = operationAnswer({
+    operation_id: "op-create",
+    instance_id: "instance-1",
+    kind: "create",
+    state: "succeeded",
+    steps: [{ name: "publish", state: "succeeded", detail: "Instance prepared and stopped." }],
+  })
+  const container: OperationStep = {
+    name: "container",
+    state: "succeeded",
+    detail: "Starting the setup container.",
+  }
+  const waiting = operationAnswer({
+    operation_id: "op-login",
+    instance_id: "instance-1",
+    kind: "login",
+    state: "running",
+    steps: [
+      container,
+      {
+        name: "sign-in",
+        state: "running",
+        detail: "Waiting for you to sign in to Codex.",
+        prompt: { url: "https://auth.openai.com/codex/device", code: "ABCD-12345" },
+      },
+    ],
+  })
+
+  /** A hub whose prepared image declares Codex, and answers the login's polls in order. */
+  function withLogin(...logins: OperationGetResult[]) {
+    return hub({
+      "package.describe": () => ({ ...vanilla, logins: [codex] }),
+      "instance.login.start": () => ({ operation_id: "op-login", instance_id: "instance-1" }),
+      "operation.get": ({ operation_id }) => {
+        if (operation_id === "op-1") return prepared
+        if (operation_id === "op-create") return published
+        return (logins.length > 1 ? logins.shift() : logins[0]) as OperationGetResult
+      },
+    })
+  }
+
+  async function created(caller: StubCaller) {
+    const { user, clock } = await openWizard(caller)
+    await nameIt(user)
+    await fillSetup(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await act(() => clock.advance(0))
+    return { user, clock }
+  }
+
+  const row = () =>
+    within(within(screen.getByRole("list", { name: "Subscription logins" })).getByRole("listitem"))
+
+  it("lists each login the image declares, not signed in yet", async () => {
+    await created(withLogin(waiting))
+
+    expect(row().getByText("Codex")).toBeDefined()
+    expect(row().getByText("Signs Codex in with your ChatGPT plan.")).toBeDefined()
+    expect(row().getByText("Not signed in")).toBeDefined()
+    expect(screen.getByRole("button", { name: "Start and chat" })).toBeDefined()
+  })
+
+  it("shows the URL and the code while the hub waits for the sign-in", async () => {
+    const caller = withLogin(waiting)
+    const { user, clock } = await created(caller)
+
+    await user.click(row().getByRole("button", { name: "Sign in" }))
+    await act(() => clock.advance(0))
+
+    expect(caller.calls.find((call) => call.method === "instance.login.start")?.params).toEqual({
+      instance_id: "instance-1",
+      login_id: "codex",
+    })
+    const link = row().getByRole("link", { name: "https://auth.openai.com/codex/device" })
+    expect(link.getAttribute("href")).toBe("https://auth.openai.com/codex/device")
+    expect(link.getAttribute("target")).toBe("_blank")
+    expect(row().getByText("ABCD-12345").tagName).toBe("CODE")
+    expect(row().getByText("Waiting")).toBeDefined()
+    expect(row().getByRole("button", { name: "Sign in" }).hasAttribute("disabled")).toBe(true)
+  })
+
+  it("turns the row green once the sign-in succeeded", async () => {
+    const signedIn = operationAnswer({
+      operation_id: "op-login",
+      kind: "login",
+      state: "succeeded",
+      detail: "Signed in.",
+    })
+    const { user, clock } = await created(withLogin(waiting, signedIn))
+
+    await user.click(row().getByRole("button", { name: "Sign in" }))
+    await act(() => clock.advance(0))
+    await act(() => clock.advance(1_000))
+
+    const badge = row().getByText("Signed in")
+    expect(badge.getAttribute("data-variant")).toBe("success")
+    expect(row().queryByRole("link")).toBeNull()
+  })
+
+  it("says the code expired, and signs in again for a new one", async () => {
+    const detail = "The code expired. Sign in again for a new one."
+    const caller = withLogin(
+      operationAnswer({ operation_id: "op-login", kind: "login", state: "failed", detail }),
+      waiting,
+    )
+    const { user, clock } = await created(caller)
+
+    await user.click(row().getByRole("button", { name: "Sign in" }))
+    await act(() => clock.advance(0))
+
+    expect(row().getByText(detail)).toBeDefined()
+    expect(row().getByText("Failed")).toBeDefined()
+    await user.click(row().getByRole("button", { name: "Sign in again" }))
+    await act(() => clock.advance(0))
+
+    expect(row().getByText("ABCD-12345")).toBeDefined()
+    expect(caller.calls.filter((call) => call.method === "instance.login.start")).toHaveLength(2)
+  })
+
+  it("has no sign in step when the image declares no login", async () => {
+    await created(hub({}, published))
+
+    expect(await screen.findByRole("button", { name: "Start and chat" })).toBeDefined()
+    expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
   })
 })

@@ -12,7 +12,7 @@ import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from importlib.metadata import entry_points
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 from kinby.contracts import (
@@ -46,6 +46,9 @@ from kinby.plugins.routines import SharedCodeStep, load_routines, resolve_code_s
 from kinby.plugins.skills import load_skills
 
 _ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+#: A login's id names its Docker volume, so it takes the characters a volume name takes.
+_VOLUME_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+_PROMPT_GROUPS = ("url", "code")
 _MARKDOWN_LINK = re.compile(r"\]\(([^)\s]+)\)")
 _PLACEHOLDER_SECRET = "kinby-package-check"
 
@@ -66,6 +69,7 @@ def check_package(package_id: str, instance: Path | None = None) -> tuple[str, .
         return (
             f"Template is not a directory: {template}",
             *declarations,
+            *_login_declarations(package),
             *_missing_executables(package),
         )
     template_config = list(_config_failures(package, template))
@@ -75,6 +79,7 @@ def check_package(package_id: str, instance: Path | None = None) -> tuple[str, .
     failures = [
         *_unshipped_template_files(loaded, template),
         *declarations,
+        *_login_declarations(package),
         *_secret_values(package, template),
         *_missing_executables(package),
         *_template_validation(package, template),
@@ -167,6 +172,36 @@ def _defaults_at_targets(package: Package) -> dict[str, SetupValue]:
     """The defaults initialization writes at their targets when the user changes nothing."""
     targeted = [field for field in package_fields(package.declared_fields()) if field.target]
     return resolved_values(targeted, {})
+
+
+def _login_declarations(package: Package) -> Iterator[str]:
+    seen: set[str] = set()
+    for login in package.logins:
+        if login.id in seen:
+            yield f'Login "{login.id}" is declared more than once.'
+            continue
+        seen.add(login.id)
+        try:
+            groups = re.compile(login.prompt_pattern).groupindex
+        except re.error as exc:
+            yield f'Login "{login.id}" has a prompt pattern that does not compile: {exc}.'
+        else:
+            for group in _PROMPT_GROUPS:
+                if group not in groups:
+                    yield (
+                        f'Login "{login.id}" has a prompt pattern without the named group '
+                        f'"{group}".'
+                    )
+        if _VOLUME_NAME.fullmatch(login.id) is None:
+            yield (
+                f'Login "{login.id}" has an id that cannot name a volume: use letters, digits, '
+                '".", "_" and "-", starting with a letter or digit.'
+            )
+        if not PurePosixPath(login.volume).is_absolute():
+            yield (
+                f'Login "{login.id}" mounts its volume at "{login.volume}", '
+                "which is not an absolute path."
+            )
 
 
 def _missing_executables(package: Package) -> Iterator[str]:

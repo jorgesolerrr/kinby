@@ -80,6 +80,7 @@ from kinby.hub import (
     InstanceSpec,
     PreparedImage,
     RuntimeStatus,
+    SetupSpec,
 )
 from kinby.hub.service import HubAlreadyRunning
 from kinby.instance import inspect_instance
@@ -163,6 +164,15 @@ class FakeRuntime:
         self.missing: set[str] = set()
         self.deleted_volumes: list[str] = []
         self.log_output = b"booted\n"
+        #: What a setup container prints, then the code it exits with once `setup_exits` is set.
+        self.setup_lines: list[str] = []
+        self.setup_exit_code = 0
+        self.setup_exits = asyncio.Event()
+        self.setups: list[SetupSpec] = []
+        #: Setup containers not removed yet.
+        self.setups_running = 0
+        #: Setup containers a previous process left running.
+        self.leftover_setups: list[str] = []
 
     async def create(self, spec: InstanceSpec) -> None:
         self.created.append(spec)
@@ -228,6 +238,20 @@ class FakeRuntime:
     async def delete_volume(self, name: str) -> None:
         self.deleted_volumes.append(name)
         self.missing.add(name)
+
+    async def run_setup(self, spec: SetupSpec, output: Callable[[str], None]) -> int:
+        self.setups.append(spec)
+        self.setups_running += 1
+        try:
+            for line in self.setup_lines:
+                output(line)
+            await self.setup_exits.wait()
+            return self.setup_exit_code
+        finally:
+            self.setups_running -= 1
+
+    async def remove_setup_containers(self) -> None:
+        self.leftover_setups.clear()
 
 
 class SerialRuntime(FakeRuntime):
@@ -462,7 +486,6 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
         assert {item.destination for item in summary.storage} == {
             "/instance",
             "/instance/workspace",
-            "/root/.codex",
         }
         assert len(runtime.created) == 1
         spec = runtime.created[0]

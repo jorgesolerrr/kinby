@@ -5,11 +5,12 @@ import shutil
 import subprocess
 import threading
 import uuid
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import cast
 
 import pytest
-from docker.errors import ContainerError, ImageNotFound, NotFound
+from docker.errors import ContainerError, DockerException, ImageNotFound, NotFound
 from docker.types import Mount
 
 from docker import DockerClient
@@ -25,6 +26,7 @@ from kinby.hub import (
     InstanceSpec,
     PreparedImage,
     RecoveredState,
+    SetupSpec,
 )
 from kinby.packages import InstalledPackage, PackageDescriptor, package_json, vanilla_description
 from tests.test_hub import hub_client, started_instance
@@ -44,12 +46,16 @@ class FakeContainer:
         self.attrs: dict[str, object] = {"State": {"Status": status}}
         self.labels = labels
         self.stop_timeout: int | None = None
+        self.removed_force: bool | None = None
 
     def reload(self) -> None:
         return None
 
     def stop(self, timeout: int | None = None) -> None:
         self.stop_timeout = timeout
+
+    def remove(self, *, force: bool = False) -> None:
+        self.removed_force = force
 
 
 class FakeContainers:
@@ -64,12 +70,29 @@ class FakeContainers:
         self.run_failure: bytes | None = None
         #: What the check prints. The package check's output unless a test sets another.
         self.run_output: bytes | None = None
+        #: What the next create returns: a container a test drives, or a bare placeholder.
+        self.creates: object | None = None
+        #: Containers `list` can see. A test that sets `list_error` makes `list` raise it.
+        self.present: list[FakeContainer] = []
+        self.list_error: DockerException | None = None
 
-    def create(self, image: object, command: object, **options: object) -> object:
+    def list(
+        self, *, all: bool = False, filters: dict[str, str | Sequence[str]] | None = None
+    ) -> Sequence[FakeContainer]:
+        if self.list_error is not None:
+            raise self.list_error
+        labels: str | Sequence[str] = () if filters is None else filters.get("label", ())
+        required = (labels,) if isinstance(labels, str) else tuple(labels)
+        found = [container for container in self.present if _has_labels(container.labels, required)]
+        if all:
+            return found
+        return [container for container in found if container.status == "running"]
+
+    def create(self, image: object, command: object = None, **options: object) -> object:
         self.arguments = (image, command)
         self.options = options
         self.thread_id = threading.get_ident()
-        return object()
+        return self.creates or object()
 
     def get(self, name: str) -> FakeContainer:
         found = self.named.get(name, self.container)
@@ -722,6 +745,144 @@ def test_docker_runtime_stops_within_the_grace_period(tmp_path):
 
     assert client.containers.container is not None
     assert client.containers.container.stop_timeout == 45
+
+
+class FakeSetupContainer:
+    """A setup container that prints its chunks, then exits, or keeps printing until removed."""
+
+    def __init__(self, chunks: list[bytes], exit_code: int | None = 0) -> None:
+        self.chunks = chunks
+        self.exit_code = exit_code
+        self.events: list[str] = []
+        self._gone = threading.Event()
+
+    def start(self) -> None:
+        self.events.append("start")
+
+    def logs(self, **options: object) -> Iterator[bytes]:
+        assert options == {"stdout": True, "stderr": True, "stream": True, "follow": True}
+        yield from self.chunks
+        if self.exit_code is None:
+            self._gone.wait(timeout=5)
+
+    def wait(self) -> dict[str, object]:
+        self.events.append("wait")
+        return {"StatusCode": self.exit_code, "Error": None}
+
+    def remove(self, *, force: bool = False) -> None:
+        self.events.append(f"remove force={force}")
+        self._gone.set()
+
+
+LOGIN_VOLUME = StorageItem(
+    kind=StorageKind.VOLUME,
+    source="kinby-alice-codex",
+    destination="/root/.codex",
+    writable=True,
+)
+
+
+def run_setup(
+    container: FakeSetupContainer, *, seconds: float = 5
+) -> tuple[FakeDockerClient, list[str], int | None]:
+    client = FakeDockerClient()
+    client.containers.creates = container
+    runtime = DockerRuntime("hub-id", network="kinby_private", client=cast(DockerClient, client))
+    lines: list[str] = []
+
+    async def scenario() -> int | None:
+        try:
+            async with asyncio.timeout(seconds):
+                return await runtime.run_setup(
+                    SetupSpec(
+                        instance_id="alice",
+                        image="sha256:selected",
+                        command=("codex", "login", "--device-auth"),
+                        volume=LOGIN_VOLUME,
+                    ),
+                    lines.append,
+                )
+        except TimeoutError:
+            return None
+
+    return client, lines, asyncio.run(scenario())
+
+
+def _has_labels(labels: dict[str, str], required: tuple[object, ...]) -> bool:
+    for item in required:
+        text = str(item)
+        if "=" in text:
+            key, value = text.split("=", 1)
+            if labels.get(key) != value:
+                return False
+        elif text not in labels:
+            return False
+    return True
+
+
+def test_a_reopened_runtime_removes_setup_containers_this_hub_left_behind():
+    ours = FakeContainer("exited", {"kinby.hub": "hub-id", "kinby.setup": "alice"})
+    other_hub = FakeContainer("running", {"kinby.hub": "other", "kinby.setup": "bob"})
+    instance = FakeContainer("running", {"kinby.hub": "hub-id", "kinby.instance": "alice"})
+    client = FakeDockerClient()
+    client.containers.present = [ours, other_hub, instance]
+    runtime = DockerRuntime("hub-id", network="kinby_private", client=cast(DockerClient, client))
+
+    asyncio.run(runtime.remove_setup_containers())
+
+    assert ours.removed_force is True
+    assert other_hub.removed_force is None
+    assert instance.removed_force is None
+
+
+def test_a_setup_cleanup_the_runtime_cannot_reach_does_not_raise():
+    client = FakeDockerClient()
+    client.containers.list_error = DockerException("daemon down")
+    runtime = DockerRuntime("hub-id", network="kinby_private", client=cast(DockerClient, client))
+
+    asyncio.run(runtime.remove_setup_containers())
+
+
+def test_a_setup_container_runs_the_command_with_one_volume_and_the_hub_labels_then_goes():
+    container = FakeSetupContainer(
+        [b"Open https://auth.example/device and", b" enter AB12-C3D\r\nWaiting", b"\n"]
+    )
+
+    client, lines, exit_code = run_setup(container)
+
+    assert client.containers.arguments == ("sha256:selected", None)
+    assert client.containers.options == {
+        # The login command replaces the image's entrypoint, so kinby never starts.
+        "entrypoint": ["codex", "login", "--device-auth"],
+        "labels": {"kinby.hub": "hub-id", "kinby.setup": "alice"},
+        "mounts": [Mount(target="/root/.codex", source="kinby-alice-codex", type="volume")],
+    }
+    assert lines == [
+        "Open https://auth.example/device and enter AB12-C3D",
+        "Waiting",
+    ]
+    assert exit_code == 0
+    assert container.events == ["start", "wait", "remove force=True"]
+
+
+def test_a_setup_container_that_fails_reports_its_exit_code_and_goes():
+    container = FakeSetupContainer([b"error: no device code"], exit_code=1)
+
+    _, lines, exit_code = run_setup(container)
+
+    assert lines == ["error: no device code"]
+    assert exit_code == 1
+    assert container.events == ["start", "wait", "remove force=True"]
+
+
+def test_a_setup_container_that_outlives_its_timeout_goes():
+    container = FakeSetupContainer([b"Open https://auth.example/device and enter AB12-C3D\n"], None)
+
+    _, lines, exit_code = run_setup(container, seconds=0.1)
+
+    assert lines == ["Open https://auth.example/device and enter AB12-C3D"]
+    assert exit_code is None
+    assert container.events == ["start", "remove force=True"]
 
 
 class _RecordingNetwork:

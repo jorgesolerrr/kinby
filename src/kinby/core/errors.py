@@ -91,6 +91,12 @@ class LifecycleOperationNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class LoginNotFound(CoreError):
+    """The instance's package declares no subscription login by this id."""
+
+    code = ErrorCode.NOT_FOUND
+
+
 class LifecycleOperationInFlight(CoreError):
     """Another lifecycle operation owns this managed instance right now."""
 

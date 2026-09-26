@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -16,7 +16,13 @@ from docker.types import Mount
 
 import docker
 from kinby.contracts import ContainerOwner, PackageDescription, StorageItem, StorageKind
-from kinby.hub.models import BuildResult, ContainerDescription, InstanceSpec, RuntimeStatus
+from kinby.hub.models import (
+    BuildResult,
+    ContainerDescription,
+    InstanceSpec,
+    RuntimeStatus,
+    SetupSpec,
+)
 from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage, installed_package_from_json
 
 _FROM = re.compile(r"^(FROM\s+)(\S+)(.*)$", re.MULTILINE | re.IGNORECASE)
@@ -448,6 +454,62 @@ class DockerRuntime:
             return
         await asyncio.to_thread(volume.remove)
 
+    async def run_setup(self, spec: SetupSpec, output: Callable[[str], None]) -> int:
+        """Run the command in a new container with the one volume, and remove it at the end.
+
+        The command replaces the image's entrypoint, so kinby and its scheduler never start.
+        The container stays off the instance network, and gets no environment from the hub.
+        """
+        volume = spec.volume
+        container = await asyncio.to_thread(
+            self._client.containers.create,
+            spec.image,
+            entrypoint=list(spec.command),
+            labels={"kinby.hub": self._hub_id, "kinby.setup": spec.instance_id},
+            mounts=[
+                Mount(
+                    target=volume.destination,
+                    source=volume.source,
+                    type=volume.kind.value,
+                    read_only=not volume.writable,
+                )
+            ],
+        )
+        try:
+            await asyncio.to_thread(container.start)
+            stream = await asyncio.to_thread(
+                container.logs, stdout=True, stderr=True, stream=True, follow=True
+            )
+            unfinished = b""
+            while (chunk := await asyncio.to_thread(_next_or_end, stream)) is not _END:
+                *lines, unfinished = (unfinished + cast(bytes, chunk)).split(b"\n")
+                for line in lines:
+                    output(_text(line))
+            if unfinished:
+                output(_text(unfinished))
+            exited = await asyncio.to_thread(container.wait)
+            return int(exited["StatusCode"])
+        finally:
+            await asyncio.to_thread(container.remove, force=True)
+
+    async def remove_setup_containers(self) -> None:
+        """Remove setup containers this hub left when it stopped mid-login.
+
+        A login removes its container when the run ends. A hub that dies first does not,
+        and the container keeps the login volume mounted, so a later delete fails and a
+        new login starts beside the old one.
+        """
+        try:
+            containers = await asyncio.to_thread(
+                self._client.containers.list,
+                all=True,
+                filters={"label": [f"kinby.hub={self._hub_id}", "kinby.setup"]},
+            )
+        except DockerException:
+            return
+        for container in containers:
+            await asyncio.to_thread(container.remove, force=True)
+
     async def _container(self, instance_id: str) -> Container:
         """The recorded runtime id, or the kinby- prefixed name earlier releases used."""
         try:
@@ -533,3 +595,7 @@ def _attached_containers(attrs: dict[str, object]) -> tuple[str, ...]:
 
 def _next_or_end(iterator: Iterator[bytes]) -> bytes | object:
     return next(iterator, _END)
+
+
+def _text(line: bytes) -> str:
+    return line.decode(errors="replace").removesuffix("\r")

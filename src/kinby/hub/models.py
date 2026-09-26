@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -30,6 +30,20 @@ class InstanceSpec:
     command: Sequence[str] = ("serve",)
     env: Mapping[str, str] = field(default_factory=dict)
     port: int = 8787
+
+
+@dataclass(frozen=True)
+class SetupSpec:
+    """One setup container: a login's command on an instance's image, with that login's volume.
+
+    It gets none of the instance's secrets, and its command runs in place of kinby.
+    """
+
+    #: The instance it signs in, by runtime id. The container is labeled with it.
+    instance_id: str
+    image: str
+    command: Sequence[str]
+    volume: StorageItem
 
 
 @dataclass(frozen=True)
@@ -113,6 +127,22 @@ class ContainerRuntime(Protocol):
     async def has_volume(self, name: str) -> bool: ...
 
     async def delete_volume(self, name: str) -> None: ...
+
+    async def run_setup(self, spec: SetupSpec, output: Callable[[str], None]) -> int:
+        """Run a setup container to its exit code, and hand each line it prints to *output*.
+
+        The container is removed however the run ends: it exits, a timeout cancels the
+        caller, or the caller is cancelled.
+        """
+        ...
+
+    async def remove_setup_containers(self) -> None:
+        """Remove setup containers this hub left when it stopped mid-login.
+
+        A login removes its container when the run ends. A hub that dies first does not,
+        and the container keeps the login volume mounted.
+        """
+        ...
 
 
 class RecoveredState(StrEnum):

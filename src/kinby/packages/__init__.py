@@ -25,6 +25,7 @@ from kinby.contracts import (
     SetupFieldType,
     SetupTarget,
     SetupValue,
+    SubscriptionLogin,
     TargetFile,
 )
 
@@ -119,6 +120,7 @@ class Package:
     validate: Callable[[Path], None] | None = None
     config: type[PackageConfig] | None = None
     executables: tuple[str, ...] = ()
+    logins: tuple[SubscriptionLogin, ...] = ()
 
     def declared_fields(self) -> tuple[SetupField, ...]:
         """Its setup fields, then each required secret as a required secret text field."""
@@ -149,6 +151,7 @@ class PackageDescriptor:
     version: str
     #: The package's own fields, required secrets included, as it declared them.
     setup_fields: tuple[SetupField, ...] = ()
+    logins: tuple[SubscriptionLogin, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -187,6 +190,7 @@ def installed_package(loaded: LoadedPackage) -> InstalledPackage:
             distribution=loaded.distribution.name,
             version=loaded.distribution.version,
             setup_fields=exported.declared_fields(),
+            logins=exported.logins,
         ),
         files=readable_template_files(exported.template),
     )
@@ -260,7 +264,7 @@ def vanilla_description() -> PackageDescription:
 
 
 def package_description(package: InstalledPackage) -> PackageDescription:
-    """A package's card and version, with the built-in fields before the package's own.
+    """A package's card, version, and logins, with the built-in fields before the package's own.
 
     Defaults resolve built-in first, then package: a package field named like a built-in
     one lends that field its default, and the field stays kinby's.
@@ -281,6 +285,7 @@ def package_description(package: InstalledPackage) -> PackageDescription:
         icon=descriptor.icon,
         version=descriptor.version,
         setup_fields=[*built_in, *package_fields(descriptor.setup_fields)],
+        logins=list(descriptor.logins),
     )
 
 
@@ -343,6 +348,9 @@ def installed_package_from_json(body: str) -> InstalledPackage:
                     for secret in descriptor.get("required_secrets", [])
                 ),
             ),
+            logins=tuple(
+                SubscriptionLogin.model_validate(login) for login in descriptor.get("logins", [])
+            ),
         ),
         files=dict(raw["files"]),
     )
@@ -364,6 +372,7 @@ def package_json(package: InstalledPackage) -> str:
                     field.model_dump(mode="json", exclude_none=True)
                     for field in descriptor.setup_fields
                 ],
+                "logins": [login.model_dump(mode="json") for login in descriptor.logins],
             },
             "files": package.files,
         },
@@ -401,6 +410,7 @@ __all__ = [
     "SetupFieldType",
     "SetupTarget",
     "SetupValue",
+    "SubscriptionLogin",
     "TargetFile",
     "inspect_installed_package",
     "installed_package",

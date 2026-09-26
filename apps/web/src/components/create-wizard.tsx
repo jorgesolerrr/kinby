@@ -11,11 +11,13 @@ import type {
   PackageDescription,
   PackageSelection,
   SetupField,
+  SubscriptionLogin,
 } from "@kinby/contract"
 import { useCallback, useEffect, useRef, useState } from "react"
 import type * as React from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
+import { SubscriptionLogins } from "@/components/subscription-logins"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -51,6 +53,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { useFollowing } from "@/hooks/use-following"
 import {
   type Creation,
   createCommand,
@@ -105,7 +108,9 @@ const HINTS: Record<Stage | "create", string> = {
   package: "Package: pick what the instance starts from.",
   identity: "Identity: name the instance and pick its avatar.",
   setup: "Setup: fill in what the image asks for.",
-  create: "Create: the hub builds the instance, then you start it or leave it stopped.",
+  create:
+    "Create: the hub builds the instance. Sign in to what it declares, then start it or leave " +
+    "it stopped.",
 }
 
 const noop = () => {}
@@ -199,6 +204,7 @@ export function CreateWizard({
           caller={caller}
           clock={clock}
           name={identity.name}
+          logins={description?.logins ?? []}
           creation={creation}
           onBack={() => setSubmitted(undefined)}
         />
@@ -243,22 +249,6 @@ export function CreateWizard({
       )}
     </div>
   )
-}
-
-/**
- * What following the latest request reported. A new request forgets the previous one's reports,
- * and `follow` must keep its identity across renders, or it starts over.
- */
-function useFollowing<Request, Report>(
-  request: Request | undefined,
-  follow: (request: Request, report: (report: Report) => void) => () => void,
-): Report | undefined {
-  const [followed, setFollowed] = useState<{ request: Request; report: Report }>()
-  useEffect(() => {
-    if (request === undefined) return
-    return follow(request, (report) => setFollowed({ request, report }))
-  }, [request, follow])
-  return request !== undefined && followed?.request === request ? followed.report : undefined
 }
 
 /** The hub refused the setup values, or the image it just built no longer takes them. */
@@ -665,12 +655,14 @@ function CreationView({
   caller,
   clock,
   name,
+  logins,
   creation,
   onBack,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   name: string
+  logins: SubscriptionLogin[]
   creation: Exclude<Creation, { state: "invalid" }>
   onBack: () => void
 }) {
@@ -684,6 +676,21 @@ function CreationView({
             Back to setup
           </Button>
         </div>
+      )}
+      {creation.state === "created" && logins.length > 0 && (
+        <>
+          <h2 className="font-medium">Sign in</h2>
+          <p className="text-sm text-muted-foreground">
+            Each sign-in shows a link and a code. Open the link and enter the code there. Starting
+            the instance does not wait for a sign-in.
+          </p>
+          <SubscriptionLogins
+            caller={caller}
+            clock={clock}
+            instanceId={creation.instanceId}
+            logins={logins}
+          />
+        </>
       )}
       {creation.state === "created" && (
         <StartStep caller={caller} clock={clock} instanceId={creation.instanceId} />
