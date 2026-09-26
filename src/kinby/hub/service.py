@@ -1544,7 +1544,12 @@ class Hub:
             )
 
     async def recover(self) -> LifecycleRecovery:
-        """Reconcile every managed instance against what the container runtime still has."""
+        """Reconcile every managed instance against what the container runtime still has.
+
+        Setup containers from a login the previous process did not finish go first, so
+        they are not still holding a login volume when recovery looks at the instances.
+        """
+        await self._runtime.remove_setup_containers()
         return await recover_lifecycle(self.registry, self._runtime, self._restore_start)
 
     async def _restore_start(self, instance_id: UUID) -> OperationState:

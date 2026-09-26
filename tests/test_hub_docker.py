@@ -5,12 +5,12 @@ import shutil
 import subprocess
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import cast
 
 import pytest
-from docker.errors import ContainerError, ImageNotFound, NotFound
+from docker.errors import ContainerError, DockerException, ImageNotFound, NotFound
 from docker.types import Mount
 
 from docker import DockerClient
@@ -46,12 +46,16 @@ class FakeContainer:
         self.attrs: dict[str, object] = {"State": {"Status": status}}
         self.labels = labels
         self.stop_timeout: int | None = None
+        self.removed_force: bool | None = None
 
     def reload(self) -> None:
         return None
 
     def stop(self, timeout: int | None = None) -> None:
         self.stop_timeout = timeout
+
+    def remove(self, *, force: bool = False) -> None:
+        self.removed_force = force
 
 
 class FakeContainers:
@@ -68,6 +72,21 @@ class FakeContainers:
         self.run_output: bytes | None = None
         #: What the next create returns: a container a test drives, or a bare placeholder.
         self.creates: object | None = None
+        #: Containers `list` can see. A test that sets `list_error` makes `list` raise it.
+        self.present: list[FakeContainer] = []
+        self.list_error: DockerException | None = None
+
+    def list(
+        self, *, all: bool = False, filters: dict[str, str | Sequence[str]] | None = None
+    ) -> Sequence[FakeContainer]:
+        if self.list_error is not None:
+            raise self.list_error
+        labels: str | Sequence[str] = () if filters is None else filters.get("label", ())
+        required = (labels,) if isinstance(labels, str) else tuple(labels)
+        found = [container for container in self.present if _has_labels(container.labels, required)]
+        if all:
+            return found
+        return [container for container in found if container.status == "running"]
 
     def create(self, image: object, command: object = None, **options: object) -> object:
         self.arguments = (image, command)
@@ -787,6 +806,41 @@ def run_setup(
             return None
 
     return client, lines, asyncio.run(scenario())
+
+
+def _has_labels(labels: dict[str, str], required: tuple[object, ...]) -> bool:
+    for item in required:
+        text = str(item)
+        if "=" in text:
+            key, value = text.split("=", 1)
+            if labels.get(key) != value:
+                return False
+        elif text not in labels:
+            return False
+    return True
+
+
+def test_a_reopened_runtime_removes_setup_containers_this_hub_left_behind():
+    ours = FakeContainer("exited", {"kinby.hub": "hub-id", "kinby.setup": "alice"})
+    other_hub = FakeContainer("running", {"kinby.hub": "other", "kinby.setup": "bob"})
+    instance = FakeContainer("running", {"kinby.hub": "hub-id", "kinby.instance": "alice"})
+    client = FakeDockerClient()
+    client.containers.present = [ours, other_hub, instance]
+    runtime = DockerRuntime("hub-id", network="kinby_private", client=cast(DockerClient, client))
+
+    asyncio.run(runtime.remove_setup_containers())
+
+    assert ours.removed_force is True
+    assert other_hub.removed_force is None
+    assert instance.removed_force is None
+
+
+def test_a_setup_cleanup_the_runtime_cannot_reach_does_not_raise():
+    client = FakeDockerClient()
+    client.containers.list_error = DockerException("daemon down")
+    runtime = DockerRuntime("hub-id", network="kinby_private", client=cast(DockerClient, client))
+
+    asyncio.run(runtime.remove_setup_containers())
 
 
 def test_a_setup_container_runs_the_command_with_one_volume_and_the_hub_labels_then_goes():

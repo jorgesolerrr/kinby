@@ -492,6 +492,24 @@ class DockerRuntime:
         finally:
             await asyncio.to_thread(container.remove, force=True)
 
+    async def remove_setup_containers(self) -> None:
+        """Remove setup containers this hub left when it stopped mid-login.
+
+        A login removes its container when the run ends. A hub that dies first does not,
+        and the container keeps the login volume mounted, so a later delete fails and a
+        new login starts beside the old one.
+        """
+        try:
+            containers = await asyncio.to_thread(
+                self._client.containers.list,
+                all=True,
+                filters={"label": [f"kinby.hub={self._hub_id}", "kinby.setup"]},
+            )
+        except DockerException:
+            return
+        for container in containers:
+            await asyncio.to_thread(container.remove, force=True)
+
     async def _container(self, instance_id: str) -> Container:
         """The recorded runtime id, or the kinby- prefixed name earlier releases used."""
         try:

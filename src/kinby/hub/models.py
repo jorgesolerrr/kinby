@@ -136,6 +136,14 @@ class ContainerRuntime(Protocol):
         """
         ...
 
+    async def remove_setup_containers(self) -> None:
+        """Remove setup containers this hub left when it stopped mid-login.
+
+        A login removes its container when the run ends. A hub that dies first does not,
+        and the container keeps the login volume mounted.
+        """
+        ...
+
 
 class RecoveredState(StrEnum):
     """What a hub found for one managed instance when it opened its directory."""

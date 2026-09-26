@@ -171,6 +171,8 @@ class FakeRuntime:
         self.setups: list[SetupSpec] = []
         #: Setup containers not removed yet.
         self.setups_running = 0
+        #: Setup containers a previous process left running.
+        self.leftover_setups: list[str] = []
 
     async def create(self, spec: InstanceSpec) -> None:
         self.created.append(spec)
@@ -247,6 +249,9 @@ class FakeRuntime:
             return self.setup_exit_code
         finally:
             self.setups_running -= 1
+
+    async def remove_setup_containers(self) -> None:
+        self.leftover_setups.clear()
 
 
 class SerialRuntime(FakeRuntime):

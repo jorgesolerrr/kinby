@@ -47,6 +47,20 @@ from tests.test_hub import (
 )
 
 
+def test_reopening_a_hub_removes_setup_containers_a_login_left_behind(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        runtime.leftover_setups = ["alice-login"]
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
+
+        await hub.recover()
+
+        assert runtime.leftover_setups == []
+        hub.close()
+
+    asyncio.run(scenario())
+
+
 def test_reopening_a_hub_keeps_a_running_instance_alive(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
