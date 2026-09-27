@@ -167,10 +167,6 @@ _INTERRUPTED_OPERATION = "The hub stopped before this operation finished."
 _PREPARED_REVISION = "HEAD"
 #: How long a login waits for the user to sign in before its code counts as expired.
 LOGIN_SECONDS = 15 * 60
-#: The factory package does not declare its Codex login yet (#323). A new coder still
-#: gets the volume the hub used to mount at this path, under the old name.
-_TEMPORARY_CODEX_PACKAGE = "coder"
-_TEMPORARY_CODEX_PATH = "/root/.codex"
 #: Colors and cursor moves a command prints around its URL and code.
 _TERMINAL_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -400,8 +396,7 @@ class Hub:
             if record.path.exists():
                 raise FileExistsError(f"Instance directory already exists: {record.path}")
             staging.replace(record.path)
-            package_id = None if record.package is None else record.package.id
-            storage = self._storage(record.instance_id, record.path, description.logins, package_id)
+            storage = self._storage(record.instance_id, record.path, description.logins)
             self.registry.record_preparation(record.instance_id, artifact, storage)
             await self._runtime.create(
                 InstanceSpec(
@@ -1769,14 +1764,12 @@ class Hub:
         instance_id: UUID,
         path: Path,
         logins: Collection[SubscriptionLogin],
-        package_id: str | None,
     ) -> tuple[StorageItem, ...]:
         """What a created instance owns: its directory on the Docker host, its workspace
         volume, and one volume per declared login.
 
         A login's volume is named after its id, so the factory's `codex` login keeps the name
-        the hub gave the Codex volume before packages declared their logins. Until that login
-        is in the pinned package (#323), a new coder still gets the volume.
+        the hub gave the Codex volume before packages declared their logins.
         """
         relative = path.relative_to(self.directory)
         host_path = self._docker_host_directory / relative
@@ -1790,18 +1783,6 @@ class Hub:
             )
             for login in logins
         ]
-        declared = any(
-            login.id == "codex" or login.volume == _TEMPORARY_CODEX_PATH for login in logins
-        )
-        if package_id == _TEMPORARY_CODEX_PACKAGE and not declared:
-            login_volumes.append(
-                StorageItem(
-                    kind=StorageKind.VOLUME,
-                    source=f"{volume}-codex",
-                    destination=_TEMPORARY_CODEX_PATH,
-                    writable=True,
-                )
-            )
         return (
             StorageItem(
                 kind=StorageKind.BIND,

@@ -182,7 +182,7 @@ async def created_coder(hub: Hub) -> LifecycleOperationResult:
     return created
 
 
-def test_a_new_coder_keeps_a_codex_volume_until_its_package_declares_one(tmp_path):
+def test_a_coder_whose_package_declares_no_login_gets_no_codex_volume(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
         hub = hub_at(
@@ -194,11 +194,9 @@ def test_a_new_coder_keeps_a_codex_volume_until_its_package_declares_one(tmp_pat
 
         instance_id = (await created_coder(hub)).instance_id
 
-        owned = {
+        assert volumes(runtime.created[0].storage) == {
             (f"kinby-{instance_id}-workspace", "/instance/workspace"),
-            (f"kinby-{instance_id}-codex", "/root/.codex"),
         }
-        assert volumes(runtime.created[0].storage) == owned
 
     asyncio.run(scenario())
 
