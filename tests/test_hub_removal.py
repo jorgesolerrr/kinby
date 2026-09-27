@@ -132,7 +132,9 @@ def test_a_removal_drains_the_instance_and_removes_only_its_container(tmp_path):
         assert instance_environment(hub, created.instance_id)["PROVIDER_TOKEN"] == _SENTINEL
         assert await listed(client) == []
         assert await listed(client, removed=True) == [
-            before.model_copy(update={"intended_state": IntendedState.REMOVED})
+            before.model_copy(
+                update={"intended_state": IntendedState.REMOVED, "process": ProcessState.MISSING}
+            )
         ]
 
     asyncio.run(scenario())

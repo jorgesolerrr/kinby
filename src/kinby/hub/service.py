@@ -149,6 +149,9 @@ from kinby.packages import (
 
 _INSTANCE_HOST = "0.0.0.0"
 _INSTANCE_PORT = 8787
+_SERVE_HEADER = re.compile(r"\s*\[\s*serve\s*\]\s*(#.*)?$")
+_TABLE_HEADER = re.compile(r"\s*\[")
+_LISTEN_KEY = re.compile(r"\s*listen\s*=")
 #: How long a forced container may take to exit before the runtime terminates it.
 STOP_GRACE_SECONDS = 30
 #: How long a forced instance may take to report its own drain before the container goes down.
@@ -230,12 +233,39 @@ def _delete_directory(directory: Path) -> None:
         return
 
 
+def _set_listen(lines: list[str]) -> None:
+    """Set ``serve.listen`` to the hub's address, inside ``[serve]`` when the file has one."""
+    listen = f'listen = "{_INSTANCE_HOST}:{_INSTANCE_PORT}"'
+    header = next((i for i, line in enumerate(lines) if _SERVE_HEADER.match(line)), None)
+    if header is None:
+        lines.extend(("", "[serve]", listen))
+        return
+    end = next(
+        (i for i in range(header + 1, len(lines)) if _TABLE_HEADER.match(lines[i])),
+        len(lines),
+    )
+    for index in range(header + 1, end):
+        if _LISTEN_KEY.match(lines[index]):
+            lines[index] = listen
+            return
+    lines.insert(header + 1, listen)
+
+
 @dataclass(frozen=True)
 class PendingStop:
     """The stop running on one instance, and the way a later request escalates it."""
 
     operation_id: UUID
     force: asyncio.Event
+
+
+@dataclass(frozen=True)
+class ObservedProcess:
+    """What the container runtime reports for one instance, its detail redacted."""
+
+    process: ProcessState
+    readiness: Readiness
+    detail: str
 
 
 class Hub:
@@ -462,14 +492,21 @@ class Hub:
     async def _prepare_image(self, operation_id: UUID, package: PackageSelection | None) -> None:
         try:
             self._record(operation_id, "image", "Building the image, or reusing the one prepared.")
-            artifact = await self._images.build(ImageSelection(_PREPARED_REVISION, package))
+            built = await self._images.build(ImageSelection(_PREPARED_REVISION, package))
+            self.registry.succeed_step(
+                operation_id,
+                "Reused the image prepared for this selection."
+                if built.reused
+                else "Built the image.",
+            )
             self._record(
                 operation_id,
                 "describe",
                 "Reading what the image declares with the candidate check.",
             )
-            description = await self._images.describe(artifact)
-            self.registry.record_description(package, artifact.image_id, description)
+            description = await self._images.describe(built.artifact)
+            self.registry.record_description(package, built.artifact.image_id, description)
+            self.registry.succeed_step(operation_id, "Read what the image declares.")
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
             raise
@@ -907,8 +944,9 @@ class Hub:
 
     def _not_signing_in(self, record: ManagedInstance) -> ManagedInstance:
         """No login is writing into this instance's storage while it is taken away."""
-        login_id = self.registry.running_login(record.instance_id)
-        if login_id is not None:
+        running = self.registry.running_login(record.instance_id)
+        if running is not None:
+            _, login_id = running
             description = self.registry.description(record.package)
             logins = description.logins if description is not None else []
             label = next((login.label for login in logins if login.id == login_id), login_id)
@@ -1577,12 +1615,13 @@ class Hub:
     async def list(self, command: InstanceListCommand) -> InstanceListResult:
         return InstanceListResult(
             instances=[
-                self._summary(record)
+                await self._summary(record)
                 for record in self.registry.listed_instances(removed=command.removed)
             ]
         )
 
-    def _summary(self, record: ManagedInstance) -> InstanceSummary:
+    async def _summary(self, record: ManagedInstance) -> InstanceSummary:
+        observed = await self._observed(record)
         return InstanceSummary(
             instance_id=record.instance_id,
             manifest_id=record.manifest_id,
@@ -1590,6 +1629,8 @@ class Hub:
             source_revision=record.source_revision or "",
             image_id=record.image_id or "",
             intended_state=record.intended_state,
+            process=observed.process,
+            detail=observed.detail,
             runtime_id=record.runtime_id,
             storage=list(record.storage),
             avatar=record.avatar,
@@ -1607,31 +1648,29 @@ class Hub:
 
     async def status(self, command: InstanceStatusCommand) -> InstanceStatusResult:
         record = self._active_instance(command.instance_id)
-        active = self.registry.active_operation(record.instance_id)
-        setup = self._setup(record)
+        observed = await self._observed(record)
+        return InstanceStatusResult(
+            instance_id=record.instance_id,
+            process=observed.process,
+            readiness=observed.readiness,
+            setup=self._setup(record),
+            detail=observed.detail,
+            active_operation_id=self.registry.active_operation(record.instance_id),
+        )
+
+    async def _observed(self, record: ManagedInstance) -> ObservedProcess:
+        """Read the runtime once. A runtime that cannot be read reports the instance unavailable."""
+        secrets = self._environment(record.path).values()
         try:
             status = await self._runtime.status(record.runtime_id)
         except Exception as exc:
-            return InstanceStatusResult(
-                instance_id=record.instance_id,
-                process=ProcessState.UNAVAILABLE,
-                readiness=Readiness.UNKNOWN,
-                setup=setup,
-                detail=self._redact(
-                    str(exc) or type(exc).__name__,
-                    self._environment(record.path).values(),
-                ),
-                active_operation_id=active,
+            return ObservedProcess(
+                ProcessState.UNAVAILABLE,
+                Readiness.UNKNOWN,
+                self._redact(str(exc) or type(exc).__name__, secrets),
             )
         process, readiness = self._status(status)
-        return InstanceStatusResult(
-            instance_id=record.instance_id,
-            process=process,
-            readiness=readiness,
-            setup=setup,
-            detail=self._redact(status.detail, self._environment(record.path).values()),
-            active_operation_id=active,
-        )
+        return ObservedProcess(process, readiness, self._redact(status.detail, secrets))
 
     def _setup(self, record: ManagedInstance) -> InstanceSetup:
         """The logins and secrets the instance's stored descriptor declares, and how they stand."""
@@ -1639,9 +1678,17 @@ class Hub:
             model = inspect_instance(record.path).manifest.models.main
         except ManifestError:
             model = None
+        description = self.registry.description(record.package)
+        declared = description.logins if description is not None else []
+        running = {
+            login.id: running[0]
+            for login in declared
+            if (running := self.registry.running_login(record.instance_id, login.id))
+        }
         return instance_setup(
-            self.registry.description(record.package),
+            description,
             logins=self.registry.login_states(record.instance_id),
+            running=running,
             secrets=self._environment(record.path),
             model=model,
         )
@@ -1874,7 +1921,7 @@ class Hub:
             if line.startswith("id = "):
                 lines[index : index + 1] = identity
                 break
-        lines.extend(("", "[serve]", f'listen = "{_INSTANCE_HOST}:{_INSTANCE_PORT}"'))
+        _set_listen(lines)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     @staticmethod

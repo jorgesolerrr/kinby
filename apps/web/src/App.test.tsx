@@ -16,7 +16,7 @@ function openApp({
 }) {
   const hub = fakeHub({ signedIn, instances })
   const clock = fakeClock()
-  render(<App client={createClient("http://hub.test", hub.transport, clock)} />)
+  render(<App client={createClient("http://hub.test", hub.transport, clock)} clock={clock} />)
   return { hub, clock }
 }
 
@@ -89,9 +89,18 @@ const unnamed = instanceSummary({
   instance_id: "hub-unnamed",
   manifest_id: "research",
   intended_state: "stopped",
+  process: "stopped",
 })
 
 const instanceLink = (name: string) => screen.findByRole("link", { name })
+
+/** The browser shows or hides the tab, as switching to another one does. */
+function showPage(visibility: DocumentVisibilityState) {
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: visibility })
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"))
+  })
+}
 
 async function instanceState(name: string) {
   const row = (await instanceLink(name)).closest("li")
@@ -100,13 +109,26 @@ async function instanceState(name: string) {
 }
 
 describe("the instances", () => {
-  beforeEach(() => window.history.replaceState(null, "", "/"))
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/")
+    Reflect.deleteProperty(document, "visibilityState")
+  })
 
   it("lists every instance in the sidebar with its name and state", async () => {
     openApp({ signedIn: true, instances: [ada, unnamed] })
 
     expect((await instanceState("Ada")).getByText("running")).toBeDefined()
     expect((await instanceState("research")).getByText("stopped")).toBeDefined()
+  })
+
+  it("shows the state the runtime observed, not the one the instance is meant to be in", async () => {
+    const looping = { ...ada, process: "starting", detail: "restarting" } as const
+    const failed = { ...unnamed, intended_state: "running", process: "failed" } as const
+    openApp({ signedIn: true, instances: [looping, failed] })
+
+    expect((await instanceState("Ada")).getByText("restarting")).toBeDefined()
+    expect((await instanceState("research")).getByText("failed")).toBeDefined()
+    expect(screen.queryByText("running")).toBeNull()
   })
 
   it("badges an instance whose setup is pending", async () => {
@@ -173,6 +195,45 @@ describe("the instances", () => {
     await act(() => clock.advance(16_000))
 
     expect(await instanceLink("research")).toBeDefined()
+  })
+
+  it("lists the instances again when the window regains focus, keeping the list meanwhile", async () => {
+    const pending = { ...unnamed, setup_pending: true }
+    const { hub } = openApp({ signedIn: true, instances: [pending] })
+    expect((await instanceState("research")).getByText("Setup pending")).toBeDefined()
+
+    // Signed in and started from another tab.
+    hub.instances = [
+      { ...pending, setup_pending: false, intended_state: "running", process: "running" },
+    ]
+    act(() => {
+      window.dispatchEvent(new Event("focus"))
+    })
+
+    expect(screen.getByText("stopped")).toBeDefined()
+    expect(await (await instanceState("research")).findByText("running")).toBeDefined()
+    expect((await instanceState("research")).queryByText("Setup pending")).toBeNull()
+  })
+
+  it("lists the instances again every 30 seconds while the page is visible, and not while hidden", async () => {
+    const { hub, clock } = openApp({ signedIn: true, instances: [unnamed] })
+    const started = { ...unnamed, intended_state: "running", process: "running" } as const
+    expect((await instanceState("research")).getByText("stopped")).toBeDefined()
+
+    hub.instances = [started]
+    await act(() => clock.advance(29_000))
+    expect((await instanceState("research")).getByText("stopped")).toBeDefined()
+    await act(() => clock.advance(1_000))
+    expect((await instanceState("research")).getByText("running")).toBeDefined()
+
+    showPage("hidden")
+    hub.instances = [unnamed]
+    await act(() => clock.advance(120_000))
+    expect((await instanceState("research")).getByText("running")).toBeDefined()
+
+    showPage("visible")
+    await act(() => clock.advance(30_000))
+    expect((await instanceState("research")).getByText("stopped")).toBeDefined()
   })
 
   it("says the hub has no instances yet", async () => {

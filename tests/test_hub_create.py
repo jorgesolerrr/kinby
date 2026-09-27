@@ -34,7 +34,7 @@ from kinby.contracts import (
     SetupValue,
     TargetFile,
 )
-from kinby.hub import ImageArtifact, ImageSelection
+from kinby.hub import BuiltImage, ImageArtifact, ImageSelection
 from kinby.instance import init_instance, inspect_instance
 from kinby.packages import InstalledPackage, PackageDescriptor
 from tests.test_hub import (
@@ -206,11 +206,11 @@ def test_a_vanilla_creation_without_a_behavior_prompt_keeps_the_default_one(tmp_
 class RebuiltImages(FakeImages):
     """Every build after the first makes a new image that asks for one more secret."""
 
-    async def build(self, selection: ImageSelection) -> ImageArtifact:
-        artifact = await super().build(selection)
+    async def build(self, selection: ImageSelection) -> BuiltImage:
+        built = await super().build(selection)
         if len(self.selections) == 1:
-            return artifact
-        return replace(artifact, image_id="sha256:rebuilt-image")
+            return built
+        return BuiltImage(replace(built.artifact, image_id="sha256:rebuilt-image"), reused=False)
 
     async def describe(self, artifact: ImageArtifact) -> PackageDescription:
         description = await super().describe(artifact)
@@ -517,6 +517,54 @@ def test_defaults_fill_in_what_the_user_left_out_and_keep_the_file_as_shipped(tm
         assert images.checked_configs == []
         environment = instance_environment(hub, accepted.instance_id)
         assert environment["ANTHROPIC_API_KEY"] == "sk-private"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "served",
+    ['[serve]\nlisten = "127.0.0.1:9000"\n', "[serve]\n"],
+    ids=["own-listen", "no-listen"],
+)
+def test_a_template_that_declares_serve_gets_the_hub_listen_address_in_that_one_table(
+    tmp_path, served
+):
+    async def scenario() -> None:
+        package = InstalledPackage(
+            descriptor=PackageDescriptor(
+                id="writer",
+                display_name="Writing teammate",
+                description="Drafts articles.",
+                icon="pen",
+                distribution="kinby-writer",
+                version="1.4.2",
+            ),
+            files={"kinby.toml": served + "\n[budgets]\nsteps = 3\n"},
+        )
+        hub = hub_at(tmp_path / "hub", images=FakeImages(package=package))
+        client = hub_client(hub)
+        await prepared(client, WRITER)
+
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="editor",
+                model="openai:gpt-5",
+                package=WRITER,
+                secrets={"api_key": "sk-private"},
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert outcome.state is OperationState.SUCCEEDED, outcome.detail
+        written = (hub.instances_directory / str(accepted.instance_id) / "kinby.toml").read_text(
+            encoding="utf-8"
+        )
+        manifest = tomllib.loads(written)
+        assert manifest["serve"] == {"listen": "0.0.0.0:8787"}
+        assert manifest["budgets"]["steps"] == 3
+        assert written.count("[serve]") == 1
 
     asyncio.run(scenario())
 

@@ -58,6 +58,11 @@ export function SubscriptionLogins({
   )
 }
 
+interface LoginRequest {
+  loginId: string
+  running?: string
+}
+
 function LoginRow({
   caller,
   clock,
@@ -71,10 +76,13 @@ function LoginRow({
   login: LoginSetup
   onEnded: () => void
 }) {
-  // A new object for each click, so signing in again follows a new login.
-  const [request, setRequest] = useState<{ loginId: string }>()
+  // A new object for each click, so signing in again follows a new login. A sign-in the hub
+  // already runs when the row loads, after a reload say, is followed without a click.
+  const [request, setRequest] = useState<LoginRequest | undefined>(() =>
+    login.operation_id ? { loginId: login.id, running: login.operation_id } : undefined,
+  )
   const follow = useCallback(
-    (asked: { loginId: string }, report: (signIn: SignIn) => void) =>
+    (asked: LoginRequest, report: (signIn: SignIn) => void) =>
       followLogin(
         caller,
         instanceId,
@@ -84,6 +92,7 @@ function LoginRow({
           if (signIn.state !== "signing-in") onEnded()
         },
         clock,
+        asked.running,
       ),
     [caller, clock, instanceId, onEnded],
   )

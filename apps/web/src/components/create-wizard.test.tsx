@@ -82,6 +82,15 @@ const typed: PackageDescription = {
   ],
 }
 
+const codex: SubscriptionLogin = {
+  id: "codex",
+  label: "Codex",
+  description: "Signs Codex in with your ChatGPT plan.",
+  command: ["codex", "login", "--device-auth"],
+  volume: "/root/.codex",
+  prompt_pattern: "(?P<url>https://\\S+)\\s+(?P<code>\\S+)",
+}
+
 const coder: CuratedPackage = {
   id: "coder",
   display_name: "Software factory",
@@ -231,6 +240,23 @@ describe("the create wizard's package step", () => {
     expect(apiKey.getByText("Secret")).toBeDefined()
     expect(prompt.getByText("Optional")).toBeDefined()
     expect(prompt.getByText("Instructions the instance follows in every turn.")).toBeDefined()
+    expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
+  })
+
+  it("lists each login the prepared image declares, after its fields", async () => {
+    await pickVanilla({
+      ...preparation({ state: "succeeded" }),
+      "package.describe": () => ({ ...vanilla, logins: [codex] }),
+    })
+
+    const logins = await screen.findByRole("list", { name: "Subscription logins" })
+    const row = within(within(logins).getByRole("listitem", { name: "Codex" }))
+    expect(row.getByText("Signs Codex in with your ChatGPT plan.")).toBeDefined()
+    expect(row.getByText("After creation")).toBeDefined()
+    expect(
+      screen.getByRole("list", { name: "Setup fields" }).compareDocumentPosition(logins) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 
   it("marks the step that failed with what went wrong", async () => {
@@ -805,14 +831,6 @@ describe("the create wizard's start step", () => {
 })
 
 describe("the create wizard's sign in step", () => {
-  const codex: SubscriptionLogin = {
-    id: "codex",
-    label: "Codex",
-    description: "Signs Codex in with your ChatGPT plan.",
-    command: ["codex", "login", "--device-auth"],
-    volume: "/root/.codex",
-    prompt_pattern: "(?P<url>https://\\S+)\\s+(?P<code>\\S+)",
-  }
   const published = operationAnswer({
     operation_id: "op-create",
     instance_id: "instance-1",

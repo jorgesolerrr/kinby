@@ -16,6 +16,7 @@ from docker.types import Mount
 from docker import DockerClient
 from kinby.contracts import PackageDescription, StorageItem, StorageKind
 from kinby.hub import (
+    BuiltImage,
     DockerImageBackend,
     DockerRuntime,
     Hub,
@@ -574,15 +575,16 @@ class PulledImage:
         selection: ImageSelection,
         instance: StorageItem | None = None,
     ) -> PreparedImage:
-        return PreparedImage(artifact=await self.build(selection))
+        return PreparedImage(artifact=(await self.build(selection)).artifact)
 
-    async def build(self, selection: ImageSelection) -> ImageArtifact:
-        return ImageArtifact(
+    async def build(self, selection: ImageSelection) -> BuiltImage:
+        artifact = ImageArtifact(
             image_id=self._image_id,
             revision="a" * 40,
             dependency_id="sha256:dependencies",
             base_images=("busybox:1.36",),
         )
+        return BuiltImage(artifact, reused=False)
 
     async def describe(self, artifact: ImageArtifact) -> PackageDescription:
         return vanilla_description()

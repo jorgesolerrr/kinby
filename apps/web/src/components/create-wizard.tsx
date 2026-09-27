@@ -389,6 +389,7 @@ function PackageStep({
             <>
               <h2 className="font-medium">What it asks for</h2>
               <Fields fields={preparation.description.setup_fields} />
+              <Logins logins={preparation.description.logins ?? []} />
               <div>
                 <Button onClick={onContinue}>Continue</Button>
               </div>
@@ -817,6 +818,27 @@ function Fields({ fields }: { fields: SetupField[] }) {
           <ItemActions>
             <Badge variant="outline">{field.kind === "secret" ? "Secret" : "Configuration"}</Badge>
             {!field.required && <Badge variant="secondary">Optional</Badge>}
+          </ItemActions>
+        </Item>
+      ))}
+    </ItemGroup>
+  )
+}
+
+/** The subscription logins a package declares. The user signs in once the instance exists. */
+function Logins({ logins }: { logins: SubscriptionLogin[] }) {
+  if (logins.length === 0) return null
+  return (
+    <ItemGroup aria-label="Subscription logins">
+      {logins.map((login) => (
+        <Item key={login.id} render={<li />} aria-label={login.label} variant="outline" size="sm">
+          <ItemContent>
+            <ItemTitle>{login.label}</ItemTitle>
+            <ItemDescription>{login.description}</ItemDescription>
+          </ItemContent>
+          <ItemActions>
+            <Badge variant="outline">Sign-in</Badge>
+            <Badge variant="secondary">After creation</Badge>
           </ItemActions>
         </Item>
       ))}

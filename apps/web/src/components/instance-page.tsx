@@ -19,18 +19,26 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
 import { followStart, type Starting } from "@/lib/creation"
-import { instanceName } from "@/lib/instances"
-import { BotIcon, CircleCheckIcon, CircleXIcon } from "lucide-react"
+import { instanceName, observedState } from "@/lib/instances"
+import { BotIcon, CircleCheckIcon, CirclePauseIcon, CircleXIcon } from "lucide-react"
 
 /**
  * What one instance shows. A stopped instance with setup pending opens on its setup card, and
- * keeps it until it runs. A running one offers its logins to sign in again. `onChanged` hears a
- * sign-in or a start end, so the instances are listed again, and must keep its identity.
+ * keeps it until it runs. Any other stopped one offers Start. A running one offers its logins to
+ * sign in again. `onChanged` hears a sign-in or a start end, so the instances are listed again,
+ * and must keep its identity.
  */
 export function InstancePage({
   caller,
@@ -55,28 +63,69 @@ export function InstancePage({
       <SetupCard caller={caller} clock={clock} name={name} status={status} onChanged={onChanged} />
     )
   }
+  if (instance.intended_state === "stopped") {
+    return (
+      <Stopped
+        caller={caller}
+        clock={clock}
+        instanceId={instance.instance_id}
+        name={name}
+        onChanged={onChanged}
+      />
+    )
+  }
   // The empty state waits until the status is read. A read that failed has nothing to sign in to.
   if (instance.intended_state === "running") {
     if (waiting && status === undefined) return null
     const logins = status?.setup.logins ?? []
-    if (logins.length > 0) {
-      return (
-        <section className="flex max-w-2xl flex-col gap-3 p-6">
-          <h2 className="font-medium">Subscription logins</h2>
-          <p className="text-sm text-muted-foreground">
-            Sign in again when a subscription stops working. The instance keeps running.
-          </p>
-          <SubscriptionLogins
-            caller={caller}
-            clock={clock}
-            instanceId={instance.instance_id}
-            logins={logins}
-            onEnded={onChanged}
-          />
-        </section>
-      )
-    }
+    return (
+      <>
+        <ProcessAlert instance={instance} name={name} />
+        {logins.length > 0 ? (
+          <section className="flex max-w-2xl flex-col gap-3 p-6">
+            <h2 className="font-medium">Subscription logins</h2>
+            <p className="text-sm text-muted-foreground">
+              Sign in again when a subscription stops working. The instance keeps running.
+            </p>
+            <SubscriptionLogins
+              caller={caller}
+              clock={clock}
+              instanceId={instance.instance_id}
+              logins={logins}
+              onEnded={onChanged}
+            />
+          </section>
+        ) : (
+          <NothingHereYet name={name} />
+        )}
+      </>
+    )
   }
+  return <NothingHereYet name={name} />
+}
+
+/** Says so when an instance meant to run is restarting in a loop or has failed. */
+function ProcessAlert({ instance, name }: { instance: InstanceSummary; name: string }) {
+  const state = observedState(instance)
+  if (state !== "restarting" && state !== "failed") return null
+  return (
+    <div className="max-w-2xl px-6 pt-6">
+      <Alert variant="destructive">
+        <CircleXIcon />
+        <AlertTitle>
+          {state === "restarting" ? `${name} is restarting` : `${name} failed`}
+        </AlertTitle>
+        <AlertDescription>
+          {state === "restarting"
+            ? "Its container keeps stopping, and the runtime keeps starting it again."
+            : instance.detail}
+        </AlertDescription>
+      </Alert>
+    </div>
+  )
+}
+
+function NothingHereYet({ name }: { name: string }) {
   return (
     <Empty>
       <EmptyHeader>
@@ -176,6 +225,43 @@ function SetupCard({
           />
         </CardFooter>
       </Card>
+    </section>
+  )
+}
+
+function Stopped({
+  caller,
+  clock,
+  instanceId,
+  name,
+  onChanged,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  instanceId: string
+  name: string
+  onChanged: () => void
+}) {
+  const titleId = useId()
+  return (
+    <section aria-labelledby={titleId} className="flex flex-1">
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <CirclePauseIcon />
+          </EmptyMedia>
+          <EmptyTitle id={titleId}>{name} is stopped</EmptyTitle>
+          <EmptyDescription>It does nothing until it starts.</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <StartButton
+            caller={caller}
+            clock={clock}
+            instanceId={instanceId}
+            onStarted={onChanged}
+          />
+        </EmptyContent>
+      </Empty>
     </section>
   )
 }
