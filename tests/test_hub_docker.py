@@ -46,7 +46,7 @@ class FakeContainer:
         self.attrs: dict[str, object] = {"State": {"Status": status}}
         self.labels = labels
         self.stop_timeout: int | None = None
-        self.removed_force: bool | None = None
+        self.removal: dict[str, bool] | None = None
 
     def reload(self) -> None:
         return None
@@ -54,8 +54,8 @@ class FakeContainer:
     def stop(self, timeout: int | None = None) -> None:
         self.stop_timeout = timeout
 
-    def remove(self, *, force: bool = False) -> None:
-        self.removed_force = force
+    def remove(self, *, force: bool = False, v: bool = False) -> None:
+        self.removal = {"force": force, "v": v}
 
 
 class FakeContainers:
@@ -769,8 +769,8 @@ class FakeSetupContainer:
         self.events.append("wait")
         return {"StatusCode": self.exit_code, "Error": None}
 
-    def remove(self, *, force: bool = False) -> None:
-        self.events.append(f"remove force={force}")
+    def remove(self, *, force: bool = False, v: bool = False) -> None:
+        self.events.append(f"remove force={force} v={v}")
         self._gone.set()
 
 
@@ -830,9 +830,11 @@ def test_a_reopened_runtime_removes_setup_containers_this_hub_left_behind():
 
     asyncio.run(runtime.remove_setup_containers())
 
-    assert ours.removed_force is True
-    assert other_hub.removed_force is None
-    assert instance.removed_force is None
+    # v=True takes the anonymous /instance volume with it; Docker keeps named volumes.
+    assert ours.removal == {"force": True, "v": True}
+    assert other_hub.removal is None
+    assert instance.removal is None
+    assert client.volumes.removed == []
 
 
 def test_a_setup_cleanup_the_runtime_cannot_reach_does_not_raise():
@@ -862,7 +864,9 @@ def test_a_setup_container_runs_the_command_with_one_volume_and_the_hub_labels_t
         "Waiting",
     ]
     assert exit_code == 0
-    assert container.events == ["start", "wait", "remove force=True"]
+    # v=True takes the anonymous /instance volume with it; Docker keeps named volumes.
+    assert container.events == ["start", "wait", "remove force=True v=True"]
+    assert client.volumes.removed == []
 
 
 def test_a_setup_container_that_fails_reports_its_exit_code_and_goes():
@@ -872,7 +876,7 @@ def test_a_setup_container_that_fails_reports_its_exit_code_and_goes():
 
     assert lines == ["error: no device code"]
     assert exit_code == 1
-    assert container.events == ["start", "wait", "remove force=True"]
+    assert container.events == ["start", "wait", "remove force=True v=True"]
 
 
 def test_a_setup_container_that_outlives_its_timeout_goes():
@@ -882,7 +886,7 @@ def test_a_setup_container_that_outlives_its_timeout_goes():
 
     assert lines == ["Open https://auth.example/device and enter AB12-C3D"]
     assert exit_code is None
-    assert container.events == ["start", "remove force=True"]
+    assert container.events == ["start", "remove force=True v=True"]
 
 
 class _RecordingNetwork:
