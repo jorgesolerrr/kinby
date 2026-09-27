@@ -907,10 +907,13 @@ class Hub:
 
     def _not_signing_in(self, record: ManagedInstance) -> ManagedInstance:
         """No login is writing into this instance's storage while it is taken away."""
-        login = self.registry.running_login(record.instance_id)
-        if login is not None:
+        login_id = self.registry.running_login(record.instance_id)
+        if login_id is not None:
+            description = self.registry.description(record.package)
+            logins = description.logins if description is not None else []
+            label = next((login.label for login in logins if login.id == login_id), login_id)
             raise LifecycleOperationInFlight(
-                f'Login "{login}" is still running for this instance. '
+                f"The {label} sign-in is still running for this instance. "
                 "Finish the sign-in or let its code expire first."
             )
         return record

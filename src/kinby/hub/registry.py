@@ -477,7 +477,7 @@ class HubRegistry:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._running_login(connection, instance_id, login_id)
             if existing is not None:
-                return existing
+                return UUID(existing[0])
             connection.execute(
                 """
                 INSERT INTO operations (id, instance_id, kind, state, detail, login_id)
@@ -494,20 +494,22 @@ class HubRegistry:
             )
         return operation_id
 
-    def running_login(self, instance_id: UUID) -> UUID | None:
-        """A login of this instance that has not finished, if one is running."""
+    def running_login(self, instance_id: UUID) -> str | None:
+        """The login id of a login of this instance that has not finished, if one is running."""
         with self._connect() as connection:
-            return self._running_login(connection, instance_id)
+            row = self._running_login(connection, instance_id)
+        return row[1] if row is not None else None
 
     @staticmethod
     def _running_login(
         connection: sqlite3.Connection,
         instance_id: UUID,
         login_id: str | None = None,
-    ) -> UUID | None:
-        row = connection.execute(
+    ) -> tuple[str, str] | None:
+        """The operation id and the login id of an unfinished login, if one is running."""
+        return connection.execute(
             """
-            SELECT id FROM operations
+            SELECT id, login_id FROM operations
             WHERE instance_id = ? AND kind = ? AND state IN (?, ?)
               AND (? IS NULL OR login_id = ?)
             ORDER BY rowid LIMIT 1
@@ -521,7 +523,6 @@ class HubRegistry:
                 login_id,
             ),
         ).fetchone()
-        return UUID(row[0]) if row is not None else None
 
     def seed_logins(self, instance_id: UUID, login_ids: Collection[str]) -> None:
         """Track each login a new instance declares, none of them signed in yet."""
