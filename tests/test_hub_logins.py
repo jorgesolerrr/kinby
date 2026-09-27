@@ -115,7 +115,9 @@ def writer_hub(
     return hub, runtime
 
 
-async def created_writer(hub: Hub) -> LifecycleOperationResult:
+async def created_writer(
+    hub: Hub, secrets: dict[str, str] | None = None
+) -> LifecycleOperationResult:
     """Prepare the writer, create one instance from it, and wait until it is published."""
     client = hub_client(hub)
     accepted = await client.call(IMAGE_PREPARE, ImagePrepareCommand(package=WRITER))
@@ -127,7 +129,7 @@ async def created_writer(hub: Hub) -> LifecycleOperationResult:
             manifest_id="writer",
             model="openai:gpt-5",
             package=WRITER,
-            secrets={"api_key": "sk-private"},
+            secrets={"api_key": "sk-private", **(secrets or {})},
         ),
     )
     assert isinstance(created, LifecycleOperationResult)

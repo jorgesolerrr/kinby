@@ -42,7 +42,12 @@ function Shell({ client, connected }: { client: Client; connected: boolean }) {
           {creating ? (
             <CreateWizard caller={client} onPublished={listAgain} />
           ) : (
-            <MainPanel instances={instances} selected={selected} />
+            <MainPanel
+              caller={client}
+              instances={instances}
+              selected={selected}
+              onChanged={listAgain}
+            />
           )}
         </SidebarInset>
       </SidebarProvider>

@@ -1,4 +1,5 @@
-"""Check the values a client sends for the setup fields a prepared image declares."""
+"""Check the values a client sends for the setup fields a prepared image declares, and read
+how much of that setup an instance has done."""
 
 from __future__ import annotations
 
@@ -7,9 +8,24 @@ from collections.abc import Mapping
 
 from pydantic import TypeAdapter, ValidationError
 
-from kinby.contracts import PackageDescription, SetupFieldKind, SetupValue
+from kinby.contracts import (
+    InstanceSetup,
+    LoginSetup,
+    LoginState,
+    PackageDescription,
+    SecretSetup,
+    SetupField,
+    SetupFieldKind,
+    SetupValue,
+)
 from kinby.instance import ModelName
-from kinby.packages import MODEL_FIELD, package_fields, resolved_values, value_problem
+from kinby.packages import (
+    API_KEY_FIELD,
+    MODEL_FIELD,
+    package_fields,
+    resolved_values,
+    value_problem,
+)
 
 ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MODEL_NAME = TypeAdapter(ModelName)
@@ -81,6 +97,47 @@ def targeted(
         for field in package_fields(description.setup_fields)
         if field.target is not None and field.name in configured
     }
+
+
+def instance_setup(
+    description: PackageDescription | None,
+    *,
+    logins: Mapping[str, LoginState],
+    secrets: Mapping[str, str],
+    model: ModelName | None,
+) -> InstanceSetup:
+    """Each login and secret field the instance's stored descriptor declares, and how it stands.
+
+    A login the hub never tracked belongs to an instance created before it tracked logins, and
+    reads as signed in. The API key is held under its provider's variable, so it takes the model.
+    Blank text counts as not set, the way creation reads it.
+    """
+    if description is None:
+        return InstanceSetup(logins=[], secrets=[])
+
+    def is_set(field: SetupField) -> bool:
+        if field.name != API_KEY_FIELD.name:
+            return bool(secrets.get(field.name, "").strip())
+        return model is not None and bool(secrets.get(api_key_variable(model), "").strip())
+
+    return InstanceSetup(
+        logins=[
+            LoginSetup(
+                id=login.id,
+                label=login.label,
+                description=login.description,
+                state=logins.get(login.id, LoginState.SIGNED_IN),
+            )
+            for login in description.logins
+        ],
+        secrets=[
+            SecretSetup(
+                name=field.name, label=field.label, required=field.required, is_set=is_set(field)
+            )
+            for field in description.setup_fields
+            if field.kind is SetupFieldKind.SECRET
+        ],
+    )
 
 
 def api_key_variable(model: ModelName) -> str:

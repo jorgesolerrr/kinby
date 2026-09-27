@@ -44,6 +44,10 @@ export type DrainState = "drained" | "interrupted";
 export type IntendedState = "stopped" | "running" | "removed" | "deleted";
 export type ProcessState = "missing" | "created" | "starting" | "running" | "stopped" | "failed" | "unavailable";
 export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "unknown";
+/**
+ * How an instance's subscription login stands: not signed in yet, or how its last one ended.
+ */
+export type LoginState = "pending" | "signed_in" | "failed";
 export type OperationKind =
   | "create"
   | "start"
@@ -442,6 +446,7 @@ export interface InstanceSummary {
   package?: PackageSummary | null;
   persona_name: string | null;
   runtime_id: string;
+  setup_pending: boolean;
   source_revision: string;
   storage: StorageItem[];
 }
@@ -506,6 +511,32 @@ export interface InstanceStatusResult {
   instance_id: string;
   process: ProcessState;
   readiness: Readiness;
+  setup: InstanceSetup;
+}
+/**
+ * What an instance declares it needs, as its stored descriptor has it, and what is done.
+ */
+export interface InstanceSetup {
+  logins: LoginSetup[];
+  secrets: SecretSetup[];
+}
+/**
+ * One subscription login an instance declares, and its state.
+ */
+export interface LoginSetup {
+  description: string;
+  id: string;
+  label: string;
+  state: LoginState;
+}
+/**
+ * One secret field an instance declares, and whether it holds a value. Never the value.
+ */
+export interface SecretSetup {
+  is_set: boolean;
+  label: string;
+  name: string;
+  required: boolean;
 }
 export interface InstanceStopCommand {
   force?: boolean;

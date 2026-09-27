@@ -1,24 +1,35 @@
-import type { InstanceSummary } from "@kinby/contract"
+import { browserClock } from "@kinby/contract"
+import type { Client, Clock, InstanceSummary } from "@kinby/contract"
 import type * as React from "react"
 
+import { InstancePage } from "@/components/instance-page"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { instanceName } from "@/lib/instances"
-import { BotIcon, MousePointerClickIcon, ServerIcon } from "lucide-react"
+import { MousePointerClickIcon, ServerIcon } from "lucide-react"
 
-/** What the selected instance shows. No flow fills it yet, so every case is an empty state. */
+/** The selected instance's page, or why there is none. `onChanged` lists the instances again. */
 export function MainPanel({
+  caller,
+  clock = browserClock,
   instances,
   selected,
+  onChanged,
 }: {
+  caller: Pick<Client, "call">
+  clock?: Clock
   instances: InstanceSummary[] | undefined
   selected: InstanceSummary | undefined
+  onChanged: () => void
 }) {
   if (instances === undefined) return null
   if (selected !== undefined) {
     return (
-      <EmptyState icon={<BotIcon />} title="Nothing here yet">
-        What {instanceName(selected)} does will show here.
-      </EmptyState>
+      <InstancePage
+        key={selected.instance_id}
+        caller={caller}
+        clock={clock}
+        instance={selected}
+        onChanged={onChanged}
+      />
     )
   }
   if (instances.length === 0) {

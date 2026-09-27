@@ -115,6 +115,7 @@ export function instanceSummary(
     manifest_id: fields.instance_id,
     persona_name: null,
     runtime_id: "runtime",
+    setup_pending: false,
     source_revision: "revision",
     storage: [],
     ...fields,

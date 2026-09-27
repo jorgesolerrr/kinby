@@ -228,6 +228,7 @@ describe("following a start", () => {
         instance_id: "instance-1",
         process: "starting",
         readiness: "starting",
+        setup: { logins: [], secrets: [] },
         active_operation_id: "op-2",
       }),
       "operation.get": () => operation({ operation_id: "op-2", kind: "start", state: "succeeded" }),

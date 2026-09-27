@@ -688,7 +688,8 @@ function CreationView({
             caller={caller}
             clock={clock}
             instanceId={creation.instanceId}
-            logins={logins}
+            // The hub seeds each declared login pending when it publishes the instance.
+            logins={logins.map((login) => ({ ...login, state: "pending" }))}
           />
         </>
       )}

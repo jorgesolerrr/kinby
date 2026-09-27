@@ -175,6 +175,11 @@ _Avoid_: login, device flow, auth
 The temporary container the **hub** runs on an instance's **image artifact** for one **subscription login**. It runs the login's command in place of kinby, mounts only that login's volume, holds none of the **instance secrets**, and is removed when the login ends, however it ends.
 _Avoid_: login container, helper container
 
+### Pending setup
+
+What an **instance** still needs after creation: a **subscription login** that is not signed in, or a required secret **setup field** with no value in its **instance secrets**. The **hub** tracks each declared login per instance as pending, signed in, or failed, from its creation on, and reads the secrets from the instance's stored descriptor and its secrets file, never showing a value. An instance created before the hub tracked logins reads as complete. Pending setup never blocks a start. A stopped instance with pending setup opens on its setup card, where the user signs in, sees which secrets are set, and starts it.
+_Avoid_: incomplete instance, onboarding
+
 ### Avatar
 
 How clients draw an **instance**: a shape (circle, squircle, or square) and a color named from a fixed palette, which each client maps to its own theme. The user picks it at creation, and the **instance registry** keeps it, never the instance directory, so it shows before the instance ever starts. An instance nobody picked one for is a circle in the palette's first color.
