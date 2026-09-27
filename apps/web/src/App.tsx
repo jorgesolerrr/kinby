@@ -1,5 +1,5 @@
 import type { Client, InstanceSummary } from "@kinby/contract"
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { CreateWizard } from "@/components/create-wizard"
@@ -55,27 +55,37 @@ function Shell({ client, connected }: { client: Client; connected: boolean }) {
   )
 }
 
-/** The hub's instances, listed again each time the connection comes back, or when asked to. */
+/**
+ * The hub's instances, listed again each time the connection comes back, or when asked to.
+ * The promise settles once that list is stored. A caller that opens an instance waits for it,
+ * so the page reads the list that includes the change.
+ */
 function useInstances(
   client: Client,
   connected: boolean,
-): [InstanceSummary[] | undefined, () => void] {
+): [InstanceSummary[] | undefined, () => Promise<void>] {
   const [instances, setInstances] = useState<InstanceSummary[]>()
-  const [listing, setListing] = useState(0)
-  const listAgain = useCallback(() => setListing((count) => count + 1), [])
-  useEffect(() => {
-    if (!connected) return
-    let current = true
-    client.call("instance.list", {}).then(
+  // A newer list, or a drop, retires the one already in flight.
+  const generation = useRef(0)
+  const connectedRef = useRef(false)
+  const listAgain = useCallback(() => {
+    if (!connectedRef.current) return Promise.resolve()
+    const mine = ++generation.current
+    return client.call("instance.list", {}).then(
       (listed) => {
-        if (current) setInstances(listed.instances)
+        if (mine === generation.current) setInstances(listed.instances)
       },
       // A dropped socket shows as reconnecting, and the list stays as it was until it is back.
       () => {},
     )
-    return () => {
-      current = false
+  }, [client])
+  useEffect(() => {
+    connectedRef.current = connected
+    if (!connected) {
+      generation.current += 1
+      return
     }
-  }, [client, connected, listing])
+    void listAgain()
+  }, [connected, listAgain])
   return [instances, listAgain]
 }
