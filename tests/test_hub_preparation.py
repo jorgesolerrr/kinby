@@ -26,7 +26,7 @@ from kinby.contracts import (
     SetupFieldKind,
     SetupFieldType,
 )
-from kinby.hub import Hub, ImageArtifact, ImageSelection
+from kinby.hub import BuiltImage, Hub, ImageSelection
 from kinby.hub.curated import CURATED_DIRECTORY
 from kinby.packages import InstalledPackage, PackageDescriptor
 from tests.test_hub import (
@@ -51,7 +51,7 @@ class HeldImages(FakeImages):
         self.building = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def build(self, selection: ImageSelection) -> ImageArtifact:
+    async def build(self, selection: ImageSelection) -> BuiltImage:
         self.building.set()
         await self.release.wait()
         return await super().build(selection)
@@ -91,6 +91,37 @@ def test_preparing_vanilla_builds_the_base_image_then_reads_its_descriptor(tmp_p
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
         assert not isinstance(listed, ErrorEnvelope)
         assert listed.instances == []
+
+    asyncio.run(scenario())
+
+
+def test_preparing_a_selection_the_first_time_says_each_step_did_its_work(tmp_path):
+    async def scenario() -> None:
+        client = hub_client(hub_at(tmp_path / "hub"))
+
+        outcome = await prepared(client, None)
+
+        assert [(step.name, step.state, step.detail) for step in outcome.steps] == [
+            ("image", OperationState.SUCCEEDED, "Built the image."),
+            ("describe", OperationState.SUCCEEDED, "Read what the image declares."),
+        ]
+        assert outcome.detail == "Image prepared."
+
+    asyncio.run(scenario())
+
+
+def test_preparing_a_selection_again_says_it_reused_the_image(tmp_path):
+    async def scenario() -> None:
+        client = hub_client(hub_at(tmp_path / "hub", images=FakeImages(package=writer_package())))
+        await prepared(client, WRITER)
+
+        again = await prepared(client, WRITER)
+
+        assert again.state is OperationState.SUCCEEDED
+        assert [(step.name, step.detail) for step in again.steps] == [
+            ("image", "Reused the image prepared for this selection."),
+            ("describe", "Read what the image declares."),
+        ]
 
     asyncio.run(scenario())
 
@@ -202,7 +233,7 @@ def test_a_failed_candidate_check_fails_the_describe_step_and_stores_nothing(tmp
 
         assert outcome.state is OperationState.FAILED
         assert [(step.name, step.state, step.detail) for step in outcome.steps] == [
-            ("image", OperationState.SUCCEEDED, "Building the image, or reusing the one prepared."),
+            ("image", OperationState.SUCCEEDED, "Built the image."),
             ("describe", OperationState.FAILED, 'Executable "claude" is not on PATH.'),
         ]
         assert isinstance(described, ErrorEnvelope)

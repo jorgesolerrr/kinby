@@ -10,11 +10,11 @@ const building: OperationStep = {
   state: "running",
   detail: "Building the image, or reusing the one prepared.",
 }
-const built: OperationStep = { ...building, state: "succeeded" }
+const built: OperationStep = { name: "image", state: "succeeded", detail: "Built the image." }
 const described: OperationStep = {
   name: "describe",
   state: "succeeded",
-  detail: "Reading what the image declares with the candidate check.",
+  detail: "Read what the image declares.",
 }
 
 const vanilla: PackageDescription = {

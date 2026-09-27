@@ -483,14 +483,21 @@ class Hub:
     async def _prepare_image(self, operation_id: UUID, package: PackageSelection | None) -> None:
         try:
             self._record(operation_id, "image", "Building the image, or reusing the one prepared.")
-            artifact = await self._images.build(ImageSelection(_PREPARED_REVISION, package))
+            built = await self._images.build(ImageSelection(_PREPARED_REVISION, package))
+            self.registry.succeed_step(
+                operation_id,
+                "Reused the image prepared for this selection."
+                if built.reused
+                else "Built the image.",
+            )
             self._record(
                 operation_id,
                 "describe",
                 "Reading what the image declares with the candidate check.",
             )
-            description = await self._images.describe(artifact)
-            self.registry.record_description(package, artifact.image_id, description)
+            description = await self._images.describe(built.artifact)
+            self.registry.record_description(package, built.artifact.image_id, description)
+            self.registry.succeed_step(operation_id, "Read what the image declares.")
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
             raise

@@ -15,6 +15,7 @@ from kinby.hub.factory import build_docker_hub
 from kinby.hub.images import ImagePreparer
 from kinby.hub.models import (
     BuildResult,
+    BuiltImage,
     ContainerDescription,
     ContainerRuntime,
     ImageArtifact,
@@ -38,6 +39,7 @@ from kinby.hub.service import Hub
 
 __all__ = [
     "BuildResult",
+    "BuiltImage",
     "ContainerDescription",
     "ContainerRuntime",
     "ControlConnectionLost",
