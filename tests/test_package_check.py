@@ -71,7 +71,7 @@ def test_the_check_reports_every_failure_together(tmp_path, monkeypatch, capsys)
         'Template file notes.env holds a value for the secret "EDITOR_TOKEN".',
         'Executable "kinby-fake-editor" is not on PATH.',
         'routines/draft/ROUTINE.md: Frontmatter must contain a non-empty "description" string.',
-        '/package.yaml: token: "GITHUB_TOKEN" is not a required secret this package declares.',
+        '/package.yaml: token: "GITHUB_TOKEN" is not a secret field this package declares.',
         f'Skill "drafting" links to style.md, which is not in {package.root}/skills/drafting.',
     ]
     assert len(errors) == len(expected)
@@ -111,26 +111,26 @@ def test_a_template_left_out_of_the_distribution_fails_the_check(tmp_path, monke
     assert f"Template file SYSTEM.md is not part of distribution {package.module}." in errors
 
 
-def test_malformed_secret_declarations_fail_the_check(tmp_path, monkeypatch, capsys):
-    package = _install(tmp_path, monkeypatch)
-    source = package.root / "__init__.py"
-    source.write_text(
-        source.read_text(encoding="utf-8").replace(
-            'RequiredSecret("EDITOR_TOKEN", "Editor token", "Authenticates editing."),',
-            'RequiredSecret("EDITOR_TOKEN", "Editor token", "Authenticates editing."),'
-            'RequiredSecret("EDITOR_TOKEN", "Again", "Twice."),'
-            'RequiredSecret("EDITOR-KEY", "", "Signs."),',
-        ),
-        encoding="utf-8",
+def test_malformed_secret_fields_fail_the_check(tmp_path, monkeypatch, capsys):
+    def secret(name: str, label: str) -> str:
+        return (
+            f'SetupField(name="{name}", label="{label}", description="Signs.", '
+            "kind=SetupFieldKind.SECRET, type=SetupFieldType.TEXT, required=True),"
+        )
+
+    _install(
+        tmp_path,
+        monkeypatch,
+        setup_fields=TONE_FIELD + secret("EDITOR-KEY", "") + secret("EDITOR_TOKEN", "Again"),
     )
 
     status = main(["package", "check", "writer"])
 
     assert status == 1
     assert capsys.readouterr().err.splitlines() == [
-        'Setup field "EDITOR_TOKEN" is declared more than once.',
         'Secret field "EDITOR-KEY" is not an environment variable name.',
         'Setup field "EDITOR-KEY" has no label.',
+        'Setup field "EDITOR_TOKEN" is declared more than once.',
     ]
 
 

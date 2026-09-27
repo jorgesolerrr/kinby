@@ -61,6 +61,9 @@ from kinby.contracts import (
     PackageSelection,
     Readiness,
     Scope,
+    SetupField,
+    SetupFieldKind,
+    SetupFieldType,
     StatsGetCommand,
     StatsGetResult,
     StorageItem,
@@ -87,10 +90,21 @@ from kinby.instance import inspect_instance
 from kinby.packages import (
     InstalledPackage,
     PackageDescriptor,
-    RequiredSecret,
     package_description,
     vanilla_description,
 )
+
+
+def secret_field(name: str, label: str, description: str) -> SetupField:
+    """A required secret text field, as a package declares one."""
+    return SetupField(
+        name=name,
+        label=label,
+        description=description,
+        kind=SetupFieldKind.SECRET,
+        type=SetupFieldType.TEXT,
+        required=True,
+    )
 
 
 class FakeImages:
@@ -527,11 +541,9 @@ def test_create_from_a_pinned_package_seeds_owned_configuration_and_provenance(t
                 distribution="kinby-writer",
                 version="1.4.2",
                 setup_fields=(
-                    RequiredSecret(
-                        name="EDITOR_TOKEN",
-                        label="Editor token",
-                        description="Authenticates the editor service.",
-                    ).setup_field(),
+                    secret_field(
+                        "EDITOR_TOKEN", "Editor token", "Authenticates the editor service."
+                    ),
                 ),
             ),
             files={
@@ -604,9 +616,7 @@ def test_package_creation_refuses_a_missing_declared_secret_and_publishes_nothin
                 distribution="kinby-writer",
                 version="1.4.2",
                 setup_fields=(
-                    RequiredSecret(
-                        "EDITOR_TOKEN", "Editor token", "Authenticates editing."
-                    ).setup_field(),
+                    secret_field("EDITOR_TOKEN", "Editor token", "Authenticates editing."),
                 ),
             ),
             files={"SYSTEM.md": "Write clearly.\n"},

@@ -27,6 +27,17 @@ SetupField(
     target=SetupTarget(file=TargetFile.PACKAGE_YAML, key="tone"),
 ),
 """
+#: The source of the secret field the package always declares, after its other setup fields.
+EDITOR_TOKEN_FIELD = """
+SetupField(
+    name="EDITOR_TOKEN",
+    label="Editor token",
+    description="Authenticates editing.",
+    kind=SetupFieldKind.SECRET,
+    type=SetupFieldType.TEXT,
+    required=True,
+),
+"""
 
 
 @dataclass(frozen=True)
@@ -52,7 +63,8 @@ def install_fake_package(
     """Write package ``writer`` under *site* with a dist-info, entry points and RECORD.
 
     The module name is unique, so each test imports its own copy. *logins* is the source
-    text of each login it declares. *setup_fields* is the source of its setup fields.
+    text of each login it declares. *setup_fields* is the source of its setup fields, which
+    come before its ``EDITOR_TOKEN`` secret field.
     """
     module = f"kinby_fake_writer_{uuid4().hex[:8]}"
     root = site / module
@@ -91,7 +103,6 @@ def install_fake_package(
             from kinby.packages import (
                 Package,
                 PackageConfig,
-                RequiredSecret,
                 SecretName,
                 SetupField,
                 SetupFieldKind,
@@ -123,9 +134,6 @@ def install_fake_package(
                 description="Drafts articles.",
                 icon="pen",
                 template=ROOT / "template",
-                required_secrets=(
-                    RequiredSecret("EDITOR_TOKEN", "Editor token", "Authenticates editing."),
-                ),
                 setup_fields=({{setup_fields}}),
                 config=WriterConfig,
                 executables={executables!r},
@@ -133,7 +141,7 @@ def install_fake_package(
             )
             SKILLS = ROOT / "skills"
             '''
-        ).replace("{setup_fields}", setup_fields),
+        ).replace("{setup_fields}", setup_fields + EDITOR_TOKEN_FIELD),
         encoding="utf-8",
     )
     dist_info = site / f"{module}-1.4.2.dist-info"

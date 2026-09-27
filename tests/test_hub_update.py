@@ -57,7 +57,6 @@ from kinby.hub import (
 from kinby.packages import (
     InstalledPackage,
     PackageDescriptor,
-    RequiredSecret,
     installed_package_from_json,
     package_description,
 )
@@ -71,6 +70,7 @@ from tests.test_hub import (
     hub_at,
     hub_client,
     prepared,
+    secret_field,
     started_instance,
 )
 from tests.test_hub_recreate import CrashOnReplacement
@@ -438,11 +438,7 @@ def writer_package() -> InstalledPackage:
             distribution="kinby-writer",
             version="1.4.2",
             setup_fields=(
-                RequiredSecret(
-                    name="EDITOR_TOKEN",
-                    label="Editor token",
-                    description="Authenticates the editor service.",
-                ).setup_field(),
+                secret_field("EDITOR_TOKEN", "Editor token", "Authenticates the editor service."),
             ),
         ),
         files={"SYSTEM.md": "You are an exacting editor.\n"},
