@@ -321,7 +321,7 @@ function PackageCard({
           {name}
           {version !== undefined && <Badge variant="outline">{version}</Badge>}
         </ItemTitle>
-        <ItemDescription>{description}</ItemDescription>
+        <ItemDescription lines="all">{description}</ItemDescription>
       </ItemContent>
       <ItemActions>
         <Button disabled={disabled} onClick={onPick}>
@@ -813,7 +813,7 @@ function Fields({ fields }: { fields: SetupField[] }) {
         <Item key={field.name} render={<li />} aria-label={field.label} variant="outline" size="sm">
           <ItemContent>
             <ItemTitle>{field.label}</ItemTitle>
-            <ItemDescription>{field.description}</ItemDescription>
+            <ItemDescription lines="all">{field.description}</ItemDescription>
           </ItemContent>
           <ItemActions>
             <Badge variant="outline">{field.kind === "secret" ? "Secret" : "Configuration"}</Badge>

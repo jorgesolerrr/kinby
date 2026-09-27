@@ -149,6 +149,9 @@ describe("the create wizard's package step", () => {
     expect(card.querySelector("svg.lucide-code")).not.toBeNull()
     expect(within(card).getByRole("button", { name: "Prepare Software factory" })).toBeDefined()
     expect(
+      within(card).getByText("Implements GitHub issues labeled ready-for-agent.").className,
+    ).not.toMatch(/line-clamp-\d/)
+    expect(
       within(screen.getByRole("listitem", { name: "Vanilla" })).getByRole("button", {
         name: "Prepare vanilla",
       }),
@@ -257,6 +260,20 @@ describe("the create wizard's package step", () => {
       screen.getByRole("list", { name: "Setup fields" }).compareDocumentPosition(logins) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
+  })
+
+  // jsdom lays nothing out, so the line clamp shows only in the classes.
+  it("shows each field's whole description, however narrow the screen", async () => {
+    await pickVanilla(
+      preparation({
+        state: "succeeded",
+        steps: [{ name: "image", state: "succeeded", detail: "Building the image." }],
+      }),
+    )
+
+    const fields = within(await screen.findByRole("list", { name: "Setup fields" }))
+    const description = fields.getByText("Instructions the instance follows in every turn.")
+    expect(description.className).not.toMatch(/line-clamp-\d/)
   })
 
   it("marks the step that failed with what went wrong", async () => {
