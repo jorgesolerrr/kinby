@@ -45,32 +45,37 @@ export function InstancePage({
 }) {
   // Read once: finishing the last sign-in on the card leaves the card open, with Start.
   const [openedOnSetup] = useState(instance.intended_state === "stopped" && instance.setup_pending)
-  const status = useStatus(caller, instance)
+  const { status, waiting } = useStatus(caller, instance)
   const name = instanceName(instance)
+  const onSetup = openedOnSetup && instance.intended_state === "stopped"
 
-  if (openedOnSetup && instance.intended_state === "stopped") {
+  if (onSetup) {
     if (status === undefined) return null
     return (
       <SetupCard caller={caller} clock={clock} name={name} status={status} onChanged={onChanged} />
     )
   }
-  const logins = status?.setup.logins ?? []
-  if (instance.intended_state === "running" && logins.length > 0) {
-    return (
-      <section className="flex max-w-2xl flex-col gap-3 p-6">
-        <h2 className="font-medium">Subscription logins</h2>
-        <p className="text-sm text-muted-foreground">
-          Sign in again when a subscription stops working. The instance keeps running.
-        </p>
-        <SubscriptionLogins
-          caller={caller}
-          clock={clock}
-          instanceId={instance.instance_id}
-          logins={logins}
-          onEnded={onChanged}
-        />
-      </section>
-    )
+  // The empty state waits until the status is read. A read that failed has nothing to sign in to.
+  if (instance.intended_state === "running") {
+    if (waiting && status === undefined) return null
+    const logins = status?.setup.logins ?? []
+    if (logins.length > 0) {
+      return (
+        <section className="flex max-w-2xl flex-col gap-3 p-6">
+          <h2 className="font-medium">Subscription logins</h2>
+          <p className="text-sm text-muted-foreground">
+            Sign in again when a subscription stops working. The instance keeps running.
+          </p>
+          <SubscriptionLogins
+            caller={caller}
+            clock={clock}
+            instanceId={instance.instance_id}
+            logins={logins}
+            onEnded={onChanged}
+          />
+        </section>
+      )
+    }
   }
   return (
     <Empty>
@@ -88,26 +93,32 @@ export function InstancePage({
 /**
  * The instance's status, read again each time the instance is listed again. The last one read
  * stays while the next is on its way, so the rows that follow a sign-in stay where they are.
+ * `waiting` is true until the first read settles.
  */
 function useStatus(
   caller: Pick<Client, "call">,
   instance: InstanceSummary,
-): InstanceStatusResult | undefined {
+): { status: InstanceStatusResult | undefined; waiting: boolean } {
   const [status, setStatus] = useState<InstanceStatusResult>()
+  const [waiting, setWaiting] = useState(true)
   useEffect(() => {
     let current = true
     caller.call("instance.status", { instance_id: instance.instance_id }).then(
       (read) => {
-        if (current) setStatus(read)
+        if (!current) return
+        setStatus(read)
+        setWaiting(false)
       },
       // A status that cannot be read keeps the one already shown.
-      () => {},
+      () => {
+        if (current) setWaiting(false)
+      },
     )
     return () => {
       current = false
     }
   }, [caller, instance])
-  return status
+  return { status, waiting }
 }
 
 function SetupCard({

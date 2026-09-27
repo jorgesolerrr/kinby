@@ -48,9 +48,19 @@ export function fakeHub({
     sockets: [],
     transport: {
       openSocket(url, events) {
-        const socket = fakeSocket(url, events, (method) =>
-          method === "instance.list" ? { instances: hub.instances } : undefined,
-        )
+        const socket = fakeSocket(url, events, (method) => {
+          if (method === "instance.list") return { instances: hub.instances }
+          // Nothing left to set up. A page waits for this read before its empty state.
+          if (method === "instance.status") {
+            return {
+              instance_id: "",
+              process: "created",
+              readiness: "not-running",
+              setup: { logins: [], secrets: [] },
+            }
+          }
+          return undefined
+        })
         hub.sockets.push(socket)
         queueMicrotask(() => (hub.reachable && hub.signedIn ? socket.accept() : socket.drop()))
         return socket

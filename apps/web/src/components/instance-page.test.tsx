@@ -1,4 +1,9 @@
-import type { InstanceSetup, InstanceStatusResult, OperationGetResult } from "@kinby/contract"
+import type {
+  Client,
+  InstanceSetup,
+  InstanceStatusResult,
+  OperationGetResult,
+} from "@kinby/contract"
 import { type Answers, fakeClock, instanceSummary, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -190,6 +195,31 @@ describe("a running instance", () => {
       running,
     )
 
+    expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
+    expect(screen.getByText("Nothing here yet")).toBeDefined()
+  })
+
+  it("says there is nothing here when the status cannot be read", async () => {
+    const caller: Pick<Client, "call"> = {
+      call: () => Promise.reject(new Error("gone")),
+    }
+    const clock = fakeClock()
+    render(<InstancePage caller={caller} clock={clock} instance={running} onChanged={vi.fn()} />)
+    await act(() => clock.advance(0))
+
+    expect(screen.getByText("Nothing here yet")).toBeDefined()
+    expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
+  })
+
+  it("does not say there is nothing here before the status is read", () => {
+    const caller: Pick<Client, "call"> = {
+      call: () => new Promise<never>(() => {}),
+    }
+    render(
+      <InstancePage caller={caller} clock={fakeClock()} instance={running} onChanged={vi.fn()} />,
+    )
+
+    expect(screen.queryByText("Nothing here yet")).toBeNull()
     expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
   })
 })
