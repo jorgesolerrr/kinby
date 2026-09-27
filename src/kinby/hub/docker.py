@@ -459,6 +459,8 @@ class DockerRuntime:
 
         The command replaces the image's entrypoint, so kinby and its scheduler never start.
         The container stays off the instance network, and gets no environment from the hub.
+        The image declares `VOLUME /instance`, so Docker gives the container an anonymous
+        volume; removing the container with `v=True` takes that volume and keeps the named one.
         """
         volume = spec.volume
         container = await asyncio.to_thread(
@@ -490,7 +492,7 @@ class DockerRuntime:
             exited = await asyncio.to_thread(container.wait)
             return int(exited["StatusCode"])
         finally:
-            await asyncio.to_thread(container.remove, force=True)
+            await asyncio.to_thread(container.remove, force=True, v=True)
 
     async def remove_setup_containers(self) -> None:
         """Remove setup containers this hub left when it stopped mid-login.
@@ -508,7 +510,7 @@ class DockerRuntime:
         except DockerException:
             return
         for container in containers:
-            await asyncio.to_thread(container.remove, force=True)
+            await asyncio.to_thread(container.remove, force=True, v=True)
 
     async def _container(self, instance_id: str) -> Container:
         """The recorded runtime id, or the kinby- prefixed name earlier releases used."""
