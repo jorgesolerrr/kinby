@@ -659,6 +659,11 @@ class HubRegistry:
                 (OperationState.RUNNING.value, detail, str(operation_id)),
             )
 
+    def succeed_step(self, operation_id: UUID, detail: str) -> None:
+        """Succeed the step that is running with what it did, leaving the operation running."""
+        with self._connect() as connection:
+            self._close_running_step(connection, operation_id, OperationState.SUCCEEDED, detail)
+
     def finish_operation(
         self,
         operation_id: UUID,

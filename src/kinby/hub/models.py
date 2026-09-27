@@ -193,6 +193,14 @@ class ImageSelection:
 
 
 @dataclass(frozen=True)
+class BuiltImage:
+    """The artifact a build returns, and whether it was the one already recorded."""
+
+    artifact: ImageArtifact
+    reused: bool
+
+
+@dataclass(frozen=True)
 class PreparedImage:
     artifact: ImageArtifact
     package: InstalledPackage | None = None
@@ -211,7 +219,7 @@ class ImagePreparation(Protocol):
         """
         ...
 
-    async def build(self, selection: ImageSelection) -> ImageArtifact:
+    async def build(self, selection: ImageSelection) -> BuiltImage:
         """Build the selected image, or reuse the artifact already recorded for it.
 
         Nothing runs inside the image.

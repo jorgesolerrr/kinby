@@ -34,7 +34,7 @@ from kinby.contracts import (
     SetupValue,
     TargetFile,
 )
-from kinby.hub import ImageArtifact, ImageSelection
+from kinby.hub import BuiltImage, ImageArtifact, ImageSelection
 from kinby.instance import init_instance, inspect_instance
 from kinby.packages import InstalledPackage, PackageDescriptor
 from tests.test_hub import (
@@ -206,11 +206,11 @@ def test_a_vanilla_creation_without_a_behavior_prompt_keeps_the_default_one(tmp_
 class RebuiltImages(FakeImages):
     """Every build after the first makes a new image that asks for one more secret."""
 
-    async def build(self, selection: ImageSelection) -> ImageArtifact:
-        artifact = await super().build(selection)
+    async def build(self, selection: ImageSelection) -> BuiltImage:
+        built = await super().build(selection)
         if len(self.selections) == 1:
-            return artifact
-        return replace(artifact, image_id="sha256:rebuilt-image")
+            return built
+        return BuiltImage(replace(built.artifact, image_id="sha256:rebuilt-image"), reused=False)
 
     async def describe(self, artifact: ImageArtifact) -> PackageDescription:
         description = await super().describe(artifact)

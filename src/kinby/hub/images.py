@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 from kinby.contracts import PackageCommit, PackageDescription, PackageSelection, StorageItem
 from kinby.hub.models import (
     BuildResult,
+    BuiltImage,
     ImageArtifact,
     ImageBackend,
     ImageSelection,
@@ -67,13 +68,13 @@ class ImagePreparer:
         selection: ImageSelection,
         instance: StorageItem | None = None,
     ) -> PreparedImage:
-        artifact = await self.build(selection)
+        artifact = (await self.build(selection)).artifact
         return PreparedImage(
             artifact=artifact,
             package=await self._inspect_package(artifact, instance),
         )
 
-    async def build(self, selection: ImageSelection) -> ImageArtifact:
+    async def build(self, selection: ImageSelection) -> BuiltImage:
         resolved = await asyncio.to_thread(self._resolve, selection.revision)
         with TemporaryDirectory(prefix="kinby-build-") as temporary:
             context = Path(temporary)
@@ -86,7 +87,7 @@ class ImagePreparer:
             input_key = self._input_key(resolved, dependency_id, base_images, selection)
             recorded = self._registry.image_artifact(input_key)
             if recorded is not None and await self._backend.exists(recorded.image_id):
-                return recorded
+                return BuiltImage(recorded, reused=True)
             built = await self._backend.build(context, base_images)
         artifact = ImageArtifact(
             image_id=built.image_id,
@@ -97,7 +98,7 @@ class ImagePreparer:
             package=selection.package,
         )
         self._registry.record_image_artifact(input_key, artifact)
-        return artifact
+        return BuiltImage(artifact, reused=False)
 
     async def describe(self, artifact: ImageArtifact) -> PackageDescription:
         installed = await self._inspect_package(artifact, None)
