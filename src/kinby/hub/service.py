@@ -259,6 +259,15 @@ class PendingStop:
     force: asyncio.Event
 
 
+@dataclass(frozen=True)
+class ObservedProcess:
+    """What the container runtime reports for one instance, its detail redacted."""
+
+    process: ProcessState
+    readiness: Readiness
+    detail: str
+
+
 class Hub:
     """Own instance management without booting instance runtimes in this process."""
 
@@ -1602,12 +1611,13 @@ class Hub:
     async def list(self, command: InstanceListCommand) -> InstanceListResult:
         return InstanceListResult(
             instances=[
-                self._summary(record)
+                await self._summary(record)
                 for record in self.registry.listed_instances(removed=command.removed)
             ]
         )
 
-    def _summary(self, record: ManagedInstance) -> InstanceSummary:
+    async def _summary(self, record: ManagedInstance) -> InstanceSummary:
+        observed = await self._observed(record)
         return InstanceSummary(
             instance_id=record.instance_id,
             manifest_id=record.manifest_id,
@@ -1615,6 +1625,8 @@ class Hub:
             source_revision=record.source_revision or "",
             image_id=record.image_id or "",
             intended_state=record.intended_state,
+            process=observed.process,
+            detail=observed.detail,
             runtime_id=record.runtime_id,
             storage=list(record.storage),
             avatar=record.avatar,
@@ -1632,31 +1644,29 @@ class Hub:
 
     async def status(self, command: InstanceStatusCommand) -> InstanceStatusResult:
         record = self._active_instance(command.instance_id)
-        active = self.registry.active_operation(record.instance_id)
-        setup = self._setup(record)
+        observed = await self._observed(record)
+        return InstanceStatusResult(
+            instance_id=record.instance_id,
+            process=observed.process,
+            readiness=observed.readiness,
+            setup=self._setup(record),
+            detail=observed.detail,
+            active_operation_id=self.registry.active_operation(record.instance_id),
+        )
+
+    async def _observed(self, record: ManagedInstance) -> ObservedProcess:
+        """Read the runtime once. A runtime that cannot be read reports the instance unavailable."""
+        secrets = self._environment(record.path).values()
         try:
             status = await self._runtime.status(record.runtime_id)
         except Exception as exc:
-            return InstanceStatusResult(
-                instance_id=record.instance_id,
-                process=ProcessState.UNAVAILABLE,
-                readiness=Readiness.UNKNOWN,
-                setup=setup,
-                detail=self._redact(
-                    str(exc) or type(exc).__name__,
-                    self._environment(record.path).values(),
-                ),
-                active_operation_id=active,
+            return ObservedProcess(
+                ProcessState.UNAVAILABLE,
+                Readiness.UNKNOWN,
+                self._redact(str(exc) or type(exc).__name__, secrets),
             )
         process, readiness = self._status(status)
-        return InstanceStatusResult(
-            instance_id=record.instance_id,
-            process=process,
-            readiness=readiness,
-            setup=setup,
-            detail=self._redact(status.detail, self._environment(record.path).values()),
-            active_operation_id=active,
-        )
+        return ObservedProcess(process, readiness, self._redact(status.detail, secrets))
 
     def _setup(self, record: ManagedInstance) -> InstanceSetup:
         """The logins and secrets the instance's stored descriptor declares, and how they stand."""

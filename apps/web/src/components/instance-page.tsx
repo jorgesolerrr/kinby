@@ -31,7 +31,7 @@ import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from "@/componen
 import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
 import { followStart, type Starting } from "@/lib/creation"
-import { instanceName } from "@/lib/instances"
+import { instanceName, observedState } from "@/lib/instances"
 import { BotIcon, CircleCheckIcon, CirclePauseIcon, CircleXIcon } from "lucide-react"
 
 /**
@@ -78,24 +78,54 @@ export function InstancePage({
   if (instance.intended_state === "running") {
     if (waiting && status === undefined) return null
     const logins = status?.setup.logins ?? []
-    if (logins.length > 0) {
-      return (
-        <section className="flex max-w-2xl flex-col gap-3 p-6">
-          <h2 className="font-medium">Subscription logins</h2>
-          <p className="text-sm text-muted-foreground">
-            Sign in again when a subscription stops working. The instance keeps running.
-          </p>
-          <SubscriptionLogins
-            caller={caller}
-            clock={clock}
-            instanceId={instance.instance_id}
-            logins={logins}
-            onEnded={onChanged}
-          />
-        </section>
-      )
-    }
+    return (
+      <>
+        <ProcessAlert instance={instance} name={name} />
+        {logins.length > 0 ? (
+          <section className="flex max-w-2xl flex-col gap-3 p-6">
+            <h2 className="font-medium">Subscription logins</h2>
+            <p className="text-sm text-muted-foreground">
+              Sign in again when a subscription stops working. The instance keeps running.
+            </p>
+            <SubscriptionLogins
+              caller={caller}
+              clock={clock}
+              instanceId={instance.instance_id}
+              logins={logins}
+              onEnded={onChanged}
+            />
+          </section>
+        ) : (
+          <NothingHereYet name={name} />
+        )}
+      </>
+    )
   }
+  return <NothingHereYet name={name} />
+}
+
+/** Says so when an instance meant to run is restarting in a loop or has failed. */
+function ProcessAlert({ instance, name }: { instance: InstanceSummary; name: string }) {
+  const state = observedState(instance)
+  if (state !== "restarting" && state !== "failed") return null
+  return (
+    <div className="max-w-2xl px-6 pt-6">
+      <Alert variant="destructive">
+        <CircleXIcon />
+        <AlertTitle>
+          {state === "restarting" ? `${name} is restarting` : `${name} failed`}
+        </AlertTitle>
+        <AlertDescription>
+          {state === "restarting"
+            ? "Its container keeps stopping, and the runtime keeps starting it again."
+            : instance.detail}
+        </AlertDescription>
+      </Alert>
+    </div>
+  )
+}
+
+function NothingHereYet({ name }: { name: string }) {
   return (
     <Empty>
       <EmptyHeader>

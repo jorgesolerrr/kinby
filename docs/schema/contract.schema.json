@@ -1392,6 +1392,10 @@
         "avatar": {
           "$ref": "#/$defs/Avatar"
         },
+        "detail": {
+          "default": "",
+          "type": "string"
+        },
         "image_id": {
           "type": "string"
         },
@@ -1426,6 +1430,9 @@
             }
           ]
         },
+        "process": {
+          "$ref": "#/$defs/ProcessState"
+        },
         "runtime_id": {
           "type": "string"
         },
@@ -1449,6 +1456,7 @@
         "source_revision",
         "image_id",
         "intended_state",
+        "process",
         "runtime_id",
         "storage",
         "avatar",
