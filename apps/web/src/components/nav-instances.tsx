@@ -9,7 +9,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { instanceName } from "@/lib/instances"
+import { instanceName, observedState } from "@/lib/instances"
 import { CREATE_PATH, instancePath, openCreateWizard, selectInstance } from "@/lib/selection"
 import { CircleAlertIcon, PlusIcon } from "lucide-react"
 
@@ -55,7 +55,7 @@ export function NavInstances({
                       <span className="sr-only">Setup pending</span>
                     </>
                   )}
-                  {instance.intended_state}
+                  {observedState(instance)}
                 </span>
               </SidebarMenuBadge>
             </SidebarMenuItem>

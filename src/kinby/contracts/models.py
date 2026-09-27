@@ -954,12 +954,16 @@ class InstanceSummary(ContractModel):
     source_revision: str
     image_id: str
     intended_state: IntendedState
+    #: What the runtime saw when the list was read, as `instance.status` reports it.
+    process: ProcessState
     runtime_id: str
     storage: list[StorageItem]
     avatar: Avatar
     #: A declared login is not signed in, or a required secret is not set.
     setup_pending: bool
     package: PackageSummary | None = None
+    #: The runtime's word for the process, such as "restarting" beside `starting`.
+    detail: str = ""
 
 
 class InstanceListResult(ContractModel):

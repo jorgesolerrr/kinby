@@ -439,12 +439,14 @@ export interface InstanceListResult {
 }
 export interface InstanceSummary {
   avatar: Avatar;
+  detail?: string;
   image_id: string;
   instance_id: string;
   intended_state: IntendedState;
   manifest_id: string;
   package?: PackageSummary | null;
   persona_name: string | null;
+  process: ProcessState;
   runtime_id: string;
   setup_pending: boolean;
   source_revision: string;

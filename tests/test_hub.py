@@ -873,6 +873,42 @@ def test_status_distinguishes_missing_starting_unhealthy_and_unavailable(tmp_pat
     asyncio.run(scenario())
 
 
+def test_list_carries_the_observed_process_and_lists_an_instance_it_cannot_read(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = _client(hub)
+        created = await created_instance(client, secrets={"TOKEN": "secret-in-detail"})
+        started = await client.call(
+            INSTANCE_START,
+            InstanceStartCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        await finished_operation(client, started)
+        runtime.states[str(created.instance_id)] = RuntimeStatus(
+            "starting", False, "restarting secret-in-detail"
+        )
+
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        [summary] = listed.instances
+        assert summary.intended_state == "running"
+        assert summary.process == "starting"
+        assert summary.detail == "restarting [REDACTED]"
+
+        unavailable = UnavailableRuntime()
+        hub.close()
+        reopened = Hub(tmp_path / "hub", runtime=unavailable, images=FakeImages())
+        listed = await _client(reopened).call(INSTANCE_LIST, InstanceListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        [summary] = listed.instances
+        assert summary.instance_id == created.instance_id
+        assert summary.process == "unavailable"
+        assert summary.detail == "Docker daemon unavailable"
+
+    asyncio.run(scenario())
+
+
 def test_metadata_for_two_created_instances_never_changes_process_environment(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()

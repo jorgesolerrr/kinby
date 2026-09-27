@@ -187,6 +187,23 @@ describe("a running instance", () => {
     expect(screen.queryByRole("region", { name: "Finish setting up Ada" })).toBeNull()
     expect(login("Editor account").getByRole("button", { name: "Sign in again" })).toBeDefined()
     expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("says it is restarting when its container restarts in a loop", async () => {
+    await openPage({}, { ...running, process: "starting", detail: "restarting" })
+
+    expect(within(screen.getByRole("alert")).getByText("Ada is restarting")).toBeDefined()
+    expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
+  })
+
+  it("says it failed, with what the runtime saw", async () => {
+    const failed = { ...running, process: "failed", detail: "exited (1)" } as const
+    await openPage({ "instance.status": () => status({ setup: { ...setup, logins: [] } }) }, failed)
+
+    const alert = within(screen.getByRole("alert"))
+    expect(alert.getByText("Ada failed")).toBeDefined()
+    expect(alert.getByText("exited (1)")).toBeDefined()
   })
 
   it("shows no sign-in rows when it declares no login", async () => {
