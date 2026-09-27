@@ -521,12 +521,13 @@ export interface InstanceSetup {
   secrets: SecretSetup[];
 }
 /**
- * One subscription login an instance declares, and its state.
+ * One subscription login an instance declares, its state, and its sign-in while one runs.
  */
 export interface LoginSetup {
   description: string;
   id: string;
   label: string;
+  operation_id?: string | null;
   state: LoginState;
 }
 /**

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from uuid import UUID
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -103,10 +104,13 @@ def instance_setup(
     description: PackageDescription | None,
     *,
     logins: Mapping[str, LoginState],
+    running: Mapping[str, UUID],
     secrets: Mapping[str, str],
     model: ModelName | None,
 ) -> InstanceSetup:
     """Each login and secret field the instance's stored descriptor declares, and how it stands.
+
+    `running` names the sign-in each login has running, by login id.
 
     A login the hub never tracked belongs to an instance created before it tracked logins, and
     reads as signed in. The API key is held under its provider's variable, so it takes the model.
@@ -127,6 +131,7 @@ def instance_setup(
                 label=login.label,
                 description=login.description,
                 state=logins.get(login.id, LoginState.SIGNED_IN),
+                operation_id=running.get(login.id),
             )
             for login in description.logins
         ],
