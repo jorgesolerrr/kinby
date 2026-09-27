@@ -3,6 +3,7 @@ import type {
   Clock,
   InstanceStatusResult,
   InstanceSummary,
+  LoginSetup,
   SecretSetup,
 } from "@kinby/contract"
 import { useCallback, useEffect, useId, useState } from "react"
@@ -29,8 +30,9 @@ import { BotIcon, CircleCheckIcon, CircleXIcon } from "lucide-react"
 
 /**
  * What one instance shows. A stopped instance with setup pending opens on its setup card, and
- * keeps it until it runs. A running one offers its logins to sign in again. `onChanged` hears a
- * sign-in or a start end, so the instances are listed again, and must keep its identity.
+ * keeps it until it runs. A running one lists its logins, asking to sign in to those that are
+ * not signed in, or to sign in again once all are. `onChanged` hears a sign-in or a start end,
+ * so the instances are listed again, and must keep its identity.
  */
 export function InstancePage({
   caller,
@@ -64,7 +66,7 @@ export function InstancePage({
         <section className="flex max-w-2xl flex-col gap-3 p-6">
           <h2 className="font-medium">Subscription logins</h2>
           <p className="text-sm text-muted-foreground">
-            Sign in again when a subscription stops working. The instance keeps running.
+            {loginsNote(logins)} The instance keeps running.
           </p>
           <SubscriptionLogins
             caller={caller}
@@ -88,6 +90,16 @@ export function InstancePage({
       </EmptyHeader>
     </Empty>
   )
+}
+
+/** Names the logins not signed in, pending or failed, or offers signing in again once none is. */
+function loginsNote(logins: LoginSetup[]): string {
+  const notSignedIn = logins.filter((login) => login.state !== "signed_in")
+  if (notSignedIn.length === 0) return "Sign in again when a subscription stops working."
+  const names = new Intl.ListFormat("en").format(notSignedIn.map((login) => login.label))
+  return notSignedIn.length === 1
+    ? `${names} is not signed in yet. Sign in to let the instance use it.`
+    : `${names} are not signed in yet. Sign in to let the instance use them.`
 }
 
 /**

@@ -189,6 +189,43 @@ describe("a running instance", () => {
     expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
   })
 
+  it("asks to sign in to a login that is not signed in yet", async () => {
+    await openPage({ "instance.status": () => status({ process: "running" }) }, running)
+
+    expect(
+      screen.getByText(
+        "Codex is not signed in yet. Sign in to let the instance use it. The instance keeps running.",
+      ),
+    ).toBeDefined()
+    expect(screen.queryByText(/Sign in again when/)).toBeNull()
+  })
+
+  it("names every login not signed in, a failed one too", async () => {
+    const logins: InstanceSetup["logins"] = [
+      { ...setup.logins[0]!, state: "pending" },
+      { ...setup.logins[1]!, state: "failed" },
+      { id: "claude", label: "Claude", description: "Signs Claude in.", state: "signed_in" },
+    ]
+    await openPage({ "instance.status": () => status({ setup: { ...setup, logins } }) }, running)
+
+    expect(
+      screen.getByText(
+        "Codex and Editor account are not signed in yet. Sign in to let the instance use them. The instance keeps running.",
+      ),
+    ).toBeDefined()
+  })
+
+  it("offers signing in again once every login is signed in", async () => {
+    const logins = setup.logins.map((login) => ({ ...login, state: "signed_in" as const }))
+    await openPage({ "instance.status": () => status({ setup: { ...setup, logins } }) }, running)
+
+    expect(
+      screen.getByText(
+        "Sign in again when a subscription stops working. The instance keeps running.",
+      ),
+    ).toBeDefined()
+  })
+
   it("shows no sign-in rows when it declares no login", async () => {
     await openPage(
       { "instance.status": () => status({ setup: { ...setup, logins: [] } }) },
