@@ -447,13 +447,19 @@ def test_a_login_leaves_the_instance_free_to_start_and_stop(tmp_path):
     asyncio.run(scenario())
 
 
+CODEX_SIGNING_IN = (
+    "The Codex sign-in is still running for this instance. "
+    "Finish the sign-in or let its code expire first."
+)
+
+
 def test_removing_an_instance_is_refused_while_one_of_its_logins_runs(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        hub, _ = writer_hub(tmp_path, runtime=runtime)
+        hub, _ = writer_hub(tmp_path, CODEX, runtime=runtime)
         client = hub_client(hub)
         created = await created_writer(hub)
-        login = await login_started(hub, created.instance_id, "editor")
+        login = await login_started(hub, created.instance_id, "codex")
 
         refused = await client.call(
             INSTANCE_REMOVE, InstanceRemoveCommand(instance_id=created.instance_id)
@@ -466,7 +472,7 @@ def test_removing_an_instance_is_refused_while_one_of_its_logins_runs(tmp_path):
 
         assert isinstance(refused, ErrorEnvelope)
         assert refused.code is ErrorCode.INSTANCE_BUSY
-        assert str(login.operation_id) in refused.message
+        assert refused.message == CODEX_SIGNING_IN
         assert isinstance(removed, LifecycleOperationResult)
         assert (await finished_operation(client, removed)).state is OperationState.SUCCEEDED
 
@@ -490,7 +496,7 @@ class HeldRemoval(FakeRuntime):
 def test_deleting_an_instance_is_refused_while_one_of_its_logins_runs(tmp_path):
     async def scenario() -> None:
         runtime = HeldRemoval()
-        hub, _ = writer_hub(tmp_path, runtime=runtime)
+        hub, _ = writer_hub(tmp_path, CODEX, runtime=runtime)
         client = hub_client(hub)
         created = await created_writer(hub)
         instance_id = created.instance_id
@@ -498,7 +504,7 @@ def test_deleting_an_instance_is_refused_while_one_of_its_logins_runs(tmp_path):
         assert isinstance(removal, LifecycleOperationResult)
         await runtime.removing.wait()
         # The instance is still listed until its container is gone, so a login can start.
-        login = await login_started(hub, instance_id, "editor")
+        await login_started(hub, instance_id, "codex")
         runtime.released.set()
         assert (await finished_operation(client, removal)).state is OperationState.SUCCEEDED
         preview = await client.call(
@@ -517,7 +523,7 @@ def test_deleting_an_instance_is_refused_while_one_of_its_logins_runs(tmp_path):
 
         assert isinstance(refused, ErrorEnvelope)
         assert refused.code is ErrorCode.INSTANCE_BUSY
-        assert str(login.operation_id) in refused.message
+        assert refused.message == CODEX_SIGNING_IN
         assert runtime.deleted_volumes == []
 
     asyncio.run(scenario())
