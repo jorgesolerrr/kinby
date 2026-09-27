@@ -19,18 +19,26 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
 import { followStart, type Starting } from "@/lib/creation"
 import { instanceName, observedState } from "@/lib/instances"
-import { BotIcon, CircleCheckIcon, CircleXIcon } from "lucide-react"
+import { BotIcon, CircleCheckIcon, CirclePauseIcon, CircleXIcon } from "lucide-react"
 
 /**
  * What one instance shows. A stopped instance with setup pending opens on its setup card, and
- * keeps it until it runs. A running one offers its logins to sign in again. `onChanged` hears a
- * sign-in or a start end, so the instances are listed again, and must keep its identity.
+ * keeps it until it runs. Any other stopped one offers Start. A running one offers its logins to
+ * sign in again. `onChanged` hears a sign-in or a start end, so the instances are listed again,
+ * and must keep its identity.
  */
 export function InstancePage({
   caller,
@@ -53,6 +61,17 @@ export function InstancePage({
     if (status === undefined) return null
     return (
       <SetupCard caller={caller} clock={clock} name={name} status={status} onChanged={onChanged} />
+    )
+  }
+  if (instance.intended_state === "stopped") {
+    return (
+      <Stopped
+        caller={caller}
+        clock={clock}
+        instanceId={instance.instance_id}
+        name={name}
+        onChanged={onChanged}
+      />
     )
   }
   // The empty state waits until the status is read. A read that failed has nothing to sign in to.
@@ -206,6 +225,43 @@ function SetupCard({
           />
         </CardFooter>
       </Card>
+    </section>
+  )
+}
+
+function Stopped({
+  caller,
+  clock,
+  instanceId,
+  name,
+  onChanged,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  instanceId: string
+  name: string
+  onChanged: () => void
+}) {
+  const titleId = useId()
+  return (
+    <section aria-labelledby={titleId} className="flex flex-1">
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <CirclePauseIcon />
+          </EmptyMedia>
+          <EmptyTitle id={titleId}>{name} is stopped</EmptyTitle>
+          <EmptyDescription>It does nothing until it starts.</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <StartButton
+            caller={caller}
+            clock={clock}
+            instanceId={instanceId}
+            onStarted={onChanged}
+          />
+        </EmptyContent>
+      </Empty>
     </section>
   )
 }

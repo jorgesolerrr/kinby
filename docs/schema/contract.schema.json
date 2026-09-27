@@ -1572,7 +1572,7 @@
     },
     "LoginSetup": {
       "additionalProperties": false,
-      "description": "One subscription login an instance declares, and its state.",
+      "description": "One subscription login an instance declares, its state, and its sign-in while one runs.",
       "properties": {
         "description": {
           "type": "string"
@@ -1582,6 +1582,18 @@
         },
         "label": {
           "type": "string"
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "state": {
           "$ref": "#/$defs/LoginState"

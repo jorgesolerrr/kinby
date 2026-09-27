@@ -70,6 +70,7 @@ from kinby.contracts import (
     StorageKind,
 )
 from kinby.hub import (
+    BuiltImage,
     ContainerDescription,
     ControlConnectionLost,
     ControlEndpoint,
@@ -132,7 +133,7 @@ class FakeImages:
         selection: ImageSelection,
         instance: StorageItem | None = None,
     ) -> PreparedImage:
-        artifact = await self.build(selection)
+        artifact = (await self.build(selection)).artifact
         if instance is not None:
             config = Path(instance.source)
             if config.is_file():
@@ -141,18 +142,21 @@ class FakeImages:
                 raise ValueError(self.config_failure)
         return PreparedImage(artifact=artifact, package=self.package)
 
-    async def build(self, selection: ImageSelection) -> ImageArtifact:
+    async def build(self, selection: ImageSelection) -> BuiltImage:
+        """A selection built before is reused, as the recorded artifact would be."""
+        reused = selection in self.selections
         self.revisions.append(selection.revision)
         self.selections.append(selection)
         if self.failure is not None:
             raise RuntimeError(self.failure)
-        return ImageArtifact(
+        artifact = ImageArtifact(
             image_id="sha256:selected-image",
             revision="a" * 40,
             dependency_id="sha256:dependencies",
             base_images=("python@sha256:base",),
             package=selection.package,
         )
+        return BuiltImage(artifact, reused=reused)
 
     async def describe(self, artifact: ImageArtifact) -> PackageDescription:
         """What the candidate check prints in the image: kinby's own, or the package's."""

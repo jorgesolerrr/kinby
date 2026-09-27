@@ -494,10 +494,10 @@ class HubRegistry:
             )
         return operation_id
 
-    def running_login(self, instance_id: UUID) -> UUID | None:
-        """A login of this instance that has not finished, if one is running."""
+    def running_login(self, instance_id: UUID, login_id: str | None = None) -> UUID | None:
+        """A login of this instance that has not finished, if one is running, or of that login."""
         with self._connect() as connection:
-            return self._running_login(connection, instance_id)
+            return self._running_login(connection, instance_id, login_id)
 
     @staticmethod
     def _running_login(
@@ -658,6 +658,11 @@ class HubRegistry:
                 "UPDATE operations SET state = ?, detail = ? WHERE id = ?",
                 (OperationState.RUNNING.value, detail, str(operation_id)),
             )
+
+    def succeed_step(self, operation_id: UUID, detail: str) -> None:
+        """Succeed the step that is running with what it did, leaving the operation running."""
+        with self._connect() as connection:
+            self._close_running_step(connection, operation_id, OperationState.SUCCEEDED, detail)
 
     def finish_operation(
         self,

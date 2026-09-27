@@ -149,6 +149,9 @@ from kinby.packages import (
 
 _INSTANCE_HOST = "0.0.0.0"
 _INSTANCE_PORT = 8787
+_SERVE_HEADER = re.compile(r"\s*\[\s*serve\s*\]\s*(#.*)?$")
+_TABLE_HEADER = re.compile(r"\s*\[")
+_LISTEN_KEY = re.compile(r"\s*listen\s*=")
 #: How long a forced container may take to exit before the runtime terminates it.
 STOP_GRACE_SECONDS = 30
 #: How long a forced instance may take to report its own drain before the container goes down.
@@ -228,6 +231,24 @@ def _delete_directory(directory: Path) -> None:
         shutil.rmtree(directory)
     except FileNotFoundError:
         return
+
+
+def _set_listen(lines: list[str]) -> None:
+    """Set ``serve.listen`` to the hub's address, inside ``[serve]`` when the file has one."""
+    listen = f'listen = "{_INSTANCE_HOST}:{_INSTANCE_PORT}"'
+    header = next((i for i, line in enumerate(lines) if _SERVE_HEADER.match(line)), None)
+    if header is None:
+        lines.extend(("", "[serve]", listen))
+        return
+    end = next(
+        (i for i in range(header + 1, len(lines)) if _TABLE_HEADER.match(lines[i])),
+        len(lines),
+    )
+    for index in range(header + 1, end):
+        if _LISTEN_KEY.match(lines[index]):
+            lines[index] = listen
+            return
+    lines.insert(header + 1, listen)
 
 
 @dataclass(frozen=True)
@@ -471,14 +492,21 @@ class Hub:
     async def _prepare_image(self, operation_id: UUID, package: PackageSelection | None) -> None:
         try:
             self._record(operation_id, "image", "Building the image, or reusing the one prepared.")
-            artifact = await self._images.build(ImageSelection(_PREPARED_REVISION, package))
+            built = await self._images.build(ImageSelection(_PREPARED_REVISION, package))
+            self.registry.succeed_step(
+                operation_id,
+                "Reused the image prepared for this selection."
+                if built.reused
+                else "Built the image.",
+            )
             self._record(
                 operation_id,
                 "describe",
                 "Reading what the image declares with the candidate check.",
             )
-            description = await self._images.describe(artifact)
-            self.registry.record_description(package, artifact.image_id, description)
+            description = await self._images.describe(built.artifact)
+            self.registry.record_description(package, built.artifact.image_id, description)
+            self.registry.succeed_step(operation_id, "Read what the image declares.")
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
             raise
@@ -1646,9 +1674,17 @@ class Hub:
             model = inspect_instance(record.path).manifest.models.main
         except ManifestError:
             model = None
+        description = self.registry.description(record.package)
+        declared = description.logins if description is not None else []
+        running = {
+            login.id: operation_id
+            for login in declared
+            if (operation_id := self.registry.running_login(record.instance_id, login.id))
+        }
         return instance_setup(
-            self.registry.description(record.package),
+            description,
             logins=self.registry.login_states(record.instance_id),
+            running=running,
             secrets=self._environment(record.path),
             model=model,
         )
@@ -1881,7 +1917,7 @@ class Hub:
             if line.startswith("id = "):
                 lines[index : index + 1] = identity
                 break
-        lines.extend(("", "[serve]", f'listen = "{_INSTANCE_HOST}:{_INSTANCE_PORT}"'))
+        _set_listen(lines)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     @staticmethod

@@ -14,8 +14,9 @@ function promptOf(steps: OperationStep[]): LoginPrompt | null {
 
 /**
  * Start one of an instance's subscription logins and report its URL and code until it ends.
- * Starting a login that is running returns it, so a dropped call is asked again, and a reload
- * shows the same code. The returned function stops following it; the hub carries on.
+ * Starting a login that is running returns it, so a dropped call is asked again. `running` is
+ * the login's operation the hub already runs, followed without starting one. The returned
+ * function stops following it; the hub carries on.
  */
 export function followLogin(
   caller: Pick<Client, "call">,
@@ -23,18 +24,19 @@ export function followLogin(
   loginId: string,
   report: (signIn: SignIn) => void,
   clock: Clock,
+  running?: string,
 ): () => void {
   const pacing = pace(clock)
   const emit = (signIn: SignIn) => {
     if (!pacing.stopped) report(signIn)
   }
 
+  const start = () =>
+    caller.call("instance.login.start", { instance_id: instanceId, login_id: loginId })
+
   const follow = async () => {
     try {
-      const { operation_id } = await retried(
-        () => caller.call("instance.login.start", { instance_id: instanceId, login_id: loginId }),
-        pacing,
-      )
+      const operation_id = running ?? (await retried(start, pacing)).operation_id
       const operation = await finished(caller, operation_id, pacing, (steps) =>
         emit({ state: "signing-in", prompt: promptOf(steps) }),
       )

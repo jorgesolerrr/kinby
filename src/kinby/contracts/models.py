@@ -979,12 +979,13 @@ class LoginState(StrEnum):
 
 
 class LoginSetup(ContractModel):
-    """One subscription login an instance declares, and its state."""
+    """One subscription login an instance declares, its state, and its sign-in while one runs."""
 
     id: str
     label: str
     description: str
     state: LoginState
+    operation_id: UUID | None = None
 
 
 class SecretSetup(ContractModel):
