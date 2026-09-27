@@ -79,6 +79,24 @@ const typed: PackageDescription = {
       required: false,
       default: 7,
     },
+    {
+      name: "commit_email",
+      label: "Commit email",
+      description: "The address commits are signed with.",
+      kind: "config",
+      type: "email",
+      required: false,
+      default: "kinby@example.com",
+    },
+    {
+      name: "repository",
+      label: "Repository",
+      description: "The repository to clone.",
+      kind: "config",
+      type: "url",
+      required: false,
+      default: "https://github.com/owner/name.git",
+    },
   ],
 }
 
@@ -581,6 +599,12 @@ describe("the create wizard's setup step", () => {
     const steps = configuration.getByRole("spinbutton", { name: /Steps per turn/ })
     expect((steps as HTMLInputElement).value).toBe("7")
     expect(configuration.getByLabelText(/Behavior prompt/).tagName).toBe("TEXTAREA")
+    const email = configuration.getByLabelText(/Commit email/) as HTMLInputElement
+    expect(email.type).toBe("email")
+    expect(email.value).toBe("kinby@example.com")
+    const repository = configuration.getByLabelText(/Repository/) as HTMLInputElement
+    expect(repository.type).toBe("url")
+    expect(repository.value).toBe("https://github.com/owner/name.git")
   })
 
   it("sends a picked choice, a switch, and a whole number as typed values", async () => {
@@ -645,6 +669,48 @@ describe("the create wizard's setup step", () => {
     ).toBe("Name the provider and the model, like openai:gpt-5.")
     expect(screen.getByLabelText("API key").getAttribute("aria-invalid")).toBeNull()
     expect(screen.queryByRole("list", { name: "Creation steps" })).toBeNull()
+  })
+
+  it("sends a malformed email and URL and shows the hub's error under each", async () => {
+    const caller = hub({
+      "package.describe": () => typed,
+      "instance.create": () => {
+        throw new CallError({
+          code: "INVALID_SETUP",
+          message: "Some setup values are missing or invalid.",
+          retryable: false,
+          fields: {
+            commit_email: "Commit email is not an email address, like someone@example.com.",
+            repository:
+              "Repository is not a URL with a scheme and a host, like https://example.com.",
+          },
+        })
+      },
+    })
+    const { user } = await openWizard(caller)
+    await nameIt(user)
+    await fillSetup(user)
+    const email = screen.getByLabelText(/Commit email/)
+    const repository = screen.getByLabelText(/Repository/)
+    await user.clear(email)
+    await user.type(email, "not-an-email")
+    await user.clear(repository)
+    await user.type(repository, "not a repository")
+
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
+      config: { commit_email: "not-an-email", repository: "not a repository" },
+    })
+    const errors = within(await screen.findByRole("group", { name: "Configuration" }))
+      .getAllByRole("alert")
+      .map((alert) => alert.textContent)
+    expect(errors).toEqual([
+      "Commit email is not an email address, like someone@example.com.",
+      "Repository is not a URL with a scheme and a host, like https://example.com.",
+    ])
+    expect(screen.getByLabelText(/Commit email/).getAttribute("aria-invalid")).toBe("true")
+    expect(screen.getByLabelText(/Repository/).getAttribute("aria-invalid")).toBe("true")
   })
 
   it("shows the fields a rebuilt image stored, and a retry sends the new one", async () => {

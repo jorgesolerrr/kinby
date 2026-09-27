@@ -847,7 +847,7 @@ def test_a_setup_cleanup_the_runtime_cannot_reach_does_not_raise():
     asyncio.run(runtime.remove_setup_containers())
 
 
-def test_a_setup_container_runs_the_command_with_one_volume_and_the_hub_labels_then_goes():
+def test_a_setup_container_signs_in_on_a_scratch_home_and_copies_it_to_the_volume_on_success():
     container = FakeSetupContainer(
         [b"Open https://auth.example/device and", b" enter AB12-C3D\r\nWaiting", b"\n"]
     )
@@ -857,9 +857,20 @@ def test_a_setup_container_runs_the_command_with_one_volume_and_the_hub_labels_t
     assert client.containers.arguments == ("sha256:selected", None)
     assert client.containers.options == {
         # The login command replaces the image's entrypoint, so kinby never starts.
-        "entrypoint": ["codex", "login", "--device-auth"],
+        "entrypoint": [
+            "sh",
+            "-c",
+            '"$@" && cp -a /root/.codex/. /kinby/login/',
+            "sh",
+            "codex",
+            "login",
+            "--device-auth",
+        ],
         "labels": {"kinby.hub": "hub-id", "kinby.setup": "alice"},
-        "mounts": [Mount(target="/root/.codex", source="kinby-alice-codex", type="volume")],
+        "mounts": [
+            Mount(target="/root/.codex", source=None, type="tmpfs", tmpfs_mode=0o700),
+            Mount(target="/kinby/login", source="kinby-alice-codex", type="volume"),
+        ],
     }
     assert lines == [
         "Open https://auth.example/device and enter AB12-C3D",
@@ -869,6 +880,55 @@ def test_a_setup_container_runs_the_command_with_one_volume_and_the_hub_labels_t
     # v=True takes the anonymous /instance volume with it; Docker keeps named volumes.
     assert container.events == ["start", "wait", "remove force=True v=True"]
     assert client.volumes.removed == []
+
+
+@pytest.mark.skipif(not docker_available(), reason="Docker daemon is not available")
+def test_a_real_sign_in_changes_the_login_volume_only_when_it_succeeds():
+    import docker
+
+    client = docker.from_env()
+    image = client.images.pull("busybox", tag="1.36")
+    volume = client.volumes.create(f"kinby-test-login-{uuid.uuid4().hex}")
+    mount = [Mount(target="/v", source=volume.name, type="volume")]
+    runtime = DockerRuntime(str(uuid.uuid4()), network="unused", client=client)
+
+    def sign_in(exit_code: int) -> int:
+        spec = SetupSpec(
+            instance_id="alice",
+            image=str(image.id),
+            command=("sh", "-c", f"echo new > /root/.codex/auth.json; exit {exit_code}"),
+            volume=StorageItem(
+                kind=StorageKind.VOLUME,
+                source=str(volume.name),
+                destination="/root/.codex",
+                writable=True,
+            ),
+        )
+        return asyncio.run(runtime.run_setup(spec, lambda line: None))
+
+    def volume_files() -> str:
+        printed = client.containers.run(
+            image.id,
+            ["sh", "-c", "cat /v/auth.json /v/sessions/one"],
+            mounts=mount,
+            remove=True,
+        )
+        return cast(bytes, printed).decode()
+
+    try:
+        client.containers.run(
+            image.id,
+            ["sh", "-c", "echo old > /v/auth.json; mkdir /v/sessions; echo kept > /v/sessions/one"],
+            mounts=mount,
+            remove=True,
+        )
+
+        assert sign_in(1) == 1
+        assert volume_files() == "old\nkept\n"
+        assert sign_in(0) == 0
+        assert volume_files() == "new\nkept\n"
+    finally:
+        volume.remove(force=True)
 
 
 def test_a_setup_container_that_fails_reports_its_exit_code_and_goes():

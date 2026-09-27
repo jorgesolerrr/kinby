@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shlex
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from pathlib import Path
 from typing import cast
@@ -27,6 +28,8 @@ from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage, installed_pack
 
 _FROM = re.compile(r"^(FROM\s+)(\S+)(.*)$", re.MULTILINE | re.IGNORECASE)
 _END = object()
+#: Where a setup container mounts the login's volume, beside the scratch home it signs in on.
+_LOGIN_MOUNT = "/kinby/login"
 
 
 class DockerImageBackend:
@@ -458,23 +461,36 @@ class DockerRuntime:
         """Run the command in a new container with the one volume, and remove it at the end.
 
         The command replaces the image's entrypoint, so kinby and its scheduler never start.
+        It signs in on an empty scratch home where the login keeps its credentials, and what
+        it wrote is copied into the volume only when it exits 0, so a sign-in that fails or
+        expires leaves the credentials before it working (ADR 0068). The copy replaces files
+        of the same name and deletes nothing, because the volume also holds the instance's
+        sessions and config.
         The container stays off the instance network, and gets no environment from the hub.
         The image declares `VOLUME /instance`, so Docker gives the container an anonymous
         volume; removing the container with `v=True` takes that volume and keeps the named one.
         """
         volume = spec.volume
+        home = shlex.quote(volume.destination)
         container = await asyncio.to_thread(
             self._client.containers.create,
             spec.image,
-            entrypoint=list(spec.command),
+            entrypoint=[
+                "sh",
+                "-c",
+                f'"$@" && cp -a {home}/. {_LOGIN_MOUNT}/',
+                "sh",
+                *spec.command,
+            ],
             labels={"kinby.hub": self._hub_id, "kinby.setup": spec.instance_id},
             mounts=[
+                Mount(target=volume.destination, source=None, type="tmpfs", tmpfs_mode=0o700),
                 Mount(
-                    target=volume.destination,
+                    target=_LOGIN_MOUNT,
                     source=volume.source,
                     type=volume.kind.value,
                     read_only=not volume.writable,
-                )
+                ),
             ],
         )
         try:

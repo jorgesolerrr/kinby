@@ -23,6 +23,7 @@ from kinby.contracts import (
 )
 from kinby.hub import InstanceSpec, RecoveredState
 from tests.test_hub import (
+    RESTARTING,
     FakeControl,
     FakeImages,
     FakeRuntime,
@@ -110,6 +111,71 @@ def test_a_recreation_brings_a_missing_container_back_on_request(tmp_path):
         assert len(runtime.created) == 2
         assert runtime.removed == []
         assert runtime.started == [str(created.instance_id)] * 2
+
+    asyncio.run(scenario())
+
+
+def test_a_restarting_container_is_recreated_without_a_drain(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl()
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+        runtime.states[str(created.instance_id)] = RESTARTING
+
+        accepted = await client.call(
+            INSTANCE_RECREATE,
+            InstanceRecreateCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert [step.name for step in outcome.steps] == [
+            "validate",
+            "container",
+            "remove",
+            "create",
+            "start",
+        ]
+        assert control.endpoints == []
+        assert runtime.stopped == [30]
+        assert len(runtime.created) == 2
+
+    asyncio.run(scenario())
+
+
+def test_a_running_container_whose_endpoint_cannot_be_reached_is_terminated_and_recreated(
+    tmp_path,
+):
+    async def scenario() -> None:
+        control = FakeControl(reachable=False)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        accepted = await client.call(
+            INSTANCE_RECREATE,
+            InstanceRecreateCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert [step.name for step in outcome.steps] == [
+            "validate",
+            "probe",
+            "result",
+            "container",
+            "remove",
+            "create",
+            "start",
+        ]
+        assert control.forces == []
+        assert runtime.stopped == [30]
+        assert len(runtime.created) == 2
 
     asyncio.run(scenario())
 

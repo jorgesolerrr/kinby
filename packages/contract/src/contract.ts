@@ -73,7 +73,7 @@ export type TargetFile = "kinby.toml" | "package.yaml";
 /**
  * How a client asks for a setup field's value, and so what the value is.
  */
-export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "choice";
+export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "choice" | "email" | "url";
 export type RoutineRunOutcome = "running" | "parked" | "work" | "no-work" | "failed" | "interrupted";
 export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
 export type RoutineNoticeKind = "first-failure" | "disabled";

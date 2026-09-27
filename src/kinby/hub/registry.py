@@ -676,6 +676,8 @@ class HubRegistry:
         """Record the outcome on the operation and on the step it stopped in.
 
         A login's outcome is its login's state too, however the login ended, a restart included.
+        A login that fails after it once signed in stays signed in: a sign-in writes its
+        credentials only when it succeeds, so the ones before it still work (ADR 0068).
         """
         login = LoginState.SIGNED_IN if state is OperationState.SUCCEEDED else LoginState.FAILED
         with self._connect() as connection:
@@ -686,10 +688,20 @@ class HubRegistry:
             )
             connection.execute(
                 """
-                INSERT OR REPLACE INTO logins (instance_id, login_id, state, changed_at)
+                INSERT INTO logins (instance_id, login_id, state, changed_at)
                 SELECT instance_id, login_id, ?, ? FROM operations WHERE id = ? AND kind = ?
+                ON CONFLICT (instance_id, login_id) DO UPDATE
+                SET state = excluded.state, changed_at = excluded.changed_at
+                WHERE logins.state != ? OR excluded.state = ?
                 """,
-                (login.value, _now(), str(operation_id), OperationKind.LOGIN.value),
+                (
+                    login.value,
+                    _now(),
+                    str(operation_id),
+                    OperationKind.LOGIN.value,
+                    LoginState.SIGNED_IN.value,
+                    LoginState.SIGNED_IN.value,
+                ),
             )
 
     @staticmethod
