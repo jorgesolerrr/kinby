@@ -2791,7 +2791,9 @@
         "multiline",
         "boolean",
         "integer",
-        "choice"
+        "choice",
+        "email",
+        "url"
       ],
       "title": "SetupFieldType",
       "type": "string"

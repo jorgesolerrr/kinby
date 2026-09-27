@@ -178,7 +178,7 @@ def test_a_login_that_signs_in_reads_signed_in_and_one_that_fails_reads_failed(t
     asyncio.run(scenario())
 
 
-def test_signing_in_again_after_a_success_that_fails_reads_failed(tmp_path):
+def test_signing_in_again_after_a_success_that_fails_stays_signed_in(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
         runtime.setup_exits.set()
@@ -187,9 +187,34 @@ def test_signing_in_again_after_a_success_that_fails_reads_failed(tmp_path):
         await finished_operation(hub_client(hub), await login_started(hub, instance_id, "editor"))
 
         runtime.setup_exit_code = 1
+        retried = await finished_operation(
+            hub_client(hub), await login_started(hub, instance_id, "editor")
+        )
+
+        assert retried.state is OperationState.FAILED
+        assert login_states(await setup_of(hub, instance_id)) == {"editor": LoginState.SIGNED_IN}
+        assert await pending_by_instance(hub) == {instance_id: False}
+
+    asyncio.run(scenario())
+
+
+def test_signing_in_again_after_a_success_whose_code_expires_stays_signed_in(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        runtime.setup_exits.set()
+        hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR)), runtime)
+        instance_id = (await created_writer(hub)).instance_id
         await finished_operation(hub_client(hub), await login_started(hub, instance_id, "editor"))
 
-        assert login_states(await setup_of(hub, instance_id)) == {"editor": LoginState.FAILED}
+        runtime.setup_exits.clear()
+        monkeypatch.setattr("kinby.hub.service.LOGIN_SECONDS", 0.05)
+        expired = await finished_operation(
+            hub_client(hub), await login_started(hub, instance_id, "editor")
+        )
+
+        assert expired.state is OperationState.FAILED
+        assert expired.detail == "The code expired. Sign in again for a new one."
+        assert login_states(await setup_of(hub, instance_id)) == {"editor": LoginState.SIGNED_IN}
 
     asyncio.run(scenario())
 

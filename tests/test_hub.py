@@ -169,6 +169,12 @@ class FakeImages:
         return package_description(self.package)
 
 
+#: How the Docker runtime reports a container its restart policy keeps bringing back.
+RESTARTING = RuntimeStatus("starting", healthy=False, detail="restarting")
+#: How the Docker runtime reports a running container before its first health check passes.
+BOOTING = RuntimeStatus("starting", healthy=False, detail="running")
+
+
 class FakeRuntime:
     def __init__(self) -> None:
         self.created: list[InstanceSpec] = []
@@ -223,7 +229,9 @@ class FakeRuntime:
         return self.states.get(instance_id, RuntimeStatus("absent", None))
 
     async def address(self, instance_id: str) -> str | None:
-        if self.states.get(instance_id, RuntimeStatus("absent", None)).state != "running":
+        """Only a container Docker reports running has one, a booting one included."""
+        status = self.states.get(instance_id, RuntimeStatus("absent", None))
+        if "running" not in (status.state, status.detail):
             return None
         return self.addresses.get(instance_id)
 
@@ -1563,7 +1571,9 @@ def test_a_drain_the_instance_refuses_fails_the_stop_and_leaves_it_running(tmp_p
     asyncio.run(scenario())
 
 
-def test_an_unreachable_lifecycle_endpoint_is_reported_without_stopping_the_container(tmp_path):
+def test_a_stop_of_a_running_instance_whose_endpoint_cannot_be_reached_suggests_a_force_stop(
+    tmp_path,
+):
     async def scenario() -> None:
         runtime = FakeRuntime()
         hub = hub_at(tmp_path / "hub", runtime=runtime, control=FakeControl(reachable=False))
@@ -1578,8 +1588,113 @@ def test_an_unreachable_lifecycle_endpoint_is_reported_without_stopping_the_cont
         outcome = await finished_operation(client, stopped)
 
         assert outcome.state is OperationState.FAILED
+        assert "Force stop it" in outcome.detail
         assert "Cannot connect to host" in outcome.detail
         assert runtime.stopped == []
+        assert (await runtime.status(str(created.instance_id))).state == "running"
+
+    asyncio.run(scenario())
+
+
+def test_a_force_stop_terminates_a_running_instance_whose_endpoint_cannot_be_reached(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl(reachable=False)
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id, force=True),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await finished_operation(client, stopped)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert [(step.name, step.detail) for step in outcome.steps] == [
+            ("probe", "Checking the instance's lifecycle endpoint."),
+            ("result", "The lifecycle endpoint cannot be reached. Terminating the container."),
+            ("container", "Instance stopped."),
+        ]
+        assert control.forces == []
+        assert runtime.stopped == [30]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_a_stop_of_a_restarting_container_skips_the_drain_and_stops_it(tmp_path, force):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+        runtime.states[str(created.instance_id)] = RESTARTING
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id, force=force),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await finished_operation(client, stopped)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert outcome.detail == "Instance stopped."
+        assert [step.name for step in outcome.steps] == ["container"]
+        assert control.endpoints == []
+        assert runtime.stopped == [30]
+
+    asyncio.run(scenario())
+
+
+def test_a_stop_of_a_booting_instance_still_drains_it(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+        runtime.states[str(created.instance_id)] = BOOTING
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await finished_operation(client, stopped)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert control.forces == [False]
+        assert runtime.stopped == [30]
+
+    asyncio.run(scenario())
+
+
+def test_a_stop_of_a_failed_container_stops_it_so_docker_does_not_restart_it(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+        runtime.states[str(created.instance_id)] = RuntimeStatus("failed", None, "exited (1)")
+
+        stopped = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(stopped, LifecycleOperationResult)
+        outcome = await finished_operation(client, stopped)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert outcome.detail == "Instance stopped."
+        assert [(step.name, step.detail) for step in outcome.steps] == [
+            ("container", "Instance stopped."),
+        ]
+        assert control.endpoints == []
+        assert runtime.stopped == [30]
 
     asyncio.run(scenario())
 

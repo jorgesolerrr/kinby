@@ -4,6 +4,7 @@ import asyncio
 import sqlite3
 import tomllib
 from dataclasses import replace
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -604,6 +605,104 @@ def test_a_value_of_the_wrong_type_is_refused_on_its_field(
         assert refused.fields == fields
         assert runtime.created == []
         assert list(hub.instances_directory.iterdir()) == []
+
+    asyncio.run(scenario())
+
+
+CODER = PackageSelection(id="coder", distribution="kinby-coder", version="0.3.0")
+CODER_PACKAGE = InstalledPackage(
+    descriptor=PackageDescriptor(
+        id="coder",
+        display_name="Coder",
+        description="Implements tickets.",
+        icon="code",
+        distribution="kinby-coder",
+        version="0.3.0",
+        setup_fields=(
+            _config_field(
+                "repository",
+                "Repository",
+                SetupFieldType.URL,
+                target=SetupTarget(file=TargetFile.PACKAGE_YAML, key="workspace.source"),
+            ),
+            _config_field(
+                "commit_email",
+                "Commit email",
+                SetupFieldType.EMAIL,
+                target=SetupTarget(file=TargetFile.PACKAGE_YAML, key="git.email"),
+            ),
+        ),
+    ),
+    files={"package.yaml": "workspace:\n  source: ''\ngit:\n  email: ''\n"},
+)
+
+
+async def created_coder(
+    tmp_path, config: dict[str, SetupValue]
+) -> tuple[FakeRuntime, LifecycleOperationResult | ErrorEnvelope, Path]:
+    runtime = FakeRuntime()
+    hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(package=CODER_PACKAGE))
+    client = hub_client(hub)
+    await prepared(client, CODER)
+    answer = await client.call(
+        INSTANCE_CREATE,
+        InstanceCreateCommand(
+            manifest_id="coder",
+            model="openai:gpt-5",
+            package=CODER,
+            config=config,
+            secrets={"api_key": "sk-private"},
+        ),
+    )
+    if isinstance(answer, LifecycleOperationResult):
+        assert (await finished_operation(client, answer)).state is OperationState.SUCCEEDED
+    return runtime, answer, hub.instances_directory
+
+
+@pytest.mark.parametrize(
+    "repository",
+    ["not a repository", "owner/name", "git@github.com:owner/name.git", "https://"],
+)
+@pytest.mark.parametrize("email", ["not-an-email", "someone@example", "some one@example.com"])
+def test_a_malformed_url_or_email_is_refused_on_its_field_and_creates_nothing(
+    tmp_path, repository, email
+):
+    async def scenario() -> None:
+        runtime, refused, instances = await created_coder(
+            tmp_path, {"repository": repository, "commit_email": email}
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_SETUP
+        assert refused.fields == {
+            "repository": "Repository is not a URL with a scheme and a host, "
+            "like https://example.com.",
+            "commit_email": "Commit email is not an email address, like someone@example.com.",
+        }
+        assert runtime.created == []
+        assert list(instances.iterdir()) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_url_and_an_email_that_fit_land_at_their_targets(tmp_path):
+    async def scenario() -> None:
+        _, accepted, instances = await created_coder(
+            tmp_path,
+            {
+                "repository": "https://github.com/owner/name.git",
+                "commit_email": "someone@example.com",
+            },
+        )
+
+        assert isinstance(accepted, LifecycleOperationResult)
+        written = (instances / str(accepted.instance_id) / "package.yaml").read_text(
+            encoding="utf-8"
+        )
+        assert yaml.safe_load(written) == {
+            "workspace": {"source": "https://github.com/owner/name.git"},
+            "git": {"email": "someone@example.com"},
+        }
 
     asyncio.run(scenario())
 

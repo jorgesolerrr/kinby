@@ -640,6 +640,18 @@ function SetupControl({
           onChange={(event) => onChange(event.target.value)}
         />
       )
+    case "email":
+    case "url":
+      return (
+        <Input
+          id={id}
+          type={field.type}
+          autoComplete="off"
+          value={value}
+          aria-invalid={invalid}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      )
     default:
       return (
         <Input

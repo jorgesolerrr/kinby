@@ -107,7 +107,7 @@ One recorded stage of a **lifecycle operation**, kept in the order the **hub** r
 
 ### Force stop
 
-A user's request to stop an **instance** without waiting for its accepted work. It interrupts running **turns** and parked **approvals** through the **instance runtime**, then takes the container down within a bounded grace period. A force stop may also escalate an **instance draining** that is already pending, inside the same **lifecycle operation**.
+A user's request to stop an **instance** without waiting for its accepted work. It interrupts running **turns** and parked **approvals** through the **instance runtime**, then takes the container down within a bounded grace period. A running instance whose lifecycle endpoint does not answer is terminated without a drain. A force stop may also escalate an **instance draining** that is already pending, inside the same **lifecycle operation**.
 
 ### Container recreation
 
@@ -162,7 +162,7 @@ _Avoid_: image build, warm-up
 
 ### Setup field
 
-One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. Each has a type (text, multiline, boolean, integer, or choice), may be required, and may have a default. A secret never has one. The built-in fields come first. Every instance asks for its model and API key, and a **vanilla instance** also asks for an optional **behavior prompt**. kinby writes those itself. A package's own fields follow, and each of its configuration fields names its target: `kinby.toml` or `package.yaml` and a dotted key inside it. A package may give a built-in field another default, but it cannot remove the field. Defaults resolve built-in first, then package, then the user's value. A package's required secrets read as required secret text fields.
+One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. Each has a type (text, multiline, boolean, integer, choice, email, or URL), may be required, and may have a default. An email is one address with a dot in its domain, and a URL has a scheme and a host. A secret never has one. The built-in fields come first. Every instance asks for its model and API key, and a **vanilla instance** also asks for an optional **behavior prompt**. kinby writes those itself. A package's own fields follow, and each of its configuration fields names its target: `kinby.toml` or `package.yaml` and a dotted key inside it. A package may give a built-in field another default, but it cannot remove the field. Defaults resolve built-in first, then package, then the user's value. A package's required secrets read as required secret text fields.
 _Avoid_: required input, form field
 
 ### Subscription login
@@ -172,7 +172,7 @@ _Avoid_: login, device flow, auth
 
 ### Setup container
 
-The temporary container the **hub** runs on an instance's **image artifact** for one **subscription login**. It runs the login's command in place of kinby, mounts only that login's volume, holds none of the **instance secrets**, and is removed when the login ends, however it ends.
+The temporary container the **hub** runs on an instance's **image artifact** for one **subscription login**. It runs the login's command in place of kinby, holds none of the **instance secrets**, and is removed when the login ends, however it ends. The command signs in on an empty scratch home at the path where the login keeps its credentials. The container mounts only that login's volume, at `/kinby/login`, and the files the command wrote are copied into it only when the command succeeds, so a failed or expired sign-in leaves the credentials before it working.
 _Avoid_: login container, helper container
 
 ### Pending setup

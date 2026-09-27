@@ -256,6 +256,16 @@ def _field(name="drafts", **options):
             ),
             'Setup field "drafts" has a default that is not one of plain, formal.',
         ),
+        (
+            _field(type="SetupFieldType.EMAIL", default='"not-an-email"'),
+            'Setup field "drafts" has a default that is not an email address, '
+            "like someone@example.com.",
+        ),
+        (
+            _field(type="SetupFieldType.URL", default='"owner/name"'),
+            'Setup field "drafts" has a default that is not a URL with a scheme and a host, '
+            "like https://example.com.",
+        ),
     ],
     ids=[
         "duplicate-name",
@@ -270,6 +280,8 @@ def _field(name="drafts", **options):
         "integer-default",
         "boolean-default",
         "choice-default",
+        "email-default",
+        "url-default",
     ],
 )
 def test_each_malformed_setup_field_fails_the_check(tmp_path, monkeypatch, capsys, fields, failure):

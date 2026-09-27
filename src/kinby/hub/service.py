@@ -165,6 +165,8 @@ STATS_SECONDS = 5
 #: Pause before calling a drain again, so a socket that closes immediately does not spin.
 _DRAIN_RETRY_SECONDS = 0.2
 _RUNTIME_STOPPED = frozenset({"absent", "created", "stopped", "failed"})
+#: A failed container is not among them: Docker's restart policy brings it back until it is stopped.
+_ALREADY_STOPPED = frozenset({"absent", "created", "stopped"})
 _INTERRUPTED_OPERATION = "The hub stopped before this operation finished."
 #: What an image preparation builds on: the hub's own checkout, as `instance.create` defaults to.
 _PREPARED_REVISION = "HEAD"
@@ -257,6 +259,8 @@ class PendingStop:
 
     operation_id: UUID
     force: asyncio.Event
+    #: Recreation is the way back for a broken container, so it terminates one that never answers.
+    terminates_unreachable: bool = False
 
 
 @dataclass(frozen=True)
@@ -979,7 +983,9 @@ class Hub:
         self._revalidate(operation_id, record)
         if not record.image_id:
             raise ValueError("This instance has no recorded image to recreate its container from.")
-        await self._remove_container(record, PendingStop(operation_id, asyncio.Event()))
+        await self._remove_container(
+            record, PendingStop(operation_id, asyncio.Event(), terminates_unreachable=True)
+        )
         await self._create_container(operation_id, record, record.image_id)
         if record.intended_state is IntendedState.RUNNING:
             self._record(operation_id, "start", "Restoring the intended running state.")
@@ -1438,12 +1444,40 @@ class Hub:
             self._stopping.pop(instance_id, None)
 
     async def _stop_running(self, record: ManagedInstance, pending: PendingStop) -> str:
-        """Drain the instance through its own runtime, then take the container down."""
+        """Drain the instance through its own runtime, then take the container down.
+
+        A container that is not running has no process to drain, and one whose endpoint
+        never answers is terminated only when forced (ADR 0066).
+        """
         operation_id = pending.operation_id
-        if (await self._runtime.status(record.runtime_id)).state in _RUNTIME_STOPPED:
+        status = await self._runtime.status(record.runtime_id)
+        if status.state in _ALREADY_STOPPED:
             return "Instance was already stopped."
+        # A booting instance reports starting too, but only a container Docker runs has an address.
+        if await self._runtime.address(record.runtime_id) is None:
+            self._record(
+                operation_id,
+                "container",
+                f"The container is {status.detail or status.state}, so nothing drains. "
+                "Stopping it.",
+            )
+            await self._halt_container(record.runtime_id)
+            return "Instance stopped."
         self._record(operation_id, "probe", "Checking the instance's lifecycle endpoint.")
-        probed = await self._control.probe(await self._endpoint(record))
+        try:
+            probed = await self._control.probe(await self._endpoint(record))
+        except ControlUnreachable as exc:
+            if not (pending.force.is_set() or pending.terminates_unreachable):
+                raise ControlUnreachable(
+                    "The instance's lifecycle endpoint cannot be reached, so it was left "
+                    f"running. Force stop it to terminate the container. {exc}"
+                ) from exc
+            await self._terminate(
+                operation_id,
+                record.runtime_id,
+                "The lifecycle endpoint cannot be reached. Terminating the container.",
+            )
+            return "Instance stopped."
         if Capability.DRAIN not in probed.capabilities:
             raise IncompatibleLifecycleEndpoint(
                 "The instance's lifecycle endpoint cannot drain, so it was left running. "
@@ -1456,14 +1490,18 @@ class Hub:
         """Wait for the instance's own drain, then take its container down and watch it go."""
         operation_id = pending.operation_id
         state = await self._drain(operation_id, await self._endpoint(record), pending)
-        self._record(
+        await self._terminate(
             operation_id,
-            "result",
+            record.runtime_id,
             f"Instance {state.value}. Stopping the container."
             if state is not None
             else "The instance did not report its drain. Terminating the container.",
         )
-        await self._halt_container(record.runtime_id)
+
+    async def _terminate(self, operation_id: UUID, runtime_id: str, result: str) -> None:
+        """Record why the container goes down, then take it down and watch it go."""
+        self._record(operation_id, "result", result)
+        await self._halt_container(runtime_id)
         self._record(operation_id, "container", "Stopping the container.")
 
     async def _halt_container(self, runtime_id: str) -> None:

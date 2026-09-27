@@ -657,9 +657,13 @@ class SetupFieldType(StrEnum):
     BOOLEAN = "boolean"
     INTEGER = "integer"
     CHOICE = "choice"
+    #: One address, like someone@example.com.
+    EMAIL = "email"
+    #: An absolute URL with a scheme and a host, like https://github.com/owner/name.git.
+    URL = "url"
 
 
-#: A setup value: text for text, multiline and choice fields, a bool, or a whole number.
+#: A setup value: text for text, multiline, choice, email and URL fields, a bool, or a whole number.
 type SetupValue = bool | int | str
 
 

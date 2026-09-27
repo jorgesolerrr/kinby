@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from importlib.metadata import Distribution, entry_points, version
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import (
@@ -33,6 +35,7 @@ if TYPE_CHECKING:
     from kinby.instance import Instance
 
 PACKAGE_CONFIG_NAME = "package.yaml"
+_EMAIL = re.compile(r"[^@\s]+@[^@\s.]+(\.[^@\s.]+)+")
 
 MODEL_FIELD = SetupField(
     name="model",
@@ -283,7 +286,27 @@ def value_problem(field: SetupField, value: SetupValue) -> str | None:
             return "is not a whole number"
         case SetupFieldType.CHOICE if value not in (field.choices or ()):
             return f"is not one of {', '.join(field.choices or ())}"
+        case SetupFieldType.EMAIL if not _is_email(value):
+            return "is not an email address, like someone@example.com"
+        case SetupFieldType.URL if not _is_url(value):
+            return "is not a URL with a scheme and a host, like https://example.com"
     return None
+
+
+def _is_email(value: SetupValue) -> bool:
+    """One address: no spaces, and a dot in the domain."""
+    return isinstance(value, str) and _EMAIL.fullmatch(value) is not None
+
+
+def _is_url(value: SetupValue) -> bool:
+    """An absolute URL. `owner/name` and the scp form `git@host:owner/name.git` have no scheme."""
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    return bool(parsed.scheme and parsed.hostname)
 
 
 def resolved_values(
