@@ -11,6 +11,7 @@ import pytest
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
+    IMAGE_PREPARE,
     INSTANCE_CREATE,
     INSTANCE_LIST,
     INSTANCE_RECREATE,
@@ -21,6 +22,8 @@ from kinby.contracts import (
     OPERATION_GET,
     ErrorCode,
     ErrorEnvelope,
+    ImagePrepareCommand,
+    ImagePrepareResult,
     InstanceCreateCommand,
     InstanceListCommand,
     InstanceListResult,
@@ -573,7 +576,7 @@ def _checked_directory(instance: StorageItem) -> str:
 
 async def _checked(
     client: ContractClient,
-    accepted: LifecycleOperationResult,
+    accepted: LifecycleOperationResult | ImagePrepareResult,
 ) -> OperationGetResult:
     """Wait out an operation whose candidate check starts a separate Python."""
     async with asyncio.timeout(60):
@@ -602,7 +605,9 @@ def test_a_failing_candidate_stops_the_update_before_the_container_stops(tmp_pat
         hub = hub_at(tmp_path / "hub", runtime=runtime, images=images, control=control)
         client = hub_client(hub)
         selection = PackageSelection(id="writer", distribution=package.module, version="1.4.2")
-        await prepared(client, selection)
+        preparing = await client.call(IMAGE_PREPARE, ImagePrepareCommand(package=selection))
+        assert isinstance(preparing, ImagePrepareResult)
+        assert (await _checked(client, preparing)).state is OperationState.SUCCEEDED
         created = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
