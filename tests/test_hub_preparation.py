@@ -28,7 +28,7 @@ from kinby.contracts import (
 )
 from kinby.hub import Hub, ImageArtifact, ImageSelection
 from kinby.hub.curated import CURATED_DIRECTORY
-from kinby.packages import InstalledPackage, PackageDescriptor, RequiredSecret
+from kinby.packages import InstalledPackage, PackageDescriptor
 from tests.test_hub import (
     FakeImages,
     FakeRuntime,
@@ -37,6 +37,7 @@ from tests.test_hub import (
     hub_at,
     hub_client,
     prepared,
+    secret_field,
 )
 
 WRITER = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
@@ -65,13 +66,7 @@ def writer_package() -> InstalledPackage:
             icon="pen",
             distribution="kinby-writer",
             version="1.4.2",
-            setup_fields=(
-                RequiredSecret(
-                    name="EDITOR_TOKEN",
-                    label="Editor token",
-                    description="Publishes drafts.",
-                ).setup_field(),
-            ),
+            setup_fields=(secret_field("EDITOR_TOKEN", "Editor token", "Publishes drafts."),),
         ),
         files={"SYSTEM.md": "Write clearly.\n"},
     )

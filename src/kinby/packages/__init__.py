@@ -77,31 +77,12 @@ class PackageConfig(BaseModel):
 
 def _declared_secret(name: str, info: ValidationInfo) -> str:
     if not isinstance(info.context, frozenset) or name not in info.context:
-        raise ValueError(f'"{name}" is not a required secret this package declares.')
+        raise ValueError(f'"{name}" is not a secret field this package declares.')
     return name
 
 
 SecretName = Annotated[str, AfterValidator(_declared_secret)]
-"""A config field that names a required secret's environment variable, never its value."""
-
-
-@dataclass(frozen=True)
-class RequiredSecret:
-    """One environment secret an instance package requires. It reads as a secret setup field."""
-
-    name: str
-    label: str
-    description: str
-
-    def setup_field(self) -> SetupField:
-        return SetupField(
-            name=self.name,
-            label=self.label,
-            description=self.description,
-            kind=SetupFieldKind.SECRET,
-            type=SetupFieldType.TEXT,
-            required=True,
-        )
+"""A config field that names a secret field's environment variable, never its value."""
 
 
 @dataclass(frozen=True)
@@ -115,19 +96,11 @@ class Package:
     description: str
     icon: str
     template: Path
-    required_secrets: tuple[RequiredSecret, ...] = ()
     setup_fields: tuple[SetupField, ...] = ()
     validate: Callable[[Path], None] | None = None
     config: type[PackageConfig] | None = None
     executables: tuple[str, ...] = ()
     logins: tuple[SubscriptionLogin, ...] = ()
-
-    def declared_fields(self) -> tuple[SetupField, ...]:
-        """Its setup fields, then each required secret as a required secret text field."""
-        return (
-            *self.setup_fields,
-            *(secret.setup_field() for secret in self.required_secrets),
-        )
 
 
 @dataclass(frozen=True)
@@ -149,7 +122,7 @@ class PackageDescriptor:
     icon: str
     distribution: str
     version: str
-    #: The package's own fields, required secrets included, as it declared them.
+    #: The package's own fields, as it declared them.
     setup_fields: tuple[SetupField, ...] = ()
     logins: tuple[SubscriptionLogin, ...] = ()
 
@@ -189,7 +162,7 @@ def installed_package(loaded: LoadedPackage) -> InstalledPackage:
             icon=exported.icon,
             distribution=loaded.distribution.name,
             version=loaded.distribution.version,
-            setup_fields=exported.declared_fields(),
+            setup_fields=exported.setup_fields,
             logins=exported.logins,
         ),
         files=readable_template_files(exported.template),
@@ -224,7 +197,7 @@ def read_package_config(package: Package, directory: Path) -> PackageConfig | No
         raise PackageConfigError(f"{path}: the package requires this file.") from None
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         raise PackageConfigError(f"{path}: {exc}") from exc
-    declared = secret_names(package.declared_fields())
+    declared = secret_names(package.setup_fields)
     try:
         return package.config.model_validate(raw, context=declared)
     except ValidationError as exc:
@@ -340,13 +313,8 @@ def installed_package_from_json(body: str) -> InstalledPackage:
             icon=descriptor["icon"],
             distribution=descriptor["distribution"],
             version=descriptor["version"],
-            setup_fields=(
-                *(SetupField.model_validate(field) for field in descriptor.get("setup_fields", [])),
-                # An image prepared before setup fields prints its required secrets instead.
-                *(
-                    RequiredSecret(**secret).setup_field()
-                    for secret in descriptor.get("required_secrets", [])
-                ),
+            setup_fields=tuple(
+                SetupField.model_validate(field) for field in descriptor.get("setup_fields", [])
             ),
             logins=tuple(
                 SubscriptionLogin.model_validate(login) for login in descriptor.get("logins", [])
@@ -403,7 +371,6 @@ __all__ = [
     "PackageConfig",
     "PackageConfigError",
     "PackageDescriptor",
-    "RequiredSecret",
     "SecretName",
     "SetupField",
     "SetupFieldKind",

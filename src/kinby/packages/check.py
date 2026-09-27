@@ -106,7 +106,7 @@ def _unshipped_template_files(loaded: LoadedPackage, template: Path) -> list[str
 def _field_declarations(package: Package) -> Iterator[str]:
     built_in = {field.name: field for field in BUILT_IN_FIELDS}
     seen: set[str] = set()
-    for field in package.declared_fields():
+    for field in package.setup_fields:
         if field.name in seen:
             yield f'Setup field "{field.name}" is declared more than once.'
             continue
@@ -170,7 +170,7 @@ def _override_failures(field: SetupField, built_in: SetupField) -> Iterator[str]
 
 def _defaults_at_targets(package: Package) -> dict[str, SetupValue]:
     """The defaults initialization writes at their targets when the user changes nothing."""
-    targeted = [field for field in package_fields(package.declared_fields()) if field.target]
+    targeted = [field for field in package_fields(package.setup_fields) if field.target]
     return resolved_values(targeted, {})
 
 
@@ -212,7 +212,7 @@ def _missing_executables(package: Package) -> Iterator[str]:
 
 def _secret_values(package: Package, template: Path) -> Iterator[str]:
     """A line that assigns a declared secret, in a .env, shell, TOML or YAML style."""
-    secrets = secret_names(package.declared_fields())
+    secrets = secret_names(package.setup_fields)
     for name, body in readable_template_files(template).items():
         for secret in sorted(secrets):
             assignment = re.compile(
@@ -271,7 +271,7 @@ def _written_config_failures(
     """The package.yaml a new instance gets once each default lands at its target."""
     in_package_yaml = any(
         field.target is not None and field.target.file is TargetFile.PACKAGE_YAML
-        for field in package.declared_fields()
+        for field in package.setup_fields
         if field.name in defaults
     )
     if in_package_yaml:
@@ -300,7 +300,7 @@ def _routine_failures(instance: Instance, package: Package) -> Iterator[str]:
 @contextmanager
 def _placeholder_secrets(package: Package) -> Iterator[None]:
     """A signal routine loads only when its secret is set, and the check holds no secrets."""
-    unset = sorted(secret_names(package.declared_fields()) - os.environ.keys())
+    unset = sorted(secret_names(package.setup_fields) - os.environ.keys())
     os.environ.update(dict.fromkeys(unset, _PLACEHOLDER_SECRET))
     try:
         yield

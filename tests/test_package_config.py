@@ -72,7 +72,7 @@ def test_a_code_step_receives_the_validated_config_and_an_edit_applies_at_the_ne
         ),
         (
             "tone: plain\ntoken: GITHUB_TOKEN\n",
-            'token: "GITHUB_TOKEN" is not a required secret this package declares',
+            'token: "GITHUB_TOKEN" is not a secret field this package declares',
         ),
         ("tone: [plain\n", "while parsing a flow sequence"),
     ],

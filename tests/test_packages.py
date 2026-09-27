@@ -6,7 +6,6 @@ from kinby import packages as package_module
 from kinby.contracts import SetupField, SetupFieldKind, SetupFieldType, SetupTarget, TargetFile
 from kinby.packages import (
     Package,
-    RequiredSecret,
     inspect_installed_package,
     installed_package_from_json,
     package_description,
@@ -83,52 +82,30 @@ def test_installed_package_entry_point_supplies_descriptor_template_and_validati
     assert validated == [template.resolve()]
 
 
-def test_setup_fields_and_required_secrets_round_trip_as_setup_fields(tmp_path, monkeypatch):
+def test_setup_fields_round_trip_through_the_printed_descriptor(tmp_path, monkeypatch):
     template = tmp_path / "template"
     template.mkdir()
+    token = SetupField(
+        name="EDITOR_TOKEN",
+        label="Editor token",
+        description="Authenticates editing.",
+        kind=SetupFieldKind.SECRET,
+        type=SetupFieldType.TEXT,
+        required=True,
+    )
     exported = Package(
         display_name="Writing teammate",
         description="Drafts articles.",
         icon="pen",
         template=template,
-        required_secrets=(
-            RequiredSecret("EDITOR_TOKEN", "Editor token", "Authenticates editing."),
-        ),
-        setup_fields=(TONE, DRAFTS),
+        setup_fields=(TONE, DRAFTS, token),
     )
 
     installed = _installed(monkeypatch, exported)
     parsed = installed_package_from_json(package_json(installed))
 
     assert parsed == installed
-    assert parsed.descriptor.setup_fields == (
-        TONE,
-        DRAFTS,
-        SetupField(
-            name="EDITOR_TOKEN",
-            label="Editor token",
-            description="Authenticates editing.",
-            kind=SetupFieldKind.SECRET,
-            type=SetupFieldType.TEXT,
-            required=True,
-        ),
-    )
-
-
-def test_an_image_from_before_setup_fields_reads_its_required_secrets_as_secret_fields():
-    printed = (
-        '{"descriptor":{"id":"writer","display_name":"Writing teammate",'
-        '"description":"Drafts articles.","icon":"pen","distribution":"kinby-writer",'
-        '"version":"1.4.2","required_secrets":[{"name":"EDITOR_TOKEN",'
-        '"label":"Editor token","description":"Authenticates editing."}]},"files":{}}'
-    )
-
-    parsed = installed_package_from_json(printed)
-
-    assert [
-        (field.name, field.kind, field.type, field.required)
-        for field in parsed.descriptor.setup_fields
-    ] == [("EDITOR_TOKEN", SetupFieldKind.SECRET, SetupFieldType.TEXT, True)]
+    assert parsed.descriptor.setup_fields == (TONE, DRAFTS, token)
 
 
 @pytest.mark.parametrize("override", [True, False])
