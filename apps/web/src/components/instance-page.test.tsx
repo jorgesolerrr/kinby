@@ -2,6 +2,7 @@ import type {
   Client,
   InstanceSetup,
   InstanceStatusResult,
+  InstanceSummary,
   OperationGetResult,
 } from "@kinby/contract"
 import { type Answers, fakeClock, instanceSummary, stubCaller } from "@kinby/contract/testing"
@@ -77,9 +78,14 @@ async function openPage(answers: Answers, instance = stopped) {
   const caller = stubCaller({ "instance.status": () => status(), ...answers })
   const clock = fakeClock()
   const onChanged = vi.fn()
-  render(<InstancePage caller={caller} clock={clock} instance={instance} onChanged={onChanged} />)
+  const page = (shown: InstanceSummary) => (
+    <InstancePage caller={caller} clock={clock} instance={shown} onChanged={onChanged} />
+  )
+  const { rerender } = render(page(instance))
   await act(() => clock.advance(0))
-  return { caller, clock, onChanged, user: userEvent.setup() }
+  // What the page shows once the instances are listed again with `listed` in them.
+  const relist = (listed: InstanceSummary) => rerender(page(listed))
+  return { caller, clock, onChanged, relist, user: userEvent.setup() }
 }
 
 const card = () => within(screen.getByRole("region", { name: "Finish setting up Ada" }))
@@ -191,11 +197,66 @@ describe("the setup card", () => {
     expect(card().getByText("The image is gone.")).toBeDefined()
     expect(card().getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(false)
   })
+})
 
-  it("does not open a stopped instance with nothing pending on the card", async () => {
-    await openPage({}, { ...stopped, setup_pending: false })
+describe("a stopped instance with setup complete", () => {
+  const complete = { ...stopped, setup_pending: false }
+  const stoppedView = () => within(screen.getByRole("region", { name: "Ada is stopped" }))
 
+  it("offers Start instead of the setup card", async () => {
+    await openPage({}, complete)
+
+    expect(stoppedView().getByRole("button", { name: "Start" })).toBeDefined()
     expect(screen.queryByRole("region", { name: "Finish setting up Ada" })).toBeNull()
+  })
+
+  it("starts it, and leaves the stopped view once it runs", async () => {
+    const polls = [
+      operation({ kind: "start", state: "running" }),
+      operation({ kind: "start", state: "succeeded" }),
+    ]
+    const { user, clock, caller, onChanged, relist } = await openPage(
+      {
+        "instance.start": () => ({ operation_id: "op-start", instance_id: "instance-1" }),
+        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+      },
+      complete,
+    )
+
+    await user.click(stoppedView().getByRole("button", { name: "Start" }))
+    await act(() => clock.advance(0))
+    expect(stoppedView().getByRole("status", { name: "Loading" })).toBeDefined()
+    expect(stoppedView().getByRole("button", { name: /Start/ }).hasAttribute("disabled")).toBe(true)
+    expect(onChanged).not.toHaveBeenCalled()
+    await act(() => clock.advance(1_000))
+
+    expect(caller.calls.find((call) => call.method === "instance.start")?.params).toEqual({
+      instance_id: "instance-1",
+    })
+    expect(onChanged).toHaveBeenCalledOnce()
+    relist({ ...complete, intended_state: "running" })
+    await act(() => clock.advance(0))
+    expect(screen.queryByRole("region", { name: "Ada is stopped" })).toBeNull()
+  })
+
+  it("says why a start failed", async () => {
+    const { user, clock, onChanged } = await openPage(
+      {
+        "instance.start": () => ({ operation_id: "op-start", instance_id: "instance-1" }),
+        "operation.get": () =>
+          operation({ kind: "start", state: "failed", detail: "The image is gone." }),
+      },
+      complete,
+    )
+
+    await user.click(stoppedView().getByRole("button", { name: "Start" }))
+    await act(() => clock.advance(0))
+
+    expect(stoppedView().getByText("The image is gone.")).toBeDefined()
+    expect(stoppedView().getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(
+      false,
+    )
+    expect(onChanged).not.toHaveBeenCalled()
   })
 })
 
