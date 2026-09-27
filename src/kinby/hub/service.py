@@ -149,6 +149,9 @@ from kinby.packages import (
 
 _INSTANCE_HOST = "0.0.0.0"
 _INSTANCE_PORT = 8787
+_SERVE_HEADER = re.compile(r"\s*\[\s*serve\s*\]\s*(#.*)?$")
+_TABLE_HEADER = re.compile(r"\s*\[")
+_LISTEN_KEY = re.compile(r"\s*listen\s*=")
 #: How long a forced container may take to exit before the runtime terminates it.
 STOP_GRACE_SECONDS = 30
 #: How long a forced instance may take to report its own drain before the container goes down.
@@ -228,6 +231,24 @@ def _delete_directory(directory: Path) -> None:
         shutil.rmtree(directory)
     except FileNotFoundError:
         return
+
+
+def _set_listen(lines: list[str]) -> None:
+    """Set ``serve.listen`` to the hub's address, inside ``[serve]`` when the file has one."""
+    listen = f'listen = "{_INSTANCE_HOST}:{_INSTANCE_PORT}"'
+    header = next((i for i, line in enumerate(lines) if _SERVE_HEADER.match(line)), None)
+    if header is None:
+        lines.extend(("", "[serve]", listen))
+        return
+    end = next(
+        (i for i in range(header + 1, len(lines)) if _TABLE_HEADER.match(lines[i])),
+        len(lines),
+    )
+    for index in range(header + 1, end):
+        if _LISTEN_KEY.match(lines[index]):
+            lines[index] = listen
+            return
+    lines.insert(header + 1, listen)
 
 
 @dataclass(frozen=True)
@@ -1871,7 +1892,7 @@ class Hub:
             if line.startswith("id = "):
                 lines[index : index + 1] = identity
                 break
-        lines.extend(("", "[serve]", f'listen = "{_INSTANCE_HOST}:{_INSTANCE_PORT}"'))
+        _set_listen(lines)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     @staticmethod

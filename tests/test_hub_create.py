@@ -522,6 +522,54 @@ def test_defaults_fill_in_what_the_user_left_out_and_keep_the_file_as_shipped(tm
 
 
 @pytest.mark.parametrize(
+    "served",
+    ['[serve]\nlisten = "127.0.0.1:9000"\n', "[serve]\n"],
+    ids=["own-listen", "no-listen"],
+)
+def test_a_template_that_declares_serve_gets_the_hub_listen_address_in_that_one_table(
+    tmp_path, served
+):
+    async def scenario() -> None:
+        package = InstalledPackage(
+            descriptor=PackageDescriptor(
+                id="writer",
+                display_name="Writing teammate",
+                description="Drafts articles.",
+                icon="pen",
+                distribution="kinby-writer",
+                version="1.4.2",
+            ),
+            files={"kinby.toml": served + "\n[budgets]\nsteps = 3\n"},
+        )
+        hub = hub_at(tmp_path / "hub", images=FakeImages(package=package))
+        client = hub_client(hub)
+        await prepared(client, WRITER)
+
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="editor",
+                model="openai:gpt-5",
+                package=WRITER,
+                secrets={"api_key": "sk-private"},
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert outcome.state is OperationState.SUCCEEDED, outcome.detail
+        written = (hub.instances_directory / str(accepted.instance_id) / "kinby.toml").read_text(
+            encoding="utf-8"
+        )
+        manifest = tomllib.loads(written)
+        assert manifest["serve"] == {"listen": "0.0.0.0:8787"}
+        assert manifest["budgets"]["steps"] == 3
+        assert written.count("[serve]") == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
     ("config", "fields"),
     [
         ({"tone": "loud"}, {"tone": "Tone is not one of plain, formal."}),
