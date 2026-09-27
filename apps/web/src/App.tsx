@@ -1,4 +1,5 @@
-import type { Client, InstanceSummary } from "@kinby/contract"
+import { browserClock } from "@kinby/contract"
+import type { Client, Clock, InstanceSummary } from "@kinby/contract"
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
@@ -10,16 +11,16 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/s
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useCreating, useSelectedInstanceId } from "@/lib/selection"
 
-export default function App({ client }: { client: Client }) {
+export default function App({ client, clock = browserClock }: { client: Client; clock?: Clock }) {
   const state = useSyncExternalStore(client.onStateChange, client.state)
 
   if (state === "signed-out") return <SignIn onSignIn={client.signIn} />
   if (state === "connecting") return null
-  return <Shell client={client} connected={state === "connected"} />
+  return <Shell client={client} clock={clock} connected={state === "connected"} />
 }
 
-function Shell({ client, connected }: { client: Client; connected: boolean }) {
-  const [instances, listAgain] = useInstances(client, connected)
+function Shell({ client, clock, connected }: { client: Client; clock: Clock; connected: boolean }) {
+  const [instances, listAgain] = useInstances(client, clock, connected)
   const selectedId = useSelectedInstanceId()
   const creating = useCreating()
   // An instance the hub does not have, or no longer has, selects nothing.
@@ -40,10 +41,11 @@ function Shell({ client, connected }: { client: Client; connected: boolean }) {
             {!connected && <Badge variant="destructive">Reconnecting</Badge>}
           </header>
           {creating ? (
-            <CreateWizard caller={client} onPublished={listAgain} />
+            <CreateWizard caller={client} clock={clock} onPublished={listAgain} />
           ) : (
             <MainPanel
               caller={client}
+              clock={clock}
               instances={instances}
               selected={selected}
               onChanged={listAgain}
@@ -55,13 +57,18 @@ function Shell({ client, connected }: { client: Client; connected: boolean }) {
   )
 }
 
+/** How often the instances are listed again while the page is visible. */
+const LIST_INTERVAL_MS = 30_000
+
 /**
- * The hub's instances, listed again each time the connection comes back, or when asked to.
- * The promise settles once that list is stored. A caller that opens an instance waits for it,
- * so the page reads the list that includes the change.
+ * The hub's instances, listed again each time the connection comes back, the window regains
+ * focus, `LIST_INTERVAL_MS` passes while the page is visible, or when asked to. The list shown
+ * stays until the next one arrives. The promise settles once that list is stored. A caller that
+ * opens an instance waits for it, so the page reads the list that includes the change.
  */
 function useInstances(
   client: Client,
+  clock: Clock,
   connected: boolean,
 ): [InstanceSummary[] | undefined, () => Promise<void>] {
   const [instances, setInstances] = useState<InstanceSummary[]>()
@@ -87,5 +94,28 @@ function useInstances(
     }
     void listAgain()
   }, [connected, listAgain])
+  // Another tab or the CLI may change an instance, and a container may crash, with no word to this one.
+  useEffect(() => {
+    let cancel: (() => void) | undefined
+    const poll = () => {
+      cancel?.()
+      cancel =
+        document.visibilityState === "visible"
+          ? clock.after(LIST_INTERVAL_MS, () => {
+              void listAgain()
+              poll()
+            })
+          : undefined
+    }
+    const onFocus = () => void listAgain()
+    poll()
+    document.addEventListener("visibilitychange", poll)
+    window.addEventListener("focus", onFocus)
+    return () => {
+      cancel?.()
+      document.removeEventListener("visibilitychange", poll)
+      window.removeEventListener("focus", onFocus)
+    }
+  }, [clock, listAgain])
   return [instances, listAgain]
 }

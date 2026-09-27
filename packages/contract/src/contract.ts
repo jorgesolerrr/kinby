@@ -439,12 +439,14 @@ export interface InstanceListResult {
 }
 export interface InstanceSummary {
   avatar: Avatar;
+  detail?: string;
   image_id: string;
   instance_id: string;
   intended_state: IntendedState;
   manifest_id: string;
   package?: PackageSummary | null;
   persona_name: string | null;
+  process: ProcessState;
   runtime_id: string;
   setup_pending: boolean;
   source_revision: string;
@@ -521,12 +523,13 @@ export interface InstanceSetup {
   secrets: SecretSetup[];
 }
 /**
- * One subscription login an instance declares, and its state.
+ * One subscription login an instance declares, its state, and its sign-in while one runs.
  */
 export interface LoginSetup {
   description: string;
   id: string;
   label: string;
+  operation_id?: string | null;
   state: LoginState;
 }
 /**

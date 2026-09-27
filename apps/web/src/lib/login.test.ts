@@ -62,6 +62,24 @@ describe("following a login", () => {
     })
   })
 
+  it("follows the login the hub already runs, without starting another", async () => {
+    const caller = stubCaller({
+      "operation.get": polls(
+        operation({ steps: [container, { ...waiting, prompt }] }),
+        operation({ state: "succeeded", detail: "Signed in." }),
+      ),
+    })
+    const clock = fakeClock()
+    const reports: SignIn[] = []
+
+    followLogin(caller, "instance-1", "codex", (signIn) => reports.push(signIn), clock, "op-login")
+    await clock.advance(1_000)
+
+    expect(reports).toEqual([{ state: "signing-in", prompt }, { state: "signed-in" }])
+    expect(caller.calls.map((call) => call.method)).toEqual(["operation.get", "operation.get"])
+    expect(caller.calls[0]?.params).toEqual({ operation_id: "op-login" })
+  })
+
   it("reports why the login failed, such as an expired code", async () => {
     const detail = "The code expired. Sign in again for a new one."
     const caller = stubCaller({

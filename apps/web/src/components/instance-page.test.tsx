@@ -2,6 +2,7 @@ import type {
   Client,
   InstanceSetup,
   InstanceStatusResult,
+  InstanceSummary,
   OperationGetResult,
 } from "@kinby/contract"
 import { type Answers, fakeClock, instanceSummary, stubCaller } from "@kinby/contract/testing"
@@ -62,13 +63,29 @@ function operation(fields: Partial<OperationGetResult>): OperationGetResult {
   }
 }
 
+const waitingForCode = operation({
+  steps: [
+    {
+      name: "sign-in",
+      state: "running",
+      detail: "Waiting for you to sign in to Codex.",
+      prompt: { url: "https://auth.openai.com/codex/device", code: "ABCD-12345" },
+    },
+  ],
+})
+
 async function openPage(answers: Answers, instance = stopped) {
   const caller = stubCaller({ "instance.status": () => status(), ...answers })
   const clock = fakeClock()
   const onChanged = vi.fn()
-  render(<InstancePage caller={caller} clock={clock} instance={instance} onChanged={onChanged} />)
+  const page = (shown: InstanceSummary) => (
+    <InstancePage caller={caller} clock={clock} instance={shown} onChanged={onChanged} />
+  )
+  const { rerender } = render(page(instance))
   await act(() => clock.advance(0))
-  return { caller, clock, onChanged, user: userEvent.setup() }
+  // What the page shows once the instances are listed again with `listed` in them.
+  const relist = (listed: InstanceSummary) => rerender(page(listed))
+  return { caller, clock, onChanged, relist, user: userEvent.setup() }
 }
 
 const card = () => within(screen.getByRole("region", { name: "Finish setting up Ada" }))
@@ -110,19 +127,7 @@ describe("the setup card", () => {
   })
 
   it("finishes a sign-in there, and lists the instances again once it ends", async () => {
-    const polls = [
-      operation({
-        steps: [
-          {
-            name: "sign-in",
-            state: "running",
-            detail: "Waiting for you to sign in to Codex.",
-            prompt: { url: "https://auth.openai.com/codex/device", code: "ABCD-12345" },
-          },
-        ],
-      }),
-      operation({ state: "succeeded", detail: "Signed in." }),
-    ]
+    const polls = [waitingForCode, operation({ state: "succeeded", detail: "Signed in." })]
     const { user, clock, caller, onChanged } = await openPage({
       "instance.login.start": () => ({ operation_id: "op-1", instance_id: "instance-1" }),
       "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
@@ -138,6 +143,28 @@ describe("the setup card", () => {
       instance_id: "instance-1",
       login_id: "codex",
     })
+    expect(login("Codex").getByText("Signed in")).toBeDefined()
+    expect(onChanged).toHaveBeenCalledOnce()
+  })
+
+  it("follows a sign-in that runs when the page loads, and lists the instances again once it ends", async () => {
+    const signingIn: InstanceSetup = {
+      ...setup,
+      logins: [{ ...setup.logins[0]!, operation_id: "op-1" }, setup.logins[1]!],
+    }
+    const polls = [waitingForCode, operation({ state: "succeeded", detail: "Signed in." })]
+    const { clock, caller, onChanged } = await openPage({
+      "instance.status": () => status({ setup: signingIn }),
+      "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+    })
+
+    expect(login("Codex").getByText("ABCD-12345")).toBeDefined()
+    expect(login("Codex").getByText("Waiting")).toBeDefined()
+    expect(login("Codex").getByRole("button", { name: "Sign in" })).toHaveProperty("disabled", true)
+    expect(login("Editor account").getByText("Signed in")).toBeDefined()
+    await act(() => clock.advance(1_000))
+
+    expect(caller.calls.some((call) => call.method === "instance.login.start")).toBe(false)
     expect(login("Codex").getByText("Signed in")).toBeDefined()
     expect(onChanged).toHaveBeenCalledOnce()
   })
@@ -170,11 +197,66 @@ describe("the setup card", () => {
     expect(card().getByText("The image is gone.")).toBeDefined()
     expect(card().getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(false)
   })
+})
 
-  it("does not open a stopped instance with nothing pending on the card", async () => {
-    await openPage({}, { ...stopped, setup_pending: false })
+describe("a stopped instance with setup complete", () => {
+  const complete = { ...stopped, setup_pending: false }
+  const stoppedView = () => within(screen.getByRole("region", { name: "Ada is stopped" }))
 
+  it("offers Start instead of the setup card", async () => {
+    await openPage({}, complete)
+
+    expect(stoppedView().getByRole("button", { name: "Start" })).toBeDefined()
     expect(screen.queryByRole("region", { name: "Finish setting up Ada" })).toBeNull()
+  })
+
+  it("starts it, and leaves the stopped view once it runs", async () => {
+    const polls = [
+      operation({ kind: "start", state: "running" }),
+      operation({ kind: "start", state: "succeeded" }),
+    ]
+    const { user, clock, caller, onChanged, relist } = await openPage(
+      {
+        "instance.start": () => ({ operation_id: "op-start", instance_id: "instance-1" }),
+        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+      },
+      complete,
+    )
+
+    await user.click(stoppedView().getByRole("button", { name: "Start" }))
+    await act(() => clock.advance(0))
+    expect(stoppedView().getByRole("status", { name: "Loading" })).toBeDefined()
+    expect(stoppedView().getByRole("button", { name: /Start/ }).hasAttribute("disabled")).toBe(true)
+    expect(onChanged).not.toHaveBeenCalled()
+    await act(() => clock.advance(1_000))
+
+    expect(caller.calls.find((call) => call.method === "instance.start")?.params).toEqual({
+      instance_id: "instance-1",
+    })
+    expect(onChanged).toHaveBeenCalledOnce()
+    relist({ ...complete, intended_state: "running" })
+    await act(() => clock.advance(0))
+    expect(screen.queryByRole("region", { name: "Ada is stopped" })).toBeNull()
+  })
+
+  it("says why a start failed", async () => {
+    const { user, clock, onChanged } = await openPage(
+      {
+        "instance.start": () => ({ operation_id: "op-start", instance_id: "instance-1" }),
+        "operation.get": () =>
+          operation({ kind: "start", state: "failed", detail: "The image is gone." }),
+      },
+      complete,
+    )
+
+    await user.click(stoppedView().getByRole("button", { name: "Start" }))
+    await act(() => clock.advance(0))
+
+    expect(stoppedView().getByText("The image is gone.")).toBeDefined()
+    expect(stoppedView().getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(
+      false,
+    )
+    expect(onChanged).not.toHaveBeenCalled()
   })
 })
 
@@ -187,6 +269,41 @@ describe("a running instance", () => {
     expect(screen.queryByRole("region", { name: "Finish setting up Ada" })).toBeNull()
     expect(login("Editor account").getByRole("button", { name: "Sign in again" })).toBeDefined()
     expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("says it is restarting when its container restarts in a loop", async () => {
+    await openPage({}, { ...running, process: "starting", detail: "restarting" })
+
+    expect(within(screen.getByRole("alert")).getByText("Ada is restarting")).toBeDefined()
+    expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
+  })
+
+  it("says it failed, with what the runtime saw", async () => {
+    const failed = { ...running, process: "failed", detail: "exited (1)" } as const
+    await openPage({ "instance.status": () => status({ setup: { ...setup, logins: [] } }) }, failed)
+
+    const alert = within(screen.getByRole("alert"))
+    expect(alert.getByText("Ada failed")).toBeDefined()
+    expect(alert.getByText("exited (1)")).toBeDefined()
+  })
+
+  it("follows a sign-in that runs when the page loads", async () => {
+    const signingIn: InstanceSetup = {
+      ...setup,
+      logins: [setup.logins[0]!, { ...setup.logins[1]!, operation_id: "op-1" }],
+    }
+    await openPage(
+      {
+        "instance.status": () => status({ process: "running", setup: signingIn }),
+        "operation.get": () => waitingForCode,
+      },
+      running,
+    )
+
+    expect(login("Editor account").getByText("ABCD-12345")).toBeDefined()
+    expect(login("Editor account").getByText("Waiting")).toBeDefined()
+    expect(login("Codex").getByText("Not signed in")).toBeDefined()
   })
 
   it("asks to sign in to a login that is not signed in yet", async () => {

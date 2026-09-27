@@ -954,12 +954,16 @@ class InstanceSummary(ContractModel):
     source_revision: str
     image_id: str
     intended_state: IntendedState
+    #: What the runtime saw when the list was read, as `instance.status` reports it.
+    process: ProcessState
     runtime_id: str
     storage: list[StorageItem]
     avatar: Avatar
     #: A declared login is not signed in, or a required secret is not set.
     setup_pending: bool
     package: PackageSummary | None = None
+    #: The runtime's word for the process, such as "restarting" beside `starting`.
+    detail: str = ""
 
 
 class InstanceListResult(ContractModel):
@@ -975,12 +979,13 @@ class LoginState(StrEnum):
 
 
 class LoginSetup(ContractModel):
-    """One subscription login an instance declares, and its state."""
+    """One subscription login an instance declares, its state, and its sign-in while one runs."""
 
     id: str
     label: str
     description: str
     state: LoginState
+    operation_id: UUID | None = None
 
 
 class SecretSetup(ContractModel):

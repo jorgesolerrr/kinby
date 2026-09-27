@@ -150,11 +150,12 @@ def test_preparing_vanilla_again_reuses_its_image_and_describes_it_from_inside(t
 
         first = await preparer.build(ImageSelection("HEAD"))
         again = await preparer.build(ImageSelection("HEAD"))
-        described = await preparer.describe(again)
+        described = await preparer.describe(again.artifact)
 
-        assert again == first
+        assert (first.reused, again.reused) == (False, True)
+        assert again.artifact == first.artifact
         assert len(backend.builds) == 1
-        assert backend.vanilla_checks == [first.image_id]
+        assert backend.vanilla_checks == [first.artifact.image_id]
         assert described == vanilla_description()
 
     asyncio.run(scenario())
@@ -169,9 +170,9 @@ def test_describing_a_package_image_checks_it_and_puts_the_built_in_fields_first
         preparer = ImagePreparer(source, HubRegistry(tmp_path / "hub"), backend)
         package = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
 
-        artifact = await preparer.build(ImageSelection("HEAD", package))
+        built = await preparer.build(ImageSelection("HEAD", package))
         assert backend.inspected == []
-        described = await preparer.describe(artifact)
+        described = await preparer.describe(built.artifact)
 
         assert backend.inspected == [None]
         assert backend.vanilla_checks == []
