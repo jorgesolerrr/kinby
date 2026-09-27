@@ -1274,6 +1274,30 @@
       "title": "InstanceSecretsSetCommand",
       "type": "object"
     },
+    "InstanceSetup": {
+      "additionalProperties": false,
+      "description": "What an instance declares it needs, as its stored descriptor has it, and what is done.",
+      "properties": {
+        "logins": {
+          "items": {
+            "$ref": "#/$defs/LoginSetup"
+          },
+          "type": "array"
+        },
+        "secrets": {
+          "items": {
+            "$ref": "#/$defs/SecretSetup"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "logins",
+        "secrets"
+      ],
+      "title": "InstanceSetup",
+      "type": "object"
+    },
     "InstanceStartCommand": {
       "additionalProperties": false,
       "properties": {
@@ -1330,12 +1354,16 @@
         },
         "readiness": {
           "$ref": "#/$defs/Readiness"
+        },
+        "setup": {
+          "$ref": "#/$defs/InstanceSetup"
         }
       },
       "required": [
         "instance_id",
         "process",
-        "readiness"
+        "readiness",
+        "setup"
       ],
       "title": "InstanceStatusResult",
       "type": "object"
@@ -1401,6 +1429,9 @@
         "runtime_id": {
           "type": "string"
         },
+        "setup_pending": {
+          "type": "boolean"
+        },
         "source_revision": {
           "type": "string"
         },
@@ -1420,7 +1451,8 @@
         "intended_state",
         "runtime_id",
         "storage",
-        "avatar"
+        "avatar",
+        "setup_pending"
       ],
       "title": "InstanceSummary",
       "type": "object"
@@ -1529,6 +1561,42 @@
       ],
       "title": "LoginPrompt",
       "type": "object"
+    },
+    "LoginSetup": {
+      "additionalProperties": false,
+      "description": "One subscription login an instance declares, and its state.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/LoginState"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "description",
+        "state"
+      ],
+      "title": "LoginSetup",
+      "type": "object"
+    },
+    "LoginState": {
+      "description": "How an instance's subscription login stands: not signed in yet, or how its last one ended.",
+      "enum": [
+        "pending",
+        "signed_in",
+        "failed"
+      ],
+      "title": "LoginState",
+      "type": "string"
     },
     "MemoryCallCounts": {
       "additionalProperties": false,
@@ -2560,6 +2628,32 @@
         "type"
       ],
       "title": "RunDelegated",
+      "type": "object"
+    },
+    "SecretSetup": {
+      "additionalProperties": false,
+      "description": "One secret field an instance declares, and whether it holds a value. Never the value.",
+      "properties": {
+        "is_set": {
+          "type": "boolean"
+        },
+        "label": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "required",
+        "is_set"
+      ],
+      "title": "SecretSetup",
       "type": "object"
     },
     "ServerFrame": {

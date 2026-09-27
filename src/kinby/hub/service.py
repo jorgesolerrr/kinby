@@ -59,10 +59,12 @@ from kinby.contracts import (
     InstanceRemoveCommand,
     InstanceRestoreCommand,
     InstanceSecretsSetCommand,
+    InstanceSetup,
     InstanceStartCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
     InstanceStopCommand,
+    InstanceSummary,
     InstanceUpdateCommand,
     IntendedState,
     LifecycleOperationResult,
@@ -78,6 +80,7 @@ from kinby.contracts import (
     PackageListResult,
     PackagePin,
     PackageSelection,
+    PackageSummary,
     ProcessState,
     Readiness,
     SetupFieldKind,
@@ -129,11 +132,12 @@ from kinby.hub.setup import (
     ENVIRONMENT_NAME,
     api_key_variable,
     configuration,
+    instance_setup,
     setup_errors,
     targeted,
 )
 from kinby.hub.usage import Uncounted, summed_usage
-from kinby.instance import Instance, init_instance, inspect_instance
+from kinby.instance import Instance, ManifestError, init_instance, inspect_instance
 from kinby.instance.layout import SYSTEM_NAME
 from kinby.packages import (
     API_KEY_FIELD,
@@ -407,6 +411,9 @@ class Hub:
                     env=self._environment(record.path),
                     port=_INSTANCE_PORT,
                 )
+            )
+            self.registry.seed_logins(
+                record.instance_id, [login.id for login in description.logins]
             )
             self.registry.mark_prepared(record.instance_id)
             self.registry.finish_operation(
@@ -1570,11 +1577,40 @@ class Hub:
         return finished.state if finished is not None else OperationState.FAILED
 
     async def list(self, command: InstanceListCommand) -> InstanceListResult:
-        return InstanceListResult(instances=self.registry.list_instances(removed=command.removed))
+        return InstanceListResult(
+            instances=[
+                self._summary(record)
+                for record in self.registry.listed_instances(removed=command.removed)
+            ]
+        )
+
+    def _summary(self, record: ManagedInstance) -> InstanceSummary:
+        return InstanceSummary(
+            instance_id=record.instance_id,
+            manifest_id=record.manifest_id,
+            persona_name=record.persona_name,
+            source_revision=record.source_revision or "",
+            image_id=record.image_id or "",
+            intended_state=record.intended_state,
+            runtime_id=record.runtime_id,
+            storage=list(record.storage),
+            avatar=record.avatar,
+            setup_pending=self._setup(record).pending,
+            package=(
+                PackageSummary(
+                    id=record.package.id,
+                    distribution=record.package.distribution,
+                    version=record.package.version,
+                )
+                if record.package is not None
+                else None
+            ),
+        )
 
     async def status(self, command: InstanceStatusCommand) -> InstanceStatusResult:
         record = self._active_instance(command.instance_id)
         active = self.registry.active_operation(record.instance_id)
+        setup = self._setup(record)
         try:
             status = await self._runtime.status(record.runtime_id)
         except Exception as exc:
@@ -1582,6 +1618,7 @@ class Hub:
                 instance_id=record.instance_id,
                 process=ProcessState.UNAVAILABLE,
                 readiness=Readiness.UNKNOWN,
+                setup=setup,
                 detail=self._redact(
                     str(exc) or type(exc).__name__,
                     self._environment(record.path).values(),
@@ -1593,8 +1630,22 @@ class Hub:
             instance_id=record.instance_id,
             process=process,
             readiness=readiness,
+            setup=setup,
             detail=self._redact(status.detail, self._environment(record.path).values()),
             active_operation_id=active,
+        )
+
+    def _setup(self, record: ManagedInstance) -> InstanceSetup:
+        """The logins and secrets the instance's stored descriptor declares, and how they stand."""
+        try:
+            model = inspect_instance(record.path).manifest.models.main
+        except ManifestError:
+            model = None
+        return instance_setup(
+            self.registry.description(record.package),
+            logins=self.registry.login_states(record.instance_id),
+            secrets=self._environment(record.path),
+            model=model,
         )
 
     async def logs(self, command: InstanceLogsCommand) -> InstanceLogsResult:

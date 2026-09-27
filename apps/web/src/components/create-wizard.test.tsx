@@ -737,6 +737,38 @@ describe("the create wizard's start step", () => {
     expect(onPublished).not.toHaveBeenCalled()
   })
 
+  it("opens the instance only after the list that follows a start", async () => {
+    const release: Array<() => void> = []
+    const onPublished = () =>
+      new Promise<void>((resolve) => {
+        release.push(resolve)
+      })
+    const caller = hub(
+      {
+        "instance.start": () => ({ operation_id: "op-start", instance_id: "instance-1" }),
+        "operation.get": ({ operation_id }) =>
+          operation_id === "op-1"
+            ? prepared
+            : operation_id === "op-create"
+              ? published
+              : operationAnswer({ operation_id, kind: "start", state: "succeeded" }),
+      },
+      published,
+    )
+    const { user, clock } = await createdAda(caller, onPublished)
+
+    await user.click(await screen.findByRole("button", { name: "Start and chat" }))
+    await act(() => clock.advance(0))
+
+    expect(window.location.pathname).toBe("/new")
+    expect(release).toHaveLength(2)
+    await act(() => {
+      release[1]?.()
+      return Promise.resolve()
+    })
+    expect(window.location.pathname).toBe("/instances/instance-1")
+  })
+
   it("starts the instance and opens it", async () => {
     const caller = hub(
       {

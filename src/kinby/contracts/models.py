@@ -957,6 +957,8 @@ class InstanceSummary(ContractModel):
     runtime_id: str
     storage: list[StorageItem]
     avatar: Avatar
+    #: A declared login is not signed in, or a required secret is not set.
+    setup_pending: bool
     package: PackageSummary | None = None
 
 
@@ -964,10 +966,51 @@ class InstanceListResult(ContractModel):
     instances: list[InstanceSummary]
 
 
+class LoginState(StrEnum):
+    """How an instance's subscription login stands: not signed in yet, or how its last one ended."""
+
+    PENDING = "pending"
+    SIGNED_IN = "signed_in"
+    FAILED = "failed"
+
+
+class LoginSetup(ContractModel):
+    """One subscription login an instance declares, and its state."""
+
+    id: str
+    label: str
+    description: str
+    state: LoginState
+
+
+class SecretSetup(ContractModel):
+    """One secret field an instance declares, and whether it holds a value. Never the value."""
+
+    name: str
+    label: str
+    required: bool
+    is_set: bool
+
+
+class InstanceSetup(ContractModel):
+    """What an instance declares it needs, as its stored descriptor has it, and what is done."""
+
+    logins: list[LoginSetup]
+    secrets: list[SecretSetup]
+
+    @property
+    def pending(self) -> bool:
+        """A login is not signed in, or a required secret is not set."""
+        return any(login.state is not LoginState.SIGNED_IN for login in self.logins) or any(
+            secret.required and not secret.is_set for secret in self.secrets
+        )
+
+
 class InstanceStatusResult(ContractModel):
     instance_id: UUID
     process: ProcessState
     readiness: Readiness
+    setup: InstanceSetup
     detail: str = ""
     #: The lifecycle operation still running, so a client that lost its response finds it again.
     active_operation_id: UUID | None = None

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -15,9 +17,9 @@ from kinby.contracts import (
     Avatar,
     AvatarColor,
     AvatarShape,
-    InstanceSummary,
     IntendedState,
     LoginPrompt,
+    LoginState,
     OperationGetResult,
     OperationKind,
     OperationState,
@@ -25,7 +27,6 @@ from kinby.contracts import (
     PackageCommit,
     PackageDescription,
     PackageSelection,
-    PackageSummary,
     StorageItem,
     StorageKind,
 )
@@ -130,6 +131,13 @@ class HubRegistry:
                     prompt_url TEXT,
                     prompt_code TEXT,
                     PRIMARY KEY (operation_id, name)
+                );
+                CREATE TABLE IF NOT EXISTS logins (
+                    instance_id TEXT NOT NULL REFERENCES instances(id),
+                    login_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    PRIMARY KEY (instance_id, login_id)
                 );
                 CREATE TABLE IF NOT EXISTS image_artifacts (
                     input_key TEXT PRIMARY KEY,
@@ -515,6 +523,30 @@ class HubRegistry:
         ).fetchone()
         return UUID(row[0]) if row is not None else None
 
+    def seed_logins(self, instance_id: UUID, login_ids: Collection[str]) -> None:
+        """Track each login a new instance declares, none of them signed in yet."""
+        changed_at = _now()
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT OR REPLACE INTO logins (instance_id, login_id, state, changed_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (str(instance_id), login_id, LoginState.PENDING.value, changed_at)
+                    for login_id in login_ids
+                ],
+            )
+
+    def login_states(self, instance_id: UUID) -> dict[str, LoginState]:
+        """How each login the hub tracks for this instance stands, by login id."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT login_id, state FROM logins WHERE instance_id = ?",
+                (str(instance_id),),
+            ).fetchall()
+        return {login_id: LoginState(state) for login_id, state in rows}
+
     def record_prompt(self, operation_id: UUID, prompt: LoginPrompt) -> None:
         """Show the URL and the code on the step that is running."""
         with self._connect() as connection:
@@ -633,12 +665,23 @@ class HubRegistry:
         state: OperationState,
         detail: str,
     ) -> None:
-        """Record the outcome on the operation and on the step it stopped in."""
+        """Record the outcome on the operation and on the step it stopped in.
+
+        A login's outcome is its login's state too, however the login ended, a restart included.
+        """
+        login = LoginState.SIGNED_IN if state is OperationState.SUCCEEDED else LoginState.FAILED
         with self._connect() as connection:
             self._close_running_step(connection, operation_id, state, detail)
             connection.execute(
                 "UPDATE operations SET state = ?, detail = ? WHERE id = ?",
                 (state.value, detail, str(operation_id)),
+            )
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO logins (instance_id, login_id, state, changed_at)
+                SELECT instance_id, login_id, ?, ? FROM operations WHERE id = ? AND kind = ?
+                """,
+                (login.value, _now(), str(operation_id), OperationKind.LOGIN.value),
             )
 
     @staticmethod
@@ -1205,7 +1248,7 @@ class HubRegistry:
             ).fetchone()
         return self.operation(UUID(row[0])) if row is not None else None
 
-    def list_instances(self, *, removed: bool = False) -> list[InstanceSummary]:
+    def listed_instances(self, *, removed: bool = False) -> list[ManagedInstance]:
         """The active instances, or the removed ones whose records and storage the hub retains."""
         with self._connect() as connection:
             ids = [
@@ -1214,34 +1257,11 @@ class HubRegistry:
                     "SELECT id FROM instances WHERE prepared = 1 ORDER BY rowid"
                 ).fetchall()
             ]
-        records = [
+        return [
             record
             for instance_id in ids
             if (record := self.instance(instance_id)) is not None
             and (record.intended_state is IntendedState.REMOVED if removed else record.active)
-        ]
-        return [
-            InstanceSummary(
-                instance_id=record.instance_id,
-                manifest_id=record.manifest_id,
-                persona_name=record.persona_name,
-                source_revision=record.source_revision or "",
-                image_id=record.image_id or "",
-                intended_state=record.intended_state,
-                runtime_id=record.runtime_id,
-                storage=list(record.storage),
-                avatar=record.avatar,
-                package=(
-                    PackageSummary(
-                        id=record.package.id,
-                        distribution=record.package.distribution,
-                        version=record.package.version,
-                    )
-                    if record.package is not None
-                    else None
-                ),
-            )
-            for record in records
         ]
 
     def image_artifact(self, input_key: str) -> ImageArtifact | None:
@@ -1297,6 +1317,10 @@ class HubRegistry:
 
 
 _SELECTION = TypeAdapter(PackageSelection | None)
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 def _selection_key(package: PackageSelection | None) -> str:

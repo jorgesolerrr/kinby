@@ -127,7 +127,8 @@ type PackagePick = { package: PackageSelection | null }
 
 /**
  * Create an instance: pick a package, name it, fill in its setup fields, create it, then start it.
- * `onPublished` hears when the hub lists the new instance.
+ * `onPublished` lists the instances again. The wizard waits for the list that follows a start
+ * before it opens the instance, so the page reads that instance as running.
  */
 export function CreateWizard({
   caller,
@@ -136,7 +137,7 @@ export function CreateWizard({
 }: {
   caller: Pick<Client, "call">
   clock?: Clock
-  onPublished?: () => void
+  onPublished?: () => void | Promise<void>
 }) {
   const curated = useCuratedList(caller)
   const [pick, setPick] = useState<PackagePick>()
@@ -167,7 +168,7 @@ export function CreateWizard({
 
   const createdId = creation?.state === "created" ? creation.instanceId : undefined
   useEffect(() => {
-    if (createdId !== undefined) onPublished()
+    if (createdId !== undefined) void onPublished()
   }, [createdId, onPublished])
 
   const preparedDescription =
@@ -207,6 +208,7 @@ export function CreateWizard({
           logins={description?.logins ?? []}
           creation={creation}
           onBack={() => setSubmitted(undefined)}
+          onPublished={onPublished}
         />
       ) : stage === "setup" && description !== undefined ? (
         <SetupStep
@@ -658,6 +660,7 @@ function CreationView({
   logins,
   creation,
   onBack,
+  onPublished,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
@@ -665,6 +668,7 @@ function CreationView({
   logins: SubscriptionLogin[]
   creation: Exclude<Creation, { state: "invalid" }>
   onBack: () => void
+  onPublished: () => void | Promise<void>
 }) {
   return (
     <section className="flex max-w-2xl flex-col gap-3">
@@ -688,12 +692,18 @@ function CreationView({
             caller={caller}
             clock={clock}
             instanceId={creation.instanceId}
-            logins={logins}
+            // The hub seeds each declared login pending when it publishes the instance.
+            logins={logins.map((login) => ({ ...login, state: "pending" }))}
           />
         </>
       )}
       {creation.state === "created" && (
-        <StartStep caller={caller} clock={clock} instanceId={creation.instanceId} />
+        <StartStep
+          caller={caller}
+          clock={clock}
+          instanceId={creation.instanceId}
+          onPublished={onPublished}
+        />
       )}
     </section>
   )
@@ -703,10 +713,12 @@ function StartStep({
   caller,
   clock,
   instanceId,
+  onPublished,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   instanceId: string
+  onPublished: () => void | Promise<void>
 }) {
   const [request, setRequest] = useState<{ instanceId: string }>()
   const start = useCallback(
@@ -716,11 +728,13 @@ function StartStep({
         asked.instanceId,
         (starting) => {
           report(starting)
-          if (starting.state === "started") selectInstance(asked.instanceId)
+          if (starting.state === "started") {
+            void Promise.resolve(onPublished()).then(() => selectInstance(asked.instanceId))
+          }
         },
         clock,
       ),
-    [caller, clock],
+    [caller, clock, onPublished],
   )
   const starting = useFollowing(request, start)
   const busy = request !== undefined && starting?.state !== "failed"

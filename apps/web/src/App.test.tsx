@@ -109,6 +109,15 @@ describe("the instances", () => {
     expect((await instanceState("research")).getByText("stopped")).toBeDefined()
   })
 
+  it("badges an instance whose setup is pending", async () => {
+    const pending = { ...unnamed, setup_pending: true }
+    openApp({ signedIn: true, instances: [ada, pending] })
+
+    expect((await instanceState("research")).getByText("Setup pending")).toBeDefined()
+    expect((await instanceState("research")).getByText("stopped")).toBeDefined()
+    expect((await instanceState("Ada")).queryByText("Setup pending")).toBeNull()
+  })
+
   it("draws each instance's avatar in its shape and palette color", async () => {
     const drawn = { ...ada, avatar: { shape: "squircle", color: "green" } } as const
     openApp({ signedIn: true, instances: [drawn, unnamed] })

@@ -1,4 +1,4 @@
-import type { Client, Clock, SubscriptionLogin } from "@kinby/contract"
+import type { Client, Clock, LoginSetup, LoginState } from "@kinby/contract"
 import { useCallback, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
@@ -16,17 +16,31 @@ import { useFollowing } from "@/hooks/use-following"
 import { followLogin, type SignIn } from "@/lib/login"
 import { CircleCheckIcon } from "lucide-react"
 
-/** One row per subscription login an instance declares, each signed in on its own. */
+const noop = () => {}
+
+/** How the hub last saw a login, before this page signed it in. Pending shows as nothing yet. */
+const STORED: Record<LoginState, SignIn | undefined> = {
+  pending: undefined,
+  signed_in: { state: "signed-in" },
+  failed: { state: "failed", detail: "The last sign-in did not finish." },
+}
+
+/**
+ * One row per subscription login an instance declares, each signed in on its own and shown in
+ * the state the hub keeps for it. `onEnded` hears each sign-in end, and must keep its identity.
+ */
 export function SubscriptionLogins({
   caller,
   clock,
   instanceId,
   logins,
+  onEnded = noop,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   instanceId: string
-  logins: SubscriptionLogin[]
+  logins: LoginSetup[]
+  onEnded?: () => void
 }) {
   return (
     <ItemGroup aria-label="Subscription logins">
@@ -37,6 +51,7 @@ export function SubscriptionLogins({
           clock={clock}
           instanceId={instanceId}
           login={login}
+          onEnded={onEnded}
         />
       ))}
     </ItemGroup>
@@ -48,22 +63,34 @@ function LoginRow({
   clock,
   instanceId,
   login,
+  onEnded,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   instanceId: string
-  login: SubscriptionLogin
+  login: LoginSetup
+  onEnded: () => void
 }) {
   // A new object for each click, so signing in again follows a new login.
   const [request, setRequest] = useState<{ loginId: string }>()
   const follow = useCallback(
     (asked: { loginId: string }, report: (signIn: SignIn) => void) =>
-      followLogin(caller, instanceId, asked.loginId, report, clock),
-    [caller, clock, instanceId],
+      followLogin(
+        caller,
+        instanceId,
+        asked.loginId,
+        (signIn) => {
+          report(signIn)
+          if (signIn.state !== "signing-in") onEnded()
+        },
+        clock,
+      ),
+    [caller, clock, instanceId, onEnded],
   )
-  const signIn =
+  const followed =
     useFollowing(request, follow) ??
     (request === undefined ? undefined : { state: "signing-in", prompt: null })
+  const signIn = followed ?? STORED[login.state]
   const busy = signIn?.state === "signing-in"
   return (
     <Item render={<li />} aria-label={login.label} variant="outline">

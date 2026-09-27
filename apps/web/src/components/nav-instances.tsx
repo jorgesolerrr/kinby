@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/sidebar"
 import { instanceName } from "@/lib/instances"
 import { CREATE_PATH, instancePath, openCreateWizard, selectInstance } from "@/lib/selection"
-import { PlusIcon } from "lucide-react"
+import { CircleAlertIcon, PlusIcon } from "lucide-react"
 
 export function NavInstances({
   instances,
@@ -47,7 +47,17 @@ export function NavInstances({
                   </a>
                 }
               />
-              <SidebarMenuBadge>{instance.intended_state}</SidebarMenuBadge>
+              <SidebarMenuBadge>
+                <span className="flex items-center gap-1">
+                  {instance.setup_pending && (
+                    <>
+                      <CircleAlertIcon aria-hidden className="size-3.5" />
+                      <span className="sr-only">Setup pending</span>
+                    </>
+                  )}
+                  {instance.intended_state}
+                </span>
+              </SidebarMenuBadge>
             </SidebarMenuItem>
           )
         })}
