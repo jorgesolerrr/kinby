@@ -189,6 +189,16 @@ describe("a running instance", () => {
     expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
   })
 
+  // jsdom lays nothing out, so the layout shows only in the classes.
+  it("gives a login's description the row's width on a phone, above its badge and button", async () => {
+    await openPage({ "instance.status": () => status({ process: "running" }) }, running)
+
+    const description = login("Codex").getByText("Signs Codex in with your ChatGPT plan.")
+    expect(description.className).not.toMatch(/line-clamp-\d/)
+    const text = description.parentElement?.classList
+    expect(text?.contains("basis-full") && text.contains("sm:basis-0")).toBe(true)
+  })
+
   it("shows no sign-in rows when it declares no login", async () => {
     await openPage(
       { "instance.status": () => status({ setup: { ...setup, logins: [] } }) },

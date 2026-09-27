@@ -94,11 +94,12 @@ function LoginRow({
   const busy = signIn?.state === "signing-in"
   return (
     <Item render={<li />} aria-label={login.label} variant="outline">
-      <ItemContent>
+      {/* On a phone the text takes the whole row and the badge and button wrap below it. */}
+      <ItemContent className="basis-full sm:basis-0">
         <ItemTitle>{login.label}</ItemTitle>
-        <ItemDescription>{login.description}</ItemDescription>
+        <ItemDescription lines="all">{login.description}</ItemDescription>
         {signIn?.state === "signing-in" && signIn.prompt !== null && (
-          <ItemDescription>
+          <ItemDescription lines="all">
             Open{" "}
             <a href={signIn.prompt.url} target="_blank" rel="noreferrer">
               {signIn.prompt.url}
@@ -106,7 +107,9 @@ function LoginRow({
             and enter <code className="font-mono text-foreground">{signIn.prompt.code}</code>
           </ItemDescription>
         )}
-        {signIn?.state === "failed" && <ItemDescription>{signIn.detail}</ItemDescription>}
+        {signIn?.state === "failed" && (
+          <ItemDescription lines="all">{signIn.detail}</ItemDescription>
+        )}
       </ItemContent>
       <ItemActions>
         <State signIn={signIn} />
