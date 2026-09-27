@@ -62,6 +62,17 @@ function operation(fields: Partial<OperationGetResult>): OperationGetResult {
   }
 }
 
+const waitingForCode = operation({
+  steps: [
+    {
+      name: "sign-in",
+      state: "running",
+      detail: "Waiting for you to sign in to Codex.",
+      prompt: { url: "https://auth.openai.com/codex/device", code: "ABCD-12345" },
+    },
+  ],
+})
+
 async function openPage(answers: Answers, instance = stopped) {
   const caller = stubCaller({ "instance.status": () => status(), ...answers })
   const clock = fakeClock()
@@ -110,19 +121,7 @@ describe("the setup card", () => {
   })
 
   it("finishes a sign-in there, and lists the instances again once it ends", async () => {
-    const polls = [
-      operation({
-        steps: [
-          {
-            name: "sign-in",
-            state: "running",
-            detail: "Waiting for you to sign in to Codex.",
-            prompt: { url: "https://auth.openai.com/codex/device", code: "ABCD-12345" },
-          },
-        ],
-      }),
-      operation({ state: "succeeded", detail: "Signed in." }),
-    ]
+    const polls = [waitingForCode, operation({ state: "succeeded", detail: "Signed in." })]
     const { user, clock, caller, onChanged } = await openPage({
       "instance.login.start": () => ({ operation_id: "op-1", instance_id: "instance-1" }),
       "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
@@ -138,6 +137,28 @@ describe("the setup card", () => {
       instance_id: "instance-1",
       login_id: "codex",
     })
+    expect(login("Codex").getByText("Signed in")).toBeDefined()
+    expect(onChanged).toHaveBeenCalledOnce()
+  })
+
+  it("follows a sign-in that runs when the page loads, and lists the instances again once it ends", async () => {
+    const signingIn: InstanceSetup = {
+      ...setup,
+      logins: [{ ...setup.logins[0]!, operation_id: "op-1" }, setup.logins[1]!],
+    }
+    const polls = [waitingForCode, operation({ state: "succeeded", detail: "Signed in." })]
+    const { clock, caller, onChanged } = await openPage({
+      "instance.status": () => status({ setup: signingIn }),
+      "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+    })
+
+    expect(login("Codex").getByText("ABCD-12345")).toBeDefined()
+    expect(login("Codex").getByText("Waiting")).toBeDefined()
+    expect(login("Codex").getByRole("button", { name: "Sign in" })).toHaveProperty("disabled", true)
+    expect(login("Editor account").getByText("Signed in")).toBeDefined()
+    await act(() => clock.advance(1_000))
+
+    expect(caller.calls.some((call) => call.method === "instance.login.start")).toBe(false)
     expect(login("Codex").getByText("Signed in")).toBeDefined()
     expect(onChanged).toHaveBeenCalledOnce()
   })
@@ -187,6 +208,24 @@ describe("a running instance", () => {
     expect(screen.queryByRole("region", { name: "Finish setting up Ada" })).toBeNull()
     expect(login("Editor account").getByRole("button", { name: "Sign in again" })).toBeDefined()
     expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
+  })
+
+  it("follows a sign-in that runs when the page loads", async () => {
+    const signingIn: InstanceSetup = {
+      ...setup,
+      logins: [setup.logins[0]!, { ...setup.logins[1]!, operation_id: "op-1" }],
+    }
+    await openPage(
+      {
+        "instance.status": () => status({ process: "running", setup: signingIn }),
+        "operation.get": () => waitingForCode,
+      },
+      running,
+    )
+
+    expect(login("Editor account").getByText("ABCD-12345")).toBeDefined()
+    expect(login("Editor account").getByText("Waiting")).toBeDefined()
+    expect(login("Codex").getByText("Not signed in")).toBeDefined()
   })
 
   it("shows no sign-in rows when it declares no login", async () => {

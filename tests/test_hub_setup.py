@@ -34,7 +34,14 @@ from tests.test_hub import (
     hub_client,
     prepared,
 )
-from tests.test_hub_logins import CODEX, EDITOR, WRITER, created_writer, login_started
+from tests.test_hub_logins import (
+    CODEX,
+    EDITOR,
+    WRITER,
+    created_writer,
+    login_started,
+    prompted,
+)
 
 TOKEN = SetupField(
     name="WRITER_TOKEN",
@@ -124,6 +131,29 @@ def login_states(setup: InstanceSetup) -> dict[str, LoginState]:
     return {login.id: login.state for login in setup.logins}
 
 
+def running_logins(setup: InstanceSetup) -> dict[str, UUID | None]:
+    return {login.id: login.operation_id for login in setup.logins}
+
+
+def test_a_login_being_signed_in_names_its_operation_until_it_ends(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        runtime.setup_lines = ["Open https://auth.example/device and enter AB12-C3D"]
+        hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR, CODEX)), runtime)
+        instance_id = (await created_writer(hub)).instance_id
+        signing_in = await login_started(hub, instance_id, "editor")
+        await prompted(hub, signing_in)
+
+        running = running_logins(await setup_of(hub, instance_id))
+        runtime.setup_exits.set()
+        await finished_operation(hub_client(hub), signing_in)
+
+        assert running == {"editor": signing_in.operation_id, "codex": None}
+        assert running_logins(await setup_of(hub, instance_id)) == {"editor": None, "codex": None}
+
+    asyncio.run(scenario())
+
+
 def test_a_login_that_signs_in_reads_signed_in_and_one_that_fails_reads_failed(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
@@ -138,10 +168,12 @@ def test_a_login_that_signs_in_reads_signed_in_and_one_that_fails_reads_failed(t
         failed = await login_started(hub, instance_id, "codex")
         await finished_operation(hub_client(hub), failed)
 
-        assert login_states(await setup_of(hub, instance_id)) == {
+        setup = await setup_of(hub, instance_id)
+        assert login_states(setup) == {
             "editor": LoginState.SIGNED_IN,
             "codex": LoginState.FAILED,
         }
+        assert running_logins(setup) == {"editor": None, "codex": None}
 
     asyncio.run(scenario())
 
@@ -174,7 +206,9 @@ def test_a_login_whose_code_expires_reads_failed(tmp_path, monkeypatch):
         )
 
         assert "code expired" in expired.detail
-        assert login_states(await setup_of(hub, instance_id)) == {"editor": LoginState.FAILED}
+        setup = await setup_of(hub, instance_id)
+        assert login_states(setup) == {"editor": LoginState.FAILED}
+        assert running_logins(setup) == {"editor": None}
 
     asyncio.run(scenario())
 

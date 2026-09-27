@@ -1657,9 +1657,17 @@ class Hub:
             model = inspect_instance(record.path).manifest.models.main
         except ManifestError:
             model = None
+        description = self.registry.description(record.package)
+        declared = description.logins if description is not None else []
+        running = {
+            login.id: operation_id
+            for login in declared
+            if (operation_id := self.registry.running_login(record.instance_id, login.id))
+        }
         return instance_setup(
-            self.registry.description(record.package),
+            description,
             logins=self.registry.login_states(record.instance_id),
+            running=running,
             secrets=self._environment(record.path),
             model=model,
         )
