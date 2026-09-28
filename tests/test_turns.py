@@ -11,6 +11,7 @@ import pytest
 
 from kinby.contracts import (
     AcceptedResult,
+    ApprovalDecision,
     ApprovalRequested,
     CompletionOutcome,
     ErrorCode,
@@ -41,7 +42,7 @@ from kinby.core.pricing import price_map
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import (
-    ApprovalDecision,
+    ApprovalAnswer,
     Emit,
     ParkedTurn,
     PreparedTurnRequest,
@@ -173,10 +174,10 @@ class ParkingRunner:
     async def resume(
         self,
         turn: PreparedTurnRequest,
-        decision: ApprovalDecision,
+        answer: ApprovalAnswer,
         emit: Emit,
     ) -> TurnOutcome:
-        assert decision is ApprovalDecision.APPROVE
+        assert answer == ApprovalAnswer(ApprovalDecision.APPROVE)
         self.resumed_modes.append(turn.permission_mode)
         await emit(MessageDelta(text="Approved"))
         return TurnOutcome(input_tokens=3, output_tokens=1)
@@ -199,11 +200,11 @@ class PausingRestoreRunner(ParkingRunner):
     async def resume(
         self,
         turn: PreparedTurnRequest,
-        decision: ApprovalDecision,
+        answer: ApprovalAnswer,
         emit: Emit,
     ) -> TurnOutcome:
         self.resume_calls += 1
-        return await super().resume(turn, decision, emit)
+        return await super().resume(turn, answer, emit)
 
 
 class CancellationSuppressingRunner:
@@ -1511,7 +1512,7 @@ def test_parked_approval_resumes_after_dispatcher_restart(tmp_path: Path) -> Non
             {
                 "thread_id": created.id,
                 "approval_id": _APPROVAL_ID,
-                "answer": "yes",
+                "decision": "approve",
             },
             {Scope.THREAD_OPERATE},
         )
@@ -1556,7 +1557,7 @@ def test_concurrent_approval_responses_resume_once(tmp_path: Path) -> None:
         command = {
             "thread_id": created.id,
             "approval_id": _APPROVAL_ID,
-            "answer": "yes",
+            "decision": "approve",
         }
         first_response = asyncio.create_task(
             restarted.dispatch(
@@ -1616,7 +1617,7 @@ def test_interrupt_during_approval_restore_prevents_resume(tmp_path: Path) -> No
                 {
                     "thread_id": created.id,
                     "approval_id": _APPROVAL_ID,
-                    "answer": "yes",
+                    "decision": "approve",
                 },
                 {Scope.THREAD_OPERATE},
             )
@@ -1689,7 +1690,7 @@ def test_parked_turn_uses_checkpoint_mode_when_event_lacks_mode(tmp_path: Path) 
             {
                 "thread_id": created.id,
                 "approval_id": _APPROVAL_ID,
-                "answer": "yes",
+                "decision": "approve",
             },
             {Scope.THREAD_OPERATE},
         )
@@ -1726,7 +1727,7 @@ def test_set_mode_rejects_a_thread_with_a_pending_approval(tmp_path: Path) -> No
             {
                 "thread_id": created.id,
                 "approval_id": _APPROVAL_ID,
-                "answer": "yes",
+                "decision": "approve",
             },
             {Scope.THREAD_OPERATE},
         )
@@ -1792,7 +1793,7 @@ def test_parked_approval_resumes_with_the_turns_pinned_mode(tmp_path: Path) -> N
             {
                 "thread_id": created.id,
                 "approval_id": _APPROVAL_ID,
-                "answer": "yes",
+                "decision": "approve",
             },
             {Scope.THREAD_OPERATE},
         )
@@ -1849,7 +1850,7 @@ def test_lowered_ceiling_constrains_a_parked_turn_on_resume(tmp_path: Path) -> N
             {
                 "thread_id": created.id,
                 "approval_id": _APPROVAL_ID,
-                "answer": "yes",
+                "decision": "approve",
             },
             {Scope.THREAD_OPERATE},
         )
@@ -1874,7 +1875,7 @@ def test_parked_approval_resumes_on_the_same_dispatcher(tmp_path: Path) -> None:
             {
                 "thread_id": created.id,
                 "approval_id": _APPROVAL_ID,
-                "answer": "yes",
+                "decision": "approve",
             },
             {Scope.THREAD_OPERATE},
         )
@@ -1898,7 +1899,7 @@ def test_parked_approval_resumes_on_the_same_dispatcher(tmp_path: Path) -> None:
             {
                 "thread_id": created.id,
                 "approval_id": _APPROVAL_ID,
-                "answer": "yes",
+                "decision": "approve",
             },
             {Scope.THREAD_OPERATE},
         )
@@ -1921,7 +1922,7 @@ def test_unknown_approval_id_returns_not_found(tmp_path: Path) -> None:
             {
                 "thread_id": created.id,
                 "approval_id": "22222222-2222-2222-2222-222222222222",
-                "answer": "yes",
+                "decision": "approve",
             },
             {Scope.THREAD_OPERATE},
         )
@@ -2019,7 +2020,7 @@ def test_unknown_approval_id_with_no_active_turn_returns_not_found(
             {
                 "thread_id": created.id,
                 "approval_id": "11111111-1111-1111-1111-111111111111",
-                "answer": "yes",
+                "decision": "approve",
             },
             {Scope.THREAD_OPERATE},
         )

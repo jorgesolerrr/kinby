@@ -52,7 +52,7 @@ from kinby.core.runtime import InstanceRuntime
 from kinby.core.scheduler import SchedulerConfig
 from kinby.core.snapshots import SnapshotRef, SnapshotStore
 from kinby.core.turns import (
-    ApprovalDecision,
+    ApprovalAnswer,
     Emit,
     ParkedTurn,
     PreparedTurnRequest,
@@ -120,7 +120,7 @@ class ParkingRunner:
     async def resume(
         self,
         turn: PreparedTurnRequest,
-        decision: ApprovalDecision,
+        answer: ApprovalAnswer,
         emit: Emit,
     ) -> TurnOutcome:
         await emit(MessageDelta(text="Approved"))
@@ -272,7 +272,7 @@ def test_a_parked_approval_keeps_the_drain_pending_until_it_is_answered(tmp_path
             "thread.approval.respond",
             thread_id=str(thread),
             approval_id=str(_APPROVAL_ID),
-            answer="yes",
+            decision="approve",
         )
         result = await asyncio.wait_for(draining, timeout=5)
 
@@ -515,7 +515,7 @@ def test_the_hub_stops_a_served_instance_through_its_private_server(
                 "thread.approval.respond",
                 thread_id=str(thread),
                 approval_id=str(_APPROVAL_ID),
-                answer="yes",
+                decision="approve",
             )
             assert not isinstance(answered, ErrorEnvelope)
             outcome = await _finished(hub, stopping.operation_id)

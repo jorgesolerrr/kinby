@@ -15,6 +15,7 @@ from kinby.contracts import (
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_START,
     AcceptedResult,
+    ApprovalDecision,
     ApprovalRequested,
     ChangeStatus,
     FileChange,
@@ -43,7 +44,7 @@ from kinby.core import turns
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.snapshots import WorkspaceDiff
-from kinby.core.turns import ApprovalDecision, Emit, ParkedTurn, PreparedTurnRequest, TurnOutcome
+from kinby.core.turns import ApprovalAnswer, Emit, ParkedTurn, PreparedTurnRequest, TurnOutcome
 from kinby.instance import FeedbackPolicy, load_instance
 from kinby.memory import GraphStore, RecapWriter
 from tests.helpers import (
@@ -622,7 +623,7 @@ class FailingReplRunner:
 
 class ApprovalReplRunner:
     def __init__(self, arguments: dict[str, JsonValue] | None = None) -> None:
-        self.decisions: list[ApprovalDecision] = []
+        self.answers: list[ApprovalAnswer] = []
         self.parked = asyncio.Event()
         self.parked_turn: PreparedTurnRequest | None = None
         self.arguments = arguments if arguments is not None else {"note": "remember me"}
@@ -652,10 +653,30 @@ class ApprovalReplRunner:
     async def resume(
         self,
         turn: PreparedTurnRequest,
-        decision: ApprovalDecision,
+        answer: ApprovalAnswer,
         emit: Emit,
     ) -> TurnOutcome:
-        self.decisions.append(decision)
+        self.answers.append(answer)
+        if answer.decision is ApprovalDecision.DENY:
+            await emit(
+                ToolGated(
+                    call_id="write-1",
+                    name="write_note",
+                    action=GateOutcome.DENY,
+                    rule="mode.ask.write",
+                    decided_by=GateDecider.USER,
+                    reason=answer.reason,
+                )
+            )
+            await emit(
+                ToolResult(
+                    call_id="write-1",
+                    name="write_note",
+                    output='Tool "write_note" was denied by the user.',
+                    error=True,
+                )
+            )
+            return TurnOutcome()
         await emit(
             ToolCall(
                 call_id="write-1",
@@ -1108,7 +1129,7 @@ def test_repl_answers_a_parked_approval(tmp_path: Path) -> None:
                 client,
                 created.id,
                 feedback=FeedbackPolicy.OFF,
-                stdin=StringIO("Remember this\nyes\n"),
+                stdin=StringIO("Remember this\ny\n"),
                 stdout=stdout,
                 stderr=stderr,
             ),
@@ -1116,12 +1137,61 @@ def test_repl_answers_a_parked_approval(tmp_path: Path) -> None:
         )
 
         assert exit_code == 0
-        assert runner.decisions == [ApprovalDecision.APPROVE]
+        assert runner.answers == [ApprovalAnswer(ApprovalDecision.APPROVE)]
         assert stdout.getvalue() == (
             '> Approve write_note {"note": "remember me"} under rule "mode.ask.write"? '
-            "[yes/no] "
+            "[y/n or a reason to deny] "
             '[tool.call] write_note {"note": "remember me"}\n'
             "[tool.result] write_note (ok): remember me\nDone\n> "
+        )
+        assert stderr.getvalue() == ""
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("typed", "reason", "gated"),
+    [
+        (
+            "Use the staging branch",
+            "Use the staging branch",
+            "[tool.gated] write_note denied by the user: Use the staging branch\n",
+        ),
+        ("n", None, "[tool.gated] write_note denied by the user\n"),
+    ],
+)
+def test_repl_denies_a_parked_approval_with_the_typed_reason(
+    tmp_path: Path, typed: str, reason: str | None, gated: str
+) -> None:
+    async def scenario() -> None:
+        runner = ApprovalReplRunner()
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, runner),
+        )
+        client = ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope))
+        created = await client.call(THREAD_CREATE, ThreadCreateCommand())
+        assert isinstance(created, ThreadCreateResult)
+        stdout = StringIO()
+        stderr = StringIO()
+
+        exit_code = await asyncio.wait_for(
+            run_repl(
+                client,
+                created.id,
+                feedback=FeedbackPolicy.OFF,
+                stdin=StringIO(f"Remember this\n{typed}\n"),
+                stdout=stdout,
+                stderr=stderr,
+            ),
+            timeout=1,
+        )
+
+        assert exit_code == 0
+        assert runner.answers == [ApprovalAnswer(ApprovalDecision.DENY, reason)]
+        assert stdout.getvalue() == (
+            '> Approve write_note {"note": "remember me"} under rule "mode.ask.write"? '
+            f"[y/n or a reason to deny] {gated}\n> "
         )
         assert stderr.getvalue() == ""
 
@@ -1159,7 +1229,7 @@ def test_repl_renders_and_escapes_a_multiline_approval_argument(tmp_path: Path) 
         )
 
         assert exit_code == 0
-        assert runner.decisions == [ApprovalDecision.APPROVE]
+        assert runner.answers == [ApprovalAnswer(ApprovalDecision.APPROVE)]
         assert stdout.getvalue() == (
             '> Approve write_note under rule "mode.ask.write":\n'
             "content:\n"
@@ -1167,7 +1237,7 @@ def test_repl_renders_and_escapes_a_multiline_approval_argument(tmp_path: Path) 
             "  second line\\n\n"
             "  third line\\n\n"
             "z\\u001b[2J: one\\u001b[2J line\n"
-            "[yes/no] "
+            "[y/n or a reason to deny] "
             '[tool.call] write_note {"content": "first line\\r\\nsecond line\\nthird line\\n", '
             '"z\\u001b[2J": "one\\u001b[2J line"}\n'
             "[tool.result] write_note (ok): remember me\nDone\n> "
@@ -1209,7 +1279,7 @@ def test_repl_renders_mixed_approval_arguments_in_key_order(tmp_path: Path) -> N
         )
 
         assert exit_code == 0
-        assert runner.decisions == [ApprovalDecision.APPROVE]
+        assert runner.answers == [ApprovalAnswer(ApprovalDecision.APPROVE)]
         assert stdout.getvalue() == (
             '> Approve write_note under rule "mode.ask.write":\n'
             "content:\n"
@@ -1217,7 +1287,7 @@ def test_repl_renders_mixed_approval_arguments_in_key_order(tmp_path: Path) -> N
             "  second line\n"
             "enabled: false\n"
             "name: morning\n"
-            "[yes/no] "
+            "[y/n or a reason to deny] "
             '[tool.call] write_note {"content": "first line\\nsecond line", '
             '"enabled": false, "name": "morning"}\n'
             "[tool.result] write_note (ok): remember me\nDone\n> "
@@ -1261,10 +1331,10 @@ def test_repl_interrupts_while_waiting_for_approval(tmp_path: Path) -> None:
         exit_code = await asyncio.wait_for(repl, timeout=1)
 
         assert exit_code == 0
-        assert runner.decisions == []
+        assert runner.answers == []
         assert stdout.getvalue() == (
             '> Approve write_note {"note": "remember me"} under rule "mode.ask.write"? '
-            "[yes/no] (interrupted)\n> "
+            "[y/n or a reason to deny] (interrupted)\n> "
         )
         assert stderr.getvalue() == ""
 

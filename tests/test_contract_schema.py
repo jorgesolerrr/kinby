@@ -120,3 +120,14 @@ def test_the_schema_declares_thread_rename() -> None:
 
     assert rename["result"] == {"$ref": "#/$defs/ThreadSummary"}
     assert {"minLength": 1, "maxLength": 200}.items() <= _object(title).items()
+
+
+def test_an_approval_answer_is_a_decision_with_an_optional_reason() -> None:
+    definitions = _object(contract_schema()["$defs"])
+    respond = _object(definitions["ThreadApprovalRespondCommand"])
+    gated = _object(definitions["ToolGated"])
+
+    assert set(_object(respond["properties"])) == {"thread_id", "approval_id", "decision", "reason"}
+    assert "decision" in cast(list[str], respond["required"])
+    assert _object(definitions["ApprovalDecision"])["enum"] == ["approve", "deny"]
+    assert "reason" in _object(gated["properties"])

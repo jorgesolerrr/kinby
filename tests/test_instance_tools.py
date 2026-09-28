@@ -13,6 +13,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import JsonValue
 
 from kinby.contracts import (
+    ApprovalDecision,
     ApprovalRequested,
     Delivery,
     Event,
@@ -31,7 +32,7 @@ from kinby.contracts import (
 from kinby.core import LangGraphRunner
 from kinby.core.errors import RoutineNotFound
 from kinby.core.turns import (
-    ApprovalDecision,
+    ApprovalAnswer,
     ParkedTurn,
     PreparedTurnRequest,
     TurnContext,
@@ -590,7 +591,7 @@ def test_approved_routine_write_runs_through_the_gate(tmp_path: Path) -> None:
         assert approval.arguments == arguments
         assert not (tmp_path / "routines" / "morning-news").exists()
 
-        completed = await runner.resume(turn, ApprovalDecision.APPROVE, context)
+        completed = await runner.resume(turn, ApprovalAnswer(ApprovalDecision.APPROVE), context)
 
         assert isinstance(completed, TurnOutcome)
         assert (tmp_path / "routines" / "morning-news" / "ROUTINE.md").read_text(
@@ -682,7 +683,7 @@ def test_approved_routine_enable_changes_the_file(tmp_path: Path) -> None:
         assert approval.arguments == arguments
         assert "enabled: false" in target.read_text(encoding="utf-8")
         assert isinstance(
-            await runner.resume(turn, ApprovalDecision.APPROVE, context),
+            await runner.resume(turn, ApprovalAnswer(ApprovalDecision.APPROVE), context),
             TurnOutcome,
         )
 
@@ -742,7 +743,7 @@ def test_denied_routine_write_leaves_the_instance_untouched(tmp_path: Path) -> N
 
         assert isinstance(await runner.run(turn, context), ParkedTurn)
         assert isinstance(
-            await runner.resume(turn, ApprovalDecision.DENY, context),
+            await runner.resume(turn, ApprovalAnswer(ApprovalDecision.DENY), context),
             TurnOutcome,
         )
 

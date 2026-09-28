@@ -11,6 +11,7 @@ from langchain_core.tools import StructuredTool
 
 from kinby.cli import main
 from kinby.contracts import (
+    ApprovalDecision,
     ApprovalRequested,
     CompletionOutcome,
     Delivery,
@@ -1122,7 +1123,9 @@ def fetch() -> str:
         )
         await resumed.respond(
             ThreadApprovalRespondCommand(
-                thread_id=thread.id, approval_id=approval.approval_id, answer="yes"
+                thread_id=thread.id,
+                approval_id=approval.approval_id,
+                decision=ApprovalDecision.APPROVE,
             )
         )
         subscription = (await log.subscribe(thread.id, after_sequence=event.sequence)).items

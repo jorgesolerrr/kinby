@@ -382,7 +382,7 @@ async def _resume_budget_turn(
         {
             "thread_id": thread_id,
             "approval_id": requested.payload.approval_id,
-            "answer": "yes",
+            "decision": "approve",
         },
         {Scope.THREAD_OPERATE},
     )
