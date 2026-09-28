@@ -51,7 +51,7 @@ export interface ToolStep {
   durationMs?: number
 }
 
-type TurnEnd =
+export type TurnEnd =
   | { kind: "done"; tokens: number }
   | { kind: "failed"; code: ErrorCode; message: string }
   | { kind: "stopped" }

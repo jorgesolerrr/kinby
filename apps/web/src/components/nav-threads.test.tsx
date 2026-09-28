@@ -85,6 +85,20 @@ describe("an instance's threads", () => {
     ])
   })
 
+  it("keeps a long title on one line beside its badge", async () => {
+    openThreads({
+      "thread.list": () =>
+        listing([thread({ id: "t1", title: "Pirate tools pass", status: "running" })]),
+    })
+
+    const row = within((await threadLinks())[0] as HTMLElement)
+
+    const title = row.getByText("Pirate tools pass").className
+    expect(title).toMatch(/\btruncate\b/)
+    expect(title).toMatch(/\bmin-w-0\b/)
+    expect(row.getByText("working").className).toMatch(/\bshrink-0\b/)
+  })
+
   it("names a thread without a title as untitled", async () => {
     openThreads({ "thread.list": () => listing([thread({ id: "t1" })]) })
 

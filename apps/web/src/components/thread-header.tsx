@@ -39,7 +39,13 @@ export function ThreadHeader({
   const threads = threadList(client)
   const listed = useSyncExternalStore(threads.onChange, threads.view)
   const thread = listed?.threads.find((summary) => summary.id === threadId)
+  const missing = thread === undefined
   const [failure, setFailure] = useState<string>()
+  // The sidebar lists the threads, but at phone width it is closed and nothing does. A header that
+  // cannot list them stays empty, and the transcript under it does not depend on it.
+  useEffect(() => {
+    if (missing) threads.list().catch(() => {})
+  }, [threads, threadId, missing])
 
   if (listed === undefined || thread === undefined) return null
   /** Make a change, then list the threads again. Resolves to whether the instance took it. */
@@ -56,7 +62,7 @@ export function ThreadHeader({
   }
 
   return (
-    <Field data-invalid={failure !== undefined || undefined} className="mx-4 my-2">
+    <Field data-invalid={failure !== undefined || undefined} className="mx-4 my-2 w-auto">
       <div className="flex items-center gap-2">
         <ThreadTitle
           thread={thread}
@@ -101,7 +107,8 @@ function ThreadTitle({
 
   if (draft === undefined) {
     return (
-      <h1 className="min-w-0 flex-1">
+      // No width of its own, so a long title truncates instead of widening the panel.
+      <h1 className="w-0 flex-1">
         <Button variant="ghost" className="max-w-full" onClick={() => setDraft(thread.title ?? "")}>
           <span className="truncate">{threadTitle(thread)}</span>
           <PencilIcon data-icon="inline-end" />
@@ -143,7 +150,7 @@ function ThreadTitle({
   )
 }
 
-/** The instance refuses a mode above its ceiling, so the picker offers none. */
+/** The instance refuses a mode above its ceiling, so the picker disables each one and says why. */
 function ModePicker({
   mode,
   ceiling,
@@ -166,18 +173,22 @@ function ModePicker({
       disabled={changing}
       onValueChange={(picked) => picked !== null && picked !== mode && void pick(picked)}
     >
-      <SelectTrigger size="sm" aria-label="Mode">
+      <SelectTrigger size="sm" aria-label="Mode" className="shrink-0">
         <SelectValue>
           {(value: PermissionMode) => MODES.find((entry) => entry.mode === value)?.label}
         </SelectValue>
         {changing && <Spinner aria-label="Changing the mode" />}
       </SelectTrigger>
-      <SelectContent>
+      <SelectContent align="end" alignItemWithTrigger={false} className="w-auto">
         <SelectGroup>
           {MODES.map((entry, index) => (
             <SelectItem key={entry.mode} value={entry.mode} disabled={index > allowed}>
-              {entry.label}
-              <span className="text-muted-foreground">{entry.hint}</span>
+              <span className="flex flex-col">
+                {entry.label}
+                <span className="text-xs text-muted-foreground">
+                  {index > allowed ? "Above this instance's ceiling" : entry.hint}
+                </span>
+              </span>
             </SelectItem>
           ))}
         </SelectGroup>
