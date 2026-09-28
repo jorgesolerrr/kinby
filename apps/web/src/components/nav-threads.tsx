@@ -71,7 +71,7 @@ export function NavThreads({
                     selectThread(instanceId, thread.id)
                   }}
                 >
-                  <span>{threadTitle(thread)}</span>
+                  <span className="min-w-0 truncate">{threadTitle(thread)}</span>
                   {STATUS_BADGES[thread.status]}
                 </SidebarMenuSubButton>
               </SidebarMenuSubItem>
