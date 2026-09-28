@@ -162,6 +162,35 @@ describe("a thread's panel", () => {
     expect(screen.getByText(/^Routine nightly-digest ·/)).toBeDefined()
   })
 
+  it("marks a failed turn's end as destructive, and a done turn's as not", async () => {
+    const events = thread(
+      ["turn-1", started("Fix the runtime")],
+      ["turn-1", { type: "turn.completed", input_tokens: 1_200, output_tokens: 300 }],
+      ["turn-2", started("Fix it again")],
+      [
+        "turn-2",
+        {
+          type: "turn.failed",
+          code: "BUDGET_EXCEEDED",
+          message: "The turn exceeded the steps budget of 1.",
+        },
+      ],
+    )
+    const { subscription } = openThread()
+
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+
+    const variant = (text: string) =>
+      screen.getByText(text).closest("[data-slot=marker]")?.getAttribute("data-variant")
+    expect(variant("Failed: The turn exceeded the steps budget of 1. (BUDGET_EXCEEDED)")).toBe(
+      "destructive",
+    )
+    expect(variant("Done · 0 steps · 1,500 tokens")).toBe("default")
+  })
+
   it("starts a turn with the message when Enter is pressed", async () => {
     const { client, subscription } = openThread({
       "thread.turn.start": () => ({ sequence: 1, thread_id: "t1", turn_id: "turn-1" }),
