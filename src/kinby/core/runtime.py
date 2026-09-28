@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 
 from kinby.contracts import (
     INSTANCE_DRAIN,
@@ -22,6 +23,7 @@ from kinby.core.dispatcher import (
 from kinby.core.events import EventLog
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.instance import Instance
+from kinby.instance.permissions import load_permissions
 from kinby.memory import RecapWriter
 from kinby.packages import instance_package_config
 
@@ -99,6 +101,7 @@ async def boot_instance(
         instance.manifest.state_dir,
         event_log=event_log,
         turns=ScheduledTurnConfig(turns, SchedulerConfig(instance, clock)),
+        permissions=partial(load_permissions, instance),
         clock=clock,
     )
     runtime = InstanceRuntime(dispatcher, turns.recap)

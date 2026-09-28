@@ -1,6 +1,7 @@
 import type { InstanceClient, JsonValue } from "@kinby/contract"
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react"
 
+import { ThreadHeader } from "@/components/thread-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
@@ -61,19 +62,25 @@ export function ThreadPanel({
       </div>
     )
   }
-  // Half a history must not pass for all of it.
-  if (!replayed) return <TranscriptSkeleton />
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <Transcript turns={timeline.turns} name={name} />
-      <div className="mx-auto w-full max-w-3xl p-4">
-        <Composer
-          client={client}
-          threadId={threadId}
-          name={name}
-          running={latest !== undefined && latest.end === undefined}
-        />
-      </div>
+      <ThreadHeader client={client} threadId={threadId} />
+      {/* Half a history must not pass for all of it. */}
+      {replayed ? (
+        <>
+          <Transcript turns={timeline.turns} name={name} />
+          <div className="mx-auto w-full max-w-3xl p-4">
+            <Composer
+              client={client}
+              threadId={threadId}
+              name={name}
+              running={latest !== undefined && latest.end === undefined}
+            />
+          </div>
+        </>
+      ) : (
+        <TranscriptSkeleton />
+      )}
     </div>
   )
 }

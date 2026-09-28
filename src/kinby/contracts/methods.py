@@ -56,7 +56,9 @@ from kinby.contracts.models import (
     ThreadListCommand,
     ThreadListResult,
     ThreadModeSetCommand,
+    ThreadRenameCommand,
     ThreadSubscribeCommand,
+    ThreadSummary,
     ThreadTurnDiffCommand,
     ThreadTurnDiffResult,
     ThreadTurnInterruptCommand,
@@ -100,6 +102,7 @@ THREAD_CREATE = Method(
     "thread.create", Scope.THREAD_OPERATE, ThreadCreateCommand, ThreadCreateResult
 )
 THREAD_LIST = Method("thread.list", Scope.THREAD_READ, ThreadListCommand, ThreadListResult)
+THREAD_RENAME = Method("thread.rename", Scope.THREAD_OPERATE, ThreadRenameCommand, ThreadSummary)
 THREAD_MODE_SET = Method(
     "thread.mode.set", Scope.THREAD_ADMIN, ThreadModeSetCommand, AcceptedResult
 )
@@ -227,6 +230,7 @@ STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSu
 METHODS = (
     THREAD_CREATE,
     THREAD_LIST,
+    THREAD_RENAME,
     THREAD_MODE_SET,
     THREAD_TURN_START,
     THREAD_TURN_DIFF,

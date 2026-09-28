@@ -1,4 +1,4 @@
-import type { ThreadSummary } from "@kinby/contract"
+import type { ThreadListResult, ThreadSummary } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 
 import { NavThreads } from "@/components/nav-threads"
 import { SidebarMenu, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar"
+import { threadList } from "@/lib/thread-list"
 
 function thread(fields: Pick<ThreadSummary, "id"> & Partial<ThreadSummary>): ThreadSummary {
   return {
@@ -13,8 +14,15 @@ function thread(fields: Pick<ThreadSummary, "id"> & Partial<ThreadSummary>): Thr
     created_at: "2026-09-27T10:00:00Z",
     last_activity_at: "2026-09-27T10:00:00Z",
     status: "idle",
+    mode: "ask",
+    mode_pinned: false,
     ...fields,
   }
+}
+
+/** What `thread.list` answers with `threads` on an instance whose ceiling is full access. */
+function listing(threads: ThreadSummary[]): ThreadListResult {
+  return { threads, ceiling: "full-access" }
 }
 
 /** Render Ada's threads from an instance client that is connected and answers from `answers`. */
@@ -58,14 +66,13 @@ describe("an instance's threads", () => {
 
   it("lists the threads in the order the instance returns them, badging the ones that need a look", async () => {
     openThreads({
-      "thread.list": () => ({
-        threads: [
+      "thread.list": () =>
+        listing([
           thread({ id: "t1", title: "Deploy notes", status: "running" }),
           thread({ id: "t2", title: "Pull request review", status: "awaiting_approval" }),
           thread({ id: "t3", title: "Nightly digest", status: "failed" }),
           thread({ id: "t4", title: "Groceries" }),
-        ],
-      }),
+        ]),
     })
 
     const links = await threadLinks()
@@ -79,14 +86,14 @@ describe("an instance's threads", () => {
   })
 
   it("names a thread without a title as untitled", async () => {
-    openThreads({ "thread.list": () => ({ threads: [thread({ id: "t1" })] }) })
+    openThreads({ "thread.list": () => listing([thread({ id: "t1" })]) })
 
     expect((await threadLinks()).map((link) => link.textContent)).toEqual(["Untitled thread"])
   })
 
   it("lists the threads again every 5 seconds while the page is visible, and not while hidden", async () => {
     let threads = [thread({ id: "t1", title: "Deploy notes", status: "running" })]
-    const { clock } = openThreads({ "thread.list": () => ({ threads }) })
+    const { clock } = openThreads({ "thread.list": () => listing(threads) })
     const row = async () => within((await threadLinks())[0] as HTMLElement)
     expect((await row()).getByText("working")).toBeDefined()
 
@@ -108,12 +115,11 @@ describe("an instance's threads", () => {
 
   it("selects a thread and puts it in the URL", async () => {
     openThreads({
-      "thread.list": () => ({
-        threads: [
+      "thread.list": () =>
+        listing([
           thread({ id: "t1", title: "Deploy notes" }),
           thread({ id: "t2", title: "Review" }),
-        ],
-      }),
+        ]),
     })
     const user = userEvent.setup()
 
@@ -129,7 +135,7 @@ describe("an instance's threads", () => {
   it("starts an untitled thread from the plus and selects it", async () => {
     let threads = [thread({ id: "t1", title: "Deploy notes" })]
     const { client } = openThreads({
-      "thread.list": () => ({ threads }),
+      "thread.list": () => listing(threads),
       "thread.create": () => {
         threads = [thread({ id: "t2" }), ...threads]
         return { id: "t2", created_at: "2026-09-27T11:00:00Z" }
@@ -144,5 +150,16 @@ describe("an instance's threads", () => {
     const created = await screen.findByRole("link", { name: "Untitled thread" })
     expect(created.getAttribute("aria-current")).toBe("page")
     expect(window.location.pathname).toBe("/instances/hub-ada/threads/t2")
+  })
+
+  it("shows what the open thread listed without waiting for the next poll", async () => {
+    let title = "Deploy notes"
+    const { client } = openThreads({ "thread.list": () => listing([thread({ id: "t1", title })]) })
+    await threadLinks()
+
+    title = "Release plan"
+    await act(() => threadList(client).list())
+
+    expect((await threadLinks()).map((link) => link.textContent)).toEqual(["Release plan"])
   })
 })

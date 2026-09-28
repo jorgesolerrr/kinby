@@ -13,6 +13,8 @@ from pydantic import BaseModel, ConfigDict  # noqa: TID251 - the store's file bo
 from kinby.contracts import (
     ApprovalRequested,
     Event,
+    ModePinned,
+    PermissionMode,
     ThreadCreateResult,
     ThreadListResult,
     ThreadStatus,
@@ -21,8 +23,12 @@ from kinby.contracts import (
     TurnStarted,
     is_turn_closing,
 )
+from kinby.core.errors import ThreadNotFound
+from kinby.instance.permissions import GatePolicy, constrain_mode
 
 THREADS_NAME = "threads.jsonl"
+#: The most characters a title taken from a thread's first message has.
+TITLE_LENGTH = 60
 
 
 class ThreadRecord(BaseModel):
@@ -42,24 +48,57 @@ class PendingApproval:
 
 
 class ThreadStore:
+    """Append-only: a rename appends the thread's record again, and its latest record wins."""
+
     def __init__(self, state_dir: Path) -> None:
         self._path = state_dir / THREADS_NAME
 
     def create(self, title: str | None) -> ThreadCreateResult:
         thread = ThreadRecord(id=uuid4(), title=title, created_at=datetime.now(UTC))
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._path.open("a", encoding="utf-8") as records:
-            records.write(f"{thread.model_dump_json()}\n")
+        self._append(thread)
         return ThreadCreateResult(id=thread.id, created_at=thread.created_at)
 
+    def rename(self, thread_id: UUID, title: str) -> ThreadRecord:
+        thread = self.thread(thread_id)
+        if thread is None:
+            raise ThreadNotFound(f'Thread "{thread_id}" was not found.')
+        renamed = thread.model_copy(update={"title": title})
+        self._append(renamed)
+        return renamed
+
     def threads(self) -> list[ThreadRecord]:
+        """Each thread once, in the order they were created."""
         if not self._path.exists():
             return []
         with self._path.open(encoding="utf-8") as records:
-            return [ThreadRecord.model_validate_json(line) for line in records]
+            latest = {
+                thread.id: thread
+                for thread in (ThreadRecord.model_validate_json(line) for line in records)
+            }
+        return list(latest.values())
+
+    def thread(self, thread_id: UUID) -> ThreadRecord | None:
+        return next((thread for thread in self.threads() if thread.id == thread_id), None)
 
     def exists(self, thread_id: UUID) -> bool:
-        return any(thread.id == thread_id for thread in self.threads())
+        return self.thread(thread_id) is not None
+
+    def _append(self, thread: ThreadRecord) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._path.open("a", encoding="utf-8") as records:
+            records.write(f"{thread.model_dump_json()}\n")
+
+
+def first_message_title(message: str) -> str:
+    """The message on one line, cut on a word boundary with an ellipsis when it runs long."""
+    text = " ".join(message.split())
+    if len(text) <= TITLE_LENGTH:
+        return text
+    # The ellipsis takes the last place, and a word ends where a space follows it. A first
+    # word too long to fit is cut where it runs out of room.
+    words = text[:TITLE_LENGTH].rsplit(" ", 1)
+    head = words[0] if len(words) == 2 else text[: TITLE_LENGTH - 1]
+    return f"{head}…"
 
 
 def events_by_thread(
@@ -73,21 +112,36 @@ def events_by_thread(
     return grouped
 
 
-def thread_list(threads: Sequence[ThreadRecord], events: Iterable[Event]) -> ThreadListResult:
+def thread_list(
+    threads: Sequence[ThreadRecord], events: Iterable[Event], policy: GatePolicy
+) -> ThreadListResult:
     """Summarize each thread from its events, the most recently active first."""
     grouped = events_by_thread(threads, events)
-    summaries = [_summary(thread, grouped[thread.id]) for thread in threads]
+    summaries = [thread_summary(thread, grouped[thread.id], policy) for thread in threads]
     summaries.sort(key=lambda summary: summary.last_activity_at, reverse=True)
-    return ThreadListResult(threads=summaries)
+    return ThreadListResult(threads=summaries, ceiling=policy.ceiling)
 
 
-def _summary(thread: ThreadRecord, events: Sequence[Event]) -> ThreadSummary:
+def thread_summary(
+    thread: ThreadRecord, events: Sequence[Event], policy: GatePolicy
+) -> ThreadSummary:
+    pinned = pinned_mode(events)
     return ThreadSummary(
         id=thread.id,
         title=thread.title,
         created_at=thread.created_at,
         status=thread_status(events),
         last_activity_at=events[-1].timestamp if events else thread.created_at,
+        mode=constrain_mode(pinned or policy.mode, policy.ceiling),
+        mode_pinned=pinned is not None,
+    )
+
+
+def pinned_mode(events: Sequence[Event]) -> PermissionMode | None:
+    """The mode the thread last pinned, before any ceiling applies."""
+    return next(
+        (event.payload.mode for event in reversed(events) if isinstance(event.payload, ModePinned)),
+        None,
     )
 
 

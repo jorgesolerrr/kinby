@@ -13,6 +13,7 @@ import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import date, datetime
+from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -74,6 +75,7 @@ from kinby.instance import (
     load_instance,
     parse_listen,
 )
+from kinby.instance.permissions import load_permissions
 from kinby.instance.recap import load_recap_lens
 from kinby.packages import PackageConfigError, inspect_installed_package
 from kinby.packages.check import check_package
@@ -231,6 +233,7 @@ def _load_selected_instance(
 def _contract_client(instance: Instance, clock: Callable[[], datetime]) -> ContractClient:
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
+        permissions=partial(load_permissions, instance),
         price_overrides=instance.manifest.prices,
         clock=clock,
     )

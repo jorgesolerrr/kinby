@@ -73,7 +73,13 @@ from kinby.core.snapshots import (
     SnapshotStore,
     snapshot_ref,
 )
-from kinby.core.threads import ThreadStore, events_by_thread, pending_approval
+from kinby.core.threads import (
+    ThreadStore,
+    events_by_thread,
+    first_message_title,
+    pending_approval,
+    pinned_mode,
+)
 from kinby.instance import Budgets, ModelName
 from kinby.instance.permissions import constrain_mode, exceeds_ceiling
 
@@ -550,6 +556,8 @@ class Turns:
                     snapshot=snapshot,
                 ),
             )
+            if not any(isinstance(event.payload, TurnStarted) for event in events):
+                self._title_untitled(thread_id, message)
         finally:
             self._release_claim(thread_id, claim)
         self._spawn(turn, self._run(turn, preparation.budgets))
@@ -656,6 +664,12 @@ class Turns:
             turn_id=turn.turn_id,
             sequence=pending.event.sequence,
         )
+
+    def _title_untitled(self, thread_id: UUID, message: str) -> None:
+        thread = self._store.thread(thread_id)
+        title = first_message_title(message)
+        if thread is not None and thread.title is None and title:
+            self._store.rename(thread_id, title)
 
     def _require_thread(self, thread_id: UUID) -> None:
         if not self._store.exists(thread_id):
@@ -855,11 +869,7 @@ def _permission_mode(
     default: PermissionMode,
     ceiling: PermissionMode,
 ) -> PermissionMode:
-    mode = next(
-        (event.payload.mode for event in reversed(events) if isinstance(event.payload, ModePinned)),
-        default,
-    )
-    return constrain_mode(mode, ceiling)
+    return constrain_mode(pinned_mode(events) or default, ceiling)
 
 
 def _thread_busy(thread_id: UUID) -> ThreadBusy:

@@ -7,6 +7,7 @@ from kinby.contracts import (
     ApprovalRequested,
     Event,
     EventType,
+    PermissionMode,
     Scope,
     ThreadCreateResult,
     ThreadListResult,
@@ -15,6 +16,7 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.turns import Emit, ParkedTurn, PreparedTurnRequest, TurnOutcome
+from kinby.instance.permissions import GatePolicy
 from tests.helpers import (
     cannot_restore,
     does_not_park,
@@ -205,6 +207,61 @@ def test_a_parked_turn_that_is_interrupted_leaves_the_thread_idle(tmp_path: Path
         assert thread.status is ThreadStatus.IDLE
 
     asyncio.run(scenario())
+
+
+def _pin(dispatcher: Dispatcher, thread_id: UUID, mode: PermissionMode) -> None:
+    pinned = asyncio.run(
+        dispatcher.dispatch(
+            "thread.mode.set", {"thread_id": thread_id, "mode": mode}, {Scope.THREAD_ADMIN}
+        )
+    )
+    assert isinstance(pinned, AcceptedResult)
+
+
+def test_an_unpinned_thread_runs_in_the_instance_default_mode(tmp_path: Path) -> None:
+    dispatcher = build_dispatcher(
+        tmp_path, permissions=lambda: GatePolicy(mode=PermissionMode.AUTO)
+    )
+    asyncio.run(_create(dispatcher))
+
+    [thread] = asyncio.run(_listed(dispatcher))
+
+    assert thread.mode is PermissionMode.AUTO
+    assert thread.mode_pinned is False
+
+
+def test_a_pinned_thread_runs_in_its_pinned_mode(tmp_path: Path) -> None:
+    dispatcher = _dispatcher(tmp_path, ScriptedRunner())
+    created = asyncio.run(_create(dispatcher))
+    _pin(dispatcher, created.id, PermissionMode.READ_ONLY)
+
+    [thread] = asyncio.run(_listed(dispatcher))
+
+    assert thread.mode is PermissionMode.READ_ONLY
+    assert thread.mode_pinned is True
+
+
+def test_a_mode_above_a_lowered_ceiling_is_capped_at_the_ceiling(tmp_path: Path) -> None:
+    ceiling = PermissionMode.FULL_ACCESS
+    dispatcher = build_dispatcher(
+        tmp_path,
+        turns=TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, ScriptedRunner()),
+        permissions=lambda: GatePolicy(mode=PermissionMode.FULL_ACCESS, ceiling=ceiling),
+    )
+    pinned = asyncio.run(_create(dispatcher))
+    unpinned = asyncio.run(_create(dispatcher))
+    _pin(dispatcher, pinned.id, PermissionMode.FULL_ACCESS)
+
+    ceiling = PermissionMode.ASK
+    listed = asyncio.run(dispatcher.dispatch("thread.list", {}, {Scope.THREAD_READ}))
+
+    assert isinstance(listed, ThreadListResult)
+    assert listed.ceiling is PermissionMode.ASK
+    modes = {thread.id: (thread.mode, thread.mode_pinned) for thread in listed.threads}
+    assert modes == {
+        pinned.id: (PermissionMode.ASK, True),
+        unpinned.id: (PermissionMode.ASK, False),
+    }
 
 
 def test_threads_list_the_most_recently_active_first(tmp_path: Path) -> None:

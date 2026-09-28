@@ -232,6 +232,10 @@ export interface Contract {
       command: ThreadModeSetCommand;
       result: AcceptedResult;
     };
+    "thread.rename": {
+      command: ThreadRenameCommand;
+      result: ThreadSummary;
+    };
     "thread.turn.diff": {
       command: ThreadTurnDiffCommand;
       result: ThreadTurnDiffResult;
@@ -938,18 +942,25 @@ export interface ThreadCreateResult {
 }
 export interface ThreadListCommand {}
 export interface ThreadListResult {
+  ceiling: PermissionMode;
   threads: ThreadSummary[];
 }
 export interface ThreadSummary {
   created_at: string;
   id: string;
   last_activity_at: string;
+  mode: PermissionMode;
+  mode_pinned: boolean;
   status: ThreadStatus;
   title: string | null;
 }
 export interface ThreadModeSetCommand {
   mode: PermissionMode;
   thread_id: string;
+}
+export interface ThreadRenameCommand {
+  thread_id: string;
+  title: string;
 }
 export interface ThreadTurnDiffCommand {
   thread_id: string;

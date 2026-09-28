@@ -1,5 +1,5 @@
-import type { Clock, InstanceClient, ThreadStatus, ThreadSummary } from "@kinby/contract"
-import { type ReactNode, useCallback, useSyncExternalStore } from "react"
+import type { Clock, InstanceClient, ThreadStatus } from "@kinby/contract"
+import { type ReactNode, useSyncExternalStore } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import {
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/sidebar"
 import { usePolled } from "@/hooks/use-polled"
 import { selectThread, threadPath, useSelectedThreadId } from "@/lib/selection"
+import { threadList, threadTitle } from "@/lib/thread-list"
 import { PlusIcon } from "lucide-react"
 
 /** How often the threads are listed again while the page is visible. */
@@ -34,11 +35,9 @@ export function NavThreads({
   instanceId: string
 }) {
   const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
-  const list = useCallback(
-    () => client.call("thread.list", {}).then((listed) => listed.threads),
-    [client],
-  )
-  const [threads, listAgain] = usePolled(list, clock, connected, LIST_INTERVAL_MS)
+  const list = threadList(client)
+  const [, listAgain] = usePolled(list.list, clock, connected, LIST_INTERVAL_MS)
+  const threads = useSyncExternalStore(list.onChange, list.view)?.threads
   const selectedId = useSelectedThreadId()
 
   const startThread = () =>
@@ -82,8 +81,4 @@ export function NavThreads({
       )}
     </>
   )
-}
-
-function threadTitle(thread: ThreadSummary): string {
-  return thread.title ?? "Untitled thread"
 }

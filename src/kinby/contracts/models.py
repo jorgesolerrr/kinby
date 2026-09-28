@@ -15,6 +15,7 @@ from pydantic import (
     Field,
     JsonValue,
     SecretStr,
+    StringConstraints,
     field_serializer,
     model_validator,
 )
@@ -556,6 +557,12 @@ class ThreadListCommand(ContractModel):
     pass
 
 
+class ThreadRenameCommand(ContractModel):
+    thread_id: UUID
+    #: Trimmed before it is checked, so a title of spaces is empty.
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+
+
 class ThreadStatus(StrEnum):
     IDLE = "idle"
     RUNNING = "running"
@@ -570,10 +577,15 @@ class ThreadSummary(ContractModel):
     status: ThreadStatus
     #: The time of the thread's last event, or its creation time when it has none.
     last_activity_at: datetime
+    #: The pinned mode, or the instance's default when none is pinned, capped at the ceiling.
+    mode: PermissionMode
+    mode_pinned: bool
 
 
 class ThreadListResult(ContractModel):
     threads: list[ThreadSummary]
+    #: The highest mode the instance lets a thread pin.
+    ceiling: PermissionMode
 
 
 class IntendedState(StrEnum):
