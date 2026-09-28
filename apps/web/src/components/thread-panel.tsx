@@ -463,9 +463,9 @@ function mainArgument(args: Record<string, JsonValue>): string | undefined {
 }
 
 function EndMarker({ turn }: { turn: TurnBlock }) {
-  const { icon, outcome } = turnOutcome(turn)
+  const { icon, outcome, variant } = turnOutcome(turn)
   return (
-    <Marker>
+    <Marker variant={variant}>
       <MarkerIcon>{icon}</MarkerIcon>
       <MarkerContent>{outcome}</MarkerContent>
     </Marker>
@@ -473,7 +473,11 @@ function EndMarker({ turn }: { turn: TurnBlock }) {
 }
 
 /** How the turn ended, or that it is still working. */
-function turnOutcome({ end, steps }: TurnBlock): { icon: ReactNode; outcome: ReactNode } {
+function turnOutcome({ end, steps }: TurnBlock): {
+  icon: ReactNode
+  outcome: ReactNode
+  variant?: "destructive"
+} {
   switch (end?.kind) {
     case undefined:
       return { icon: <Spinner />, outcome: <span className="shimmer">Working</span> }
@@ -486,7 +490,11 @@ function turnOutcome({ end, steps }: TurnBlock): { icon: ReactNode; outcome: Rea
       }
     }
     case "failed":
-      return { icon: <CircleAlertIcon />, outcome: `Failed: ${end.message} (${end.code})` }
+      return {
+        icon: <CircleAlertIcon />,
+        outcome: `Failed: ${end.message} (${end.code})`,
+        variant: "destructive",
+      }
     case "stopped":
       return { icon: <CircleStopIcon />, outcome: "Stopped" }
   }
