@@ -1,5 +1,15 @@
 import type { InstanceClient, JsonValue } from "@kinby/contract"
-import { type ReactNode, useEffect, useId, useState, useSyncExternalStore } from "react"
+import {
+  type ReactNode,
+  type Ref,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
+import { code } from "@streamdown/code"
+import { defaultRehypePlugins, Streamdown, type StreamdownProps } from "streamdown"
 
 import { ThreadHeader } from "@/components/thread-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -32,7 +42,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { reason } from "@/lib/operation"
 import { threadStore } from "@/lib/thread-store"
-import type { ParkedApproval, ToolStep, TurnBlock } from "@/lib/timeline"
+import type { ParkedApproval, ToolStep, TurnBlock, TurnEnd } from "@/lib/timeline"
 import {
   ArrowUpIcon,
   BanIcon,
@@ -63,6 +73,12 @@ export function ThreadPanel({
   const { timeline, replayed, failure } = useSyncExternalStore(store.onChange, store.view)
   const latest = timeline.turns.at(-1)
   const approval = latest?.approval
+  const reasonField = useRef<HTMLInputElement>(null)
+  // A thread that opens on a parked approval has no composer to take focus. An approval that parks
+  // later leaves focus where it is, so keys typed for the composer cannot deny it.
+  useEffect(() => {
+    if (replayed) takeFocus(reasonField.current)
+  }, [replayed])
 
   if (failure !== undefined) {
     return (
@@ -94,6 +110,7 @@ export function ThreadPanel({
             ) : (
               <ApprovalPanel
                 key={approval.approvalId}
+                reasonField={reasonField}
                 client={client}
                 threadId={threadId}
                 approval={approval}
@@ -126,7 +143,10 @@ function Composer({
   const [message, setMessage] = useState("")
   const [sending, setSending] = useState(false)
   const [failure, setFailure] = useState<string>()
+  const field = useRef<HTMLTextAreaElement>(null)
   const text = message.trim()
+  // The composer shows when a thread opens and when an answered approval gives way to it.
+  useEffect(() => takeFocus(field.current), [])
 
   const send = async () => {
     if (text === "" || sending || running) return
@@ -150,6 +170,7 @@ function Composer({
   return (
     <Field data-invalid={failure !== undefined || undefined}>
       <Textarea
+        ref={field}
         aria-label={`Message ${name}`}
         placeholder={`Message ${name}`}
         value={message}
@@ -182,15 +203,20 @@ function Composer({
   )
 }
 
+/** The button pressed in an approval panel. */
+type Answer = "approve" | "deny" | "stop"
+
 /**
  * The approval a turn is parked on, in the composer's place: approve, deny with an optional reason
- * the model reads, or stop the turn.
+ * the model reads, or stop the turn. Enter in the reason denies with it.
  */
 function ApprovalPanel({
+  reasonField,
   client,
   threadId,
   approval,
 }: {
+  reasonField: Ref<HTMLInputElement>
   client: Pick<InstanceClient, "call">
   threadId: string
   approval: ParkedApproval
@@ -198,23 +224,23 @@ function ApprovalPanel({
   const reasonId = useId()
   const [typed, setTyped] = useState("")
   // An answer is final. The panel goes when the turn's next event arrives.
-  const [answering, setAnswering] = useState(false)
+  const [answering, setAnswering] = useState<Answer>()
   const [failure, setFailure] = useState<string>()
   const call = [approval.name, mainArgument(approval.arguments)].filter(Boolean).join(" ")
 
-  const answer = async (work: () => Promise<unknown>) => {
-    setAnswering(true)
+  const answer = async (pressed: Answer, work: () => Promise<unknown>) => {
+    setAnswering(pressed)
     try {
       await work()
       setFailure(undefined)
     } catch (error) {
       setFailure(reason(error))
-      setAnswering(false)
+      setAnswering(undefined)
     }
   }
   const respond = (decision: "approve" | "deny") => {
     const denial = typed.trim()
-    return answer(() =>
+    return answer(decision, () =>
       client.call("thread.approval.respond", {
         thread_id: threadId,
         approval_id: approval.approvalId,
@@ -223,7 +249,9 @@ function ApprovalPanel({
       }),
     )
   }
-  const stop = () => answer(() => client.call("thread.turn.interrupt", { thread_id: threadId }))
+  const stop = () =>
+    answer("stop", () => client.call("thread.turn.interrupt", { thread_id: threadId }))
+  const busy = answering !== undefined
 
   return (
     <section aria-label={`Approve ${call}?`}>
@@ -243,34 +271,58 @@ function ApprovalPanel({
             <Field data-invalid={failure !== undefined || undefined}>
               <FieldLabel htmlFor={reasonId}>Reason</FieldLabel>
               <Input
+                ref={reasonField}
                 id={reasonId}
                 placeholder="Optional: why not, or what to do instead"
                 value={typed}
-                disabled={answering}
+                disabled={busy}
                 aria-invalid={failure !== undefined || undefined}
                 onChange={(event) => setTyped(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.nativeEvent.isComposing) return
+                  event.preventDefault()
+                  void respond("deny")
+                }}
               />
               {failure !== undefined && <FieldError>{failure}</FieldError>}
             </Field>
           </div>
         </CardContent>
         <CardFooter>
-          <div className="flex w-full items-center gap-2">
-            <Button disabled={answering} onClick={() => void respond("approve")}>
-              <CheckIcon data-icon="inline-start" />
+          {/* Below md the buttons grow to a 44 px tap target, and Stop the turn wraps before it overflows. */}
+          <div className="flex w-full flex-wrap items-center gap-2">
+            <Button className="max-md:h-11" disabled={busy} onClick={() => void respond("approve")}>
+              {answering === "approve" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <CheckIcon data-icon="inline-start" />
+              )}
               Approve
             </Button>
-            <Button variant="outline" disabled={answering} onClick={() => void respond("deny")}>
-              <XIcon data-icon="inline-start" />
+            <Button
+              variant="outline"
+              className="max-md:h-11"
+              disabled={busy}
+              onClick={() => void respond("deny")}
+            >
+              {answering === "deny" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <XIcon data-icon="inline-start" />
+              )}
               Deny
             </Button>
             <Button
               variant="ghost"
-              className="ml-auto"
-              disabled={answering}
+              className="ml-auto max-md:h-11"
+              disabled={busy}
               onClick={() => void stop()}
             >
-              <CircleStopIcon data-icon="inline-start" />
+              {answering === "stop" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <CircleStopIcon data-icon="inline-start" />
+              )}
               Stop the turn
             </Button>
           </div>
@@ -280,12 +332,25 @@ function ApprovalPanel({
   )
 }
 
+/** Focus `field`, unless the user is typing in another one, like the title in the header. */
+function takeFocus(field: HTMLElement | null) {
+  const active = document.activeElement
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
+  field?.focus()
+}
+
 function Transcript({ turns, name }: { turns: TurnBlock[]; name: string }) {
   return (
-    <MessageScrollerProvider autoScroll defaultScrollPosition="last-anchor">
-      <MessageScroller className="flex-1">
+    // A turn opens from its first marker, without a peek at the turn before it.
+    <MessageScrollerProvider
+      autoScroll
+      defaultScrollPosition="last-anchor"
+      scrollPreviousItemPeek={0}
+    >
+      {/* The scroller leaves its content's margin out when it decides where a thread opens. */}
+      <MessageScroller className="my-6 flex-1">
         <MessageScrollerViewport>
-          <MessageScrollerContent className="mx-auto my-6 w-full max-w-3xl">
+          <MessageScrollerContent className="mx-auto w-full max-w-3xl">
             {turns.map((turn) => (
               <MessageScrollerItem key={turn.turnId} messageId={turn.turnId} scrollAnchor>
                 <Turn turn={turn} name={name} />
@@ -324,13 +389,16 @@ function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
           {turn.steps.map((step, index) =>
             step.kind === "text" ? (
               <Bubble key={index} variant="ghost">
-                <BubbleContent className="whitespace-pre-wrap">{step.text}</BubbleContent>
+                <BubbleContent>
+                  <Reply text={step.text} />
+                </BubbleContent>
               </Bubble>
             ) : (
               <ToolMarker
                 key={step.callId}
                 step={step}
                 waiting={turn.approval?.callId === step.callId}
+                end={turn.end}
               />
             ),
           )}
@@ -341,8 +409,36 @@ function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
   )
 }
 
-function ToolMarker({ step, waiting }: { step: ToolStep; waiting: boolean }) {
-  const { icon, decision } = gateDecision(step, waiting)
+/** How Streamdown renders a reply, built once so its memoization holds while a reply streams. */
+const replyOptions = {
+  // Streamdown draws bold as a styled span. A reply's bold stays a `strong`.
+  components: { strong: "strong" },
+  // Streamdown renders raw HTML through its `raw` plugin. Without it, HTML in a reply stays text.
+  rehypePlugins: Object.entries(defaultRehypePlugins)
+    .filter(([name]) => name !== "raw")
+    .map(([, plugin]) => plugin),
+  // An image would load its URL the moment the thread opens, so a reply can't carry one.
+  disallowedElements: ["img"],
+  plugins: { code },
+  // Links open straight in a new tab, without Streamdown's confirmation dialog.
+  linkSafety: { enabled: false },
+} satisfies StreamdownProps
+
+/** What the instance wrote, as the Markdown it writes in. */
+function Reply({ text }: { text: string }) {
+  return <Streamdown {...replyOptions}>{text}</Streamdown>
+}
+
+function ToolMarker({
+  step,
+  waiting,
+  end,
+}: {
+  step: ToolStep
+  waiting: boolean
+  end: TurnEnd | undefined
+}) {
+  const { icon, decision } = gateDecision(step, waiting, end)
   const call = [step.name, mainArgument(step.arguments)].filter(Boolean).join(" ")
   return (
     <Marker>
@@ -352,11 +448,18 @@ function ToolMarker({ step, waiting }: { step: ToolStep; waiting: boolean }) {
   )
 }
 
-/** How the gate decided a call, or, once it let the call run, how long the call took. */
+/**
+ * How the gate decided a call and, once it let the call run, how long the call took. A call the
+ * gate never decided did not run if its turn has ended.
+ */
 function gateDecision(
   { gate, durationMs }: ToolStep,
   waiting: boolean,
+  end: TurnEnd | undefined,
 ): { icon: ReactNode; decision: string } {
+  if (gate === undefined && durationMs === undefined && end !== undefined) {
+    return { icon: <BanIcon />, decision: `not run, turn ${end.kind}` }
+  }
   if (gate === undefined) {
     return waiting
       ? { icon: <ShieldAlertIcon />, decision: "waiting for you" }
@@ -371,11 +474,11 @@ function gateDecision(
           : "denied by you"
     return { icon: <BanIcon />, decision }
   }
-  if (gate.decidedBy === "user") return { icon: <CheckIcon />, decision: "approved by you" }
-  return {
-    icon: <WrenchIcon />,
-    decision: durationMs === undefined ? "running" : `${durationMs} ms`,
+  const took = durationMs === undefined ? "running" : `${durationMs} ms`
+  if (gate.decidedBy === "user") {
+    return { icon: <CheckIcon />, decision: `approved by you · ${took}` }
   }
+  return { icon: <WrenchIcon />, decision: took }
 }
 
 /** The first text argument. Tools take the thing they act on first: the path, the command, the pattern. */
@@ -384,9 +487,9 @@ function mainArgument(args: Record<string, JsonValue>): string | undefined {
 }
 
 function EndMarker({ turn }: { turn: TurnBlock }) {
-  const { icon, outcome } = turnOutcome(turn)
+  const { icon, outcome, variant } = turnOutcome(turn)
   return (
-    <Marker>
+    <Marker variant={variant}>
       <MarkerIcon>{icon}</MarkerIcon>
       <MarkerContent>{outcome}</MarkerContent>
     </Marker>
@@ -394,7 +497,11 @@ function EndMarker({ turn }: { turn: TurnBlock }) {
 }
 
 /** How the turn ended, or that it is still working. */
-function turnOutcome({ end, steps }: TurnBlock): { icon: ReactNode; outcome: ReactNode } {
+function turnOutcome({ end, steps }: TurnBlock): {
+  icon: ReactNode
+  outcome: ReactNode
+  variant?: "destructive"
+} {
   switch (end?.kind) {
     case undefined:
       return { icon: <Spinner />, outcome: <span className="shimmer">Working</span> }
@@ -407,7 +514,11 @@ function turnOutcome({ end, steps }: TurnBlock): { icon: ReactNode; outcome: Rea
       }
     }
     case "failed":
-      return { icon: <CircleAlertIcon />, outcome: `Failed: ${end.message} (${end.code})` }
+      return {
+        icon: <CircleAlertIcon />,
+        outcome: `Failed: ${end.message} (${end.code})`,
+        variant: "destructive",
+      }
     case "stopped":
       return { icon: <CircleStopIcon />, outcome: "Stopped" }
   }

@@ -1,10 +1,18 @@
-import { CallError, type PermissionMode, type ThreadSummary } from "@kinby/contract"
-import { type Answers, stubCaller } from "@kinby/contract/testing"
+import {
+  CallError,
+  type InstanceClient,
+  type Method,
+  type PermissionMode,
+  type ThreadSummary,
+} from "@kinby/contract"
+import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
+import { NavThreads } from "@/components/nav-threads"
 import { ThreadHeader } from "@/components/thread-header"
+import { SidebarMenu, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar"
 import { threadList } from "@/lib/thread-list"
 
 function thread(fields: Partial<ThreadSummary> = {}): ThreadSummary {
@@ -34,6 +42,33 @@ async function openHeader(
   return client
 }
 
+/**
+ * Open thread t1's header over a client whose changes stay out until the test fails them, as they
+ * do while the socket is down but not yet closed.
+ */
+async function openHeaderOffline() {
+  const lister = stubCaller({
+    "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }),
+  })
+  const sent: Method[] = []
+  let fail = (_error: CallError) => {}
+  const client: Pick<InstanceClient, "call"> = {
+    call: (method, params) => {
+      if (method === "thread.list") return lister.call(method, params)
+      sent.push(method)
+      return new Promise<never>((_resolve, reject) => (fail = reject))
+    },
+  }
+  await act(() => threadList(client).list())
+  render(<ThreadHeader client={client} threadId="t1" />)
+  const lost = new CallError({
+    code: "CONNECTION_LOST",
+    message: "The connection to the instance dropped.",
+    retryable: true,
+  })
+  return { sent, loseConnection: () => act(async () => fail(lost)) }
+}
+
 const modePicker = () => screen.getByRole("combobox", { name: "Mode" })
 
 describe("a thread's header", () => {
@@ -44,21 +79,24 @@ describe("a thread's header", () => {
   })
 
   it("shows the thread's mode and disables the modes above the instance's ceiling", async () => {
-    await openHeader({ ceiling: "auto" })
+    await openHeader({ ceiling: "ask" })
     const user = userEvent.setup()
 
     expect(modePicker().textContent).toContain("Ask")
     await user.click(modePicker())
     await screen.findAllByRole("option")
-    const disabled = (name: RegExp) =>
-      screen.getByRole("option", { name }).getAttribute("aria-disabled") === "true"
+    const option = (name: RegExp) => screen.getByRole("option", { name })
+    const modes = [/^Read-only/, /^Ask/, /^Auto/, /^Full access/].map(option)
 
-    expect([/^Read-only/, /^Ask/, /^Auto/, /^Full access/].map(disabled)).toEqual([
-      false,
+    expect(modes.map((mode) => mode.getAttribute("aria-disabled") === "true")).toEqual([
       false,
       false,
       true,
+      true,
     ])
+    expect(
+      modes.map((mode) => mode.textContent?.includes("Above this instance's ceiling")),
+    ).toEqual([false, false, true, true])
   })
 
   it("pins the mode picked and shows it once the instance lists it", async () => {
@@ -137,5 +175,112 @@ describe("a thread's header", () => {
       "value",
       "Deploy notes v2",
     )
+  })
+
+  it("holds the new title while the rename is out, and shows why once it fails", async () => {
+    const { sent, loseConnection } = await openHeaderOffline()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole("button", { name: "Deploy notes" }))
+    const field = screen.getByRole("textbox", { name: "Thread title" })
+    await user.type(field, " v2{Enter}")
+    await user.type(field, "{Enter}{Escape}")
+
+    expect(sent).toEqual(["thread.rename"])
+    expect(field).toHaveProperty("readOnly", true)
+    expect(field).toHaveProperty("value", "Deploy notes v2")
+    expect(screen.getByRole("status", { name: "Renaming" })).toBeDefined()
+
+    await loseConnection()
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The connection to the instance dropped.",
+    )
+    expect(screen.queryByRole("status", { name: "Renaming" })).toBeNull()
+    expect(field).toHaveProperty("readOnly", false)
+    expect(field).toHaveProperty("value", "Deploy notes v2")
+  })
+
+  it("disables the mode picker while the change is out, and shows why once it fails", async () => {
+    const { sent, loseConnection } = await openHeaderOffline()
+    const user = userEvent.setup()
+
+    await user.click(modePicker())
+    await user.click(await screen.findByRole("option", { name: /^Read-only/ }))
+
+    expect(sent).toEqual(["thread.mode.set"])
+    expect(modePicker()).toHaveProperty("disabled", true)
+    expect(screen.getByRole("status", { name: "Changing the mode" })).toBeDefined()
+
+    await loseConnection()
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The connection to the instance dropped.",
+    )
+    expect(screen.queryByRole("status", { name: "Changing the mode" })).toBeNull()
+    expect(modePicker()).toHaveProperty("disabled", false)
+    expect(modePicker().textContent).toContain("Ask")
+  })
+
+  describe("without the sidebar", () => {
+    it("lists the threads itself when nothing has listed them", async () => {
+      const client = stubCaller({
+        "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }),
+      })
+
+      render(<ThreadHeader client={client} threadId="t1" />)
+
+      expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
+      expect(modePicker().textContent).toContain("Ask")
+    })
+
+    it("lists the threads again when the last list came before the thread", async () => {
+      let threads: ThreadSummary[] = []
+      const client = stubCaller({ "thread.list": () => ({ threads, ceiling: "full-access" }) })
+      await act(() => threadList(client).list())
+
+      threads = [thread()]
+      render(<ThreadHeader client={client} threadId="t1" />)
+
+      expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
+    })
+
+    it("stays empty when the threads do not list", async () => {
+      const client = stubCaller({})
+
+      await act(async () => {
+        render(<ThreadHeader client={client} threadId="t1" />)
+      })
+
+      expect(client.calls.map((call) => call.method)).toEqual(["thread.list"])
+      expect(screen.queryByRole("heading")).toBeNull()
+    })
+  })
+
+  it("leaves listing the threads again to the sidebar beside it", async () => {
+    const client = {
+      ...stubCaller({ "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }) }),
+      state: () => "connected" as const,
+      onStateChange: () => () => {},
+    }
+    const clock = fakeClock()
+    render(
+      <SidebarProvider>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <NavThreads client={client} clock={clock} instanceId="hub-ada" />
+          </SidebarMenuItem>
+        </SidebarMenu>
+        <ThreadHeader client={client} threadId="t1" />
+      </SidebarProvider>,
+    )
+    await screen.findByRole("heading")
+    const listings = () => client.calls.filter((call) => call.method === "thread.list").length
+    const onMount = listings()
+
+    for (const _ of [1, 2, 3]) await act(() => clock.advance(5_000))
+
+    expect(onMount).toBeLessThanOrEqual(2)
+    expect(listings() - onMount).toBe(3)
   })
 })
