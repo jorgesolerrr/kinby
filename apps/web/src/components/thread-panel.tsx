@@ -1,5 +1,13 @@
 import type { InstanceClient, JsonValue } from "@kinby/contract"
-import { type ReactNode, useEffect, useId, useState, useSyncExternalStore } from "react"
+import {
+  type ReactNode,
+  type Ref,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
 import { ThreadHeader } from "@/components/thread-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -63,6 +71,12 @@ export function ThreadPanel({
   const { timeline, replayed, failure } = useSyncExternalStore(store.onChange, store.view)
   const latest = timeline.turns.at(-1)
   const approval = latest?.approval
+  const reasonField = useRef<HTMLInputElement>(null)
+  // A thread that opens on a parked approval has no composer to take focus. An approval that parks
+  // later leaves focus where it is, so keys typed for the composer cannot deny it.
+  useEffect(() => {
+    if (replayed) takeFocus(reasonField.current)
+  }, [replayed])
 
   if (failure !== undefined) {
     return (
@@ -94,6 +108,7 @@ export function ThreadPanel({
             ) : (
               <ApprovalPanel
                 key={approval.approvalId}
+                reasonField={reasonField}
                 client={client}
                 threadId={threadId}
                 approval={approval}
@@ -126,7 +141,10 @@ function Composer({
   const [message, setMessage] = useState("")
   const [sending, setSending] = useState(false)
   const [failure, setFailure] = useState<string>()
+  const field = useRef<HTMLTextAreaElement>(null)
   const text = message.trim()
+  // The composer shows when a thread opens and when an answered approval gives way to it.
+  useEffect(() => takeFocus(field.current), [])
 
   const send = async () => {
     if (text === "" || sending || running) return
@@ -150,6 +168,7 @@ function Composer({
   return (
     <Field data-invalid={failure !== undefined || undefined}>
       <Textarea
+        ref={field}
         aria-label={`Message ${name}`}
         placeholder={`Message ${name}`}
         value={message}
@@ -184,13 +203,15 @@ function Composer({
 
 /**
  * The approval a turn is parked on, in the composer's place: approve, deny with an optional reason
- * the model reads, or stop the turn.
+ * the model reads, or stop the turn. Enter in the reason denies with it.
  */
 function ApprovalPanel({
+  reasonField,
   client,
   threadId,
   approval,
 }: {
+  reasonField: Ref<HTMLInputElement>
   client: Pick<InstanceClient, "call">
   threadId: string
   approval: ParkedApproval
@@ -243,12 +264,18 @@ function ApprovalPanel({
             <Field data-invalid={failure !== undefined || undefined}>
               <FieldLabel htmlFor={reasonId}>Reason</FieldLabel>
               <Input
+                ref={reasonField}
                 id={reasonId}
                 placeholder="Optional: why not, or what to do instead"
                 value={typed}
                 disabled={answering}
                 aria-invalid={failure !== undefined || undefined}
                 onChange={(event) => setTyped(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.nativeEvent.isComposing) return
+                  event.preventDefault()
+                  void respond("deny")
+                }}
               />
               {failure !== undefined && <FieldError>{failure}</FieldError>}
             </Field>
@@ -278,6 +305,13 @@ function ApprovalPanel({
       </Card>
     </section>
   )
+}
+
+/** Focus `field`, unless the user is typing in another one, like the title in the header. */
+function takeFocus(field: HTMLElement | null) {
+  const active = document.activeElement
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
+  field?.focus()
 }
 
 function Transcript({ turns, name }: { turns: TurnBlock[]; name: string }) {
