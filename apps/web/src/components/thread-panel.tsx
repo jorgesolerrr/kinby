@@ -401,7 +401,7 @@ function ToolMarker({
 }
 
 /**
- * How the gate decided a call, or, once it let the call run, how long the call took. A call the
+ * How the gate decided a call and, once it let the call run, how long the call took. A call the
  * gate never decided did not run if its turn has ended.
  */
 function gateDecision(
@@ -426,11 +426,11 @@ function gateDecision(
           : "denied by you"
     return { icon: <BanIcon />, decision }
   }
-  if (gate.decidedBy === "user") return { icon: <CheckIcon />, decision: "approved by you" }
-  return {
-    icon: <WrenchIcon />,
-    decision: durationMs === undefined ? "running" : `${durationMs} ms`,
+  const took = durationMs === undefined ? "running" : `${durationMs} ms`
+  if (gate.decidedBy === "user") {
+    return { icon: <CheckIcon />, decision: `approved by you · ${took}` }
   }
+  return { icon: <WrenchIcon />, decision: took }
 }
 
 /** The first text argument. Tools take the thing they act on first: the path, the command, the pattern. */
