@@ -282,10 +282,16 @@ function ApprovalPanel({
 
 function Transcript({ turns, name }: { turns: TurnBlock[]; name: string }) {
   return (
-    <MessageScrollerProvider autoScroll defaultScrollPosition="last-anchor">
-      <MessageScroller className="flex-1">
+    // A turn opens from its first marker, without a peek at the turn before it.
+    <MessageScrollerProvider
+      autoScroll
+      defaultScrollPosition="last-anchor"
+      scrollPreviousItemPeek={0}
+    >
+      {/* The scroller leaves its content's margin out when it decides where a thread opens. */}
+      <MessageScroller className="my-6 flex-1">
         <MessageScrollerViewport>
-          <MessageScrollerContent className="mx-auto my-6 w-full max-w-3xl">
+          <MessageScrollerContent className="mx-auto w-full max-w-3xl">
             {turns.map((turn) => (
               <MessageScrollerItem key={turn.turnId} messageId={turn.turnId} scrollAnchor>
                 <Turn turn={turn} name={name} />
