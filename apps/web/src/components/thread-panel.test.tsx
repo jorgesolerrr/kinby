@@ -9,11 +9,18 @@ import { threadList } from "@/lib/thread-list"
 
 type Payload = Event["payload"]
 
+/** A client of an instance whose socket is up, answering from `answers`. */
+function instanceClient(answers: Answers = {}) {
+  return {
+    ...stubCaller(answers),
+    ...stubSubscriber(),
+    state: () => "connected" as const,
+    onStateChange: () => () => {},
+  }
+}
+
 /** Open thread t1 of Ada's instance, from a client that answers from `answers`. */
-function openThread(
-  answers: Answers = {},
-  client = { ...stubCaller(answers), ...stubSubscriber() },
-) {
+function openThread(answers: Answers = {}, client = instanceClient(answers)) {
   const rendered = render(<ThreadPanel client={client} threadId="t1" name="Ada" />)
   const subscription = () => {
     const latest = client.subscriptions.at(-1)
@@ -342,8 +349,7 @@ describe("a thread's panel", () => {
       const { subscription } = openThread(
         {},
         {
-          ...stubCaller({}),
-          ...stubSubscriber(),
+          ...instanceClient(),
           call: () => new Promise<never>((_resolve, reject) => (fail = reject)),
         },
       )

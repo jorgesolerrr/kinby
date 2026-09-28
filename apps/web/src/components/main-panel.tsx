@@ -26,7 +26,7 @@ export function MainPanel({
   instances: InstanceSummary[] | undefined
   selected: InstanceSummary | undefined
   threadId: string | undefined
-  instanceClient: Pick<InstanceClient, "call" | "subscribe"> | undefined
+  instanceClient: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange"> | undefined
   onChanged: () => void
 }) {
   if (instances === undefined) return null

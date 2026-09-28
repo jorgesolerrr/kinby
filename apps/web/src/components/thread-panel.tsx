@@ -63,7 +63,7 @@ export function ThreadPanel({
   threadId,
   name,
 }: {
-  client: Pick<InstanceClient, "call" | "subscribe">
+  client: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange">
   threadId: string
   /** What the instance is called. */
   name: string
