@@ -243,6 +243,28 @@ describe("a thread's panel", () => {
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message Ada" }))
   })
 
+  it("lines up the instance's name the same in a turn of only tool steps as in one with text", async () => {
+    const events = thread(
+      ["turn-1", started("List the repo")],
+      ["turn-1", { type: "tool.call", call_id: "c1", name: "bash", arguments: { command: "ls" } }],
+      ["turn-2", started("Say hi")],
+      ["turn-2", { type: "message.delta", text: "Hi." }],
+    )
+    const { subscription } = openThread()
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+    // jsdom has no Tailwind, so read the paddings the header's classes can resolve to.
+    const paddings = (header: HTMLElement) =>
+      new Set([...header.classList].flatMap((name) => /(?:^|:)px-(.+)$/.exec(name)?.[1] ?? []))
+
+    const [toolsOnly, withText] = screen.getAllByText("Ada")
+
+    expect(paddings(toolsOnly as HTMLElement)).toEqual(new Set(["0"]))
+    expect(paddings(withText as HTMLElement)).toEqual(new Set(["0"]))
+  })
+
   it("starts a turn with the message when Enter is pressed", async () => {
     const { sent, subscription } = openThread({
       "thread.turn.start": () => ({ sequence: 1, thread_id: "t1", turn_id: "turn-1" }),

@@ -384,7 +384,8 @@ function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
       </Message>
       <Message>
         <MessageContent>
-          <MessageHeader>{name}</MessageHeader>
+          {/* Flush in every turn, not only once a text bubble is in the message. */}
+          <MessageHeader className="px-0">{name}</MessageHeader>
           {turn.steps.map((step, index) =>
             step.kind === "text" ? (
               <Bubble key={index} variant="ghost">
