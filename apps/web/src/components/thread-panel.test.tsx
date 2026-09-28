@@ -1,10 +1,11 @@
 import { CallError, type Event } from "@kinby/contract"
 import { type Answers, stubCaller, stubSubscriber } from "@kinby/contract/testing"
-import { act, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
 import { ThreadPanel } from "@/components/thread-panel"
+import { threadList } from "@/lib/thread-list"
 
 type Payload = Event["payload"]
 
@@ -19,7 +20,9 @@ function openThread(
     if (latest === undefined) throw new Error("The panel did not subscribe.")
     return latest
   }
-  return { client, subscription, unmount: rendered.unmount }
+  /** What the panel called besides the header listing the threads. */
+  const sent = () => client.calls.filter((call) => call.method !== "thread.list")
+  return { client, sent, subscription, unmount: rendered.unmount }
 }
 
 /** The thread's events, numbered from 1 in the order given. */
@@ -127,6 +130,7 @@ describe("a thread's panel", () => {
       ["turn-3", started("Deploy it")],
       ["turn-3", { type: "turn.interrupted" }],
       ["turn-4", started("Deploy it now")],
+      ["turn-4", call("c5", "read", { path: "deploy.log" })],
       ["turn-4", call("c4", "bash", { command: "make deploy" })],
       [
         "turn-4",
@@ -153,6 +157,7 @@ describe("a thread's panel", () => {
       "Done · 3 steps · 1,500 tokens",
       "Failed: The steps budget ran out. (BUDGET_EXCEEDED)",
       "Stopped",
+      "read deploy.log · running",
       "bash make deploy · waiting for you",
       "Working",
     ]) {
@@ -201,8 +206,16 @@ describe("a thread's panel", () => {
     expect(screen.getByText("bash make deploy · approved by you · 12 ms")).toBeDefined()
   })
 
+  it("puts focus in the composer once the replay has loaded", async () => {
+    const { subscription } = openThread()
+
+    await act(async () => subscription().subscribed(0))
+
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message Ada" }))
+  })
+
   it("starts a turn with the message when Enter is pressed", async () => {
-    const { client, subscription } = openThread({
+    const { sent, subscription } = openThread({
       "thread.turn.start": () => ({ sequence: 1, thread_id: "t1", turn_id: "turn-1" }),
     })
     await act(async () => subscription().subscribed(0))
@@ -210,7 +223,7 @@ describe("a thread's panel", () => {
 
     await user.type(screen.getByRole("textbox", { name: "Message Ada" }), "Fix the runtime{Enter}")
 
-    expect(client.calls).toEqual([
+    expect(sent()).toEqual([
       { method: "thread.turn.start", params: { thread_id: "t1", message: "Fix the runtime" } },
     ])
     expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Ada" }).value).toBe("")
@@ -221,7 +234,7 @@ describe("a thread's panel", () => {
       ["turn-1", started("Deploy it")],
       ["turn-1", { type: "turn.interrupted" }],
     )
-    const { client, subscription } = openThread({
+    const { sent, subscription } = openThread({
       "thread.turn.interrupt": () => ({ sequence: 2, thread_id: "t1", turn_id: "turn-1" }),
     })
     await act(async () => {
@@ -232,7 +245,7 @@ describe("a thread's panel", () => {
 
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull()
     await user.click(screen.getByRole("button", { name: "Stop" }))
-    expect(client.calls).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
+    expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
 
     await act(async () => subscription().deliver(events[1] as Event))
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull()
@@ -260,10 +273,11 @@ describe("a thread's panel", () => {
     const accepted = () => ({ sequence: 3, thread_id: "t1", turn_id: "turn-1" })
 
     /** Reopen the thread with its replay parked on approval a1. */
-    async function reopenParked() {
+    async function reopenParked(answers: Answers = {}) {
       const opened = openThread({
         "thread.approval.respond": accepted,
         "thread.turn.interrupt": accepted,
+        ...answers,
       })
       await act(async () => {
         opened.subscription().subscribed(parked.length)
@@ -282,12 +296,18 @@ describe("a thread's panel", () => {
       expect(approval.textContent).toContain('"command": "make deploy"')
     })
 
+    it("puts focus in the reason when the thread opens on it", async () => {
+      await reopenParked()
+
+      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reason" }))
+    })
+
     it("approves it", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
 
       await userEvent.setup().click(screen.getByRole("button", { name: "Approve" }))
 
-      expect(client.calls).toEqual([
+      expect(sent()).toEqual([
         {
           method: "thread.approval.respond",
           params: { thread_id: "t1", approval_id: "a1", decision: "approve" },
@@ -296,11 +316,31 @@ describe("a thread's panel", () => {
     })
 
     it("denies it with the reason typed", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
       const user = userEvent.setup()
 
       await user.type(screen.getByRole("textbox", { name: "Reason" }), "  Use staging instead ")
       await user.click(screen.getByRole("button", { name: "Deny" }))
+
+      expect(sent()).toEqual([
+        {
+          method: "thread.approval.respond",
+          params: {
+            thread_id: "t1",
+            approval_id: "a1",
+            decision: "deny",
+            reason: "Use staging instead",
+          },
+        },
+      ])
+    })
+
+    it("denies it with the reason typed when Enter is pressed, once", async () => {
+      const { client } = await reopenParked()
+
+      await userEvent
+        .setup()
+        .type(screen.getByRole("textbox", { name: "Reason" }), "Use staging instead{Enter}{Enter}")
 
       expect(client.calls).toEqual([
         {
@@ -315,12 +355,23 @@ describe("a thread's panel", () => {
       ])
     })
 
-    it("denies it without a reason when none is typed", async () => {
+    it("does not deny while an input method is composing the reason", async () => {
       const { client } = await reopenParked()
+
+      fireEvent.keyDown(screen.getByRole("textbox", { name: "Reason" }), {
+        key: "Enter",
+        isComposing: true,
+      })
+
+      expect(client.calls).toEqual([])
+    })
+
+    it("denies it without a reason when none is typed", async () => {
+      const { sent } = await reopenParked()
 
       await userEvent.setup().click(screen.getByRole("button", { name: "Deny" }))
 
-      expect(client.calls).toEqual([
+      expect(sent()).toEqual([
         {
           method: "thread.approval.respond",
           params: { thread_id: "t1", approval_id: "a1", decision: "deny" },
@@ -329,16 +380,36 @@ describe("a thread's panel", () => {
     })
 
     it("stops the turn instead", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
 
       await userEvent.setup().click(screen.getByRole("button", { name: "Stop the turn" }))
 
-      expect(client.calls).toEqual([
-        { method: "thread.turn.interrupt", params: { thread_id: "t1" } },
-      ])
+      expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
     })
 
-    it("gives the composer back once the turn moves on", async () => {
+    it("marks the call as not run when the turn stops, live and on replay", async () => {
+      const { subscription, unmount } = await reopenParked()
+      const stopped: Event = {
+        sequence: 4,
+        thread_id: "t1",
+        turn_id: "turn-1",
+        timestamp: "2026-09-28T10:00:00Z",
+        payload: { type: "turn.interrupted" },
+      }
+
+      await act(async () => subscription().deliver(stopped))
+      expect(screen.getByText("bash make deploy · not run, turn stopped")).toBeDefined()
+
+      unmount()
+      const reopened = openThread()
+      await act(async () => {
+        reopened.subscription().subscribed(stopped.sequence)
+        for (const event of [...parked, stopped]) reopened.subscription().deliver(event)
+      })
+      expect(screen.getByText("bash make deploy · not run, turn stopped")).toBeDefined()
+    })
+
+    it("marks the call as not run when the turn fails", async () => {
       const { subscription } = await reopenParked()
 
       await act(async () =>
@@ -347,23 +418,76 @@ describe("a thread's panel", () => {
           thread_id: "t1",
           turn_id: "turn-1",
           timestamp: "2026-09-28T10:00:00Z",
-          payload: {
-            type: "tool.gated",
-            call_id: "c1",
-            name: "bash",
-            action: "deny",
-            decided_by: "user",
-            rule: "mode.ask.write",
-            reason: "Use staging instead",
-          },
+          payload: { type: "turn.failed", code: "INTERNAL", message: "The runner crashed." },
         }),
       )
+
+      expect(screen.getByText("bash make deploy · not run, turn failed")).toBeDefined()
+    })
+
+    /** The event that moves the turn on once the user denied a1 for `reason`. */
+    const denied = (reason: string): Event => ({
+      sequence: 4,
+      thread_id: "t1",
+      turn_id: "turn-1",
+      timestamp: "2026-09-28T10:00:00Z",
+      payload: {
+        type: "tool.gated",
+        call_id: "c1",
+        name: "bash",
+        action: "deny",
+        decided_by: "user",
+        rule: "mode.ask.write",
+        reason,
+      },
+    })
+
+    it("gives the composer back once the turn moves on", async () => {
+      const { subscription } = await reopenParked()
+
+      await act(async () => subscription().deliver(denied("Use staging instead")))
 
       expect(screen.queryByRole("region", { name: "Approve bash make deploy?" })).toBeNull()
       expect(screen.getByRole("textbox", { name: "Message Ada" })).toBeDefined()
       expect(
         screen.getByText("bash make deploy · denied by you: Use staging instead"),
       ).toBeDefined()
+    })
+
+    it("returns focus to the composer once the answered approval clears", async () => {
+      const { subscription } = await reopenParked()
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Deny" }))
+      await act(async () => subscription().deliver(denied("")))
+
+      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message Ada" }))
+    })
+
+    it("leaves focus in the title being renamed when the approval clears", async () => {
+      const { client, subscription } = await reopenParked({
+        "thread.list": () => ({
+          threads: [
+            {
+              id: "t1",
+              title: "Deploy notes",
+              created_at: "2026-09-28T10:00:00Z",
+              last_activity_at: "2026-09-28T10:00:00Z",
+              status: "awaiting_approval",
+              mode: "ask",
+              mode_pinned: false,
+            },
+          ],
+          ceiling: "full-access",
+        }),
+      })
+      await act(() => threadList(client).list())
+      const user = userEvent.setup()
+
+      await user.click(screen.getByRole("button", { name: "Deploy notes" }))
+      await user.type(screen.getByRole("textbox", { name: "Thread title" }), " for staging")
+      await act(async () => subscription().deliver(denied("")))
+
+      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Thread title" }))
     })
   })
 

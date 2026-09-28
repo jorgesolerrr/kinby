@@ -1,5 +1,13 @@
 import type { InstanceClient, JsonValue } from "@kinby/contract"
-import { type ReactNode, useEffect, useId, useState, useSyncExternalStore } from "react"
+import {
+  type ReactNode,
+  type Ref,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
 import { ThreadHeader } from "@/components/thread-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -32,7 +40,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { reason } from "@/lib/operation"
 import { threadStore } from "@/lib/thread-store"
-import type { ParkedApproval, ToolStep, TurnBlock } from "@/lib/timeline"
+import type { ParkedApproval, ToolStep, TurnBlock, TurnEnd } from "@/lib/timeline"
 import {
   ArrowUpIcon,
   BanIcon,
@@ -63,6 +71,12 @@ export function ThreadPanel({
   const { timeline, replayed, failure } = useSyncExternalStore(store.onChange, store.view)
   const latest = timeline.turns.at(-1)
   const approval = latest?.approval
+  const reasonField = useRef<HTMLInputElement>(null)
+  // A thread that opens on a parked approval has no composer to take focus. An approval that parks
+  // later leaves focus where it is, so keys typed for the composer cannot deny it.
+  useEffect(() => {
+    if (replayed) takeFocus(reasonField.current)
+  }, [replayed])
 
   if (failure !== undefined) {
     return (
@@ -94,6 +108,7 @@ export function ThreadPanel({
             ) : (
               <ApprovalPanel
                 key={approval.approvalId}
+                reasonField={reasonField}
                 client={client}
                 threadId={threadId}
                 approval={approval}
@@ -126,7 +141,10 @@ function Composer({
   const [message, setMessage] = useState("")
   const [sending, setSending] = useState(false)
   const [failure, setFailure] = useState<string>()
+  const field = useRef<HTMLTextAreaElement>(null)
   const text = message.trim()
+  // The composer shows when a thread opens and when an answered approval gives way to it.
+  useEffect(() => takeFocus(field.current), [])
 
   const send = async () => {
     if (text === "" || sending || running) return
@@ -150,6 +168,7 @@ function Composer({
   return (
     <Field data-invalid={failure !== undefined || undefined}>
       <Textarea
+        ref={field}
         aria-label={`Message ${name}`}
         placeholder={`Message ${name}`}
         value={message}
@@ -184,13 +203,15 @@ function Composer({
 
 /**
  * The approval a turn is parked on, in the composer's place: approve, deny with an optional reason
- * the model reads, or stop the turn.
+ * the model reads, or stop the turn. Enter in the reason denies with it.
  */
 function ApprovalPanel({
+  reasonField,
   client,
   threadId,
   approval,
 }: {
+  reasonField: Ref<HTMLInputElement>
   client: Pick<InstanceClient, "call">
   threadId: string
   approval: ParkedApproval
@@ -243,12 +264,18 @@ function ApprovalPanel({
             <Field data-invalid={failure !== undefined || undefined}>
               <FieldLabel htmlFor={reasonId}>Reason</FieldLabel>
               <Input
+                ref={reasonField}
                 id={reasonId}
                 placeholder="Optional: why not, or what to do instead"
                 value={typed}
                 disabled={answering}
                 aria-invalid={failure !== undefined || undefined}
                 onChange={(event) => setTyped(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.nativeEvent.isComposing) return
+                  event.preventDefault()
+                  void respond("deny")
+                }}
               />
               {failure !== undefined && <FieldError>{failure}</FieldError>}
             </Field>
@@ -280,12 +307,25 @@ function ApprovalPanel({
   )
 }
 
+/** Focus `field`, unless the user is typing in another one, like the title in the header. */
+function takeFocus(field: HTMLElement | null) {
+  const active = document.activeElement
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
+  field?.focus()
+}
+
 function Transcript({ turns, name }: { turns: TurnBlock[]; name: string }) {
   return (
-    <MessageScrollerProvider autoScroll defaultScrollPosition="last-anchor">
-      <MessageScroller className="flex-1">
+    // A turn opens from its first marker, without a peek at the turn before it.
+    <MessageScrollerProvider
+      autoScroll
+      defaultScrollPosition="last-anchor"
+      scrollPreviousItemPeek={0}
+    >
+      {/* The scroller leaves its content's margin out when it decides where a thread opens. */}
+      <MessageScroller className="my-6 flex-1">
         <MessageScrollerViewport>
-          <MessageScrollerContent className="mx-auto my-6 w-full max-w-3xl">
+          <MessageScrollerContent className="mx-auto w-full max-w-3xl">
             {turns.map((turn) => (
               <MessageScrollerItem key={turn.turnId} messageId={turn.turnId} scrollAnchor>
                 <Turn turn={turn} name={name} />
@@ -330,6 +370,7 @@ function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
                 key={step.callId}
                 step={step}
                 waiting={turn.approval?.callId === step.callId}
+                end={turn.end}
               />
             ),
           )}
@@ -340,8 +381,16 @@ function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
   )
 }
 
-function ToolMarker({ step, waiting }: { step: ToolStep; waiting: boolean }) {
-  const { icon, decision } = gateDecision(step, waiting)
+function ToolMarker({
+  step,
+  waiting,
+  end,
+}: {
+  step: ToolStep
+  waiting: boolean
+  end: TurnEnd | undefined
+}) {
+  const { icon, decision } = gateDecision(step, waiting, end)
   const call = [step.name, mainArgument(step.arguments)].filter(Boolean).join(" ")
   return (
     <Marker>
@@ -351,11 +400,18 @@ function ToolMarker({ step, waiting }: { step: ToolStep; waiting: boolean }) {
   )
 }
 
-/** How the gate decided a call and, once it let the call run, how long the call took. */
+/**
+ * How the gate decided a call and, once it let the call run, how long the call took. A call the
+ * gate never decided did not run if its turn has ended.
+ */
 function gateDecision(
   { gate, durationMs }: ToolStep,
   waiting: boolean,
+  end: TurnEnd | undefined,
 ): { icon: ReactNode; decision: string } {
+  if (gate === undefined && durationMs === undefined && end !== undefined) {
+    return { icon: <BanIcon />, decision: `not run, turn ${end.kind}` }
+  }
   if (gate === undefined) {
     return waiting
       ? { icon: <ShieldAlertIcon />, decision: "waiting for you" }
