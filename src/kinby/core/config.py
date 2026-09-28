@@ -7,20 +7,35 @@ import hashlib
 from pathlib import Path
 
 from kinby.contracts import (
+    BashPermissions,
     ConfigActor,
     ConfigFile,
     ConfigHistoryCommand,
     ConfigHistoryResult,
+    DenyPattern,
     FileHash,
+    PermissionsGetCommand,
+    PermissionsResult,
+    PermissionsSetCommand,
     PromptGetCommand,
     PromptName,
     PromptResult,
     PromptSetCommand,
 )
-from kinby.core.errors import StaleWrite
+from kinby.core.errors import InvalidConfig, StaleWrite
 from kinby.instance import Instance
 from kinby.instance.config_changes import ConfigChangeLog, recorded_change
-from kinby.instance.layout import RECAP_NAME, SYSTEM_NAME
+from kinby.instance.layout import PERMISSIONS_NAME, RECAP_NAME, SYSTEM_NAME
+from kinby.instance.permissions import (
+    SHIPPED_BASH_DENY,
+    SHIPPED_POLICY,
+    BashPolicy,
+    GatePolicy,
+    bash_regex_errors,
+    exceeds_ceiling,
+    parse_permissions,
+    permissions_toml,
+)
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 
 _PROMPT_FILES = {
@@ -73,6 +88,31 @@ class InstanceConfig:
             await asyncio.to_thread(self._write, _PROMPT_FILES[command.name], content, command.hash)
         return PromptResult(content=command.content, hash=_file_hash(content), default=False)
 
+    async def get_permissions(self, command: PermissionsGetCommand) -> PermissionsResult:
+        content = _read_bytes(self._instance.path / PERMISSIONS_NAME)
+        if content is None:
+            return _permissions_result(SHIPPED_POLICY, _file_hash(b""))
+        return _permissions_result(parse_permissions(content), _file_hash(content))
+
+    async def set_permissions(self, command: PermissionsSetCommand) -> PermissionsResult:
+        policy = GatePolicy(
+            mode=command.mode,
+            ceiling=command.ceiling,
+            tools=command.tools,
+            bash=BashPolicy(deny=tuple(command.bash.deny), ask=tuple(command.bash.ask)),
+        )
+        errors = bash_regex_errors(policy.bash)
+        if exceeds_ceiling(policy.mode, policy.ceiling):
+            errors["mode"] = f"{policy.mode} is above the ceiling, {policy.ceiling}."
+        if errors:
+            raise InvalidConfig(errors)
+        content = permissions_toml(policy).encode("utf-8")
+        async with self._instance.config_lock:
+            await asyncio.to_thread(
+                self._write, ConfigFile(PERMISSIONS_NAME), content, command.hash
+            )
+        return _permissions_result(policy, _file_hash(content))
+
     async def history(self, command: ConfigHistoryCommand) -> ConfigHistoryResult:
         log = ConfigChangeLog(self._instance.manifest.state_dir)
         return ConfigHistoryResult(changes=log.history(command.file, command.limit))
@@ -80,3 +120,19 @@ class InstanceConfig:
     def _write(self, file: ConfigFile, content: bytes, read: FileHash) -> None:
         with recorded_change(self._instance, file, ConfigActor.APP):
             _write_over(self._instance.path / file, content, read)
+
+
+def _permissions_result(policy: GatePolicy, read: FileHash) -> PermissionsResult:
+    return PermissionsResult(
+        mode=policy.mode,
+        ceiling=policy.ceiling,
+        tools=dict(policy.tools),
+        bash=BashPermissions(
+            deny=[
+                DenyPattern(pattern=pattern, shipped=pattern in SHIPPED_BASH_DENY)
+                for pattern in policy.bash.denylist
+            ],
+            ask=list(policy.bash.ask),
+        ),
+        hash=read,
+    )

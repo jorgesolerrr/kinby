@@ -18,6 +18,7 @@ from kinby.contracts import (
 )
 from kinby.core import LangGraphRunner
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
+from kinby.instance.permissions import SHIPPED_BASH_DENY
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 from kinby.plugins import ToolContext
 from kinby.plugins.instance_tools import instance_tools
@@ -326,5 +327,162 @@ def test_the_failure_policy_records_the_routine_it_disables(tmp_path: Path) -> N
         assert change.actor == "failure_policy"
         assert "-enabled: true" in change.diff.splitlines()
         assert "+enabled: false" in change.diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+PERMISSIONS = (
+    'mode = "ask"\n'
+    'ceiling = "auto"\n'
+    "\n"
+    "[tools]\n"
+    'bash = "deny"\n'
+    "\n"
+    "[bash]\n"
+    f"deny = ['''{SHIPPED_BASH_DENY[1]}''', '^deploy production$']\n"
+    "ask = ['^npm publish']\n"
+)
+
+
+def test_permissions_get_marks_the_shipped_deny_patterns(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        (tmp_path / "permissions.toml").write_text(PERMISSIONS, encoding="utf-8")
+
+        read = await call(dispatcher, "permissions.get")
+
+        assert read.model_dump(mode="json") == {
+            "mode": "ask",
+            "ceiling": "auto",
+            "tools": {"bash": "deny"},
+            "bash": {
+                "deny": [
+                    *({"pattern": pattern, "shipped": True} for pattern in SHIPPED_BASH_DENY),
+                    {"pattern": "^deploy production$", "shipped": False},
+                ],
+                "ask": ["^npm publish"],
+            },
+            "hash": _sha256(PERMISSIONS),
+        }
+
+    asyncio.run(scenario())
+
+
+def test_permissions_get_without_a_file_reads_the_shipped_policy(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        read = await call(_dispatcher(tmp_path), "permissions.get")
+
+        assert read.model_dump(mode="json") == {
+            "mode": "ask",
+            "ceiling": "full-access",
+            "tools": {},
+            "bash": {
+                "deny": [{"pattern": pattern, "shipped": True} for pattern in SHIPPED_BASH_DENY],
+                "ask": [],
+            },
+            "hash": EMPTY_HASH,
+        }
+
+    asyncio.run(scenario())
+
+
+def _permissions(hash: str, **values: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "mode": "auto",
+        "ceiling": "auto",
+        "tools": {"bash": "ask", "web_fetch": "allow"},
+        "bash": {"deny": ["^deploy production$"], "ask": [r"\bnpm publish\b"]},
+        "hash": hash,
+    } | values
+
+
+def test_permissions_set_writes_only_the_instances_own_patterns(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        (tmp_path / "permissions.toml").write_text(PERMISSIONS, encoding="utf-8")
+
+        written = await call(dispatcher, "permissions.set", **_permissions(_sha256(PERMISSIONS)))
+        read = await call(dispatcher, "permissions.get")
+
+        file = (tmp_path / "permissions.toml").read_text(encoding="utf-8")
+        assert file == (
+            'mode = "auto"\n'
+            'ceiling = "auto"\n'
+            "\n"
+            "[tools]\n"
+            'bash = "ask"\n'
+            'web_fetch = "allow"\n'
+            "\n"
+            "[bash]\n"
+            'deny = ["^deploy production$"]\n'
+            'ask = ["\\\\bnpm publish\\\\b"]\n'
+        )
+        assert written == read
+        assert read.model_dump(mode="json") == {
+            "mode": "auto",
+            "ceiling": "auto",
+            "tools": {"bash": "ask", "web_fetch": "allow"},
+            "bash": {
+                "deny": [
+                    *({"pattern": pattern, "shipped": True} for pattern in SHIPPED_BASH_DENY),
+                    {"pattern": "^deploy production$", "shipped": False},
+                ],
+                "ask": [r"\bnpm publish\b"],
+            },
+            "hash": _sha256(file),
+        }
+        history = await call(dispatcher, "config.history", file="permissions.toml", limit=10)
+        [change] = history.changes
+        assert change.actor == "app"
+        assert '+mode = "auto"' in change.diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("values", "fields"),
+    [
+        ({"mode": "full-access"}, {"mode": "full-access is above the ceiling, auto."}),
+        (
+            {"bash": {"deny": ["^ok$", "(unclosed"], "ask": ["[z-a]"]}},
+            {
+                "bash.deny.1": "invalid regex: missing ), unterminated subpattern at position 0",
+                "bash.ask.0": "invalid regex: bad character range z-a at position 1",
+            },
+        ),
+    ],
+    ids=["mode-above-ceiling", "bad-regex"],
+)
+def test_permissions_set_refuses_invalid_values_and_leaves_the_file(
+    tmp_path: Path, values: dict[str, JsonValue], fields: dict[str, str]
+) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        (tmp_path / "permissions.toml").write_text(PERMISSIONS, encoding="utf-8")
+
+        refused = await call(
+            dispatcher, "permissions.set", **_permissions(_sha256(PERMISSIONS), **values)
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (refused.code, refused.fields) == (ErrorCode.INVALID_ARGUMENT, fields)
+        assert (tmp_path / "permissions.toml").read_text(encoding="utf-8") == PERMISSIONS
+
+    asyncio.run(scenario())
+
+
+def test_permissions_set_with_a_stale_hash_leaves_the_file(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "permissions.get")
+        (tmp_path / "permissions.toml").write_text(PERMISSIONS, encoding="utf-8")
+
+        refused = await call(dispatcher, "permissions.set", **_permissions(read.hash))
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (refused.code, refused.retryable) == (ErrorCode.STALE, False)
+        assert (tmp_path / "permissions.toml").read_text(encoding="utf-8") == PERMISSIONS
+        history = await call(dispatcher, "config.history", limit=10)
+        assert history.changes == []
 
     asyncio.run(scenario())

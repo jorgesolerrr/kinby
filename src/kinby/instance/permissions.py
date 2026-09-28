@@ -6,23 +6,17 @@ import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from enum import StrEnum
 
 from pydantic import TypeAdapter, ValidationError
 
-from kinby.contracts import PermissionMode
+from kinby.contracts import GateAction, PermissionMode
 from kinby.instance.dataclasses import Instance
 from kinby.instance.layout import PERMISSIONS_NAME
+from kinby.instance.toml import toml_document
 
 
 class PermissionsError(ValueError):
     """Raised when an instance permission policy cannot be loaded."""
-
-
-class GateAction(StrEnum):
-    ALLOW = "allow"
-    ASK = "ask"
-    DENY = "deny"
 
 
 SHIPPED_BASH_DENY = (
@@ -34,8 +28,14 @@ SHIPPED_BASH_DENY = (
 
 @dataclass(frozen=True)
 class BashPolicy:
-    deny: tuple[str, ...] = SHIPPED_BASH_DENY
+    #: The instance's own deny patterns, which add to the shipped ones (ADR 0069).
+    deny: tuple[str, ...] = ()
     ask: tuple[str, ...] = ()
+
+    @property
+    def denylist(self) -> tuple[str, ...]:
+        """The deny patterns the gate applies: the shipped ones, then the instance's own."""
+        return tuple(dict.fromkeys((*SHIPPED_BASH_DENY, *self.deny)))
 
 
 @dataclass(frozen=True)
@@ -52,31 +52,44 @@ _POLICY_KEYS = frozenset({"mode", "ceiling", "tools", "bash"})
 _BASH_KEYS = frozenset({"deny", "ask"})
 
 
+def bash_regex_errors(bash: BashPolicy) -> dict[str, str]:
+    """What is wrong with each Bash pattern that is not a valid regex, by its key in the file."""
+    errors: dict[str, str] = {}
+    for tier, patterns in (("deny", bash.deny), ("ask", bash.ask)):
+        for index, pattern in enumerate(patterns):
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                errors[f"bash.{tier}.{index}"] = f"invalid regex: {exc}"
+    return errors
+
+
 def validate_bash_regexes(
     policy: GatePolicy,
     *,
     source: str = PERMISSIONS_NAME,
 ) -> None:
     """Reject invalid Bash patterns before the gate evaluates them."""
-    for tier, patterns in (("deny", policy.bash.deny), ("ask", policy.bash.ask)):
-        for index, pattern in enumerate(patterns):
-            try:
-                re.compile(pattern)
-            except re.error as exc:
-                raise PermissionsError(
-                    f"{source}: bash.{tier}.{index}: invalid regex: {exc}"
-                ) from exc
+    errors = bash_regex_errors(policy.bash)
+    if errors:
+        key, message = next(iter(errors.items()))
+        raise PermissionsError(f"{source}: {key}: {message}")
 
 
 def load_permissions(instance: Instance) -> GatePolicy:
     """Read the instance permission policy or return kinby's shipped policy."""
-    path = instance.path / PERMISSIONS_NAME
     try:
-        with path.open("rb") as permissions_file:
-            values = tomllib.load(permissions_file)
+        content = (instance.path / PERMISSIONS_NAME).read_bytes()
     except FileNotFoundError:
         return SHIPPED_POLICY
-    except tomllib.TOMLDecodeError as exc:
+    return parse_permissions(content)
+
+
+def parse_permissions(content: bytes) -> GatePolicy:
+    """Parse the bytes of a ``permissions.toml``."""
+    try:
+        values = tomllib.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise PermissionsError(f"{PERMISSIONS_NAME}: {exc}") from exc
     unknown = values.keys() - _POLICY_KEYS
     if unknown:
@@ -95,6 +108,18 @@ def load_permissions(instance: Instance) -> GatePolicy:
         raise PermissionsError(f"{PERMISSIONS_NAME}: {key}: {message}") from exc
     validate_bash_regexes(policy)
     return policy
+
+
+def permissions_toml(policy: GatePolicy) -> str:
+    """The ``permissions.toml`` for *policy*, which lists only the instance's own deny patterns."""
+    return toml_document(
+        {
+            "mode": policy.mode.value,
+            "ceiling": policy.ceiling.value,
+            "tools": {name: action.value for name, action in policy.tools.items()},
+            "bash": {"deny": list(policy.bash.deny), "ask": list(policy.bash.ask)},
+        }
+    )
 
 
 _MODE_ORDER = (
