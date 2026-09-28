@@ -143,7 +143,7 @@ class Scheduler:
             trigger=trigger,
             delivery_id=delivery.delivery_id,
         )
-        title_suffix = delivery.delivery_id or delivery.received_at.isoformat()
+        title_suffix = delivery.delivery_id or self._local_minute(delivery.received_at)
         thread = self._store.create(f"{name} · {title_suffix}")
         event = await self._log.append(
             thread.id,
@@ -176,6 +176,10 @@ class Scheduler:
     def _next(self, schedule: CronSchedule, after: datetime) -> datetime:
         zone = self._instance.manifest.routines.timezone
         return next(CronSim(schedule, after.astimezone(zone))).astimezone(UTC)
+
+    def _local_minute(self, time: datetime) -> str:
+        zone = self._instance.manifest.routines.timezone
+        return f"{time.astimezone(zone):%Y-%m-%d %H:%M}"
 
     def _arm(
         self, routines: Sequence[Routine], history: Mapping[RoutineName, RoutineHistory]
@@ -256,7 +260,7 @@ class Scheduler:
         now = self._clock()
         self._turns.require_available(RoutineOrigin(name=routine.name, trigger=trigger))
         accepted = await self._turns.wake_new_thread(
-            f"{routine.name} · {now.isoformat()}",
+            f"{routine.name} · {self._local_minute(now)}",
             routine.prompt,
             RoutineOrigin(name=routine.name, trigger=trigger),
         )
