@@ -255,18 +255,28 @@ function ApprovalPanel({
           </div>
         </CardContent>
         <CardFooter>
-          <div className="flex w-full items-center gap-2">
-            <Button disabled={answering} onClick={() => void respond("approve")}>
+          {/* Below md the buttons grow to a 44 px tap target, and Stop the turn wraps before it overflows. */}
+          <div className="flex w-full flex-wrap items-center gap-2">
+            <Button
+              className="max-md:h-11"
+              disabled={answering}
+              onClick={() => void respond("approve")}
+            >
               <CheckIcon data-icon="inline-start" />
               Approve
             </Button>
-            <Button variant="outline" disabled={answering} onClick={() => void respond("deny")}>
+            <Button
+              variant="outline"
+              className="max-md:h-11"
+              disabled={answering}
+              onClick={() => void respond("deny")}
+            >
               <XIcon data-icon="inline-start" />
               Deny
             </Button>
             <Button
               variant="ghost"
-              className="ml-auto"
+              className="ml-auto max-md:h-11"
               disabled={answering}
               onClick={() => void stop()}
             >
