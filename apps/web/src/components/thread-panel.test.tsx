@@ -336,13 +336,13 @@ describe("a thread's panel", () => {
     })
 
     it("denies it with the reason typed when Enter is pressed, once", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
 
       await userEvent
         .setup()
         .type(screen.getByRole("textbox", { name: "Reason" }), "Use staging instead{Enter}{Enter}")
 
-      expect(client.calls).toEqual([
+      expect(sent()).toEqual([
         {
           method: "thread.approval.respond",
           params: {
@@ -356,14 +356,14 @@ describe("a thread's panel", () => {
     })
 
     it("does not deny while an input method is composing the reason", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
 
       fireEvent.keyDown(screen.getByRole("textbox", { name: "Reason" }), {
         key: "Enter",
         isComposing: true,
       })
 
-      expect(client.calls).toEqual([])
+      expect(sent()).toEqual([])
     })
 
     it("denies it without a reason when none is typed", async () => {
