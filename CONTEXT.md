@@ -114,6 +114,15 @@ A user's request to stop an **instance** without waiting for its accepted work. 
 The **lifecycle operation** that replaces one **instance**'s container with a new one built from the **image artifact** and **instance secrets** already recorded for it. It is how replaced secrets reach a running instance, and the only way a container the **hub** has lost comes back; it never selects a different image and never touches the instance's storage.
 _Avoid_: rebuild, restart, update
 
+### Recreate reason
+
+A change that reaches a running **instance** only through **container recreation**: replaced **instance secrets**, or an edited **package config**. The user sees every pending reason together and applies them with one recreation.
+
+### Config change
+
+One recorded edit to an **instance**'s configuration: which file, who made it (the user from a client, the agent through an **instance tool**, or the **failure policy**), when, and what changed. Config changes are kept apart from any **thread**.
+_Avoid_: config event, audit entry
+
 ### Instance update
 
 The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares, carrying the instance's **package** selection along, or moving it with a **package pin**. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path, keeps every storage the instance owns, and leaves the instance's own configuration alone. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
@@ -395,7 +404,7 @@ A named preset of **gate** rules a **thread** runs under: read-only, ask, auto, 
 
 ### Denylist
 
-The instance's list of command patterns the **gate** refuses or escalates regardless of **permission mode**. A tripwire, not a wall: it catches obvious disasters, while the **sandbox** provides the actual isolation.
+The instance's list of command patterns the **gate** refuses or escalates regardless of **permission mode**. The patterns kinby ships always apply, and the instance's own patterns add to them. A tripwire, not a wall: it catches obvious disasters, while the **sandbox** provides the actual isolation.
 
 ### Contract
 
@@ -517,6 +526,11 @@ The fixed, name-sorted set of tools for one **turn**. The model and tool calls u
 ### Skill
 
 A markdown instruction set the model reads on demand. Skills are listed to the model by name and description; the body is fetched only when the model asks for it.
+
+### Skill tier
+
+Where a **skill** comes from: the **instance**, a **package**, or the **workspace**, in that order of precedence. A skill hides any skill of the same name in a lower tier. Customizing a skill copies it into the instance tier.
+_Avoid_: skill level, skill source
 
 ### Skill tool
 
