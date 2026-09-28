@@ -15,6 +15,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/ws": { target: hub, ws: true },
+      "^/instances/[^/]+/ws$": { target: hub, ws: true },
       "/auth": hub,
     },
   },

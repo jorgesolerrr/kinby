@@ -6,21 +6,27 @@ import { InstancePage } from "@/components/instance-page"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { MousePointerClickIcon, ServerIcon } from "lucide-react"
 
-/** The selected instance's page, or why there is none. `onChanged` lists the instances again. */
+/**
+ * The selected instance's page, or why there is none. A selected thread's panel is empty for now.
+ * `onChanged` lists the instances again.
+ */
 export function MainPanel({
   caller,
   clock = browserClock,
   instances,
   selected,
+  threadId,
   onChanged,
 }: {
   caller: Pick<Client, "call">
   clock?: Clock
   instances: InstanceSummary[] | undefined
   selected: InstanceSummary | undefined
+  threadId: string | undefined
   onChanged: () => void
 }) {
   if (instances === undefined) return null
+  if (selected !== undefined && threadId !== undefined) return null
   if (selected !== undefined) {
     return (
       <InstancePage

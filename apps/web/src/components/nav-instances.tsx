@@ -1,4 +1,5 @@
 import type { InstanceSummary } from "@kinby/contract"
+import type * as React from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
 import {
@@ -17,10 +18,13 @@ export function NavInstances({
   instances,
   selected,
   creating,
+  threads,
 }: {
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
   creating: boolean
+  /** Shown in the selected instance's row, in place of its state. */
+  threads: React.ReactNode
 }) {
   return (
     <SidebarGroup>
@@ -47,17 +51,21 @@ export function NavInstances({
                   </a>
                 }
               />
-              <SidebarMenuBadge>
-                <span className="flex items-center gap-1">
-                  {instance.setup_pending && (
-                    <>
-                      <CircleAlertIcon aria-hidden className="size-3.5" />
-                      <span className="sr-only">Setup pending</span>
-                    </>
-                  )}
-                  {observedState(instance)}
-                </span>
-              </SidebarMenuBadge>
+              {isSelected && threads ? (
+                threads
+              ) : (
+                <SidebarMenuBadge>
+                  <span className="flex items-center gap-1">
+                    {instance.setup_pending && (
+                      <>
+                        <CircleAlertIcon aria-hidden className="size-3.5" />
+                        <span className="sr-only">Setup pending</span>
+                      </>
+                    )}
+                    {observedState(instance)}
+                  </span>
+                </SidebarMenuBadge>
+              )}
             </SidebarMenuItem>
           )
         })}

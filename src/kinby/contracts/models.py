@@ -556,10 +556,20 @@ class ThreadListCommand(ContractModel):
     pass
 
 
+class ThreadStatus(StrEnum):
+    IDLE = "idle"
+    RUNNING = "running"
+    AWAITING_APPROVAL = "awaiting_approval"
+    FAILED = "failed"
+
+
 class ThreadSummary(ContractModel):
     id: UUID
     title: str | None
     created_at: datetime
+    status: ThreadStatus
+    #: The time of the thread's last event, or its creation time when it has none.
+    last_activity_at: datetime
 
 
 class ThreadListResult(ContractModel):

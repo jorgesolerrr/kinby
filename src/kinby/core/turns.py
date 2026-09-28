@@ -73,7 +73,7 @@ from kinby.core.snapshots import (
     SnapshotStore,
     snapshot_ref,
 )
-from kinby.core.threads import ThreadStore
+from kinby.core.threads import ThreadStore, events_by_thread, pending_approval
 from kinby.instance import Budgets, ModelName
 from kinby.instance.permissions import constrain_mode, exceeds_ceiling
 
@@ -135,12 +135,6 @@ class ParkedTurn:
 class ApprovalDecision(StrEnum):
     APPROVE = "approve"
     DENY = "deny"
-
-
-@dataclass(frozen=True)
-class PendingApproval:
-    event: Event
-    request: ApprovalRequested
 
 
 def _no_token_usage() -> TokenTotals:
@@ -261,14 +255,9 @@ class Turns:
         for thread, claim in self._claims.items():
             if isinstance(claim, TurnClaim):
                 origins[thread] = claim.origin
-        events_by_thread: dict[UUID, list[Event]] = {
-            thread.id: [] for thread in self._store.list().threads
-        }
-        for event in self._log.all_events():
-            if event.thread_id in events_by_thread:
-                events_by_thread[event.thread_id].append(event)
-        for thread_id, events in events_by_thread.items():
-            pending = _pending_approval(events)
+        grouped = events_by_thread(self._store.threads(), self._log.all_events())
+        for thread_id, events in grouped.items():
+            pending = pending_approval(events)
             if pending is not None:
                 origins[thread_id] = _turn_origin(events, pending.event.turn_id)
         return origins
@@ -325,7 +314,7 @@ class Turns:
         events = self._log.stored(command.thread_id)
         running = self._running.get(command.thread_id)
         active = running is not None and not running.task.done()
-        if command.thread_id in self._claims or active or _pending_approval(events) is not None:
+        if command.thread_id in self._claims or active or pending_approval(events) is not None:
             raise _thread_busy(command.thread_id)
         ceiling = self._permission_ceiling()
         if exceeds_ceiling(command.mode, ceiling):
@@ -494,7 +483,7 @@ class Turns:
         self._require_thread(thread_id)
         self.require_available(origin)
         events = self._log.stored(thread_id)
-        pending = _pending_approval(events)
+        pending = pending_approval(events)
         running = self._running.get(thread_id)
         active = running is not None and not running.task.done()
         if thread_id in self._claims or active or pending is not None:
@@ -581,7 +570,7 @@ class Turns:
             running.task.cancel()
             turn_id = running.request.turn_id
         else:
-            pending = _pending_approval(self._log.stored(command.thread_id))
+            pending = pending_approval(self._log.stored(command.thread_id))
             if pending is None:
                 raise _no_active_turn(command.thread_id)
             turn_id = pending.event.turn_id
@@ -624,7 +613,7 @@ class Turns:
     async def respond(self, command: ThreadApprovalRespondCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
         events = self._log.stored(command.thread_id)
-        pending = _pending_approval(events)
+        pending = pending_approval(events)
         known = any(
             isinstance(event.payload, ApprovalRequested)
             and event.payload.approval_id == command.approval_id
@@ -859,19 +848,6 @@ def _recorded_model_calls(events: Sequence[Event], turn_id: UUID) -> list[ModelC
 
 def _recorded_model_usage(events: Sequence[Event], turn_id: UUID) -> TokenTotals:
     return _sum_model_calls(_recorded_model_calls(events, turn_id))
-
-
-def _pending_approval(events: Sequence[Event]) -> PendingApproval | None:
-    # Answering an approval appends nothing, so the resumed turn's own next event is
-    # what ends the park. Events on any other turn leave it standing.
-    for index, event in reversed(list(enumerate(events))):
-        payload = event.payload
-        if not isinstance(payload, ApprovalRequested):
-            continue
-        if any(later.turn_id == event.turn_id for later in events[index + 1 :]):
-            return None
-        return PendingApproval(event, payload)
-    return None
 
 
 def _permission_mode(

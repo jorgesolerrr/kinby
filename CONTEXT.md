@@ -252,6 +252,10 @@ A **turn** or recorded **workspace revert** selected for a **workspace diff** or
 
 One conversation with its own durable history. Survives across sessions; can be resumed later. What memory distills from and what **instance statistics** are derived from.
 
+### Thread status
+
+What a **thread**'s latest **turn** is doing: running while it is open, awaiting approval while it waits on an **approval**, failed when it closed as failed, and idle otherwise, including after a **turn interruption**. Derived from the thread's events when it is read, never stored. Failed clears when the next turn starts.
+
 ### Session
 
 One run of the agent loop against a thread, from start to exit (a process, a REPL open–close). Ephemeral; the unit a server wraps. A session contains one or more **turns**. Not a model call: a turn makes one or more model calls, and a model-assisted **recap** makes one more after it.

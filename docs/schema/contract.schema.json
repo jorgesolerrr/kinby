@@ -3526,6 +3526,16 @@
       "title": "ThreadModeSetCommand",
       "type": "object"
     },
+    "ThreadStatus": {
+      "enum": [
+        "idle",
+        "running",
+        "awaiting_approval",
+        "failed"
+      ],
+      "title": "ThreadStatus",
+      "type": "string"
+    },
     "ThreadSubscribeCommand": {
       "additionalProperties": false,
       "properties": {
@@ -3556,6 +3566,13 @@
           "format": "uuid",
           "type": "string"
         },
+        "last_activity_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ThreadStatus"
+        },
         "title": {
           "anyOf": [
             {
@@ -3570,7 +3587,9 @@
       "required": [
         "id",
         "title",
-        "created_at"
+        "created_at",
+        "status",
+        "last_activity_at"
       ],
       "title": "ThreadSummary",
       "type": "object"

@@ -51,6 +51,33 @@ describe("client", () => {
     await expect(listed).resolves.toEqual({ instances: [] })
   })
 
+  it("reaches one instance through the hub's relay on a socket of its own", async () => {
+    const { client, hub } = await connected()
+
+    const ada = client.instance("hub ada")
+    await vi.waitFor(() => expect(ada.state()).toBe("connected"))
+    const threads = ada.call("thread.list", {})
+    const relayed = lastSocket(hub)
+    relayed.receive({ type: "result", id: "1", result: { threads: [] } })
+
+    expect(relayed.url).toBe("wss://hub.example/instances/hub%20ada/ws")
+    expect(relayed.sent).toEqual([{ type: "call", id: "1", method: "thread.list", params: {} }])
+    await expect(threads).resolves.toEqual({ threads: [] })
+  })
+
+  it("stops reaching an instance once it is closed, and leaves the hub's socket open", async () => {
+    const { client, hub, clock } = await connected()
+    const ada = client.instance("hub-ada")
+    await vi.waitFor(() => expect(ada.state()).toBe("connected"))
+
+    ada.close()
+    await clock.advance(60_000)
+
+    expect(hub.sockets).toHaveLength(2)
+    expect(client.state()).toBe("connected")
+    await expect(ada.call("thread.list", {})).rejects.toMatchObject({ code: "CONNECTION_LOST" })
+  })
+
   it("types a call from its method name to the method's command and result", async () => {
     const { client } = await connected()
 

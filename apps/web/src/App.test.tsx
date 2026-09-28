@@ -174,6 +174,28 @@ describe("the instances", () => {
     expect(await screen.findByText("Nothing here yet")).toBeDefined()
   })
 
+  it("opens a running instance's threads beside it, with an empty main panel for the selected one", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/threads/t1")
+
+    const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBe("page")
+    expect(await screen.findByRole("button", { name: "New thread" })).toBeDefined()
+    expect(hub.sockets.map((socket) => socket.url)).toContain("ws://hub.test/instances/hub-ada/ws")
+    expect(screen.queryByText("Nothing here yet")).toBeNull()
+    expect(screen.queryByText("No instance selected")).toBeNull()
+  })
+
+  it("opens no threads for a selected instance that is not running", async () => {
+    window.history.replaceState(null, "", "/instances/hub-unnamed")
+
+    const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    expect((await instanceLink("research")).getAttribute("aria-current")).toBe("page")
+    expect(screen.queryByRole("button", { name: "New thread" })).toBeNull()
+    expect(hub.sockets).toHaveLength(1)
+  })
+
   it("selects nothing when the URL names an instance the hub does not have", async () => {
     window.history.replaceState(null, "", "/instances/hub-gone")
 

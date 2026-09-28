@@ -26,12 +26,15 @@ export function AppSidebar({
   instances,
   selected,
   creating,
+  threads,
   onSignOut,
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
   creating: boolean
+  /** The selected instance's threads, when it has them to show. */
+  threads: React.ReactNode
   onSignOut: () => void
 }) {
   return (
@@ -48,7 +51,12 @@ export function AppSidebar({
       </SidebarHeader>
       <SidebarContent>
         <NavMain entries={entries} />
-        <NavInstances instances={instances} selected={selected} creating={creating} />
+        <NavInstances
+          instances={instances}
+          selected={selected}
+          creating={creating}
+          threads={threads}
+        />
       </SidebarContent>
       <SidebarFooter>
         <NavUser onSignOut={onSignOut} />

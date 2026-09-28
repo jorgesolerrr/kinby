@@ -1,15 +1,18 @@
 import { browserClock } from "@kinby/contract"
-import type { Client, Clock, InstanceSummary } from "@kinby/contract"
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import type { Client, Clock, InstanceClient, InstanceSummary } from "@kinby/contract"
+import { useCallback, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { CreateWizard } from "@/components/create-wizard"
 import { MainPanel } from "@/components/main-panel"
+import { NavThreads } from "@/components/nav-threads"
 import { SignIn } from "@/components/sign-in"
 import { Badge } from "@/components/ui/badge"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { useCreating, useSelectedInstanceId } from "@/lib/selection"
+import { useFollowing } from "@/hooks/use-following"
+import { usePolled } from "@/hooks/use-polled"
+import { useCreating, useSelectedInstanceId, useSelectedThreadId } from "@/lib/selection"
 
 export default function App({ client, clock = browserClock }: { client: Client; clock?: Clock }) {
   const state = useSyncExternalStore(client.onStateChange, client.state)
@@ -25,6 +28,10 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const creating = useCreating()
   // An instance the hub does not have, or no longer has, selects nothing.
   const selected = instances?.find((instance) => instance.instance_id === selectedId)
+  // The hub relays only to a running instance.
+  const running = selected?.process === "running" ? selected.instance_id : undefined
+  const instanceClient = useInstanceClient(client, running)
+  const threadId = useSelectedThreadId()
 
   return (
     <TooltipProvider>
@@ -33,6 +40,12 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           instances={instances ?? []}
           selected={selected}
           creating={creating}
+          threads={
+            instanceClient !== undefined &&
+            running !== undefined && (
+              <NavThreads client={instanceClient} clock={clock} instanceId={running} />
+            )
+          }
           onSignOut={() => void client.signOut()}
         />
         <SidebarInset>
@@ -48,6 +61,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
               clock={clock}
               instances={instances}
               selected={selected}
+              threadId={threadId}
               onChanged={listAgain}
             />
           )}
@@ -61,61 +75,33 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
 const LIST_INTERVAL_MS = 30_000
 
 /**
- * The hub's instances, listed again each time the connection comes back, the window regains
- * focus, `LIST_INTERVAL_MS` passes while the page is visible, or when asked to. The list shown
- * stays until the next one arrives. The promise settles once that list is stored. A caller that
- * opens an instance waits for it, so the page reads the list that includes the change.
+ * The hub's instances, listed again as `usePolled` says. A caller that opens an instance waits for
+ * the list it asks for, so the page reads the list that includes the change.
  */
 function useInstances(
   client: Client,
   clock: Clock,
   connected: boolean,
 ): [InstanceSummary[] | undefined, () => Promise<void>] {
-  const [instances, setInstances] = useState<InstanceSummary[]>()
-  // A newer list, or a drop, retires the one already in flight.
-  const generation = useRef(0)
-  const connectedRef = useRef(false)
-  const listAgain = useCallback(() => {
-    if (!connectedRef.current) return Promise.resolve()
-    const mine = ++generation.current
-    return client.call("instance.list", {}).then(
-      (listed) => {
-        if (mine === generation.current) setInstances(listed.instances)
-      },
-      // A dropped socket shows as reconnecting, and the list stays as it was until it is back.
-      () => {},
-    )
-  }, [client])
-  useEffect(() => {
-    connectedRef.current = connected
-    if (!connected) {
-      generation.current += 1
-      return
-    }
-    void listAgain()
-  }, [connected, listAgain])
-  // Another tab or the CLI may change an instance, and a container may crash, with no word to this one.
-  useEffect(() => {
-    let cancel: (() => void) | undefined
-    const poll = () => {
-      cancel?.()
-      cancel =
-        document.visibilityState === "visible"
-          ? clock.after(LIST_INTERVAL_MS, () => {
-              void listAgain()
-              poll()
-            })
-          : undefined
-    }
-    const onFocus = () => void listAgain()
-    poll()
-    document.addEventListener("visibilitychange", poll)
-    window.addEventListener("focus", onFocus)
-    return () => {
-      cancel?.()
-      document.removeEventListener("visibilitychange", poll)
-      window.removeEventListener("focus", onFocus)
-    }
-  }, [clock, listAgain])
-  return [instances, listAgain]
+  const list = useCallback(
+    () => client.call("instance.list", {}).then((listed) => listed.instances),
+    [client],
+  )
+  return usePolled(list, clock, connected, LIST_INTERVAL_MS)
+}
+
+/** One instance's own connection, open while `instanceId` names it and closed after. */
+function useInstanceClient(
+  client: Client,
+  instanceId: string | undefined,
+): InstanceClient | undefined {
+  const open = useCallback(
+    (instanceId: string, report: (opened: InstanceClient) => void) => {
+      const opened = client.instance(instanceId)
+      report(opened)
+      return () => opened.close()
+    },
+    [client],
+  )
+  return useFollowing(instanceId, open)
 }

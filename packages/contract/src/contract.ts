@@ -83,6 +83,7 @@ export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription"
 export type TurnClosingKind = "completed" | "failed" | "interrupted";
 export type DelegatedRunOutcome = "completed" | "failed" | "limited";
 export type TurnVerdict = "good" | "bad";
+export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
 export type ServerFrame = ResultFrame | ErrorFrame | SubscribedFrame | ItemFrame | EndFrame;
 export type ErrorCode =
@@ -942,6 +943,8 @@ export interface ThreadListResult {
 export interface ThreadSummary {
   created_at: string;
   id: string;
+  last_activity_at: string;
+  status: ThreadStatus;
   title: string | null;
 }
 export interface ThreadModeSetCommand {
