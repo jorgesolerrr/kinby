@@ -1,5 +1,6 @@
 import {
   CallError,
+  type ConnectionState,
   type InstanceClient,
   type Method,
   type PermissionMode,
@@ -28,6 +29,11 @@ function thread(fields: Partial<ThreadSummary> = {}): ThreadSummary {
   }
 }
 
+/** `caller` as an instance client whose socket is up. */
+function connected<Caller>(caller: Caller) {
+  return { ...caller, state: () => "connected" as const, onStateChange: () => () => {} }
+}
+
 /**
  * Open thread t1's header once its instance has listed `listed()` under `ceiling`. The list is read
  * again after each change, so a test changes what `listed` returns to show what the instance did.
@@ -36,7 +42,9 @@ async function openHeader(
   answers: Answers & { listed?: () => ThreadSummary; ceiling?: PermissionMode } = {},
 ) {
   const { listed = () => thread(), ceiling = "full-access", ...calls } = answers
-  const client = stubCaller({ "thread.list": () => ({ threads: [listed()], ceiling }), ...calls })
+  const client = connected(
+    stubCaller({ "thread.list": () => ({ threads: [listed()], ceiling }), ...calls }),
+  )
   await act(() => threadList(client).list())
   render(<ThreadHeader client={client} threadId="t1" />)
   return client
@@ -52,13 +60,13 @@ async function openHeaderOffline() {
   })
   const sent: Method[] = []
   let fail = (_error: CallError) => {}
-  const client: Pick<InstanceClient, "call"> = {
+  const client = connected<Pick<InstanceClient, "call">>({
     call: (method, params) => {
       if (method === "thread.list") return lister.call(method, params)
       sent.push(method)
       return new Promise<never>((_resolve, reject) => (fail = reject))
     },
-  }
+  })
   await act(() => threadList(client).list())
   render(<ThreadHeader client={client} threadId="t1" />)
   const lost = new CallError({
@@ -224,9 +232,9 @@ describe("a thread's header", () => {
 
   describe("without the sidebar", () => {
     it("lists the threads itself when nothing has listed them", async () => {
-      const client = stubCaller({
-        "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }),
-      })
+      const client = connected(
+        stubCaller({ "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }) }),
+      )
 
       render(<ThreadHeader client={client} threadId="t1" />)
 
@@ -236,7 +244,9 @@ describe("a thread's header", () => {
 
     it("lists the threads again when the last list came before the thread", async () => {
       let threads: ThreadSummary[] = []
-      const client = stubCaller({ "thread.list": () => ({ threads, ceiling: "full-access" }) })
+      const client = connected(
+        stubCaller({ "thread.list": () => ({ threads, ceiling: "full-access" }) }),
+      )
       await act(() => threadList(client).list())
 
       threads = [thread()]
@@ -245,8 +255,43 @@ describe("a thread's header", () => {
       expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
     })
 
+    it("lists the threads once the instance connects", async () => {
+      const lister = stubCaller({
+        "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }),
+      })
+      let state: ConnectionState = "connecting"
+      const listeners = new Set<() => void>()
+      // Like the instance client, it refuses a call before the socket is up.
+      const client: Pick<InstanceClient, "call" | "state" | "onStateChange"> = {
+        call: (method, params) =>
+          state === "connected"
+            ? lister.call(method, params)
+            : Promise.reject(
+                new CallError({
+                  code: "CONNECTION_LOST",
+                  message: "Not connected.",
+                  retryable: true,
+                }),
+              ),
+        state: () => state,
+        onStateChange: (listener) => {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+      }
+      render(<ThreadHeader client={client} threadId="t1" />)
+
+      await act(async () => {
+        state = "connected"
+        for (const listener of listeners) listener()
+      })
+
+      expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
+      expect(modePicker().textContent).toContain("Ask")
+    })
+
     it("stays empty when the threads do not list", async () => {
-      const client = stubCaller({})
+      const client = connected(stubCaller({}))
 
       await act(async () => {
         render(<ThreadHeader client={client} threadId="t1" />)
@@ -258,11 +303,9 @@ describe("a thread's header", () => {
   })
 
   it("leaves listing the threads again to the sidebar beside it", async () => {
-    const client = {
-      ...stubCaller({ "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }) }),
-      state: () => "connected" as const,
-      onStateChange: () => () => {},
-    }
+    const client = connected(
+      stubCaller({ "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }) }),
+    )
     const clock = fakeClock()
     render(
       <SidebarProvider>
