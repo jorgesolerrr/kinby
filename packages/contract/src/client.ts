@@ -11,6 +11,7 @@ import type {
   ErrorEnvelope,
   ErrorFrame,
   ResultFrame,
+  SubscribedFrame,
 } from "./contract"
 
 type Methods = Contract["methods"]
@@ -25,6 +26,11 @@ export type Item<M extends SubscriptionMethod> = Subscriptions[M]["item"]
 
 /** A subscription's items, in order. They end on the hub's end frame, or on cancel. */
 export interface Subscription<M extends SubscriptionMethod> extends AsyncIterable<Item<M>> {
+  /**
+   * The sequence the hub subscribed at: items up to it are the replay, later ones are live. It
+   * never settles when the subscription ends before the hub subscribes, and the items say why.
+   */
+  readonly head: Promise<number>
   cancel(): void
 }
 
@@ -110,6 +116,7 @@ interface OpenSubscription {
   readonly params: object
   /** The sequence of the last item delivered. A resubscribe asks for what comes after it. */
   lastSequence: number | undefined
+  subscribed(headSequence: number): void
   deliver(sequence: number, item: object): void
   end(error?: CallError): void
 }
@@ -206,6 +213,8 @@ function connect(
     const call = pending.get(frame.id)
     const subscription = subscriptions.get(frame.id)
     switch (frame.type) {
+      case "subscribed":
+        return subscription?.subscribed(frame.head_sequence)
       case "item":
         return subscription?.deliver(frame.sequence, frame.item)
       case "result":
@@ -273,10 +282,14 @@ function connect(
         }
       }
       const items = itemQueue<Item<typeof method>>(stop)
+      // A resubscribe after a reconnect is subscribed again, and only the first head counts.
+      let subscribed = (_headSequence: number) => {}
+      const head = new Promise<number>((resolve) => (subscribed = resolve))
       const subscription: OpenSubscription = {
         method,
         params,
         lastSequence: undefined,
+        subscribed,
         deliver(sequence, item) {
           // A resubscribe can replay what was already delivered.
           if (subscription.lastSequence !== undefined && sequence <= subscription.lastSequence) {
@@ -291,6 +304,7 @@ function connect(
       subscriptions.set(id, subscription)
       if (connection.state === "connected") sendSubscribe(id, subscription)
       return Object.assign(items.read, {
+        head,
         cancel: () => {
           stop()
           items.drop()
@@ -382,6 +396,7 @@ function itemQueue<T>(onStop: () => void) {
 
 type Reply =
   | ((ResultFrame | ErrorFrame | EndFrame) & { id: string })
+  | SubscribedFrame
   | { type: "item"; id: string; sequence: number; item: Record<string, unknown> }
 
 /** Read a frame off the socket. Anything that is not a reply the client can route is dropped. */
@@ -398,6 +413,9 @@ function parseReply(data: unknown): Reply | undefined {
   // Every subscription's items are events, and the sequence is how a resubscribe resumes.
   if (frame.type === "item" && isRecord(frame.item) && typeof frame.item.sequence === "number") {
     return { type: "item", id: frame.id, sequence: frame.item.sequence, item: frame.item }
+  }
+  if (frame.type === "subscribed" && typeof frame.head_sequence === "number") {
+    return { type: "subscribed", id: frame.id, head_sequence: frame.head_sequence }
   }
   if (frame.type === "end") return { type: "end", id: frame.id }
   return undefined

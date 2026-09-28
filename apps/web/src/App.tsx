@@ -1,5 +1,6 @@
 import { browserClock } from "@kinby/contract"
 import type { Client, Clock, InstanceClient, InstanceSummary } from "@kinby/contract"
+import { cn } from "cn"
 import { useCallback, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
@@ -48,7 +49,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           }
           onSignOut={() => void client.signOut()}
         />
-        <SidebarInset>
+        {/* An open thread scrolls its transcript inside the window, not the page. */}
+        <SidebarInset className={cn(threadId !== undefined && "h-svh")}>
           <header className="flex h-12 items-center gap-2 px-2">
             <SidebarTrigger />
             {!connected && <Badge variant="destructive">Reconnecting</Badge>}
@@ -62,6 +64,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
               instances={instances}
               selected={selected}
               threadId={threadId}
+              instanceClient={instanceClient}
               onChanged={listAgain}
             />
           )}

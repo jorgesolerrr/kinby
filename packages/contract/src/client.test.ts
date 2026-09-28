@@ -188,6 +188,15 @@ describe("client", () => {
     expect(await collect(events)).toEqual([event(1), event(2)])
   })
 
+  it("reports the head sequence the hub subscribed at, where the replay ends", async () => {
+    const { client, socket } = await connected()
+
+    const events = client.subscribe("thread.subscribe", { thread_id: "t" })
+    socket.receive({ type: "subscribed", id: "1", head_sequence: 2 })
+
+    expect(await events.head).toBe(2)
+  })
+
   it("types a subscription from its method name to the method's command and item", async () => {
     const { client } = await connected()
 

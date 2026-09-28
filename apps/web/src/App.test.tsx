@@ -174,16 +174,25 @@ describe("the instances", () => {
     expect(await screen.findByText("Nothing here yet")).toBeDefined()
   })
 
-  it("opens a running instance's threads beside it, with an empty main panel for the selected one", async () => {
+  it("opens a running instance's threads beside it, and follows the selected one in the main panel", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/threads/t1")
 
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
 
     expect((await instanceLink("Ada")).getAttribute("aria-current")).toBe("page")
     expect(await screen.findByRole("button", { name: "New thread" })).toBeDefined()
-    expect(hub.sockets.map((socket) => socket.url)).toContain("ws://hub.test/instances/hub-ada/ws")
+    const relayed = hub.sockets.find(
+      (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
+    )
+    expect(relayed?.sent).toContainEqual(
+      expect.objectContaining({
+        type: "subscribe",
+        method: "thread.subscribe",
+        params: { thread_id: "t1", after_sequence: 0 },
+      }),
+    )
+    expect(screen.getByRole("status", { name: "Loading the thread" })).toBeDefined()
     expect(screen.queryByText("Nothing here yet")).toBeNull()
-    expect(screen.queryByText("No instance selected")).toBeNull()
   })
 
   it("opens no threads for a selected instance that is not running", async () => {

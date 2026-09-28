@@ -3,10 +3,12 @@ import {
   type Client,
   type Clock,
   type Command,
+  type Item,
   type Method,
   type Result,
   type Socket,
   type SocketEvents,
+  type SubscriptionMethod,
   type Transport,
 } from "./client"
 import type { InstanceSummary } from "./contract"
@@ -110,6 +112,73 @@ export function stubCaller(answers: Answers): StubCaller {
         })
       }
       return answer(params)
+    },
+  }
+}
+
+/** One subscription a stub took, answered by the test. */
+export interface StubSubscription {
+  readonly method: SubscriptionMethod
+  readonly params: unknown
+  /** Whether the reader cancelled it. */
+  readonly cancelled: boolean
+  /** The hub subscribes at `headSequence`. */
+  subscribed(headSequence: number): void
+  deliver(item: Item<SubscriptionMethod>): void
+  /** The hub ends the subscription with an error frame. */
+  fail(error: CallError): void
+}
+
+export interface StubSubscriber extends Pick<Client, "subscribe"> {
+  /** Every subscription, oldest first. */
+  readonly subscriptions: StubSubscription[]
+}
+
+/** A client whose subscriptions the test answers without a hub. */
+export function stubSubscriber(): StubSubscriber {
+  const subscriptions: StubSubscription[] = []
+  return {
+    subscriptions,
+    subscribe(method, params) {
+      const items: Item<typeof method>[] = []
+      let ended = false
+      let failure: CallError | undefined
+      let wake = () => {}
+      let subscribed = (_headSequence: number) => {}
+      const head = new Promise<number>((resolve) => (subscribed = resolve))
+      const end = (error?: CallError) => {
+        ended = true
+        failure = error
+        wake()
+      }
+      const subscription = {
+        method,
+        params,
+        cancelled: false,
+        subscribed,
+        deliver(item: Item<SubscriptionMethod>) {
+          items.push(item)
+          wake()
+        },
+        fail: end,
+      }
+      subscriptions.push(subscription)
+      async function* read(): AsyncGenerator<Item<typeof method>, void> {
+        for (;;) {
+          const next = items.shift()
+          if (next !== undefined) yield next
+          else if (failure !== undefined) throw failure
+          else if (ended) return
+          else await new Promise<void>((resolve) => (wake = resolve))
+        }
+      }
+      return Object.assign(read(), {
+        head,
+        cancel() {
+          subscription.cancelled = true
+          end()
+        },
+      })
     },
   }
 }
