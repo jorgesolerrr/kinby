@@ -1,4 +1,10 @@
-import { CallError, type PermissionMode, type ThreadSummary } from "@kinby/contract"
+import {
+  CallError,
+  type InstanceClient,
+  type Method,
+  type PermissionMode,
+  type ThreadSummary,
+} from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -34,6 +40,33 @@ async function openHeader(
   await act(() => threadList(client).list())
   render(<ThreadHeader client={client} threadId="t1" />)
   return client
+}
+
+/**
+ * Open thread t1's header over a client whose changes stay out until the test fails them, as they
+ * do while the socket is down but not yet closed.
+ */
+async function openHeaderOffline() {
+  const lister = stubCaller({
+    "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }),
+  })
+  const sent: Method[] = []
+  let fail = (_error: CallError) => {}
+  const client: Pick<InstanceClient, "call"> = {
+    call: (method, params) => {
+      if (method === "thread.list") return lister.call(method, params)
+      sent.push(method)
+      return new Promise<never>((_resolve, reject) => (fail = reject))
+    },
+  }
+  await act(() => threadList(client).list())
+  render(<ThreadHeader client={client} threadId="t1" />)
+  const lost = new CallError({
+    code: "CONNECTION_LOST",
+    message: "The connection to the instance dropped.",
+    retryable: true,
+  })
+  return { sent, loseConnection: () => act(async () => fail(lost)) }
 }
 
 const modePicker = () => screen.getByRole("combobox", { name: "Mode" })
@@ -142,6 +175,51 @@ describe("a thread's header", () => {
       "value",
       "Deploy notes v2",
     )
+  })
+
+  it("holds the new title while the rename is out, and shows why once it fails", async () => {
+    const { sent, loseConnection } = await openHeaderOffline()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole("button", { name: "Deploy notes" }))
+    const field = screen.getByRole("textbox", { name: "Thread title" })
+    await user.type(field, " v2{Enter}")
+    await user.type(field, "{Enter}{Escape}")
+
+    expect(sent).toEqual(["thread.rename"])
+    expect(field).toHaveProperty("readOnly", true)
+    expect(field).toHaveProperty("value", "Deploy notes v2")
+    expect(screen.getByRole("status", { name: "Renaming" })).toBeDefined()
+
+    await loseConnection()
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The connection to the instance dropped.",
+    )
+    expect(screen.queryByRole("status", { name: "Renaming" })).toBeNull()
+    expect(field).toHaveProperty("readOnly", false)
+    expect(field).toHaveProperty("value", "Deploy notes v2")
+  })
+
+  it("disables the mode picker while the change is out, and shows why once it fails", async () => {
+    const { sent, loseConnection } = await openHeaderOffline()
+    const user = userEvent.setup()
+
+    await user.click(modePicker())
+    await user.click(await screen.findByRole("option", { name: /^Read-only/ }))
+
+    expect(sent).toEqual(["thread.mode.set"])
+    expect(modePicker()).toHaveProperty("disabled", true)
+    expect(screen.getByRole("status", { name: "Changing the mode" })).toBeDefined()
+
+    await loseConnection()
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The connection to the instance dropped.",
+    )
+    expect(screen.queryByRole("status", { name: "Changing the mode" })).toBeNull()
+    expect(modePicker()).toHaveProperty("disabled", false)
+    expect(modePicker().textContent).toContain("Ask")
   })
 
   describe("without the sidebar", () => {

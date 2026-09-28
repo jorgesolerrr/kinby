@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Spinner } from "@/components/ui/spinner"
 import { reason } from "@/lib/operation"
 import { threadList, threadTitle } from "@/lib/thread-list"
 import { PencilIcon } from "lucide-react"
@@ -74,7 +75,7 @@ export function ThreadHeader({
           mode={thread.mode}
           ceiling={listed.ceiling}
           onPick={(mode) =>
-            void change(() => client.call("thread.mode.set", { thread_id: threadId, mode }))
+            change(() => client.call("thread.mode.set", { thread_id: threadId, mode }))
           }
         />
       </div>
@@ -83,7 +84,10 @@ export function ThreadHeader({
   )
 }
 
-/** Enter renames the thread, and Escape or leaving the field keeps the title it had. */
+/**
+ * Enter renames the thread, and Escape or leaving the field keeps the title it had. While the rename
+ * is out, the field holds the new title and takes no keys.
+ */
 function ThreadTitle({
   thread,
   invalid,
@@ -94,6 +98,7 @@ function ThreadTitle({
   onRename: (title: string) => Promise<boolean>
 }) {
   const [draft, setDraft] = useState<string>()
+  const [renaming, setRenaming] = useState(false)
   const field = useRef<HTMLInputElement>(null)
   const editing = draft !== undefined
   useEffect(() => {
@@ -111,24 +116,37 @@ function ThreadTitle({
       </h1>
     )
   }
+  const rename = async (title: string) => {
+    setRenaming(true)
+    const renamed = await onRename(title)
+    setRenaming(false)
+    if (renamed) setDraft(undefined)
+  }
   return (
-    <Input
-      aria-label="Thread title"
-      aria-invalid={invalid || undefined}
-      ref={field}
-      className="flex-1"
-      value={draft}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => setDraft(undefined)}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") setDraft(undefined)
-        if (event.key !== "Enter" || event.nativeEvent.isComposing) return
-        event.preventDefault()
-        const title = draft.trim()
-        if (title === "" || title === thread.title) return setDraft(undefined)
-        void onRename(title).then((renamed) => renamed && setDraft(undefined))
-      }}
-    />
+    <>
+      <Input
+        aria-label="Thread title"
+        aria-invalid={invalid || undefined}
+        ref={field}
+        className="flex-1"
+        value={draft}
+        readOnly={renaming}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          if (!renaming) setDraft(undefined)
+        }}
+        onKeyDown={(event) => {
+          if (renaming) return
+          if (event.key === "Escape") setDraft(undefined)
+          if (event.key !== "Enter" || event.nativeEvent.isComposing) return
+          event.preventDefault()
+          const title = draft.trim()
+          if (title === "" || title === thread.title) return setDraft(undefined)
+          void rename(title)
+        }}
+      />
+      {renaming && <Spinner aria-label="Renaming" />}
+    </>
   )
 }
 
@@ -140,18 +158,26 @@ function ModePicker({
 }: {
   mode: PermissionMode
   ceiling: PermissionMode
-  onPick: (mode: PermissionMode) => void
+  onPick: (mode: PermissionMode) => Promise<boolean>
 }) {
+  const [changing, setChanging] = useState(false)
   const allowed = MODES.findIndex((entry) => entry.mode === ceiling)
+  const pick = async (picked: PermissionMode) => {
+    setChanging(true)
+    await onPick(picked)
+    setChanging(false)
+  }
   return (
     <Select<PermissionMode>
       value={mode}
-      onValueChange={(picked) => picked !== null && picked !== mode && onPick(picked)}
+      disabled={changing}
+      onValueChange={(picked) => picked !== null && picked !== mode && void pick(picked)}
     >
       <SelectTrigger size="sm" aria-label="Mode" className="shrink-0">
         <SelectValue>
           {(value: PermissionMode) => MODES.find((entry) => entry.mode === value)?.label}
         </SelectValue>
+        {changing && <Spinner aria-label="Changing the mode" />}
       </SelectTrigger>
       <SelectContent align="end" alignItemWithTrigger={false} className="w-auto">
         <SelectGroup>

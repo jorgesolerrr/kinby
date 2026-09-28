@@ -203,6 +203,9 @@ function Composer({
   )
 }
 
+/** The button pressed in an approval panel. */
+type Answer = "approve" | "deny" | "stop"
+
 /**
  * The approval a turn is parked on, in the composer's place: approve, deny with an optional reason
  * the model reads, or stop the turn. Enter in the reason denies with it.
@@ -221,23 +224,23 @@ function ApprovalPanel({
   const reasonId = useId()
   const [typed, setTyped] = useState("")
   // An answer is final. The panel goes when the turn's next event arrives.
-  const [answering, setAnswering] = useState(false)
+  const [answering, setAnswering] = useState<Answer>()
   const [failure, setFailure] = useState<string>()
   const call = [approval.name, mainArgument(approval.arguments)].filter(Boolean).join(" ")
 
-  const answer = async (work: () => Promise<unknown>) => {
-    setAnswering(true)
+  const answer = async (pressed: Answer, work: () => Promise<unknown>) => {
+    setAnswering(pressed)
     try {
       await work()
       setFailure(undefined)
     } catch (error) {
       setFailure(reason(error))
-      setAnswering(false)
+      setAnswering(undefined)
     }
   }
   const respond = (decision: "approve" | "deny") => {
     const denial = typed.trim()
-    return answer(() =>
+    return answer(decision, () =>
       client.call("thread.approval.respond", {
         thread_id: threadId,
         approval_id: approval.approvalId,
@@ -246,7 +249,9 @@ function ApprovalPanel({
       }),
     )
   }
-  const stop = () => answer(() => client.call("thread.turn.interrupt", { thread_id: threadId }))
+  const stop = () =>
+    answer("stop", () => client.call("thread.turn.interrupt", { thread_id: threadId }))
+  const busy = answering !== undefined
 
   return (
     <section aria-label={`Approve ${call}?`}>
@@ -270,7 +275,7 @@ function ApprovalPanel({
                 id={reasonId}
                 placeholder="Optional: why not, or what to do instead"
                 value={typed}
-                disabled={answering}
+                disabled={busy}
                 aria-invalid={failure !== undefined || undefined}
                 onChange={(event) => setTyped(event.target.value)}
                 onKeyDown={(event) => {
@@ -285,21 +290,28 @@ function ApprovalPanel({
         </CardContent>
         <CardFooter>
           <div className="flex w-full items-center gap-2">
-            <Button disabled={answering} onClick={() => void respond("approve")}>
-              <CheckIcon data-icon="inline-start" />
+            <Button disabled={busy} onClick={() => void respond("approve")}>
+              {answering === "approve" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <CheckIcon data-icon="inline-start" />
+              )}
               Approve
             </Button>
-            <Button variant="outline" disabled={answering} onClick={() => void respond("deny")}>
-              <XIcon data-icon="inline-start" />
+            <Button variant="outline" disabled={busy} onClick={() => void respond("deny")}>
+              {answering === "deny" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <XIcon data-icon="inline-start" />
+              )}
               Deny
             </Button>
-            <Button
-              variant="ghost"
-              className="ml-auto"
-              disabled={answering}
-              onClick={() => void stop()}
-            >
-              <CircleStopIcon data-icon="inline-start" />
+            <Button variant="ghost" className="ml-auto" disabled={busy} onClick={() => void stop()}>
+              {answering === "stop" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <CircleStopIcon data-icon="inline-start" />
+              )}
               Stop the turn
             </Button>
           </div>
