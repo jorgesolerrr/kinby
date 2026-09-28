@@ -46,21 +46,24 @@ describe("a thread's header", () => {
   })
 
   it("shows the thread's mode and disables the modes above the instance's ceiling", async () => {
-    await openHeader({ ceiling: "auto" })
+    await openHeader({ ceiling: "ask" })
     const user = userEvent.setup()
 
     expect(modePicker().textContent).toContain("Ask")
     await user.click(modePicker())
     await screen.findAllByRole("option")
-    const disabled = (name: RegExp) =>
-      screen.getByRole("option", { name }).getAttribute("aria-disabled") === "true"
+    const option = (name: RegExp) => screen.getByRole("option", { name })
+    const modes = [/^Read-only/, /^Ask/, /^Auto/, /^Full access/].map(option)
 
-    expect([/^Read-only/, /^Ask/, /^Auto/, /^Full access/].map(disabled)).toEqual([
-      false,
+    expect(modes.map((mode) => mode.getAttribute("aria-disabled") === "true")).toEqual([
       false,
       false,
       true,
+      true,
     ])
+    expect(
+      modes.map((mode) => mode.textContent?.includes("Above this instance's ceiling")),
+    ).toEqual([false, false, true, true])
   })
 
   it("pins the mode picked and shows it once the instance lists it", async () => {
