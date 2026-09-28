@@ -190,7 +190,7 @@ def test_scheduled_fire_through_dispatcher(tmp_path: Path) -> None:
         threads = await call(dispatcher, "thread.list")
         assert isinstance(threads, ThreadListResult)
         assert len(threads.threads) == 1
-        assert threads.threads[0].title == "news · 2026-09-06T09:01:00+00:00"
+        assert threads.threads[0].title == "news · 2026-09-06 09:01"
         events = await events_for(dispatcher, threads.threads[0].id)
         assert isinstance(events[0].payload, TurnStarted)
         assert events[0].payload.message == "Read the news."
@@ -297,6 +297,61 @@ def test_madrid_schedule_across_dst(tmp_path, start, expected):
         clock.now = datetime.fromisoformat(expected)
         await dispatcher.scheduler.tick()
         assert len((await call(dispatcher, "thread.list")).threads) == 1
+
+    asyncio.run(scenario())
+
+
+def madrid_instance(tmp_path: Path):
+    instance_at(tmp_path)
+    with (tmp_path / "kinby.toml").open("a") as manifest:
+        manifest.write('[routines]\ntimezone = "Europe/Madrid"\n')
+    return load_instance(tmp_path)
+
+
+def test_fired_routine_thread_is_titled_with_local_minute(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = madrid_instance(tmp_path)
+        routine_file(instance, "description: News\nschedule: 0 9 * * *")
+        clock = FakeClock(datetime(2026, 9, 6, 6, 59, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        assert dispatcher.scheduler is not None
+        clock.now = datetime(2026, 9, 6, 7, 0, 42, 838099, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+        await dispatcher.scheduler.drain()
+        threads = await call(dispatcher, "thread.list")
+        assert isinstance(threads, ThreadListResult)
+        assert [thread.title for thread in threads.threads] == ["news · 2026-09-06 09:00"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "delivery_id,title",
+    [(None, "issues · 2026-09-07 00:30"), (DeliveryId("delivery-1"), "issues · delivery-1")],
+)
+def test_delivery_thread_is_titled_with_its_id_or_local_minute(
+    tmp_path: Path, delivery_id: DeliveryId | None, title: str
+) -> None:
+    async def scenario() -> None:
+        instance = madrid_instance(tmp_path)
+        routine_file(instance, "description: Issues", name="issues")
+        clock = FakeClock(datetime(2026, 9, 6, 22, 30, 45, 500000, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        assert dispatcher.scheduler is not None
+        await dispatcher.scheduler.receive(
+            RoutineName("issues"),
+            Delivery(
+                headers={},
+                content_type="text/plain",
+                body="opened",
+                delivery_id=delivery_id,
+                received_at=clock.now,
+            ),
+            RoutineTrigger.SIGNAL,
+        )
+        threads = await call(dispatcher, "thread.list")
+        assert isinstance(threads, ThreadListResult)
+        assert [thread.title for thread in threads.threads] == [title]
 
     asyncio.run(scenario())
 

