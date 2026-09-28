@@ -19,8 +19,12 @@ from kinby.contracts import (
     INSTANCE_PROBE,
     PROMPT_GET,
     PROMPT_SET,
+    ROUTINE_DELETE,
     ROUTINE_LIST,
+    ROUTINE_READ,
     ROUTINE_RUN,
+    ROUTINE_SET_ENABLED,
+    ROUTINE_WRITE,
     STATS_GET,
     THREAD_APPROVAL_RESPOND,
     THREAD_CREATE,
@@ -398,6 +402,10 @@ def build_dispatcher(
         dispatcher.register(PROMPT_GET, config.get_prompt)
         dispatcher.register(PROMPT_SET, config.set_prompt)
         dispatcher.register(CONFIG_HISTORY, config.history)
+        dispatcher.register(ROUTINE_READ, config.read_routine)
+        dispatcher.register(ROUTINE_WRITE, config.write_routine)
+        dispatcher.register(ROUTINE_SET_ENABLED, config.set_routine_enabled)
+        dispatcher.register(ROUTINE_DELETE, config.delete_routine)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)
         dispatcher.register(ROUTINE_RUN, scheduler.run)

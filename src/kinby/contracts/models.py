@@ -91,6 +91,8 @@ class ErrorCode(StrEnum):
     INVALID_SETUP = "INVALID_SETUP"
     #: The file changed since the client read it, so the write was refused. Read it again.
     STALE = "STALE"
+    #: The routine has deliveries waiting to fire, so it cannot be deleted yet.
+    ROUTINE_PENDING = "ROUTINE_PENDING"
     #: Raised by a client, never sent by a server: its connection dropped under a call.
     CONNECTION_LOST = "CONNECTION_LOST"
     INTERNAL = "INTERNAL"
@@ -1495,3 +1497,36 @@ class ConfigHistoryCommand(ContractModel):
 class ConfigHistoryResult(ContractModel):
     #: Newest first.
     changes: list[ConfigChange]
+
+
+class RoutineReadCommand(ContractModel):
+    name: RoutineName
+
+
+class RoutineFile(ContractModel):
+    name: RoutineName
+    #: The routine's ``ROUTINE.md``.
+    content: str
+    #: The sha256 over the sorted (relative path, bytes) pairs of the routine's directory.
+    hash: FileHash
+
+
+class RoutineWriteCommand(ContractModel):
+    name: RoutineName
+    content: str
+    #: The hash the client read, or null to create a routine that does not exist yet.
+    hash: FileHash | None
+
+
+class RoutineSetEnabledCommand(ContractModel):
+    name: RoutineName
+    enabled: bool
+
+
+class RoutineDeleteCommand(ContractModel):
+    name: RoutineName
+    hash: FileHash
+
+
+class RoutineDeleteResult(ContractModel):
+    pass

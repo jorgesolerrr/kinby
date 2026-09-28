@@ -35,6 +35,18 @@ class RoutineNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class RoutinePending(CoreError):
+    """Deliveries wait on the routine, so deleting it would drop them."""
+
+    code = ErrorCode.ROUTINE_PENDING
+
+
+class InvalidConfig(CoreError):
+    """The instance's loaders refused a config value, so nothing was written."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class StaleWrite(CoreError):
     """The file changed since the client read it, so the write would overwrite a change unseen."""
 

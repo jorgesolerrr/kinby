@@ -62,6 +62,7 @@ describe("ConfigPanel", () => {
       false,
     )
     expect(screen.getByRole("button", { name: "Recap prompt" })).toHaveProperty("disabled", false)
+    expect(screen.getByRole("button", { name: "Routines" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Permissions" })).toHaveProperty("disabled", true)
     expect(screen.getByRole("button", { name: "Package and version" })).toHaveProperty(
       "disabled",
@@ -132,5 +133,14 @@ describe("ConfigPanel", () => {
       content: "The agent's text. And mine.",
       hash: "hash-3",
     })
+  })
+
+  it("opens the routines section", async () => {
+    const { user } = openPanel({ "routine.list": () => ({ routines: [], warnings: [] }) })
+
+    await user.click(screen.getByRole("button", { name: "Routines" }))
+
+    expect(await screen.findByRole("heading", { name: "Routines" })).toBeDefined()
+    expect(await screen.findByRole("button", { name: "New routine" })).toBeDefined()
   })
 })
