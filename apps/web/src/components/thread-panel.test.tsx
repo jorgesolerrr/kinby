@@ -127,6 +127,7 @@ describe("a thread's panel", () => {
       ["turn-3", started("Deploy it")],
       ["turn-3", { type: "turn.interrupted" }],
       ["turn-4", started("Deploy it now")],
+      ["turn-4", call("c5", "read", { path: "deploy.log" })],
       ["turn-4", call("c4", "bash", { command: "make deploy" })],
       [
         "turn-4",
@@ -153,6 +154,7 @@ describe("a thread's panel", () => {
       "Done · 3 steps · 1,500 tokens",
       "Failed: The steps budget ran out. (BUDGET_EXCEEDED)",
       "Stopped",
+      "read deploy.log · running",
       "bash make deploy · waiting for you",
       "Working",
     ]) {
@@ -297,6 +299,44 @@ describe("a thread's panel", () => {
       expect(client.calls).toEqual([
         { method: "thread.turn.interrupt", params: { thread_id: "t1" } },
       ])
+    })
+
+    it("marks the call as not run when the turn stops, live and on replay", async () => {
+      const { subscription, unmount } = await reopenParked()
+      const stopped: Event = {
+        sequence: 4,
+        thread_id: "t1",
+        turn_id: "turn-1",
+        timestamp: "2026-09-28T10:00:00Z",
+        payload: { type: "turn.interrupted" },
+      }
+
+      await act(async () => subscription().deliver(stopped))
+      expect(screen.getByText("bash make deploy · not run, turn stopped")).toBeDefined()
+
+      unmount()
+      const reopened = openThread()
+      await act(async () => {
+        reopened.subscription().subscribed(stopped.sequence)
+        for (const event of [...parked, stopped]) reopened.subscription().deliver(event)
+      })
+      expect(screen.getByText("bash make deploy · not run, turn stopped")).toBeDefined()
+    })
+
+    it("marks the call as not run when the turn fails", async () => {
+      const { subscription } = await reopenParked()
+
+      await act(async () =>
+        subscription().deliver({
+          sequence: 4,
+          thread_id: "t1",
+          turn_id: "turn-1",
+          timestamp: "2026-09-28T10:00:00Z",
+          payload: { type: "turn.failed", code: "INTERNAL", message: "The runner crashed." },
+        }),
+      )
+
+      expect(screen.getByText("bash make deploy · not run, turn failed")).toBeDefined()
     })
 
     it("gives the composer back once the turn moves on", async () => {

@@ -32,7 +32,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { reason } from "@/lib/operation"
 import { threadStore } from "@/lib/thread-store"
-import type { ParkedApproval, ToolStep, TurnBlock } from "@/lib/timeline"
+import type { ParkedApproval, ToolStep, TurnBlock, TurnEnd } from "@/lib/timeline"
 import {
   ArrowUpIcon,
   BanIcon,
@@ -330,6 +330,7 @@ function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
                 key={step.callId}
                 step={step}
                 waiting={turn.approval?.callId === step.callId}
+                end={turn.end}
               />
             ),
           )}
@@ -340,8 +341,16 @@ function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
   )
 }
 
-function ToolMarker({ step, waiting }: { step: ToolStep; waiting: boolean }) {
-  const { icon, decision } = gateDecision(step, waiting)
+function ToolMarker({
+  step,
+  waiting,
+  end,
+}: {
+  step: ToolStep
+  waiting: boolean
+  end: TurnEnd | undefined
+}) {
+  const { icon, decision } = gateDecision(step, waiting, end)
   const call = [step.name, mainArgument(step.arguments)].filter(Boolean).join(" ")
   return (
     <Marker>
@@ -351,11 +360,18 @@ function ToolMarker({ step, waiting }: { step: ToolStep; waiting: boolean }) {
   )
 }
 
-/** How the gate decided a call, or, once it let the call run, how long the call took. */
+/**
+ * How the gate decided a call, or, once it let the call run, how long the call took. A call the
+ * gate never decided did not run if its turn has ended.
+ */
 function gateDecision(
   { gate, durationMs }: ToolStep,
   waiting: boolean,
+  end: TurnEnd | undefined,
 ): { icon: ReactNode; decision: string } {
+  if (gate === undefined && durationMs === undefined && end !== undefined) {
+    return { icon: <BanIcon />, decision: `not run, turn ${end.kind}` }
+  }
   if (gate === undefined) {
     return waiting
       ? { icon: <ShieldAlertIcon />, decision: "waiting for you" }
