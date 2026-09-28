@@ -370,7 +370,7 @@ A user decision a live turn waits on before it continues. Requested as an event;
 
 ### Approval decision
 
-The normalized answer to an **approval**: approve or deny. The answer `yes` approves; every other answer denies.
+The user's answer to an **approval**: approve, or deny with an optional reason. The model reads the reason in the denied call's result, so it can do what the user asked instead.
 
 ### Gate
 

@@ -151,6 +151,8 @@ describe("a thread's timeline", () => {
       expect(turn?.approval).toEqual({
         approvalId: "a1",
         callId: "c2",
+        name: "write",
+        arguments: write,
         rule: "ask mode: writes need approval",
       })
     })

@@ -462,7 +462,7 @@ def test_a_parked_turn_snapshots_only_once_it_resumes_and_closes(tmp_path: Path)
             {
                 "thread_id": thread_id,
                 "approval_id": str(requested.approval_id),
-                "answer": "yes",
+                "decision": "approve",
             },
             {Scope.THREAD_OPERATE},
         )

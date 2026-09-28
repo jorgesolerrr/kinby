@@ -16,6 +16,8 @@ from langchain_core.tools import StructuredTool
 from kinby.contracts import (
     AcceptedResult,
     ApprovalRequested,
+    ErrorCode,
+    ErrorEnvelope,
     Event,
     GateDecider,
     GateOutcome,
@@ -159,14 +161,14 @@ async def _start_turn(
     instance: Instance,
     model: ScriptedModel,
     message: str = "Use the tool",
-    approval_answers: Sequence[str] = (),
+    approvals: Sequence[str] = (),
 ) -> list[Event]:
     dispatcher, thread_id = await _session(instance, model)
     events, _ = await _turn_events(
         dispatcher,
         thread_id,
         message,
-        approval_answers=approval_answers,
+        approvals=approvals,
     )
     return events
 
@@ -191,7 +193,7 @@ async def _turn_events(
     thread_id: UUID,
     message: str,
     after_sequence: int = 0,
-    approval_answers: Sequence[str] = (),
+    approvals: Sequence[str] = (),
 ) -> tuple[list[Event], int]:
     accepted = await dispatcher.dispatch(
         "thread.turn.start",
@@ -203,14 +205,14 @@ async def _turn_events(
         dispatcher, {"thread_id": thread_id, "after_sequence": after_sequence}
     )
     events: list[Event] = []
-    answers = iter(approval_answers)
+    decisions = iter(approvals)
     while True:
         event = await asyncio.wait_for(anext(subscription), timeout=GRAPH_EVENT_TIMEOUT)
         assert isinstance(event, Event)
         events.append(event)
         if isinstance(event.payload, ApprovalRequested):
             try:
-                answer = next(answers)
+                decision = next(decisions)
             except StopIteration as exc:
                 raise AssertionError("The turn requested an unexpected approval.") from exc
             responded = await dispatcher.dispatch(
@@ -218,7 +220,7 @@ async def _turn_events(
                 {
                     "thread_id": thread_id,
                     "approval_id": event.payload.approval_id,
-                    "answer": answer,
+                    "decision": decision,
                 },
                 {Scope.THREAD_OPERATE},
             )
@@ -758,7 +760,7 @@ def test_default_bash_uses_the_workspace_timeout_and_output_cap(
             ]
         )
 
-        events = await _start_turn(instance, model, approval_answers=("yes",))
+        events = await _start_turn(instance, model, approvals=("approve",))
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert calls == [(("bash", "-c", "status"), instance.manifest.workspace.path)]
@@ -811,7 +813,7 @@ def test_default_bash_reports_a_nonzero_exit_code(tmp_path: Path, monkeypatch) -
             ]
         )
 
-        events = await _start_turn(instance, model, approval_answers=("yes",))
+        events = await _start_turn(instance, model, approvals=("approve",))
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert _without_duration(result) == ToolResult(
@@ -856,7 +858,7 @@ def test_default_bash_kills_a_timed_out_process_and_returns_partial_output(
             ]
         )
 
-        events = await _start_turn(instance, model, approval_answers=("yes",))
+        events = await _start_turn(instance, model, approvals=("approve",))
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert process.killed
@@ -910,7 +912,7 @@ def test_default_write_and_edit_change_workspace_files(tmp_path: Path) -> None:
         events = await _start_turn(
             instance,
             model,
-            approval_answers=("yes", "yes"),
+            approvals=("approve", "approve"),
         )
 
         results = [event.payload for event in events if isinstance(event.payload, ToolResult)]
@@ -1051,7 +1053,8 @@ async def _answer_write_tool(
     dispatcher: Dispatcher,
     thread_id: UUID,
     requested: Event,
-    answer: str,
+    decision: str,
+    reason: str | None = None,
 ) -> list[Event]:
     assert isinstance(requested.payload, ApprovalRequested)
     accepted = await dispatcher.dispatch(
@@ -1059,7 +1062,8 @@ async def _answer_write_tool(
         {
             "thread_id": thread_id,
             "approval_id": requested.payload.approval_id,
-            "answer": answer,
+            "decision": decision,
+            "reason": reason,
         },
         {Scope.THREAD_OPERATE},
     )
@@ -1092,10 +1096,10 @@ def test_write_tool_parks_before_running(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_yes_runs_the_parked_write_tool_and_completes(tmp_path: Path) -> None:
+def test_approve_runs_the_parked_write_tool_and_completes(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance, dispatcher, thread_id, requested, _ = await _park_write_tool(tmp_path)
-        events = await _answer_write_tool(dispatcher, thread_id, requested, "yes")
+        events = await _answer_write_tool(dispatcher, thread_id, requested, "approve")
 
         gated = next(event.payload for event in events if isinstance(event.payload, ToolGated))
         assert gated == ToolGated(
@@ -1150,7 +1154,7 @@ def write_note(note: str) -> str:
             ]
         )
 
-        events = await _start_turn(instance, model, approval_answers=("yes",))
+        events = await _start_turn(instance, model, approvals=("approve",))
 
         activity = [
             event.payload
@@ -1233,7 +1237,7 @@ def write_note(note: str, context: ToolContext) -> str:
                 requested = event
         await subscription.aclose()
 
-        events.extend(await _answer_write_tool(dispatcher, thread_id, requested, "yes"))
+        events.extend(await _answer_write_tool(dispatcher, thread_id, requested, "approve"))
 
         activity = [
             event.payload
@@ -1251,17 +1255,20 @@ def write_note(note: str, context: ToolContext) -> str:
     asyncio.run(scenario())
 
 
-def test_any_other_answer_denies_the_write_tool_and_completes(tmp_path: Path) -> None:
+def test_deny_without_a_reason_denies_the_write_tool_and_completes(tmp_path: Path) -> None:
     async def scenario() -> None:
-        instance, dispatcher, thread_id, requested, _ = await _park_write_tool(tmp_path)
-        events = await _answer_write_tool(
-            dispatcher,
-            thread_id,
-            requested,
-            "not this time",
-        )
+        instance, dispatcher, thread_id, requested, model = await _park_write_tool(tmp_path)
+        events = await _answer_write_tool(dispatcher, thread_id, requested, "deny")
 
         assert not any(isinstance(event.payload, ToolCall) for event in events)
+        gated = next(event.payload for event in events if isinstance(event.payload, ToolGated))
+        assert gated == ToolGated(
+            call_id="write-1",
+            name="write_note",
+            action=GateOutcome.DENY,
+            rule="mode.ask.write",
+            decided_by=GateDecider.USER,
+        )
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert result == ToolResult(
             call_id="write-1",
@@ -1269,7 +1276,66 @@ def test_any_other_answer_denies_the_write_tool_and_completes(tmp_path: Path) ->
             output='Tool "write_note" was denied by the user.',
             error=True,
         )
+        tool_message = model.messages[-1][-1]
+        assert isinstance(tool_message, ToolMessage)
+        assert tool_message.content == 'Tool "write_note" was denied by the user.'
         assert not (instance.manifest.workspace.path / "note.txt").exists()
+
+    asyncio.run(scenario())
+
+
+def test_deny_with_a_reason_tells_the_model_what_to_do_instead(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance, dispatcher, thread_id, requested, model = await _park_write_tool(tmp_path)
+        events = await _answer_write_tool(
+            dispatcher,
+            thread_id,
+            requested,
+            "deny",
+            "Use the staging branch instead",
+        )
+
+        gated = next(event.payload for event in events if isinstance(event.payload, ToolGated))
+        assert gated == ToolGated(
+            call_id="write-1",
+            name="write_note",
+            action=GateOutcome.DENY,
+            rule="mode.ask.write",
+            decided_by=GateDecider.USER,
+            reason="Use the staging branch instead",
+        )
+        denied = 'Tool "write_note" was denied by the user: Use the staging branch instead'
+        result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
+        assert result == ToolResult(call_id="write-1", name="write_note", output=denied, error=True)
+        tool_message = model.messages[-1][-1]
+        assert isinstance(tool_message, ToolMessage)
+        assert tool_message.content == denied
+        assert not (instance.manifest.workspace.path / "note.txt").exists()
+
+    asyncio.run(scenario())
+
+
+def test_a_reason_on_approve_is_refused_and_the_approval_stays_open(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance, dispatcher, thread_id, requested, _ = await _park_write_tool(tmp_path)
+        assert isinstance(requested.payload, ApprovalRequested)
+
+        refused = await dispatcher.dispatch(
+            "thread.approval.respond",
+            {
+                "thread_id": thread_id,
+                "approval_id": requested.payload.approval_id,
+                "decision": "approve",
+                "reason": "Looks fine",
+            },
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        events = await _answer_write_tool(dispatcher, thread_id, requested, "approve")
+        assert isinstance(events[-1].payload, TurnCompleted)
+        assert (instance.manifest.workspace.path / "note.txt").exists()
 
     asyncio.run(scenario())
 
@@ -1326,7 +1392,7 @@ def test_write_tool_approval_resumes_after_restart(tmp_path: Path) -> None:
             ),
         )
 
-        events = await _answer_write_tool(restarted, thread_id, requested, "yes")
+        events = await _answer_write_tool(restarted, thread_id, requested, "approve")
 
         assert (instance.manifest.workspace.path / "note.txt").read_text(
             encoding="utf-8"

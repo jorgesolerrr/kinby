@@ -224,6 +224,8 @@ class ToolGated(ContractModel):
     action: GateOutcome
     rule: GateRule
     decided_by: GateDecider
+    #: The user's reason for a denial, when they gave one.
+    reason: str | None = None
 
 
 def gate_denial_source(gate: ToolGated) -> str:
@@ -523,10 +525,23 @@ class ThreadTurnRateCommand(ContractModel):
     reason: str | None = None
 
 
+class ApprovalDecision(StrEnum):
+    APPROVE = "approve"
+    DENY = "deny"
+
+
 class ThreadApprovalRespondCommand(ContractModel):
     thread_id: UUID
     approval_id: UUID
-    answer: str
+    decision: ApprovalDecision
+    #: What the model should do instead. Only a denial carries one.
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def _reason_only_on_deny(self) -> Self:
+        if self.decision is ApprovalDecision.APPROVE and self.reason is not None:
+            raise ValueError("An approval takes no reason; only a denial does.")
+        return self
 
 
 class AcceptedResult(ContractModel):

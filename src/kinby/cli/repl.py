@@ -27,6 +27,7 @@ from kinby.contracts import (
     THREAD_TURN_START,
     THREAD_TURN_TARGET_LIST,
     AcceptedResult,
+    ApprovalDecision,
     ApprovalRequested,
     ErrorCode,
     ErrorEnvelope,
@@ -63,6 +64,11 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.instance import FeedbackPolicy
+
+# `y` approves. Any other answer denies, and anything past a plain no is the reason the model reads.
+_APPROVE = frozenset({"y", "yes"})
+_NO = frozenset({"", "n", "no"})
+_ANSWERS = "[y/n or a reason to deny] "
 
 
 class _AsyncInput:
@@ -528,12 +534,15 @@ async def _answer_approval(
     interruption.cancel()
     with suppress(asyncio.CancelledError):
         await interruption
+    typed = answer.result().strip()
+    approved = typed.lower() in _APPROVE
     result = await client.call(
         THREAD_APPROVAL_RESPOND,
         ThreadApprovalRespondCommand(
             thread_id=event.thread_id,
             approval_id=approval.approval_id,
-            answer=answer.result().rstrip("\r\n"),
+            decision=ApprovalDecision.APPROVE if approved else ApprovalDecision.DENY,
+            reason=None if approved or typed.lower() in _NO else typed,
         ),
     )
     if isinstance(result, ErrorEnvelope):
@@ -545,7 +554,7 @@ async def _answer_approval(
 def _approval_prompt(approval: ApprovalRequested) -> str:
     if not any(isinstance(value, str) and "\n" in value for value in approval.arguments.values()):
         arguments = json.dumps(approval.arguments, sort_keys=True)
-        return f'Approve {approval.name} {arguments} under rule "{approval.rule}"? [yes/no] '
+        return f'Approve {approval.name} {arguments} under rule "{approval.rule}"? {_ANSWERS}'
 
     lines = [f'Approve {approval.name} under rule "{approval.rule}":\n']
     for key, value in sorted(approval.arguments.items()):
@@ -561,7 +570,7 @@ def _approval_prompt(approval: ApprovalRequested) -> str:
                 lines.append(f"{escaped_key}: {_escape_terminal_text(value)}\n")
         else:
             lines.append(f"{escaped_key}: {json.dumps(value, sort_keys=True)}\n")
-    lines.append("[yes/no] ")
+    lines.append(_ANSWERS)
     return "".join(lines)
 
 
@@ -583,7 +592,8 @@ def render_event(event: Event, stdout: TextIO, stderr: TextIO) -> None:
                 action=GateOutcome.DENY,
             ) as gate
         ):
-            stdout.write(f"[tool.gated] {name} denied by {gate_denial_source(gate)}\n")
+            reason = f": {gate.reason}" if gate.reason else ""
+            stdout.write(f"[tool.gated] {name} denied by {gate_denial_source(gate)}{reason}\n")
             stdout.flush()
         case ToolResult(name=name, output=output, error=error):
             status = "error" if error else "ok"

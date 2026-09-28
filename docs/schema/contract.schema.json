@@ -124,6 +124,14 @@
       "title": "ApiUse",
       "type": "object"
     },
+    "ApprovalDecision": {
+      "enum": [
+        "approve",
+        "deny"
+      ],
+      "title": "ApprovalDecision",
+      "type": "string"
+    },
     "ApprovalRequested": {
       "additionalProperties": false,
       "properties": {
@@ -3429,12 +3437,23 @@
     "ThreadApprovalRespondCommand": {
       "additionalProperties": false,
       "properties": {
-        "answer": {
-          "type": "string"
-        },
         "approval_id": {
           "format": "uuid",
           "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecision"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "thread_id": {
           "format": "uuid",
@@ -3444,7 +3463,7 @@
       "required": [
         "thread_id",
         "approval_id",
-        "answer"
+        "decision"
       ],
       "title": "ThreadApprovalRespondCommand",
       "type": "object"
@@ -3956,6 +3975,17 @@
         },
         "name": {
           "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "rule": {
           "type": "string"

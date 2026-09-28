@@ -83,6 +83,7 @@ export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription"
 export type TurnClosingKind = "completed" | "failed" | "interrupted";
 export type DelegatedRunOutcome = "completed" | "failed" | "limited";
 export type TurnVerdict = "good" | "bad";
+export type ApprovalDecision = "approve" | "deny";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
 export type ServerFrame = ResultFrame | ErrorFrame | SubscribedFrame | ItemFrame | EndFrame;
@@ -929,8 +930,9 @@ export interface ApiUse {
   output_tokens: number;
 }
 export interface ThreadApprovalRespondCommand {
-  answer: string;
   approval_id: string;
+  decision: ApprovalDecision;
+  reason?: string | null;
   thread_id: string;
 }
 export interface ThreadCreateCommand {
@@ -1165,6 +1167,7 @@ export interface ToolGated {
   call_id: string;
   decided_by: GateDecider;
   name: string;
+  reason?: string | null;
   rule: string;
   type: "tool.gated";
 }

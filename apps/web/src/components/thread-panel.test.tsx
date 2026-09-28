@@ -200,6 +200,134 @@ describe("a thread's panel", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDefined()
   })
 
+  describe("a waiting approval", () => {
+    const parked = thread(
+      ["turn-1", started("Deploy it")],
+      [
+        "turn-1",
+        { type: "tool.call", call_id: "c1", name: "bash", arguments: { command: "make deploy" } },
+      ],
+      [
+        "turn-1",
+        {
+          type: "approval.requested",
+          approval_id: "a1",
+          name: "bash",
+          arguments: { command: "make deploy" },
+          rule: "mode.ask.write",
+        },
+      ],
+    )
+    const accepted = () => ({ sequence: 3, thread_id: "t1", turn_id: "turn-1" })
+
+    /** Reopen the thread with its replay parked on approval a1. */
+    async function reopenParked() {
+      const opened = openThread({
+        "thread.approval.respond": accepted,
+        "thread.turn.interrupt": accepted,
+      })
+      await act(async () => {
+        opened.subscription().subscribed(parked.length)
+        for (const event of parked) opened.subscription().deliver(event)
+      })
+      return opened
+    }
+
+    it("takes the composer's place with the tool, its main argument, the rule, and the arguments", async () => {
+      await reopenParked()
+      const approval = screen.getByRole("region", { name: "Approve bash make deploy?" })
+
+      expect(screen.queryByRole("textbox", { name: "Message Ada" })).toBeNull()
+      expect(screen.queryByRole("button", { name: "Send" })).toBeNull()
+      expect(approval.textContent).toContain("mode.ask.write")
+      expect(approval.textContent).toContain('"command": "make deploy"')
+    })
+
+    it("approves it", async () => {
+      const { client } = await reopenParked()
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Approve" }))
+
+      expect(client.calls).toEqual([
+        {
+          method: "thread.approval.respond",
+          params: { thread_id: "t1", approval_id: "a1", decision: "approve" },
+        },
+      ])
+    })
+
+    it("denies it with the reason typed", async () => {
+      const { client } = await reopenParked()
+      const user = userEvent.setup()
+
+      await user.type(screen.getByRole("textbox", { name: "Reason" }), "  Use staging instead ")
+      await user.click(screen.getByRole("button", { name: "Deny" }))
+
+      expect(client.calls).toEqual([
+        {
+          method: "thread.approval.respond",
+          params: {
+            thread_id: "t1",
+            approval_id: "a1",
+            decision: "deny",
+            reason: "Use staging instead",
+          },
+        },
+      ])
+    })
+
+    it("denies it without a reason when none is typed", async () => {
+      const { client } = await reopenParked()
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Deny" }))
+
+      expect(client.calls).toEqual([
+        {
+          method: "thread.approval.respond",
+          params: { thread_id: "t1", approval_id: "a1", decision: "deny" },
+        },
+      ])
+    })
+
+    it("stops the turn instead", async () => {
+      const { client } = await reopenParked()
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Stop the turn" }))
+
+      expect(client.calls).toEqual([
+        { method: "thread.turn.interrupt", params: { thread_id: "t1" } },
+      ])
+    })
+
+    it("gives the composer back once the turn moves on", async () => {
+      const { subscription } = await reopenParked()
+
+      await act(async () =>
+        subscription().deliver({
+          sequence: 4,
+          thread_id: "t1",
+          turn_id: "turn-1",
+          timestamp: "2026-09-28T10:00:00Z",
+          payload: {
+            type: "tool.gated",
+            call_id: "c1",
+            name: "bash",
+            action: "deny",
+            decided_by: "user",
+            rule: "mode.ask.write",
+            reason: "Use staging instead",
+          },
+        }),
+      )
+
+      expect(screen.queryByRole("region", { name: "Approve bash make deploy?" })).toBeNull()
+      expect(screen.getByRole("textbox", { name: "Message Ada" })).toBeDefined()
+      expect(
+        screen.getByText("bash make deploy · denied by you: Use staging instead"),
+      ).toBeDefined()
+    })
+  })
+
   it("says why a thread it cannot follow did not load", async () => {
     const { subscription } = openThread()
 

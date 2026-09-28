@@ -1,11 +1,22 @@
 import type { InstanceClient, JsonValue } from "@kinby/contract"
-import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react"
+import { type ReactNode, useEffect, useId, useState, useSyncExternalStore } from "react"
 
 import { ThreadHeader } from "@/components/thread-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
-import { Field, FieldError } from "@/components/ui/field"
+import { Badge } from "@/components/ui/badge"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Field, FieldError, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
 import { Message, MessageContent, MessageHeader } from "@/components/ui/message"
 import {
@@ -21,7 +32,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { reason } from "@/lib/operation"
 import { threadStore } from "@/lib/thread-store"
-import type { ToolStep, TurnBlock } from "@/lib/timeline"
+import type { ParkedApproval, ToolStep, TurnBlock } from "@/lib/timeline"
 import {
   ArrowUpIcon,
   BanIcon,
@@ -33,6 +44,7 @@ import {
   SquareIcon,
   UserIcon,
   WrenchIcon,
+  XIcon,
 } from "lucide-react"
 
 /** A thread's turns as a timeline, followed live once its history has loaded. */
@@ -50,6 +62,7 @@ export function ThreadPanel({
   useEffect(() => store.follow(), [store])
   const { timeline, replayed, failure } = useSyncExternalStore(store.onChange, store.view)
   const latest = timeline.turns.at(-1)
+  const approval = latest?.approval
 
   if (failure !== undefined) {
     return (
@@ -70,12 +83,22 @@ export function ThreadPanel({
         <>
           <Transcript turns={timeline.turns} name={name} />
           <div className="mx-auto w-full max-w-3xl p-4">
-            <Composer
-              client={client}
-              threadId={threadId}
-              name={name}
-              running={latest !== undefined && latest.end === undefined}
-            />
+            {/* Nothing else is sent while the turn waits on the user. */}
+            {approval === undefined ? (
+              <Composer
+                client={client}
+                threadId={threadId}
+                name={name}
+                running={latest !== undefined && latest.end === undefined}
+              />
+            ) : (
+              <ApprovalPanel
+                key={approval.approvalId}
+                client={client}
+                threadId={threadId}
+                approval={approval}
+              />
+            )}
           </div>
         </>
       ) : (
@@ -156,6 +179,104 @@ function Composer({
       </div>
       {failure !== undefined && <FieldError>{failure}</FieldError>}
     </Field>
+  )
+}
+
+/**
+ * The approval a turn is parked on, in the composer's place: approve, deny with an optional reason
+ * the model reads, or stop the turn.
+ */
+function ApprovalPanel({
+  client,
+  threadId,
+  approval,
+}: {
+  client: Pick<InstanceClient, "call">
+  threadId: string
+  approval: ParkedApproval
+}) {
+  const reasonId = useId()
+  const [typed, setTyped] = useState("")
+  // An answer is final. The panel goes when the turn's next event arrives.
+  const [answering, setAnswering] = useState(false)
+  const [failure, setFailure] = useState<string>()
+  const call = [approval.name, mainArgument(approval.arguments)].filter(Boolean).join(" ")
+
+  const answer = async (work: () => Promise<unknown>) => {
+    setAnswering(true)
+    try {
+      await work()
+      setFailure(undefined)
+    } catch (error) {
+      setFailure(reason(error))
+      setAnswering(false)
+    }
+  }
+  const respond = (decision: "approve" | "deny") => {
+    const denial = typed.trim()
+    return answer(() =>
+      client.call("thread.approval.respond", {
+        thread_id: threadId,
+        approval_id: approval.approvalId,
+        decision,
+        ...(decision === "deny" && denial !== "" && { reason: denial }),
+      }),
+    )
+  }
+  const stop = () => answer(() => client.call("thread.turn.interrupt", { thread_id: threadId }))
+
+  return (
+    <section aria-label={`Approve ${call}?`}>
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle>{call}</CardTitle>
+          <CardDescription>Waiting for your answer</CardDescription>
+          <CardAction>
+            <Badge variant="outline">{approval.rule}</Badge>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col gap-3">
+            <pre className="max-h-40 overflow-auto font-mono text-xs whitespace-pre-wrap">
+              {JSON.stringify(approval.arguments, null, 2)}
+            </pre>
+            <Field data-invalid={failure !== undefined || undefined}>
+              <FieldLabel htmlFor={reasonId}>Reason</FieldLabel>
+              <Input
+                id={reasonId}
+                placeholder="Optional: why not, or what to do instead"
+                value={typed}
+                disabled={answering}
+                aria-invalid={failure !== undefined || undefined}
+                onChange={(event) => setTyped(event.target.value)}
+              />
+              {failure !== undefined && <FieldError>{failure}</FieldError>}
+            </Field>
+          </div>
+        </CardContent>
+        <CardFooter>
+          <div className="flex w-full items-center gap-2">
+            <Button disabled={answering} onClick={() => void respond("approve")}>
+              <CheckIcon data-icon="inline-start" />
+              Approve
+            </Button>
+            <Button variant="outline" disabled={answering} onClick={() => void respond("deny")}>
+              <XIcon data-icon="inline-start" />
+              Deny
+            </Button>
+            <Button
+              variant="ghost"
+              className="ml-auto"
+              disabled={answering}
+              onClick={() => void stop()}
+            >
+              <CircleStopIcon data-icon="inline-start" />
+              Stop the turn
+            </Button>
+          </div>
+        </CardFooter>
+      </Card>
+    </section>
   )
 }
 
@@ -241,7 +362,12 @@ function gateDecision(
       : { icon: <WrenchIcon />, decision: "running" }
   }
   if (gate.action === "deny") {
-    const decision = gate.decidedBy === "user" ? "denied by you" : `denied by policy: ${gate.rule}`
+    const decision =
+      gate.decidedBy === "policy"
+        ? `denied by policy: ${gate.rule}`
+        : gate.reason
+          ? `denied by you: ${gate.reason}`
+          : "denied by you"
     return { icon: <BanIcon />, decision }
   }
   if (gate.decidedBy === "user") return { icon: <CheckIcon />, decision: "approved by you" }

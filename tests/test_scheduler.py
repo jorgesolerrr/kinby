@@ -1061,7 +1061,8 @@ def test_repl_startup_names_the_thread_for_a_parked_routine(tmp_path: Path) -> N
 
 
 def test_repl_answers_a_parked_routine_approval_before_input(tmp_path: Path) -> None:
-    from kinby.core.turns import ApprovalDecision
+    from kinby.contracts import ApprovalDecision
+    from kinby.core.turns import ApprovalAnswer
     from tests.test_repl import ApprovalReplRunner
 
     async def scenario() -> None:
@@ -1082,7 +1083,7 @@ def test_repl_answers_a_parked_routine_approval_before_input(tmp_path: Path) -> 
                 ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope)),
                 accepted.thread_id,
                 feedback=FeedbackPolicy.OFF,
-                stdin=StringIO("yes\n"),
+                stdin=StringIO("y\n"),
                 stdout=stdout,
                 stderr=stderr,
             ),
@@ -1090,11 +1091,11 @@ def test_repl_answers_a_parked_routine_approval_before_input(tmp_path: Path) -> 
         )
 
         assert exit_code == 0
-        assert runner.decisions == [ApprovalDecision.APPROVE]
+        assert runner.answers == [ApprovalAnswer(ApprovalDecision.APPROVE)]
         assert stdout.getvalue() == (
             f'Routine "news": {started_at}, parked on thread {accepted.thread_id}\n'
             'Approve write_note {"note": "remember me"} under rule "mode.ask.write"? '
-            "[yes/no] "
+            "[y/n or a reason to deny] "
             '[tool.call] write_note {"note": "remember me"}\n'
             "[tool.result] write_note (ok): remember me\nDone\n> "
         )

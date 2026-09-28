@@ -7,13 +7,13 @@ import logging
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
-from enum import StrEnum
 from functools import partial
 from typing import Protocol
 from uuid import UUID, uuid4
 
 from kinby.contracts import (
     AcceptedResult,
+    ApprovalDecision,
     ApprovalRequested,
     CompletionOutcome,
     ErrorCode,
@@ -138,9 +138,12 @@ class ParkedTurn:
     pass
 
 
-class ApprovalDecision(StrEnum):
-    APPROVE = "approve"
-    DENY = "deny"
+@dataclass(frozen=True)
+class ApprovalAnswer:
+    """The user's answer to an approval, and for a denial, what the model should do instead."""
+
+    decision: ApprovalDecision
+    reason: str | None = None
 
 
 def _no_token_usage() -> TokenTotals:
@@ -167,7 +170,7 @@ class TurnRunner(Protocol):
     async def resume(
         self,
         turn: PreparedTurnRequest,
-        decision: ApprovalDecision,
+        answer: ApprovalAnswer,
         context: TurnContext,
         /,
     ) -> TurnResult: ...
@@ -652,10 +655,8 @@ class Turns:
                     preparation.ceiling,
                 ),
             )
-            decision = (
-                ApprovalDecision.APPROVE if command.answer == "yes" else ApprovalDecision.DENY
-            )
-            self._spawn(turn, self._resume(turn, decision, preparation.budgets))
+            answer = ApprovalAnswer(command.decision, command.reason)
+            self._spawn(turn, self._resume(turn, answer, preparation.budgets))
         finally:
             self._release_claim(command.thread_id, claim)
         # respond appends no event, so approval.requested is the resume cursor.
@@ -707,13 +708,13 @@ class Turns:
     async def _resume(
         self,
         turn: PreparedTurnRequest,
-        decision: ApprovalDecision,
+        answer: ApprovalAnswer,
         budgets: Budgets,
     ) -> None:
         await self._finish(
             turn,
             budgets,
-            lambda context: self._runner.resume(turn, decision, context),
+            lambda context: self._runner.resume(turn, answer, context),
         )
 
     async def _finish(

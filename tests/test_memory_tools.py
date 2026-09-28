@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessageChunk, BaseMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from kinby.contracts import (
+    ApprovalDecision,
     ApprovalRequested,
     Event,
     GateDecider,
@@ -24,7 +25,7 @@ from kinby.contracts import (
 )
 from kinby.core import LangGraphRunner
 from kinby.core.turns import (
-    ApprovalDecision,
+    ApprovalAnswer,
     ParkedTurn,
     PreparedTurnRequest,
     TurnContext,
@@ -278,7 +279,7 @@ def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None
         assert any(isinstance(payload, ApprovalRequested) for payload in payloads)
         assert GraphStore(instance.path).recall("coding preferences") == ()
 
-        completed = await runner.resume(turn, ApprovalDecision.APPROVE, context)
+        completed = await runner.resume(turn, ApprovalAnswer(ApprovalDecision.APPROVE), context)
 
         assert isinstance(completed, TurnOutcome)
         hits = GraphStore(instance.path).recall("coding preferences")
@@ -443,7 +444,7 @@ def test_denied_remember_returns_an_error_and_the_turn_continues(tmp_path: Path)
         )
         context = TurnContext(preparation.budgets, emit)
         parked = await runner.run(turn, context)
-        completed = await runner.resume(turn, ApprovalDecision.DENY, context)
+        completed = await runner.resume(turn, ApprovalAnswer(ApprovalDecision.DENY), context)
 
         assert isinstance(parked, ParkedTurn)
         assert isinstance(completed, TurnOutcome)

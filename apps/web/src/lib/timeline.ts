@@ -25,9 +25,11 @@ export interface TurnBlock {
 }
 
 /** An approval the user has not answered, and the tool call it asks about. */
-interface ParkedApproval {
+export interface ParkedApproval {
   approvalId: string
   callId: string
+  name: string
+  arguments: Record<string, JsonValue>
   rule: string
 }
 
@@ -43,8 +45,8 @@ export interface ToolStep {
   callId: string
   name: string
   arguments: Record<string, JsonValue>
-  /** How the gate decided the call. An undecided call has none yet. */
-  gate?: { action: GateOutcome; decidedBy: GateDecider; rule: string }
+  /** How the gate decided the call, and the user's reason for a denial. An undecided call has none yet. */
+  gate?: { action: GateOutcome; decidedBy: GateDecider; rule: string; reason?: string | null }
   /** How long the call ran, once it returned. */
   durationMs?: number
 }
@@ -115,13 +117,24 @@ function projectTurn(previous: TurnBlock, payload: Payload): TurnBlock {
           JSON.stringify(step.arguments) === asked,
       )
       if (call === undefined) return turn
-      const approval = { approvalId: payload.approval_id, callId: call.callId, rule: payload.rule }
+      const approval = {
+        approvalId: payload.approval_id,
+        callId: call.callId,
+        name: payload.name,
+        arguments: payload.arguments,
+        rule: payload.rule,
+      }
       return { ...turn, approval }
     }
     case "tool.gated":
       return updateTool(turn, payload.call_id, (step) => ({
         ...step,
-        gate: { action: payload.action, decidedBy: payload.decided_by, rule: payload.rule },
+        gate: {
+          action: payload.action,
+          decidedBy: payload.decided_by,
+          rule: payload.rule,
+          reason: payload.reason,
+        },
       }))
     case "tool.result":
       return updateTool(turn, payload.call_id, (step) =>

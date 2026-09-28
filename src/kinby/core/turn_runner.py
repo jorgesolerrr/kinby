@@ -32,6 +32,7 @@ from langgraph.types import Command, Interrupt, interrupt
 from pydantic import JsonValue, TypeAdapter
 
 from kinby.contracts import (
+    ApprovalDecision,
     ApprovalRequested,
     CompletionOutcome,
     Delivery,
@@ -77,7 +78,7 @@ from kinby.core.prompt import (
 )
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
-    ApprovalDecision,
+    ApprovalAnswer,
     Emit,
     ParkedTurn,
     PreparedTurnRequest,
@@ -121,6 +122,7 @@ _BUDGET_SECONDS = "kinby_budget_seconds"
 _BUDGET_USD_PER_DAY = "kinby_budget_usd_per_day"
 _CHECKPOINT_SERIALIZER = JsonPlusSerializer(
     allowed_msgpack_modules=(
+        ApprovalAnswer,
         ApprovalDecision,
         ApprovalRequested,
         EventType,
@@ -352,7 +354,7 @@ class LangGraphRunner:
     async def resume(
         self,
         turn: PreparedTurnRequest,
-        decision: ApprovalDecision,
+        answer: ApprovalAnswer,
         context: TurnContext,
     ) -> TurnResult:
         progress = await self._resume_budget_progress(
@@ -369,7 +371,7 @@ class LangGraphRunner:
         return await self._invoke(
             turn,
             context,
-            Command(resume=decision),
+            Command(resume=answer),
             _graph_config(turn),
             replace(progress, resumes=progress.resumes + 1),
         )
@@ -755,37 +757,32 @@ class LangGraphRunner:
                 runtime.context.tool_context.workspace,
             )
             if gate_decision.action is GateAction.ASK:
-                approval_decision = ApprovalDecision(
-                    interrupt(
-                        ApprovalRequested(
-                            approval_id=uuid4(),
-                            name=name,
-                            arguments=arguments,
-                            rule=gate_decision.rule,
-                        )
+                answer: ApprovalAnswer = interrupt(
+                    ApprovalRequested(
+                        approval_id=uuid4(),
+                        name=name,
+                        arguments=arguments,
+                        rule=gate_decision.rule,
                     )
                 )
-                action = (
-                    GateOutcome.ALLOW
-                    if approval_decision is ApprovalDecision.APPROVE
-                    else GateOutcome.DENY
+                approved = answer.decision is ApprovalDecision.APPROVE
+                gate = ToolGated(
+                    call_id=call.call_id,
+                    name=call.name,
+                    action=GateOutcome.ALLOW if approved else GateOutcome.DENY,
+                    rule=gate_decision.rule,
+                    decided_by=GateDecider.USER,
+                    reason=answer.reason,
                 )
-                decided_by = GateDecider.USER
             else:
-                action = _gate_outcome(gate_decision.action)
-                decided_by = GateDecider.POLICY
-            calls.append(
-                ToolCallResolution(
-                    call,
-                    ToolGated(
-                        call_id=call.call_id,
-                        name=call.name,
-                        action=action,
-                        rule=gate_decision.rule,
-                        decided_by=decided_by,
-                    ),
+                gate = ToolGated(
+                    call_id=call.call_id,
+                    name=call.name,
+                    action=_gate_outcome(gate_decision.action),
+                    rule=gate_decision.rule,
+                    decided_by=GateDecider.POLICY,
                 )
-            )
+            calls.append(ToolCallResolution(call, gate))
 
         messages: list[AnyMessage] = []
         for resolution in calls:
@@ -795,9 +792,7 @@ class LangGraphRunner:
                 result = ToolResult(
                     call_id=call.call_id,
                     name=call.name,
-                    output=(
-                        f'Tool "{call.name}" was denied by {gate_denial_source(resolution.gate)}.'
-                    ),
+                    output=_denial(resolution.gate),
                     error=True,
                 )
                 await runtime.context.emit(result)
@@ -903,6 +898,12 @@ def _elapsed_ms(started_at: float) -> int:
 
 def _run_reporter(emit: Emit) -> RunReporter:
     return lambda run: emit(RunDelegated(run=run))
+
+
+def _denial(gate: ToolGated) -> str:
+    """The tool result the model reads for a denied call, with the user's reason when given."""
+    denied = f'Tool "{gate.name}" was denied by {gate_denial_source(gate)}'
+    return f"{denied}: {gate.reason}" if gate.reason else f"{denied}."
 
 
 def _gate_outcome(action: GateAction) -> GateOutcome:
