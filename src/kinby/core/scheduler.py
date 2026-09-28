@@ -14,6 +14,8 @@ from cronsim import CronSim
 
 from kinby.contracts import (
     AcceptedResult,
+    ConfigActor,
+    ConfigFile,
     CronSchedule,
     Delivery,
     RoutineFailureHandled,
@@ -44,6 +46,8 @@ from kinby.core.routine_history import RoutineHistory, routine_history
 from kinby.core.threads import ThreadStore
 from kinby.core.turns import Turns
 from kinby.instance import Instance
+from kinby.instance.config_changes import recorded_change
+from kinby.instance.layout import ROUTINES_DIR
 from kinby.plugins.routines import Routine, disable_routine, load_routine, load_routines
 
 
@@ -341,7 +345,14 @@ class Scheduler:
             notice = None
             routine = by_name.get(failure.name)
             if failure.count >= 10 and routine is not None and routine.enabled:
-                disable_routine(routine)
+                with recorded_change(
+                    self._instance,
+                    ConfigFile(f"{ROUTINES_DIR}/{failure.name}"),
+                    ConfigActor.FAILURE_POLICY,
+                    thread_id=failure.event.thread_id,
+                    turn_id=failure.event.turn_id,
+                ):
+                    disable_routine(routine)
                 by_name.pop(failure.name)
                 notice = RoutineNotice(
                     kind=RoutineNoticeKind.DISABLED,

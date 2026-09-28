@@ -4,14 +4,16 @@ import asyncio
 import json
 import re
 import shutil
+from contextlib import AbstractContextManager
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from cronsim import CronSim
 
-from kinby.contracts import CronSchedule, RoutineName
+from kinby.contracts import ConfigActor, ConfigFile, CronSchedule, RoutineName
 from kinby.instance import Instance
+from kinby.instance.config_changes import recorded_change
 from kinby.instance.layout import (
     ROUTINE_CODE_FILE,
     ROUTINE_FILE,
@@ -43,6 +45,17 @@ def _validate_name(name: str) -> None:
 def _next_firing(schedule: CronSchedule, instance: Instance) -> datetime:
     zone = instance.manifest.routines.timezone
     return next(CronSim(schedule, datetime.now(zone)))
+
+
+def _recorded(context: ToolContext, file: str) -> AbstractContextManager[None]:
+    """Record the change an instance tool makes as the agent's, in the turn it runs in."""
+    return recorded_change(
+        context.instance,
+        ConfigFile(file),
+        ConfigActor.AGENT,
+        thread_id=context.thread_id,
+        turn_id=context.turn_id,
+    )
 
 
 def instance_tools(instance: Instance) -> tuple[Tool, ...]:
@@ -103,7 +116,10 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         routines = context.instance.path / ROUTINES_DIR
         routines.mkdir(parents=True, exist_ok=True)
         target = routines / name
-        with TemporaryDirectory(prefix=".routine-", dir=context.instance.path) as temporary:
+        with (
+            _recorded(context, f"{ROUTINES_DIR}/{name}"),
+            TemporaryDirectory(prefix=".routine-", dir=context.instance.path) as temporary,
+        ):
             staged = Path(temporary) / name
             if target.is_dir():
                 shutil.copytree(target, staged)
@@ -159,7 +175,8 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         routine = load_routine(context.instance, RoutineName(name))
         if routine is None:
             raise LookupError(f'Routine "{name}" was not found.')
-        set_routine_enabled(routine, enabled=enabled)
+        with _recorded(context, f"{ROUTINES_DIR}/{name}"):
+            set_routine_enabled(routine, enabled=enabled)
         if not enabled:
             return f"Routine {name} disabled."
         result = f"Enabled routine {name}."
@@ -202,7 +219,8 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
             raise ValueError(
                 f'Routine "{name}" has {pending} pending {noun} and cannot be deleted.'
             )
-        shutil.rmtree(target)
+        with _recorded(context, f"{ROUTINES_DIR}/{name}"):
+            shutil.rmtree(target)
         return f"Deleted routines/{name}/."
 
     @tool(write=True)
@@ -222,7 +240,10 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         skills = context.instance.path / SKILLS_DIR
         skills.mkdir(parents=True, exist_ok=True)
         target = skills / name
-        with TemporaryDirectory(prefix=".skill-", dir=context.instance.path) as temporary:
+        with (
+            _recorded(context, f"{SKILLS_DIR}/{name}"),
+            TemporaryDirectory(prefix=".skill-", dir=context.instance.path) as temporary,
+        ):
             staged = Path(temporary) / name
             if target.is_dir():
                 shutil.copytree(target, staged)
@@ -262,7 +283,8 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
                     "skill_delete removes instance skills only."
                 )
             raise LookupError(f'Skill "{name}" was not found in the instance.')
-        shutil.rmtree(target)
+        with _recorded(context, f"{SKILLS_DIR}/{name}"):
+            shutil.rmtree(target)
         return f"Deleted skills/{name}/."
 
     return (

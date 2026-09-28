@@ -307,6 +307,107 @@
       "title": "CompletionOutcome",
       "type": "string"
     },
+    "ConfigActor": {
+      "enum": [
+        "app",
+        "agent",
+        "failure_policy"
+      ],
+      "title": "ConfigActor",
+      "type": "string"
+    },
+    "ConfigChange": {
+      "additionalProperties": false,
+      "description": "One recorded edit to the instance's configuration.",
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/ConfigActor"
+        },
+        "at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "diff": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "turn_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "at",
+        "file",
+        "actor",
+        "diff"
+      ],
+      "title": "ConfigChange",
+      "type": "object"
+    },
+    "ConfigHistoryCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limit": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "limit"
+      ],
+      "title": "ConfigHistoryCommand",
+      "type": "object"
+    },
+    "ConfigHistoryResult": {
+      "additionalProperties": false,
+      "properties": {
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/ConfigChange"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "changes"
+      ],
+      "title": "ConfigHistoryResult",
+      "type": "object"
+    },
     "ContainerOwner": {
       "description": "Who manages an existing container now, read from the labels it carries.",
       "enum": [
@@ -524,6 +625,7 @@
         "INVALID_ARGUMENT",
         "NOT_PREPARED",
         "INVALID_SETUP",
+        "STALE",
         "CONNECTION_LOST",
         "INTERNAL"
       ],
@@ -2260,6 +2362,69 @@
       ],
       "title": "ProcessState",
       "type": "string"
+    },
+    "PromptGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/PromptName"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "PromptGetCommand",
+      "type": "object"
+    },
+    "PromptName": {
+      "enum": [
+        "behavior",
+        "recap"
+      ],
+      "title": "PromptName",
+      "type": "string"
+    },
+    "PromptResult": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "default": {
+          "type": "boolean"
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "hash",
+        "default"
+      ],
+      "title": "PromptResult",
+      "type": "object"
+    },
+    "PromptSetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/PromptName"
+        }
+      },
+      "required": [
+        "name",
+        "content",
+        "hash"
+      ],
+      "title": "PromptSetCommand",
+      "type": "object"
     },
     "Readiness": {
       "enum": [
@@ -4678,6 +4843,22 @@
     "methods": {
       "additionalProperties": false,
       "properties": {
+        "config.history": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ConfigHistoryCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ConfigHistoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "image.prepare": {
           "additionalProperties": false,
           "properties": {
@@ -5030,6 +5211,38 @@
           ],
           "type": "object"
         },
+        "prompt.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PromptGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/PromptResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "prompt.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PromptSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/PromptResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "routine.list": {
           "additionalProperties": false,
           "properties": {
@@ -5339,6 +5552,9 @@
         "instance.drain",
         "routine.list",
         "routine.run",
+        "prompt.get",
+        "prompt.set",
+        "config.history",
         "instance.create",
         "instance.start",
         "instance.stop",

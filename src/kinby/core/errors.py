@@ -35,6 +35,12 @@ class RoutineNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class StaleWrite(CoreError):
+    """The file changed since the client read it, so the write would overwrite a change unseen."""
+
+    code = ErrorCode.STALE
+
+
 class ThreadNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 

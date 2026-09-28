@@ -432,6 +432,7 @@ class LangGraphRunner:
                             tool_context=ToolContext(
                                 instance=self._instance,
                                 thread_id=turn.thread_id,
+                                turn_id=turn.turn_id,
                                 run_reporter=_run_reporter(emit),
                             ),
                             user_message=HumanMessage(

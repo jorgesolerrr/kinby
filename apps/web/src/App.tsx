@@ -13,7 +13,12 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/s
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useFollowing } from "@/hooks/use-following"
 import { usePolled } from "@/hooks/use-polled"
-import { useCreating, useSelectedInstanceId, useSelectedThreadId } from "@/lib/selection"
+import {
+  useConfigOpen,
+  useCreating,
+  useSelectedInstanceId,
+  useSelectedThreadId,
+} from "@/lib/selection"
 
 export default function App({ client, clock = browserClock }: { client: Client; clock?: Clock }) {
   const state = useSyncExternalStore(client.onStateChange, client.state)
@@ -33,6 +38,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const running = selected?.process === "running" ? selected.instance_id : undefined
   const instanceClient = useInstanceClient(client, running)
   const threadId = useSelectedThreadId()
+  const configOpen = useConfigOpen()
 
   return (
     <TooltipProvider>
@@ -49,8 +55,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           }
           onSignOut={() => void client.signOut()}
         />
-        {/* An open thread scrolls its transcript inside the window, not the page. */}
-        <SidebarInset className={cn(threadId !== undefined && "h-svh")}>
+        {/* An open thread or config panel scrolls inside the window, not the page. */}
+        <SidebarInset className={cn((threadId !== undefined || configOpen) && "h-svh")}>
           <header className="flex h-12 items-center gap-2 px-2">
             <SidebarTrigger />
             {!connected && <Badge variant="destructive">Reconnecting</Badge>}
@@ -64,6 +70,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
               instances={instances}
               selected={selected}
               threadId={threadId}
+              configOpen={configOpen}
               instanceClient={instanceClient}
               onChanged={listAgain}
             />

@@ -13,9 +13,12 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from kinby.contracts import (
+    CONFIG_HISTORY,
     CONTRACT_VERSION,
     INSTANCE_DRAIN,
     INSTANCE_PROBE,
+    PROMPT_GET,
+    PROMPT_SET,
     ROUTINE_LIST,
     ROUTINE_RUN,
     STATS_GET,
@@ -65,6 +68,7 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.clock import utc_now
+from kinby.core.config import InstanceConfig
 from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
 from kinby.core.pricing import price_map
@@ -389,6 +393,11 @@ def build_dispatcher(
     dispatcher.register(INSTANCE_PROBE, probe)
     dispatcher.register(THREAD_TURN_RATE, rate_turn)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
+    if isinstance(turns, ScheduledTurnConfig):
+        config = InstanceConfig(turns.scheduler.instance)
+        dispatcher.register(PROMPT_GET, config.get_prompt)
+        dispatcher.register(PROMPT_SET, config.set_prompt)
+        dispatcher.register(CONFIG_HISTORY, config.history)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)
         dispatcher.register(ROUTINE_RUN, scheduler.run)

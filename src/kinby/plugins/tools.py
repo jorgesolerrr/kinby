@@ -29,6 +29,8 @@ class ToolContext:
 
     instance: Instance
     thread_id: UUID
+    #: The turn the tool runs in, which an instance tool's config change names.
+    turn_id: UUID | None = None
     package_config: PackageConfig | None = None
     run_reporter: RunReporter | None = field(default=None, repr=False)
 
