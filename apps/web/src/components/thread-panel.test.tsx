@@ -1,6 +1,6 @@
 import { CallError, type Event } from "@kinby/contract"
 import { type Answers, stubCaller, stubSubscriber } from "@kinby/contract/testing"
-import { act, fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -488,6 +488,84 @@ describe("a thread's panel", () => {
       await act(async () => subscription().deliver(denied("")))
 
       expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Thread title" }))
+    })
+  })
+
+  describe("a reply", () => {
+    /** Open a thread whose one turn asked `request` and was answered with `reply`. */
+    async function replied(request: string, reply: string) {
+      const events = thread(
+        ["turn-1", started(request)],
+        ["turn-1", { type: "message.delta", text: reply }],
+      )
+      const { subscription } = openThread()
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+      return screen.getByText("Ada").parentElement as HTMLElement
+    }
+
+    it("renders its Markdown", async () => {
+      const reply = await replied("Explain it", "The **runtime** reads `config.toml` first.")
+
+      expect(reply.querySelector("strong")?.textContent).toBe("runtime")
+      expect(reply.querySelector("code")?.textContent).toBe("config.toml")
+      expect(reply.textContent).not.toContain("**")
+      expect(reply.textContent).not.toContain("`")
+    })
+
+    it("renders a reply cut off mid-emphasis without the open marker", async () => {
+      const reply = await replied("Explain it", "The **runtime reads")
+
+      expect(reply.querySelector("strong")?.textContent).toBe("runtime reads")
+      expect(reply.textContent).not.toContain("**")
+    })
+
+    it("renders a reply cut off inside a code fence without the fence", async () => {
+      const reply = await replied("Show it", "Run this:\n\n```sh\nmake deploy")
+
+      expect(reply.querySelector("pre")?.textContent).toContain("make deploy")
+      expect(reply.textContent).not.toContain("```")
+    })
+
+    it("highlights the syntax of a fenced code block", async () => {
+      const reply = await replied("Show it", "```python\nimport os\n```")
+
+      await waitFor(() => {
+        const keyword = [...reply.querySelectorAll("pre span")].find(
+          (token) => token.textContent === "import",
+        )
+        expect(keyword?.getAttribute("style")).toContain("--sdm-c")
+      })
+    })
+
+    it("leaves the request as typed", async () => {
+      await replied("Deploy **now**, not `later`", "Deploying.")
+
+      expect(screen.getByText("Deploy **now**, not `later`")).toBeDefined()
+    })
+
+    it("shows raw HTML as text", async () => {
+      const reply = await replied("Explain it", "Use <b>bold</b> sparingly.")
+
+      expect(reply.querySelector("b")).toBeNull()
+      expect(reply.textContent).toContain("Use <b>bold</b> sparingly.")
+    })
+
+    it("loads no image it links to", async () => {
+      const reply = await replied("Explain it", "Done. ![pixel](https://evil.example/?q=secret)")
+
+      expect(reply.querySelector("img")).toBeNull()
+      expect(reply.textContent).toContain("Done.")
+    })
+
+    it("opens its links in a new tab", async () => {
+      await replied("Where is it?", "See [the docs](https://kinby.dev/docs).")
+
+      const link = screen.getByRole("link", { name: "the docs" })
+      expect(link.getAttribute("href")).toBe("https://kinby.dev/docs")
+      expect(link.getAttribute("target")).toBe("_blank")
     })
   })
 

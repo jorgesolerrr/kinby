@@ -8,6 +8,8 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
+import { code } from "@streamdown/code"
+import { defaultRehypePlugins, Streamdown, type StreamdownProps } from "streamdown"
 
 import { ThreadHeader } from "@/components/thread-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -363,7 +365,9 @@ function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
           {turn.steps.map((step, index) =>
             step.kind === "text" ? (
               <Bubble key={index} variant="ghost">
-                <BubbleContent className="whitespace-pre-wrap">{step.text}</BubbleContent>
+                <BubbleContent>
+                  <Reply text={step.text} />
+                </BubbleContent>
               </Bubble>
             ) : (
               <ToolMarker
@@ -379,6 +383,26 @@ function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
       </Message>
     </div>
   )
+}
+
+/** How Streamdown renders a reply, built once so its memoization holds while a reply streams. */
+const replyOptions = {
+  // Streamdown draws bold as a styled span. A reply's bold stays a `strong`.
+  components: { strong: "strong" },
+  // Streamdown renders raw HTML through its `raw` plugin. Without it, HTML in a reply stays text.
+  rehypePlugins: Object.entries(defaultRehypePlugins)
+    .filter(([name]) => name !== "raw")
+    .map(([, plugin]) => plugin),
+  // An image would load its URL the moment the thread opens, so a reply can't carry one.
+  disallowedElements: ["img"],
+  plugins: { code },
+  // Links open straight in a new tab, without Streamdown's confirmation dialog.
+  linkSafety: { enabled: false },
+} satisfies StreamdownProps
+
+/** What the instance wrote, as the Markdown it writes in. */
+function Reply({ text }: { text: string }) {
+  return <Streamdown {...replyOptions}>{text}</Streamdown>
 }
 
 function ToolMarker({
