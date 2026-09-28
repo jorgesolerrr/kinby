@@ -1,6 +1,6 @@
 import { CallError, type Event } from "@kinby/contract"
 import { type Answers, stubCaller, stubSubscriber } from "@kinby/contract/testing"
-import { act, render, screen } from "@testing-library/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -232,6 +232,50 @@ describe("a thread's panel", () => {
       })
       return opened
     }
+
+    it("marks the answer pressed while it is out, and shows why once it fails", async () => {
+      let fail = (_error: CallError) => {}
+      const { subscription } = openThread(
+        {},
+        {
+          ...stubCaller({}),
+          ...stubSubscriber(),
+          call: () => new Promise<never>((_resolve, reject) => (fail = reject)),
+        },
+      )
+      await act(async () => {
+        subscription().subscribed(parked.length)
+        for (const event of parked) subscription().deliver(event)
+      })
+      const button = (name: string) =>
+        screen.getByRole<HTMLButtonElement>("button", { name: new RegExp(name) })
+
+      await userEvent.setup().click(button("Approve"))
+
+      expect(["Approve", "Deny", "Stop the turn"].map((name) => button(name).disabled)).toEqual([
+        true,
+        true,
+        true,
+      ])
+      expect(within(button("Approve")).getByRole("status")).toBeDefined()
+      expect(within(button("Deny")).queryByRole("status")).toBeNull()
+
+      await act(async () =>
+        fail(
+          new CallError({
+            code: "CONNECTION_LOST",
+            message: "The connection to the instance dropped.",
+            retryable: true,
+          }),
+        ),
+      )
+
+      expect(screen.getByRole("alert").textContent).toContain(
+        "The connection to the instance dropped.",
+      )
+      expect(within(button("Approve")).queryByRole("status")).toBeNull()
+      expect(button("Approve")).toHaveProperty("disabled", false)
+    })
 
     it("takes the composer's place with the tool, its main argument, the rule, and the arguments", async () => {
       await reopenParked()
