@@ -149,7 +149,7 @@ describe("a thread's panel", () => {
     for (const marker of [
       "read runtime.py · 38 ms",
       "write notes.md · denied by policy: read-only mode denies writes",
-      "edit runtime.py · approved by you",
+      "edit runtime.py · approved by you · running",
       "Done · 3 steps · 1,500 tokens",
       "Failed: The steps budget ran out. (BUDGET_EXCEEDED)",
       "Stopped",
@@ -160,6 +160,45 @@ describe("a thread's panel", () => {
     }
     expect(screen.getAllByText(/^You ·/)).toHaveLength(3)
     expect(screen.getByText(/^Routine nightly-digest ·/)).toBeDefined()
+  })
+
+  it("marks how long a call you approved took once it ran", async () => {
+    const events = thread(
+      ["turn-1", started("Deploy it")],
+      [
+        "turn-1",
+        { type: "tool.call", call_id: "c1", name: "bash", arguments: { command: "make deploy" } },
+      ],
+      [
+        "turn-1",
+        {
+          type: "tool.gated",
+          call_id: "c1",
+          name: "bash",
+          action: "allow",
+          decided_by: "user",
+          rule: "mode.ask.write",
+        },
+      ],
+      [
+        "turn-1",
+        {
+          type: "tool.result",
+          call_id: "c1",
+          name: "bash",
+          output: "",
+          error: false,
+          duration_ms: 12,
+        },
+      ],
+    )
+    const { subscription } = openThread()
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+
+    expect(screen.getByText("bash make deploy · approved by you · 12 ms")).toBeDefined()
   })
 
   it("starts a turn with the message when Enter is pressed", async () => {
