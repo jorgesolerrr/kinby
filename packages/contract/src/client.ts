@@ -71,6 +71,17 @@ export interface Client {
   signOut: () => Promise<void>
   state: () => ConnectionState
   onStateChange: (listener: () => void) => () => void
+  /** Reach one instance through the hub's relay, on a socket of its own. */
+  instance: (instanceId: string) => InstanceClient
+}
+
+/** One instance's contract, as the hub relays it. Its connection follows the same rules as the hub's. */
+export interface InstanceClient extends Pick<
+  Client,
+  "call" | "subscribe" | "state" | "onStateChange"
+> {
+  /** Close the socket and stop reconnecting. */
+  close: () => void
 }
 
 /** A call the hub answered with an error frame, or one the connection could not carry. */
@@ -142,7 +153,17 @@ export function createClient(
   transport: Transport,
   clock: Clock = browserClock,
 ): Client {
+  return connect(origin, transport, clock, "/ws")
+}
+
+function connect(
+  origin: string,
+  transport: Transport,
+  clock: Clock,
+  path: string,
+): Client & InstanceClient {
   let connection = INITIAL_CONNECTION
+  let closed = false
   let socket: Socket | undefined
   let nextId = 1
   const pending = new Map<string, PendingCall>()
@@ -166,13 +187,13 @@ export function createClient(
       (response) => response.status === 401,
       () => false,
     )
-    if (generation !== settleGeneration || socket !== undefined) return
+    if (generation !== settleGeneration || socket !== undefined || closed) return
     cancelTimer()
     if (ended) return dispatch("session-ended")
     dispatch("dropped")
     // Full jitter: anywhere from no wait to the ceiling, so clients never retry in step.
     const ceiling = Math.min(LAST_BACKOFF_MS, FIRST_BACKOFF_MS * 2 ** (connection.drops - 1))
-    cancelTimer = clock.after(clock.random() * ceiling, connect)
+    cancelTimer = clock.after(clock.random() * ceiling, open)
   }
 
   const sendSubscribe = (id: string, { method, params, lastSequence }: OpenSubscription) => {
@@ -201,9 +222,9 @@ export function createClient(
     }
   }
 
-  const connect = () => {
+  const open = () => {
     cancelTimer()
-    const opened = transport.openSocket(socketUrl(origin), {
+    const opened = transport.openSocket(socketUrl(origin, path), {
       open: () => {
         if (socket !== opened) return
         for (const [id, subscription] of subscriptions) sendSubscribe(id, subscription)
@@ -220,13 +241,13 @@ export function createClient(
         cancelTimer()
         for (const call of pending.values()) call.reject(new CallError(CONNECTION_LOST))
         pending.clear()
-        void settle()
+        if (!closed) void settle()
       },
     })
     socket = opened
   }
 
-  connect()
+  open()
 
   return {
     call(method, params) {
@@ -287,7 +308,7 @@ export function createClient(
       if (!login?.ok) return false
       if (socket === undefined) {
         dispatch("signed-in")
-        connect()
+        open()
       }
       return true
     },
@@ -302,11 +323,18 @@ export function createClient(
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
+    instance: (instanceId) =>
+      connect(origin, transport, clock, `/instances/${encodeURIComponent(instanceId)}/ws`),
+    close() {
+      closed = true
+      cancelTimer()
+      socket?.close()
+    },
   }
 }
 
-function socketUrl(origin: string): string {
-  const url = new URL("/ws", origin)
+function socketUrl(origin: string, path: string): string {
+  const url = new URL(path, origin)
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
   return url.href
 }

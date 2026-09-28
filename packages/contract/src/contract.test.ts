@@ -19,6 +19,7 @@ import type {
   StatsGetCommand,
   SubscribedFrame,
   SubscriptionUse,
+  ThreadStatus,
 } from "./index"
 
 test("the committed types are a fresh generation of the contract schema", async () => {
@@ -97,4 +98,12 @@ test("stats.summary takes stats.get's range and names each instance it counted o
   expectTypeOf<Summary["result"]["limits"]>().toEqualTypeOf<PlanLimit[]>()
   expectTypeOf<Summary["result"]["skipped"]>().toEqualTypeOf<string[]>()
   expectTypeOf<Summary["result"]["unreachable"]>().toEqualTypeOf<string[]>()
+})
+
+test("thread.list reads each thread's status and last activity", () => {
+  type Thread = Contract["methods"]["thread.list"]["result"]["threads"][number]
+
+  expectTypeOf<Thread["status"]>().toEqualTypeOf<ThreadStatus>()
+  expectTypeOf<ThreadStatus>().toEqualTypeOf<"idle" | "running" | "awaiting_approval" | "failed">()
+  expectTypeOf<Thread["last_activity_at"]>().toEqualTypeOf<string>()
 })

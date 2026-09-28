@@ -68,7 +68,7 @@ from kinby.core.pricing import price_map
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
 from kinby.core.stats import active_limits, plan_windows, stats_buckets, stats_summary
-from kinby.core.threads import ThreadStore
+from kinby.core.threads import ThreadStore, thread_list
 from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnPreparation, TurnRunner, Turns
@@ -299,7 +299,7 @@ def build_dispatcher(
         return store.create(command.title)
 
     async def list_threads(command: ThreadListCommand) -> ThreadListResult:
-        return store.list()
+        return thread_list(store.threads(), event_log.all_events())
 
     async def get_usage(command: UsageGetCommand) -> UsageGetResult:
         return usage_totals(

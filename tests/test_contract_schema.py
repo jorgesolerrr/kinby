@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import cast
 
 from pydantic import JsonValue
 
@@ -86,3 +87,17 @@ def test_every_const_discriminant_is_required_so_a_union_narrows_on_it() -> None
                 assert name in required
 
     assert discriminated > 0
+
+
+def test_a_thread_summary_carries_its_status_and_last_activity() -> None:
+    definitions = _object(contract_schema()["$defs"])
+    summary = _object(definitions["ThreadSummary"])
+
+    assert {"status", "last_activity_at"} <= set(_object(summary["properties"]))
+    assert {"status", "last_activity_at"} <= set(cast(list[str], summary["required"]))
+    assert _object(definitions["ThreadStatus"])["enum"] == [
+        "idle",
+        "running",
+        "awaiting_approval",
+        "failed",
+    ]
