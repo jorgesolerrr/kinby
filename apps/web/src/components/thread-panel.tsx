@@ -393,6 +393,8 @@ const replyOptions = {
   rehypePlugins: Object.entries(defaultRehypePlugins)
     .filter(([name]) => name !== "raw")
     .map(([, plugin]) => plugin),
+  // An image would load its URL the moment the thread opens, so a reply can't carry one.
+  disallowedElements: ["img"],
   plugins: { code },
   // Links open straight in a new tab, without Streamdown's confirmation dialog.
   linkSafety: { enabled: false },
