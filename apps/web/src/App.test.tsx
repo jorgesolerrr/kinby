@@ -195,6 +195,33 @@ describe("the instances", () => {
     expect(screen.queryByText("Nothing here yet")).toBeNull()
   })
 
+  it("opens a running instance's config panel from its page, and puts it in the URL", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("button", { name: "Configure" }))
+
+    expect(window.location.pathname).toBe("/instances/hub-ada/config")
+    expect(screen.getByRole("navigation", { name: "Config sections" })).toBeDefined()
+    const relayed = hub.sockets.find(
+      (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
+    )
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(relayed?.sent).toContainEqual(
+      expect.objectContaining({ type: "call", method: "prompt.get", params: { name: "behavior" } }),
+    )
+  })
+
+  it("restores the config panel from the URL", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/config")
+
+    openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    expect(await screen.findByRole("navigation", { name: "Config sections" })).toBeDefined()
+    expect(screen.queryByText("Nothing here yet")).toBeNull()
+  })
+
   it("opens no threads for a selected instance that is not running", async () => {
     window.history.replaceState(null, "", "/instances/hub-unnamed")
 

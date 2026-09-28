@@ -131,3 +131,40 @@ def test_an_approval_answer_is_a_decision_with_an_optional_reason() -> None:
     assert "decision" in cast(list[str], respond["required"])
     assert _object(definitions["ApprovalDecision"])["enum"] == ["approve", "deny"]
     assert "reason" in _object(gated["properties"])
+
+
+def test_the_schema_declares_the_prompt_and_config_history_calls() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"]
+        for name in ("prompt.get", "prompt.set", "config.history")
+    } == {
+        "prompt.get": {
+            "command": {"$ref": "#/$defs/PromptGetCommand"},
+            "result": {"$ref": "#/$defs/PromptResult"},
+        },
+        "prompt.set": {
+            "command": {"$ref": "#/$defs/PromptSetCommand"},
+            "result": {"$ref": "#/$defs/PromptResult"},
+        },
+        "config.history": {
+            "command": {"$ref": "#/$defs/ConfigHistoryCommand"},
+            "result": {"$ref": "#/$defs/ConfigHistoryResult"},
+        },
+    }
+    assert set(cast(list[str], _object(definitions["PromptResult"])["required"])) == {
+        "content",
+        "hash",
+        "default",
+    }
+    assert set(cast(list[str], _object(definitions["ConfigChange"])["required"])) == {
+        "at",
+        "file",
+        "actor",
+        "diff",
+    }
+    assert _object(definitions["ConfigActor"])["enum"] == ["app", "agent", "failure_policy"]
+    assert "STALE" in cast(list[str], _object(definitions["ErrorCode"])["enum"])

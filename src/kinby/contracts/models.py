@@ -89,6 +89,8 @@ class ErrorCode(StrEnum):
     NOT_PREPARED = "NOT_PREPARED"
     #: Some setup values are missing or invalid. The envelope names each field.
     INVALID_SETUP = "INVALID_SETUP"
+    #: The file changed since the client read it, so the write was refused. Read it again.
+    STALE = "STALE"
     #: Raised by a client, never sent by a server: its connection dropped under a call.
     CONNECTION_LOST = "CONNECTION_LOST"
     INTERNAL = "INTERNAL"
@@ -1434,3 +1436,62 @@ class RoutineSummary(ContractModel):
 class RoutineListResult(ContractModel):
     routines: list[RoutineSummary]
     warnings: tuple[Warning, ...]
+
+
+#: The sha256 hex of a config file's bytes on disk. A missing file hashes as empty bytes.
+FileHash = NewType("FileHash", str)
+#: A config file's path in the instance directory, such as ``SYSTEM.md`` or ``routines/news``.
+ConfigFile = NewType("ConfigFile", str)
+
+
+class PromptName(StrEnum):
+    BEHAVIOR = "behavior"
+    RECAP = "recap"
+
+
+class PromptGetCommand(ContractModel):
+    name: PromptName
+
+
+class PromptSetCommand(ContractModel):
+    name: PromptName
+    content: str
+    #: The hash the client read. The write is refused as STALE when the file changed since.
+    hash: FileHash
+
+
+class PromptResult(ContractModel):
+    content: str
+    hash: FileHash
+    #: True when the instance has no file and ``content`` is the text kinby ships.
+    default: bool
+
+
+class ConfigActor(StrEnum):
+    APP = "app"
+    AGENT = "agent"
+    FAILURE_POLICY = "failure_policy"
+
+
+class ConfigChange(ContractModel):
+    """One recorded edit to the instance's configuration."""
+
+    at: AwareDatetime
+    file: ConfigFile
+    actor: ConfigActor
+    #: The thread and turn the change was made in, when it was made in one.
+    thread_id: UUID | None = None
+    turn_id: UUID | None = None
+    #: A unified diff from the content before the change to the content after it.
+    diff: str
+
+
+class ConfigHistoryCommand(ContractModel):
+    #: Only the changes to this file. Every file's changes when absent.
+    file: ConfigFile | None = None
+    limit: int = Field(ge=1)
+
+
+class ConfigHistoryResult(ContractModel):
+    #: Newest first.
+    changes: list[ConfigChange]

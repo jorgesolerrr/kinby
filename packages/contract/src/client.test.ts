@@ -130,6 +130,19 @@ describe("client", () => {
     })
   })
 
+  it("rejects a write over a file that changed since it was read as stale", async () => {
+    const { client, socket } = await connected()
+
+    const saved = client.call("prompt.set", { name: "behavior", content: "Be kind.", hash: "h" })
+    socket.receive({
+      type: "error",
+      id: "1",
+      error: { code: "STALE", message: "SYSTEM.md changed since it was read.", retryable: false },
+    })
+
+    await expect(saved).rejects.toMatchObject({ code: "STALE", retryable: false })
+  })
+
   it("rejects the calls in flight when the socket drops, and never replays them", async () => {
     const { client, hub, socket, clock } = await connected()
 

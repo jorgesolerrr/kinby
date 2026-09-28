@@ -7,6 +7,7 @@
 
 export type ClientFrame = CallFrame | SubscribeFrame | CancelFrame;
 export type JsonValue = unknown;
+export type ConfigActor = "app" | "agent" | "failure_policy";
 export type CommitSha = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
@@ -74,6 +75,7 @@ export type TargetFile = "kinby.toml" | "package.yaml";
  * How a client asks for a setup field's value, and so what the value is.
  */
 export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "choice" | "email" | "url";
+export type PromptName = "behavior" | "recap";
 export type RoutineRunOutcome = "running" | "parked" | "work" | "no-work" | "failed" | "interrupted";
 export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
 export type RoutineNoticeKind = "first-failure" | "disabled";
@@ -103,6 +105,7 @@ export type ErrorCode =
   | "INVALID_ARGUMENT"
   | "NOT_PREPARED"
   | "INVALID_SETUP"
+  | "STALE"
   | "CONNECTION_LOST"
   | "INTERNAL";
 export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
@@ -113,6 +116,10 @@ export type CompletionOutcome = "work" | "no-work";
 export interface Contract {
   client_frame: ClientFrame;
   methods: {
+    "config.history": {
+      command: ConfigHistoryCommand;
+      result: ConfigHistoryResult;
+    };
     "image.prepare": {
       command: ImagePrepareCommand;
       result: ImagePrepareResult;
@@ -200,6 +207,14 @@ export interface Contract {
     "package.list": {
       command: PackageListCommand;
       result: PackageListResult;
+    };
+    "prompt.get": {
+      command: PromptGetCommand;
+      result: PromptResult;
+    };
+    "prompt.set": {
+      command: PromptSetCommand;
+      result: PromptResult;
     };
     "routine.list": {
       command: RoutineListCommand;
@@ -301,6 +316,24 @@ export interface SubscribeFrame {
 export interface CancelFrame {
   id: string;
   type: "cancel";
+}
+export interface ConfigHistoryCommand {
+  file?: string | null;
+  limit: number;
+}
+export interface ConfigHistoryResult {
+  changes: ConfigChange[];
+}
+/**
+ * One recorded edit to the instance's configuration.
+ */
+export interface ConfigChange {
+  actor: ConfigActor;
+  at: string;
+  diff: string;
+  file: string;
+  thread_id?: string | null;
+  turn_id?: string | null;
 }
 /**
  * Prepare a package selection's image. No package prepares kinby's base image.
@@ -664,6 +697,19 @@ export interface CuratedPackage {
   icon: string;
   id: string;
   selection: PackageSelection;
+}
+export interface PromptGetCommand {
+  name: PromptName;
+}
+export interface PromptResult {
+  content: string;
+  default: boolean;
+  hash: string;
+}
+export interface PromptSetCommand {
+  content: string;
+  hash: string;
+  name: PromptName;
 }
 export interface RoutineListCommand {}
 export interface RoutineListResult {

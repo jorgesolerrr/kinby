@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from kinby.contracts.models import (
     AcceptedResult,
+    ConfigHistoryCommand,
+    ConfigHistoryResult,
     ContractModel,
     Event,
     ImagePrepareCommand,
@@ -43,6 +45,9 @@ from kinby.contracts.models import (
     PackageDescription,
     PackageListCommand,
     PackageListResult,
+    PromptGetCommand,
+    PromptResult,
+    PromptSetCommand,
     RoutineListCommand,
     RoutineListResult,
     RoutineRunCommand,
@@ -160,6 +165,11 @@ INSTANCE_DRAIN = Method(
 
 ROUTINE_LIST = Method("routine.list", Scope.INSTANCE_READ, RoutineListCommand, RoutineListResult)
 ROUTINE_RUN = Method("routine.run", Scope.INSTANCE_ADMIN, RoutineRunCommand, AcceptedResult)
+PROMPT_GET = Method("prompt.get", Scope.INSTANCE_READ, PromptGetCommand, PromptResult)
+PROMPT_SET = Method("prompt.set", Scope.INSTANCE_ADMIN, PromptSetCommand, PromptResult)
+CONFIG_HISTORY = Method(
+    "config.history", Scope.INSTANCE_READ, ConfigHistoryCommand, ConfigHistoryResult
+)
 
 INSTANCE_CREATE = Method(
     "instance.create", Scope.HUB_ADMIN, InstanceCreateCommand, LifecycleOperationResult
@@ -247,6 +257,9 @@ METHODS = (
     INSTANCE_DRAIN,
     ROUTINE_LIST,
     ROUTINE_RUN,
+    PROMPT_GET,
+    PROMPT_SET,
+    CONFIG_HISTORY,
     INSTANCE_CREATE,
     INSTANCE_START,
     INSTANCE_STOP,
