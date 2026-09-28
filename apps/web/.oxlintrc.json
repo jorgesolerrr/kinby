@@ -10,7 +10,13 @@
     "react/react-in-jsx-scope": "off",
     "react/only-export-components": ["error", { "allowConstantExport": true }],
     "typescript/no-explicit-any": "error",
-    "shadcn/no-restyle": ["error", { "allow": ["layout"] }],
+    "shadcn/no-restyle": [
+      "error",
+      {
+        "allow": ["layout"],
+        "contracts": [{ "pattern": "^MessageHeader$", "allow": ["layout", "px-0"] }]
+      }
+    ],
     "shadcn/no-raw-colors": "error",
     "shadcn/no-arbitrary-values": "error",
     "shadcn/no-inline-styles": "error",
