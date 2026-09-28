@@ -33,19 +33,21 @@ export function ThreadHeader({
   client,
   threadId,
 }: {
-  client: Pick<InstanceClient, "call">
+  client: Pick<InstanceClient, "call" | "state" | "onStateChange">
   threadId: string
 }) {
+  const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
   const threads = threadList(client)
   const listed = useSyncExternalStore(threads.onChange, threads.view)
   const thread = listed?.threads.find((summary) => summary.id === threadId)
   const missing = thread === undefined
   const [failure, setFailure] = useState<string>()
-  // The sidebar lists the threads, but at phone width it is closed and nothing does. A header that
-  // cannot list them stays empty, and the transcript under it does not depend on it.
+  // The sidebar lists the threads, but at phone width it is closed and nothing does. The client
+  // refuses a call before its socket is up, so the header waits for it. A header that cannot list
+  // the threads stays empty, and the transcript under it does not depend on it.
   useEffect(() => {
-    if (missing) threads.list().catch(() => {})
-  }, [threads, threadId, missing])
+    if (connected && missing) threads.list().catch(() => {})
+  }, [threads, threadId, connected, missing])
 
   if (listed === undefined || thread === undefined) return null
   /** Make a change, then list the threads again. Resolves to whether the instance took it. */
