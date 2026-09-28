@@ -289,8 +289,9 @@ function ApprovalPanel({
           </div>
         </CardContent>
         <CardFooter>
-          <div className="flex w-full items-center gap-2">
-            <Button disabled={busy} onClick={() => void respond("approve")}>
+          {/* Below md the buttons grow to a 44 px tap target, and Stop the turn wraps before it overflows. */}
+          <div className="flex w-full flex-wrap items-center gap-2">
+            <Button className="max-md:h-11" disabled={busy} onClick={() => void respond("approve")}>
               {answering === "approve" ? (
                 <Spinner data-icon="inline-start" />
               ) : (
@@ -298,7 +299,12 @@ function ApprovalPanel({
               )}
               Approve
             </Button>
-            <Button variant="outline" disabled={busy} onClick={() => void respond("deny")}>
+            <Button
+              variant="outline"
+              className="max-md:h-11"
+              disabled={busy}
+              onClick={() => void respond("deny")}
+            >
               {answering === "deny" ? (
                 <Spinner data-icon="inline-start" />
               ) : (
@@ -306,7 +312,12 @@ function ApprovalPanel({
               )}
               Deny
             </Button>
-            <Button variant="ghost" className="ml-auto" disabled={busy} onClick={() => void stop()}>
+            <Button
+              variant="ghost"
+              className="ml-auto max-md:h-11"
+              disabled={busy}
+              onClick={() => void stop()}
+            >
               {answering === "stop" ? (
                 <Spinner data-icon="inline-start" />
               ) : (
