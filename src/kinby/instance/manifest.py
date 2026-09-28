@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import re
 import tomllib
+from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import tomlkit
 from dotenv import load_dotenv
 from pydantic import (
     BaseModel,
@@ -21,6 +23,7 @@ from pydantic import (
     field_validator,
 )
 
+from kinby.contracts import ManifestValues, NewModelPrice
 from kinby.instance.dataclasses import (
     Budgets,
     Conventions,
@@ -55,6 +58,12 @@ ModelName = Annotated[
     StringConstraints(min_length=1, pattern=_MODEL_PATTERN),
 ]
 _MODEL_NAME_ADAPTER = TypeAdapter(ModelName)
+
+
+def api_key_variable(model: ModelName) -> str:
+    """Where the model's provider looks for its key, by the `<PROVIDER>_API_KEY` convention."""
+    provider, _, _ = model.partition(":")
+    return f"{provider.upper()}_API_KEY"
 
 
 def _provider_model(value: str) -> str:
@@ -181,14 +190,69 @@ class RawManifest(_Section):
     )
 
 
-def _manifest_error(exc: ValidationError) -> ManifestError:
-    first = exc.errors()[0]
-    key = ".".join(str(part) for part in first["loc"])
-    ctx = first.get("ctx") or {}
-    if ctx.get("pattern") == _MODEL_PATTERN.pattern:
-        message = _MODEL_ERROR
+def parse_manifest(text: str) -> RawManifest:
+    """Validate the text of ``kinby.toml`` without loading the instance it belongs to."""
+    return RawManifest.model_validate(tomllib.loads(text))
+
+
+def offered_values(raw: RawManifest) -> ManifestValues:
+    """The fields of the manifest a client may change."""
+    return ManifestValues.model_validate(raw.model_dump(include=set(ManifestValues.model_fields)))
+
+
+def edited_manifest(text: str, values: ManifestValues, prices: Mapping[str, NewModelPrice]) -> str:
+    """Write *values* and *prices* into the text of ``kinby.toml``, keeping its comments.
+
+    Only the fields whose value changes are touched, so a field the file leaves to its
+    default stays out of it. Raises ``ValidationError`` when the result is not a valid manifest.
+    """
+    current = offered_values(parse_manifest(text)).model_dump(mode="json")
+    document = tomlkit.parse(text)
+    for key, value in values.model_dump(mode="json").items():
+        if not isinstance(value, dict):
+            if value != current[key]:
+                _put(document, key, value)
+            continue
+        for name, field_value in value.items():
+            if field_value != current[key][name]:
+                if key not in document:
+                    document[key] = tomlkit.table()
+                _put(document[key], name, field_value)
+    if prices:
+        if "prices" not in document:
+            document["prices"] = tomlkit.table(is_super_table=True)
+        for model, price in prices.items():
+            if model not in document["prices"]:
+                document["prices"][model] = tomlkit.table()
+            document["prices"][model].update(price.model_dump())
+    edited = tomlkit.dumps(document)
+    parse_manifest(edited)
+    return edited
+
+
+def _put(table: MutableMapping[str, object], key: str, value: object) -> None:
+    if value is None:
+        table.pop(key, None)
     else:
-        message = first["msg"].removeprefix("Value error, ")
+        table[key] = value
+
+
+def manifest_field_errors(exc: ValidationError) -> dict[str, str]:
+    """What is wrong with each field of a manifest, by its dotted key."""
+    fields: dict[str, str] = {}
+    for error in exc.errors():
+        key = ".".join(str(part) for part in error["loc"])
+        ctx = error.get("ctx") or {}
+        if ctx.get("pattern") == _MODEL_PATTERN.pattern:
+            message = _MODEL_ERROR
+        else:
+            message = error["msg"].removeprefix("Value error, ")
+        fields.setdefault(key, message)
+    return fields
+
+
+def _manifest_error(exc: ValidationError) -> ManifestError:
+    key, message = next(iter(manifest_field_errors(exc).items()))
     return ManifestError(f"{key}: {message}")
 
 
@@ -282,8 +346,7 @@ def inspect_instance(
     instance_path = Path(directory).resolve()
     manifest_path = instance_path / MANIFEST_NAME
     try:
-        with manifest_path.open("rb") as manifest_file:
-            raw = RawManifest.model_validate(tomllib.load(manifest_file))
+        raw = parse_manifest(manifest_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ManifestError(f"{MANIFEST_NAME}: not found in {instance_path}") from exc
     except tomllib.TOMLDecodeError as exc:

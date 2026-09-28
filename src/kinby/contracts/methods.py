@@ -39,6 +39,9 @@ from kinby.contracts.models import (
     InstanceStopCommand,
     InstanceUpdateCommand,
     LifecycleOperationResult,
+    ManifestGetCommand,
+    ManifestResult,
+    ManifestSetCommand,
     OperationGetCommand,
     OperationGetResult,
     PackageDescribeCommand,
@@ -167,6 +170,8 @@ ROUTINE_LIST = Method("routine.list", Scope.INSTANCE_READ, RoutineListCommand, R
 ROUTINE_RUN = Method("routine.run", Scope.INSTANCE_ADMIN, RoutineRunCommand, AcceptedResult)
 PROMPT_GET = Method("prompt.get", Scope.INSTANCE_READ, PromptGetCommand, PromptResult)
 PROMPT_SET = Method("prompt.set", Scope.INSTANCE_ADMIN, PromptSetCommand, PromptResult)
+MANIFEST_GET = Method("manifest.get", Scope.INSTANCE_READ, ManifestGetCommand, ManifestResult)
+MANIFEST_SET = Method("manifest.set", Scope.INSTANCE_ADMIN, ManifestSetCommand, ManifestResult)
 CONFIG_HISTORY = Method(
     "config.history", Scope.INSTANCE_READ, ConfigHistoryCommand, ConfigHistoryResult
 )
@@ -259,6 +264,8 @@ METHODS = (
     ROUTINE_RUN,
     PROMPT_GET,
     PROMPT_SET,
+    MANIFEST_GET,
+    MANIFEST_SET,
     CONFIG_HISTORY,
     INSTANCE_CREATE,
     INSTANCE_START,

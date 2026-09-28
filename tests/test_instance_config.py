@@ -328,3 +328,323 @@ def test_the_failure_policy_records_the_routine_it_disables(tmp_path: Path) -> N
         assert "+enabled: false" in change.diff.splitlines()
 
     asyncio.run(scenario())
+
+
+MANIFEST = """# Ada's instance
+id = "test"
+persona_name = "Ada"  # the name she answers to
+
+[models]
+# The main model runs every turn.
+main = "openai:gpt-5"
+
+[tools]
+defaults = false
+
+[routines]
+timezone = "Europe/Madrid"
+
+[serve]
+listen = "0.0.0.0:8080"
+"""
+
+MANIFEST_VALUES: dict[str, JsonValue] = {
+    "persona_name": "Ada",
+    "models": {"main": "openai:gpt-5", "recap": None, "embed": None},
+    "budgets": {"steps": None, "tokens": None, "seconds": None, "usd_per_day": None},
+    "routines": {"timezone": "Europe/Madrid"},
+    "tools": {"defaults": False, "bash_timeout_seconds": 120},
+    "memory": {"recap": "every-turn"},
+    "feedback": {"ask": "every-turn"},
+}
+
+
+def _manifest_dispatcher(path: Path):
+    dispatcher = _dispatcher(path)
+    (path / "kinby.toml").write_text(MANIFEST, encoding="utf-8")
+    return dispatcher
+
+
+def test_manifest_get_returns_the_offered_fields_and_the_hash(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        read = await call(_manifest_dispatcher(tmp_path), "manifest.get")
+
+        assert read.values.model_dump(mode="json") == MANIFEST_VALUES
+        assert read.hash == _sha256(MANIFEST)
+
+    asyncio.run(scenario())
+
+
+def test_manifest_set_writes_the_offered_fields_and_keeps_the_comments(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values["persona_name"] = None
+        values["models"]["main"] = "anthropic:claude-sonnet-5"
+        values["budgets"]["steps"] = 20
+        values["budgets"]["usd_per_day"] = 2.5
+        values["routines"]["timezone"] = "America/Bogota"
+        values["tools"]["defaults"] = True
+        values["feedback"]["ask"] = "off"
+
+        written = await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+
+        saved = (tmp_path / "kinby.toml").read_text(encoding="utf-8")
+        assert saved == (
+            "# Ada's instance\n"
+            'id = "test"\n'
+            "\n"
+            "[models]\n"
+            "# The main model runs every turn.\n"
+            'main = "anthropic:claude-sonnet-5"\n'
+            "\n"
+            "[tools]\n"
+            "defaults = true\n"
+            "\n"
+            "[routines]\n"
+            'timezone = "America/Bogota"\n'
+            "\n"
+            "[serve]\n"
+            'listen = "0.0.0.0:8080"\n'
+            "\n"
+            "[budgets]\n"
+            "steps = 20\n"
+            "usd_per_day = 2.5\n"
+            "\n"
+            "[feedback]\n"
+            'ask = "off"\n'
+        )
+        assert written.values.model_dump(mode="json") == values
+        assert written.hash == _sha256(saved)
+        again = await call(dispatcher, "manifest.get")
+        assert again.values.model_dump(mode="json") == values
+
+    asyncio.run(scenario())
+
+
+def test_manifest_set_with_the_values_read_leaves_the_file_as_it_was(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+
+        await call(
+            dispatcher,
+            "manifest.set",
+            values=read.values.model_dump(mode="json"),
+            hash=read.hash,
+        )
+
+        assert (tmp_path / "kinby.toml").read_text(encoding="utf-8") == MANIFEST
+
+    asyncio.run(scenario())
+
+
+def test_manifest_set_with_a_stale_hash_leaves_the_file_alone(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        theirs = MANIFEST.replace('persona_name = "Ada"', 'persona_name = "Grace"')
+        (tmp_path / "kinby.toml").write_text(theirs, encoding="utf-8")
+        values = read.values.model_dump(mode="json")
+        values["persona_name"] = "Ida"
+
+        refused = await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (refused.code, refused.retryable) == (ErrorCode.STALE, False)
+        assert (tmp_path / "kinby.toml").read_text(encoding="utf-8") == theirs
+
+    asyncio.run(scenario())
+
+
+def test_a_manifest_write_records_a_config_change(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values["tools"]["bash_timeout_seconds"] = 300
+
+        await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+
+        history = await call(dispatcher, "config.history", file="kinby.toml", limit=10)
+        [change] = history.changes
+        assert (change.actor, change.thread_id, change.turn_id) == ("app", None, None)
+        assert "+bash_timeout_seconds = 300" in change.diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("owned", "value"),
+    [("id", "other"), ("state_dir", "/elsewhere"), ("serve", {"listen": "0.0.0.0:9000"})],
+)
+def test_manifest_set_refuses_a_field_the_hub_owns(
+    tmp_path: Path, owned: str, value: JsonValue
+) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values[owned] = value
+
+        refused = await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert (tmp_path / "kinby.toml").read_text(encoding="utf-8") == MANIFEST
+
+    asyncio.run(scenario())
+
+
+def test_manifest_set_names_each_invalid_value(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values["models"]["recap"] = "no-provider"
+        values["budgets"]["steps"] = 0
+        values["routines"]["timezone"] = "Mars/Olympus"
+
+        refused = await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert refused.fields == {
+            "models.recap": "must use provider:model form",
+            "budgets.steps": "Input should be greater than 0",
+            "routines.timezone": "Unknown IANA time zone: Mars/Olympus",
+        }
+        assert (tmp_path / "kinby.toml").read_text(encoding="utf-8") == MANIFEST
+        assert (await call(dispatcher, "config.history", limit=10)).changes == []
+
+    asyncio.run(scenario())
+
+
+def test_manifest_set_writes_a_new_price_and_offers_its_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("MISTRAL_API_KEY", "")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values["models"]["main"] = "mistral:large-3"
+
+        written = await call(
+            dispatcher,
+            "manifest.set",
+            values=values,
+            prices={"mistral:large-3": {"input": 2, "output": 6}},
+            hash=read.hash,
+        )
+
+        assert (
+            (tmp_path / "kinby.toml")
+            .read_text(encoding="utf-8")
+            .endswith('\n[prices."mistral:large-3"]\ninput = 2.0\noutput = 6.0\n')
+        )
+        assert [
+            (choice.model, choice.priced_from, choice.key_set) for choice in written.model_choices
+        ] == [
+            ("anthropic:claude-fable-5-1", "shipped", False),
+            ("anthropic:claude-haiku-4-5", "shipped", False),
+            ("anthropic:claude-opus-5", "shipped", False),
+            ("anthropic:claude-opus-5-5", "shipped", False),
+            ("anthropic:claude-sonnet-4-6", "shipped", False),
+            ("anthropic:claude-sonnet-5", "shipped", False),
+            ("mistral:large-3", "manifest", False),
+            ("openai:gpt-5", "shipped", True),
+            ("openai:gpt-5-mini", "shipped", True),
+            ("openai:gpt-5-nano", "shipped", True),
+            ("openai:gpt-5.1", "shipped", True),
+            ("openai:gpt-5.2", "shipped", True),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_manifest_price_for_a_shipped_model_is_the_one_offered(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        with (tmp_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+            manifest.write('\n[prices."openai:gpt-5"]\ninput = 1.0\noutput = 8.0\n')
+
+        read = await call(dispatcher, "manifest.get")
+
+        [choice] = [choice for choice in read.model_choices if choice.model == "openai:gpt-5"]
+        assert choice.priced_from == "manifest"
+
+    asyncio.run(scenario())
+
+
+def test_a_new_routines_timezone_applies_at_the_next_tick(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nschedule: 0 9 * * *")
+        clock = FakeClock(datetime(2026, 9, 6, 6, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        await dispatcher.scheduler.tick()
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values["routines"]["timezone"] = "Europe/Madrid"
+
+        await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+        await dispatcher.scheduler.tick()
+
+        listed = await call(dispatcher, "routine.list")
+        assert listed.routines[0].next_run == datetime(2026, 9, 6, 7, tzinfo=UTC)
+        clock.now = datetime(2026, 9, 6, 7, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+        assert len((await call(dispatcher, "thread.list")).threads) == 1
+
+    asyncio.run(scenario())
+
+
+def test_turning_the_default_tools_on_applies_at_the_next_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        model = ScriptedModel([AIMessageChunk(content="One."), AIMessageChunk(content="Two.")])
+        runner = LangGraphRunner(instance, model_factory=lambda _: model)
+
+        async def turn() -> set[str]:
+            preparation = runner.prepare_for_turn()
+            thread_id, turn_id = uuid4(), uuid4()
+
+            async def emit(payload: Payload) -> Event:
+                return Event(
+                    sequence=1,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    payload=payload,
+                    timestamp=datetime.now(UTC),
+                )
+
+            await runner.run(
+                PreparedTurnRequest(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    message="Hello.",
+                    model=preparation.model,
+                    permission_mode=PermissionMode.FULL_ACCESS,
+                    system_prompt=SystemPrompt("System prompt"),
+                ),
+                TurnContext(preparation.budgets, emit),
+            )
+            return {tool.name for tool in model.bound_tools[-1]}
+
+        without = await turn()
+        manifest = tmp_path / "kinby.toml"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace("defaults = false", "defaults = true"),
+            encoding="utf-8",
+        )
+        with_defaults = await turn()
+
+        assert "bash" not in without
+        assert {"bash", "read", "write", "edit"} <= with_defaults
+
+    asyncio.run(scenario())

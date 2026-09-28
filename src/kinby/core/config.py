@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from kinby.contracts import (
     ConfigActor,
@@ -12,15 +15,27 @@ from kinby.contracts import (
     ConfigHistoryCommand,
     ConfigHistoryResult,
     FileHash,
+    ManifestGetCommand,
+    ManifestResult,
+    ManifestSetCommand,
+    ModelChoice,
+    PriceSource,
     PromptGetCommand,
     PromptName,
     PromptResult,
     PromptSetCommand,
 )
-from kinby.core.errors import StaleWrite
-from kinby.instance import Instance
+from kinby.core.errors import InvalidConfig, StaleWrite
+from kinby.core.pricing import SHIPPED_PRICES
+from kinby.instance import Instance, api_key_variable
 from kinby.instance.config_changes import ConfigChangeLog, recorded_change
-from kinby.instance.layout import RECAP_NAME, SYSTEM_NAME
+from kinby.instance.layout import MANIFEST_NAME, RECAP_NAME, SYSTEM_NAME
+from kinby.instance.manifest import (
+    edited_manifest,
+    manifest_field_errors,
+    offered_values,
+    parse_manifest,
+)
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 
 _PROMPT_FILES = {
@@ -51,6 +66,22 @@ def _write_over(path: Path, content: bytes, read: FileHash) -> None:
     staging.replace(path)
 
 
+def _manifest_result(content: bytes) -> ManifestResult:
+    raw = parse_manifest(content.decode("utf-8"))
+    return ManifestResult(
+        values=offered_values(raw),
+        model_choices=[
+            ModelChoice(
+                model=model,
+                priced_from=PriceSource.MANIFEST if model in raw.prices else PriceSource.SHIPPED,
+                key_set=bool(os.environ.get(api_key_variable(model))),
+            )
+            for model in sorted(SHIPPED_PRICES.keys() | raw.prices.keys())
+        ],
+        hash=_file_hash(content),
+    )
+
+
 class InstanceConfig:
     """The instance's configuration as the contract reads and writes it."""
 
@@ -72,6 +103,21 @@ class InstanceConfig:
         async with self._instance.config_lock:
             await asyncio.to_thread(self._write, _PROMPT_FILES[command.name], content, command.hash)
         return PromptResult(content=command.content, hash=_file_hash(content), default=False)
+
+    async def get_manifest(self, command: ManifestGetCommand) -> ManifestResult:
+        return _manifest_result((self._instance.path / MANIFEST_NAME).read_bytes())
+
+    async def set_manifest(self, command: ManifestSetCommand) -> ManifestResult:
+        path = self._instance.path / MANIFEST_NAME
+        async with self._instance.config_lock:
+            text = path.read_text(encoding="utf-8")
+            try:
+                edited = edited_manifest(text, command.values, command.prices)
+            except ValidationError as exc:
+                raise InvalidConfig(manifest_field_errors(exc)) from exc
+            content = edited.encode("utf-8")
+            await asyncio.to_thread(self._write, ConfigFile(MANIFEST_NAME), content, command.hash)
+        return _manifest_result(content)
 
     async def history(self, command: ConfigHistoryCommand) -> ConfigHistoryResult:
         log = ConfigChangeLog(self._instance.manifest.state_dir)

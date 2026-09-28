@@ -78,19 +78,35 @@ class SelectionNotPrepared(CoreError):
     code = ErrorCode.NOT_PREPARED
 
 
-class InvalidSetup(CoreError):
-    """Some setup values are missing or invalid, so nothing was created."""
+class FieldErrors(CoreError):
+    """An error that names what is wrong with each value the client sent."""
 
-    code = ErrorCode.INVALID_SETUP
-
-    def __init__(self, fields: dict[str, str]) -> None:
-        super().__init__("Some setup values are missing or invalid.")
+    def __init__(self, message: str, fields: dict[str, str]) -> None:
+        super().__init__(message)
         self.fields = fields
 
     def envelope(self) -> ErrorEnvelope:
         return ErrorEnvelope(
             code=self.code, message=str(self), retryable=self.retryable, fields=self.fields
         )
+
+
+class InvalidSetup(FieldErrors):
+    """Some setup values are missing or invalid, so nothing was created."""
+
+    code = ErrorCode.INVALID_SETUP
+
+    def __init__(self, fields: dict[str, str]) -> None:
+        super().__init__("Some setup values are missing or invalid.", fields)
+
+
+class InvalidConfig(FieldErrors):
+    """Some config values are invalid, so the file was left as it was."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+    def __init__(self, fields: dict[str, str]) -> None:
+        super().__init__("Some values are invalid.", fields)
 
 
 class LifecycleOperationNotFound(CoreError):

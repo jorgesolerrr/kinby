@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -45,7 +45,7 @@ from kinby.core.events import EventLog
 from kinby.core.routine_history import RoutineHistory, routine_history
 from kinby.core.threads import ThreadStore
 from kinby.core.turns import Turns
-from kinby.instance import Instance
+from kinby.instance import Instance, ManifestError, inspect_instance
 from kinby.instance.config_changes import recorded_change
 from kinby.instance.layout import ROUTINES_DIR
 from kinby.plugins.routines import Routine, disable_routine, load_routine, load_routines
@@ -274,9 +274,23 @@ class Scheduler:
             )
         return accepted
 
+    def _reread_manifest(self) -> None:
+        """Take the routines timezone from kinby.toml as it is now, or keep the last valid one."""
+        try:
+            manifest = inspect_instance(
+                self._instance.path, matching_rule=self._instance.matching_rule
+            ).manifest
+        except ManifestError:
+            return
+        if manifest.routines != self._instance.manifest.routines:
+            # Every armed time was read in the old zone.
+            self._armed = {}
+        self._instance = replace(self._instance, manifest=manifest)
+
     async def tick(self) -> None:
         await self._turns.wait_idle()
         async with self._pass:
+            self._reread_manifest()
             await self._handle_failures()
             routines, _ = load_routines(self._instance)
             histories = routine_history(self._log.all_events())

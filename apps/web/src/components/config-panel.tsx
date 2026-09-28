@@ -1,7 +1,8 @@
 import type { InstanceClient, PromptName } from "@kinby/contract"
 import { useCallback, useEffect, useId, useState } from "react"
 
-import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Failure, StaleNotice } from "@/components/config-alerts"
+import { ManifestSection } from "@/components/manifest-section"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
@@ -18,10 +19,10 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { reason } from "@/lib/operation"
-import { lastChanged, type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
+import { lastChanged } from "@/lib/config-changes"
+import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
 import {
   BoxIcon,
-  CircleXIcon,
   CpuIcon,
   FileTextIcon,
   KeyRoundIcon,
@@ -36,12 +37,15 @@ import {
 
 type Caller = Pick<InstanceClient, "call">
 
-/** One section of the panel. Only a section with a `prompt` is built yet; the rest are unavailable. */
+/** The sections built so far: the two prompts and the manifest. */
+type SectionId = PromptName | "manifest"
+
+/** One section of the panel. Only a section with an `id` is built yet; the rest are unavailable. */
 interface Section {
   label: string
   hint: string
   icon: LucideIcon
-  prompt?: PromptName
+  id?: SectionId
 }
 
 const GROUPS: { label: string; sections: Section[] }[] = [
@@ -52,16 +56,16 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Behavior prompt",
         hint: "SYSTEM.md, how the agent acts",
         icon: FileTextIcon,
-        prompt: "behavior",
+        id: "behavior",
       },
       {
         label: "Recap prompt",
         hint: "RECAP.md, what a recap looks at",
         icon: NotebookPenIcon,
-        prompt: "recap",
+        id: "recap",
       },
       { label: "Permissions", hint: "ceiling, mode, tool rules, shell patterns", icon: ShieldIcon },
-      { label: "Manifest", hint: "models, budgets, timezone", icon: CpuIcon },
+      { label: "Manifest", hint: "models, budgets, timezone", icon: CpuIcon, id: "manifest" },
     ],
   },
   {
@@ -90,9 +94,9 @@ const APPLIES: Record<PromptName, string> = {
 
 /** The instance's config: its sections grouped in a left column, the selected one on the right. */
 export function ConfigPanel({ client }: { client: Caller }) {
-  const [selected, setSelected] = useState<PromptName>("behavior")
+  const [selected, setSelected] = useState<SectionId>("behavior")
   const section = GROUPS.flatMap((group) => group.sections).find(
-    (candidate) => candidate.prompt === selected,
+    (candidate) => candidate.id === selected,
   )
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -116,7 +120,11 @@ export function ConfigPanel({ client }: { client: Caller }) {
           <p className="text-sm text-muted-foreground">{section?.hint}</p>
         </div>
         <Separator />
-        <PromptSection key={selected} client={client} name={selected} />
+        {selected === "manifest" ? (
+          <ManifestSection client={client} />
+        ) : (
+          <PromptSection key={selected} client={client} name={selected} />
+        )}
       </main>
     </div>
   )
@@ -131,8 +139,8 @@ function SectionGroup({
 }: {
   label: string
   sections: Section[]
-  selected: PromptName
-  onSelect: (prompt: PromptName) => void
+  selected: SectionId
+  onSelect: (id: SectionId) => void
 }) {
   const labelId = useId()
   return (
@@ -141,18 +149,18 @@ function SectionGroup({
         {label}
       </span>
       <ItemGroup aria-labelledby={labelId}>
-        {sections.map(({ label, hint, icon: Icon, prompt }) => (
+        {sections.map(({ label, hint, icon: Icon, id }) => (
           <li key={label}>
             <Item
               size="xs"
-              variant={prompt !== undefined && prompt === selected ? "muted" : "default"}
+              variant={id !== undefined && id === selected ? "muted" : "default"}
               render={
                 <button
                   type="button"
                   aria-label={label}
-                  aria-current={prompt === selected || undefined}
-                  disabled={prompt === undefined}
-                  onClick={() => prompt !== undefined && onSelect(prompt)}
+                  aria-current={id === selected || undefined}
+                  disabled={id === undefined}
+                  onClick={() => id !== undefined && onSelect(id)}
                 />
               }
             >
@@ -161,9 +169,7 @@ function SectionGroup({
               </ItemMedia>
               <ItemContent>
                 <ItemTitle>{label}</ItemTitle>
-                <ItemDescription>
-                  {prompt === undefined ? "Not available yet" : hint}
-                </ItemDescription>
+                <ItemDescription>{id === undefined ? "Not available yet" : hint}</ItemDescription>
               </ItemContent>
             </Item>
           </li>
@@ -229,21 +235,7 @@ function PromptSection({ client, name }: { client: Caller; name: PromptName }) {
 
   return (
     <div className="flex flex-col gap-3">
-      {notice === "stale" && (
-        <Alert variant="destructive">
-          <CircleXIcon />
-          <AlertTitle>Changed since you opened it</AlertTitle>
-          <AlertDescription>
-            {file} was saved by someone else, most likely the agent. Load theirs to see it. Your
-            edits here are dropped.
-          </AlertDescription>
-          <AlertAction>
-            <Button size="sm" variant="outline" onClick={() => void load()}>
-              Load theirs
-            </Button>
-          </AlertAction>
-        </Alert>
-      )}
+      {notice === "stale" && <StaleNotice file={file} onLoad={() => void load()} />}
       {failure !== undefined && <Failure>{failure}</Failure>}
       <Field>
         <div className="flex items-center gap-2">
@@ -277,15 +269,5 @@ function PromptSection({ client, name }: { client: Caller; name: PromptName }) {
         )}
       </div>
     </div>
-  )
-}
-
-function Failure({ children }: { children: string }) {
-  return (
-    <Alert variant="destructive">
-      <CircleXIcon />
-      <AlertTitle>The instance did not answer</AlertTitle>
-      <AlertDescription>{children}</AlertDescription>
-    </Alert>
   )
 }
