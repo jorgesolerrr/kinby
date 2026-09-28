@@ -38,7 +38,13 @@ export function ThreadHeader({
   const threads = threadList(client)
   const listed = useSyncExternalStore(threads.onChange, threads.view)
   const thread = listed?.threads.find((summary) => summary.id === threadId)
+  const missing = thread === undefined
   const [failure, setFailure] = useState<string>()
+  // The sidebar lists the threads, but at phone width it is closed and nothing does. A header that
+  // cannot list them stays empty, and the transcript under it does not depend on it.
+  useEffect(() => {
+    if (missing) threads.list().catch(() => {})
+  }, [threads, threadId, missing])
 
   if (listed === undefined || thread === undefined) return null
   /** Make a change, then list the threads again. Resolves to whether the instance took it. */

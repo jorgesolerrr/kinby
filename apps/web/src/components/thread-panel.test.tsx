@@ -19,7 +19,9 @@ function openThread(
     if (latest === undefined) throw new Error("The panel did not subscribe.")
     return latest
   }
-  return { client, subscription, unmount: rendered.unmount }
+  /** What the panel called besides the header listing the threads. */
+  const sent = () => client.calls.filter((call) => call.method !== "thread.list")
+  return { client, sent, subscription, unmount: rendered.unmount }
 }
 
 /** The thread's events, numbered from 1 in the order given. */
@@ -163,7 +165,7 @@ describe("a thread's panel", () => {
   })
 
   it("starts a turn with the message when Enter is pressed", async () => {
-    const { client, subscription } = openThread({
+    const { sent, subscription } = openThread({
       "thread.turn.start": () => ({ sequence: 1, thread_id: "t1", turn_id: "turn-1" }),
     })
     await act(async () => subscription().subscribed(0))
@@ -171,7 +173,7 @@ describe("a thread's panel", () => {
 
     await user.type(screen.getByRole("textbox", { name: "Message Ada" }), "Fix the runtime{Enter}")
 
-    expect(client.calls).toEqual([
+    expect(sent()).toEqual([
       { method: "thread.turn.start", params: { thread_id: "t1", message: "Fix the runtime" } },
     ])
     expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Ada" }).value).toBe("")
@@ -182,7 +184,7 @@ describe("a thread's panel", () => {
       ["turn-1", started("Deploy it")],
       ["turn-1", { type: "turn.interrupted" }],
     )
-    const { client, subscription } = openThread({
+    const { sent, subscription } = openThread({
       "thread.turn.interrupt": () => ({ sequence: 2, thread_id: "t1", turn_id: "turn-1" }),
     })
     await act(async () => {
@@ -193,7 +195,7 @@ describe("a thread's panel", () => {
 
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull()
     await user.click(screen.getByRole("button", { name: "Stop" }))
-    expect(client.calls).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
+    expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
 
     await act(async () => subscription().deliver(events[1] as Event))
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull()
@@ -244,11 +246,11 @@ describe("a thread's panel", () => {
     })
 
     it("approves it", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
 
       await userEvent.setup().click(screen.getByRole("button", { name: "Approve" }))
 
-      expect(client.calls).toEqual([
+      expect(sent()).toEqual([
         {
           method: "thread.approval.respond",
           params: { thread_id: "t1", approval_id: "a1", decision: "approve" },
@@ -257,13 +259,13 @@ describe("a thread's panel", () => {
     })
 
     it("denies it with the reason typed", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
       const user = userEvent.setup()
 
       await user.type(screen.getByRole("textbox", { name: "Reason" }), "  Use staging instead ")
       await user.click(screen.getByRole("button", { name: "Deny" }))
 
-      expect(client.calls).toEqual([
+      expect(sent()).toEqual([
         {
           method: "thread.approval.respond",
           params: {
@@ -277,11 +279,11 @@ describe("a thread's panel", () => {
     })
 
     it("denies it without a reason when none is typed", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
 
       await userEvent.setup().click(screen.getByRole("button", { name: "Deny" }))
 
-      expect(client.calls).toEqual([
+      expect(sent()).toEqual([
         {
           method: "thread.approval.respond",
           params: { thread_id: "t1", approval_id: "a1", decision: "deny" },
@@ -290,13 +292,11 @@ describe("a thread's panel", () => {
     })
 
     it("stops the turn instead", async () => {
-      const { client } = await reopenParked()
+      const { sent } = await reopenParked()
 
       await userEvent.setup().click(screen.getByRole("button", { name: "Stop the turn" }))
 
-      expect(client.calls).toEqual([
-        { method: "thread.turn.interrupt", params: { thread_id: "t1" } },
-      ])
+      expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
     })
 
     it("gives the composer back once the turn moves on", async () => {

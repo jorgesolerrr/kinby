@@ -1,10 +1,12 @@
 import { CallError, type PermissionMode, type ThreadSummary } from "@kinby/contract"
-import { type Answers, stubCaller } from "@kinby/contract/testing"
+import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
+import { NavThreads } from "@/components/nav-threads"
 import { ThreadHeader } from "@/components/thread-header"
+import { SidebarMenu, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar"
 import { threadList } from "@/lib/thread-list"
 
 function thread(fields: Partial<ThreadSummary> = {}): ThreadSummary {
@@ -137,5 +139,67 @@ describe("a thread's header", () => {
       "value",
       "Deploy notes v2",
     )
+  })
+
+  describe("without the sidebar", () => {
+    it("lists the threads itself when nothing has listed them", async () => {
+      const client = stubCaller({
+        "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }),
+      })
+
+      render(<ThreadHeader client={client} threadId="t1" />)
+
+      expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
+      expect(modePicker().textContent).toContain("Ask")
+    })
+
+    it("lists the threads again when the last list came before the thread", async () => {
+      let threads: ThreadSummary[] = []
+      const client = stubCaller({ "thread.list": () => ({ threads, ceiling: "full-access" }) })
+      await act(() => threadList(client).list())
+
+      threads = [thread()]
+      render(<ThreadHeader client={client} threadId="t1" />)
+
+      expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
+    })
+
+    it("stays empty when the threads do not list", async () => {
+      const client = stubCaller({})
+
+      await act(async () => {
+        render(<ThreadHeader client={client} threadId="t1" />)
+      })
+
+      expect(client.calls.map((call) => call.method)).toEqual(["thread.list"])
+      expect(screen.queryByRole("heading")).toBeNull()
+    })
+  })
+
+  it("leaves listing the threads again to the sidebar beside it", async () => {
+    const client = {
+      ...stubCaller({ "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }) }),
+      state: () => "connected" as const,
+      onStateChange: () => () => {},
+    }
+    const clock = fakeClock()
+    render(
+      <SidebarProvider>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <NavThreads client={client} clock={clock} instanceId="hub-ada" />
+          </SidebarMenuItem>
+        </SidebarMenu>
+        <ThreadHeader client={client} threadId="t1" />
+      </SidebarProvider>,
+    )
+    await screen.findByRole("heading")
+    const listings = () => client.calls.filter((call) => call.method === "thread.list").length
+    const onMount = listings()
+
+    for (const _ of [1, 2, 3]) await act(() => clock.advance(5_000))
+
+    expect(onMount).toBeLessThanOrEqual(2)
+    expect(listings() - onMount).toBe(3)
   })
 })
