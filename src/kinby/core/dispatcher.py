@@ -23,6 +23,7 @@ from kinby.contracts import (
     THREAD_CREATE,
     THREAD_LIST,
     THREAD_MODE_SET,
+    THREAD_RENAME,
     THREAD_SUBSCRIBE,
     THREAD_TURN_DIFF,
     THREAD_TURN_INTERRUPT,
@@ -52,7 +53,9 @@ from kinby.contracts import (
     ThreadCreateResult,
     ThreadListCommand,
     ThreadListResult,
+    ThreadRenameCommand,
     ThreadSubscribeCommand,
+    ThreadSummary,
     ThreadTurnRateCommand,
     TurnRated,
     TurnStarted,
@@ -68,12 +71,13 @@ from kinby.core.pricing import price_map
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
 from kinby.core.stats import active_limits, plan_windows, stats_buckets, stats_summary
-from kinby.core.threads import ThreadStore, thread_list
+from kinby.core.threads import ThreadStore, thread_list, thread_summary
 from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnPreparation, TurnRunner, Turns
 from kinby.core.usage import TimeRange, usage_totals
 from kinby.instance import Instance, ModelPrice
+from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
 from kinby.memory import GraphStore, RecapWriter
 
 Handler = Callable[[ContractModel], Awaitable[ContractModel]]
@@ -244,6 +248,7 @@ def build_dispatcher(
     *,
     turns: ScheduledTurnConfig,
     event_log: EventLog | None = None,
+    permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     price_overrides: Mapping[str, ModelPrice] | None = None,
     clock: Callable[[], datetime] = utc_now,
 ) -> ScheduledDispatcher: ...
@@ -255,6 +260,7 @@ def build_dispatcher(
     *,
     turns: TurnConfig | None = None,
     event_log: EventLog | None = None,
+    permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     price_overrides: Mapping[str, ModelPrice] | None = None,
     clock: Callable[[], datetime] = utc_now,
 ) -> Dispatcher: ...
@@ -265,6 +271,7 @@ def build_dispatcher(
     *,
     event_log: EventLog | None = None,
     turns: TurnConfig | ScheduledTurnConfig | None = None,
+    permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     price_overrides: Mapping[str, ModelPrice] | None = None,
     clock: Callable[[], datetime] = utc_now,
 ) -> Dispatcher:
@@ -299,7 +306,11 @@ def build_dispatcher(
         return store.create(command.title)
 
     async def list_threads(command: ThreadListCommand) -> ThreadListResult:
-        return thread_list(store.threads(), event_log.all_events())
+        return thread_list(store.threads(), event_log.all_events(), permissions())
+
+    async def rename_thread(command: ThreadRenameCommand) -> ThreadSummary:
+        renamed = store.rename(command.thread_id, command.title)
+        return thread_summary(renamed, event_log.stored(command.thread_id), permissions())
 
     async def get_usage(command: UsageGetCommand) -> UsageGetResult:
         return usage_totals(
@@ -372,6 +383,7 @@ def build_dispatcher(
 
     dispatcher.register(THREAD_CREATE, create_thread)
     dispatcher.register(THREAD_LIST, list_threads)
+    dispatcher.register(THREAD_RENAME, rename_thread)
     dispatcher.register(USAGE_GET, get_usage)
     dispatcher.register(STATS_GET, get_stats)
     dispatcher.register(INSTANCE_PROBE, probe)

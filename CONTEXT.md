@@ -250,7 +250,7 @@ A **turn** or recorded **workspace revert** selected for a **workspace diff** or
 
 ### Thread
 
-One conversation with its own durable history. Survives across sessions; can be resumed later. What memory distills from and what **instance statistics** are derived from.
+One conversation with its own durable history. Survives across sessions; can be resumed later. What memory distills from and what **instance statistics** are derived from. Its title is the one it was created with, or else its first message cut to 60 characters, until the user renames it.
 
 ### Thread status
 

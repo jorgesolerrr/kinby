@@ -101,3 +101,22 @@ def test_a_thread_summary_carries_its_status_and_last_activity() -> None:
         "awaiting_approval",
         "failed",
     ]
+
+
+def test_a_thread_summary_carries_its_mode_and_the_list_its_ceiling() -> None:
+    definitions = _object(contract_schema()["$defs"])
+    summary = _object(definitions["ThreadSummary"])
+    listed = _object(definitions["ThreadListResult"])
+
+    assert {"mode", "mode_pinned"} <= set(cast(list[str], summary["required"]))
+    assert "ceiling" in cast(list[str], listed["required"])
+
+
+def test_the_schema_declares_thread_rename() -> None:
+    schema = contract_schema()
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+    rename = _object(_object(methods_schema["thread.rename"])["properties"])
+    title = _object(_object(_object(schema["$defs"])["ThreadRenameCommand"])["properties"])["title"]
+
+    assert rename["result"] == {"$ref": "#/$defs/ThreadSummary"}
+    assert {"minLength": 1, "maxLength": 200}.items() <= _object(title).items()

@@ -16,6 +16,7 @@ from kinby.contracts import (
     Delivery,
     MemoryRecapped,
     MessageDelta,
+    PermissionMode,
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
@@ -111,6 +112,33 @@ def test_boot_instance_starts_the_scheduler(tmp_path, monkeypatch) -> None:
                     await asyncio.sleep(0)
         finally:
             await runtime.stop_after_running_routine()
+
+    asyncio.run(scenario())
+
+
+def test_a_booted_instance_lists_threads_under_its_permission_policy(tmp_path, monkeypatch) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        (instance.path / "permissions.toml").write_text('mode = "read-only"\nceiling = "auto"\n')
+        ThreadStore(instance.manifest.state_dir).create(None)
+        monkeypatch.setattr(
+            "kinby.core.runtime.turn_config",
+            turn_config_stub(
+                lambda: TurnConfig(
+                    fixed_turn_preparation, fixed_permission_ceiling, ScriptedRunner()
+                )
+            ),
+        )
+
+        runtime = await boot_instance(instance)
+        try:
+            listed = await runtime.dispatcher.dispatch("thread.list", {}, set(Scope))
+        finally:
+            await runtime.stop_after_running_routine()
+
+        assert isinstance(listed, ThreadListResult)
+        assert listed.ceiling is PermissionMode.AUTO
+        assert [thread.mode for thread in listed.threads] == [PermissionMode.READ_ONLY]
 
     asyncio.run(scenario())
 

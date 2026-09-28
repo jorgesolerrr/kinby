@@ -10,6 +10,7 @@ import type {
   Event,
   InstanceListResult,
   ItemFrame,
+  PermissionMode,
   PlanLimit,
   PlanWindow,
   ResultFrame,
@@ -20,6 +21,7 @@ import type {
   SubscribedFrame,
   SubscriptionUse,
   ThreadStatus,
+  ThreadSummary,
 } from "./index"
 
 test("the committed types are a fresh generation of the contract schema", async () => {
@@ -106,4 +108,19 @@ test("thread.list reads each thread's status and last activity", () => {
   expectTypeOf<Thread["status"]>().toEqualTypeOf<ThreadStatus>()
   expectTypeOf<ThreadStatus>().toEqualTypeOf<"idle" | "running" | "awaiting_approval" | "failed">()
   expectTypeOf<Thread["last_activity_at"]>().toEqualTypeOf<string>()
+})
+
+test("thread.list reads each thread's mode and the instance's ceiling", () => {
+  type Listed = Contract["methods"]["thread.list"]["result"]
+
+  expectTypeOf<Listed["ceiling"]>().toEqualTypeOf<PermissionMode>()
+  expectTypeOf<Listed["threads"][number]["mode"]>().toEqualTypeOf<PermissionMode>()
+  expectTypeOf<Listed["threads"][number]["mode_pinned"]>().toEqualTypeOf<boolean>()
+})
+
+test("thread.rename takes a title and returns the thread's summary", () => {
+  type Rename = Contract["methods"]["thread.rename"]
+
+  expectTypeOf<Rename["command"]>().toEqualTypeOf<{ thread_id: string; title: string }>()
+  expectTypeOf<Rename["result"]>().toEqualTypeOf<ThreadSummary>()
 })

@@ -3495,6 +3495,9 @@
     "ThreadListResult": {
       "additionalProperties": false,
       "properties": {
+        "ceiling": {
+          "$ref": "#/$defs/PermissionMode"
+        },
         "threads": {
           "items": {
             "$ref": "#/$defs/ThreadSummary"
@@ -3503,7 +3506,8 @@
         }
       },
       "required": [
-        "threads"
+        "threads",
+        "ceiling"
       ],
       "title": "ThreadListResult",
       "type": "object"
@@ -3524,6 +3528,26 @@
         "mode"
       ],
       "title": "ThreadModeSetCommand",
+      "type": "object"
+    },
+    "ThreadRenameCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "title"
+      ],
+      "title": "ThreadRenameCommand",
       "type": "object"
     },
     "ThreadStatus": {
@@ -3570,6 +3594,12 @@
           "format": "date-time",
           "type": "string"
         },
+        "mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "mode_pinned": {
+          "type": "boolean"
+        },
         "status": {
           "$ref": "#/$defs/ThreadStatus"
         },
@@ -3589,7 +3619,9 @@
         "title",
         "created_at",
         "status",
-        "last_activity_at"
+        "last_activity_at",
+        "mode",
+        "mode_pinned"
       ],
       "title": "ThreadSummary",
       "type": "object"
@@ -5096,6 +5128,22 @@
           ],
           "type": "object"
         },
+        "thread.rename": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadRenameCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadSummary"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "thread.turn.diff": {
           "additionalProperties": false,
           "properties": {
@@ -5244,6 +5292,7 @@
       "required": [
         "thread.create",
         "thread.list",
+        "thread.rename",
         "thread.mode.set",
         "thread.turn.start",
         "thread.turn.diff",
