@@ -62,6 +62,8 @@ describe("ConfigPanel", () => {
       false,
     )
     expect(screen.getByRole("button", { name: "Recap prompt" })).toHaveProperty("disabled", false)
+    expect(screen.getByRole("button", { name: "Skills" })).toHaveProperty("disabled", false)
+    expect(screen.getByRole("button", { name: "Tools" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Permissions" })).toHaveProperty("disabled", true)
     expect(screen.getByRole("button", { name: "Package and version" })).toHaveProperty(
       "disabled",
@@ -132,5 +134,36 @@ describe("ConfigPanel", () => {
       content: "The agent's text. And mine.",
       hash: "hash-3",
     })
+  })
+
+  it("opens the skills and the tools", async () => {
+    const { user } = openPanel({
+      "skill.list": () => ({
+        skills: [
+          {
+            name: "planning",
+            tier: "package",
+            description: "Plan work.",
+            source: "kinby-factory 0.3.0",
+            shadowed_by: null,
+          },
+        ],
+        warnings: [],
+      }),
+      "tool.list": () => ({
+        tools: [{ name: "skill", source: "core", write: false, rule: "mode" }],
+        warnings: [],
+      }),
+    })
+
+    await user.click(screen.getByRole("button", { name: "Skills" }))
+    expect(await screen.findByRole("heading", { name: "Skills" })).toBeDefined()
+    expect(await screen.findByRole("button", { name: "planning, package skill" })).toBeDefined()
+    await user.click(screen.getByRole("button", { name: "Tools" }))
+    expect(await screen.findByRole("table", { name: "Tools" })).toBeDefined()
+    expect(screen.getByRole("button", { name: "Change a rule in Permissions" })).toHaveProperty(
+      "disabled",
+      true,
+    )
   })
 })

@@ -52,6 +52,13 @@ from kinby.contracts.models import (
     RoutineListResult,
     RoutineRunCommand,
     Scope,
+    SkillCustomizeCommand,
+    SkillDeleteCommand,
+    SkillListCommand,
+    SkillListResult,
+    SkillReadCommand,
+    SkillResult,
+    SkillWriteCommand,
     StatsGetCommand,
     StatsGetResult,
     StatsSummaryResult,
@@ -76,6 +83,8 @@ from kinby.contracts.models import (
     ThreadTurnStartCommand,
     ThreadTurnTargetListCommand,
     ThreadTurnTargetListResult,
+    ToolListCommand,
+    ToolListResult,
     UsageGetCommand,
     UsageGetResult,
 )
@@ -170,6 +179,14 @@ PROMPT_SET = Method("prompt.set", Scope.INSTANCE_ADMIN, PromptSetCommand, Prompt
 CONFIG_HISTORY = Method(
     "config.history", Scope.INSTANCE_READ, ConfigHistoryCommand, ConfigHistoryResult
 )
+SKILL_LIST = Method("skill.list", Scope.INSTANCE_READ, SkillListCommand, SkillListResult)
+SKILL_READ = Method("skill.read", Scope.INSTANCE_READ, SkillReadCommand, SkillResult)
+SKILL_WRITE = Method("skill.write", Scope.INSTANCE_ADMIN, SkillWriteCommand, SkillResult)
+SKILL_CUSTOMIZE = Method(
+    "skill.customize", Scope.INSTANCE_ADMIN, SkillCustomizeCommand, SkillResult
+)
+SKILL_DELETE = Method("skill.delete", Scope.INSTANCE_ADMIN, SkillDeleteCommand, SkillListResult)
+TOOL_LIST = Method("tool.list", Scope.INSTANCE_READ, ToolListCommand, ToolListResult)
 
 INSTANCE_CREATE = Method(
     "instance.create", Scope.HUB_ADMIN, InstanceCreateCommand, LifecycleOperationResult
@@ -260,6 +277,12 @@ METHODS = (
     PROMPT_GET,
     PROMPT_SET,
     CONFIG_HISTORY,
+    SKILL_LIST,
+    SKILL_READ,
+    SKILL_WRITE,
+    SKILL_CUSTOMIZE,
+    SKILL_DELETE,
+    TOOL_LIST,
     INSTANCE_CREATE,
     INSTANCE_START,
     INSTANCE_STOP,

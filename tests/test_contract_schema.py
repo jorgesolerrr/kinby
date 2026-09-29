@@ -168,3 +168,60 @@ def test_the_schema_declares_the_prompt_and_config_history_calls() -> None:
     }
     assert _object(definitions["ConfigActor"])["enum"] == ["app", "agent", "failure_policy"]
     assert "STALE" in cast(list[str], _object(definitions["ErrorCode"])["enum"])
+
+
+def test_the_schema_declares_the_skill_and_tool_calls() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"]
+        for name in (
+            "skill.list",
+            "skill.read",
+            "skill.write",
+            "skill.customize",
+            "skill.delete",
+            "tool.list",
+        )
+    } == {
+        "skill.list": {
+            "command": {"$ref": "#/$defs/SkillListCommand"},
+            "result": {"$ref": "#/$defs/SkillListResult"},
+        },
+        "skill.read": {
+            "command": {"$ref": "#/$defs/SkillReadCommand"},
+            "result": {"$ref": "#/$defs/SkillResult"},
+        },
+        "skill.write": {
+            "command": {"$ref": "#/$defs/SkillWriteCommand"},
+            "result": {"$ref": "#/$defs/SkillResult"},
+        },
+        "skill.customize": {
+            "command": {"$ref": "#/$defs/SkillCustomizeCommand"},
+            "result": {"$ref": "#/$defs/SkillResult"},
+        },
+        "skill.delete": {
+            "command": {"$ref": "#/$defs/SkillDeleteCommand"},
+            "result": {"$ref": "#/$defs/SkillListResult"},
+        },
+        "tool.list": {
+            "command": {"$ref": "#/$defs/ToolListCommand"},
+            "result": {"$ref": "#/$defs/ToolListResult"},
+        },
+    }
+    assert set(cast(list[str], _object(definitions["SkillSummary"])["required"])) == {
+        "name",
+        "tier",
+        "description",
+        "source",
+        "shadowed_by",
+    }
+    assert set(cast(list[str], _object(definitions["SkillWriteCommand"])["required"])) == {
+        "name",
+        "content",
+        "hash",
+    }
+    assert _object(definitions["SkillTier"])["enum"] == ["instance", "package", "workspace"]
+    assert _object(definitions["ToolRule"])["enum"] == ["allow", "ask", "deny", "mode"]

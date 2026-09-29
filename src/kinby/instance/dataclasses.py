@@ -150,6 +150,12 @@ class Instance:
         repr=False,
         compare=False,
     )
+    #: Held while the agent or a client writes or deletes an instance skill.
+    skill_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock,
+        repr=False,
+        compare=False,
+    )
     #: Held while a client writes the prompts, permissions.toml, kinby.toml, or package.yaml.
     config_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock,

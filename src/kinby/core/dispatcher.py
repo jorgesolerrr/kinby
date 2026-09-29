@@ -21,6 +21,11 @@ from kinby.contracts import (
     PROMPT_SET,
     ROUTINE_LIST,
     ROUTINE_RUN,
+    SKILL_CUSTOMIZE,
+    SKILL_DELETE,
+    SKILL_LIST,
+    SKILL_READ,
+    SKILL_WRITE,
     STATS_GET,
     THREAD_APPROVAL_RESPOND,
     THREAD_CREATE,
@@ -36,6 +41,7 @@ from kinby.contracts import (
     THREAD_TURN_REVERT_PREVIEW,
     THREAD_TURN_START,
     THREAD_TURN_TARGET_LIST,
+    TOOL_LIST,
     USAGE_GET,
     AcceptedResult,
     Capability,
@@ -398,6 +404,12 @@ def build_dispatcher(
         dispatcher.register(PROMPT_GET, config.get_prompt)
         dispatcher.register(PROMPT_SET, config.set_prompt)
         dispatcher.register(CONFIG_HISTORY, config.history)
+        dispatcher.register(SKILL_LIST, config.list_skills)
+        dispatcher.register(SKILL_READ, config.read_skill)
+        dispatcher.register(SKILL_WRITE, config.write_skill)
+        dispatcher.register(SKILL_CUSTOMIZE, config.customize_skill)
+        dispatcher.register(SKILL_DELETE, config.delete_skill)
+        dispatcher.register(TOOL_LIST, config.list_tools)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)
         dispatcher.register(ROUTINE_RUN, scheduler.run)
