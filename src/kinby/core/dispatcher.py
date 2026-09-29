@@ -19,6 +19,8 @@ from kinby.contracts import (
     INSTANCE_PROBE,
     MANIFEST_GET,
     MANIFEST_SET,
+    PERMISSIONS_GET,
+    PERMISSIONS_SET,
     PROMPT_GET,
     PROMPT_SET,
     ROUTINE_LIST,
@@ -401,6 +403,8 @@ def build_dispatcher(
         dispatcher.register(PROMPT_SET, config.set_prompt)
         dispatcher.register(MANIFEST_GET, config.get_manifest)
         dispatcher.register(MANIFEST_SET, config.set_manifest)
+        dispatcher.register(PERMISSIONS_GET, config.get_permissions)
+        dispatcher.register(PERMISSIONS_SET, config.set_permissions)
         dispatcher.register(CONFIG_HISTORY, config.history)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)

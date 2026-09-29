@@ -207,3 +207,35 @@ def test_the_schema_declares_the_manifest_calls() -> None:
         "feedback",
     }
     assert _object(definitions["PriceSource"])["enum"] == ["shipped", "manifest"]
+
+
+def test_the_schema_declares_the_permissions_calls() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"]
+        for name in ("permissions.get", "permissions.set")
+    } == {
+        "permissions.get": {
+            "command": {"$ref": "#/$defs/PermissionsGetCommand"},
+            "result": {"$ref": "#/$defs/PermissionsResult"},
+        },
+        "permissions.set": {
+            "command": {"$ref": "#/$defs/PermissionsSetCommand"},
+            "result": {"$ref": "#/$defs/PermissionsResult"},
+        },
+    }
+    assert set(cast(list[str], _object(definitions["PermissionsResult"])["required"])) == {
+        "mode",
+        "ceiling",
+        "tools",
+        "bash",
+        "hash",
+    }
+    assert set(cast(list[str], _object(definitions["DenyPattern"])["required"])) == {
+        "pattern",
+        "shipped",
+    }
+    assert _object(definitions["GateAction"])["enum"] == ["allow", "ask", "deny"]

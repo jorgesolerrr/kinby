@@ -2,8 +2,8 @@ import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { CircleXIcon } from "lucide-react"
 
-/** A save refused because `file` changed since it was read, with "Load theirs" to read it again. */
-export function StaleNotice({ file, onLoad }: { file: string; onLoad: () => void }) {
+/** A save refused because `file` changed since it was read. "Load theirs" reads it again. */
+export function StaleAlert({ file, onLoad }: { file: string; onLoad: () => void }) {
   return (
     <Alert variant="destructive">
       <CircleXIcon />

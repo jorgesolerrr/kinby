@@ -1,8 +1,9 @@
 import type { InstanceClient, PromptName } from "@kinby/contract"
 import { useCallback, useEffect, useId, useState } from "react"
 
-import { Failure, StaleNotice } from "@/components/config-alerts"
+import { Failure, StaleAlert } from "@/components/config-alerts"
 import { ManifestSection } from "@/components/manifest-section"
+import { PermissionsSection } from "@/components/permissions-section"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
@@ -18,8 +19,8 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
-import { reason } from "@/lib/operation"
 import { lastChanged } from "@/lib/config-changes"
+import { reason } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
 import {
   BoxIcon,
@@ -37,15 +38,15 @@ import {
 
 type Caller = Pick<InstanceClient, "call">
 
-/** The sections built so far: the two prompts and the manifest. */
-type SectionId = PromptName | "manifest"
+/** A section that is built: one of the prompts, the permissions, or the manifest. */
+type SectionKey = PromptName | "permissions" | "manifest"
 
-/** One section of the panel. Only a section with an `id` is built yet; the rest are unavailable. */
+/** One section of the panel. A section without a `key` is not built yet, and is unavailable. */
 interface Section {
   label: string
   hint: string
   icon: LucideIcon
-  id?: SectionId
+  key?: SectionKey
 }
 
 const GROUPS: { label: string; sections: Section[] }[] = [
@@ -56,16 +57,21 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Behavior prompt",
         hint: "SYSTEM.md, how the agent acts",
         icon: FileTextIcon,
-        id: "behavior",
+        key: "behavior",
       },
       {
         label: "Recap prompt",
         hint: "RECAP.md, what a recap looks at",
         icon: NotebookPenIcon,
-        id: "recap",
+        key: "recap",
       },
-      { label: "Permissions", hint: "ceiling, mode, tool rules, shell patterns", icon: ShieldIcon },
-      { label: "Manifest", hint: "models, budgets, timezone", icon: CpuIcon, id: "manifest" },
+      {
+        label: "Permissions",
+        hint: "ceiling, mode, tool rules, shell patterns",
+        icon: ShieldIcon,
+        key: "permissions",
+      },
+      { label: "Manifest", hint: "models, budgets, timezone", icon: CpuIcon, key: "manifest" },
     ],
   },
   {
@@ -94,9 +100,9 @@ const APPLIES: Record<PromptName, string> = {
 
 /** The instance's config: its sections grouped in a left column, the selected one on the right. */
 export function ConfigPanel({ client }: { client: Caller }) {
-  const [selected, setSelected] = useState<SectionId>("behavior")
+  const [selected, setSelected] = useState<SectionKey>("behavior")
   const section = GROUPS.flatMap((group) => group.sections).find(
-    (candidate) => candidate.id === selected,
+    (candidate) => candidate.key === selected,
   )
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -120,7 +126,9 @@ export function ConfigPanel({ client }: { client: Caller }) {
           <p className="text-sm text-muted-foreground">{section?.hint}</p>
         </div>
         <Separator />
-        {selected === "manifest" ? (
+        {selected === "permissions" ? (
+          <PermissionsSection client={client} />
+        ) : selected === "manifest" ? (
           <ManifestSection client={client} />
         ) : (
           <PromptSection key={selected} client={client} name={selected} />
@@ -139,8 +147,8 @@ function SectionGroup({
 }: {
   label: string
   sections: Section[]
-  selected: SectionId
-  onSelect: (id: SectionId) => void
+  selected: SectionKey
+  onSelect: (key: SectionKey) => void
 }) {
   const labelId = useId()
   return (
@@ -149,18 +157,18 @@ function SectionGroup({
         {label}
       </span>
       <ItemGroup aria-labelledby={labelId}>
-        {sections.map(({ label, hint, icon: Icon, id }) => (
+        {sections.map(({ label, hint, icon: Icon, key }) => (
           <li key={label}>
             <Item
               size="xs"
-              variant={id !== undefined && id === selected ? "muted" : "default"}
+              variant={key !== undefined && key === selected ? "muted" : "default"}
               render={
                 <button
                   type="button"
                   aria-label={label}
-                  aria-current={id === selected || undefined}
-                  disabled={id === undefined}
-                  onClick={() => id !== undefined && onSelect(id)}
+                  aria-current={key === selected || undefined}
+                  disabled={key === undefined}
+                  onClick={() => key !== undefined && onSelect(key)}
                 />
               }
             >
@@ -169,7 +177,7 @@ function SectionGroup({
               </ItemMedia>
               <ItemContent>
                 <ItemTitle>{label}</ItemTitle>
-                <ItemDescription>{id === undefined ? "Not available yet" : hint}</ItemDescription>
+                <ItemDescription>{key === undefined ? "Not available yet" : hint}</ItemDescription>
               </ItemContent>
             </Item>
           </li>
@@ -235,7 +243,7 @@ function PromptSection({ client, name }: { client: Caller; name: PromptName }) {
 
   return (
     <div className="flex flex-col gap-3">
-      {notice === "stale" && <StaleNotice file={file} onLoad={() => void load()} />}
+      {notice === "stale" && <StaleAlert file={file} onLoad={() => void load()} />}
       {failure !== undefined && <Failure>{failure}</Failure>}
       <Field>
         <div className="flex items-center gap-2">

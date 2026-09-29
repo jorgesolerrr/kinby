@@ -84,9 +84,13 @@ export type TargetFile = "kinby.toml" | "package.yaml";
  * How a client asks for a setup field's value, and so what the value is.
  */
 export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "choice" | "email" | "url";
+export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
+/**
+ * What the gate answers for a tool call, and the rule a tool can be given in its place.
+ */
+export type GateAction = "allow" | "ask" | "deny";
 export type PromptName = "behavior" | "recap";
 export type RoutineRunOutcome = "running" | "parked" | "work" | "no-work" | "failed" | "interrupted";
-export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
 export type RoutineNoticeKind = "first-failure" | "disabled";
 export type SignalAuth = "token" | "hmac-sha256";
 export type StatsBucketSize = "day" | "week";
@@ -224,6 +228,14 @@ export interface Contract {
     "package.list": {
       command: PackageListCommand;
       result: PackageListResult;
+    };
+    "permissions.get": {
+      command: PermissionsGetCommand;
+      result: PermissionsResult;
+    };
+    "permissions.set": {
+      command: PermissionsSetCommand;
+      result: PermissionsResult;
     };
     "prompt.get": {
       command: PromptGetCommand;
@@ -775,6 +787,37 @@ export interface CuratedPackage {
   icon: string;
   id: string;
   selection: PackageSelection;
+}
+export interface PermissionsGetCommand {}
+export interface PermissionsResult {
+  bash: BashPermissions;
+  ceiling: PermissionMode;
+  hash: string;
+  mode: PermissionMode;
+  tools: {
+    [k: string]: GateAction;
+  };
+}
+export interface BashPermissions {
+  ask: string[];
+  deny: DenyPattern[];
+}
+export interface DenyPattern {
+  pattern: string;
+  shipped: boolean;
+}
+export interface PermissionsSetCommand {
+  bash: OwnBashPatterns;
+  ceiling: PermissionMode;
+  hash: string;
+  mode: PermissionMode;
+  tools: {
+    [k: string]: GateAction;
+  };
+}
+export interface OwnBashPatterns {
+  ask: string[];
+  deny: string[];
 }
 export interface PromptGetCommand {
   name: PromptName;

@@ -207,6 +207,29 @@
       "title": "AvatarShape",
       "type": "string"
     },
+    "BashPermissions": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny": {
+          "items": {
+            "$ref": "#/$defs/DenyPattern"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "deny",
+        "ask"
+      ],
+      "title": "BashPermissions",
+      "type": "object"
+    },
     "CallFrame": {
       "additionalProperties": false,
       "properties": {
@@ -580,6 +603,23 @@
       "title": "DenyCounts",
       "type": "object"
     },
+    "DenyPattern": {
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string"
+        },
+        "shipped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pattern",
+        "shipped"
+      ],
+      "title": "DenyPattern",
+      "type": "object"
+    },
     "DrainState": {
       "description": "How an instance's accepted work ended when it drained.",
       "enum": [
@@ -835,6 +875,16 @@
       ],
       "title": "FileChange",
       "type": "object"
+    },
+    "GateAction": {
+      "description": "What the gate answers for a tool call, and the rule a tool can be given in its place.",
+      "enum": [
+        "allow",
+        "ask",
+        "deny"
+      ],
+      "title": "GateAction",
+      "type": "string"
     },
     "GateDecider": {
       "enum": [
@@ -2399,6 +2449,29 @@
       "title": "OperationStep",
       "type": "object"
     },
+    "OwnBashPatterns": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "deny",
+        "ask"
+      ],
+      "title": "OwnBashPatterns",
+      "type": "object"
+    },
     "PackageCommit": {
       "additionalProperties": false,
       "description": "One commit of a package's git repository, installed in place of an index version.",
@@ -2602,6 +2675,76 @@
       ],
       "title": "PermissionMode",
       "type": "string"
+    },
+    "PermissionsGetCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "PermissionsGetCommand",
+      "type": "object"
+    },
+    "PermissionsResult": {
+      "additionalProperties": false,
+      "properties": {
+        "bash": {
+          "$ref": "#/$defs/BashPermissions"
+        },
+        "ceiling": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/$defs/GateAction"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "mode",
+        "ceiling",
+        "tools",
+        "bash",
+        "hash"
+      ],
+      "title": "PermissionsResult",
+      "type": "object"
+    },
+    "PermissionsSetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "bash": {
+          "$ref": "#/$defs/OwnBashPatterns"
+        },
+        "ceiling": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/$defs/GateAction"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "mode",
+        "ceiling",
+        "tools",
+        "bash",
+        "hash"
+      ],
+      "title": "PermissionsSetCommand",
+      "type": "object"
     },
     "PlanLimit": {
       "additionalProperties": false,
@@ -5550,6 +5693,38 @@
           ],
           "type": "object"
         },
+        "permissions.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PermissionsGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/PermissionsResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "permissions.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PermissionsSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/PermissionsResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "prompt.get": {
           "additionalProperties": false,
           "properties": {
@@ -5895,6 +6070,8 @@
         "prompt.set",
         "manifest.get",
         "manifest.set",
+        "permissions.get",
+        "permissions.set",
         "config.history",
         "instance.create",
         "instance.start",

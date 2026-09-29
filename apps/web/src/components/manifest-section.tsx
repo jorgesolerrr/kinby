@@ -7,7 +7,7 @@ import type {
 } from "@kinby/contract"
 import { useCallback, useEffect, useId, useState } from "react"
 
-import { Failure, StaleNotice } from "@/components/config-alerts"
+import { Failure, StaleAlert } from "@/components/config-alerts"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -158,7 +158,7 @@ export function ManifestSection({ client }: { client: Caller }) {
 
   return (
     <div className="flex flex-col gap-6">
-      {notice === "stale" && <StaleNotice file={MANIFEST_FILE} onLoad={() => void load()} />}
+      {notice === "stale" && <StaleAlert file={MANIFEST_FILE} onLoad={() => void load()} />}
       {failure !== undefined && <Failure>{failure}</Failure>}
       {unnamed.length > 0 && (
         <Alert variant="destructive">
