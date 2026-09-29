@@ -47,6 +47,10 @@ class RoutineRefused(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class SkillNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
 class StaleWrite(CoreError):
     """The file changed since the client read it, so the write would overwrite a change unseen."""
 

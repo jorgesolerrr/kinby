@@ -1683,3 +1683,96 @@ class ManifestSetCommand(ContractModel):
     prices: dict[str, NewModelPrice] = Field(default_factory=dict)
     #: The hash the client read. The write is refused as STALE when the file changed since.
     hash: FileHash
+
+
+SkillName = NewType("SkillName", str)
+
+
+class SkillTier(StrEnum):
+    """Where a skill comes from, in the order the model looks for it."""
+
+    INSTANCE = "instance"
+    PACKAGE = "package"
+    WORKSPACE = "workspace"
+
+
+class SkillListCommand(ContractModel):
+    pass
+
+
+class SkillSummary(ContractModel):
+    name: SkillName
+    tier: SkillTier
+    description: str
+    #: ``instance``, ``workspace``, or the package's distribution and version.
+    source: str
+    #: The tier of the skill that hides this one, when a higher tier has one by this name.
+    shadowed_by: SkillTier | None
+
+
+class SkillListResult(ContractModel):
+    #: By name, and each name's skills in tier order, so the one the model reads comes first.
+    skills: list[SkillSummary]
+    warnings: tuple[Warning, ...]
+
+
+class SkillReadCommand(ContractModel):
+    name: SkillName
+    tier: SkillTier
+
+
+class SkillResult(ContractModel):
+    #: The skill's ``SKILL.md``.
+    content: str
+    #: The skill directory's other files, by their path in it.
+    files: list[str]
+    #: The hash of the skill directory: every file's path and bytes.
+    hash: FileHash
+
+
+class SkillWriteCommand(ContractModel):
+    """Write the instance copy's ``SKILL.md``, creating the skill when ``hash`` is null."""
+
+    name: SkillName
+    content: str
+    hash: FileHash | None
+
+
+class SkillCustomizeCommand(ContractModel):
+    """Copy the skill the model reads into the instance, where it can be edited."""
+
+    name: SkillName
+
+
+class SkillDeleteCommand(ContractModel):
+    """Delete the instance copy, so the skill it hid, if any, applies again."""
+
+    name: SkillName
+    hash: FileHash
+
+
+class ToolRule(StrEnum):
+    """What the gate does with a tool: its own rule in permissions.toml, or the mode's."""
+
+    ALLOW = "allow"
+    ASK = "ask"
+    DENY = "deny"
+    MODE = "mode"
+
+
+class ToolListCommand(ContractModel):
+    pass
+
+
+class ToolSummary(ContractModel):
+    name: str
+    #: ``core``, the package's distribution and version, or the instance file that defines it.
+    source: str
+    write: bool
+    rule: ToolRule
+
+
+class ToolListResult(ContractModel):
+    #: By name.
+    tools: list[ToolSummary]
+    warnings: tuple[Warning, ...]

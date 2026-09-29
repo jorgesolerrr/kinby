@@ -1,6 +1,8 @@
+import type { Warning } from "@kinby/contract"
+import { CircleXIcon, TriangleAlertIcon } from "lucide-react"
+
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { CircleXIcon } from "lucide-react"
 
 /** A call the instance did not answer, or refused, with its reason. */
 export function Failure({
@@ -34,6 +36,26 @@ export function StaleAlert({ file, onLoad }: { file: string; onLoad: () => void 
           Load theirs
         </Button>
       </AlertAction>
+    </Alert>
+  )
+}
+
+/** What the instance could not load, so the list leaves it out. */
+export function Warnings({ warnings }: { warnings: readonly Warning[] }) {
+  if (warnings.length === 0) return null
+  return (
+    <Alert>
+      <TriangleAlertIcon />
+      <AlertTitle>Some files did not load</AlertTitle>
+      <AlertDescription>
+        <ul>
+          {warnings.map((warning) => (
+            <li key={`${warning.sources.join(" ")} ${warning.message}`}>
+              {warning.sources.join(", ")}: {warning.message}
+            </li>
+          ))}
+        </ul>
+      </AlertDescription>
     </Alert>
   )
 }

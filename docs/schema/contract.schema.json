@@ -3603,6 +3603,183 @@
       "title": "SignalSummary",
       "type": "object"
     },
+    "SkillCustomizeCommand": {
+      "additionalProperties": false,
+      "description": "Copy the skill the model reads into the instance, where it can be edited.",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "SkillCustomizeCommand",
+      "type": "object"
+    },
+    "SkillDeleteCommand": {
+      "additionalProperties": false,
+      "description": "Delete the instance copy, so the skill it hid, if any, applies again.",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "hash"
+      ],
+      "title": "SkillDeleteCommand",
+      "type": "object"
+    },
+    "SkillListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "SkillListCommand",
+      "type": "object"
+    },
+    "SkillListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/SkillSummary"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "skills",
+        "warnings"
+      ],
+      "title": "SkillListResult",
+      "type": "object"
+    },
+    "SkillReadCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/SkillTier"
+        }
+      },
+      "required": [
+        "name",
+        "tier"
+      ],
+      "title": "SkillReadCommand",
+      "type": "object"
+    },
+    "SkillResult": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "files",
+        "hash"
+      ],
+      "title": "SkillResult",
+      "type": "object"
+    },
+    "SkillSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "shadowed_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/SkillTier"
+        }
+      },
+      "required": [
+        "name",
+        "tier",
+        "description",
+        "source",
+        "shadowed_by"
+      ],
+      "title": "SkillSummary",
+      "type": "object"
+    },
+    "SkillTier": {
+      "description": "Where a skill comes from, in the order the model looks for it.",
+      "enum": [
+        "instance",
+        "package",
+        "workspace"
+      ],
+      "title": "SkillTier",
+      "type": "string"
+    },
+    "SkillWriteCommand": {
+      "additionalProperties": false,
+      "description": "Write the instance copy's ``SKILL.md``, creating the skill when ``hash`` is null.",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "content",
+        "hash"
+      ],
+      "title": "SkillWriteCommand",
+      "type": "object"
+    },
     "StatsBucket": {
       "additionalProperties": false,
       "properties": {
@@ -4725,6 +4902,35 @@
       "title": "ToolGated",
       "type": "object"
     },
+    "ToolListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "ToolListCommand",
+      "type": "object"
+    },
+    "ToolListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ToolSummary"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tools",
+        "warnings"
+      ],
+      "title": "ToolListResult",
+      "type": "object"
+    },
     "ToolResult": {
       "additionalProperties": false,
       "properties": {
@@ -4765,6 +4971,42 @@
         "type"
       ],
       "title": "ToolResult",
+      "type": "object"
+    },
+    "ToolRule": {
+      "description": "What the gate does with a tool: its own rule in permissions.toml, or the mode's.",
+      "enum": [
+        "allow",
+        "ask",
+        "deny",
+        "mode"
+      ],
+      "title": "ToolRule",
+      "type": "string"
+    },
+    "ToolSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "rule": {
+          "$ref": "#/$defs/ToolRule"
+        },
+        "source": {
+          "type": "string"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "write",
+        "rule"
+      ],
+      "title": "ToolSummary",
       "type": "object"
     },
     "ToolTime": {
@@ -5956,6 +6198,86 @@
           ],
           "type": "object"
         },
+        "skill.customize": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/SkillCustomizeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "skill.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/SkillDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "skill.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/SkillListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "skill.read": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/SkillReadCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "skill.write": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/SkillWriteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "stats.get": {
           "additionalProperties": false,
           "properties": {
@@ -6196,6 +6518,22 @@
           ],
           "type": "object"
         },
+        "tool.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ToolListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ToolListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "usage.get": {
           "additionalProperties": false,
           "properties": {
@@ -6244,6 +6582,12 @@
         "permissions.get",
         "permissions.set",
         "config.history",
+        "skill.list",
+        "skill.read",
+        "skill.write",
+        "skill.customize",
+        "skill.delete",
+        "tool.list",
         "instance.create",
         "instance.start",
         "instance.stop",

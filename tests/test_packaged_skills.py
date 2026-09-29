@@ -104,12 +104,15 @@ def test_other_packages_survive_defaults_flag_and_keep_first_duplicate(
             *installed,
             SimpleNamespace(
                 name="defaults",
-                dist=SimpleNamespace(name="other-package"),
+                dist=SimpleNamespace(name="other-package", version="1.0.0"),
                 value="other:SKILLS",
                 load=lambda: first.parent.parent,
             ),
             SimpleNamespace(
-                name="second", value="second:SKILLS", load=lambda: second.parent.parent
+                name="second",
+                value="second:SKILLS",
+                dist=None,
+                load=lambda: second.parent.parent,
             ),
         )
 

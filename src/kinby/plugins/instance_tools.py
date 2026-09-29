@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 
 from cronsim import CronSim
 
-from kinby.contracts import ConfigActor, ConfigFile, CronSchedule, RoutineName
+from kinby.contracts import ConfigActor, ConfigFile, CronSchedule, RoutineName, SkillName
 from kinby.instance import Instance
 from kinby.instance.config_changes import recorded_change
 from kinby.instance.layout import (
@@ -31,7 +31,7 @@ from kinby.plugins.routines import (
     load_routines,
     set_routine_enabled,
 )
-from kinby.plugins.skills import SkillName, describe_skill_shadow, load_skill_file
+from kinby.plugins.skills import describe_skill_shadow, load_skill_file
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 _INSTANCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
@@ -41,6 +41,7 @@ type Recorder = Callable[[ConfigFile], AbstractContextManager[None]]
 
 
 def validate_name(name: str) -> None:
+    """Refuse a routine or skill name that is not one safe directory name."""
     if _INSTANCE_NAME.fullmatch(name) is None:
         raise ValueError(
             "A name must contain only letters, digits, hyphens, and underscores, "
@@ -51,6 +52,39 @@ def validate_name(name: str) -> None:
 def _next_firing(schedule: CronSchedule, instance: Instance) -> datetime:
     zone = instance.manifest.routines.timezone
     return next(CronSim(schedule, datetime.now(zone)))
+
+
+def write_skill(instance: Instance, name: str, content: str) -> None:
+    """Write an instance skill's SKILL.md once the skill loader accepts it.
+
+    The skill is staged beside the instance and renamed into place, keeping its other files.
+    """
+    validate_name(name)
+    skills = instance.path / SKILLS_DIR
+    skills.mkdir(parents=True, exist_ok=True)
+    target = skills / name
+    with TemporaryDirectory(prefix=".skill-", dir=instance.path) as temporary:
+        staged = Path(temporary) / name
+        if target.is_dir():
+            shutil.copytree(target, staged)
+        else:
+            staged.mkdir()
+        skill_path = staged / SKILL_FILE
+        skill_path.write_text(content, encoding="utf-8")
+        skill = load_skill_file(skill_path)
+        if skill.name != name:
+            raise ValueError(
+                f'Skill frontmatter name "{skill.name}" must match directory name "{name}".'
+            )
+        previous = Path(temporary) / ".previous"
+        if target.exists():
+            target.rename(previous)
+        try:
+            staged.rename(target)
+        except Exception:
+            if previous.exists():
+                previous.rename(target)
+            raise
 
 
 def routine_config_file(name: RoutineName) -> ConfigFile:
@@ -244,50 +278,26 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
             await asyncio.to_thread(delete_routine, context.instance, RoutineName(name), recorded)
         return f"Deleted routines/{name}/."
 
-    @tool(write=True)
-    def skill_write(name: str, content: str, context: ToolContext) -> str:
-        """Write a SKILL.md with required name and description frontmatter keys.
-
-        Its body is the instructions.
-        """
+    def _write_skill(name: str, content: str, context: ToolContext) -> str:
         validate_name(name)
         shadow = describe_skill_shadow(context.instance, SkillName(name))
-        skills = context.instance.path / SKILLS_DIR
-        skills.mkdir(parents=True, exist_ok=True)
-        target = skills / name
-        with (
-            _recorded(context, ConfigFile(f"{SKILLS_DIR}/{name}")),
-            TemporaryDirectory(prefix=".skill-", dir=context.instance.path) as temporary,
-        ):
-            staged = Path(temporary) / name
-            if target.is_dir():
-                shutil.copytree(target, staged)
-            else:
-                staged.mkdir()
-            skill_path = staged / SKILL_FILE
-            skill_path.write_text(content, encoding="utf-8")
-            skill = load_skill_file(skill_path)
-            if skill.name != name:
-                raise ValueError(
-                    f'Skill frontmatter name "{skill.name}" must match directory name "{name}".'
-                )
-            previous = Path(temporary) / ".previous"
-            if target.exists():
-                target.rename(previous)
-            try:
-                staged.rename(target)
-            except Exception:
-                if previous.exists():
-                    previous.rename(target)
-                raise
+        with _recorded(context, ConfigFile(f"{SKILLS_DIR}/{name}")):
+            write_skill(context.instance, name, content)
         result = f"Wrote skills/{name}/SKILL.md."
         if shadow is not None:
             result = f"{result} Shadows {shadow}."
         return result
 
     @tool(write=True)
-    def skill_delete(name: str, context: ToolContext) -> str:
-        """Delete a skill from the instance tier."""
+    async def skill_write(name: str, content: str, context: ToolContext) -> str:
+        """Write a SKILL.md with required name and description frontmatter keys.
+
+        Its body is the instructions.
+        """
+        async with context.instance.skill_lock:
+            return await asyncio.to_thread(_write_skill, name, content, context)
+
+    def _delete_skill(name: str, context: ToolContext) -> str:
         validate_name(name)
         target = context.instance.path / SKILLS_DIR / name
         if not target.is_dir():
@@ -301,6 +311,12 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         with _recorded(context, ConfigFile(f"{SKILLS_DIR}/{name}")):
             shutil.rmtree(target)
         return f"Deleted skills/{name}/."
+
+    @tool(write=True)
+    async def skill_delete(name: str, context: ToolContext) -> str:
+        """Delete a skill from the instance tier."""
+        async with context.instance.skill_lock:
+            return await asyncio.to_thread(_delete_skill, name, context)
 
     return (
         routine_list,

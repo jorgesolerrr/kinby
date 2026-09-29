@@ -29,6 +29,11 @@ from kinby.contracts import (
     ROUTINE_RUN,
     ROUTINE_SET_ENABLED,
     ROUTINE_WRITE,
+    SKILL_CUSTOMIZE,
+    SKILL_DELETE,
+    SKILL_LIST,
+    SKILL_READ,
+    SKILL_WRITE,
     STATS_GET,
     THREAD_APPROVAL_RESPOND,
     THREAD_CREATE,
@@ -44,6 +49,7 @@ from kinby.contracts import (
     THREAD_TURN_REVERT_PREVIEW,
     THREAD_TURN_START,
     THREAD_TURN_TARGET_LIST,
+    TOOL_LIST,
     USAGE_GET,
     AcceptedResult,
     Capability,
@@ -410,6 +416,12 @@ def build_dispatcher(
         dispatcher.register(PERMISSIONS_GET, config.get_permissions)
         dispatcher.register(PERMISSIONS_SET, config.set_permissions)
         dispatcher.register(CONFIG_HISTORY, config.history)
+        dispatcher.register(SKILL_LIST, config.list_skills)
+        dispatcher.register(SKILL_READ, config.read_skill)
+        dispatcher.register(SKILL_WRITE, config.write_skill)
+        dispatcher.register(SKILL_CUSTOMIZE, config.customize_skill)
+        dispatcher.register(SKILL_DELETE, config.delete_skill)
+        dispatcher.register(TOOL_LIST, config.list_tools)
         dispatcher.register(ROUTINE_READ, config.read_routine)
         dispatcher.register(ROUTINE_WRITE, config.write_routine)
         dispatcher.register(ROUTINE_SET_ENABLED, config.set_routine_enabled)

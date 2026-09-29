@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from kinby.contracts import Warning
 from kinby.instance.layout import TOOLS_DIR
+from kinby.plugins.entry_points import distribution_label
 from kinby.plugins.errors import exception_message
 from kinby.plugins.tools import Tool
 
@@ -56,8 +57,11 @@ class _FileTools:
 
 class ToolRegistry:
     def __init__(self, instance_path: Path, *, defaults: bool = True) -> None:
+        self._instance_path = instance_path
         self._tools_path = instance_path / TOOLS_DIR
-        self._packaged, self._package_warnings = _load_entry_points(defaults=defaults)
+        self._packaged, self._package_origins, self._package_warnings = _load_entry_points(
+            defaults=defaults
+        )
         self._signature: FileSignature | None = None
         self._files: dict[Path, _FileTools] = {}
         self._snapshot = ToolSnapshot(tuple(sorted(self._packaged, key=lambda tool: tool.name)))
@@ -110,6 +114,13 @@ class ToolRegistry:
         self._snapshot = ToolSnapshot(tools)
         return self._snapshot, self._package_warnings
 
+    def origin(self, tool: Tool) -> str:
+        """The instance file that defines *tool*, or the distribution and version that ship it."""
+        tools_path = self._tools_path.resolve()
+        if tool.source.is_relative_to(tools_path):
+            return tool.source.relative_to(self._instance_path.resolve()).as_posix()
+        return self._package_origins[tool.name]
+
 
 def _directory_signature(tools_path: Path) -> FileSignature:
     if not tools_path.is_dir():
@@ -138,8 +149,12 @@ def _module_tools(module: ModuleType) -> tuple[Tool, ...]:
     return tuple(value for value in vars(module).values() if isinstance(value, Tool))
 
 
-def _load_entry_points(*, defaults: bool) -> tuple[tuple[Tool, ...], tuple[Warning, ...]]:
+def _load_entry_points(
+    *, defaults: bool
+) -> tuple[tuple[Tool, ...], dict[str, str], tuple[Warning, ...]]:
+    """Load each package's tools, with the distribution and version that ship each one."""
     tools: list[Tool] = []
+    origins: dict[str, str] = {}
     warnings: list[Warning] = []
     for entry_point in entry_points(group="kinby.tools"):
         if not defaults and entry_point.name == "defaults":
@@ -147,11 +162,14 @@ def _load_entry_points(*, defaults: bool) -> tuple[tuple[Tool, ...], tuple[Warni
             if distribution is not None and distribution.name == "kinby":
                 continue
         try:
-            tools.extend(_entry_point_tools(entry_point))
+            loaded = _entry_point_tools(entry_point)
         except Exception as exc:
             warnings.append(Warning(sources=(entry_point.value,), message=exception_message(exc)))
+            continue
+        tools.extend(loaded)
+        origins.update((tool.name, distribution_label(entry_point)) for tool in loaded)
     packaged, duplicates = _deduplicate_packaged_tools(tuple(tools))
-    return packaged, (*warnings, *duplicates)
+    return packaged, origins, (*warnings, *duplicates)
 
 
 def _entry_point_tools(entry_point: EntryPoint) -> tuple[Tool, ...]:

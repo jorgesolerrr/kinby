@@ -93,6 +93,10 @@ export type PromptName = "behavior" | "recap";
 export type RoutineRunOutcome = "running" | "parked" | "work" | "no-work" | "failed" | "interrupted";
 export type RoutineNoticeKind = "first-failure" | "disabled";
 export type SignalAuth = "token" | "hmac-sha256";
+/**
+ * Where a skill comes from, in the order the model looks for it.
+ */
+export type SkillTier = "instance" | "package" | "workspace";
 export type StatsBucketSize = "day" | "week";
 export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
 export type TurnClosingKind = "completed" | "failed" | "interrupted";
@@ -101,6 +105,10 @@ export type TurnVerdict = "good" | "bad";
 export type ApprovalDecision = "approve" | "deny";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
+/**
+ * What the gate does with a tool: its own rule in permissions.toml, or the mode's.
+ */
+export type ToolRule = "allow" | "ask" | "deny" | "mode";
 export type ServerFrame = ResultFrame | ErrorFrame | SubscribedFrame | ItemFrame | EndFrame;
 export type ErrorCode =
   | "NOT_FOUND"
@@ -270,6 +278,26 @@ export interface Contract {
       command: RoutineWriteCommand;
       result: RoutineFile;
     };
+    "skill.customize": {
+      command: SkillCustomizeCommand;
+      result: SkillResult;
+    };
+    "skill.delete": {
+      command: SkillDeleteCommand;
+      result: SkillListResult;
+    };
+    "skill.list": {
+      command: SkillListCommand;
+      result: SkillListResult;
+    };
+    "skill.read": {
+      command: SkillReadCommand;
+      result: SkillResult;
+    };
+    "skill.write": {
+      command: SkillWriteCommand;
+      result: SkillResult;
+    };
     "stats.get": {
       command: StatsGetCommand;
       result: StatsGetResult;
@@ -329,6 +357,10 @@ export interface Contract {
     "thread.turn.target.list": {
       command: ThreadTurnTargetListCommand;
       result: ThreadTurnTargetListResult;
+    };
+    "tool.list": {
+      command: ToolListCommand;
+      result: ToolListResult;
     };
     "usage.get": {
       command: UsageGetCommand;
@@ -925,6 +957,48 @@ export interface RoutineWriteCommand {
   hash: string | null;
   name: string;
 }
+/**
+ * Copy the skill the model reads into the instance, where it can be edited.
+ */
+export interface SkillCustomizeCommand {
+  name: string;
+}
+export interface SkillResult {
+  content: string;
+  files: string[];
+  hash: string;
+}
+/**
+ * Delete the instance copy, so the skill it hid, if any, applies again.
+ */
+export interface SkillDeleteCommand {
+  hash: string;
+  name: string;
+}
+export interface SkillListResult {
+  skills: SkillSummary[];
+  warnings: Warning[];
+}
+export interface SkillSummary {
+  description: string;
+  name: string;
+  shadowed_by: SkillTier | null;
+  source: string;
+  tier: SkillTier;
+}
+export interface SkillListCommand {}
+export interface SkillReadCommand {
+  name: string;
+  tier: SkillTier;
+}
+/**
+ * Write the instance copy's ``SKILL.md``, creating the skill when ``hash`` is null.
+ */
+export interface SkillWriteCommand {
+  content: string;
+  hash: string | null;
+  name: string;
+}
 export interface StatsGetCommand {
   by?: StatsBucketSize;
   since?: string | null;
@@ -1230,6 +1304,17 @@ export interface ThreadTurnTargetListResult {
 export interface TurnTarget {
   closed: boolean;
   turn_id: string;
+}
+export interface ToolListCommand {}
+export interface ToolListResult {
+  tools: ToolSummary[];
+  warnings: Warning[];
+}
+export interface ToolSummary {
+  name: string;
+  rule: ToolRule;
+  source: string;
+  write: boolean;
 }
 export interface UsageGetCommand {
   since?: string | null;
