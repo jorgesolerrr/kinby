@@ -22,6 +22,7 @@ from kinby.contracts import (
 )
 from kinby.hub import BuildResult, Hub, HubRegistry, ImagePreparer, ImageSelection
 from kinby.hub.curated import CURATED_DIRECTORY
+from kinby.hub.images import GitFailed, RevisionNotFound
 from kinby.packages import InstalledPackage, PackageDescriptor, vanilla_description
 from tests.test_hub import FakeRuntime, hub_client
 from tests.test_hub_preparation import prepared
@@ -200,6 +201,38 @@ def test_image_preparation_reads_a_source_checkout_another_user_owns(tmp_path, m
         assert prepared.artifact.revision == revision
 
     asyncio.run(scenario())
+
+
+def test_an_unknown_ref_is_named_as_missing_from_the_hub_checkout(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    _source_repo(source)
+    preparer = ImagePreparer(source, HubRegistry(tmp_path / "hub"), FakeImageBackend())
+
+    with pytest.raises(RevisionNotFound) as raised:
+        asyncio.run(preparer.resolve("no-such-ref-xyz"))
+
+    assert str(raised.value) == 'No commit "no-such-ref-xyz" in the hub\'s checkout.'
+
+
+def test_a_short_ref_resolves_to_its_full_commit(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    revision = _source_repo(source)
+    preparer = ImagePreparer(source, HubRegistry(tmp_path / "hub"), FakeImageBackend())
+
+    assert asyncio.run(preparer.resolve(revision[:7])) == revision
+
+
+def test_other_git_failures_carry_git_s_own_message(tmp_path):
+    not_a_checkout = tmp_path / "source"
+    not_a_checkout.mkdir()
+    preparer = ImagePreparer(not_a_checkout, HubRegistry(tmp_path / "hub"), FakeImageBackend())
+
+    with pytest.raises(GitFailed) as raised:
+        asyncio.run(preparer.resolve("HEAD"))
+
+    assert str(raised.value).startswith("fatal: not a git repository")
 
 
 def test_pinned_package_is_installed_in_the_image_and_part_of_artifact_reuse(tmp_path):
