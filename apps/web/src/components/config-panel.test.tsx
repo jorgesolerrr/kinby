@@ -99,6 +99,11 @@ const section = (name: string) =>
     name,
   })
 
+// jsdom applies no Tailwind, so the classes tell whether the browser draws a marker: an `Item`
+// rendered as the `<li>` lays out as flex, and any other `<li>` needs `list-none`.
+const marked = (item: HTMLElement) =>
+  !item.classList.contains("flex") && !item.classList.contains("list-none")
+
 describe("ConfigPanel", () => {
   it("lists every section in its group, and the ones not built yet as unavailable", async () => {
     openPanel({})
@@ -139,6 +144,14 @@ describe("ConfigPanel", () => {
       "disabled",
       false,
     )
+    expect(await screen.findByRole("heading", { name: "Behavior prompt" })).toBeDefined()
+  })
+
+  it("shows no list marker beside a section", async () => {
+    openPanel({})
+
+    const sections = screen.getByRole("navigation", { name: "Config sections" })
+    expect(within(sections).getAllByRole("listitem").filter(marked)).toEqual([])
     expect(await screen.findByRole("heading", { name: "Behavior prompt" })).toBeDefined()
   })
 
@@ -392,6 +405,16 @@ describe("ConfigPanel", () => {
       expect(
         await screen.findByText("(oops: invalid regex: missing ), unterminated subpattern"),
       ).toBeDefined()
+    })
+
+    it("shows no list marker beside a tool rule or a pattern", async () => {
+      await openPermissions({})
+
+      const bash = await screen.findByRole("group", { name: "bash" })
+      const deny = screen.getByRole("list", { name: "Always denied" })
+      const items = [bash.closest("li"), ...within(deny).getAllByRole("listitem")]
+      expect(items).toHaveLength(SHIPPED.length + 2)
+      expect(items.filter((item) => item === null || marked(item))).toEqual([])
     })
 
     it("offers to load theirs when the permissions changed since they were opened", async () => {

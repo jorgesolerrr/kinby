@@ -100,6 +100,21 @@ describe("SkillsSection", () => {
     expect(within(items[3]).getByText("Hidden by the package skill")).toBeDefined()
   })
 
+  it("shows no list marker beside a skill, and indents the shadowed ones", async () => {
+    openSection({})
+
+    const list = await screen.findByRole("list", { name: "Skills" })
+    const items = within(list).getAllByRole("listitem")
+    // jsdom applies no Tailwind, so the classes stand in for the computed style.
+    expect(items.map((item) => item.classList.contains("list-none"))).toEqual([
+      true,
+      true,
+      true,
+      true,
+    ])
+    expect(items.map((item) => item.classList.contains("pl-6"))).toEqual([false, true, false, true])
+  })
+
   it("reads a package skill as read-only and customizes it into the instance", async () => {
     let customized = false
     const { caller, user } = openSection({

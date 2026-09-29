@@ -113,14 +113,13 @@ export function RoutinesSection({ client }: { client: Caller }) {
       )}
       <ItemGroup aria-label="Routines">
         {routines.map((listed) => (
-          <li key={listed.summary.name} aria-label={listed.summary.name}>
-            <RoutineItem
-              listed={listed}
-              onToggle={(enabled) => void toggle(listed.summary.name, enabled)}
-              onRun={() => void run(listed.summary.name)}
-              onEdit={() => setEditing(listed.summary.name)}
-            />
-          </li>
+          <RoutineItem
+            key={listed.summary.name}
+            listed={listed}
+            onToggle={(enabled) => void toggle(listed.summary.name, enabled)}
+            onRun={() => void run(listed.summary.name)}
+            onEdit={() => setEditing(listed.summary.name)}
+          />
         ))}
       </ItemGroup>
     </div>
@@ -140,7 +139,7 @@ function RoutineItem({
 }) {
   const failures = summary.failure_count ?? 0
   return (
-    <Item variant="outline">
+    <Item render={<li />} aria-label={summary.name} variant="outline">
       <ItemContent>
         <ItemTitle>{summary.name}</ItemTitle>
         <ItemDescription>{summary.description}</ItemDescription>

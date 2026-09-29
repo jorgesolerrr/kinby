@@ -62,6 +62,15 @@ function openSection(answers: Answers = {}) {
 }
 
 describe("RoutinesSection", () => {
+  it("shows no list marker beside a routine", async () => {
+    openSection()
+
+    await screen.findByRole("listitem", { name: "news" })
+    // jsdom applies no Tailwind: an `Item` rendered as the `<li>` lays out as flex, so no marker.
+    const items = within(screen.getByRole("list", { name: "Routines" })).getAllByRole("listitem")
+    expect(items.map((item) => item.classList.contains("flex"))).toEqual([true, true])
+  })
+
   it("lists each routine with its firing, state, failures, pending deliveries, and last change", async () => {
     openSection()
 
