@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from importlib.metadata import entry_points
 from pathlib import Path, PurePosixPath
@@ -51,10 +51,6 @@ _VOLUME_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 _PROMPT_GROUPS = ("url", "code")
 _MARKDOWN_LINK = re.compile(r"\]\(([^)\s]+)\)")
 _PLACEHOLDER_SECRET = "kinby-package-check"
-_FORM_TYPES = (
-    "The config form offers a string, an integer, a boolean, an enum, a list of strings, "
-    "and a map from string to string."
-)
 
 
 def check_package(package_id: str, instance: Path | None = None) -> tuple[str, ...]:
@@ -73,7 +69,6 @@ def check_package(package_id: str, instance: Path | None = None) -> tuple[str, .
         return (
             f"Template is not a directory: {template}",
             *declarations,
-            *_config_model_failures(package),
             *_login_declarations(package),
             *_missing_executables(package),
         )
@@ -84,7 +79,6 @@ def check_package(package_id: str, instance: Path | None = None) -> tuple[str, .
     failures = [
         *_unshipped_template_files(loaded, template),
         *declarations,
-        *_config_model_failures(package),
         *_login_declarations(package),
         *_secret_values(package, template),
         *_missing_executables(package),
@@ -172,47 +166,6 @@ def _override_failures(field: SetupField, built_in: SetupField) -> Iterator[str]
             f'Setup field "{field.name}" overrides a built-in field, which kinby writes itself, '
             "so it takes no target."
         )
-
-
-def _config_model_failures(package: Package) -> Iterator[str]:
-    """Each field of the package's config model that the web app's config form cannot render."""
-    if package.config is None:
-        return
-    schema = package.config.model_json_schema()
-    definitions = schema.get("$defs", {})
-    for name, field in schema.get("properties", {}).items():
-        if not _is_form_type(_resolved(field, definitions), definitions):
-            yield f'Config field "{name}" is not a type the config form offers. {_FORM_TYPES}'
-
-
-def _resolved(schema: object, definitions: Mapping[str, object]) -> object:
-    """*schema*, or the definition it references, as a StrEnum field does."""
-    match schema:
-        case {"$ref": str(reference)}:
-            return definitions.get(reference.removeprefix("#/$defs/"))
-    return schema
-
-
-def _is_form_type(schema: object, definitions: Mapping[str, object]) -> bool:
-    match schema:
-        case {"enum": [*choices]}:
-            return all(isinstance(choice, str) for choice in choices)
-        case {"type": "string" | "integer" | "boolean"}:
-            return True
-        case {"type": "array", "items": items}:
-            return _is_plain_string(_resolved(items, definitions))
-        case {"type": "object", "additionalProperties": values}:
-            return _is_plain_string(values)
-    return False
-
-
-def _is_plain_string(schema: object) -> bool:
-    match schema:
-        case {"enum": _}:
-            return False
-        case {"type": "string"}:
-            return True
-    return False
 
 
 def _defaults_at_targets(package: Package) -> dict[str, SetupValue]:
