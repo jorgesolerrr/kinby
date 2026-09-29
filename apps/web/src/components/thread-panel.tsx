@@ -40,18 +40,22 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { reason } from "@/lib/operation"
 import { threadStore } from "@/lib/thread-store"
-import type { ParkedApproval, ToolStep, TurnBlock, TurnEnd } from "@/lib/timeline"
+import type { ParkedApproval, Recap, ToolStep, TurnBlock, TurnEnd } from "@/lib/timeline"
 import {
   ArrowUpIcon,
   BanIcon,
+  BrainIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleStopIcon,
+  MinusIcon,
   RepeatIcon,
   ShieldAlertIcon,
   SquareIcon,
+  TriangleAlertIcon,
   UserIcon,
   WrenchIcon,
   XIcon,
@@ -403,6 +407,7 @@ function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
             ),
           )}
           <EndMarker turn={turn} />
+          {turn.recap !== undefined && <RecapMarker recap={turn.recap} />}
         </MessageContent>
       </Message>
     </div>
@@ -521,6 +526,43 @@ function turnOutcome({ end, steps }: TurnBlock): {
       }
     case "stopped":
       return { icon: <CircleStopIcon />, outcome: "Stopped" }
+  }
+}
+
+/** What the turn's recap left in memory. */
+function RecapMarker({ recap }: { recap: Recap }) {
+  switch (recap.kind) {
+    // The episode has no Memory page to open on yet, so the marker names it without a link.
+    case "episode":
+      return (
+        <Marker>
+          <MarkerIcon>
+            <BrainIcon />
+          </MarkerIcon>
+          <MarkerContent>Recapped</MarkerContent>
+        </Marker>
+      )
+    case "none":
+      return (
+        <Marker>
+          <MarkerIcon>
+            <MinusIcon />
+          </MarkerIcon>
+          <MarkerContent>No episode</MarkerContent>
+        </Marker>
+      )
+    case "failed":
+      return (
+        <Tooltip>
+          <Marker render={<TooltipTrigger />}>
+            <MarkerIcon>
+              <TriangleAlertIcon />
+            </MarkerIcon>
+            <MarkerContent>Recap failed</MarkerContent>
+          </Marker>
+          <TooltipContent align="start">{recap.message}</TooltipContent>
+        </Tooltip>
+      )
   }
 }
 
