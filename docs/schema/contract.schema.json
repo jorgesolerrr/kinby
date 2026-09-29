@@ -3252,6 +3252,50 @@
       "title": "ProcessState",
       "type": "string"
     },
+    "ProfileGetCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "ProfileGetCommand",
+      "type": "object"
+    },
+    "ProfileResult": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "text",
+        "hash",
+        "tokens"
+      ],
+      "title": "ProfileResult",
+      "type": "object"
+    },
+    "ProfileSetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "hash"
+      ],
+      "title": "ProfileSetCommand",
+      "type": "object"
+    },
     "PromptGetCommand": {
       "additionalProperties": false,
       "properties": {
@@ -6666,6 +6710,38 @@
           ],
           "type": "object"
         },
+        "profile.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ProfileGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ProfileResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "profile.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ProfileSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ProfileResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "prompt.get": {
           "additionalProperties": false,
           "properties": {
@@ -7185,6 +7261,8 @@
         "memory.add",
         "memory.correct",
         "memory.forget",
+        "profile.get",
+        "profile.set",
         "skill.list",
         "skill.read",
         "skill.write",

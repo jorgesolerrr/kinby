@@ -12,6 +12,7 @@ import {
 import { useEffect, useId, useState, useSyncExternalStore } from "react"
 
 import { Failure } from "@/components/config-alerts"
+import { ProfileTab } from "@/components/profile-tab"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -81,10 +82,10 @@ const NO_FILTERS: Filters = {
 const KINDS: Record<NodeKind | "all", string> = { all: "All", fact: "Facts", episode: "Episodes" }
 
 /**
- * An instance's memory, as two tabs. The knowledge graph lists its nodes newest first, narrowed by
- * the filters above it, and opens one in the pane beside it, where the user corrects or forgets it.
- * With nothing open, the pane adds a fact. The page reads when it opens, after each write, and on
- * Refresh, and never polls. The profile tab is not built yet.
+ * An instance's memory, as two tabs. The profile is text the user edits. The knowledge graph lists
+ * its nodes newest first, narrowed by the filters above it, and opens one in the pane beside it,
+ * where the user corrects or forgets it. With nothing open, the pane adds a fact. Each tab reads
+ * when it opens and after each write, the graph also on Refresh, and neither polls.
  */
 export function MemoryPage({
   client,
@@ -101,12 +102,15 @@ export function MemoryPage({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-xl font-semibold">Memory</h1>
           <TabsList>
-            <TabsTrigger value="profile" disabled>
-              Profile
-            </TabsTrigger>
+            <TabsTrigger value="profile">Profile</TabsTrigger>
             <TabsTrigger value="graph">Knowledge graph</TabsTrigger>
           </TabsList>
         </div>
+        <TabsContent value="profile">
+          <div className="pt-2">
+            <ProfileTab client={client} clock={clock} />
+          </div>
+        </TabsContent>
         <TabsContent value="graph" className="flex min-h-0 flex-col">
           <div className="flex min-h-0 flex-1 flex-col gap-4 pt-2">
             <KnowledgeGraph client={client} clock={clock} instanceId={instanceId} />

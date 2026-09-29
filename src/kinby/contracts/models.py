@@ -1918,3 +1918,21 @@ class MemoryForgetCommand(ContractModel):
 
 class MemoryForgetResult(ContractModel):
     pass
+
+
+class ProfileGetCommand(ContractModel):
+    pass
+
+
+class ProfileSetCommand(ContractModel):
+    text: str
+    #: The hash the client read. The write is refused as STALE when the file changed since.
+    hash: FileHash
+
+
+class ProfileResult(ContractModel):
+    #: ``memory/profile.md``, which goes into every prompt. Empty when there is no file.
+    text: str
+    hash: FileHash
+    #: About how many tokens the text takes in a prompt: a quarter of its characters, rounded up.
+    tokens: int
