@@ -47,7 +47,7 @@ export type ProcessState = "missing" | "created" | "starting" | "running" | "sto
 /**
  * A change a running instance applies only once it is recreated.
  */
-export type RecreateReason = "package_config";
+export type RecreateReason = "secrets" | "package_config";
 export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "unknown";
 /**
  * How an instance's subscription login stands: not signed in yet, or how its last one ended.
@@ -662,6 +662,7 @@ export interface InstanceStatusResult {
   instance_id: string;
   process: ProcessState;
   readiness: Readiness;
+  recreate_reasons: RecreateReason[];
   setup: InstanceSetup;
 }
 /**

@@ -18,6 +18,7 @@ from kinby.contracts import (
     Event,
     Payload,
     PermissionMode,
+    RecreateReason,
     RoutineName,
     RoutineTrigger,
     SystemPrompt,
@@ -25,6 +26,7 @@ from kinby.contracts import (
 from kinby.core import LangGraphRunner, boot_instance
 from kinby.core.dispatcher import Dispatcher, TurnConfig
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
+from kinby.hub import ControlEndpoint, HttpInstanceControl
 from kinby.instance import load_instance
 from kinby.instance.permissions import SHIPPED_BASH_DENY
 from kinby.instance.recap import DEFAULT_RECAP_LENS
@@ -32,6 +34,7 @@ from kinby.plugins import ToolContext
 from kinby.plugins.instance_tools import instance_tools
 from tests.fake_package import install_fake_package
 from tests.helpers import fixed_permission_ceiling, fixed_turn_preparation, turn_config_stub
+from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_instance_tools import ScriptedModel
 from tests.test_routines import instance_at, routine_file
 from tests.test_scheduler import FailingRunner, FakeClock, ScriptedRunner, call, runtime
@@ -1208,3 +1211,14 @@ def test_the_probe_asks_for_a_restart_once_the_package_config_changed(writer: Pa
         assert restored.restart_reasons == []
 
     asyncio.run(scenario())
+
+
+def test_the_hub_reads_the_restart_reasons_over_the_control_route(writer: Path) -> None:
+    async def scenario() -> list[RecreateReason]:
+        async with _booted(writer) as dispatcher, served_dispatcher(dispatcher) as address:
+            (writer / "package.yaml").write_text("tone: formal\ntoken: EDITOR_TOKEN\n")
+            return await HttpInstanceControl().restart_reasons(
+                ControlEndpoint(address=f"http://{address.host}:{address.port}", token=TOKEN)
+            )
+
+    assert asyncio.run(scenario()) == [RecreateReason.PACKAGE_CONFIG]

@@ -23,6 +23,7 @@ from kinby.hub.models import (
     InstanceSpec,
     RuntimeStatus,
     SetupSpec,
+    secrets_digest,
 )
 from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage, installed_package_from_json
 
@@ -186,6 +187,7 @@ class DockerRuntime:
                 "kinby.hub": self._hub_id,
                 "kinby.instance": runtime_id,
                 "kinby.port": str(spec.port),
+                "kinby.secrets": secrets_digest(spec.env),
             },
             environment=dict(spec.env),
             mounts=mounts,
@@ -331,6 +333,7 @@ class DockerRuntime:
             owner=owner,
             owner_name=owner_name,
             storage=_mounted(attributes),
+            secrets_digest=labels.get("kinby.secrets"),
         )
 
     def _owner(self, labels: dict[str, str]) -> tuple[ContainerOwner, str]:

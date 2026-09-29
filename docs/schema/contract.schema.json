@@ -1531,6 +1531,12 @@
         "readiness": {
           "$ref": "#/$defs/Readiness"
         },
+        "recreate_reasons": {
+          "items": {
+            "$ref": "#/$defs/RecreateReason"
+          },
+          "type": "array"
+        },
         "setup": {
           "$ref": "#/$defs/InstanceSetup"
         }
@@ -1539,7 +1545,8 @@
         "instance_id",
         "process",
         "readiness",
-        "setup"
+        "setup",
+        "recreate_reasons"
       ],
       "title": "InstanceStatusResult",
       "type": "object"
@@ -2999,6 +3006,7 @@
     "RecreateReason": {
       "description": "A change a running instance applies only once it is recreated.",
       "enum": [
+        "secrets",
         "package_config"
       ],
       "title": "RecreateReason",

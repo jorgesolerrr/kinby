@@ -6,7 +6,6 @@ import type {
   Clock,
   CuratedPackage,
   InstanceCreateCommand,
-  OperationStep,
   PackageDescription,
   PackageSelection,
   SetupField,
@@ -15,7 +14,7 @@ import type {
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
-import { OperationSteps } from "@/components/operation-steps"
+import { Progress } from "@/components/operation-progress"
 import { SubscriptionLogins } from "@/components/subscription-logins"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -752,32 +751,6 @@ function StartStep({
           Leave it stopped
         </Button>
       </div>
-    </>
-  )
-}
-
-/** An operation's steps, and why it failed when no step says so. */
-function Progress({
-  label,
-  failure,
-  operation,
-}: {
-  label: string
-  failure: string
-  operation: { state: string; steps: OperationStep[]; detail?: string }
-}) {
-  const failedOutsideAStep =
-    operation.state === "failed" && !operation.steps.some((step) => step.state === "failed")
-  return (
-    <>
-      <OperationSteps label={label} steps={operation.steps} />
-      {failedOutsideAStep && (
-        <Alert variant="destructive">
-          <CircleXIcon />
-          <AlertTitle>{failure}</AlertTitle>
-          <AlertDescription>{operation.detail}</AlertDescription>
-        </Alert>
-      )}
     </>
   )
 }

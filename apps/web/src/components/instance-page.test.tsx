@@ -47,6 +47,7 @@ function status(fields: Partial<InstanceStatusResult> = {}): InstanceStatusResul
     process: "created",
     readiness: "not-running",
     setup,
+    recreate_reasons: [],
     ...fields,
   }
 }
@@ -167,6 +168,55 @@ describe("the setup card", () => {
     expect(caller.calls.some((call) => call.method === "instance.login.start")).toBe(false)
     expect(login("Codex").getByText("Signed in")).toBeDefined()
     expect(onChanged).toHaveBeenCalledOnce()
+  })
+
+  it("sets a secret and replaces one there, and lists the instances again once the hub holds it", async () => {
+    const { user, clock, caller, onChanged } = await openPage({
+      "instance.secrets.set": () => ({ operation_id: "op-secret", instance_id: "instance-1" }),
+      "operation.get": () => operation({ kind: "secrets", state: "succeeded" }),
+    })
+
+    expect(secret("API key").queryByRole("button", { name: "Set" })).toBeNull()
+    await user.click(secret("API key").getByRole("button", { name: "Replace" }))
+    await user.type(secret("API key").getByLabelText("New value for API key"), "sk-new")
+    await user.click(secret("API key").getByRole("button", { name: "Save" }))
+    await act(() => clock.advance(0))
+    await user.click(secret("GitHub token").getByRole("button", { name: "Set" }))
+    await user.type(secret("GitHub token").getByLabelText("New value for GitHub token"), "ghp-1")
+    await user.click(secret("GitHub token").getByRole("button", { name: "Save" }))
+    await act(() => clock.advance(0))
+
+    expect(
+      caller.calls
+        .filter((call) => call.method === "instance.secrets.set")
+        .map((call) => call.params),
+    ).toEqual([
+      { instance_id: "instance-1", secrets: { api_key: "sk-new" } },
+      { instance_id: "instance-1", secrets: { GH_TOKEN: "ghp-1" } },
+    ])
+    expect(onChanged).toHaveBeenCalledTimes(2)
+    expect(secret("GitHub token").queryByLabelText("New value for GitHub token")).toBeNull()
+    expect(card().getByText(/A secret you set applies when Ada starts/)).toBeDefined()
+  })
+
+  it("says why a secret was not set, and keeps what was typed", async () => {
+    const { user, clock, onChanged } = await openPage({
+      "instance.secrets.set": () => ({ operation_id: "op-secret", instance_id: "instance-1" }),
+      "operation.get": () =>
+        operation({ kind: "secrets", state: "failed", detail: "No space left on device." }),
+    })
+
+    await user.click(secret("GitHub token").getByRole("button", { name: "Set" }))
+    await user.type(secret("GitHub token").getByLabelText("New value for GitHub token"), "ghp-1")
+    await user.click(secret("GitHub token").getByRole("button", { name: "Save" }))
+    await act(() => clock.advance(0))
+
+    expect(secret("GitHub token").getByText("No space left on device.")).toBeDefined()
+    expect(secret("GitHub token").getByLabelText("New value for GitHub token")).toHaveProperty(
+      "value",
+      "ghp-1",
+    )
+    expect(onChanged).not.toHaveBeenCalled()
   })
 
   it("starts the instance anyway, and lists the instances again once it runs", async () => {

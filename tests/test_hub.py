@@ -60,6 +60,7 @@ from kinby.contracts import (
     PackageDescription,
     PackageSelection,
     Readiness,
+    RecreateReason,
     Scope,
     SetupField,
     SetupFieldKind,
@@ -85,6 +86,7 @@ from kinby.hub import (
     PreparedImage,
     RuntimeStatus,
     SetupSpec,
+    secrets_digest,
 )
 from kinby.hub.service import HubAlreadyRunning
 from kinby.instance import inspect_instance
@@ -214,6 +216,7 @@ class FakeRuntime:
             owner=ContainerOwner.HUB,
             owner_name="this-hub",
             storage=spec.storage,
+            secrets_digest=secrets_digest(spec.env),
         )
 
     async def describe(self, instance_id: str) -> ContainerDescription | None:
@@ -357,6 +360,7 @@ class FakeControl:
         answers: bool = True,
         drops: int = 0,
         refuses: bool = False,
+        reasons: list[RecreateReason] | None = None,
     ) -> None:
         self.capabilities = capabilities or [Capability.WS, Capability.DRAIN]
         self.contract_version = contract_version
@@ -364,6 +368,8 @@ class FakeControl:
         self.answers = answers
         self.drops = drops
         self.refuses = refuses
+        #: What the instance says changed since it booted.
+        self.reasons = reasons or []
         self.endpoints: list[ControlEndpoint] = []
         self.forces: list[bool] = []
         #: What each instance answers stats with, by address. A missing address never answers.
@@ -399,6 +405,11 @@ class FakeControl:
             await asyncio.Event().wait()
         await self.release.wait()
         return DrainState.INTERRUPTED if any(self.forces) else DrainState.DRAINED
+
+    async def restart_reasons(self, endpoint: ControlEndpoint) -> list[RecreateReason]:
+        if not self.reachable:
+            raise ControlUnreachable("Cannot connect to host kinby-instance:8787")
+        return self.reasons
 
     async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
         self.stats_asked.append(command)

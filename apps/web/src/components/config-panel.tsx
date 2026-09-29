@@ -1,4 +1,12 @@
-import type { Client, Clock, InstanceClient, InstanceSummary, PromptName } from "@kinby/contract"
+import type {
+  Client,
+  Clock,
+  InstanceClient,
+  InstanceStatusResult,
+  InstanceSummary,
+  PromptName,
+  RecreateReason,
+} from "@kinby/contract"
 import { Fragment, type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
@@ -6,7 +14,9 @@ import { ManifestSection } from "@/components/manifest-section"
 import { PackageConfigSection } from "@/components/package-config-section"
 import { PackageSection } from "@/components/package-section"
 import { PermissionsSection } from "@/components/permissions-section"
+import { RecreateNotice } from "@/components/recreate-notice"
 import { RoutinesSection } from "@/components/routines-section"
+import { SecretsSection } from "@/components/secrets-section"
 import { SkillsSection } from "@/components/skills-section"
 import { ToolsSection } from "@/components/tools-section"
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +34,7 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { usePolled } from "@/hooks/use-polled"
 import { lastChanged } from "@/lib/config-changes"
 import { reason } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
@@ -43,25 +54,33 @@ import {
 
 type Caller = Pick<InstanceClient, "call">
 
-/** What a section is given: the instance and its client, the hub, and a way to open another section by its label. */
-interface Context {
+/**
+ * What a section may use: the instance and its status, the hub, a way to list the instances again,
+ * and the other sections.
+ */
+interface Panel {
   client: Caller
   caller: Pick<Client, "call">
   clock: Clock
   instance: InstanceSummary
+  /** Undefined until the hub answers. */
+  status: InstanceStatusResult | undefined
+  /** Read the status again, after a change that may add a recreate reason. */
+  statusChanged: () => void
+  /** List the instances again. */
   onChanged: () => void
+  /** Open another section by its label. */
   open: (label: string) => void
 }
-
-/** What a section shows, given its context. */
-type Render = (context: Context) => ReactNode
 
 /** One section of the panel. A section without `render` is not built yet. */
 interface Section {
   label: string
   hint: string
   icon: LucideIcon
-  render?: Render
+  render?: (panel: Panel) => ReactNode
+  /** The recreate reason a change in this section leaves. */
+  reason?: RecreateReason
 }
 
 const PACKAGE = "Package and version"
@@ -127,12 +146,29 @@ const GROUPS: { label: string; sections: Section[] }[] = [
   {
     label: "Instance",
     sections: [
-      { label: "Secrets and login", hint: "write-only values, sign-in", icon: KeyRoundIcon },
+      {
+        label: "Secrets and login",
+        hint: "write-only values, sign-in",
+        icon: KeyRoundIcon,
+        reason: "secrets",
+        render: ({ caller, clock, instance, status, statusChanged }) => (
+          <SecretsSection
+            caller={caller}
+            clock={clock}
+            instanceId={instance.instance_id}
+            setup={status?.setup}
+            onChanged={statusChanged}
+          />
+        ),
+      },
       {
         label: "Package config",
         hint: "the package's own settings",
         icon: BoxIcon,
-        render: ({ client }) => <PackageConfigSection client={client} />,
+        reason: "package_config",
+        render: ({ client, statusChanged }) => (
+          <PackageConfigSection client={client} onSaved={statusChanged} />
+        ),
       },
       {
         label: PACKAGE,
@@ -159,10 +195,14 @@ const APPLIES: Record<PromptName, string> = {
   recap: "Saved. It applies at the next recap.",
 }
 
+/** How often the panel reads the instance's status, for a change the hub or another tab made. */
+const STATUS_INTERVAL_MS = 30_000
+
 /**
- * The instance's config: its sections grouped in a left column, the selected one on the right. A
- * section that needs the user says why in place of its hint. `client` reaches the instance and
- * `caller` the hub, and `onChanged` lists the instances again.
+ * The instance's config: its sections grouped in a left column, the selected one on the right,
+ * and above it one notice for every change that waits on a recreate. A section that needs the user
+ * says why in place of its hint. `client` reaches the instance and `caller` the hub, and
+ * `onChanged` lists the instances again.
  */
 export function ConfigPanel({
   client,
@@ -179,11 +219,25 @@ export function ConfigPanel({
 }) {
   const [selected, setSelected] = useState("Behavior prompt")
   const section = SECTIONS.find((candidate) => candidate.label === selected)
-  const needs: Partial<Record<string, string>> = instance.notices.some(
-    (notice) => notice.code === "revision_behind",
+  const instanceId = instance.instance_id
+  const read = useCallback(
+    () => caller.call("instance.status", { instance_id: instanceId }),
+    [caller, instanceId],
   )
-    ? { [PACKAGE]: "behind the hub" }
-    : {}
+  const [status, readAgain] = usePolled(read, clock, true, STATUS_INTERVAL_MS)
+  const statusChanged = useCallback(() => void readAgain(), [readAgain])
+  const reasons = status?.recreate_reasons ?? []
+  const needs = needsOf(instance, reasons)
+  const panel: Panel = {
+    client,
+    caller,
+    clock,
+    instance,
+    status,
+    statusChanged,
+    onChanged,
+    open: setSelected,
+  }
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       <nav
@@ -202,20 +256,43 @@ export function ConfigPanel({
         ))}
       </nav>
       <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-6">
+        <RecreateNotice
+          caller={caller}
+          clock={clock}
+          instanceId={instanceId}
+          reasons={reasons}
+          onRecreated={statusChanged}
+        />
         <div>
           <h1 className="text-xl font-semibold">{section?.label}</h1>
           <p className="text-sm text-muted-foreground">{section?.hint}</p>
         </div>
         <Separator />
-        <Fragment key={selected}>
-          {section?.render?.({ client, caller, clock, instance, onChanged, open: setSelected })}
-        </Fragment>
+        <Fragment key={selected}>{section?.render?.(panel)}</Fragment>
       </main>
     </div>
   )
 }
 
-/** One group of the left column, as a list named for the group. */
+/**
+ * Why each section needs the user, by its label: a change that waits on a recreate, or an
+ * installed package behind the hub's.
+ */
+function needsOf(
+  instance: InstanceSummary,
+  reasons: RecreateReason[],
+): Partial<Record<string, string>> {
+  const needs: Partial<Record<string, string>> = {}
+  for (const { label, reason } of SECTIONS) {
+    if (reason !== undefined && reasons.includes(reason)) needs[label] = "Recreate to apply"
+  }
+  if (instance.notices.some((notice) => notice.code === "revision_behind")) {
+    needs[PACKAGE] = "behind the hub"
+  }
+  return needs
+}
+
+/** One group of the left column, as a list named for the group. A need replaces a hint. */
 function SectionGroup({
   label,
   sections,

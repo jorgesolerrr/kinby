@@ -1,7 +1,10 @@
 import { CallError } from "@kinby/contract"
 import type {
   ConfigChange,
+  InstanceSetup,
+  InstanceStatusResult,
   InstanceSummary,
+  OperationGetResult,
   PackageConfigResult,
   PackageConfigSetCommand,
   PermissionsResult,
@@ -9,7 +12,7 @@ import type {
   PromptResult,
 } from "@kinby/contract"
 import { type Answers, fakeClock, instanceSummary, stubCaller } from "@kinby/contract/testing"
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -27,8 +30,47 @@ const byTheAgent: ConfigChange = {
   diff: "",
 }
 
-const ada = instanceSummary({ instance_id: "hub-ada" })
+const setup: InstanceSetup = {
+  logins: [
+    {
+      id: "claude",
+      label: "Claude Code",
+      description: "Signs Claude Code in with your plan.",
+      state: "signed_in",
+    },
+  ],
+  secrets: [
+    { name: "api_key", label: "API key", required: true, is_set: true },
+    { name: "GH_TOKEN", label: "GitHub token", required: true, is_set: false },
+  ],
+}
 
+function status(fields: Partial<InstanceStatusResult> = {}): InstanceStatusResult {
+  return {
+    instance_id: "instance-1",
+    process: "running",
+    readiness: "ready",
+    setup,
+    recreate_reasons: [],
+    ...fields,
+  }
+}
+
+function operation(fields: Partial<OperationGetResult>): OperationGetResult {
+  return {
+    operation_id: "op-1",
+    instance_id: "instance-1",
+    kind: "recreate",
+    state: "running",
+    detail: "",
+    steps: [],
+    ...fields,
+  }
+}
+
+const ada = instanceSummary({ instance_id: "instance-1" })
+
+/** The panel, with one stub answering both the instance's calls and the hub's. */
 function openPanel(answers: Answers, instance: InstanceSummary = ada) {
   const caller = stubCaller({
     "prompt.get": ({ name }) =>
@@ -36,19 +78,26 @@ function openPanel(answers: Answers, instance: InstanceSummary = ada) {
         ? behavior
         : { content: "The shipped lens.", hash: "empty", default: true },
     "config.history": ({ file }) => ({ changes: file === "SYSTEM.md" ? [byTheAgent] : [] }),
+    "instance.status": () => status(),
     ...answers,
   })
+  const clock = fakeClock()
   render(
     <ConfigPanel
       client={caller}
-      caller={stubCaller({})}
-      clock={fakeClock()}
+      caller={caller}
+      clock={clock}
       instance={instance}
       onChanged={() => {}}
     />,
   )
-  return { caller, user: userEvent.setup() }
+  return { caller, clock, user: userEvent.setup() }
 }
+
+const section = (name: string) =>
+  within(screen.getByRole("navigation", { name: "Config sections" })).getByRole("button", {
+    name,
+  })
 
 describe("ConfigPanel", () => {
   it("lists every section in its group, and the ones not built yet as unavailable", async () => {
@@ -95,7 +144,7 @@ describe("ConfigPanel", () => {
 
   it("says the package section is behind the hub in place of its hint", async () => {
     const behind = instanceSummary({
-      instance_id: "hub-ada",
+      instance_id: "instance-1",
       source_revision: "a".repeat(40),
       notices: [
         {
@@ -475,6 +524,26 @@ describe("ConfigPanel", () => {
       ])
     })
 
+    it("adds a saved package config to the notice", async () => {
+      let saved = false
+      const { user, clock } = await openPackageConfig({
+        "instance.status": () => status({ recreate_reasons: saved ? ["package_config"] : [] }),
+        "package.config.set": ({ values }) => {
+          saved = true
+          return { ...factory, values, hash: "yaml-2" }
+        },
+      })
+      await act(() => clock.advance(0))
+
+      expect(screen.queryByRole("region", { name: "Recreate to apply" })).toBeNull()
+      await user.click(screen.getByRole("switch", { name: "Review" }))
+      await user.click(screen.getByRole("button", { name: "Save" }))
+      await screen.findByText("Saved. It applies once the instance is recreated.")
+
+      const notice = within(await screen.findByRole("region", { name: "Recreate to apply" }))
+      expect(notice.getByText("The edited package config")).toBeDefined()
+    })
+
     it("shows the package validator's errors next to their fields", async () => {
       const { user } = await openPackageConfig({
         "package.config.set": () => {
@@ -550,6 +619,159 @@ describe("ConfigPanel", () => {
 
       expect(await screen.findByText("No package config")).toBeDefined()
       expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
+    })
+  })
+
+  describe("Secrets and login", () => {
+    async function openSecrets(answers: Answers) {
+      const opened = openPanel(answers)
+      await opened.user.click(screen.getByRole("button", { name: "Secrets and login" }))
+      await screen.findByRole("heading", { name: "Secrets and login" })
+      await act(() => opened.clock.advance(0))
+      return opened
+    }
+
+    const secret = (name: string) =>
+      within(within(screen.getByRole("list", { name: "Secrets" })).getByRole("listitem", { name }))
+
+    it("lists each secret and whether it is set, with Set or Replace", async () => {
+      await openSecrets({})
+
+      expect(secret("API key").getByText("Set")).toBeDefined()
+      expect(secret("API key").getByText("api_key")).toBeDefined()
+      expect(secret("API key").getByRole("button", { name: "Replace" })).toBeDefined()
+      expect(secret("GitHub token").getByText("Not set")).toBeDefined()
+      expect(secret("GitHub token").getByRole("button", { name: "Set" })).toBeDefined()
+    })
+
+    it("replaces a secret, and the notice asks for a recreate", async () => {
+      let replaced = false
+      const { user, clock, caller } = await openSecrets({
+        "instance.status": () => status({ recreate_reasons: replaced ? ["secrets"] : [] }),
+        "instance.secrets.set": () => {
+          replaced = true
+          return { operation_id: "op-secret", instance_id: "instance-1" }
+        },
+        "operation.get": () => operation({ kind: "secrets", state: "succeeded" }),
+      })
+
+      expect(screen.queryByRole("region", { name: "Recreate to apply" })).toBeNull()
+      await user.click(secret("API key").getByRole("button", { name: "Replace" }))
+      await user.type(secret("API key").getByLabelText("New value for API key"), "sk-new")
+      await user.click(secret("API key").getByRole("button", { name: "Save" }))
+      await act(() => clock.advance(0))
+
+      expect(caller.calls.find((call) => call.method === "instance.secrets.set")?.params).toEqual({
+        instance_id: "instance-1",
+        secrets: { api_key: "sk-new" },
+      })
+      const notice = within(screen.getByRole("region", { name: "Recreate to apply" }))
+      expect(notice.getByText("Replaced secrets")).toBeDefined()
+      expect(within(section("Secrets and login")).getByText("Recreate to apply")).toBeDefined()
+    })
+
+    it("signs an expired login in again and shows its URL and code", async () => {
+      const { user, clock, caller } = await openSecrets({
+        "instance.login.start": () => ({ operation_id: "op-login", instance_id: "instance-1" }),
+        "operation.get": () =>
+          operation({
+            kind: "login",
+            steps: [
+              {
+                name: "sign-in",
+                state: "running",
+                detail: "Waiting for you to sign in to Claude Code.",
+                prompt: { url: "https://claude.ai/device", code: "WXYZ-98765" },
+              },
+            ],
+          }),
+      })
+
+      const login = within(screen.getByRole("listitem", { name: "Claude Code" }))
+      await user.click(login.getByRole("button", { name: "Sign in again" }))
+      await act(() => clock.advance(0))
+
+      expect(caller.calls.find((call) => call.method === "instance.login.start")?.params).toEqual({
+        instance_id: "instance-1",
+        login_id: "claude",
+      })
+      expect(login.getByText("WXYZ-98765")).toBeDefined()
+      expect(login.getByRole("link", { name: "https://claude.ai/device" })).toBeDefined()
+    })
+  })
+
+  describe("Recreate to apply", () => {
+    it("lists every reason, and says so beside each section that has one", async () => {
+      const { clock } = openPanel({
+        "instance.status": () => status({ recreate_reasons: ["secrets", "package_config"] }),
+      })
+      await act(() => clock.advance(0))
+
+      const notice = within(screen.getByRole("region", { name: "Recreate to apply" }))
+      expect(notice.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+        "Replaced secrets",
+        "The edited package config",
+      ])
+      expect(notice.getAllByRole("button").map((button) => button.textContent)).toEqual([
+        "Recreate",
+      ])
+      expect(within(section("Secrets and login")).getByText("Recreate to apply")).toBeDefined()
+      expect(within(section("Package config")).getByText("Recreate to apply")).toBeDefined()
+      expect(within(section("Permissions")).queryByText("Recreate to apply")).toBeNull()
+    })
+
+    it("recreates with one button, shows its steps, and goes once nothing waits", async () => {
+      let recreated = false
+      const polls = [
+        operation({
+          steps: [
+            { name: "validate", state: "succeeded", detail: "Revalidating the configuration." },
+            { name: "drain", state: "running", detail: "Draining accepted work." },
+          ],
+        }),
+        operation({ state: "succeeded", detail: "Container recreated." }),
+      ]
+      const { user, clock, caller } = openPanel({
+        "instance.status": () => status({ recreate_reasons: recreated ? [] : ["secrets"] }),
+        "instance.recreate": () => {
+          recreated = true
+          return { operation_id: "op-1", instance_id: "instance-1" }
+        },
+        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+      })
+      await act(() => clock.advance(0))
+
+      const notice = within(screen.getByRole("region", { name: "Recreate to apply" }))
+      await user.click(notice.getByRole("button", { name: "Recreate" }))
+      await act(() => clock.advance(0))
+
+      const steps = within(notice.getByRole("list", { name: "Recreate steps" }))
+      expect(steps.getByRole("listitem", { name: "drain" })).toBeDefined()
+      expect(notice.getByRole("button", { name: /Recreate/ })).toHaveProperty("disabled", true)
+      await act(() => clock.advance(1_000))
+
+      expect(caller.calls.find((call) => call.method === "instance.recreate")?.params).toEqual({
+        instance_id: "instance-1",
+      })
+      expect(screen.queryByRole("region", { name: "Recreate to apply" })).toBeNull()
+      expect(within(section("Secrets and login")).queryByText("Recreate to apply")).toBeNull()
+    })
+
+    it("says why a recreate failed, and offers it again", async () => {
+      const { user, clock } = openPanel({
+        "instance.status": () => status({ recreate_reasons: ["package_config"] }),
+        "instance.recreate": () => ({ operation_id: "op-1", instance_id: "instance-1" }),
+        "operation.get": () =>
+          operation({ state: "failed", detail: "The image is gone.", steps: [] }),
+      })
+      await act(() => clock.advance(0))
+
+      const notice = within(screen.getByRole("region", { name: "Recreate to apply" }))
+      await user.click(notice.getByRole("button", { name: "Recreate" }))
+      await act(() => clock.advance(0))
+
+      expect(notice.getByText("The image is gone.")).toBeDefined()
+      expect(notice.getByRole("button", { name: "Recreate" })).toHaveProperty("disabled", false)
     })
   })
 })
