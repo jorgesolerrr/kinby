@@ -1,6 +1,6 @@
 import { CallError } from "@kinby/contract"
 import type { ConfigChange, RoutineSummary } from "@kinby/contract"
-import { type Answers, stubCaller } from "@kinby/contract/testing"
+import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
@@ -57,7 +57,7 @@ function openSection(answers: Answers = {}) {
     }),
     ...answers,
   })
-  render(<RoutinesSection client={caller} />)
+  render(<RoutinesSection client={caller} clock={fakeClock()} />)
   return { caller, user: userEvent.setup() }
 }
 
@@ -123,6 +123,25 @@ describe("RoutinesSection", () => {
     expect(caller.calls.filter((call) => call.method === "routine.run")).toEqual([
       { method: "routine.run", params: { name: "news" } },
     ])
+  })
+
+  it("says the instance refused a run while a user turn runs", async () => {
+    const { user } = openSection({
+      "routine.run": () => {
+        throw new CallError({
+          code: "INSTANCE_BUSY",
+          message: "A user turn is running.",
+          retryable: true,
+        })
+      },
+    })
+
+    const item = await screen.findByRole("listitem", { name: "news" })
+    await user.click(within(item).getByRole("button", { name: "Run now" }))
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toContain("The instance refused it")
+    expect(alert.textContent).toContain("A user turn is running.")
   })
 
   it("edits a routine over the hash it read, and offers to load theirs when it changed since", async () => {

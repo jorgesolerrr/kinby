@@ -1,4 +1,4 @@
-import type { InstanceClient, RoutineFile } from "@kinby/contract"
+import type { Clock, InstanceClient, RoutineFile } from "@kinby/contract"
 import { useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
@@ -29,8 +29,9 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { usePace } from "@/hooks/use-pace"
 import { lastChanged } from "@/lib/config-changes"
-import { reason } from "@/lib/operation"
+import { retried } from "@/lib/operation"
 import {
   deleteRoutine,
   lastFiring,
@@ -46,30 +47,31 @@ import { ArrowLeftIcon, PencilIcon, PlayIcon, PlusIcon, Trash2Icon } from "lucid
 type Caller = Pick<InstanceClient, "call">
 
 /** The instance's routines, each with its switch. */
-export function RoutinesSection({ client }: { client: Caller }) {
+export function RoutinesSection({ client, clock }: { client: Caller; clock: Clock }) {
+  const pacing = usePace(clock)
   const [routines, setRoutines] = useState<ListedRoutine[]>()
-  const [failure, setFailure] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
   const [started, setStarted] = useState<string>()
   // The routine open in the editor, null for a new one, or undefined for the list.
   const [editing, setEditing] = useState<string | null>()
 
   const load = useCallback(
     () =>
-      listRoutines(client).then(
+      retried(() => listRoutines(client), pacing).then(
         (listed) => {
           setRoutines(listed)
           setFailure(undefined)
         },
-        (error: unknown) => setFailure(reason(error)),
+        (error: unknown) => setFailure(error),
       ),
-    [client],
+    [client, pacing],
   )
   useEffect(() => {
     void load()
   }, [load])
 
   const act = (action: () => Promise<unknown>) =>
-    action().then(load, (error: unknown) => setFailure(reason(error)))
+    action().then(load, (error: unknown) => setFailure(error))
   const toggle = (name: string, enabled: boolean) =>
     act(() => client.call("routine.set_enabled", { name, enabled }))
   const run = (name: string) =>
@@ -82,6 +84,7 @@ export function RoutinesSection({ client }: { client: Caller }) {
     return (
       <RoutineEditor
         client={client}
+        clock={clock}
         name={editing}
         onClose={() => {
           setEditing(undefined)
@@ -94,7 +97,7 @@ export function RoutinesSection({ client }: { client: Caller }) {
     return failure === undefined ? (
       <Skeleton className="h-40 w-full" />
     ) : (
-      <Failure>{failure}</Failure>
+      <Failure error={failure} />
     )
   }
   return (
@@ -105,7 +108,7 @@ export function RoutinesSection({ client }: { client: Caller }) {
           New routine
         </Button>
       </div>
-      {failure !== undefined && <Failure>{failure}</Failure>}
+      {failure !== undefined && <Failure error={failure} />}
       {started !== undefined && (
         <p className="text-sm text-muted-foreground">
           Started {started}. Its turn is in a new thread.
@@ -187,21 +190,24 @@ function RoutineItem({
  */
 function RoutineEditor({
   client,
+  clock,
   name,
   onClose,
 }: {
   client: Caller
+  clock: Clock
   name: string | null
   onClose: () => void
 }) {
   const nameId = useId()
   const contentId = useId()
+  const pacing = usePace(clock)
   const [opened, setOpened] = useState<RoutineFile>()
   const [newName, setNewName] = useState("")
   const [draft, setDraft] = useState(name === null ? NEW_ROUTINE : "")
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState<"saved" | "stale">()
-  const [failure, setFailure] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
   const [confirming, setConfirming] = useState(false)
   const routine = opened?.name ?? name ?? newName
 
@@ -211,16 +217,16 @@ function RoutineEditor({
   }
   const load = useCallback(
     (target: string) =>
-      client.call("routine.read", { name: target }).then(
+      retried(() => client.call("routine.read", { name: target }), pacing).then(
         (read) => {
           setOpened(read)
           setDraft(read.content)
           setNotice(undefined)
           setFailure(undefined)
         },
-        (error: unknown) => setFailure(reason(error)),
+        (error: unknown) => setFailure(error),
       ),
-    [client],
+    [client, pacing],
   )
   useEffect(() => {
     if (name !== null) void load(name)
@@ -238,7 +244,7 @@ function RoutineEditor({
         setNotice("saved")
       }
     } catch (error) {
-      setFailure(reason(error))
+      setFailure(error)
     } finally {
       setSaving(false)
     }
@@ -251,7 +257,7 @@ function RoutineEditor({
       if ((await deleteRoutine(client, read.name, read.hash)) === "stale") setNotice("stale")
       else onClose()
     } catch (error) {
-      setFailure(reason(error))
+      setFailure(error)
     }
   }
 
@@ -267,7 +273,7 @@ function RoutineEditor({
       {notice === "stale" && (
         <StaleAlert file={`routines/${routine}`} onLoad={() => void load(routine)} />
       )}
-      {failure !== undefined && <Failure title="The instance refused it">{failure}</Failure>}
+      {failure !== undefined && <Failure error={failure} />}
       {opened === undefined && !creating ? (
         failure === undefined && <Skeleton className="h-72 w-full" />
       ) : (

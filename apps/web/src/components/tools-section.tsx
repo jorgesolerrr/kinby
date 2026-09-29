@@ -1,4 +1,4 @@
-import type { InstanceClient, ToolListResult, ToolRule } from "@kinby/contract"
+import type { Clock, InstanceClient, ToolListResult, ToolRule } from "@kinby/contract"
 import { useEffect, useState } from "react"
 
 import { Failure, Warnings } from "@/components/config-alerts"
@@ -13,7 +13,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { reason } from "@/lib/operation"
+import { usePace } from "@/hooks/use-pace"
+import { retried } from "@/lib/operation"
 
 type Caller = Pick<InstanceClient, "call">
 
@@ -27,24 +28,29 @@ const RULES: Record<ToolRule, string> = {
 /** Every tool the instance has, read-only. A rule changes in Permissions. */
 export function ToolsSection({
   client,
+  clock,
   onOpenPermissions,
 }: {
   client: Caller
+  clock: Clock
   /** Opens Permissions, when that section is available. */
   onOpenPermissions?: () => void
 }) {
   const [listed, setListed] = useState<ToolListResult>()
-  const [failure, setFailure] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
+  const pacing = usePace(clock)
 
   useEffect(() => {
-    client.call("tool.list", {}).then(setListed, (error: unknown) => setFailure(reason(error)))
-  }, [client])
+    retried(() => client.call("tool.list", {}), pacing).then(setListed, (error: unknown) =>
+      setFailure(error),
+    )
+  }, [client, pacing])
 
   if (listed === undefined) {
     return failure === undefined ? (
       <Skeleton className="h-72 w-full" />
     ) : (
-      <Failure>{failure}</Failure>
+      <Failure error={failure} />
     )
   }
   return (

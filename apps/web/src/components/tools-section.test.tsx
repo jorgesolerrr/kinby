@@ -1,5 +1,5 @@
 import type { ToolListResult } from "@kinby/contract"
-import { stubCaller } from "@kinby/contract/testing"
+import { fakeClock, stubCaller } from "@kinby/contract/testing"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
@@ -20,7 +20,7 @@ const listed: ToolListResult = {
 
 function openSection(onOpenPermissions?: () => void) {
   const caller = stubCaller({ "tool.list": () => listed })
-  render(<ToolsSection client={caller} onOpenPermissions={onOpenPermissions} />)
+  render(<ToolsSection client={caller} clock={fakeClock()} onOpenPermissions={onOpenPermissions} />)
   return userEvent.setup()
 }
 

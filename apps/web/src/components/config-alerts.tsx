@@ -1,22 +1,41 @@
+import { CallError } from "@kinby/contract"
 import type { Warning } from "@kinby/contract"
 import { CircleXIcon, TriangleAlertIcon } from "lucide-react"
+import { use } from "react"
 
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { OlderCore } from "@/lib/older-core"
+import { lost, reason } from "@/lib/operation"
 
-/** A call the instance did not answer, or refused, with its reason. */
-export function Failure({
-  title = "The instance did not answer",
-  children,
-}: {
-  title?: string
-  children: string
-}) {
+/**
+ * A call the instance did not answer, or one it refused, with its reason. A method an older core
+ * lacks points to the update instead.
+ */
+export function Failure({ error }: { error: unknown }) {
+  const openUpdate = use(OlderCore)
+  const refused = error instanceof CallError && !lost(error)
+  if (refused && error.code === "NOT_FOUND" && openUpdate !== undefined) {
+    return (
+      <Alert>
+        <TriangleAlertIcon />
+        <AlertTitle>This instance runs an older core</AlertTitle>
+        <AlertDescription>
+          Its core does not have this section yet. Update it from Package and version.
+        </AlertDescription>
+        <AlertAction>
+          <Button size="sm" variant="outline" onClick={openUpdate}>
+            Open Package and version
+          </Button>
+        </AlertAction>
+      </Alert>
+    )
+  }
   return (
     <Alert variant="destructive">
       <CircleXIcon />
-      <AlertTitle>{title}</AlertTitle>
-      <AlertDescription>{children}</AlertDescription>
+      <AlertTitle>{refused ? "The instance refused it" : "The instance did not answer"}</AlertTitle>
+      <AlertDescription>{reason(error)}</AlertDescription>
     </Alert>
   )
 }

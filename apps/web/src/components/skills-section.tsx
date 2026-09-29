@@ -1,4 +1,10 @@
-import type { InstanceClient, SkillListResult, SkillSummary, SkillTier } from "@kinby/contract"
+import type {
+  Clock,
+  InstanceClient,
+  SkillListResult,
+  SkillSummary,
+  SkillTier,
+} from "@kinby/contract"
 import { cn } from "cn"
 import { useCallback, useEffect, useId, useState } from "react"
 
@@ -20,8 +26,9 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { usePace } from "@/hooks/use-pace"
 import { lastChanged } from "@/lib/config-changes"
-import { reason } from "@/lib/operation"
+import { retried } from "@/lib/operation"
 import {
   byName,
   type OpenedSkill,
@@ -41,21 +48,22 @@ type Selection = { name: string; tier: SkillTier } | "new"
  * Every skill in every tier, each name's shadowed skills greyed under the one the model reads.
  * Any skill opens read-only; an instance skill opens to edit.
  */
-export function SkillsSection({ client }: { client: Caller }) {
+export function SkillsSection({ client, clock }: { client: Caller; clock: Clock }) {
+  const pacing = usePace(clock)
   const [listed, setListed] = useState<SkillListResult>()
-  const [failure, setFailure] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
   const [selection, setSelection] = useState<Selection>()
 
   const load = useCallback(
     () =>
-      client.call("skill.list", {}).then(
+      retried(() => client.call("skill.list", {}), pacing).then(
         (result) => {
           setListed(result)
           setFailure(undefined)
         },
-        (error: unknown) => setFailure(reason(error)),
+        (error: unknown) => setFailure(error),
       ),
-    [client],
+    [client, pacing],
   )
   useEffect(() => {
     void load()
@@ -65,7 +73,7 @@ export function SkillsSection({ client }: { client: Caller }) {
     return failure === undefined ? (
       <Skeleton className="h-72 w-full" />
     ) : (
-      <Failure>{failure}</Failure>
+      <Failure error={failure} />
     )
   }
   const groups = byName(listed.skills)
@@ -81,7 +89,7 @@ export function SkillsSection({ client }: { client: Caller }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {failure !== undefined && <Failure>{failure}</Failure>}
+      {failure !== undefined && <Failure error={failure} />}
       <Warnings warnings={listed.warnings} />
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
@@ -129,6 +137,7 @@ export function SkillsSection({ client }: { client: Caller }) {
         <SkillView
           key={`${selection.name} ${selection.tier}`}
           client={client}
+          clock={clock}
           summary={listed.skills.find(
             (skill) => skill.name === selection.name && skill.tier === selection.tier,
           )}
@@ -199,6 +208,7 @@ function SkillItem({
 /** One skill: read-only below the instance tier, editable in it. */
 function SkillView({
   client,
+  clock,
   summary,
   name,
   tier,
@@ -208,6 +218,7 @@ function SkillView({
   onRemoved,
 }: {
   client: Caller
+  clock: Clock
   summary: SkillSummary | undefined
   name: string
   tier: SkillTier
@@ -218,12 +229,13 @@ function SkillView({
   onRemoved: (name: string, after: SkillListResult) => void
 }) {
   const id = useId()
+  const pacing = usePace(clock)
   const [opened, setOpened] = useState<OpenedSkill>()
   const [draft, setDraft] = useState("")
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<"saved" | "stale">()
   const [invalid, setInvalid] = useState<string>()
-  const [failure, setFailure] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
 
   const show = useCallback((read: OpenedSkill) => {
     setOpened(read)
@@ -231,16 +243,16 @@ function SkillView({
   }, [])
   const load = useCallback(
     () =>
-      openSkill(client, name, tier).then(
+      retried(() => openSkill(client, name, tier), pacing).then(
         (read) => {
           show(read)
           setNotice(undefined)
           setInvalid(undefined)
           setFailure(undefined)
         },
-        (error: unknown) => setFailure(reason(error)),
+        (error: unknown) => setFailure(error),
       ),
-    [client, name, tier, show],
+    [client, name, tier, pacing, show],
   )
   useEffect(() => {
     void load()
@@ -250,7 +262,7 @@ function SkillView({
     return failure === undefined ? (
       <Skeleton className="h-72 w-full" />
     ) : (
-      <Failure>{failure}</Failure>
+      <Failure error={failure} />
     )
   }
   const editable = tier === "instance"
@@ -260,7 +272,7 @@ function SkillView({
     try {
       await action()
     } catch (error) {
-      setFailure(reason(error))
+      setFailure(error)
     } finally {
       setBusy(false)
     }
@@ -291,7 +303,7 @@ function SkillView({
   return (
     <div className="flex flex-col gap-3">
       {notice === "stale" && <StaleAlert file={skillFile(name)} onLoad={() => void load()} />}
-      {failure !== undefined && <Failure>{failure}</Failure>}
+      {failure !== undefined && <Failure error={failure} />}
       <Field data-invalid={invalid !== undefined || undefined}>
         <div className="flex items-center gap-2">
           <FieldLabel htmlFor={id}>SKILL.md</FieldLabel>
@@ -358,7 +370,7 @@ function NewSkill({ client, onCreated }: { client: Caller; onCreated: (name: str
   const [instructions, setInstructions] = useState("")
   const [busy, setBusy] = useState(false)
   const [refusal, setRefusal] = useState<Record<string, string>>({})
-  const [failure, setFailure] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
 
   const create = async () => {
     setBusy(true)
@@ -371,7 +383,7 @@ function NewSkill({ client, onCreated }: { client: Caller; onCreated: (name: str
         setRefusal({ name: `The instance already has a skill named ${name}.` })
       } else setRefusal(written.fields)
     } catch (error) {
-      setFailure(reason(error))
+      setFailure(error)
     } finally {
       setBusy(false)
     }
@@ -379,7 +391,7 @@ function NewSkill({ client, onCreated }: { client: Caller; onCreated: (name: str
 
   return (
     <div className="flex flex-col gap-3">
-      {failure !== undefined && <Failure>{failure}</Failure>}
+      {failure !== undefined && <Failure error={failure} />}
       <FieldGroup>
         <Field data-invalid={refusal.name !== undefined || undefined}>
           <FieldLabel htmlFor={`${id}-name`}>Name</FieldLabel>
