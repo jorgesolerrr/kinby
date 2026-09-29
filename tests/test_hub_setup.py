@@ -303,6 +303,32 @@ def test_setup_is_pending_while_a_required_secret_is_not_set(tmp_path):
     asyncio.run(scenario())
 
 
+def test_an_api_key_set_from_the_setup_card_reads_set(tmp_path):
+    async def scenario() -> None:
+        hub = setup_hub(tmp_path, FakeImages(package=writer()))
+        instance_id = (await created_writer(hub)).instance_id
+        # An instance whose secrets lost the key, which only a hand edit can bring about.
+        (hub.instances_directory / str(instance_id) / ".env").write_text("")
+        missing = await setup_of(hub, instance_id)
+
+        replaced = await hub_client(hub).call(
+            INSTANCE_SECRETS_SET,
+            InstanceSecretsSetCommand(instance_id=instance_id, secrets={"api_key": "sk-new"}),
+        )
+        assert isinstance(replaced, LifecycleOperationResult)
+        await finished_operation(hub_client(hub), replaced)
+
+        assert missing.secrets == [
+            SecretSetup(name="api_key", label="API key", required=True, is_set=False)
+        ]
+        assert (await setup_of(hub, instance_id)).secrets == [
+            SecretSetup(name="api_key", label="API key", required=True, is_set=True)
+        ]
+        assert await pending_by_instance(hub) == {instance_id: False}
+
+    asyncio.run(scenario())
+
+
 def test_an_instance_created_before_logins_were_tracked_reads_complete(tmp_path):
     async def scenario() -> None:
         hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR)))

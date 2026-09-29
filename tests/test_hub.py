@@ -448,6 +448,7 @@ async def created_instance(
     client: ContractClient,
     *,
     secrets: dict[str, str] | None = None,
+    model: str = "openai:gpt-5",
 ) -> LifecycleOperationResult:
     """Prepare vanilla, create one instance from it, and wait for it to be published stopped."""
     assert (await prepared(client, None)).state is OperationState.SUCCEEDED
@@ -455,7 +456,7 @@ async def created_instance(
         INSTANCE_CREATE,
         InstanceCreateCommand(
             manifest_id="alice",
-            model="openai:gpt-5",
+            model=model,
             secrets={"api_key": "sk-test", **(secrets or {})},
         ),
     )

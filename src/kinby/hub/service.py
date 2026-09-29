@@ -136,6 +136,7 @@ from kinby.hub.registry import HubRegistry, ManagedInstance
 from kinby.hub.setup import (
     ENVIRONMENT_NAME,
     configuration,
+    held_secrets,
     instance_setup,
     setup_errors,
     targeted,
@@ -145,7 +146,6 @@ from kinby.instance import (
     Instance,
     ManifestError,
     PackageProvenance,
-    api_key_variable,
     init_instance,
     inspect_instance,
 )
@@ -835,6 +835,9 @@ class Hub:
                 )
                 try:
                     self._validate_secret_names(secrets)
+                    if API_KEY_FIELD.name in secrets:
+                        model = inspect_instance(record.path).manifest.models.main
+                        secrets = held_secrets(model, secrets)
                     self._replace_secrets(record.path, secrets)
                 except Exception as exc:
                     self._fail(
@@ -2012,14 +2015,9 @@ class Hub:
         Blank text counts as not sent, the same way setup validation reads it, so an optional
         secret left empty stays unset.
         """
-        held = {
-            name: value
-            for name, value in secrets.items()
-            if name != API_KEY_FIELD.name and value.strip()
-        }
-        api_key = secrets.get(API_KEY_FIELD.name)
-        if api_key is not None and api_key.strip():
-            held[api_key_variable(model)] = api_key
+        held = held_secrets(
+            model, {name: value for name, value in secrets.items() if value.strip()}
+        )
         held[CONTROL_TOKEN_VARIABLE] = new_control_token()
         return held
 

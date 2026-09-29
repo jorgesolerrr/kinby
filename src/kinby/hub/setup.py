@@ -100,6 +100,15 @@ def targeted(
     }
 
 
+def held_secrets(model: ModelName, secrets: Mapping[str, str]) -> dict[str, str]:
+    """The secrets under the names the instance reads: the API key under its provider's
+    variable, every other secret under its own name."""
+    return {
+        api_key_variable(model) if name == API_KEY_FIELD.name else name: value
+        for name, value in secrets.items()
+    }
+
+
 def instance_setup(
     description: PackageDescription | None,
     *,
