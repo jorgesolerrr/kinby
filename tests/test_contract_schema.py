@@ -170,6 +170,45 @@ def test_the_schema_declares_the_prompt_and_config_history_calls() -> None:
     assert "STALE" in cast(list[str], _object(definitions["ErrorCode"])["enum"])
 
 
+def test_the_schema_declares_the_routine_config_calls() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"]
+        for name in ("routine.read", "routine.write", "routine.set_enabled", "routine.delete")
+    } == {
+        "routine.read": {
+            "command": {"$ref": "#/$defs/RoutineReadCommand"},
+            "result": {"$ref": "#/$defs/RoutineFile"},
+        },
+        "routine.write": {
+            "command": {"$ref": "#/$defs/RoutineWriteCommand"},
+            "result": {"$ref": "#/$defs/RoutineFile"},
+        },
+        "routine.set_enabled": {
+            "command": {"$ref": "#/$defs/RoutineSetEnabledCommand"},
+            "result": {"$ref": "#/$defs/RoutineFile"},
+        },
+        "routine.delete": {
+            "command": {"$ref": "#/$defs/RoutineDeleteCommand"},
+            "result": {"$ref": "#/$defs/RoutineDeleteResult"},
+        },
+    }
+    assert set(cast(list[str], _object(definitions["RoutineFile"])["required"])) == {
+        "name",
+        "content",
+        "hash",
+    }
+    assert set(cast(list[str], _object(definitions["RoutineWriteCommand"])["required"])) == {
+        "name",
+        "content",
+        "hash",
+    }
+    assert "ROUTINE_PENDING" in cast(list[str], _object(definitions["ErrorCode"])["enum"])
+
+
 def test_the_schema_declares_the_manifest_calls() -> None:
     schema = contract_schema()
     definitions = _object(schema["$defs"])

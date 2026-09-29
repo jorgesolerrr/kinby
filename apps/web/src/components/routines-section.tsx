@@ -1,0 +1,342 @@
+import type { InstanceClient, RoutineFile } from "@kinby/contract"
+import { useCallback, useEffect, useId, useState } from "react"
+
+import { Failure, StaleAlert } from "@/components/config-alerts"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item"
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
+import { Switch } from "@/components/ui/switch"
+import { Textarea } from "@/components/ui/textarea"
+import { lastChanged } from "@/lib/config-changes"
+import { reason } from "@/lib/operation"
+import {
+  deleteRoutine,
+  lastFiring,
+  type ListedRoutine,
+  listRoutines,
+  NEW_ROUTINE,
+  nextFiring,
+  saveRoutine,
+  trigger,
+} from "@/lib/routines"
+import { ArrowLeftIcon, PencilIcon, PlayIcon, PlusIcon, Trash2Icon } from "lucide-react"
+
+type Caller = Pick<InstanceClient, "call">
+
+/** The instance's routines, each with its switch. */
+export function RoutinesSection({ client }: { client: Caller }) {
+  const [routines, setRoutines] = useState<ListedRoutine[]>()
+  const [failure, setFailure] = useState<string>()
+  const [started, setStarted] = useState<string>()
+  // The routine open in the editor, null for a new one, or undefined for the list.
+  const [editing, setEditing] = useState<string | null>()
+
+  const load = useCallback(
+    () =>
+      listRoutines(client).then(
+        (listed) => {
+          setRoutines(listed)
+          setFailure(undefined)
+        },
+        (error: unknown) => setFailure(reason(error)),
+      ),
+    [client],
+  )
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const act = (action: () => Promise<unknown>) =>
+    action().then(load, (error: unknown) => setFailure(reason(error)))
+  const toggle = (name: string, enabled: boolean) =>
+    act(() => client.call("routine.set_enabled", { name, enabled }))
+  const run = (name: string) =>
+    act(async () => {
+      await client.call("routine.run", { name })
+      setStarted(name)
+    })
+
+  if (editing !== undefined) {
+    return (
+      <RoutineEditor
+        client={client}
+        name={editing}
+        onClose={() => {
+          setEditing(undefined)
+          void load()
+        }}
+      />
+    )
+  }
+  if (routines === undefined) {
+    return failure === undefined ? (
+      <Skeleton className="h-40 w-full" />
+    ) : (
+      <Failure>{failure}</Failure>
+    )
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <Button size="sm" onClick={() => setEditing(null)}>
+          <PlusIcon data-icon="inline-start" />
+          New routine
+        </Button>
+      </div>
+      {failure !== undefined && <Failure>{failure}</Failure>}
+      {started !== undefined && (
+        <p className="text-sm text-muted-foreground">
+          Started {started}. Its turn is in a new thread.
+        </p>
+      )}
+      <ItemGroup aria-label="Routines">
+        {routines.map((listed) => (
+          <li key={listed.summary.name} aria-label={listed.summary.name}>
+            <RoutineItem
+              listed={listed}
+              onToggle={(enabled) => void toggle(listed.summary.name, enabled)}
+              onRun={() => void run(listed.summary.name)}
+              onEdit={() => setEditing(listed.summary.name)}
+            />
+          </li>
+        ))}
+      </ItemGroup>
+    </div>
+  )
+}
+
+function RoutineItem({
+  listed: { summary, lastChange },
+  onToggle,
+  onRun,
+  onEdit,
+}: {
+  listed: ListedRoutine
+  onToggle: (enabled: boolean) => void
+  onRun: () => void
+  onEdit: () => void
+}) {
+  const failures = summary.failure_count ?? 0
+  return (
+    <Item variant="outline">
+      <ItemContent>
+        <ItemTitle>{summary.name}</ItemTitle>
+        <ItemDescription>{summary.description}</ItemDescription>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
+          <span>{trigger(summary)}</span>
+          <span>{nextFiring(summary)}</span>
+          <span>{lastFiring(summary)}</span>
+        </div>
+        {(failures > 0 || summary.pending > 0) && (
+          <div className="flex flex-wrap gap-2">
+            {failures > 0 && (
+              <Badge variant="destructive">
+                {failures} {failures === 1 ? "failure" : "failures"} in a row
+              </Badge>
+            )}
+            {summary.pending > 0 && (
+              <Badge variant="secondary">
+                {summary.pending} pending {summary.pending === 1 ? "delivery" : "deliveries"}
+              </Badge>
+            )}
+          </div>
+        )}
+        <ItemDescription>{lastChanged(lastChange)}</ItemDescription>
+      </ItemContent>
+      <ItemActions>
+        <Switch aria-label="On" checked={summary.enabled} onCheckedChange={onToggle} />
+        <Button size="sm" variant="outline" onClick={onRun}>
+          <PlayIcon data-icon="inline-start" />
+          Run now
+        </Button>
+        <Button size="sm" variant="outline" onClick={onEdit}>
+          <PencilIcon data-icon="inline-start" />
+          Edit
+        </Button>
+      </ItemActions>
+    </Item>
+  )
+}
+
+/**
+ * One routine's ROUTINE.md as text, or a new routine when `name` is null. A save carries the hash
+ * of the routine's directory as it was read, so a save over a change made since is refused, and
+ * "Load theirs" reads it again. A new routine saves with a null hash, refused if it exists.
+ */
+function RoutineEditor({
+  client,
+  name,
+  onClose,
+}: {
+  client: Caller
+  name: string | null
+  onClose: () => void
+}) {
+  const nameId = useId()
+  const contentId = useId()
+  const [opened, setOpened] = useState<RoutineFile>()
+  const [newName, setNewName] = useState("")
+  const [draft, setDraft] = useState(name === null ? NEW_ROUTINE : "")
+  const [saving, setSaving] = useState(false)
+  const [notice, setNotice] = useState<"saved" | "stale">()
+  const [failure, setFailure] = useState<string>()
+  const [confirming, setConfirming] = useState(false)
+  const routine = opened?.name ?? name ?? newName
+
+  const show = (read: RoutineFile) => {
+    setOpened(read)
+    setDraft(read.content)
+  }
+  const load = useCallback(
+    (target: string) =>
+      client.call("routine.read", { name: target }).then(
+        (read) => {
+          setOpened(read)
+          setDraft(read.content)
+          setNotice(undefined)
+          setFailure(undefined)
+        },
+        (error: unknown) => setFailure(reason(error)),
+      ),
+    [client],
+  )
+  useEffect(() => {
+    if (name !== null) void load(name)
+  }, [load, name])
+
+  const save = async () => {
+    setSaving(true)
+    setFailure(undefined)
+    try {
+      const saved = await saveRoutine(client, routine, draft, opened?.hash ?? null)
+      if (saved === "stale") {
+        setNotice("stale")
+      } else {
+        show(saved)
+        setNotice("saved")
+      }
+    } catch (error) {
+      setFailure(reason(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const remove = async (read: RoutineFile) => {
+    setConfirming(false)
+    setFailure(undefined)
+    try {
+      if ((await deleteRoutine(client, read.name, read.hash)) === "stale") setNotice("stale")
+      else onClose()
+    } catch (error) {
+      setFailure(reason(error))
+    }
+  }
+
+  const creating = name === null && opened === undefined
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <Button size="sm" variant="ghost" onClick={onClose}>
+          <ArrowLeftIcon data-icon="inline-start" />
+          Back to routines
+        </Button>
+      </div>
+      {notice === "stale" && (
+        <StaleAlert file={`routines/${routine}`} onLoad={() => void load(routine)} />
+      )}
+      {failure !== undefined && <Failure title="The instance refused it">{failure}</Failure>}
+      {opened === undefined && !creating ? (
+        failure === undefined && <Skeleton className="h-72 w-full" />
+      ) : (
+        <>
+          <FieldGroup>
+            {creating && (
+              <Field>
+                <FieldLabel htmlFor={nameId}>Name</FieldLabel>
+                <Input
+                  id={nameId}
+                  value={newName}
+                  readOnly={saving}
+                  onChange={(event) => setNewName(event.target.value)}
+                />
+                <FieldDescription>
+                  The routine's directory. Letters, digits, hyphens, and underscores.
+                </FieldDescription>
+              </Field>
+            )}
+            <Field>
+              <FieldLabel htmlFor={contentId}>ROUTINE.md</FieldLabel>
+              <Textarea
+                id={contentId}
+                className="min-h-72"
+                value={draft}
+                readOnly={saving}
+                onChange={(event) => {
+                  setDraft(event.target.value)
+                  if (notice === "saved") setNotice(undefined)
+                }}
+              />
+            </Field>
+          </FieldGroup>
+          <div className="flex items-center gap-3">
+            <Button
+              disabled={saving || routine === "" || draft === opened?.content}
+              onClick={() => void save()}
+            >
+              {saving && <Spinner data-icon="inline-start" />}
+              Save
+            </Button>
+            {notice === "saved" && <span className="text-sm text-muted-foreground">Saved.</span>}
+            {opened !== undefined && (
+              <AlertDialog open={confirming} onOpenChange={setConfirming}>
+                <AlertDialogTrigger
+                  render={<Button className="ml-auto" variant="destructive" disabled={saving} />}
+                >
+                  <Trash2Icon data-icon="inline-start" />
+                  Delete
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete {opened.name}?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This removes routines/{opened.name} and every file in it.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction variant="destructive" onClick={() => void remove(opened)}>
+                      Delete
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}

@@ -35,6 +35,18 @@ class RoutineNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class RoutinePending(CoreError):
+    """Deliveries wait on the routine, so deleting it would drop them."""
+
+    code = ErrorCode.ROUTINE_PENDING
+
+
+class RoutineRefused(CoreError):
+    """The routine loader refused the routine, so nothing was written."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class StaleWrite(CoreError):
     """The file changed since the client read it, so the write would overwrite a change unseen."""
 

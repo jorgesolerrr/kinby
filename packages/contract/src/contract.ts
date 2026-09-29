@@ -119,6 +119,7 @@ export type ErrorCode =
   | "NOT_PREPARED"
   | "INVALID_SETUP"
   | "STALE"
+  | "ROUTINE_PENDING"
   | "CONNECTION_LOST"
   | "INTERNAL";
 export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
@@ -245,13 +246,29 @@ export interface Contract {
       command: PromptSetCommand;
       result: PromptResult;
     };
+    "routine.delete": {
+      command: RoutineDeleteCommand;
+      result: RoutineDeleteResult;
+    };
     "routine.list": {
       command: RoutineListCommand;
       result: RoutineListResult;
     };
+    "routine.read": {
+      command: RoutineReadCommand;
+      result: RoutineFile;
+    };
     "routine.run": {
       command: RoutineRunCommand;
       result: AcceptedResult;
+    };
+    "routine.set_enabled": {
+      command: RoutineSetEnabledCommand;
+      result: RoutineFile;
+    };
+    "routine.write": {
+      command: RoutineWriteCommand;
+      result: RoutineFile;
     };
     "stats.get": {
       command: StatsGetCommand;
@@ -832,6 +849,11 @@ export interface PromptSetCommand {
   hash: string;
   name: PromptName;
 }
+export interface RoutineDeleteCommand {
+  hash: string;
+  name: string;
+}
+export interface RoutineDeleteResult {}
 export interface RoutineListCommand {}
 export interface RoutineListResult {
   routines: RoutineSummary[];
@@ -873,6 +895,14 @@ export interface Warning {
   sources: string[];
   type: "warning";
 }
+export interface RoutineReadCommand {
+  name: string;
+}
+export interface RoutineFile {
+  content: string;
+  hash: string;
+  name: string;
+}
 export interface RoutineRunCommand {
   name: string;
   payload?: RoutinePayload | null;
@@ -885,6 +915,15 @@ export interface AcceptedResult {
   sequence: number;
   thread_id: string;
   turn_id: string;
+}
+export interface RoutineSetEnabledCommand {
+  enabled: boolean;
+  name: string;
+}
+export interface RoutineWriteCommand {
+  content: string;
+  hash: string | null;
+  name: string;
 }
 export interface StatsGetCommand {
   by?: StatsBucketSize;

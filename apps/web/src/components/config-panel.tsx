@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useState } from "react"
 import { Failure, StaleAlert } from "@/components/config-alerts"
 import { ManifestSection } from "@/components/manifest-section"
 import { PermissionsSection } from "@/components/permissions-section"
+import { RoutinesSection } from "@/components/routines-section"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
@@ -38,8 +39,8 @@ import {
 
 type Caller = Pick<InstanceClient, "call">
 
-/** A section that is built: one of the prompts, the permissions, or the manifest. */
-type SectionKey = PromptName | "permissions" | "manifest"
+/** A section that is built: one of the prompts, the routines, the permissions, or the manifest. */
+type SectionKey = PromptName | "routines" | "permissions" | "manifest"
 
 /** One section of the panel. A section without a `key` is not built yet, and is unavailable. */
 interface Section {
@@ -77,7 +78,12 @@ const GROUPS: { label: string; sections: Section[] }[] = [
   {
     label: "Capabilities",
     sections: [
-      { label: "Routines", hint: "schedules, signals, next firing", icon: RepeatIcon },
+      {
+        label: "Routines",
+        hint: "schedules, signals, next firing",
+        icon: RepeatIcon,
+        key: "routines",
+      },
       { label: "Skills", hint: "instance, package, workspace", icon: SparklesIcon },
       { label: "Tools", hint: "what the instance can do", icon: WrenchIcon },
     ],
@@ -126,7 +132,9 @@ export function ConfigPanel({ client }: { client: Caller }) {
           <p className="text-sm text-muted-foreground">{section?.hint}</p>
         </div>
         <Separator />
-        {selected === "permissions" ? (
+        {selected === "routines" ? (
+          <RoutinesSection client={client} />
+        ) : selected === "permissions" ? (
           <PermissionsSection client={client} />
         ) : selected === "manifest" ? (
           <ManifestSection client={client} />

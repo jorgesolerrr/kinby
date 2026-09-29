@@ -54,9 +54,15 @@ from kinby.contracts.models import (
     PromptGetCommand,
     PromptResult,
     PromptSetCommand,
+    RoutineDeleteCommand,
+    RoutineDeleteResult,
+    RoutineFile,
     RoutineListCommand,
     RoutineListResult,
+    RoutineReadCommand,
     RoutineRunCommand,
+    RoutineSetEnabledCommand,
+    RoutineWriteCommand,
     Scope,
     StatsGetCommand,
     StatsGetResult,
@@ -171,6 +177,14 @@ INSTANCE_DRAIN = Method(
 
 ROUTINE_LIST = Method("routine.list", Scope.INSTANCE_READ, RoutineListCommand, RoutineListResult)
 ROUTINE_RUN = Method("routine.run", Scope.INSTANCE_ADMIN, RoutineRunCommand, AcceptedResult)
+ROUTINE_READ = Method("routine.read", Scope.INSTANCE_READ, RoutineReadCommand, RoutineFile)
+ROUTINE_WRITE = Method("routine.write", Scope.INSTANCE_ADMIN, RoutineWriteCommand, RoutineFile)
+ROUTINE_SET_ENABLED = Method(
+    "routine.set_enabled", Scope.INSTANCE_ADMIN, RoutineSetEnabledCommand, RoutineFile
+)
+ROUTINE_DELETE = Method(
+    "routine.delete", Scope.INSTANCE_ADMIN, RoutineDeleteCommand, RoutineDeleteResult
+)
 PROMPT_GET = Method("prompt.get", Scope.INSTANCE_READ, PromptGetCommand, PromptResult)
 PROMPT_SET = Method("prompt.set", Scope.INSTANCE_ADMIN, PromptSetCommand, PromptResult)
 MANIFEST_GET = Method("manifest.get", Scope.INSTANCE_READ, ManifestGetCommand, ManifestResult)
@@ -271,6 +285,10 @@ METHODS = (
     INSTANCE_DRAIN,
     ROUTINE_LIST,
     ROUTINE_RUN,
+    ROUTINE_READ,
+    ROUTINE_WRITE,
+    ROUTINE_SET_ENABLED,
+    ROUTINE_DELETE,
     PROMPT_GET,
     PROMPT_SET,
     MANIFEST_GET,

@@ -666,6 +666,7 @@
         "NOT_PREPARED",
         "INVALID_SETUP",
         "STALE",
+        "ROUTINE_PENDING",
         "CONNECTION_LOST",
         "INTERNAL"
       ],
@@ -2932,6 +2933,29 @@
       "title": "ResultFrame",
       "type": "object"
     },
+    "RoutineDeleteCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "hash"
+      ],
+      "title": "RoutineDeleteCommand",
+      "type": "object"
+    },
+    "RoutineDeleteResult": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "RoutineDeleteResult",
+      "type": "object"
+    },
     "RoutineFailureHandled": {
       "additionalProperties": false,
       "properties": {
@@ -2960,6 +2984,27 @@
         "type"
       ],
       "title": "RoutineFailureHandled",
+      "type": "object"
+    },
+    "RoutineFile": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "content",
+        "hash"
+      ],
+      "title": "RoutineFile",
       "type": "object"
     },
     "RoutineLastRun": {
@@ -3113,6 +3158,19 @@
       "title": "RoutinePayload",
       "type": "object"
     },
+    "RoutineReadCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "RoutineReadCommand",
+      "type": "object"
+    },
     "RoutineRunCommand": {
       "additionalProperties": false,
       "properties": {
@@ -3148,6 +3206,23 @@
       ],
       "title": "RoutineRunOutcome",
       "type": "string"
+    },
+    "RoutineSetEnabledCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "enabled"
+      ],
+      "title": "RoutineSetEnabledCommand",
+      "type": "object"
     },
     "RoutineSummary": {
       "additionalProperties": false,
@@ -3253,6 +3328,34 @@
       ],
       "title": "RoutineTrigger",
       "type": "string"
+    },
+    "RoutineWriteCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "content",
+        "hash"
+      ],
+      "title": "RoutineWriteCommand",
+      "type": "object"
     },
     "RunDelegated": {
       "additionalProperties": false,
@@ -5757,6 +5860,22 @@
           ],
           "type": "object"
         },
+        "routine.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineDeleteResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "routine.list": {
           "additionalProperties": false,
           "properties": {
@@ -5773,6 +5892,22 @@
           ],
           "type": "object"
         },
+        "routine.read": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineReadCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineFile"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "routine.run": {
           "additionalProperties": false,
           "properties": {
@@ -5781,6 +5916,38 @@
             },
             "result": {
               "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "routine.set_enabled": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineSetEnabledCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineFile"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "routine.write": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineWriteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineFile"
             }
           },
           "required": [
@@ -6066,6 +6233,10 @@
         "instance.drain",
         "routine.list",
         "routine.run",
+        "routine.read",
+        "routine.write",
+        "routine.set_enabled",
+        "routine.delete",
         "prompt.get",
         "prompt.set",
         "manifest.get",
