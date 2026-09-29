@@ -116,7 +116,10 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
         <ItemGroup aria-label="Skills">
           {groups.flatMap(({ winner, shadowed }) =>
             [winner, ...shadowed].map((skill) => (
-              <li key={`${skill.name} ${skill.tier}`} className={cn(skill.shadowed_by && "pl-6")}>
+              <li
+                key={`${skill.name} ${skill.tier}`}
+                className={cn("list-none", skill.shadowed_by && "pl-6")}
+              >
                 <SkillItem
                   skill={skill}
                   selected={

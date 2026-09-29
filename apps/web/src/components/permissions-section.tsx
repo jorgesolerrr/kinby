@@ -165,32 +165,30 @@ export function PermissionsSection({ client, clock }: { client: Caller; clock: C
           {tools.length > 0 && (
             <ItemGroup>
               {tools.map((name) => (
-                <li key={name}>
-                  <Item size="xs" variant="outline">
-                    <ItemContent>
-                      <ItemTitle>
-                        <code>{name}</code>
-                      </ItemTitle>
-                    </ItemContent>
-                    <ItemActions>
-                      <ToggleGroup
-                        aria-label={name}
-                        size="sm"
-                        variant="outline"
-                        value={[draft.tools[name] ?? "mode"]}
-                        onValueChange={([rule]) => {
-                          if (isRule(rule)) setRule(name, rule)
-                        }}
-                      >
-                        {Object.entries(RULES).map(([rule, label]) => (
-                          <ToggleGroupItem key={rule} value={rule}>
-                            {label}
-                          </ToggleGroupItem>
-                        ))}
-                      </ToggleGroup>
-                    </ItemActions>
-                  </Item>
-                </li>
+                <Item key={name} render={<li />} size="xs" variant="outline">
+                  <ItemContent>
+                    <ItemTitle>
+                      <code>{name}</code>
+                    </ItemTitle>
+                  </ItemContent>
+                  <ItemActions>
+                    <ToggleGroup
+                      aria-label={name}
+                      size="sm"
+                      variant="outline"
+                      value={[draft.tools[name] ?? "mode"]}
+                      onValueChange={([rule]) => {
+                        if (isRule(rule)) setRule(name, rule)
+                      }}
+                    >
+                      {Object.entries(RULES).map(([rule, label]) => (
+                        <ToggleGroupItem key={rule} value={rule}>
+                          {label}
+                        </ToggleGroupItem>
+                      ))}
+                    </ToggleGroup>
+                  </ItemActions>
+                </Item>
               ))}
             </ItemGroup>
           )}
@@ -311,42 +309,38 @@ function PatternList({
       {locked.length + patterns.length > 0 && (
         <ItemGroup aria-label={label}>
           {locked.map((pattern) => (
-            <li key={pattern}>
-              <Item size="xs" variant="muted">
-                <ItemContent>
-                  <ItemTitle>
-                    <code className="break-all">{pattern}</code>
-                  </ItemTitle>
-                </ItemContent>
-                <ItemActions>
-                  <Badge variant="secondary">
-                    <LockIcon data-icon="inline-start" />
-                    Shipped
-                  </Badge>
-                </ItemActions>
-              </Item>
-            </li>
+            <Item key={pattern} render={<li />} size="xs" variant="muted">
+              <ItemContent>
+                <ItemTitle>
+                  <code className="break-all">{pattern}</code>
+                </ItemTitle>
+              </ItemContent>
+              <ItemActions>
+                <Badge variant="secondary">
+                  <LockIcon data-icon="inline-start" />
+                  Shipped
+                </Badge>
+              </ItemActions>
+            </Item>
           ))}
           {patterns.map((pattern) => (
-            <li key={pattern}>
-              <Item size="xs" variant="outline">
-                <ItemContent>
-                  <ItemTitle>
-                    <code className="break-all">{pattern}</code>
-                  </ItemTitle>
-                </ItemContent>
-                <ItemActions>
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label={`Remove ${pattern}`}
-                    onClick={() => onChange(patterns.filter((other) => other !== pattern))}
-                  >
-                    <XIcon />
-                  </Button>
-                </ItemActions>
-              </Item>
-            </li>
+            <Item key={pattern} render={<li />} size="xs" variant="outline">
+              <ItemContent>
+                <ItemTitle>
+                  <code className="break-all">{pattern}</code>
+                </ItemTitle>
+              </ItemContent>
+              <ItemActions>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={`Remove ${pattern}`}
+                  onClick={() => onChange(patterns.filter((other) => other !== pattern))}
+                >
+                  <XIcon />
+                </Button>
+              </ItemActions>
+            </Item>
           ))}
         </ItemGroup>
       )}

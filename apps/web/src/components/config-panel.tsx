@@ -323,7 +323,7 @@ function SectionGroup({
       </span>
       <ItemGroup aria-labelledby={labelId}>
         {sections.map(({ label, hint, icon: Icon, render }) => (
-          <li key={label}>
+          <li key={label} className="list-none">
             <Item
               size="xs"
               variant={label === selected ? "muted" : "default"}
