@@ -1,9 +1,10 @@
-import type { InstanceClient, PromptName } from "@kinby/contract"
+import type { Client, Clock, InstanceClient, InstanceSummary, PromptName } from "@kinby/contract"
 import { Fragment, type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
 import { ManifestSection } from "@/components/manifest-section"
 import { PackageConfigSection } from "@/components/package-config-section"
+import { PackageSection } from "@/components/package-section"
 import { PermissionsSection } from "@/components/permissions-section"
 import { RoutinesSection } from "@/components/routines-section"
 import { SkillsSection } from "@/components/skills-section"
@@ -42,8 +43,18 @@ import {
 
 type Caller = Pick<InstanceClient, "call">
 
-/** What a section shows, given the client and a way to open another section by its label. */
-type Render = (client: Caller, open: (label: string) => void) => ReactNode
+/** What a section is given: the instance and its client, the hub, and a way to open another section by its label. */
+interface Context {
+  client: Caller
+  caller: Pick<Client, "call">
+  clock: Clock
+  instance: InstanceSummary
+  onChanged: () => void
+  open: (label: string) => void
+}
+
+/** What a section shows, given its context. */
+type Render = (context: Context) => ReactNode
 
 /** One section of the panel. A section without `render` is not built yet. */
 interface Section {
@@ -53,6 +64,8 @@ interface Section {
   render?: Render
 }
 
+const PACKAGE = "Package and version"
+
 const GROUPS: { label: string; sections: Section[] }[] = [
   {
     label: "Behavior",
@@ -61,25 +74,25 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Behavior prompt",
         hint: "SYSTEM.md, how the agent acts",
         icon: FileTextIcon,
-        render: (client) => <PromptSection client={client} name="behavior" />,
+        render: ({ client }) => <PromptSection client={client} name="behavior" />,
       },
       {
         label: "Recap prompt",
         hint: "RECAP.md, what a recap looks at",
         icon: NotebookPenIcon,
-        render: (client) => <PromptSection client={client} name="recap" />,
+        render: ({ client }) => <PromptSection client={client} name="recap" />,
       },
       {
         label: "Permissions",
         hint: "ceiling, mode, tool rules, shell patterns",
         icon: ShieldIcon,
-        render: (client) => <PermissionsSection client={client} />,
+        render: ({ client }) => <PermissionsSection client={client} />,
       },
       {
         label: "Manifest",
         hint: "models, budgets, timezone",
         icon: CpuIcon,
-        render: (client) => <ManifestSection client={client} />,
+        render: ({ client }) => <ManifestSection client={client} />,
       },
     ],
   },
@@ -90,19 +103,19 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Routines",
         hint: "schedules, signals, next firing",
         icon: RepeatIcon,
-        render: (client) => <RoutinesSection client={client} />,
+        render: ({ client }) => <RoutinesSection client={client} />,
       },
       {
         label: "Skills",
         hint: "instance, package, workspace",
         icon: SparklesIcon,
-        render: (client) => <SkillsSection client={client} />,
+        render: ({ client }) => <SkillsSection client={client} />,
       },
       {
         label: "Tools",
         hint: "what the instance can do",
         icon: WrenchIcon,
-        render: (client, open) => (
+        render: ({ client, open }) => (
           <ToolsSection
             client={client}
             onOpenPermissions={available(PERMISSIONS) ? () => open(PERMISSIONS) : undefined}
@@ -119,9 +132,16 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Package config",
         hint: "the package's own settings",
         icon: BoxIcon,
-        render: (client) => <PackageConfigSection client={client} />,
+        render: ({ client }) => <PackageConfigSection client={client} />,
       },
-      { label: "Package and version", hint: "template, installed, update", icon: PackageIcon },
+      {
+        label: PACKAGE,
+        hint: "template, installed, update",
+        icon: PackageIcon,
+        render: ({ caller, clock, instance, onChanged }) => (
+          <PackageSection caller={caller} clock={clock} instance={instance} onChanged={onChanged} />
+        ),
+      },
     ],
   },
 ]
@@ -139,10 +159,31 @@ const APPLIES: Record<PromptName, string> = {
   recap: "Saved. It applies at the next recap.",
 }
 
-/** The instance's config: its sections grouped in a left column, the selected one on the right. */
-export function ConfigPanel({ client }: { client: Caller }) {
+/**
+ * The instance's config: its sections grouped in a left column, the selected one on the right. A
+ * section that needs the user says why in place of its hint. `client` reaches the instance and
+ * `caller` the hub, and `onChanged` lists the instances again.
+ */
+export function ConfigPanel({
+  client,
+  caller,
+  clock,
+  instance,
+  onChanged,
+}: {
+  client: Caller
+  caller: Pick<Client, "call">
+  clock: Clock
+  instance: InstanceSummary
+  onChanged: () => void
+}) {
   const [selected, setSelected] = useState("Behavior prompt")
   const section = SECTIONS.find((candidate) => candidate.label === selected)
+  const needs: Partial<Record<string, string>> = instance.notices.some(
+    (notice) => notice.code === "revision_behind",
+  )
+    ? { [PACKAGE]: "behind the hub" }
+    : {}
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       <nav
@@ -154,6 +195,7 @@ export function ConfigPanel({ client }: { client: Caller }) {
             key={group.label}
             label={group.label}
             sections={group.sections}
+            needs={needs}
             selected={selected}
             onSelect={setSelected}
           />
@@ -165,7 +207,9 @@ export function ConfigPanel({ client }: { client: Caller }) {
           <p className="text-sm text-muted-foreground">{section?.hint}</p>
         </div>
         <Separator />
-        <Fragment key={selected}>{section?.render?.(client, setSelected)}</Fragment>
+        <Fragment key={selected}>
+          {section?.render?.({ client, caller, clock, instance, onChanged, open: setSelected })}
+        </Fragment>
       </main>
     </div>
   )
@@ -175,11 +219,13 @@ export function ConfigPanel({ client }: { client: Caller }) {
 function SectionGroup({
   label,
   sections,
+  needs,
   selected,
   onSelect,
 }: {
   label: string
   sections: Section[]
+  needs: Partial<Record<string, string>>
   selected: string
   onSelect: (label: string) => void
 }) {
@@ -211,7 +257,7 @@ function SectionGroup({
               <ItemContent>
                 <ItemTitle>{label}</ItemTitle>
                 <ItemDescription>
-                  {render === undefined ? "Not available yet" : hint}
+                  {render === undefined ? "Not available yet" : (needs[label] ?? hint)}
                 </ItemDescription>
               </ItemContent>
             </Item>

@@ -573,6 +573,7 @@ export interface InstanceSummary {
   instance_id: string;
   intended_state: IntendedState;
   manifest_id: string;
+  notices: (RevisionBehind | PackageTemplateOlder)[];
   package?: PackageSummary | null;
   persona_name: string | null;
   process: ProcessState;
@@ -580,6 +581,24 @@ export interface InstanceSummary {
   setup_pending: boolean;
   source_revision: string;
   storage: StorageItem[];
+}
+/**
+ * The instance runs another kinby revision than the hub's checkout, so an update is there.
+ */
+export interface RevisionBehind {
+  code: "revision_behind";
+  hub_revision: string;
+  instance_revision: string;
+  message: string;
+}
+/**
+ * The instance's configuration was copied from another version of its installed package.
+ */
+export interface PackageTemplateOlder {
+  code: "package_template_older";
+  initialized_version: string;
+  installed_version: string;
+  message: string;
 }
 export interface PackageSummary {
   distribution: string;

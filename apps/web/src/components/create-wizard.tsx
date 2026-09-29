@@ -6,7 +6,6 @@ import type {
   Clock,
   CuratedPackage,
   InstanceCreateCommand,
-  OperationState,
   OperationStep,
   PackageDescription,
   PackageSelection,
@@ -14,9 +13,9 @@ import type {
   SubscriptionLogin,
 } from "@kinby/contract"
 import { useCallback, useEffect, useRef, useState } from "react"
-import type * as React from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
+import { OperationSteps } from "@/components/operation-steps"
 import { SubscriptionLogins } from "@/components/subscription-logins"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -66,21 +65,7 @@ import {
 } from "@/lib/creation"
 import { followPreparation, type Preparation } from "@/lib/preparation"
 import { selectInstance } from "@/lib/selection"
-import {
-  CircleCheckIcon,
-  CircleXIcon,
-  CodeIcon,
-  PackageIcon,
-  SparklesIcon,
-  type LucideIcon,
-} from "lucide-react"
-
-const STATES: Record<OperationState, { label: string; icon: React.ReactNode }> = {
-  pending: { label: "Waiting", icon: <Spinner /> },
-  running: { label: "Running", icon: <Spinner /> },
-  succeeded: { label: "Done", icon: <CircleCheckIcon /> },
-  failed: { label: "Failed", icon: <CircleXIcon /> },
-}
+import { CircleXIcon, CodeIcon, PackageIcon, SparklesIcon, type LucideIcon } from "lucide-react"
 
 const SHAPES: Record<AvatarShape, string> = {
   circle: "Circle",
@@ -785,7 +770,7 @@ function Progress({
     operation.state === "failed" && !operation.steps.some((step) => step.state === "failed")
   return (
     <>
-      <Steps label={label} steps={operation.steps} />
+      <OperationSteps label={label} steps={operation.steps} />
       {failedOutsideAStep && (
         <Alert variant="destructive">
           <CircleXIcon />
@@ -794,27 +779,6 @@ function Progress({
         </Alert>
       )}
     </>
-  )
-}
-
-function Steps({ label, steps }: { label: string; steps: OperationStep[] }) {
-  return (
-    <ItemGroup aria-label={label}>
-      {steps.map((step) => (
-        <Item key={step.name} render={<li />} aria-label={step.name} variant="outline" size="sm">
-          <ItemMedia variant="icon">{STATES[step.state].icon}</ItemMedia>
-          <ItemContent>
-            <ItemTitle>{step.name}</ItemTitle>
-            <ItemDescription>{step.detail}</ItemDescription>
-          </ItemContent>
-          <ItemActions>
-            <Badge variant={step.state === "failed" ? "destructive" : "secondary"}>
-              {STATES[step.state].label}
-            </Badge>
-          </ItemActions>
-        </Item>
-      ))}
-    </ItemGroup>
   )
 }
 

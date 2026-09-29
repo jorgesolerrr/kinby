@@ -12,8 +12,8 @@ import { MousePointerClickIcon, ServerIcon } from "lucide-react"
 /**
  * The selected thread's panel, the selected instance's config panel or page, or why there is none.
  * A thread or the config panel opens once `instanceClient` reaches its instance, and the config
- * panel only on a running instance, which is the one the hub relays to. `onChanged` lists the
- * instances again.
+ * panel only on an instance meant to run, which is the one the hub relays to. It stays open while
+ * an update restarts the container. `onChanged` lists the instances again.
  */
 export function MainPanel({
   caller,
@@ -46,9 +46,18 @@ export function MainPanel({
       />
     )
   }
-  if (selected !== undefined && configOpen && selected.process === "running") {
+  if (selected !== undefined && configOpen && selected.intended_state === "running") {
     if (instanceClient === undefined) return null
-    return <ConfigPanel key={selected.instance_id} client={instanceClient} />
+    return (
+      <ConfigPanel
+        key={selected.instance_id}
+        client={instanceClient}
+        caller={caller}
+        clock={clock}
+        instance={selected}
+        onChanged={onChanged}
+      />
+    )
   }
   if (selected !== undefined) {
     return (
