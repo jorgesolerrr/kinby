@@ -68,7 +68,7 @@ describe("ConfigPanel", () => {
     )
     expect(screen.getByRole("button", { name: "Recap prompt" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Permissions" })).toHaveProperty("disabled", false)
-    expect(screen.getByRole("button", { name: "Manifest" })).toHaveProperty("disabled", true)
+    expect(screen.getByRole("button", { name: "Manifest" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Package and version" })).toHaveProperty(
       "disabled",
       true,

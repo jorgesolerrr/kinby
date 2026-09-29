@@ -282,6 +282,8 @@ class LangGraphRunner:
 
     def prepare_for_turn(self) -> TurnPreparation:
         manifest = reload_manifest(self._instance, model_override=self._model_override)
+        if manifest.tools.defaults != self._instance.manifest.tools.defaults:
+            self._tools = ToolRegistry(self._instance.path, defaults=manifest.tools.defaults)
         self._instance = replace(self._instance, manifest=manifest)
         self._gate_policy = self._load_gate_policy()
         sections = self._prompt_sections()

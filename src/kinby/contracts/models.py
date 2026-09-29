@@ -1550,3 +1550,101 @@ class ConfigHistoryCommand(ContractModel):
 class ConfigHistoryResult(ContractModel):
     #: Newest first.
     changes: list[ConfigChange]
+
+
+class RecapPolicy(StrEnum):
+    """When kinby writes a model-assisted recap."""
+
+    EVERY_TURN = "every-turn"
+    TRACE_ONLY = "off"
+
+
+class FeedbackPolicy(StrEnum):
+    """When kinby asks the user to rate a completed turn."""
+
+    EVERY_TURN = "every-turn"
+    OFF = "off"
+
+
+class ManifestModels(ContractModel):
+    #: Each model as ``provider:model``. The recap model is the main one when absent.
+    main: str
+    recap: str | None
+    embed: str | None
+
+
+class ManifestBudgets(ContractModel):
+    #: Each limit is off when absent.
+    steps: int | None
+    tokens: int | None
+    seconds: float | None
+    usd_per_day: float | None
+
+
+class ManifestRoutines(ContractModel):
+    #: The IANA time zone routine schedules read in.
+    timezone: str
+
+
+class ManifestTools(ContractModel):
+    #: Whether kinby's default tools, such as bash and the file tools, are on.
+    defaults: bool
+    bash_timeout_seconds: int
+
+
+class ManifestMemory(ContractModel):
+    recap: RecapPolicy
+
+
+class ManifestFeedback(ContractModel):
+    ask: FeedbackPolicy
+
+
+class ManifestValues(ContractModel):
+    """The fields of ``kinby.toml`` a client may change. The hub owns the rest."""
+
+    persona_name: str | None
+    models: ManifestModels
+    budgets: ManifestBudgets
+    routines: ManifestRoutines
+    tools: ManifestTools
+    memory: ManifestMemory
+    feedback: ManifestFeedback
+
+
+class PriceSource(StrEnum):
+    SHIPPED = "shipped"
+    MANIFEST = "manifest"
+
+
+class ModelChoice(ContractModel):
+    """A model the budget can count, because kinby ships its price or the manifest sets one."""
+
+    model: str
+    priced_from: PriceSource
+    #: Whether ``<PROVIDER>_API_KEY`` is set in the instance's environment.
+    key_set: bool
+
+
+class ManifestGetCommand(ContractModel):
+    pass
+
+
+class ManifestResult(ContractModel):
+    values: ManifestValues
+    model_choices: list[ModelChoice]
+    hash: FileHash
+
+
+class NewModelPrice(ContractModel):
+    #: Dollars per million tokens.
+    input: float
+    output: float
+
+
+class ManifestSetCommand(ContractModel):
+    values: ManifestValues
+    #: Prices to write as ``[prices."provider:model"]`` entries, by model.
+    prices: dict[str, NewModelPrice] = Field(default_factory=dict)
+    #: The hash the client read. The write is refused as STALE when the file changed since.
+    hash: FileHash

@@ -130,14 +130,19 @@ from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import HubRegistry, ManagedInstance
 from kinby.hub.setup import (
     ENVIRONMENT_NAME,
-    api_key_variable,
     configuration,
     instance_setup,
     setup_errors,
     targeted,
 )
 from kinby.hub.usage import Uncounted, summed_usage
-from kinby.instance import Instance, ManifestError, init_instance, inspect_instance
+from kinby.instance import (
+    Instance,
+    ManifestError,
+    api_key_variable,
+    init_instance,
+    inspect_instance,
+)
 from kinby.instance.layout import SYSTEM_NAME
 from kinby.packages import (
     API_KEY_FIELD,

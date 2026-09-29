@@ -2,6 +2,7 @@ import type { InstanceClient, PromptName } from "@kinby/contract"
 import { useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
+import { ManifestSection } from "@/components/manifest-section"
 import { PermissionsSection } from "@/components/permissions-section"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -37,8 +38,8 @@ import {
 
 type Caller = Pick<InstanceClient, "call">
 
-/** A section that is built: one of the prompts, or the permissions. */
-type SectionKey = PromptName | "permissions"
+/** A section that is built: one of the prompts, the permissions, or the manifest. */
+type SectionKey = PromptName | "permissions" | "manifest"
 
 /** One section of the panel. A section without a `key` is not built yet, and is unavailable. */
 interface Section {
@@ -70,7 +71,7 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         icon: ShieldIcon,
         key: "permissions",
       },
-      { label: "Manifest", hint: "models, budgets, timezone", icon: CpuIcon },
+      { label: "Manifest", hint: "models, budgets, timezone", icon: CpuIcon, key: "manifest" },
     ],
   },
   {
@@ -127,6 +128,8 @@ export function ConfigPanel({ client }: { client: Caller }) {
         <Separator />
         {selected === "permissions" ? (
           <PermissionsSection client={client} />
+        ) : selected === "manifest" ? (
+          <ManifestSection client={client} />
         ) : (
           <PromptSection key={selected} client={client} name={selected} />
         )}

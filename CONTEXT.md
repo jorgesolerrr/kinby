@@ -299,6 +299,10 @@ The input and output tokens attributed to a turn, with totals rolled up for its 
 
 The table of input, output, cache read, and cache write prices per million tokens, keyed by exact `provider:model` names.
 
+### Model choice
+
+A model a client may pick for an **instance**'s main, recap, or embedding model. Only a model the **price map** prices is one, so the daily budget can always count it. Its price comes from kinby's shipped prices or from the **manifest**'s own, and it says whether its provider's `<PROVIDER>_API_KEY` is set.
+
 ### Usage source
 
 The account that pays for a model's tokens: the API, a Claude subscription, or a ChatGPT subscription. Only API use is priced; subscription use is counted.

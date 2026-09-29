@@ -738,7 +738,7 @@ def test_runner_reloads_the_instance_model_between_turns(
             ("Second", "anthropic:claude-sonnet-4-6"),
         ):
             manifest_path.write_text(
-                f'id = "alice"\n\n[models]\nmain = "{model}"\n',
+                f'id = "alice"\n\n[models]\nmain = "{model}"\n\n[tools]\ndefaults = false\n',
                 encoding="utf-8",
             )
             accepted = await dispatcher.dispatch(

@@ -19,7 +19,7 @@ from kinby.contracts import (
     SetupFieldKind,
     SetupValue,
 )
-from kinby.instance import ModelName
+from kinby.instance import ModelName, api_key_variable
 from kinby.packages import (
     API_KEY_FIELD,
     MODEL_FIELD,
@@ -143,12 +143,6 @@ def instance_setup(
             if field.kind is SetupFieldKind.SECRET
         ],
     )
-
-
-def api_key_variable(model: ModelName) -> str:
-    """Where the model's provider looks for its key, by the `<PROVIDER>_API_KEY` convention."""
-    provider, _, _ = model.partition(":")
-    return f"{provider.upper()}_API_KEY"
 
 
 def _is_model_name(value: SetupValue | None) -> bool:
