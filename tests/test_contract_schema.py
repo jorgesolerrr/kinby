@@ -207,3 +207,74 @@ def test_the_schema_declares_the_routine_config_calls() -> None:
         "hash",
     }
     assert "ROUTINE_PENDING" in cast(list[str], _object(definitions["ErrorCode"])["enum"])
+
+
+def test_the_schema_declares_the_manifest_calls() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"]
+        for name in ("manifest.get", "manifest.set")
+    } == {
+        "manifest.get": {
+            "command": {"$ref": "#/$defs/ManifestGetCommand"},
+            "result": {"$ref": "#/$defs/ManifestResult"},
+        },
+        "manifest.set": {
+            "command": {"$ref": "#/$defs/ManifestSetCommand"},
+            "result": {"$ref": "#/$defs/ManifestResult"},
+        },
+    }
+    assert set(cast(list[str], _object(definitions["ManifestResult"])["required"])) == {
+        "values",
+        "model_choices",
+        "hash",
+    }
+    assert set(cast(list[str], _object(definitions["ManifestSetCommand"])["required"])) == {
+        "values",
+        "hash",
+    }
+    assert set(cast(list[str], _object(definitions["ManifestValues"])["required"])) == {
+        "persona_name",
+        "models",
+        "budgets",
+        "routines",
+        "tools",
+        "memory",
+        "feedback",
+    }
+    assert _object(definitions["PriceSource"])["enum"] == ["shipped", "manifest"]
+
+
+def test_the_schema_declares_the_permissions_calls() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"]
+        for name in ("permissions.get", "permissions.set")
+    } == {
+        "permissions.get": {
+            "command": {"$ref": "#/$defs/PermissionsGetCommand"},
+            "result": {"$ref": "#/$defs/PermissionsResult"},
+        },
+        "permissions.set": {
+            "command": {"$ref": "#/$defs/PermissionsSetCommand"},
+            "result": {"$ref": "#/$defs/PermissionsResult"},
+        },
+    }
+    assert set(cast(list[str], _object(definitions["PermissionsResult"])["required"])) == {
+        "mode",
+        "ceiling",
+        "tools",
+        "bash",
+        "hash",
+    }
+    assert set(cast(list[str], _object(definitions["DenyPattern"])["required"])) == {
+        "pattern",
+        "shipped",
+    }
+    assert _object(definitions["GateAction"])["enum"] == ["allow", "ask", "deny"]

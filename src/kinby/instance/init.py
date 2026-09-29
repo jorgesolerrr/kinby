@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 import tomllib
 import unicodedata
@@ -32,8 +31,8 @@ from kinby.instance.layout import (
     TOOLS_DIR,
     WORKSPACE_DIR,
 )
-from kinby.instance.permissions import SHIPPED_BASH_DENY
 from kinby.instance.recap import DEFAULT_RECAP_LENS
+from kinby.instance.toml import TomlValue, toml_document
 from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage
 
 PLACEHOLDER_MODEL = "provider:model"
@@ -63,9 +62,6 @@ def _write_readme(directory: Path, explanation: str) -> None:
     )
 
 
-type TomlValue = str | int | float | bool | list["TomlValue"] | dict[str, "TomlValue"]
-
-
 def _merge(base: dict[str, TomlValue], override: dict[str, TomlValue]) -> None:
     for key, value in override.items():
         current = base.get(key)
@@ -73,43 +69,6 @@ def _merge(base: dict[str, TomlValue], override: dict[str, TomlValue]) -> None:
             _merge(current, value)
         else:
             base[key] = value
-
-
-def _toml_key(key: str) -> str:
-    if re.fullmatch(r"[A-Za-z0-9_-]+", key):
-        return key
-    return json.dumps(key)
-
-
-def _toml_value(value: TomlValue) -> str:
-    if isinstance(value, str):
-        return json.dumps(value)
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int | float):
-        return str(value)
-    if isinstance(value, list):
-        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
-    raise TypeError("TOML tables are written separately.")
-
-
-def _toml_document(values: dict[str, TomlValue]) -> str:
-    lines: list[str] = []
-
-    def write_table(table: dict[str, TomlValue], path: tuple[str, ...]) -> None:
-        if path:
-            if lines and lines[-1]:
-                lines.append("")
-            lines.append("[" + ".".join(_toml_key(part) for part in path) + "]")
-        for key, value in table.items():
-            if not isinstance(value, dict):
-                lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
-        for key, value in table.items():
-            if isinstance(value, dict):
-                write_table(value, (*path, key))
-
-    write_table(values, ())
-    return "\n".join(lines) + "\n"
 
 
 def _relative_template_path(name: str) -> Path:
@@ -183,7 +142,7 @@ def _validate_package_template(
         _copied_template_path(name)
     template = _package_template_manifest(package, config)
     try:
-        _toml_document(template)
+        toml_document(template)
     except TypeError as exc:
         raise ValueError("Package template manifest cannot be serialized.") from exc
 
@@ -208,7 +167,7 @@ def _package_manifest(
         "distribution": descriptor.distribution,
         "version": descriptor.version,
     }
-    path.write_text(_toml_document(base), encoding="utf-8")
+    path.write_text(toml_document(base), encoding="utf-8")
 
 
 def _copy_package_template(directory: Path, package: InstalledPackage) -> None:
@@ -316,14 +275,9 @@ def _write_starter_tree(directory: Path, model: str) -> None:
             '# edit = "allow"\n'
             "\n"
             "[bash]\n"
-            "deny = [\n"
-            "    # Delete the instance home.\n"
-            f"    '''{SHIPPED_BASH_DENY[0]}''',\n"
-            "    # Rewrite Git history.\n"
-            f"    '''{SHIPPED_BASH_DENY[1]}''',\n"
-            "    # Force-push Git history.\n"
-            f"    '''{SHIPPED_BASH_DENY[2]}''',\n"
-            "]\n"
+            "# kinby always denies deleting the instance home and rewriting or force-pushing\n"
+            "# Git history. Patterns here add to those.\n"
+            "deny = []\n"
             "ask = []\n"
         ),
         encoding="utf-8",

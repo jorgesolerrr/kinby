@@ -6,7 +6,7 @@ import type {
   RoutineSummary,
 } from "@kinby/contract"
 
-import { latestChange, unlessStale, when } from "@/lib/config"
+import { latestChange, unlessStale, when } from "@/lib/config-changes"
 
 type Caller = Pick<InstanceClient, "call">
 

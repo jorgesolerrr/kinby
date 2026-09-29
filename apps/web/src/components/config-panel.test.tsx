@@ -1,7 +1,12 @@
 import { CallError } from "@kinby/contract"
-import type { ConfigChange, PromptResult } from "@kinby/contract"
+import type {
+  ConfigChange,
+  PermissionsResult,
+  PermissionsSetCommand,
+  PromptResult,
+} from "@kinby/contract"
 import { type Answers, stubCaller } from "@kinby/contract/testing"
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -63,7 +68,8 @@ describe("ConfigPanel", () => {
     )
     expect(screen.getByRole("button", { name: "Recap prompt" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Routines" })).toHaveProperty("disabled", false)
-    expect(screen.getByRole("button", { name: "Permissions" })).toHaveProperty("disabled", true)
+    expect(screen.getByRole("button", { name: "Permissions" })).toHaveProperty("disabled", false)
+    expect(screen.getByRole("button", { name: "Manifest" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Package and version" })).toHaveProperty(
       "disabled",
       true,
@@ -142,5 +148,156 @@ describe("ConfigPanel", () => {
 
     expect(await screen.findByRole("heading", { name: "Routines" })).toBeDefined()
     expect(await screen.findByRole("button", { name: "New routine" })).toBeDefined()
+  })
+
+  describe("Permissions", () => {
+    const SHIPPED = ["rm -rf /instance", "git reset --hard", "git push --force"]
+    const permissions: PermissionsResult = {
+      mode: "auto",
+      ceiling: "full-access",
+      tools: { bash: "deny" },
+      bash: {
+        deny: [
+          ...SHIPPED.map((pattern) => ({ pattern, shipped: true })),
+          { pattern: "^deploy$", shipped: false },
+        ],
+        ask: [],
+      },
+      hash: "perm-1",
+    }
+
+    async function openPermissions(answers: Answers) {
+      const opened = openPanel({ "permissions.get": () => permissions, ...answers })
+      await opened.user.click(screen.getByRole("button", { name: "Permissions" }))
+      await screen.findByRole("heading", { name: "Permissions" })
+      return opened
+    }
+
+    const toggle = (group: string, name: string) =>
+      within(screen.getByRole("group", { name: group })).getByRole("button", { name })
+    const sent = (caller: ReturnType<typeof openPanel>["caller"]) =>
+      caller.calls
+        .filter((call) => call.method === "permissions.set")
+        .map((call) => call.params as PermissionsSetCommand)
+
+    it("disables modes above the ceiling, and lowers the mode when the ceiling drops", async () => {
+      const { caller, user } = await openPermissions({
+        "permissions.set": () => ({ ...permissions, hash: "perm-2" }),
+      })
+
+      expect(await screen.findByRole("group", { name: "Ceiling" })).toBeDefined()
+      expect(toggle("Default mode", "auto").getAttribute("aria-pressed")).toBe("true")
+      expect(toggle("Default mode", "full-access")).toHaveProperty("disabled", false)
+      await user.click(toggle("Ceiling", "ask"))
+
+      expect(toggle("Default mode", "ask").getAttribute("aria-pressed")).toBe("true")
+      expect(toggle("Default mode", "auto")).toHaveProperty("disabled", true)
+      expect(toggle("Default mode", "full-access")).toHaveProperty("disabled", true)
+      expect(
+        screen.getByText("Lowered the default mode to ask to stay within the ceiling."),
+      ).toBeDefined()
+      await user.click(screen.getByRole("button", { name: "Save" }))
+
+      expect(await screen.findByText("Saved. It applies at the next turn.")).toBeDefined()
+      expect(sent(caller)).toEqual([
+        {
+          mode: "ask",
+          ceiling: "ask",
+          tools: { bash: "deny" },
+          bash: { deny: ["^deploy$"], ask: [] },
+          hash: "perm-1",
+        },
+      ])
+    })
+
+    it("sets each tool to follow the mode or to allow, ask, or deny", async () => {
+      const { caller, user } = await openPermissions({
+        "permissions.set": () => ({ ...permissions, hash: "perm-2" }),
+      })
+
+      await screen.findByRole("group", { name: "bash" })
+      expect(toggle("bash", "deny").getAttribute("aria-pressed")).toBe("true")
+      await user.click(toggle("bash", "Follow mode"))
+      await user.type(screen.getByRole("textbox", { name: "Tool" }), "web_fetch")
+      await user.click(screen.getByRole("button", { name: "Add rule" }))
+      expect(toggle("web_fetch", "Follow mode").getAttribute("aria-pressed")).toBe("true")
+      await user.click(toggle("web_fetch", "ask"))
+      await user.click(screen.getByRole("button", { name: "Save" }))
+
+      await screen.findByText("Saved. It applies at the next turn.")
+      expect(sent(caller).map((params) => params.tools)).toEqual([{ web_fetch: "ask" }])
+    })
+
+    it("shows the shipped deny patterns locked, and edits the instance's own", async () => {
+      const { caller, user } = await openPermissions({
+        "permissions.set": () => ({ ...permissions, hash: "perm-2" }),
+      })
+
+      const deny = await screen.findByRole("list", { name: "Always denied" })
+      for (const pattern of SHIPPED) {
+        const item = within(deny).getByText(pattern).closest("li")
+        expect(item?.textContent).toContain("Shipped")
+        expect(within(item as HTMLElement).queryByRole("button")).toBeNull()
+      }
+      await user.click(within(deny).getByRole("button", { name: "Remove ^deploy$" }))
+      await user.type(screen.getByRole("textbox", { name: "New denied pattern" }), "^drop table")
+      await user.click(screen.getByRole("button", { name: "Add denied pattern" }))
+      await user.type(screen.getByRole("textbox", { name: "New asked pattern" }), "^npm publish")
+      await user.click(screen.getByRole("button", { name: "Add asked pattern" }))
+      await user.click(screen.getByRole("button", { name: "Save" }))
+
+      await screen.findByText("Saved. It applies at the next turn.")
+      expect(sent(caller).map((params) => params.bash)).toEqual([
+        { deny: ["^drop table"], ask: ["^npm publish"] },
+      ])
+    })
+
+    it("shows why the instance refused a pattern", async () => {
+      const { user } = await openPermissions({
+        "permissions.set": () => {
+          throw new CallError({
+            code: "INVALID_ARGUMENT",
+            message: "Some values are invalid.",
+            retryable: false,
+            fields: { "bash.deny.1": "invalid regex: missing ), unterminated subpattern" },
+          })
+        },
+      })
+
+      await user.type(await screen.findByRole("textbox", { name: "New denied pattern" }), "(oops")
+      await user.click(screen.getByRole("button", { name: "Add denied pattern" }))
+      await user.click(screen.getByRole("button", { name: "Save" }))
+
+      expect(
+        await screen.findByText("(oops: invalid regex: missing ), unterminated subpattern"),
+      ).toBeDefined()
+    })
+
+    it("offers to load theirs when the permissions changed since they were opened", async () => {
+      let theirs = false
+      const { caller, user } = await openPermissions({
+        "permissions.get": () =>
+          theirs ? { ...permissions, mode: "ask", hash: "perm-3" } : permissions,
+        "permissions.set": () => {
+          theirs = true
+          throw new CallError({ code: "STALE", message: "changed", retryable: false })
+        },
+      })
+
+      await screen.findByRole("group", { name: "Default mode" })
+      await user.click(toggle("Default mode", "read-only"))
+      await user.click(screen.getByRole("button", { name: "Save" }))
+      const alert = await screen.findByRole("alert")
+      expect(alert.textContent).toContain("Changed since you opened it")
+      await user.click(within(alert).getByRole("button", { name: "Load theirs" }))
+
+      await waitFor(() =>
+        expect(toggle("Default mode", "ask").getAttribute("aria-pressed")).toBe("true"),
+      )
+      expect(screen.queryByRole("alert")).toBeNull()
+      await user.click(toggle("Default mode", "auto"))
+      await user.click(screen.getByRole("button", { name: "Save" }))
+      expect(sent(caller).at(-1)?.hash).toBe("perm-3")
+    })
   })
 })

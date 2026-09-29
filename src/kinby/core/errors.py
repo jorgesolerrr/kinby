@@ -41,8 +41,8 @@ class RoutinePending(CoreError):
     code = ErrorCode.ROUTINE_PENDING
 
 
-class InvalidConfig(CoreError):
-    """The instance's loaders refused a config value, so nothing was written."""
+class RoutineRefused(CoreError):
+    """The routine loader refused the routine, so nothing was written."""
 
     code = ErrorCode.INVALID_ARGUMENT
 
@@ -90,19 +90,32 @@ class SelectionNotPrepared(CoreError):
     code = ErrorCode.NOT_PREPARED
 
 
-class InvalidSetup(CoreError):
-    """Some setup values are missing or invalid, so nothing was created."""
+class InvalidValues(CoreError):
+    """Some values the client sent are invalid. The envelope names what is wrong with each."""
 
-    code = ErrorCode.INVALID_SETUP
+    message = "Some values are invalid."
 
     def __init__(self, fields: dict[str, str]) -> None:
-        super().__init__("Some setup values are missing or invalid.")
+        super().__init__(self.message)
         self.fields = fields
 
     def envelope(self) -> ErrorEnvelope:
         return ErrorEnvelope(
             code=self.code, message=str(self), retryable=self.retryable, fields=self.fields
         )
+
+
+class InvalidSetup(InvalidValues):
+    """Some setup values are missing or invalid, so nothing was created."""
+
+    code = ErrorCode.INVALID_SETUP
+    message = "Some setup values are missing or invalid."
+
+
+class InvalidConfig(InvalidValues):
+    """Some config values are invalid, so the file was left alone."""
+
+    code = ErrorCode.INVALID_ARGUMENT
 
 
 class LifecycleOperationNotFound(CoreError):

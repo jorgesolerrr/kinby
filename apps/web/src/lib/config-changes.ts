@@ -22,7 +22,7 @@ export function lastChanged(change: ConfigChange | undefined): string {
   return `Last changed by ${ACTORS[change.actor]}, ${when(change.at)}`
 }
 
-/** The latest change to `file`, as the config changes name it. */
+/** The latest change to `file`, if the log has one. */
 export async function latestChange(
   caller: Caller,
   file: string,

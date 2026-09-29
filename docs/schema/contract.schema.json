@@ -207,6 +207,29 @@
       "title": "AvatarShape",
       "type": "string"
     },
+    "BashPermissions": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny": {
+          "items": {
+            "$ref": "#/$defs/DenyPattern"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "deny",
+        "ask"
+      ],
+      "title": "BashPermissions",
+      "type": "object"
+    },
     "CallFrame": {
       "additionalProperties": false,
       "properties": {
@@ -580,6 +603,23 @@
       "title": "DenyCounts",
       "type": "object"
     },
+    "DenyPattern": {
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string"
+        },
+        "shipped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pattern",
+        "shipped"
+      ],
+      "title": "DenyPattern",
+      "type": "object"
+    },
     "DrainState": {
       "description": "How an instance's accepted work ended when it drained.",
       "enum": [
@@ -801,6 +841,15 @@
       "title": "Event",
       "type": "object"
     },
+    "FeedbackPolicy": {
+      "description": "When kinby asks the user to rate a completed turn.",
+      "enum": [
+        "every-turn",
+        "off"
+      ],
+      "title": "FeedbackPolicy",
+      "type": "string"
+    },
     "FileChange": {
       "additionalProperties": false,
       "properties": {
@@ -827,6 +876,16 @@
       ],
       "title": "FileChange",
       "type": "object"
+    },
+    "GateAction": {
+      "description": "What the gate answers for a tool call, and the rule a tool can be given in its place.",
+      "enum": [
+        "allow",
+        "ask",
+        "deny"
+      ],
+      "title": "GateAction",
+      "type": "string"
     },
     "GateDecider": {
       "enum": [
@@ -1729,6 +1788,248 @@
       "title": "LoginState",
       "type": "string"
     },
+    "ManifestBudgets": {
+      "additionalProperties": false,
+      "properties": {
+        "seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "steps": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usd_per_day": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "steps",
+        "tokens",
+        "seconds",
+        "usd_per_day"
+      ],
+      "title": "ManifestBudgets",
+      "type": "object"
+    },
+    "ManifestFeedback": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "$ref": "#/$defs/FeedbackPolicy"
+        }
+      },
+      "required": [
+        "ask"
+      ],
+      "title": "ManifestFeedback",
+      "type": "object"
+    },
+    "ManifestGetCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "ManifestGetCommand",
+      "type": "object"
+    },
+    "ManifestMemory": {
+      "additionalProperties": false,
+      "properties": {
+        "recap": {
+          "$ref": "#/$defs/RecapPolicy"
+        }
+      },
+      "required": [
+        "recap"
+      ],
+      "title": "ManifestMemory",
+      "type": "object"
+    },
+    "ManifestModels": {
+      "additionalProperties": false,
+      "properties": {
+        "embed": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "main": {
+          "type": "string"
+        },
+        "recap": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "main",
+        "recap",
+        "embed"
+      ],
+      "title": "ManifestModels",
+      "type": "object"
+    },
+    "ManifestResult": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "model_choices": {
+          "items": {
+            "$ref": "#/$defs/ModelChoice"
+          },
+          "type": "array"
+        },
+        "values": {
+          "$ref": "#/$defs/ManifestValues"
+        }
+      },
+      "required": [
+        "values",
+        "model_choices",
+        "hash"
+      ],
+      "title": "ManifestResult",
+      "type": "object"
+    },
+    "ManifestRoutines": {
+      "additionalProperties": false,
+      "properties": {
+        "timezone": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "timezone"
+      ],
+      "title": "ManifestRoutines",
+      "type": "object"
+    },
+    "ManifestSetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "prices": {
+          "additionalProperties": {
+            "$ref": "#/$defs/NewModelPrice"
+          },
+          "type": "object"
+        },
+        "values": {
+          "$ref": "#/$defs/ManifestValues"
+        }
+      },
+      "required": [
+        "values",
+        "hash"
+      ],
+      "title": "ManifestSetCommand",
+      "type": "object"
+    },
+    "ManifestTools": {
+      "additionalProperties": false,
+      "properties": {
+        "bash_timeout_seconds": {
+          "type": "integer"
+        },
+        "defaults": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "defaults",
+        "bash_timeout_seconds"
+      ],
+      "title": "ManifestTools",
+      "type": "object"
+    },
+    "ManifestValues": {
+      "additionalProperties": false,
+      "description": "The fields of ``kinby.toml`` a client may change. The hub owns the rest.",
+      "properties": {
+        "budgets": {
+          "$ref": "#/$defs/ManifestBudgets"
+        },
+        "feedback": {
+          "$ref": "#/$defs/ManifestFeedback"
+        },
+        "memory": {
+          "$ref": "#/$defs/ManifestMemory"
+        },
+        "models": {
+          "$ref": "#/$defs/ManifestModels"
+        },
+        "persona_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "routines": {
+          "$ref": "#/$defs/ManifestRoutines"
+        },
+        "tools": {
+          "$ref": "#/$defs/ManifestTools"
+        }
+      },
+      "required": [
+        "persona_name",
+        "models",
+        "budgets",
+        "routines",
+        "tools",
+        "memory",
+        "feedback"
+      ],
+      "title": "ManifestValues",
+      "type": "object"
+    },
     "MemoryCallCounts": {
       "additionalProperties": false,
       "properties": {
@@ -1862,6 +2163,28 @@
       "title": "ModelCallMismatch",
       "type": "object"
     },
+    "ModelChoice": {
+      "additionalProperties": false,
+      "description": "A model the budget can count, because kinby ships its price or the manifest sets one.",
+      "properties": {
+        "key_set": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "priced_from": {
+          "$ref": "#/$defs/PriceSource"
+        }
+      },
+      "required": [
+        "model",
+        "priced_from",
+        "key_set"
+      ],
+      "title": "ModelChoice",
+      "type": "object"
+    },
     "ModelCompleted": {
       "additionalProperties": false,
       "properties": {
@@ -1991,6 +2314,23 @@
       "title": "NavigationMeans",
       "type": "object"
     },
+    "NewModelPrice": {
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "type": "number"
+        },
+        "output": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ],
+      "title": "NewModelPrice",
+      "type": "object"
+    },
     "OperationGetCommand": {
       "additionalProperties": false,
       "properties": {
@@ -2108,6 +2448,29 @@
         "detail"
       ],
       "title": "OperationStep",
+      "type": "object"
+    },
+    "OwnBashPatterns": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "deny",
+        "ask"
+      ],
+      "title": "OwnBashPatterns",
       "type": "object"
     },
     "PackageCommit": {
@@ -2314,6 +2677,76 @@
       "title": "PermissionMode",
       "type": "string"
     },
+    "PermissionsGetCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "PermissionsGetCommand",
+      "type": "object"
+    },
+    "PermissionsResult": {
+      "additionalProperties": false,
+      "properties": {
+        "bash": {
+          "$ref": "#/$defs/BashPermissions"
+        },
+        "ceiling": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/$defs/GateAction"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "mode",
+        "ceiling",
+        "tools",
+        "bash",
+        "hash"
+      ],
+      "title": "PermissionsResult",
+      "type": "object"
+    },
+    "PermissionsSetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "bash": {
+          "$ref": "#/$defs/OwnBashPatterns"
+        },
+        "ceiling": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/$defs/GateAction"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "mode",
+        "ceiling",
+        "tools",
+        "bash",
+        "hash"
+      ],
+      "title": "PermissionsSetCommand",
+      "type": "object"
+    },
     "PlanLimit": {
       "additionalProperties": false,
       "description": "A subscription usage source whose plan stopped a delegated run, until its window resets.",
@@ -2350,6 +2783,14 @@
       ],
       "title": "PlanWindow",
       "type": "object"
+    },
+    "PriceSource": {
+      "enum": [
+        "shipped",
+        "manifest"
+      ],
+      "title": "PriceSource",
+      "type": "string"
     },
     "ProcessState": {
       "enum": [
@@ -2436,6 +2877,15 @@
         "unknown"
       ],
       "title": "Readiness",
+      "type": "string"
+    },
+    "RecapPolicy": {
+      "description": "When kinby writes a model-assisted recap.",
+      "enum": [
+        "every-turn",
+        "off"
+      ],
+      "title": "RecapPolicy",
       "type": "string"
     },
     "ReportedRun": {
@@ -5266,6 +5716,38 @@
           ],
           "type": "object"
         },
+        "manifest.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ManifestGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ManifestResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "manifest.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ManifestSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ManifestResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "operation.get": {
           "additionalProperties": false,
           "properties": {
@@ -5306,6 +5788,38 @@
             },
             "result": {
               "$ref": "#/$defs/PackageListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "permissions.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PermissionsGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/PermissionsResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "permissions.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PermissionsSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/PermissionsResult"
             }
           },
           "required": [
@@ -5725,6 +6239,10 @@
         "routine.delete",
         "prompt.get",
         "prompt.set",
+        "manifest.get",
+        "manifest.set",
+        "permissions.get",
+        "permissions.set",
         "config.history",
         "instance.create",
         "instance.start",

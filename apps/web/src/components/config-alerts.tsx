@@ -19,8 +19,8 @@ export function Failure({
   )
 }
 
-/** A save refused because `file` changed since it was read, with the action that reads it again. */
-export function Stale({ file, onLoad }: { file: string; onLoad: () => void }) {
+/** A save refused because `file` changed since it was read. "Load theirs" reads it again. */
+export function StaleAlert({ file, onLoad }: { file: string; onLoad: () => void }) {
   return (
     <Alert variant="destructive">
       <CircleXIcon />

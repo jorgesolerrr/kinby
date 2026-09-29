@@ -1,6 +1,6 @@
 import type { ConfigChange, InstanceClient, PromptName, PromptResult } from "@kinby/contract"
 
-import { latestChange, unlessStale } from "@/lib/config"
+import { latestChange, unlessStale } from "@/lib/config-changes"
 
 /** The file each prompt is kept in, as the config changes name it. */
 export const PROMPT_FILES: Record<PromptName, string> = {

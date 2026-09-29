@@ -4,16 +4,29 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from kinby.contracts import (
+    BashPermissions,
     ConfigActor,
     ConfigFile,
     ConfigHistoryCommand,
     ConfigHistoryResult,
+    DenyPattern,
     FileHash,
+    ManifestGetCommand,
+    ManifestResult,
+    ManifestSetCommand,
+    ModelChoice,
+    PermissionsGetCommand,
+    PermissionsResult,
+    PermissionsSetCommand,
+    PriceSource,
     PromptGetCommand,
     PromptName,
     PromptResult,
@@ -26,10 +39,33 @@ from kinby.contracts import (
     RoutineSetEnabledCommand,
     RoutineWriteCommand,
 )
-from kinby.core.errors import InvalidConfig, RoutineNotFound, StaleWrite
-from kinby.instance import Instance
+from kinby.core.errors import InvalidConfig, RoutineNotFound, RoutineRefused, StaleWrite
+from kinby.core.pricing import SHIPPED_PRICES
+from kinby.instance import Instance, api_key_variable
 from kinby.instance.config_changes import ConfigChangeLog, recorded_change
-from kinby.instance.layout import RECAP_NAME, ROUTINE_FILE, SYSTEM_NAME
+from kinby.instance.layout import (
+    MANIFEST_NAME,
+    PERMISSIONS_NAME,
+    RECAP_NAME,
+    ROUTINE_FILE,
+    SYSTEM_NAME,
+)
+from kinby.instance.manifest import (
+    edited_manifest,
+    manifest_field_errors,
+    offered_values,
+    parse_manifest,
+)
+from kinby.instance.permissions import (
+    SHIPPED_BASH_DENY,
+    SHIPPED_POLICY,
+    BashPolicy,
+    GatePolicy,
+    bash_regex_errors,
+    exceeds_ceiling,
+    parse_permissions,
+    permissions_toml,
+)
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 from kinby.plugins.instance_tools import (
     delete_routine,
@@ -81,7 +117,7 @@ def _refusals() -> Iterator[None]:
     except LookupError as exc:
         raise RoutineNotFound(str(exc)) from exc
     except ValueError as exc:
-        raise InvalidConfig(str(exc)) from exc
+        raise RoutineRefused(str(exc)) from exc
 
 
 def _read_bytes(path: Path) -> bytes | None:
@@ -98,6 +134,22 @@ def _write_over(path: Path, content: bytes, read: FileHash) -> None:
     staging = path.with_name(f".{path.name}.staging")
     staging.write_bytes(content)
     staging.replace(path)
+
+
+def _manifest_result(content: bytes) -> ManifestResult:
+    raw = parse_manifest(content.decode("utf-8"))
+    return ManifestResult(
+        values=offered_values(raw),
+        model_choices=[
+            ModelChoice(
+                model=model,
+                priced_from=PriceSource.MANIFEST if model in raw.prices else PriceSource.SHIPPED,
+                key_set=bool(os.environ.get(api_key_variable(model))),
+            )
+            for model in sorted(SHIPPED_PRICES.keys() | raw.prices.keys())
+        ],
+        hash=_file_hash(content),
+    )
 
 
 class InstanceConfig:
@@ -139,6 +191,46 @@ class InstanceConfig:
             await asyncio.to_thread(self._delete_routine, command)
         return RoutineDeleteResult()
 
+    async def get_manifest(self, command: ManifestGetCommand) -> ManifestResult:
+        return _manifest_result((self._instance.path / MANIFEST_NAME).read_bytes())
+
+    async def set_manifest(self, command: ManifestSetCommand) -> ManifestResult:
+        path = self._instance.path / MANIFEST_NAME
+        async with self._instance.config_lock:
+            text = path.read_text(encoding="utf-8")
+            try:
+                edited = edited_manifest(text, command.values, command.prices)
+            except ValidationError as exc:
+                raise InvalidConfig(manifest_field_errors(exc)) from exc
+            content = edited.encode("utf-8")
+            await asyncio.to_thread(self._write, ConfigFile(MANIFEST_NAME), content, command.hash)
+        return _manifest_result(content)
+
+    async def get_permissions(self, command: PermissionsGetCommand) -> PermissionsResult:
+        content = _read_bytes(self._instance.path / PERMISSIONS_NAME)
+        if content is None:
+            return _permissions_result(SHIPPED_POLICY, _file_hash(b""))
+        return _permissions_result(parse_permissions(content), _file_hash(content))
+
+    async def set_permissions(self, command: PermissionsSetCommand) -> PermissionsResult:
+        policy = GatePolicy(
+            mode=command.mode,
+            ceiling=command.ceiling,
+            tools=command.tools,
+            bash=BashPolicy(deny=tuple(command.bash.deny), ask=tuple(command.bash.ask)),
+        )
+        errors = bash_regex_errors(policy.bash)
+        if exceeds_ceiling(policy.mode, policy.ceiling):
+            errors["mode"] = f"{policy.mode} is above the ceiling, {policy.ceiling}."
+        if errors:
+            raise InvalidConfig(errors)
+        content = permissions_toml(policy).encode("utf-8")
+        async with self._instance.config_lock:
+            await asyncio.to_thread(
+                self._write, ConfigFile(PERMISSIONS_NAME), content, command.hash
+            )
+        return _permissions_result(policy, _file_hash(content))
+
     async def history(self, command: ConfigHistoryCommand) -> ConfigHistoryResult:
         log = ConfigChangeLog(self._instance.manifest.state_dir)
         return ConfigHistoryResult(changes=log.history(command.file, command.limit))
@@ -178,3 +270,19 @@ class InstanceConfig:
         return RoutineFile(
             name=name, content=content.decode("utf-8"), hash=_directory_hash(directory)
         )
+
+
+def _permissions_result(policy: GatePolicy, read: FileHash) -> PermissionsResult:
+    return PermissionsResult(
+        mode=policy.mode,
+        ceiling=policy.ceiling,
+        tools=dict(policy.tools),
+        bash=BashPermissions(
+            deny=[
+                DenyPattern(pattern=pattern, shipped=pattern in SHIPPED_BASH_DENY)
+                for pattern in policy.bash.denylist
+            ],
+            ask=list(policy.bash.ask),
+        ),
+        hash=read,
+    )

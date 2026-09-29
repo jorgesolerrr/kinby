@@ -39,12 +39,18 @@ from kinby.contracts.models import (
     InstanceStopCommand,
     InstanceUpdateCommand,
     LifecycleOperationResult,
+    ManifestGetCommand,
+    ManifestResult,
+    ManifestSetCommand,
     OperationGetCommand,
     OperationGetResult,
     PackageDescribeCommand,
     PackageDescription,
     PackageListCommand,
     PackageListResult,
+    PermissionsGetCommand,
+    PermissionsResult,
+    PermissionsSetCommand,
     PromptGetCommand,
     PromptResult,
     PromptSetCommand,
@@ -181,6 +187,14 @@ ROUTINE_DELETE = Method(
 )
 PROMPT_GET = Method("prompt.get", Scope.INSTANCE_READ, PromptGetCommand, PromptResult)
 PROMPT_SET = Method("prompt.set", Scope.INSTANCE_ADMIN, PromptSetCommand, PromptResult)
+MANIFEST_GET = Method("manifest.get", Scope.INSTANCE_READ, ManifestGetCommand, ManifestResult)
+MANIFEST_SET = Method("manifest.set", Scope.INSTANCE_ADMIN, ManifestSetCommand, ManifestResult)
+PERMISSIONS_GET = Method(
+    "permissions.get", Scope.INSTANCE_READ, PermissionsGetCommand, PermissionsResult
+)
+PERMISSIONS_SET = Method(
+    "permissions.set", Scope.INSTANCE_ADMIN, PermissionsSetCommand, PermissionsResult
+)
 CONFIG_HISTORY = Method(
     "config.history", Scope.INSTANCE_READ, ConfigHistoryCommand, ConfigHistoryResult
 )
@@ -277,6 +291,10 @@ METHODS = (
     ROUTINE_DELETE,
     PROMPT_GET,
     PROMPT_SET,
+    MANIFEST_GET,
+    MANIFEST_SET,
+    PERMISSIONS_GET,
+    PERMISSIONS_SET,
     CONFIG_HISTORY,
     INSTANCE_CREATE,
     INSTANCE_START,

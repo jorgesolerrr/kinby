@@ -557,7 +557,25 @@ def bash(command: str) -> str:
     asyncio.run(scenario())
 
 
-def test_instance_bash_deny_list_replaces_shipped_defaults(tmp_path: Path) -> None:
+_OWN_DENY = "deny = ['^deploy production$']\n"
+_REPEATED_DENY = (
+    "deny = [\n"
+    "    '''(?:^|[;&|\\n]\\s*)rm\\s+-rf\\s+(?:/instance|\\$\\{?KINBY_INSTANCE\\}?)(?:/|\\s|$)''',\n"
+    "    '''\\bgit\\s+(?:reset\\s+--hard|rebase|filter-branch)\\b''',\n"
+    "    '''\\bgit\\s+push\\b[^\\n]*(?:--force(?:-with-lease)?|-f(?:\\s|$))''',\n"
+    "    '^deploy production$',\n"
+    "]\n"
+)
+
+
+@pytest.mark.parametrize("deny", [_OWN_DENY, _REPEATED_DENY], ids=["own", "repeating-shipped"])
+@pytest.mark.parametrize(
+    ("command", "rule"),
+    [("git push --force origin main", "bash.deny[2]"), ("deploy production", "bash.deny[3]")],
+)
+def test_a_files_own_deny_patterns_add_to_the_shipped_ones(
+    tmp_path: Path, deny: str, command: str, rule: str
+) -> None:
     async def scenario() -> None:
         instance = _instance(tmp_path)
         marker = instance.manifest.workspace.path / "ran.txt"
@@ -573,7 +591,7 @@ def bash(command: str, context: ToolContext) -> str:
             encoding="utf-8",
         )
         (instance.path / "permissions.toml").write_text(
-            'mode = "full-access"\n\n[bash]\ndeny = []\n',
+            f'mode = "full-access"\n\n[bash]\n{deny}',
             encoding="utf-8",
         )
         model = ScriptedModel(
@@ -583,21 +601,28 @@ def bash(command: str, context: ToolContext) -> str:
                     tool_calls=[
                         {
                             "name": "bash",
-                            "args": {"command": "git push --force origin main"},
+                            "args": {"command": command},
                             "id": "bash-1",
                             "type": "tool_call",
                         }
                     ],
                 ),
-                AIMessageChunk(content="Done"),
+                AIMessageChunk(content="I will not run it."),
             ]
         )
 
         result, payloads = await _run(instance, model)
 
         assert isinstance(result, TurnOutcome)
-        assert marker.read_text(encoding="utf-8") == "git push --force origin main"
-        assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
+        assert not marker.exists()
+        assert next(
+            payload for payload in payloads if isinstance(payload, ToolResult)
+        ) == ToolResult(
+            call_id="bash-1",
+            name="bash",
+            output=f'Tool "bash" was denied by policy rule "{rule}".',
+            error=True,
+        )
 
     asyncio.run(scenario())
 
@@ -660,13 +685,13 @@ def bash(command: str) -> str:
                 call_id="bash-1",
                 name="bash",
                 action=GateOutcome.DENY,
-                rule="bash.deny[0]",
+                rule="bash.deny[3]",
                 decided_by=GateDecider.POLICY,
             ),
             ToolResult(
                 call_id="bash-1",
                 name="bash",
-                output='Tool "bash" was denied by policy rule "bash.deny[0]".',
+                output='Tool "bash" was denied by policy rule "bash.deny[3]".',
                 error=True,
             ),
         ]

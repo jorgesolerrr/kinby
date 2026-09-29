@@ -1,7 +1,7 @@
 import type { InstanceClient, RoutineFile } from "@kinby/contract"
 import { useCallback, useEffect, useId, useState } from "react"
 
-import { Failure, Stale } from "@/components/config-alerts"
+import { Failure, StaleAlert } from "@/components/config-alerts"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,7 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { lastChanged } from "@/lib/config"
+import { lastChanged } from "@/lib/config-changes"
 import { reason } from "@/lib/operation"
 import {
   deleteRoutine,
@@ -265,7 +265,7 @@ function RoutineEditor({
         </Button>
       </div>
       {notice === "stale" && (
-        <Stale file={`routines/${routine}`} onLoad={() => void load(routine)} />
+        <StaleAlert file={`routines/${routine}`} onLoad={() => void load(routine)} />
       )}
       {failure !== undefined && <Failure title="The instance refused it">{failure}</Failure>}
       {opened === undefined && !creating ? (

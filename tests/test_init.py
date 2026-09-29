@@ -87,15 +87,9 @@ def test_init_writes_the_commented_permissions_template(tmp_path):
         '# edit = "allow"\n'
         "\n"
         "[bash]\n"
-        "deny = [\n"
-        "    # Delete the instance home.\n"
-        "    '''(?:^|[;&|\\n]\\s*)rm\\s+-rf\\s+(?:/instance|\\$\\{?KINBY_INSTANCE"
-        "\\}?)(?:/|\\s|$)''',\n"
-        "    # Rewrite Git history.\n"
-        "    '''\\bgit\\s+(?:reset\\s+--hard|rebase|filter-branch)\\b''',\n"
-        "    # Force-push Git history.\n"
-        "    '''\\bgit\\s+push\\b[^\\n]*(?:--force(?:-with-lease)?|-f(?:\\s|$))''',\n"
-        "]\n"
+        "# kinby always denies deleting the instance home and rewriting or force-pushing\n"
+        "# Git history. Patterns here add to those.\n"
+        "deny = []\n"
         "ask = []\n"
     )
 
