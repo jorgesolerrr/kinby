@@ -280,6 +280,38 @@ def test_the_schema_declares_the_permissions_calls() -> None:
     assert _object(definitions["GateAction"])["enum"] == ["allow", "ask", "deny"]
 
 
+def test_the_schema_declares_the_package_config_calls_and_restart_reasons() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"]
+        for name in ("package.config.get", "package.config.set")
+    } == {
+        "package.config.get": {
+            "command": {"$ref": "#/$defs/PackageConfigGetCommand"},
+            "result": {"$ref": "#/$defs/PackageConfigResult"},
+        },
+        "package.config.set": {
+            "command": {"$ref": "#/$defs/PackageConfigSetCommand"},
+            "result": {"$ref": "#/$defs/PackageConfigResult"},
+        },
+    }
+    assert set(cast(list[str], _object(definitions["PackageConfigResult"])["required"])) == {
+        "schema",
+        "values",
+        "hash",
+    }
+    assert set(cast(list[str], _object(definitions["PackageConfigSetCommand"])["required"])) == {
+        "values",
+        "hash",
+    }
+    probe = _object(_object(definitions["InstanceProbeResult"])["properties"])
+    assert _object(probe["restart_reasons"])["items"] == {"$ref": "#/$defs/RecreateReason"}
+    assert _object(definitions["RecreateReason"])["enum"] == ["package_config"]
+
+
 def test_the_schema_declares_the_skill_and_tool_calls() -> None:
     schema = contract_schema()
     definitions = _object(schema["$defs"])

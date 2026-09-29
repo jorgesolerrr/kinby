@@ -57,6 +57,12 @@ class StaleWrite(CoreError):
     code = ErrorCode.STALE
 
 
+class PackageConfigNotFound(CoreError):
+    """The instance runs no package, or its package declares no config."""
+
+    code = ErrorCode.NOT_FOUND
+
+
 class ThreadNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 

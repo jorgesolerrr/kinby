@@ -3,6 +3,7 @@ import { Fragment, type ReactNode, useCallback, useEffect, useId, useState } fro
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
 import { ManifestSection } from "@/components/manifest-section"
+import { PackageConfigSection } from "@/components/package-config-section"
 import { PermissionsSection } from "@/components/permissions-section"
 import { RoutinesSection } from "@/components/routines-section"
 import { SkillsSection } from "@/components/skills-section"
@@ -114,7 +115,12 @@ const GROUPS: { label: string; sections: Section[] }[] = [
     label: "Instance",
     sections: [
       { label: "Secrets and login", hint: "write-only values, sign-in", icon: KeyRoundIcon },
-      { label: "Package config", hint: "the package's own settings", icon: BoxIcon },
+      {
+        label: "Package config",
+        hint: "the package's own settings",
+        icon: BoxIcon,
+        render: (client) => <PackageConfigSection client={client} />,
+      },
       { label: "Package and version", hint: "template, installed, update", icon: PackageIcon },
     ],
   },

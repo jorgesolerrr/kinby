@@ -1,4 +1,3 @@
-import { CallError } from "@kinby/contract"
 import type {
   ConfigChange,
   GateAction,
@@ -8,6 +7,7 @@ import type {
 } from "@kinby/contract"
 
 import { latestChange } from "@/lib/config-changes"
+import { type Refused, refusal } from "@/lib/config-writes"
 
 export const PERMISSIONS_FILE = "permissions.toml"
 
@@ -33,14 +33,7 @@ export interface OpenedPermissions {
   lastChange: ConfigChange | undefined
 }
 
-/**
- * A save the instance took, one it refused because the file changed since it was read, or one it
- * refused for invalid values, with the reason for each by its field.
- */
-export type SavedPermissions =
-  | { state: "saved"; opened: OpenedPermissions }
-  | { state: "stale" }
-  | { state: "invalid"; fields: Record<string, string> }
+export type SavedPermissions = { state: "saved"; opened: OpenedPermissions } | Refused
 
 type Caller = Pick<InstanceClient, "call">
 
@@ -72,11 +65,7 @@ export async function savePermissions(
       hash,
     })
   } catch (error) {
-    if (error instanceof CallError && error.code === "STALE") return { state: "stale" }
-    if (error instanceof CallError && error.code === "INVALID_ARGUMENT") {
-      return { state: "invalid", fields: error.fields }
-    }
-    throw error
+    return refusal(error)
   }
   return {
     state: "saved",

@@ -1366,6 +1366,12 @@
         },
         "contract_version": {
           "type": "string"
+        },
+        "restart_reasons": {
+          "items": {
+            "$ref": "#/$defs/RecreateReason"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -2492,6 +2498,59 @@
       "title": "PackageCommit",
       "type": "object"
     },
+    "PackageConfigGetCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "PackageConfigGetCommand",
+      "type": "object"
+    },
+    "PackageConfigResult": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "schema": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "values": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "values",
+        "hash"
+      ],
+      "title": "PackageConfigResult",
+      "type": "object"
+    },
+    "PackageConfigSetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "values",
+        "hash"
+      ],
+      "title": "PackageConfigSetCommand",
+      "type": "object"
+    },
     "PackageDescribeCommand": {
       "additionalProperties": false,
       "description": "Read what a prepared selection declares. It never builds.",
@@ -2886,6 +2945,14 @@
         "off"
       ],
       "title": "RecapPolicy",
+      "type": "string"
+    },
+    "RecreateReason": {
+      "description": "A change a running instance applies only once it is recreated.",
+      "enum": [
+        "package_config"
+      ],
+      "title": "RecreateReason",
       "type": "string"
     },
     "ReportedRun": {
@@ -6006,6 +6073,38 @@
           ],
           "type": "object"
         },
+        "package.config.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PackageConfigGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/PackageConfigResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "package.config.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PackageConfigSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/PackageConfigResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "package.describe": {
           "additionalProperties": false,
           "properties": {
@@ -6581,6 +6680,8 @@
         "manifest.set",
         "permissions.get",
         "permissions.set",
+        "package.config.get",
+        "package.config.set",
         "config.history",
         "skill.list",
         "skill.read",

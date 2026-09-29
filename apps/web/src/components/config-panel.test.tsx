@@ -1,6 +1,8 @@
 import { CallError } from "@kinby/contract"
 import type {
   ConfigChange,
+  PackageConfigResult,
+  PackageConfigSetCommand,
   PermissionsResult,
   PermissionsSetCommand,
   PromptResult,
@@ -71,6 +73,7 @@ describe("ConfigPanel", () => {
     expect(screen.getByRole("button", { name: "Tools" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Routines" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Permissions" })).toHaveProperty("disabled", false)
+    expect(screen.getByRole("button", { name: "Package config" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Manifest" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Package and version" })).toHaveProperty(
       "disabled",
@@ -329,6 +332,186 @@ describe("ConfigPanel", () => {
       await user.click(toggle("Default mode", "auto"))
       await user.click(screen.getByRole("button", { name: "Save" }))
       expect(sent(caller).at(-1)?.hash).toBe("perm-3")
+    })
+  })
+
+  describe("Package config", () => {
+    // The software factory's shape: its check commands and its skills by name, with one field of
+    // each other type the form offers. An enum from a StrEnum arrives as a reference.
+    const factory: PackageConfigResult = {
+      schema: {
+        $defs: { Client: { enum: ["claude", "codex"], title: "Client", type: "string" } },
+        additionalProperties: false,
+        properties: {
+          check_commands: {
+            description: "Commands that must pass before a pull request opens.",
+            items: { type: "string" },
+            title: "Check Commands",
+            type: "array",
+          },
+          skills: { additionalProperties: { type: "string" }, title: "Skills", type: "object" },
+          client: { $ref: "#/$defs/Client" },
+          round_limit: { title: "Round Limit", type: "integer" },
+          review: { default: false, title: "Review", type: "boolean" },
+          github_token: { title: "Github Token", type: "string" },
+        },
+        required: ["check_commands", "skills", "client", "round_limit", "github_token"],
+        title: "FactoryConfig",
+        type: "object",
+      },
+      values: {
+        check_commands: ["uv run ruff check .", "uv run pytest"],
+        skills: { implement: "implement-ticket", review: "adversarial-review" },
+        client: "claude",
+        round_limit: 2,
+        github_token: "GH_TOKEN",
+      },
+      hash: "yaml-1",
+    }
+
+    async function openPackageConfig(answers: Answers) {
+      const opened = openPanel({ "package.config.get": () => factory, ...answers })
+      await opened.user.click(screen.getByRole("button", { name: "Package config" }))
+      await screen.findByRole("heading", { name: "Package config" })
+      return opened
+    }
+
+    const sent = (caller: ReturnType<typeof openPanel>["caller"]) =>
+      caller.calls
+        .filter((call) => call.method === "package.config.set")
+        .map((call) => call.params as PackageConfigSetCommand)
+
+    it("renders the form the package declares and saves its values", async () => {
+      const { caller, user } = await openPackageConfig({
+        "package.config.set": ({ values }) => ({ ...factory, values, hash: "yaml-2" }),
+      })
+
+      const commands = await screen.findByRole("textbox", { name: "Check Commands" })
+      expect(commands).toHaveProperty("value", "uv run ruff check .\nuv run pytest")
+      expect(screen.getByText("Commands that must pass before a pull request opens.")).toBeDefined()
+      expect(screen.getByRole("textbox", { name: "Skills 1 name" })).toHaveProperty(
+        "value",
+        "implement",
+      )
+      expect(screen.getByRole("textbox", { name: "Skills 1 value" })).toHaveProperty(
+        "value",
+        "implement-ticket",
+      )
+      expect(screen.getByRole("combobox", { name: "Client" }).textContent).toContain("claude")
+      expect(screen.getByRole("spinbutton", { name: "Round Limit" })).toHaveProperty("value", "2")
+      expect(screen.getByRole("switch", { name: "Review" }).getAttribute("aria-checked")).toBe(
+        "false",
+      )
+      expect(screen.getByText(/rewrites package\.yaml from these values/)).toBeDefined()
+
+      await user.type(commands, "\nuv run ty check")
+      const reviewSkill = screen.getByRole("textbox", { name: "Skills 2 value" })
+      await user.clear(reviewSkill)
+      await user.type(reviewSkill, "my-review")
+      await user.click(screen.getByRole("button", { name: "Remove implement" }))
+      await user.click(screen.getByRole("button", { name: "Add to Skills" }))
+      await user.type(screen.getByRole("textbox", { name: "Skills 2 name" }), "pull_request")
+      await user.type(screen.getByRole("textbox", { name: "Skills 2 value" }), "open-pr")
+      await user.click(screen.getByRole("combobox", { name: "Client" }))
+      await user.click(await screen.findByRole("option", { name: "codex" }))
+      await user.clear(screen.getByRole("spinbutton", { name: "Round Limit" }))
+      await user.type(screen.getByRole("spinbutton", { name: "Round Limit" }), "3")
+      await user.click(screen.getByRole("switch", { name: "Review" }))
+      await user.click(screen.getByRole("button", { name: "Save" }))
+
+      expect(
+        await screen.findByText("Saved. It applies once the instance is recreated."),
+      ).toBeDefined()
+      expect(sent(caller)).toEqual([
+        {
+          values: {
+            check_commands: ["uv run ruff check .", "uv run pytest", "uv run ty check"],
+            skills: { review: "my-review", pull_request: "open-pr" },
+            client: "codex",
+            round_limit: 3,
+            review: true,
+            github_token: "GH_TOKEN",
+          },
+          hash: "yaml-1",
+        },
+      ])
+    })
+
+    it("shows the package validator's errors next to their fields", async () => {
+      const { user } = await openPackageConfig({
+        "package.config.set": () => {
+          throw new CallError({
+            code: "INVALID_ARGUMENT",
+            message: "Some values are invalid.",
+            retryable: false,
+            fields: {
+              "check_commands.1": "a check command cannot be empty",
+              github_token: '"GITHUB_TOKEN" is not a secret field this package declares.',
+            },
+          })
+        },
+      })
+
+      const token = await screen.findByRole("textbox", { name: "Github Token" })
+      await user.clear(token)
+      await user.type(token, "GITHUB_TOKEN")
+      await user.click(screen.getByRole("button", { name: "Save" }))
+
+      const tokenError = await screen.findByText(
+        '"GITHUB_TOKEN" is not a secret field this package declares.',
+      )
+      expect(token.closest("[data-slot=field]")?.contains(tokenError)).toBe(true)
+      const commandError = screen.getByText("Item 2: a check command cannot be empty")
+      expect(
+        screen
+          .getByRole("textbox", { name: "Check Commands" })
+          .closest("[data-slot=field]")
+          ?.contains(commandError),
+      ).toBe(true)
+    })
+
+    it("offers to load theirs when package.yaml changed since it was opened", async () => {
+      let theirs = false
+      const { caller, user } = await openPackageConfig({
+        "package.config.get": () =>
+          theirs
+            ? { ...factory, values: { ...factory.values, round_limit: 5 }, hash: "yaml-3" }
+            : factory,
+        "package.config.set": () => {
+          theirs = true
+          throw new CallError({ code: "STALE", message: "changed", retryable: false })
+        },
+      })
+
+      await user.click(await screen.findByRole("switch", { name: "Review" }))
+      await user.click(screen.getByRole("button", { name: "Save" }))
+      const alert = await screen.findByRole("alert")
+      await user.click(within(alert).getByRole("button", { name: "Load theirs" }))
+
+      await waitFor(() =>
+        expect(screen.getByRole("spinbutton", { name: "Round Limit" })).toHaveProperty(
+          "value",
+          "5",
+        ),
+      )
+      await user.click(screen.getByRole("switch", { name: "Review" }))
+      await user.click(screen.getByRole("button", { name: "Save" }))
+      expect(sent(caller).at(-1)?.hash).toBe("yaml-3")
+    })
+
+    it("says a vanilla instance has no package config", async () => {
+      await openPackageConfig({
+        "package.config.get": () => {
+          throw new CallError({
+            code: "NOT_FOUND",
+            message: "The instance runs no package, so it has no config.",
+            retryable: false,
+          })
+        },
+      })
+
+      expect(await screen.findByText("No package config")).toBeDefined()
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
     })
   })
 })
