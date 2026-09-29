@@ -31,13 +31,19 @@ import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
 import { followStart, type Starting } from "@/lib/creation"
 import { instanceName, observedState } from "@/lib/instances"
-import { openConfig } from "@/lib/selection"
-import { BotIcon, CirclePauseIcon, CircleXIcon, SlidersHorizontalIcon } from "lucide-react"
+import { openConfig, openMemory } from "@/lib/selection"
+import {
+  BotIcon,
+  BrainIcon,
+  CirclePauseIcon,
+  CircleXIcon,
+  SlidersHorizontalIcon,
+} from "lucide-react"
 
 /**
  * What one instance shows. A stopped instance with setup pending opens on its setup card, and
- * keeps it until it runs. Any other stopped one offers Start. A running one opens its config panel,
- * and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
+ * keeps it until it runs. Any other stopped one offers Start. A running one opens its config panel
+ * and its memory, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
  * all are.
  * `onChanged` hears a sign-in or a start end, so the instances are listed again, and must keep
  * its identity.
@@ -82,10 +88,14 @@ export function InstancePage({
     const logins = status?.setup.logins ?? []
     return (
       <>
-        <div className="px-6 pt-6">
+        <div className="flex gap-2 px-6 pt-6">
           <Button variant="outline" onClick={() => openConfig(instance.instance_id)}>
             <SlidersHorizontalIcon data-icon="inline-start" />
             Configure
+          </Button>
+          <Button variant="outline" onClick={() => openMemory(instance.instance_id)}>
+            <BrainIcon data-icon="inline-start" />
+            Memory
           </Button>
         </div>
         <ProcessAlert instance={instance} name={name} />
