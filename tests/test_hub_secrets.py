@@ -66,6 +66,40 @@ def test_replacing_a_secret_writes_the_file_and_asks_for_a_recreation(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("model", "variable"),
+    [
+        ("anthropic:claude-opus-5-5", "ANTHROPIC_API_KEY"),
+        ("openai:gpt-5", "OPENAI_API_KEY"),
+    ],
+)
+def test_the_api_key_is_replaced_under_its_providers_variable(tmp_path, model, variable):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub", images=FakeImages())
+        client = hub_client(hub)
+        created = await created_instance(
+            client, model=model, secrets={"PROVIDER_TOKEN": "first-value"}
+        )
+
+        accepted = await client.call(
+            INSTANCE_SECRETS_SET,
+            InstanceSecretsSetCommand(
+                instance_id=created.instance_id,
+                secrets={"api_key": _SENTINEL, "PROVIDER_TOKEN": "second-value"},
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert outcome.state is OperationState.SUCCEEDED
+        environment = instance_environment(hub, created.instance_id)
+        assert environment[variable] == _SENTINEL
+        assert environment["PROVIDER_TOKEN"] == "second-value"
+        assert "api_key" not in environment
+
+    asyncio.run(scenario())
+
+
 def test_an_unauthorized_replacement_parses_nothing_and_writes_nothing(tmp_path):
     async def scenario() -> None:
         hub = hub_at(tmp_path / "hub", images=FakeImages())
