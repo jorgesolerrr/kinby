@@ -8,11 +8,16 @@ import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from pydantic import BaseModel, ConfigDict, Field  # noqa: TID251 - model output boundary
+from pydantic import (
+    BaseModel,  # noqa: TID251 - model output boundary
+    ConfigDict,
+    Field,
+    field_validator,
+)
 
 from kinby.contracts import (
     CompletionOutcome,
@@ -50,14 +55,19 @@ class RecapDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     keep: bool = Field(description="Whether this turn is useful enough to keep as an episode.")
-    description: str = Field(
-        min_length=1,
-        description="A short, searchable description of the turn.",
-    )
+    description: str = Field(description="A short, searchable description of the turn.")
     subjects: tuple[str, ...] = Field(description="Names and topics the episode is about.")
     happened: str = Field(description="What happened during the turn.")
     decided: str = Field(description="What was decided during the turn.")
     retrospective: str = Field(description="What should have gone differently.")
+
+    # A validator, not min_length: OpenAI's strict JSON schema mode refuses length keywords.
+    @field_validator("description")
+    @classmethod
+    def non_empty_description(cls, value: str) -> str:
+        if not value:
+            raise ValueError("must not be empty")
+        return value
 
 
 class StructuredRecap(Protocol):
@@ -69,6 +79,7 @@ class RecapModel(Protocol):
         self,
         schema: type[RecapDraft],
         *,
+        method: Literal["json_schema"],
         include_raw: bool,
     ) -> StructuredRecap: ...
 
@@ -264,7 +275,12 @@ class RecapWriter:
         lens: str,
     ) -> tuple[RecapDraft, TokenTotals]:
         model = self._model_factory(model_name)
-        runnable = model.with_structured_output(RecapDraft, include_raw=True)
+        # Newer Anthropic models reject a forced tool_choice, so ask for native JSON output.
+        runnable = model.with_structured_output(
+            RecapDraft,
+            method="json_schema",
+            include_raw=True,
+        )
         started_at = asyncio.get_running_loop().time()
         result = await runnable.ainvoke((HumanMessage(content=_recap_frame(events, calls, lens)),))
         if not isinstance(result, Mapping):

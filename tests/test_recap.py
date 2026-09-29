@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7,7 +8,9 @@ from threading import get_ident
 from typing import Self
 from uuid import UUID, uuid4
 
+import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from pydantic import ValidationError
 
 from kinby.contracts import (
     AcceptedResult,
@@ -62,15 +65,18 @@ class ScriptedRecapModel:
         self._cache_read_tokens = cache_read_tokens
         self._cache_creation_tokens = cache_creation_tokens
         self.calls: list[tuple[BaseMessage, ...]] = []
+        self.method: str | None = None
 
     def with_structured_output(
         self,
         schema: type[RecapDraft],
         *,
+        method: str,
         include_raw: bool,
     ) -> Self:
         assert schema is RecapDraft
         assert include_raw
+        self.method = method
         return self
 
     async def ainvoke(self, messages: Sequence[BaseMessage]) -> object:
@@ -98,6 +104,7 @@ class FailingRecapModel:
         self,
         schema: type[RecapDraft],
         *,
+        method: str,
         include_raw: bool,
     ) -> Self:
         assert schema is RecapDraft
@@ -306,6 +313,7 @@ def test_recap_model_receives_the_turn_frame_as_a_user_message(tmp_path: Path) -
 
         await asyncio.wait_for(recap.drain(), timeout=1)
 
+        assert model.method == "json_schema"
         assert len(model.calls) == 1
         (message,) = model.calls[0]
         assert isinstance(message, HumanMessage)
@@ -382,6 +390,20 @@ def test_discarded_draft_writes_marker_without_episode(tmp_path: Path) -> None:
         assert not list((tmp_path / "memory" / "graph").glob("*.md"))
 
     asyncio.run(scenario())
+
+
+def test_recap_draft_rejects_an_empty_description_outside_its_json_schema() -> None:
+    # OpenAI's strict JSON schema mode refuses string length keywords.
+    assert "minLength" not in json.dumps(RecapDraft.model_json_schema())
+    with pytest.raises(ValidationError):
+        RecapDraft(
+            keep=True,
+            description="",
+            subjects=(),
+            happened="",
+            decided="",
+            retrospective="",
+        )
 
 
 def test_recap_model_error_warns_without_changing_the_closed_turn(tmp_path: Path) -> None:

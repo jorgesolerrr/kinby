@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
+from typing import Literal
 
 from inspect_ai.model import (
     ChatMessage,
@@ -13,13 +14,16 @@ from inspect_ai.model import (
     ChatMessageSystem,
     ChatMessageTool,
     ChatMessageUser,
+    GenerateConfig,
     Model,
     ModelOutput,
+    ResponseSchema,
     StreamEvent,
     StreamTextEvent,
 )
 from inspect_ai.tool import ToolCall as InspectToolCall
-from inspect_ai.tool import ToolCallError, ToolFunction, ToolInfo, ToolParams
+from inspect_ai.tool import ToolCallError, ToolInfo, ToolParams
+from inspect_ai.util import json_schema
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -84,8 +88,10 @@ class InspectModelAdapter:
         self,
         schema: type[RecapDraft],
         *,
+        method: Literal["json_schema"],
         include_raw: bool,
     ) -> InspectStructuredRecap:
+        del method
         return InspectStructuredRecap(self.model, schema, include_raw)
 
 
@@ -96,26 +102,23 @@ class InspectStructuredRecap:
     include_raw: bool
 
     async def ainvoke(self, messages: Sequence[BaseMessage]) -> object:
-        tool = ToolInfo(
-            name=self.schema.__name__,
-            description="Return the structured recap draft.",
-            parameters=ToolParams.model_validate(self.schema.model_json_schema()),
-        )
         output = await self.model.generate(
             [_inspect_message(message) for message in messages],
-            tools=(tool,),
-            tool_choice=ToolFunction(name=tool.name),
+            config=GenerateConfig(
+                response_schema=ResponseSchema(
+                    name=self.schema.__name__,
+                    json_schema=json_schema(self.schema),
+                    strict=True,
+                )
+            ),
         )
         raw = AIMessage(
             content=output.completion,
             usage_metadata=_usage_metadata(output),
         )
         try:
-            call = next(
-                call for call in output.message.tool_calls or () if call.function == tool.name
-            )
-            parsed = self.schema.model_validate(call.arguments)
-        except (StopIteration, ValidationError) as exc:
+            parsed = self.schema.model_validate_json(output.completion)
+        except ValidationError as exc:
             if self.include_raw:
                 return {"raw": raw, "parsed": None, "parsing_error": exc}
             raise
