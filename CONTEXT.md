@@ -34,7 +34,11 @@ One distilled record in the **knowledge graph** of a single **turn**: what happe
 
 ### Fact
 
-An atomic, timestamped statement in the **knowledge graph**, recorded when it is learned. Recency decides which fact is current: the latest fact about a subject wins.
+An atomic, timestamped statement in the **knowledge graph**, recorded when it is learned. Recency decides which fact is current: the latest fact about a subject wins. The agent remembers a fact in a **thread**; the user can add one from a client, and that fact belongs to no thread.
+
+### Correction
+
+The user replacing a **fact** they judge wrong: a new fact, dated the day of the correction, plus a **tombstone** on the old one. Nothing in the graph is rewritten in place. An **episode** has no correction; it can only be forgotten.
 
 ### Transcript store
 
