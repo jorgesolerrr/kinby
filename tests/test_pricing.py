@@ -37,3 +37,21 @@ def test_shipped_prices_include_published_cache_rates() -> None:
         input=3, output=15, cache_read=0.3, cache_write=3.75
     )
     assert prices["openai:gpt-5"] == ModelPrice(input=1.25, output=10, cache_read=0.125)
+
+
+def test_shipped_prices_include_claude_sonnet_5_5() -> None:
+    assert price_map()["anthropic:claude-sonnet-5-5"] == ModelPrice(
+        input=2, output=10, cache_read=0.2, cache_write=2.5
+    )
+
+
+def test_shipped_prices_include_openai_cache_writes_from_gpt_5_6() -> None:
+    prices = price_map()
+
+    assert prices["openai:gpt-6-sol"] == ModelPrice(
+        input=2, output=10, cache_read=0.2, cache_write=2.5
+    )
+    assert prices["openai:gpt-5.6-terra"] == ModelPrice(
+        input=2, output=12, cache_read=0.2, cache_write=2.5
+    )
+    assert prices["openai:gpt-5.5"] == ModelPrice(input=5, output=30, cache_read=0.5)
