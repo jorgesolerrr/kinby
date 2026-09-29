@@ -26,15 +26,30 @@ _ROOT_FILES = frozenset({"Dockerfile", "pyproject.toml", "uv.lock", "README.md",
 _STAGE = re.compile(r"^FROM\s", re.MULTILINE | re.IGNORECASE)
 
 
+class GitFailed(RuntimeError):
+    """Git refused a command. The message is git's own stderr."""
+
+    def __init__(self, status: int, stderr: str) -> None:
+        super().__init__(stderr or f"git exited with status {status}.")
+        self.status = status
+
+
+class RevisionNotFound(LookupError):
+    def __init__(self, revision: str) -> None:
+        super().__init__(f'No commit "{revision}" in the hub\'s checkout.')
+
+
 def _git(repository: Path, *arguments: str) -> bytes:
     # The hub runs as root in its container and the host user owns the mounted checkout,
     # so git would refuse it as dubious. The hub only reads that checkout.
-    return subprocess.run(
+    completed = subprocess.run(
         ["git", "-c", f"safe.directory={repository}", *arguments],
         cwd=repository,
-        check=True,
         capture_output=True,
-    ).stdout
+    )
+    if completed.returncode != 0:
+        raise GitFailed(completed.returncode, completed.stderr.decode().strip())
+    return completed.stdout
 
 
 def _included(path: str) -> bool:
@@ -151,11 +166,16 @@ class ImagePreparer:
         dockerfile.write_text(f"{body}RUN {json.dumps(command)}\n", encoding="utf-8")
 
     def _resolve(self, revision: str) -> str:
-        return (
-            _git(self._repository, "rev-parse", "--verify", f"{revision}^{{commit}}")
-            .decode()
-            .strip()
-        )
+        # With --quiet, git exits 1 without a word only when the revision names no commit.
+        try:
+            output = _git(
+                self._repository, "rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}"
+            )
+        except GitFailed as error:
+            if error.status == 1:
+                raise RevisionNotFound(revision) from None
+            raise
+        return output.decode().strip()
 
     def _export(self, revision: str, context: Path) -> None:
         output = _git(self._repository, "ls-tree", "-r", "--name-only", revision)
