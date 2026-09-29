@@ -17,14 +17,25 @@ from kinby.contracts import (
     CONTRACT_VERSION,
     INSTANCE_DRAIN,
     INSTANCE_PROBE,
+    MANIFEST_GET,
+    MANIFEST_SET,
     PACKAGE_CONFIG_GET,
     PACKAGE_CONFIG_SET,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
     PROMPT_GET,
     PROMPT_SET,
+    ROUTINE_DELETE,
     ROUTINE_LIST,
+    ROUTINE_READ,
     ROUTINE_RUN,
+    ROUTINE_SET_ENABLED,
+    ROUTINE_WRITE,
+    SKILL_CUSTOMIZE,
+    SKILL_DELETE,
+    SKILL_LIST,
+    SKILL_READ,
+    SKILL_WRITE,
     STATS_GET,
     THREAD_APPROVAL_RESPOND,
     THREAD_CREATE,
@@ -40,6 +51,7 @@ from kinby.contracts import (
     THREAD_TURN_REVERT_PREVIEW,
     THREAD_TURN_START,
     THREAD_TURN_TARGET_LIST,
+    TOOL_LIST,
     USAGE_GET,
     AcceptedResult,
     Capability,
@@ -413,11 +425,23 @@ def build_dispatcher(
     if config is not None:
         dispatcher.register(PROMPT_GET, config.get_prompt)
         dispatcher.register(PROMPT_SET, config.set_prompt)
+        dispatcher.register(MANIFEST_GET, config.get_manifest)
+        dispatcher.register(MANIFEST_SET, config.set_manifest)
         dispatcher.register(PERMISSIONS_GET, config.get_permissions)
         dispatcher.register(PERMISSIONS_SET, config.set_permissions)
         dispatcher.register(PACKAGE_CONFIG_GET, config.get_package_config)
         dispatcher.register(PACKAGE_CONFIG_SET, config.set_package_config)
         dispatcher.register(CONFIG_HISTORY, config.history)
+        dispatcher.register(SKILL_LIST, config.list_skills)
+        dispatcher.register(SKILL_READ, config.read_skill)
+        dispatcher.register(SKILL_WRITE, config.write_skill)
+        dispatcher.register(SKILL_CUSTOMIZE, config.customize_skill)
+        dispatcher.register(SKILL_DELETE, config.delete_skill)
+        dispatcher.register(TOOL_LIST, config.list_tools)
+        dispatcher.register(ROUTINE_READ, config.read_routine)
+        dispatcher.register(ROUTINE_WRITE, config.write_routine)
+        dispatcher.register(ROUTINE_SET_ENABLED, config.set_routine_enabled)
+        dispatcher.register(ROUTINE_DELETE, config.delete_routine)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)
         dispatcher.register(ROUTINE_RUN, scheduler.run)

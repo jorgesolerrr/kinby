@@ -296,6 +296,7 @@ def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypa
             SimpleNamespace(
                 name="package",
                 value="example.tools:TOOLS",
+                dist=None,
                 load=lambda: (packaged,),
             ),
         )
@@ -384,10 +385,11 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
             SimpleNamespace(
                 name="first",
                 value="first:TOOLS",
+                dist=None,
                 load=lambda: (first, available),
             ),
-            SimpleNamespace(name="second", value="second:TOOLS", load=lambda: (second,)),
-            SimpleNamespace(name="third", value="third:TOOLS", load=lambda: (third,)),
+            SimpleNamespace(name="second", value="second:TOOLS", dist=None, load=lambda: (second,)),
+            SimpleNamespace(name="third", value="third:TOOLS", dist=None, load=lambda: (third,)),
         )
 
     registry = import_module("kinby.plugins.registry")
@@ -462,7 +464,7 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
             SimpleNamespace(
                 name="defaults",
                 value="third_party.tools:TOOLS",
-                dist=SimpleNamespace(name="third-party"),
+                dist=SimpleNamespace(name="third-party", version="2.0.0"),
                 load=lambda: (packaged,),
             ),
         )

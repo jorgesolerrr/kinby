@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
+
+from kinby.contracts import FeedbackPolicy, RecapPolicy
 
 MatchingRule = Literal[
     "explicit directory",
@@ -53,20 +54,6 @@ class Workspace:
     source: str | None
     conventions: Conventions
     snapshots: bool = True
-
-
-class RecapPolicy(StrEnum):
-    """When kinby writes a model-assisted recap."""
-
-    EVERY_TURN = "every-turn"
-    TRACE_ONLY = "off"
-
-
-class FeedbackPolicy(StrEnum):
-    """When kinby asks the user to rate a completed turn."""
-
-    EVERY_TURN = "every-turn"
-    OFF = "off"
 
 
 @dataclass(frozen=True)
@@ -146,6 +133,12 @@ class Instance:
     manifest: Manifest
     matching_rule: MatchingRule
     routine_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock,
+        repr=False,
+        compare=False,
+    )
+    #: Held while the agent or a client writes or deletes an instance skill.
+    skill_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock,
         repr=False,
         compare=False,

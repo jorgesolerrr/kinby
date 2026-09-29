@@ -21,6 +21,7 @@ from kinby.instance.errors import InstanceExistsError, InstanceNotFoundError, Ma
 from kinby.instance.init import PLACEHOLDER_MODEL, init_instance
 from kinby.instance.manifest import (
     ModelName,
+    api_key_variable,
     inspect_instance,
     load_instance,
     parse_listen,
@@ -47,6 +48,7 @@ __all__ = [
     "Serve",
     "Tools",
     "Workspace",
+    "api_key_variable",
     "discover_instance",
     "init_instance",
     "inspect_instance",

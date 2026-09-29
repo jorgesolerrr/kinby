@@ -666,6 +666,7 @@
         "NOT_PREPARED",
         "INVALID_SETUP",
         "STALE",
+        "ROUTINE_PENDING",
         "CONNECTION_LOST",
         "INTERNAL"
       ],
@@ -839,6 +840,15 @@
       ],
       "title": "Event",
       "type": "object"
+    },
+    "FeedbackPolicy": {
+      "description": "When kinby asks the user to rate a completed turn.",
+      "enum": [
+        "every-turn",
+        "off"
+      ],
+      "title": "FeedbackPolicy",
+      "type": "string"
     },
     "FileChange": {
       "additionalProperties": false,
@@ -1784,6 +1794,248 @@
       "title": "LoginState",
       "type": "string"
     },
+    "ManifestBudgets": {
+      "additionalProperties": false,
+      "properties": {
+        "seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "steps": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usd_per_day": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "steps",
+        "tokens",
+        "seconds",
+        "usd_per_day"
+      ],
+      "title": "ManifestBudgets",
+      "type": "object"
+    },
+    "ManifestFeedback": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "$ref": "#/$defs/FeedbackPolicy"
+        }
+      },
+      "required": [
+        "ask"
+      ],
+      "title": "ManifestFeedback",
+      "type": "object"
+    },
+    "ManifestGetCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "ManifestGetCommand",
+      "type": "object"
+    },
+    "ManifestMemory": {
+      "additionalProperties": false,
+      "properties": {
+        "recap": {
+          "$ref": "#/$defs/RecapPolicy"
+        }
+      },
+      "required": [
+        "recap"
+      ],
+      "title": "ManifestMemory",
+      "type": "object"
+    },
+    "ManifestModels": {
+      "additionalProperties": false,
+      "properties": {
+        "embed": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "main": {
+          "type": "string"
+        },
+        "recap": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "main",
+        "recap",
+        "embed"
+      ],
+      "title": "ManifestModels",
+      "type": "object"
+    },
+    "ManifestResult": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "model_choices": {
+          "items": {
+            "$ref": "#/$defs/ModelChoice"
+          },
+          "type": "array"
+        },
+        "values": {
+          "$ref": "#/$defs/ManifestValues"
+        }
+      },
+      "required": [
+        "values",
+        "model_choices",
+        "hash"
+      ],
+      "title": "ManifestResult",
+      "type": "object"
+    },
+    "ManifestRoutines": {
+      "additionalProperties": false,
+      "properties": {
+        "timezone": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "timezone"
+      ],
+      "title": "ManifestRoutines",
+      "type": "object"
+    },
+    "ManifestSetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "prices": {
+          "additionalProperties": {
+            "$ref": "#/$defs/NewModelPrice"
+          },
+          "type": "object"
+        },
+        "values": {
+          "$ref": "#/$defs/ManifestValues"
+        }
+      },
+      "required": [
+        "values",
+        "hash"
+      ],
+      "title": "ManifestSetCommand",
+      "type": "object"
+    },
+    "ManifestTools": {
+      "additionalProperties": false,
+      "properties": {
+        "bash_timeout_seconds": {
+          "type": "integer"
+        },
+        "defaults": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "defaults",
+        "bash_timeout_seconds"
+      ],
+      "title": "ManifestTools",
+      "type": "object"
+    },
+    "ManifestValues": {
+      "additionalProperties": false,
+      "description": "The fields of ``kinby.toml`` a client may change. The hub owns the rest.",
+      "properties": {
+        "budgets": {
+          "$ref": "#/$defs/ManifestBudgets"
+        },
+        "feedback": {
+          "$ref": "#/$defs/ManifestFeedback"
+        },
+        "memory": {
+          "$ref": "#/$defs/ManifestMemory"
+        },
+        "models": {
+          "$ref": "#/$defs/ManifestModels"
+        },
+        "persona_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "routines": {
+          "$ref": "#/$defs/ManifestRoutines"
+        },
+        "tools": {
+          "$ref": "#/$defs/ManifestTools"
+        }
+      },
+      "required": [
+        "persona_name",
+        "models",
+        "budgets",
+        "routines",
+        "tools",
+        "memory",
+        "feedback"
+      ],
+      "title": "ManifestValues",
+      "type": "object"
+    },
     "MemoryCallCounts": {
       "additionalProperties": false,
       "properties": {
@@ -1917,6 +2169,28 @@
       "title": "ModelCallMismatch",
       "type": "object"
     },
+    "ModelChoice": {
+      "additionalProperties": false,
+      "description": "A model the budget can count, because kinby ships its price or the manifest sets one.",
+      "properties": {
+        "key_set": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "priced_from": {
+          "$ref": "#/$defs/PriceSource"
+        }
+      },
+      "required": [
+        "model",
+        "priced_from",
+        "key_set"
+      ],
+      "title": "ModelChoice",
+      "type": "object"
+    },
     "ModelCompleted": {
       "additionalProperties": false,
       "properties": {
@@ -2044,6 +2318,23 @@
         }
       },
       "title": "NavigationMeans",
+      "type": "object"
+    },
+    "NewModelPrice": {
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "type": "number"
+        },
+        "output": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ],
+      "title": "NewModelPrice",
       "type": "object"
     },
     "OperationGetCommand": {
@@ -2552,6 +2843,14 @@
       "title": "PlanWindow",
       "type": "object"
     },
+    "PriceSource": {
+      "enum": [
+        "shipped",
+        "manifest"
+      ],
+      "title": "PriceSource",
+      "type": "string"
+    },
     "ProcessState": {
       "enum": [
         "missing",
@@ -2639,6 +2938,15 @@
       "title": "Readiness",
       "type": "string"
     },
+    "RecapPolicy": {
+      "description": "When kinby writes a model-assisted recap.",
+      "enum": [
+        "every-turn",
+        "off"
+      ],
+      "title": "RecapPolicy",
+      "type": "string"
+    },
     "RecreateReason": {
       "description": "A change a running instance applies only once it is recreated.",
       "enum": [
@@ -2692,6 +3000,29 @@
       "title": "ResultFrame",
       "type": "object"
     },
+    "RoutineDeleteCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "hash"
+      ],
+      "title": "RoutineDeleteCommand",
+      "type": "object"
+    },
+    "RoutineDeleteResult": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "RoutineDeleteResult",
+      "type": "object"
+    },
     "RoutineFailureHandled": {
       "additionalProperties": false,
       "properties": {
@@ -2720,6 +3051,27 @@
         "type"
       ],
       "title": "RoutineFailureHandled",
+      "type": "object"
+    },
+    "RoutineFile": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "content",
+        "hash"
+      ],
+      "title": "RoutineFile",
       "type": "object"
     },
     "RoutineLastRun": {
@@ -2873,6 +3225,19 @@
       "title": "RoutinePayload",
       "type": "object"
     },
+    "RoutineReadCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "RoutineReadCommand",
+      "type": "object"
+    },
     "RoutineRunCommand": {
       "additionalProperties": false,
       "properties": {
@@ -2908,6 +3273,23 @@
       ],
       "title": "RoutineRunOutcome",
       "type": "string"
+    },
+    "RoutineSetEnabledCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "enabled"
+      ],
+      "title": "RoutineSetEnabledCommand",
+      "type": "object"
     },
     "RoutineSummary": {
       "additionalProperties": false,
@@ -3013,6 +3395,34 @@
       ],
       "title": "RoutineTrigger",
       "type": "string"
+    },
+    "RoutineWriteCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "content",
+        "hash"
+      ],
+      "title": "RoutineWriteCommand",
+      "type": "object"
     },
     "RunDelegated": {
       "additionalProperties": false,
@@ -3258,6 +3668,183 @@
         "auth"
       ],
       "title": "SignalSummary",
+      "type": "object"
+    },
+    "SkillCustomizeCommand": {
+      "additionalProperties": false,
+      "description": "Copy the skill the model reads into the instance, where it can be edited.",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "SkillCustomizeCommand",
+      "type": "object"
+    },
+    "SkillDeleteCommand": {
+      "additionalProperties": false,
+      "description": "Delete the instance copy, so the skill it hid, if any, applies again.",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "hash"
+      ],
+      "title": "SkillDeleteCommand",
+      "type": "object"
+    },
+    "SkillListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "SkillListCommand",
+      "type": "object"
+    },
+    "SkillListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/SkillSummary"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "skills",
+        "warnings"
+      ],
+      "title": "SkillListResult",
+      "type": "object"
+    },
+    "SkillReadCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/SkillTier"
+        }
+      },
+      "required": [
+        "name",
+        "tier"
+      ],
+      "title": "SkillReadCommand",
+      "type": "object"
+    },
+    "SkillResult": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "files",
+        "hash"
+      ],
+      "title": "SkillResult",
+      "type": "object"
+    },
+    "SkillSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "shadowed_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/SkillTier"
+        }
+      },
+      "required": [
+        "name",
+        "tier",
+        "description",
+        "source",
+        "shadowed_by"
+      ],
+      "title": "SkillSummary",
+      "type": "object"
+    },
+    "SkillTier": {
+      "description": "Where a skill comes from, in the order the model looks for it.",
+      "enum": [
+        "instance",
+        "package",
+        "workspace"
+      ],
+      "title": "SkillTier",
+      "type": "string"
+    },
+    "SkillWriteCommand": {
+      "additionalProperties": false,
+      "description": "Write the instance copy's ``SKILL.md``, creating the skill when ``hash`` is null.",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "content",
+        "hash"
+      ],
+      "title": "SkillWriteCommand",
       "type": "object"
     },
     "StatsBucket": {
@@ -4382,6 +4969,35 @@
       "title": "ToolGated",
       "type": "object"
     },
+    "ToolListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "ToolListCommand",
+      "type": "object"
+    },
+    "ToolListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ToolSummary"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tools",
+        "warnings"
+      ],
+      "title": "ToolListResult",
+      "type": "object"
+    },
     "ToolResult": {
       "additionalProperties": false,
       "properties": {
@@ -4422,6 +5038,42 @@
         "type"
       ],
       "title": "ToolResult",
+      "type": "object"
+    },
+    "ToolRule": {
+      "description": "What the gate does with a tool: its own rule in permissions.toml, or the mode's.",
+      "enum": [
+        "allow",
+        "ask",
+        "deny",
+        "mode"
+      ],
+      "title": "ToolRule",
+      "type": "string"
+    },
+    "ToolSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "rule": {
+          "$ref": "#/$defs/ToolRule"
+        },
+        "source": {
+          "type": "string"
+        },
+        "write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "write",
+        "rule"
+      ],
+      "title": "ToolSummary",
       "type": "object"
     },
     "ToolTime": {
@@ -5373,6 +6025,38 @@
           ],
           "type": "object"
         },
+        "manifest.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ManifestGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ManifestResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "manifest.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ManifestSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ManifestResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "operation.get": {
           "additionalProperties": false,
           "properties": {
@@ -5517,6 +6201,22 @@
           ],
           "type": "object"
         },
+        "routine.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineDeleteResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "routine.list": {
           "additionalProperties": false,
           "properties": {
@@ -5533,6 +6233,22 @@
           ],
           "type": "object"
         },
+        "routine.read": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineReadCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineFile"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "routine.run": {
           "additionalProperties": false,
           "properties": {
@@ -5541,6 +6257,118 @@
             },
             "result": {
               "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "routine.set_enabled": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineSetEnabledCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineFile"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "routine.write": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineWriteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineFile"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "skill.customize": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/SkillCustomizeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "skill.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/SkillDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "skill.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/SkillListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "skill.read": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/SkillReadCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "skill.write": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/SkillWriteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillResult"
             }
           },
           "required": [
@@ -5789,6 +6617,22 @@
           ],
           "type": "object"
         },
+        "tool.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ToolListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ToolListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "usage.get": {
           "additionalProperties": false,
           "properties": {
@@ -5826,13 +6670,25 @@
         "instance.drain",
         "routine.list",
         "routine.run",
+        "routine.read",
+        "routine.write",
+        "routine.set_enabled",
+        "routine.delete",
         "prompt.get",
         "prompt.set",
+        "manifest.get",
+        "manifest.set",
         "permissions.get",
         "permissions.set",
         "package.config.get",
         "package.config.set",
         "config.history",
+        "skill.list",
+        "skill.read",
+        "skill.write",
+        "skill.customize",
+        "skill.delete",
+        "tool.list",
         "instance.create",
         "instance.start",
         "instance.stop",

@@ -8,7 +8,7 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import NewType
 
-from kinby.contracts import Warning
+from kinby.contracts import SkillName, SkillTier, Warning
 from kinby.frontmatter import (
     FrontmatterError,
     FrontmatterFieldError,
@@ -17,10 +17,10 @@ from kinby.frontmatter import (
 )
 from kinby.instance import Instance
 from kinby.instance.layout import SKILL_FILE, SKILLS_DIR
+from kinby.plugins.entry_points import distribution_label
 from kinby.plugins.errors import exception_message
 from kinby.plugins.tools import Tool, tool
 
-SkillName = NewType("SkillName", str)
 SkillDescription = NewType("SkillDescription", str)
 SkillBody = NewType("SkillBody", str)
 
@@ -41,50 +41,80 @@ class Skill:
     body: SkillBody
 
 
+@dataclass(frozen=True)
+class TieredSkill:
+    """A skill and the tier it comes from."""
+
+    skill: Skill
+    tier: SkillTier
+    #: ``instance``, ``workspace``, or the package's distribution and version.
+    origin: str
+
+
 def load_skills(instance: Instance) -> tuple[tuple[Skill, ...], tuple[Warning, ...]]:
-    """Load instance, packaged, then workspace convention skills."""
-    instance_skills, instance_warnings = _load_skill_roots((instance.path / SKILLS_DIR,))
-    packaged_skills, workspace_skills, other_warnings = _load_other_skill_tiers(instance)
+    """Load the skill the model reads for each name: instance, packaged, then workspace."""
+    tiered, warnings = load_skill_tiers(instance)
     skills: dict[SkillName, Skill] = {}
-    for tier in (instance_skills, packaged_skills, workspace_skills):
-        for name, skill in tier.items():
-            skills.setdefault(name, skill)
-    return tuple(skills.values()), (*instance_warnings, *other_warnings)
+    for each in tiered:
+        skills.setdefault(each.skill.name, each.skill)
+    return tuple(skills.values()), warnings
+
+
+def load_skill_tiers(instance: Instance) -> tuple[tuple[TieredSkill, ...], tuple[Warning, ...]]:
+    """Load every skill of every tier, shadowed ones included, highest tier first."""
+    instance_skills, instance_warnings = _load_skill_roots((instance.path / SKILLS_DIR,))
+    package_roots, package_warnings = _packaged_skill_roots(
+        defaults=instance.manifest.tools.defaults
+    )
+    packaged_skills, packaged_warnings = _load_skill_roots(tuple(package_roots))
+    workspace_skills, workspace_warnings = _load_skill_roots(
+        instance.manifest.workspace.conventions.skills,
+    )
+    tiered = (
+        *(TieredSkill(skill, SkillTier.INSTANCE, "instance") for skill in instance_skills.values()),
+        *(
+            # A skill file sits at <root>/<name>/SKILL.md.
+            TieredSkill(skill, SkillTier.PACKAGE, package_roots[skill.source.parent.parent])
+            for skill in packaged_skills.values()
+        ),
+        *(
+            TieredSkill(skill, SkillTier.WORKSPACE, "workspace")
+            for skill in workspace_skills.values()
+        ),
+    )
+    return tiered, (
+        *instance_warnings,
+        *package_warnings,
+        *packaged_warnings,
+        *workspace_warnings,
+    )
+
+
+def lower_tier_skill(instance: Instance, name: SkillName) -> TieredSkill | None:
+    """The package or workspace skill by *name* that an instance skill hides, or would."""
+    tiered, _ = load_skill_tiers(instance)
+    return next(
+        (
+            each
+            for each in tiered
+            if each.skill.name == name and each.tier is not SkillTier.INSTANCE
+        ),
+        None,
+    )
 
 
 def describe_skill_shadow(instance: Instance, name: SkillName) -> str | None:
     """Describe the packaged or workspace skill hidden by an instance skill."""
-    packaged, workspace, _ = _load_other_skill_tiers(instance)
-    if skill := packaged.get(name):
-        return f"packaged skill at {skill.source}"
-    if skill := workspace.get(name):
-        return f"workspace skill at {skill.source}"
-    return None
+    hidden = lower_tier_skill(instance, name)
+    if hidden is None:
+        return None
+    kind = "packaged" if hidden.tier is SkillTier.PACKAGE else "workspace"
+    return f"{kind} skill at {hidden.skill.source}"
 
 
-def _load_other_skill_tiers(
-    instance: Instance,
-) -> tuple[dict[SkillName, Skill], dict[SkillName, Skill], tuple[Warning, ...]]:
-    packaged_roots, package_warnings = _packaged_skill_roots(
-        defaults=instance.manifest.tools.defaults
-    )
-    packaged_skills, packaged_warnings = _load_skill_roots(packaged_roots)
-    workspace_skills, workspace_warnings = _load_skill_roots(
-        instance.manifest.workspace.conventions.skills,
-    )
-    return (
-        packaged_skills,
-        workspace_skills,
-        (
-            *package_warnings,
-            *packaged_warnings,
-            *workspace_warnings,
-        ),
-    )
-
-
-def _packaged_skill_roots(*, defaults: bool) -> tuple[tuple[Path, ...], tuple[Warning, ...]]:
-    roots: list[Path] = []
+def _packaged_skill_roots(*, defaults: bool) -> tuple[dict[Path, str], tuple[Warning, ...]]:
+    """Each installed package's skill directory, with the distribution that ships it."""
+    roots: dict[Path, str] = {}
     warnings: list[Warning] = []
     for entry_point in entry_points(group="kinby.skills"):
         if not defaults and entry_point.name == "defaults":
@@ -97,10 +127,10 @@ def _packaged_skill_roots(*, defaults: bool) -> tuple[tuple[Path, ...], tuple[Wa
                 raise TypeError(
                     f'Entry point "{entry_point.value}" does not export a skill directory Path.'
                 )
-            roots.append(root)
+            roots[root] = distribution_label(entry_point)
         except Exception as exc:
             warnings.append(Warning(sources=(entry_point.value,), message=exception_message(exc)))
-    return tuple(roots), tuple(warnings)
+    return roots, tuple(warnings)
 
 
 def _load_skill_roots(

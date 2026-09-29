@@ -1597,7 +1597,7 @@ def test_success_after_restart_clears_unhandled_failure_actions(tmp_path, failur
     asyncio.run(scenario())
 
 
-def test_scheduler_uses_timezone_validated_at_instance_load(tmp_path):
+def test_scheduler_keeps_the_last_valid_timezone_when_the_manifest_breaks(tmp_path):
     async def scenario():
         instance = instance_at(tmp_path)
         clock = FakeClock(datetime(2026, 9, 6, 8, tzinfo=UTC))

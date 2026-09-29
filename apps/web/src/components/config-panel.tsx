@@ -1,9 +1,13 @@
 import type { InstanceClient, PromptName } from "@kinby/contract"
-import { useCallback, useEffect, useId, useState } from "react"
+import { Fragment, type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
+import { ManifestSection } from "@/components/manifest-section"
 import { PackageConfigSection } from "@/components/package-config-section"
 import { PermissionsSection } from "@/components/permissions-section"
+import { RoutinesSection } from "@/components/routines-section"
+import { SkillsSection } from "@/components/skills-section"
+import { ToolsSection } from "@/components/tools-section"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
@@ -38,15 +42,15 @@ import {
 
 type Caller = Pick<InstanceClient, "call">
 
-/** A section that is built: one of the prompts, the permissions, or the package config. */
-type SectionKey = PromptName | "permissions" | "package-config"
+/** What a section shows, given the client and a way to open another section by its label. */
+type Render = (client: Caller, open: (label: string) => void) => ReactNode
 
-/** One section of the panel. A section without a `key` is not built yet, and is unavailable. */
+/** One section of the panel. A section without `render` is not built yet. */
 interface Section {
   label: string
   hint: string
   icon: LucideIcon
-  key?: SectionKey
+  render?: Render
 }
 
 const GROUPS: { label: string; sections: Section[] }[] = [
@@ -57,29 +61,54 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Behavior prompt",
         hint: "SYSTEM.md, how the agent acts",
         icon: FileTextIcon,
-        key: "behavior",
+        render: (client) => <PromptSection client={client} name="behavior" />,
       },
       {
         label: "Recap prompt",
         hint: "RECAP.md, what a recap looks at",
         icon: NotebookPenIcon,
-        key: "recap",
+        render: (client) => <PromptSection client={client} name="recap" />,
       },
       {
         label: "Permissions",
         hint: "ceiling, mode, tool rules, shell patterns",
         icon: ShieldIcon,
-        key: "permissions",
+        render: (client) => <PermissionsSection client={client} />,
       },
-      { label: "Manifest", hint: "models, budgets, timezone", icon: CpuIcon },
+      {
+        label: "Manifest",
+        hint: "models, budgets, timezone",
+        icon: CpuIcon,
+        render: (client) => <ManifestSection client={client} />,
+      },
     ],
   },
   {
     label: "Capabilities",
     sections: [
-      { label: "Routines", hint: "schedules, signals, next firing", icon: RepeatIcon },
-      { label: "Skills", hint: "instance, package, workspace", icon: SparklesIcon },
-      { label: "Tools", hint: "what the instance can do", icon: WrenchIcon },
+      {
+        label: "Routines",
+        hint: "schedules, signals, next firing",
+        icon: RepeatIcon,
+        render: (client) => <RoutinesSection client={client} />,
+      },
+      {
+        label: "Skills",
+        hint: "instance, package, workspace",
+        icon: SparklesIcon,
+        render: (client) => <SkillsSection client={client} />,
+      },
+      {
+        label: "Tools",
+        hint: "what the instance can do",
+        icon: WrenchIcon,
+        render: (client, open) => (
+          <ToolsSection
+            client={client}
+            onOpenPermissions={available(PERMISSIONS) ? () => open(PERMISSIONS) : undefined}
+          />
+        ),
+      },
     ],
   },
   {
@@ -90,12 +119,19 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Package config",
         hint: "the package's own settings",
         icon: BoxIcon,
-        key: "package-config",
+        render: (client) => <PackageConfigSection client={client} />,
       },
       { label: "Package and version", hint: "template, installed, update", icon: PackageIcon },
     ],
   },
 ]
+
+const SECTIONS = GROUPS.flatMap((group) => group.sections)
+const PERMISSIONS = "Permissions"
+
+function available(label: string): boolean {
+  return SECTIONS.some((section) => section.label === label && section.render !== undefined)
+}
 
 /** When a saved prompt takes effect. */
 const APPLIES: Record<PromptName, string> = {
@@ -105,10 +141,8 @@ const APPLIES: Record<PromptName, string> = {
 
 /** The instance's config: its sections grouped in a left column, the selected one on the right. */
 export function ConfigPanel({ client }: { client: Caller }) {
-  const [selected, setSelected] = useState<SectionKey>("behavior")
-  const section = GROUPS.flatMap((group) => group.sections).find(
-    (candidate) => candidate.key === selected,
-  )
+  const [selected, setSelected] = useState("Behavior prompt")
+  const section = SECTIONS.find((candidate) => candidate.label === selected)
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       <nav
@@ -131,13 +165,7 @@ export function ConfigPanel({ client }: { client: Caller }) {
           <p className="text-sm text-muted-foreground">{section?.hint}</p>
         </div>
         <Separator />
-        {selected === "permissions" ? (
-          <PermissionsSection client={client} />
-        ) : selected === "package-config" ? (
-          <PackageConfigSection client={client} />
-        ) : (
-          <PromptSection key={selected} client={client} name={selected} />
-        )}
+        <Fragment key={selected}>{section?.render?.(client, setSelected)}</Fragment>
       </main>
     </div>
   )
@@ -152,8 +180,8 @@ function SectionGroup({
 }: {
   label: string
   sections: Section[]
-  selected: SectionKey
-  onSelect: (key: SectionKey) => void
+  selected: string
+  onSelect: (label: string) => void
 }) {
   const labelId = useId()
   return (
@@ -162,18 +190,18 @@ function SectionGroup({
         {label}
       </span>
       <ItemGroup aria-labelledby={labelId}>
-        {sections.map(({ label, hint, icon: Icon, key }) => (
+        {sections.map(({ label, hint, icon: Icon, render }) => (
           <li key={label}>
             <Item
               size="xs"
-              variant={key !== undefined && key === selected ? "muted" : "default"}
+              variant={label === selected ? "muted" : "default"}
               render={
                 <button
                   type="button"
                   aria-label={label}
-                  aria-current={key === selected || undefined}
-                  disabled={key === undefined}
-                  onClick={() => key !== undefined && onSelect(key)}
+                  aria-current={label === selected || undefined}
+                  disabled={render === undefined}
+                  onClick={() => onSelect(label)}
                 />
               }
             >
@@ -182,7 +210,9 @@ function SectionGroup({
               </ItemMedia>
               <ItemContent>
                 <ItemTitle>{label}</ItemTitle>
-                <ItemDescription>{key === undefined ? "Not available yet" : hint}</ItemDescription>
+                <ItemDescription>
+                  {render === undefined ? "Not available yet" : hint}
+                </ItemDescription>
               </ItemContent>
             </Item>
           </li>

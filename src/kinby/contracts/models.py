@@ -91,6 +91,8 @@ class ErrorCode(StrEnum):
     INVALID_SETUP = "INVALID_SETUP"
     #: The file changed since the client read it, so the write was refused. Read it again.
     STALE = "STALE"
+    #: The routine has deliveries waiting to fire, so it cannot be deleted yet.
+    ROUTINE_PENDING = "ROUTINE_PENDING"
     #: Raised by a client, never sent by a server: its connection dropped under a call.
     CONNECTION_LOST = "CONNECTION_LOST"
     INTERNAL = "INTERNAL"
@@ -1579,3 +1581,227 @@ class ConfigHistoryCommand(ContractModel):
 class ConfigHistoryResult(ContractModel):
     #: Newest first.
     changes: list[ConfigChange]
+
+
+class RoutineReadCommand(ContractModel):
+    name: RoutineName
+
+
+class RoutineFile(ContractModel):
+    name: RoutineName
+    #: The routine's ``ROUTINE.md``.
+    content: str
+    #: The sha256 over the sorted (relative path, bytes) pairs of the routine's directory.
+    hash: FileHash
+
+
+class RoutineWriteCommand(ContractModel):
+    name: RoutineName
+    content: str
+    #: The hash the client read, or null to create a routine that does not exist yet.
+    hash: FileHash | None
+
+
+class RoutineSetEnabledCommand(ContractModel):
+    name: RoutineName
+    enabled: bool
+
+
+class RoutineDeleteCommand(ContractModel):
+    name: RoutineName
+    hash: FileHash
+
+
+class RoutineDeleteResult(ContractModel):
+    pass
+
+
+class RecapPolicy(StrEnum):
+    """When kinby writes a model-assisted recap."""
+
+    EVERY_TURN = "every-turn"
+    TRACE_ONLY = "off"
+
+
+class FeedbackPolicy(StrEnum):
+    """When kinby asks the user to rate a completed turn."""
+
+    EVERY_TURN = "every-turn"
+    OFF = "off"
+
+
+class ManifestModels(ContractModel):
+    #: Each model as ``provider:model``. The recap model is the main one when absent.
+    main: str
+    recap: str | None
+    embed: str | None
+
+
+class ManifestBudgets(ContractModel):
+    #: Each limit is off when absent.
+    steps: int | None
+    tokens: int | None
+    seconds: float | None
+    usd_per_day: float | None
+
+
+class ManifestRoutines(ContractModel):
+    #: The IANA time zone routine schedules read in.
+    timezone: str
+
+
+class ManifestTools(ContractModel):
+    #: Whether kinby's default tools, such as bash and the file tools, are on.
+    defaults: bool
+    bash_timeout_seconds: int
+
+
+class ManifestMemory(ContractModel):
+    recap: RecapPolicy
+
+
+class ManifestFeedback(ContractModel):
+    ask: FeedbackPolicy
+
+
+class ManifestValues(ContractModel):
+    """The fields of ``kinby.toml`` a client may change. The hub owns the rest."""
+
+    persona_name: str | None
+    models: ManifestModels
+    budgets: ManifestBudgets
+    routines: ManifestRoutines
+    tools: ManifestTools
+    memory: ManifestMemory
+    feedback: ManifestFeedback
+
+
+class PriceSource(StrEnum):
+    SHIPPED = "shipped"
+    MANIFEST = "manifest"
+
+
+class ModelChoice(ContractModel):
+    """A model the budget can count, because kinby ships its price or the manifest sets one."""
+
+    model: str
+    priced_from: PriceSource
+    #: Whether ``<PROVIDER>_API_KEY`` is set in the instance's environment.
+    key_set: bool
+
+
+class ManifestGetCommand(ContractModel):
+    pass
+
+
+class ManifestResult(ContractModel):
+    values: ManifestValues
+    model_choices: list[ModelChoice]
+    hash: FileHash
+
+
+class NewModelPrice(ContractModel):
+    #: Dollars per million tokens.
+    input: float
+    output: float
+
+
+class ManifestSetCommand(ContractModel):
+    values: ManifestValues
+    #: Prices to write as ``[prices."provider:model"]`` entries, by model.
+    prices: dict[str, NewModelPrice] = Field(default_factory=dict)
+    #: The hash the client read. The write is refused as STALE when the file changed since.
+    hash: FileHash
+
+
+SkillName = NewType("SkillName", str)
+
+
+class SkillTier(StrEnum):
+    """Where a skill comes from, in the order the model looks for it."""
+
+    INSTANCE = "instance"
+    PACKAGE = "package"
+    WORKSPACE = "workspace"
+
+
+class SkillListCommand(ContractModel):
+    pass
+
+
+class SkillSummary(ContractModel):
+    name: SkillName
+    tier: SkillTier
+    description: str
+    #: ``instance``, ``workspace``, or the package's distribution and version.
+    source: str
+    #: The tier of the skill that hides this one, when a higher tier has one by this name.
+    shadowed_by: SkillTier | None
+
+
+class SkillListResult(ContractModel):
+    #: By name, and each name's skills in tier order, so the one the model reads comes first.
+    skills: list[SkillSummary]
+    warnings: tuple[Warning, ...]
+
+
+class SkillReadCommand(ContractModel):
+    name: SkillName
+    tier: SkillTier
+
+
+class SkillResult(ContractModel):
+    #: The skill's ``SKILL.md``.
+    content: str
+    #: The skill directory's other files, by their path in it.
+    files: list[str]
+    #: The hash of the skill directory: every file's path and bytes.
+    hash: FileHash
+
+
+class SkillWriteCommand(ContractModel):
+    """Write the instance copy's ``SKILL.md``, creating the skill when ``hash`` is null."""
+
+    name: SkillName
+    content: str
+    hash: FileHash | None
+
+
+class SkillCustomizeCommand(ContractModel):
+    """Copy the skill the model reads into the instance, where it can be edited."""
+
+    name: SkillName
+
+
+class SkillDeleteCommand(ContractModel):
+    """Delete the instance copy, so the skill it hid, if any, applies again."""
+
+    name: SkillName
+    hash: FileHash
+
+
+class ToolRule(StrEnum):
+    """What the gate does with a tool: its own rule in permissions.toml, or the mode's."""
+
+    ALLOW = "allow"
+    ASK = "ask"
+    DENY = "deny"
+    MODE = "mode"
+
+
+class ToolListCommand(ContractModel):
+    pass
+
+
+class ToolSummary(ContractModel):
+    name: str
+    #: ``core``, the package's distribution and version, or the instance file that defines it.
+    source: str
+    write: bool
+    rule: ToolRule
+
+
+class ToolListResult(ContractModel):
+    #: By name.
+    tools: list[ToolSummary]
+    warnings: tuple[Warning, ...]
