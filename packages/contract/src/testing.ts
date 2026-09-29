@@ -59,6 +59,7 @@ export function fakeHub({
               process: "created",
               readiness: "not-running",
               setup: { logins: [], secrets: [] },
+              recreate_reasons: [],
             }
           }
           return undefined

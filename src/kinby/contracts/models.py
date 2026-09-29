@@ -975,6 +975,7 @@ class InstanceProbeCommand(ContractModel):
 class RecreateReason(StrEnum):
     """A change a running instance applies only once it is recreated."""
 
+    SECRETS = "secrets"
     PACKAGE_CONFIG = "package_config"
 
 
@@ -1081,6 +1082,8 @@ class InstanceStatusResult(ContractModel):
     detail: str = ""
     #: The lifecycle operation still running, so a client that lost its response finds it again.
     active_operation_id: UUID | None = None
+    #: What waits on a container recreation. A start applies them to a stopped instance.
+    recreate_reasons: list[RecreateReason]
 
 
 class InstanceLogsResult(ContractModel):

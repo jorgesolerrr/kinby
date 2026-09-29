@@ -48,7 +48,15 @@ export function MainPanel({
   }
   if (selected !== undefined && configOpen && selected.process === "running") {
     if (instanceClient === undefined) return null
-    return <ConfigPanel key={selected.instance_id} client={instanceClient} />
+    return (
+      <ConfigPanel
+        key={selected.instance_id}
+        client={instanceClient}
+        caller={caller}
+        clock={clock}
+        instanceId={selected.instance_id}
+      />
+    )
   }
   if (selected !== undefined) {
     return (

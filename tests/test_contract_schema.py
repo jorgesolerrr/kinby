@@ -309,7 +309,17 @@ def test_the_schema_declares_the_package_config_calls_and_restart_reasons() -> N
     }
     probe = _object(_object(definitions["InstanceProbeResult"])["properties"])
     assert _object(probe["restart_reasons"])["items"] == {"$ref": "#/$defs/RecreateReason"}
-    assert _object(definitions["RecreateReason"])["enum"] == ["package_config"]
+    assert _object(definitions["RecreateReason"])["enum"] == ["secrets", "package_config"]
+
+
+def test_the_status_lists_the_recreate_reasons_it_always_carries() -> None:
+    definitions = _object(contract_schema()["$defs"])
+    status = _object(definitions["InstanceStatusResult"])
+
+    assert _object(_object(status["properties"])["recreate_reasons"])["items"] == {
+        "$ref": "#/$defs/RecreateReason"
+    }
+    assert "recreate_reasons" in cast(list[str], status["required"])
 
 
 def test_the_schema_declares_the_skill_and_tool_calls() -> None:

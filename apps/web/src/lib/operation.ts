@@ -65,3 +65,44 @@ export async function finished(
 export function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+export type Followed =
+  | { state: "running"; steps: OperationStep[] }
+  | { state: "failed"; steps: OperationStep[]; detail: string }
+  | { state: "succeeded" }
+
+/**
+ * Ask for a lifecycle operation with `begin`, and report its steps until it finishes. The returned
+ * function stops following it; the hub carries on.
+ */
+export function followOperation(
+  caller: Pick<Client, "call">,
+  begin: () => Promise<{ operation_id: string }>,
+  report: (followed: Followed) => void,
+  clock: Clock,
+): () => void {
+  const pacing = pace(clock)
+  const emit = (followed: Followed) => {
+    if (!pacing.stopped) report(followed)
+  }
+
+  const follow = async () => {
+    let steps: OperationStep[] = []
+    try {
+      const { operation_id } = await begin()
+      const operation = await finished(caller, operation_id, pacing, (reached) => {
+        steps = reached
+        emit({ state: "running", steps })
+      })
+      if (operation.state === "failed") {
+        return emit({ state: "failed", steps: operation.steps ?? [], detail: operation.detail })
+      }
+      emit({ state: "succeeded" })
+    } catch (error) {
+      emit({ state: "failed", steps, detail: reason(error) })
+    }
+  }
+
+  void follow()
+  return pacing.stop
+}

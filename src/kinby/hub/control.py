@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from kinby.contracts import (
     INSTANCE_DRAIN,
+    INSTANCE_PROBE,
     STATS_GET,
     CallFrame,
     Capability,
@@ -20,8 +21,10 @@ from kinby.contracts import (
     ErrorFrame,
     FrameId,
     InstanceDrainCommand,
+    InstanceProbeCommand,
     InstanceProbeResult,
     Method,
+    RecreateReason,
     ResultFrame,
     StatsGetCommand,
     StatsGetResult,
@@ -64,6 +67,8 @@ class InstanceControl(Protocol):
 
     async def drain(self, endpoint: ControlEndpoint, *, force: bool) -> DrainState: ...
 
+    async def restart_reasons(self, endpoint: ControlEndpoint) -> list[RecreateReason]: ...
+
     async def stats(
         self, endpoint: ControlEndpoint, command: StatsGetCommand
     ) -> StatsGetResult: ...
@@ -93,6 +98,11 @@ class HttpInstanceControl:
             endpoint, INSTANCE_DRAIN, InstanceDrainCommand(force=force), "the drain"
         )
         return drained.state
+
+    async def restart_reasons(self, endpoint: ControlEndpoint) -> list[RecreateReason]:
+        """What the instance says changed since it booted. The health route does not tell."""
+        probed = await _call(endpoint, INSTANCE_PROBE, InstanceProbeCommand(), "the probe")
+        return probed.restart_reasons
 
     async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
         """Read the instance's stats. The caller decides how long to wait."""

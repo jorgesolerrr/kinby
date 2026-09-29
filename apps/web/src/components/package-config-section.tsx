@@ -42,9 +42,9 @@ type Caller = Pick<InstanceClient, "call">
 
 /**
  * The package's config as a form built from the model the package declares. The package's
- * validator judges a save, and its reasons show beside their fields.
+ * validator judges a save, and its reasons show beside their fields. `onSaved` hears each save.
  */
-export function PackageConfigSection({ client }: { client: Caller }) {
+export function PackageConfigSection({ client, onSaved }: { client: Caller; onSaved: () => void }) {
   const [opened, setOpened] = useState<OpenedPackageConfig | null>()
   const [fields, setFields] = useState<FormField[]>([])
   const [saving, setSaving] = useState(false)
@@ -109,7 +109,10 @@ export function PackageConfigSection({ client }: { client: Caller }) {
         setErrors(saved.fields)
         return
       }
-      if (saved.state === "saved") show(saved.opened)
+      if (saved.state === "saved") {
+        show(saved.opened)
+        onSaved()
+      }
       setNotice(saved.state)
     } catch (error) {
       setFailure(reason(error))

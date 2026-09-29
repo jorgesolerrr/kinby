@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -93,6 +95,13 @@ class ContainerDescription:
     owner: ContainerOwner
     owner_name: str
     storage: tuple[StorageItem, ...]
+    #: The digest of the secrets it was created with. None on a container from before the label.
+    secrets_digest: str | None = None
+
+
+def secrets_digest(env: Mapping[str, str]) -> str:
+    """Tell whether a container holds these secrets, without writing any of them down."""
+    return hashlib.sha256(json.dumps(env, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 class ContainerRuntime(Protocol):

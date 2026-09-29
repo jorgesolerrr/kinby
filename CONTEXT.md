@@ -116,7 +116,7 @@ _Avoid_: rebuild, restart, update
 
 ### Recreate reason
 
-A change that reaches a running **instance** only through **container recreation**: replaced **instance secrets**, or an edited **package config**. The user sees every pending reason together and applies them with one recreation.
+A change that reaches a running **instance** only through **container recreation**: replaced **instance secrets**, or an edited **package config**. The user sees every pending reason together and applies them with one recreation. A stopped instance applies them when it starts.
 
 ### Config change
 

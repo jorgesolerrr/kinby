@@ -28,6 +28,7 @@ from kinby.hub import (
     PreparedImage,
     RecoveredState,
     SetupSpec,
+    secrets_digest,
 )
 from kinby.packages import InstalledPackage, PackageDescriptor, package_json, vanilla_description
 from tests.test_hub import hub_client, started_instance
@@ -245,6 +246,8 @@ def test_docker_runtime_mounts_the_recorded_storage_and_offloads_creation(tmp_pa
         "kinby.instance": name,
         # The hub reads the port back off the container when it routes to the instance.
         "kinby.port": "8787",
+        # And whether the secrets changed since, without holding any of them.
+        "kinby.secrets": secrets_digest({"TOKEN": "value"}),
     }
     mounts = client.containers.options["mounts"]
     assert isinstance(mounts, list)
@@ -534,6 +537,7 @@ def test_real_docker_runtime_labels_stopped_and_independent_instances(tmp_path):
                 "kinby.hub": hub_id,
                 "kinby.instance": first,
                 "kinby.port": "8787",
+                "kinby.secrets": secrets_digest({}),
             }
             await asyncio.gather(runtime.start(first), runtime.start(second))
             del runtime
@@ -699,6 +703,22 @@ def test_the_docker_runtime_addresses_only_a_running_instance(tmp_path, status, 
     runtime = DockerRuntime("hub-id", network="kinby_private", client=cast(DockerClient, client))
 
     assert asyncio.run(runtime.address("abc")) == expected
+
+
+@pytest.mark.parametrize(
+    ("labels", "expected"),
+    [({"kinby.secrets": "digest"}, "digest"), ({}, None)],
+    ids=["labeled", "created-before-the-label"],
+)
+def test_the_docker_runtime_reads_the_secrets_a_container_was_created_with(labels, expected):
+    client = FakeDockerClient()
+    client.containers.container = FakeContainer("exited", {"kinby.hub": "hub-id", **labels})
+    runtime = DockerRuntime("hub-id", network="kinby_private", client=cast(DockerClient, client))
+
+    described = asyncio.run(runtime.describe("abc"))
+
+    assert described is not None
+    assert described.secrets_digest == expected
 
 
 def test_the_docker_runtime_has_no_address_for_a_container_that_is_gone(tmp_path):

@@ -32,6 +32,7 @@ from kinby.hub.models import (
     RecoveredState,
     RuntimeStatus,
     SetupSpec,
+    secrets_digest,
 )
 from kinby.hub.registry import HubRegistry, StorageConflict
 from kinby.hub.server import HubContractServer
@@ -73,4 +74,5 @@ __all__ = [
     "build_docker_hub",
     "hub_instance_id",
     "preflight",
+    "secrets_digest",
 ]

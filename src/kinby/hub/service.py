@@ -83,6 +83,7 @@ from kinby.contracts import (
     PackageSummary,
     ProcessState,
     Readiness,
+    RecreateReason,
     SetupFieldKind,
     StatsGetCommand,
     StatsGetResult,
@@ -125,6 +126,7 @@ from kinby.hub.models import (
     PreparedImage,
     RuntimeStatus,
     SetupSpec,
+    secrets_digest,
 )
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import HubRegistry, ManagedInstance
@@ -167,6 +169,8 @@ _STOP_OBSERVE_SECONDS = 120
 READY_OBSERVE_SECONDS = 120
 #: How long a stats summary waits for one instance before it counts it unreachable.
 STATS_SECONDS = 5
+#: How long a status waits for a running instance to say what changed since it booted.
+REASONS_SECONDS = 5
 #: Pause before calling a drain again, so a socket that closes immediately does not spin.
 _DRAIN_RETRY_SECONDS = 0.2
 _RUNTIME_STOPPED = frozenset({"absent", "created", "stopped", "failed"})
@@ -580,12 +584,15 @@ class Hub:
 
     async def _start(self, operation_id: UUID, instance_id: UUID) -> None:
         try:
-            await self._run_start(operation_id, instance_id)
+            await self._run_start(operation_id, instance_id, recreates=True)
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
             raise
 
-    async def _run_start(self, operation_id: UUID, instance_id: UUID) -> None:
+    async def _run_start(self, operation_id: UUID, instance_id: UUID, *, recreates: bool) -> None:
+        """Start the container. Only a start the user asked for *recreates* a stopped one whose
+        secrets were replaced: recovery starts no replacement (ADR 0051).
+        """
         lock = self._locks.setdefault(instance_id, asyncio.Lock())
         async with lock:
             try:
@@ -594,10 +601,19 @@ class Hub:
                 self.registry.finish_operation(operation_id, OperationState.FAILED, str(exc))
                 return
             secrets = self._environment(record.path).values()
-            self.registry.advance_operation(operation_id, "start", "Starting selected image.")
             self.registry.set_intended_state(instance_id, IntendedState.RUNNING)
             try:
-                await self._runtime.start(record.runtime_id)
+                record = self._active_instance(instance_id)
+                if recreates and await self._stopped_with_replaced_secrets(record):
+                    self._record(
+                        operation_id,
+                        "recreate",
+                        "Recreating the container to apply the replaced secrets.",
+                    )
+                    await self._replace_container(operation_id, record)
+                else:
+                    self._record(operation_id, "start", "Starting selected image.")
+                    await self._runtime.start(record.runtime_id)
             except Exception as exc:
                 self.registry.finish_operation(
                     operation_id,
@@ -610,6 +626,23 @@ class Hub:
                 OperationState.SUCCEEDED,
                 "Instance started.",
             )
+
+    async def _stopped_with_replaced_secrets(self, record: ManagedInstance) -> bool:
+        """A stopped container still holds the secrets it was created with. A running one waits
+        for an explicit recreation.
+        """
+        stopped = (await self._runtime.status(record.runtime_id)).state in _ALREADY_STOPPED
+        return stopped and await self._secrets_replaced(record)
+
+    async def _secrets_replaced(self, record: ManagedInstance) -> bool:
+        """The instance's secrets are not the ones its container was created with.
+
+        A container from before the hub labeled it reads as holding the current ones.
+        """
+        description = await self._runtime.describe(record.runtime_id)
+        if description is None or description.secrets_digest is None:
+            return False
+        return description.secrets_digest != secrets_digest(self._environment(record.path))
 
     async def start_login(self, command: InstanceLoginStartCommand) -> LifecycleOperationResult:
         """Sign one of the instance's subscription logins in, or return the one running.
@@ -1651,7 +1684,7 @@ class Hub:
             OperationKind.START,
             "Restoring the intended running state.",
         )
-        await self._run_start(operation_id, instance_id)
+        await self._run_start(operation_id, instance_id, recreates=False)
         finished = self.registry.operation(operation_id)
         return finished.state if finished is not None else OperationState.FAILED
 
@@ -1699,7 +1732,29 @@ class Hub:
             setup=self._setup(record),
             detail=observed.detail,
             active_operation_id=self.registry.active_operation(record.instance_id),
+            recreate_reasons=[*await self._recreate_reasons(record, observed.process)],
         )
+
+    async def _recreate_reasons(
+        self, record: ManagedInstance, process: ProcessState
+    ) -> tuple[RecreateReason, ...]:
+        """Secrets replaced since the container was created, then what the running instance
+        says changed since it booted. A stopped instance boots again on its next start.
+        """
+        if process in {ProcessState.MISSING, ProcessState.UNAVAILABLE}:
+            return ()
+        secrets = (RecreateReason.SECRETS,) if await self._secrets_replaced(record) else ()
+        if process is not ProcessState.RUNNING:
+            return secrets
+        return (*secrets, *await self._restart_reasons(record))
+
+    async def _restart_reasons(self, record: ManagedInstance) -> tuple[RecreateReason, ...]:
+        """An instance that does not answer in time reports none, so a status never waits long."""
+        try:
+            async with asyncio.timeout(REASONS_SECONDS):
+                return tuple(await self._control.restart_reasons(await self._endpoint(record)))
+        except ControlUnreachable, TimeoutError:
+            return ()
 
     async def _observed(self, record: ManagedInstance) -> ObservedProcess:
         """Read the runtime once. A runtime that cannot be read reports the instance unavailable."""

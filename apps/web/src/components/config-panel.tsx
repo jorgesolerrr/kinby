@@ -1,11 +1,20 @@
-import type { InstanceClient, PromptName } from "@kinby/contract"
+import type {
+  Client,
+  Clock,
+  InstanceClient,
+  InstanceStatusResult,
+  PromptName,
+  RecreateReason,
+} from "@kinby/contract"
 import { Fragment, type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
 import { ManifestSection } from "@/components/manifest-section"
 import { PackageConfigSection } from "@/components/package-config-section"
 import { PermissionsSection } from "@/components/permissions-section"
+import { RecreateNotice } from "@/components/recreate-notice"
 import { RoutinesSection } from "@/components/routines-section"
+import { SecretsSection } from "@/components/secrets-section"
 import { SkillsSection } from "@/components/skills-section"
 import { ToolsSection } from "@/components/tools-section"
 import { Badge } from "@/components/ui/badge"
@@ -23,6 +32,7 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { usePolled } from "@/hooks/use-polled"
 import { lastChanged } from "@/lib/config-changes"
 import { reason } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
@@ -42,15 +52,28 @@ import {
 
 type Caller = Pick<InstanceClient, "call">
 
-/** What a section shows, given the client and a way to open another section by its label. */
-type Render = (client: Caller, open: (label: string) => void) => ReactNode
+/** What a section may use: the instance, the hub, the instance's status, and the other sections. */
+interface Panel {
+  client: Caller
+  caller: Pick<Client, "call">
+  clock: Clock
+  instanceId: string
+  /** Undefined until the hub answers. */
+  status: InstanceStatusResult | undefined
+  /** Read the status again, after a change that may add a recreate reason. */
+  statusChanged: () => void
+  /** Open another section by its label. */
+  open: (label: string) => void
+}
 
 /** One section of the panel. A section without `render` is not built yet. */
 interface Section {
   label: string
   hint: string
   icon: LucideIcon
-  render?: Render
+  render?: (panel: Panel) => ReactNode
+  /** The recreate reason a change in this section leaves. */
+  reason?: RecreateReason
 }
 
 const GROUPS: { label: string; sections: Section[] }[] = [
@@ -61,25 +84,25 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Behavior prompt",
         hint: "SYSTEM.md, how the agent acts",
         icon: FileTextIcon,
-        render: (client) => <PromptSection client={client} name="behavior" />,
+        render: ({ client }) => <PromptSection client={client} name="behavior" />,
       },
       {
         label: "Recap prompt",
         hint: "RECAP.md, what a recap looks at",
         icon: NotebookPenIcon,
-        render: (client) => <PromptSection client={client} name="recap" />,
+        render: ({ client }) => <PromptSection client={client} name="recap" />,
       },
       {
         label: "Permissions",
         hint: "ceiling, mode, tool rules, shell patterns",
         icon: ShieldIcon,
-        render: (client) => <PermissionsSection client={client} />,
+        render: ({ client }) => <PermissionsSection client={client} />,
       },
       {
         label: "Manifest",
         hint: "models, budgets, timezone",
         icon: CpuIcon,
-        render: (client) => <ManifestSection client={client} />,
+        render: ({ client }) => <ManifestSection client={client} />,
       },
     ],
   },
@@ -90,19 +113,19 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Routines",
         hint: "schedules, signals, next firing",
         icon: RepeatIcon,
-        render: (client) => <RoutinesSection client={client} />,
+        render: ({ client }) => <RoutinesSection client={client} />,
       },
       {
         label: "Skills",
         hint: "instance, package, workspace",
         icon: SparklesIcon,
-        render: (client) => <SkillsSection client={client} />,
+        render: ({ client }) => <SkillsSection client={client} />,
       },
       {
         label: "Tools",
         hint: "what the instance can do",
         icon: WrenchIcon,
-        render: (client, open) => (
+        render: ({ client, open }) => (
           <ToolsSection
             client={client}
             onOpenPermissions={available(PERMISSIONS) ? () => open(PERMISSIONS) : undefined}
@@ -114,12 +137,29 @@ const GROUPS: { label: string; sections: Section[] }[] = [
   {
     label: "Instance",
     sections: [
-      { label: "Secrets and login", hint: "write-only values, sign-in", icon: KeyRoundIcon },
+      {
+        label: "Secrets and login",
+        hint: "write-only values, sign-in",
+        icon: KeyRoundIcon,
+        reason: "secrets",
+        render: ({ caller, clock, instanceId, status, statusChanged }) => (
+          <SecretsSection
+            caller={caller}
+            clock={clock}
+            instanceId={instanceId}
+            setup={status?.setup}
+            onChanged={statusChanged}
+          />
+        ),
+      },
       {
         label: "Package config",
         hint: "the package's own settings",
         icon: BoxIcon,
-        render: (client) => <PackageConfigSection client={client} />,
+        reason: "package_config",
+        render: ({ client, statusChanged }) => (
+          <PackageConfigSection client={client} onSaved={statusChanged} />
+        ),
       },
       { label: "Package and version", hint: "template, installed, update", icon: PackageIcon },
     ],
@@ -139,10 +179,43 @@ const APPLIES: Record<PromptName, string> = {
   recap: "Saved. It applies at the next recap.",
 }
 
-/** The instance's config: its sections grouped in a left column, the selected one on the right. */
-export function ConfigPanel({ client }: { client: Caller }) {
+/** How often the panel reads the instance's status, for a change the hub or another tab made. */
+const STATUS_INTERVAL_MS = 30_000
+
+/**
+ * The instance's config: its sections grouped in a left column, the selected one on the right,
+ * and above it one notice for every change that waits on a recreate. `client` reaches the instance
+ * and `caller` the hub.
+ */
+export function ConfigPanel({
+  client,
+  caller,
+  clock,
+  instanceId,
+}: {
+  client: Caller
+  caller: Pick<Client, "call">
+  clock: Clock
+  instanceId: string
+}) {
   const [selected, setSelected] = useState("Behavior prompt")
   const section = SECTIONS.find((candidate) => candidate.label === selected)
+  const read = useCallback(
+    () => caller.call("instance.status", { instance_id: instanceId }),
+    [caller, instanceId],
+  )
+  const [status, readAgain] = usePolled(read, clock, true, STATUS_INTERVAL_MS)
+  const statusChanged = useCallback(() => void readAgain(), [readAgain])
+  const reasons = status?.recreate_reasons ?? []
+  const panel: Panel = {
+    client,
+    caller,
+    clock,
+    instanceId,
+    status,
+    statusChanged,
+    open: setSelected,
+  }
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       <nav
@@ -154,32 +227,42 @@ export function ConfigPanel({ client }: { client: Caller }) {
             key={group.label}
             label={group.label}
             sections={group.sections}
+            reasons={reasons}
             selected={selected}
             onSelect={setSelected}
           />
         ))}
       </nav>
       <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-6">
+        <RecreateNotice
+          caller={caller}
+          clock={clock}
+          instanceId={instanceId}
+          reasons={reasons}
+          onRecreated={statusChanged}
+        />
         <div>
           <h1 className="text-xl font-semibold">{section?.label}</h1>
           <p className="text-sm text-muted-foreground">{section?.hint}</p>
         </div>
         <Separator />
-        <Fragment key={selected}>{section?.render?.(client, setSelected)}</Fragment>
+        <Fragment key={selected}>{section?.render?.(panel)}</Fragment>
       </main>
     </div>
   )
 }
 
-/** One group of the left column, as a list named for the group. */
+/** One group of the left column, as a list named for the group. A pending reason replaces a hint. */
 function SectionGroup({
   label,
   sections,
+  reasons,
   selected,
   onSelect,
 }: {
   label: string
   sections: Section[]
+  reasons: RecreateReason[]
   selected: string
   onSelect: (label: string) => void
 }) {
@@ -190,7 +273,7 @@ function SectionGroup({
         {label}
       </span>
       <ItemGroup aria-labelledby={labelId}>
-        {sections.map(({ label, hint, icon: Icon, render }) => (
+        {sections.map(({ label, hint, icon: Icon, render, reason }) => (
           <li key={label}>
             <Item
               size="xs"
@@ -211,7 +294,11 @@ function SectionGroup({
               <ItemContent>
                 <ItemTitle>{label}</ItemTitle>
                 <ItemDescription>
-                  {render === undefined ? "Not available yet" : hint}
+                  {render === undefined
+                    ? "Not available yet"
+                    : reason !== undefined && reasons.includes(reason)
+                      ? "Recreate to apply"
+                      : hint}
                 </ItemDescription>
               </ItemContent>
             </Item>

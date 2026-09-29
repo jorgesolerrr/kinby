@@ -4,13 +4,12 @@ import type {
   InstanceStatusResult,
   InstanceSummary,
   LoginSetup,
-  SecretSetup,
 } from "@kinby/contract"
 import { useCallback, useEffect, useId, useState } from "react"
 
+import { Secrets } from "@/components/secrets-section"
 import { SubscriptionLogins } from "@/components/subscription-logins"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -28,19 +27,12 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
 import { followStart, type Starting } from "@/lib/creation"
 import { instanceName, observedState } from "@/lib/instances"
 import { openConfig } from "@/lib/selection"
-import {
-  BotIcon,
-  CircleCheckIcon,
-  CirclePauseIcon,
-  CircleXIcon,
-  SlidersHorizontalIcon,
-} from "lucide-react"
+import { BotIcon, CirclePauseIcon, CircleXIcon, SlidersHorizontalIcon } from "lucide-react"
 
 /**
  * What one instance shows. A stopped instance with setup pending opens on its setup card, and
@@ -217,7 +209,8 @@ function SetupCard({
         <CardHeader>
           <CardTitle id={titleId}>Finish setting up {name}</CardTitle>
           <CardDescription>
-            Sign in to what it declares, and set its secrets. It starts without them too.
+            Sign in to what it declares, and set its secrets. It starts without them too. A secret
+            you set applies when {name} starts.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -237,7 +230,13 @@ function SetupCard({
             {secrets.length > 0 && (
               <section className="flex flex-col gap-3">
                 <h3 className="font-medium">Secrets</h3>
-                <Secrets secrets={secrets} />
+                <Secrets
+                  caller={caller}
+                  clock={clock}
+                  instanceId={status.instance_id}
+                  secrets={secrets}
+                  onSet={onChanged}
+                />
               </section>
             )}
           </div>
@@ -289,37 +288,6 @@ function Stopped({
         </EmptyContent>
       </Empty>
     </section>
-  )
-}
-
-function Secrets({ secrets }: { secrets: SecretSetup[] }) {
-  return (
-    <ItemGroup aria-label="Secrets">
-      {secrets.map((secret) => (
-        <Item
-          key={secret.name}
-          render={<li />}
-          aria-label={secret.label}
-          variant="outline"
-          size="sm"
-        >
-          <ItemContent>
-            <ItemTitle>{secret.label}</ItemTitle>
-          </ItemContent>
-          <ItemActions>
-            {!secret.required && <Badge variant="secondary">Optional</Badge>}
-            {secret.is_set ? (
-              <Badge variant="success">
-                <CircleCheckIcon data-icon="inline-start" />
-                Set
-              </Badge>
-            ) : (
-              <Badge variant="outline">Not set</Badge>
-            )}
-          </ItemActions>
-        </Item>
-      ))}
-    </ItemGroup>
   )
 }
 
