@@ -1022,6 +1022,101 @@ def test_permissions_set_writes_only_the_instances_own_patterns(tmp_path: Path) 
     asyncio.run(scenario())
 
 
+HAND_WRITTEN_PERMISSIONS = (
+    "# Hand-written by the owner.\n"
+    'mode = "auto"\n'
+    'ceiling = "full-access"\n'
+    "\n"
+    "[tools]\n"
+    'bash = "deny"\n'
+    "\n"
+    "[bash]\n"
+    "# my own only\n"
+    "deny = ['\\bwget\\b']\n"
+    "ask = []\n"
+)
+
+
+def test_permissions_set_keeps_the_comments_and_edits_the_tool_rules(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        path = tmp_path / "permissions.toml"
+        path.write_text(HAND_WRITTEN_PERMISSIONS, encoding="utf-8")
+
+        await call(
+            dispatcher,
+            "permissions.set",
+            mode="auto",
+            ceiling="full-access",
+            tools={"edit": "ask"},
+            bash={"deny": [r"\bwget\b"], "ask": []},
+            hash=_sha256(HAND_WRITTEN_PERMISSIONS),
+        )
+
+        assert path.read_text(encoding="utf-8") == (
+            "# Hand-written by the owner.\n"
+            'mode = "auto"\n'
+            'ceiling = "full-access"\n'
+            "\n"
+            "[tools]\n"
+            'edit = "ask"\n'
+            "\n"
+            "[bash]\n"
+            "# my own only\n"
+            "deny = ['\\bwget\\b']\n"
+            "ask = []\n"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_permissions_set_changes_the_mode_and_leaves_the_comments(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        path = tmp_path / "permissions.toml"
+        path.write_text(HAND_WRITTEN_PERMISSIONS, encoding="utf-8")
+
+        await call(
+            dispatcher,
+            "permissions.set",
+            mode="read-only",
+            ceiling="full-access",
+            tools={"bash": "deny"},
+            bash={"deny": [r"\bwget\b"], "ask": []},
+            hash=_sha256(HAND_WRITTEN_PERMISSIONS),
+        )
+
+        assert path.read_text(encoding="utf-8") == HAND_WRITTEN_PERMISSIONS.replace(
+            'mode = "auto"', 'mode = "read-only"'
+        )
+
+    asyncio.run(scenario())
+
+
+def test_permissions_set_without_a_file_writes_one(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        written = await call(dispatcher, "permissions.set", **_permissions(EMPTY_HASH))
+        read = await call(dispatcher, "permissions.get")
+
+        assert (tmp_path / "permissions.toml").read_text(encoding="utf-8") == (
+            'mode = "auto"\n'
+            'ceiling = "auto"\n'
+            "\n"
+            "[tools]\n"
+            'bash = "ask"\n'
+            'web_fetch = "allow"\n'
+            "\n"
+            "[bash]\n"
+            'deny = ["^deploy production$"]\n'
+            'ask = ["\\\\bnpm publish\\\\b"]\n'
+        )
+        assert written == read
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("values", "fields"),
     [
