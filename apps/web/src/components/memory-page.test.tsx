@@ -5,6 +5,7 @@ import type {
   NodeSummary,
   ThreadSummary,
 } from "@kinby/contract"
+import { CallError } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -103,6 +104,45 @@ const nodeButton = (description: string) =>
   screen.findByRole("button", { name: new RegExp(description) })
 
 const pane = () => within(screen.getByRole("region", { name: "Opened node" }))
+
+const called = (caller: ReturnType<typeof stubCaller>, method: string) =>
+  caller.calls.filter((call) => call.method === method).map((call) => call.params)
+
+const refused = (code: "NOT_FOUND" | "INVALID_ARGUMENT", fields: Record<string, string> = {}) =>
+  new CallError({ code, message: `Refused with ${code}.`, retryable: false, fields })
+
+const tea = summary({
+  node: "2026-09-28-0192c3a4-likes-green-tea",
+  description: "Likes green tea",
+  date: "2026-09-28",
+  subjects: ["drinks", "mornings"],
+  source: "user",
+})
+
+/** A page whose list gains `tea` once a write adds it. */
+function openWritablePage(answers: Answers = {}) {
+  let written = false
+  const page = openPage({
+    "memory.list": () =>
+      listing(written ? [tea, deploy, coffee, markdown] : [deploy, coffee, markdown]),
+    "memory.open": ({ node }) => {
+      const found = node === tea.node ? opened(tea) : OPENED[node]
+      if (found === undefined) throw new Error(`No node ${node}`)
+      return found
+    },
+    "memory.add": () => {
+      written = true
+      return { node: tea.node }
+    },
+    "memory.correct": () => {
+      written = true
+      return { node: tea.node }
+    },
+    "memory.forget": () => ({}),
+    ...answers,
+  })
+  return page
+}
 
 describe("the memory page", () => {
   beforeEach(() => {
@@ -241,5 +281,139 @@ describe("the memory page", () => {
     expect(screen.getByRole("tab", { name: "Knowledge graph" }).getAttribute("aria-selected")).toBe(
       "true",
     )
+  })
+
+  it("adds a fact from the pane with nothing open, then reloads the list and opens it", async () => {
+    const { caller, user } = openWritablePage()
+    await nodeButton("Picked markdown")
+
+    await user.type(pane().getByLabelText("Description"), "Likes green tea")
+    await user.type(pane().getByLabelText("Subjects"), "drinks, mornings,")
+    await user.type(pane().getByLabelText("Body"), "No milk.")
+    await user.click(pane().getByRole("button", { name: "Add fact" }))
+
+    expect(called(caller, "memory.add")).toEqual([
+      { description: "Likes green tea", subjects: ["drinks", "mornings"], body: "No milk." },
+    ])
+    expect(await pane().findByRole("heading", { name: "Likes green tea" })).toBeDefined()
+    expect(listCalls(caller)).toHaveLength(2)
+    expect(await nodeButton("Likes green tea")).toBeDefined()
+  })
+
+  it("corrects an open fact from a copy of its fields and opens the new fact", async () => {
+    const { caller, user } = openWritablePage()
+    await user.click(await nodeButton("Picked markdown"))
+
+    await user.click(await pane().findByRole("button", { name: "Correct" }))
+    const description = pane().getByLabelText("Description")
+    expect(description).toHaveProperty("value", "Picked markdown")
+    expect(pane().getByLabelText("Subjects")).toHaveProperty("value", "memory, kinby")
+    await user.clear(description)
+    await user.type(description, "Likes green tea")
+    await user.click(pane().getByRole("button", { name: "Save correction" }))
+
+    expect(called(caller, "memory.correct")).toEqual([
+      {
+        node: markdown.node,
+        description: "Likes green tea",
+        subjects: ["memory", "kinby"],
+        body: "The body of Picked markdown.",
+      },
+    ])
+    expect(await pane().findByRole("heading", { name: "Likes green tea" })).toBeDefined()
+    expect(listCalls(caller)).toHaveLength(2)
+  })
+
+  it("drops a correction on Cancel and shows the fact again", async () => {
+    const { caller, user } = openWritablePage()
+    await user.click(await nodeButton("Picked markdown"))
+
+    await user.click(await pane().findByRole("button", { name: "Correct" }))
+    await user.click(pane().getByRole("button", { name: "Cancel" }))
+
+    expect(pane().getByRole("heading", { name: "Picked markdown" })).toBeDefined()
+    expect(called(caller, "memory.correct")).toEqual([])
+  })
+
+  it("offers only Forget on an open episode", async () => {
+    const { user } = openWritablePage()
+
+    await user.click(await nodeButton("Fixed the deploy"))
+
+    expect(await pane().findByRole("button", { name: "Forget" })).toBeDefined()
+    expect(pane().queryByRole("button", { name: "Correct" })).toBeNull()
+  })
+
+  it("forgets only after a confirmation that says it can't be undone, then closes the pane", async () => {
+    const { caller, user } = openWritablePage()
+    await user.click(await nodeButton("Fixed the deploy"))
+
+    await user.click(await pane().findByRole("button", { name: "Forget" }))
+    let dialog = await screen.findByRole("alertdialog", { name: "Forget this episode?" })
+    expect(dialog.textContent).toContain("can't be undone")
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
+    expect(called(caller, "memory.forget")).toEqual([])
+    await user.click(pane().getByRole("button", { name: "Forget" }))
+    dialog = await screen.findByRole("alertdialog", { name: "Forget this episode?" })
+    await user.click(within(dialog).getByRole("button", { name: "Forget" }))
+
+    expect(called(caller, "memory.forget")).toEqual([{ node: deploy.node }])
+    expect(await pane().findByRole("button", { name: "Add fact" })).toBeDefined()
+    expect(listCalls(caller)).toHaveLength(2)
+  })
+
+  it.each([
+    [
+      "a correction",
+      async (user: ReturnType<typeof userEvent.setup>) => {
+        await user.click(await pane().findByRole("button", { name: "Correct" }))
+        await user.click(pane().getByRole("button", { name: "Save correction" }))
+      },
+    ],
+    [
+      "a forget",
+      async (user: ReturnType<typeof userEvent.setup>) => {
+        await user.click(await pane().findByRole("button", { name: "Forget" }))
+        const dialog = await screen.findByRole("alertdialog", { name: "Forget this fact?" })
+        await user.click(within(dialog).getByRole("button", { name: "Forget" }))
+      },
+    ],
+  ])("says the node is gone and reloads the list when %s finds it gone", async (_, write) => {
+    const gone = () => {
+      throw refused("NOT_FOUND")
+    }
+    const { caller, user } = openWritablePage({ "memory.correct": gone, "memory.forget": gone })
+    await user.click(await nodeButton("Picked markdown"))
+
+    await write(user)
+
+    expect(await pane().findByText(/is gone/)).toBeDefined()
+    expect(pane().getByRole("button", { name: "Add fact" })).toBeDefined()
+    expect(listCalls(caller)).toHaveLength(2)
+  })
+
+  it("shows each field's error beside the field the instance refused", async () => {
+    const { user } = openWritablePage({
+      "memory.add": () => {
+        throw refused("INVALID_ARGUMENT", { description: "Describe the fact." })
+      },
+    })
+    await nodeButton("Picked markdown")
+
+    await user.type(pane().getByLabelText("Description"), " ")
+    await user.click(pane().getByRole("button", { name: "Add fact" }))
+
+    expect(await pane().findByText("Describe the fact.")).toBeDefined()
+    expect(pane().getByLabelText("Description").getAttribute("aria-invalid")).toBe("true")
+    expect(pane().getByLabelText("Subjects").getAttribute("aria-invalid")).toBeNull()
+  })
+
+  it("closes an open node to offer Add fact again", async () => {
+    const { user } = openWritablePage()
+    await user.click(await nodeButton("Picked markdown"))
+
+    await user.click(await pane().findByRole("button", { name: "Close" }))
+
+    expect(pane().getByRole("button", { name: "Add fact" })).toBeDefined()
   })
 })

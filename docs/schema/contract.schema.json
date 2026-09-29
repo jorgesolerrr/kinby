@@ -2064,6 +2064,30 @@
       "title": "ManifestValues",
       "type": "object"
     },
+    "MemoryAddCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "subjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "description",
+        "subjects",
+        "body"
+      ],
+      "title": "MemoryAddCommand",
+      "type": "object"
+    },
     "MemoryCallCounts": {
       "additionalProperties": false,
       "properties": {
@@ -2085,6 +2109,53 @@
         }
       },
       "title": "MemoryCallCounts",
+      "type": "object"
+    },
+    "MemoryCorrectCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        },
+        "subjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "description",
+        "subjects",
+        "body",
+        "node"
+      ],
+      "title": "MemoryCorrectCommand",
+      "type": "object"
+    },
+    "MemoryForgetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "node": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node"
+      ],
+      "title": "MemoryForgetCommand",
+      "type": "object"
+    },
+    "MemoryForgetResult": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "MemoryForgetResult",
       "type": "object"
     },
     "MemoryListCommand": {
@@ -2331,6 +2402,19 @@
         "type"
       ],
       "title": "MemoryRecapped",
+      "type": "object"
+    },
+    "MemoryWriteResult": {
+      "additionalProperties": false,
+      "properties": {
+        "node": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node"
+      ],
+      "title": "MemoryWriteResult",
       "type": "object"
     },
     "MessageDelta": {
@@ -6390,6 +6474,54 @@
           ],
           "type": "object"
         },
+        "memory.add": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/MemoryAddCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/MemoryWriteResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "memory.correct": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/MemoryCorrectCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/MemoryWriteResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "memory.forget": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/MemoryForgetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/MemoryForgetResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "memory.list": {
           "additionalProperties": false,
           "properties": {
@@ -7050,6 +7182,9 @@
         "config.history",
         "memory.list",
         "memory.open",
+        "memory.add",
+        "memory.correct",
+        "memory.forget",
         "skill.list",
         "skill.read",
         "skill.write",

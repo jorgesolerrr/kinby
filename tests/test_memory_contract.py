@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import UUID
 
-from kinby.contracts import ErrorCode, ErrorEnvelope
+from kinby.contracts import ErrorCode, ErrorEnvelope, Scope
 from tests.test_routines import instance_at
 from tests.test_scheduler import FakeClock, call, runtime
 
@@ -381,5 +381,208 @@ def test_list_refuses_a_cursor_that_is_not_a_node_id(tmp_path: Path) -> None:
 
         assert isinstance(refused, ErrorEnvelope)
         assert refused.code is ErrorCode.INVALID_ARGUMENT
+
+    asyncio.run(scenario())
+
+
+def _graph_files(instance_path: Path) -> dict[str, str]:
+    graph_path = instance_path / "memory" / "graph"
+    return {path.stem: path.read_text(encoding="utf-8") for path in graph_path.glob("*.md")}
+
+
+def _events(instance_path: Path) -> bytes:
+    events_path = instance_path / ".state" / "events.jsonl"
+    return events_path.read_bytes() if events_path.is_file() else b""
+
+
+def _refused(result: object, code: ErrorCode) -> ErrorEnvelope:
+    assert isinstance(result, ErrorEnvelope)
+    assert result.code is code
+    return result
+
+
+def test_add_writes_a_user_fact_dated_today_with_no_thread(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        events = _events(tmp_path)
+
+        added = await call(
+            dispatcher,
+            "memory.add",
+            description="  Likes coffee black  ",
+            subjects=["coffee", "mornings"],
+            body="No sugar.",
+        )
+
+        assert added.node.startswith("2026-09-28-")
+        assert _graph_files(tmp_path) == {
+            added.node: (
+                "---\n"
+                "date: 2026-09-28\n"
+                'description: "Likes coffee black"\n'
+                'subjects: ["coffee", "mornings"]\n'
+                "source: user\n"
+                "---\n"
+                "No sugar.\n"
+            )
+        }
+        opened = await call(dispatcher, "memory.open", node=added.node)
+        assert (opened.source, opened.thread) == ("user", None)
+        assert _events(tmp_path) == events
+
+    asyncio.run(scenario())
+
+
+def test_add_takes_empty_subjects_and_body(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        added = await call(
+            dispatcher, "memory.add", description="Lives in Madrid", subjects=[], body=""
+        )
+
+        opened = await call(dispatcher, "memory.open", node=added.node)
+        assert (opened.description, opened.subjects, opened.body) == ("Lives in Madrid", [], "")
+
+    asyncio.run(scenario())
+
+
+def test_add_refuses_a_blank_description_and_writes_nothing(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        refused = await call(dispatcher, "memory.add", description="  ", subjects=[], body="")
+
+        assert set(_refused(refused, ErrorCode.INVALID_ARGUMENT).fields) == {"description"}
+        assert _graph_files(tmp_path) == {}
+
+    asyncio.run(scenario())
+
+
+def test_writes_need_the_admin_scope(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        node = _node(tmp_path, "2026-09-01-picked-markdown", description="Picked markdown")
+        fact = {"description": "Picked markdown", "subjects": [], "body": ""}
+
+        for method, payload in (
+            ("memory.add", fact),
+            ("memory.correct", {"node": node, **fact}),
+            ("memory.forget", {"node": node}),
+        ):
+            refused = await dispatcher.dispatch(method, payload, {Scope.INSTANCE_READ})
+            _refused(refused, ErrorCode.PERMISSION_DENIED)
+
+    asyncio.run(scenario())
+
+
+def test_correct_writes_a_new_user_fact_and_tombstones_the_old_one(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        old = _node(tmp_path, "2026-09-01-likes-tea", description="Likes tea", subjects="drinks")
+        events = _events(tmp_path)
+
+        corrected = await call(
+            dispatcher,
+            "memory.correct",
+            node=old,
+            description="Likes coffee",
+            subjects=["drinks"],
+            body="Black, no sugar.",
+        )
+
+        files = _graph_files(tmp_path)
+        assert corrected.node.startswith("2026-09-28-")
+        assert files[corrected.node] == (
+            "---\n"
+            "date: 2026-09-28\n"
+            'description: "Likes coffee"\n'
+            'subjects: ["drinks"]\n'
+            "source: user\n"
+            "---\n"
+            "Black, no sugar.\n"
+        )
+        assert "tombstone: true\n" in files[old]
+        assert await _listed(dispatcher) == [corrected.node]
+        assert _events(tmp_path) == events
+
+    asyncio.run(scenario())
+
+
+def test_correct_refuses_an_episode_a_forgotten_and_an_unknown_node_writing_nothing(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        episode = _episode(tmp_path, "2026-09-03-fixed-deploy", description="Fixed the deploy")
+        forgotten = _node(tmp_path, "2026-09-02-forgotten", description="Forgotten")
+        _forget(tmp_path, forgotten)
+        before = _graph_files(tmp_path)
+        fact = {"description": "Corrected", "subjects": [], "body": ""}
+
+        on_episode = await call(dispatcher, "memory.correct", node=episode, **fact)
+        on_forgotten = await call(dispatcher, "memory.correct", node=forgotten, **fact)
+        on_unknown = await call(dispatcher, "memory.correct", node="2026-09-01-never", **fact)
+
+        _refused(on_episode, ErrorCode.INVALID_ARGUMENT)
+        _refused(on_forgotten, ErrorCode.NOT_FOUND)
+        _refused(on_unknown, ErrorCode.NOT_FOUND)
+        assert _graph_files(tmp_path) == before
+
+    asyncio.run(scenario())
+
+
+def test_correct_refuses_a_blank_description_and_keeps_the_old_fact(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        old = _node(tmp_path, "2026-09-01-likes-tea", description="Likes tea")
+        before = _graph_files(tmp_path)
+
+        refused = await call(
+            dispatcher, "memory.correct", node=old, description="", subjects=[], body=""
+        )
+
+        assert set(_refused(refused, ErrorCode.INVALID_ARGUMENT).fields) == {"description"}
+        assert _graph_files(tmp_path) == before
+
+    asyncio.run(scenario())
+
+
+def test_forget_tombstones_a_fact_or_an_episode(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        fact = _node(tmp_path, "2026-09-01-likes-tea", description="Likes tea")
+        episode = _episode(tmp_path, "2026-09-03-fixed-deploy", description="Fixed the deploy")
+        events = _events(tmp_path)
+
+        forgot_fact = await call(dispatcher, "memory.forget", node=fact)
+        forgot_episode = await call(dispatcher, "memory.forget", node=episode)
+
+        assert forgot_fact.model_dump() == {}
+        assert forgot_episode.model_dump() == {}
+        files = _graph_files(tmp_path)
+        assert "tombstone: true\n" in files[fact]
+        assert "tombstone: true\n" in files[episode]
+        assert await _listed(dispatcher) == []
+        assert _events(tmp_path) == events
+
+    asyncio.run(scenario())
+
+
+def test_forget_refuses_a_forgotten_an_unknown_and_a_malformed_node(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        fact = _node(tmp_path, "2026-09-01-likes-tea", description="Likes tea")
+        await call(dispatcher, "memory.forget", node=fact)
+        before = _graph_files(tmp_path)
+
+        again = await call(dispatcher, "memory.forget", node=fact)
+        unknown = await call(dispatcher, "memory.forget", node="2026-09-01-never")
+        malformed = await call(dispatcher, "memory.forget", node="../kinby")
+
+        _refused(again, ErrorCode.NOT_FOUND)
+        _refused(unknown, ErrorCode.NOT_FOUND)
+        _refused(malformed, ErrorCode.INVALID_ARGUMENT)
+        assert _graph_files(tmp_path) == before
 
     asyncio.run(scenario())

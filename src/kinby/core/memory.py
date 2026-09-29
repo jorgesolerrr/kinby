@@ -1,30 +1,45 @@
-"""Answer a client's reads of the knowledge graph."""
+"""Answer a client's reads and writes of the knowledge graph."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import date
+from datetime import UTC, date, datetime
 
 from kinby.contracts import (
+    MemoryAddCommand,
+    MemoryCorrectCommand,
+    MemoryForgetCommand,
+    MemoryForgetResult,
     MemoryListCommand,
     MemoryListResult,
     MemoryOpenCommand,
     MemoryOpenResult,
+    MemoryWriteResult,
     NodeId,
     NodeKind,
     NodeSource,
     NodeSummary,
 )
-from kinby.core.errors import InvalidMemoryNode, MemoryNodeNotFound
-from kinby.memory import Episode, GraphStore, InvalidNodeId, MemoryNode, NodeNotFound
+from kinby.core.errors import (
+    EpisodeNotCorrectable,
+    InvalidFact,
+    InvalidMemoryNode,
+    MemoryNodeNotFound,
+)
+from kinby.memory import Episode, Fact, GraphStore, InvalidNodeId, MemoryNode, NodeNotFound
+from kinby.memory.facade import new_node_id
 
 
 class InstanceMemory:
-    """The instance's knowledge graph as clients read it."""
+    """The instance's knowledge graph as clients read and write it.
 
-    def __init__(self, graph: GraphStore) -> None:
+    A write goes straight to the graph: it passes no gate and appends nothing to a thread.
+    """
+
+    def __init__(self, graph: GraphStore, clock: Callable[[], datetime]) -> None:
         self._graph = graph
+        self._clock = clock
 
     async def list(self, command: MemoryListCommand) -> MemoryListResult:
         """One page of the live nodes the command's filters match, newest first."""
@@ -55,6 +70,41 @@ class InstanceMemory:
             thread=memory.thread,
             turn=None if episode is None else episode.turn,
             tools=None if episode is None else list(episode.tools),
+        )
+
+    async def add(self, command: MemoryAddCommand) -> MemoryWriteResult:
+        return MemoryWriteResult(node=self._graph.remember(self._user_fact(command)))
+
+    async def correct(self, command: MemoryCorrectCommand) -> MemoryWriteResult:
+        """Write the corrected fact, then tombstone the one it replaces."""
+        with _refusals():
+            replaced = self._graph.open(command.node)
+        if isinstance(replaced, Episode):
+            raise EpisodeNotCorrectable(f'Graph node "{command.node}" is an episode.')
+        corrected = self._graph.remember(self._user_fact(command))
+        self._graph.forget(replaced.node)
+        return MemoryWriteResult(node=corrected)
+
+    async def forget(self, command: MemoryForgetCommand) -> MemoryForgetResult:
+        with _refusals():
+            self._graph.open(command.node)
+        self._graph.forget(command.node)
+        return MemoryForgetResult()
+
+    def _user_fact(self, command: MemoryAddCommand) -> Fact:
+        """The fact *command* describes, dated today and belonging to no thread."""
+        description = command.description.strip()
+        if not description:
+            raise InvalidFact({"description": "Describe the fact."})
+        today = self._clock().astimezone(UTC).date()
+        return Fact(
+            node=new_node_id(today, description),
+            date=today,
+            description=description,
+            subjects=tuple(command.subjects),
+            body=command.body,
+            thread=None,
+            added_by_user=True,
         )
 
 
