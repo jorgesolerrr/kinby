@@ -230,6 +230,10 @@ class ImagePreparation(Protocol):
         """Run the candidate check inside the image and read what it declares."""
         ...
 
+    async def resolve(self, revision: str) -> str:
+        """The commit a revision names in the checkout images are built from."""
+        ...
+
 
 @dataclass(frozen=True)
 class BuildResult:

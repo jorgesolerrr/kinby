@@ -32,13 +32,17 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const [instances, listAgain] = useInstances(client, clock, connected)
   const selectedId = useSelectedInstanceId()
   const creating = useCreating()
+  const configOpen = useConfigOpen()
   // An instance the hub does not have, or no longer has, selects nothing.
   const selected = instances?.find((instance) => instance.instance_id === selectedId)
-  // The hub relays only to a running instance.
-  const running = selected?.process === "running" ? selected.instance_id : undefined
+  // The hub relays only to a running instance. An open config panel keeps its connection while the
+  // instance is meant to run, so an update that restarts the container does not close the panel.
+  const running =
+    selected?.process === "running" || (configOpen && selected?.intended_state === "running")
+      ? selected.instance_id
+      : undefined
   const instanceClient = useInstanceClient(client, running)
   const threadId = useSelectedThreadId()
-  const configOpen = useConfigOpen()
 
   return (
     <TooltipProvider>

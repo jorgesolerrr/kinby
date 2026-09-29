@@ -1,8 +1,9 @@
-import type { InstanceClient, PromptName } from "@kinby/contract"
+import type { Client, Clock, InstanceClient, InstanceSummary, PromptName } from "@kinby/contract"
 import { useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
 import { ManifestSection } from "@/components/manifest-section"
+import { PackageSection } from "@/components/package-section"
 import { PermissionsSection } from "@/components/permissions-section"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -38,8 +39,8 @@ import {
 
 type Caller = Pick<InstanceClient, "call">
 
-/** A section that is built: one of the prompts, the permissions, or the manifest. */
-type SectionKey = PromptName | "permissions" | "manifest"
+/** A section that is built: one of the prompts, the permissions, the manifest, or the package. */
+type SectionKey = PromptName | "permissions" | "manifest" | "package"
 
 /** One section of the panel. A section without a `key` is not built yet, and is unavailable. */
 interface Section {
@@ -87,7 +88,12 @@ const GROUPS: { label: string; sections: Section[] }[] = [
     sections: [
       { label: "Secrets and login", hint: "write-only values, sign-in", icon: KeyRoundIcon },
       { label: "Package config", hint: "the package's own settings", icon: BoxIcon },
-      { label: "Package and version", hint: "template, installed, update", icon: PackageIcon },
+      {
+        label: "Package and version",
+        hint: "template, installed, update",
+        icon: PackageIcon,
+        key: "package",
+      },
     ],
   },
 ]
@@ -98,12 +104,33 @@ const APPLIES: Record<PromptName, string> = {
   recap: "Saved. It applies at the next recap.",
 }
 
-/** The instance's config: its sections grouped in a left column, the selected one on the right. */
-export function ConfigPanel({ client }: { client: Caller }) {
+/**
+ * The instance's config: its sections grouped in a left column, the selected one on the right. A
+ * section that needs the user says why in place of its hint. `client` reaches the instance and
+ * `caller` the hub, and `onChanged` lists the instances again.
+ */
+export function ConfigPanel({
+  client,
+  caller,
+  clock,
+  instance,
+  onChanged,
+}: {
+  client: Caller
+  caller: Pick<Client, "call">
+  clock: Clock
+  instance: InstanceSummary
+  onChanged: () => void
+}) {
   const [selected, setSelected] = useState<SectionKey>("behavior")
   const section = GROUPS.flatMap((group) => group.sections).find(
     (candidate) => candidate.key === selected,
   )
+  const needs: Partial<Record<SectionKey, string>> = instance.notices.some(
+    (notice) => notice.code === "revision_behind",
+  )
+    ? { package: "behind the hub" }
+    : {}
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       <nav
@@ -115,6 +142,7 @@ export function ConfigPanel({ client }: { client: Caller }) {
             key={group.label}
             label={group.label}
             sections={group.sections}
+            needs={needs}
             selected={selected}
             onSelect={setSelected}
           />
@@ -130,6 +158,8 @@ export function ConfigPanel({ client }: { client: Caller }) {
           <PermissionsSection client={client} />
         ) : selected === "manifest" ? (
           <ManifestSection client={client} />
+        ) : selected === "package" ? (
+          <PackageSection caller={caller} clock={clock} instance={instance} onChanged={onChanged} />
         ) : (
           <PromptSection key={selected} client={client} name={selected} />
         )}
@@ -142,11 +172,13 @@ export function ConfigPanel({ client }: { client: Caller }) {
 function SectionGroup({
   label,
   sections,
+  needs,
   selected,
   onSelect,
 }: {
   label: string
   sections: Section[]
+  needs: Partial<Record<SectionKey, string>>
   selected: SectionKey
   onSelect: (key: SectionKey) => void
 }) {
@@ -177,7 +209,9 @@ function SectionGroup({
               </ItemMedia>
               <ItemContent>
                 <ItemTitle>{label}</ItemTitle>
-                <ItemDescription>{key === undefined ? "Not available yet" : hint}</ItemDescription>
+                <ItemDescription>
+                  {key === undefined ? "Not available yet" : (needs[key] ?? hint)}
+                </ItemDescription>
               </ItemContent>
             </Item>
           </li>

@@ -999,6 +999,28 @@ class LifecycleOperationResult(ContractModel):
     instance_id: UUID
 
 
+class RevisionBehind(ContractModel):
+    """The instance runs another kinby revision than the hub's checkout, so an update is there."""
+
+    code: Literal["revision_behind"] = "revision_behind"
+    message: str
+    instance_revision: str
+    hub_revision: str
+
+
+class PackageTemplateOlder(ContractModel):
+    """The instance's configuration was copied from another version of its installed package."""
+
+    code: Literal["package_template_older"] = "package_template_older"
+    message: str
+    initialized_version: str
+    installed_version: str
+
+
+#: Something about an instance the user may want to act on. It never stops the instance.
+InstanceNotice = Annotated[RevisionBehind | PackageTemplateOlder, Field(discriminator="code")]
+
+
 class InstanceSummary(ContractModel):
     instance_id: UUID
     manifest_id: str
@@ -1013,6 +1035,8 @@ class InstanceSummary(ContractModel):
     avatar: Avatar
     #: A declared login is not signed in, or a required secret is not set.
     setup_pending: bool
+    #: What the user may want to act on, such as an update the hub offers.
+    notices: list[InstanceNotice]
     package: PackageSummary | None = None
     #: The runtime's word for the process, such as "restarting" beside `starting`.
     detail: str = ""

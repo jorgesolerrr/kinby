@@ -1578,6 +1578,26 @@
         "manifest_id": {
           "type": "string"
         },
+        "notices": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "package_template_older": "#/$defs/PackageTemplateOlder",
+                "revision_behind": "#/$defs/RevisionBehind"
+              },
+              "propertyName": "code"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/RevisionBehind"
+              },
+              {
+                "$ref": "#/$defs/PackageTemplateOlder"
+              }
+            ]
+          },
+          "type": "array"
+        },
         "package": {
           "anyOf": [
             {
@@ -1629,7 +1649,8 @@
         "runtime_id",
         "storage",
         "avatar",
-        "setup_pending"
+        "setup_pending",
+        "notices"
       ],
       "title": "InstanceSummary",
       "type": "object"
@@ -2666,6 +2687,34 @@
       "title": "PackageSummary",
       "type": "object"
     },
+    "PackageTemplateOlder": {
+      "additionalProperties": false,
+      "description": "The instance's configuration was copied from another version of its installed package.",
+      "properties": {
+        "code": {
+          "const": "package_template_older",
+          "default": "package_template_older",
+          "type": "string"
+        },
+        "initialized_version": {
+          "type": "string"
+        },
+        "installed_version": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "initialized_version",
+        "installed_version",
+        "code"
+      ],
+      "title": "PackageTemplateOlder",
+      "type": "object"
+    },
     "PermissionMode": {
       "enum": [
         "read-only",
@@ -2930,6 +2979,34 @@
         "type"
       ],
       "title": "ResultFrame",
+      "type": "object"
+    },
+    "RevisionBehind": {
+      "additionalProperties": false,
+      "description": "The instance runs another kinby revision than the hub's checkout, so an update is there.",
+      "properties": {
+        "code": {
+          "const": "revision_behind",
+          "default": "revision_behind",
+          "type": "string"
+        },
+        "hub_revision": {
+          "type": "string"
+        },
+        "instance_revision": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "instance_revision",
+        "hub_revision",
+        "code"
+      ],
+      "title": "RevisionBehind",
       "type": "object"
     },
     "RoutineFailureHandled": {

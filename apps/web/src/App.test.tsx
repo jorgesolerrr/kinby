@@ -222,6 +222,20 @@ describe("the instances", () => {
     expect(screen.queryByText("Nothing here yet")).toBeNull()
   })
 
+  it("keeps the config panel and its connection while an update restarts the instance", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/config")
+    const { hub, clock } = openApp({ signedIn: true, instances: [ada, unnamed] })
+    await screen.findByRole("navigation", { name: "Config sections" })
+    const relayed = () =>
+      hub.sockets.filter((socket) => socket.url === "ws://hub.test/instances/hub-ada/ws")
+
+    hub.instances = [{ ...ada, process: "stopped" }, unnamed]
+    await act(() => clock.advance(30_000))
+
+    expect(screen.getByRole("navigation", { name: "Config sections" })).toBeDefined()
+    expect(relayed()).toHaveLength(1)
+  })
+
   it("opens no threads for a selected instance that is not running", async () => {
     window.history.replaceState(null, "", "/instances/hub-unnamed")
 
