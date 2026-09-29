@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import re
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, field
 
+import tomlkit
 from pydantic import TypeAdapter, ValidationError
 
 from kinby.contracts import GateAction, PermissionMode
 from kinby.instance.dataclasses import Instance
 from kinby.instance.layout import PERMISSIONS_NAME
-from kinby.instance.toml import toml_document
 
 
 class PermissionsError(ValueError):
@@ -110,16 +110,31 @@ def parse_permissions(content: bytes) -> GatePolicy:
     return policy
 
 
-def permissions_toml(policy: GatePolicy) -> str:
-    """The ``permissions.toml`` for *policy*, which lists only the instance's own deny patterns."""
-    return toml_document(
-        {
-            "mode": policy.mode.value,
-            "ceiling": policy.ceiling.value,
-            "tools": {name: action.value for name, action in policy.tools.items()},
-            "bash": {"deny": list(policy.bash.deny), "ask": list(policy.bash.ask)},
-        }
-    )
+def edited_permissions(text: str, policy: GatePolicy) -> str:
+    """Write *policy* into the text of ``permissions.toml``, keeping its comments.
+
+    Only the values that change are touched. The file lists only the instance's own
+    deny patterns; an empty *text* gives a whole new file.
+    """
+    document = tomlkit.parse(text)
+    _set_changed(document, "mode", policy.mode.value)
+    _set_changed(document, "ceiling", policy.ceiling.value)
+    tools = document.setdefault("tools", tomlkit.table())
+    for name in tools.keys() - policy.tools.keys():
+        del tools[name]
+    for name, action in policy.tools.items():
+        _set_changed(tools, name, action.value)
+    bash = document.setdefault("bash", tomlkit.table())
+    _set_changed(bash, "deny", list(policy.bash.deny))
+    _set_changed(bash, "ask", list(policy.bash.ask))
+    edited = tomlkit.dumps(document)
+    parse_permissions(edited.encode("utf-8"))
+    return edited
+
+
+def _set_changed(table: MutableMapping[str, object], key: str, value: object) -> None:
+    if table.get(key) != value:
+        table[key] = value
 
 
 _MODE_ORDER = (

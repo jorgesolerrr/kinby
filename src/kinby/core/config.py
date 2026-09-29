@@ -92,10 +92,10 @@ from kinby.instance.permissions import (
     BashPolicy,
     GatePolicy,
     bash_regex_errors,
+    edited_permissions,
     exceeds_ceiling,
     load_permissions,
     parse_permissions,
-    permissions_toml,
 )
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 from kinby.packages import (
@@ -306,8 +306,10 @@ class InstanceConfig:
             errors["mode"] = f"{policy.mode} is above the ceiling, {policy.ceiling}."
         if errors:
             raise InvalidConfig(errors)
-        content = permissions_toml(policy).encode("utf-8")
+        path = self._instance.path / PERMISSIONS_NAME
         async with self._instance.config_lock:
+            text = (_read_bytes(path) or b"").decode("utf-8")
+            content = edited_permissions(text, policy).encode("utf-8")
             await asyncio.to_thread(
                 self._write, ConfigFile(PERMISSIONS_NAME), content, command.hash
             )
