@@ -129,6 +129,80 @@ describe("a thread's timeline", () => {
     expect(turn?.request).toBe("Summarize the night's email")
   })
 
+  describe("a turn's recap", () => {
+    const completed: Payload = { type: "turn.completed", input_tokens: 90, output_tokens: 10 }
+    const recapped = (node: string | null): Payload => ({
+      type: "memory.recapped",
+      node,
+      input_tokens: 40,
+      output_tokens: 20,
+    })
+
+    it("is the episode it wrote", () => {
+      const [turn] = replay([
+        "turn-1",
+        started("Fix the runtime"),
+        completed,
+        recapped("2026-09-28-0192-fix-the-runtime"),
+      ]).turns
+
+      expect(turn?.recap).toEqual({ kind: "episode", node: "2026-09-28-0192-fix-the-runtime" })
+    })
+
+    it("is no episode when it wrote none", () => {
+      const [turn] = replay(["turn-1", started("Fix the runtime"), completed, recapped(null)]).turns
+
+      expect(turn?.recap).toEqual({ kind: "none" })
+    })
+
+    it("failed with the message of a warning from the recap", () => {
+      const [turn] = replay([
+        "turn-1",
+        started("Fix the runtime"),
+        completed,
+        {
+          type: "warning",
+          sources: ["recap"],
+          message: "The turn recap failed: TimeoutError: the model did not answer",
+        },
+      ]).turns
+
+      expect(turn?.recap).toEqual({
+        kind: "failed",
+        message: "The turn recap failed: TimeoutError: the model did not answer",
+      })
+    })
+
+    it("is not a warning from anything else", () => {
+      const [turn] = replay([
+        "turn-1",
+        started("Fix the runtime"),
+        { type: "warning", sources: ["routines/nightly.md"], message: "Budget exceeds the cap." },
+        completed,
+      ]).turns
+
+      expect(turn?.recap).toBeUndefined()
+    })
+
+    it("is none on a completed turn until it reports", () => {
+      const [turn] = replay(["turn-1", started("Fix the runtime"), completed]).turns
+
+      expect(turn?.end).toEqual({ kind: "done", tokens: 100 })
+      expect(turn?.recap).toBeUndefined()
+    })
+
+    it("lands on its own turn when it reports after the next turn has started", () => {
+      const [first, second] = replay(
+        ["turn-1", started("Fix the runtime"), completed],
+        ["turn-2", started("Now deploy it")],
+        ["turn-1", recapped(null)],
+      ).turns
+
+      expect(first?.recap).toEqual({ kind: "none" })
+      expect(second?.recap).toBeUndefined()
+    })
+  })
+
   describe("a running turn", () => {
     const write = { path: "runtime.py", content: "fixed" }
     const parked: Payload[] = [

@@ -242,6 +242,102 @@ describe("a thread's panel", () => {
     expect(screen.getByText("bash make deploy · approved by you · 12 ms")).toBeDefined()
   })
 
+  describe("a turn's recap", () => {
+    const completed: Payload = { type: "turn.completed", input_tokens: 90, output_tokens: 10 }
+    const recapped = (node: string | null): Payload => ({
+      type: "memory.recapped",
+      node,
+      input_tokens: 40,
+      output_tokens: 20,
+    })
+    const failed: Payload = {
+      type: "warning",
+      sources: ["recap"],
+      message: "The turn recap failed: TimeoutError: the model did not answer",
+    }
+    /** The marker on the turn that asked `request`. */
+    const recapOf = (request: string, marker: string) => {
+      const turn = screen.getByText(request).closest("[data-slot=message-scroller-item]")
+      if (!(turn instanceof HTMLElement)) throw new Error(`No turn asked ${request}.`)
+      return within(turn).queryByText(marker)
+    }
+
+    it("ends each turn with what the recap left, once it reports", async () => {
+      const events = thread(
+        ["turn-1", started("Fix the runtime")],
+        ["turn-1", completed],
+        ["turn-2", started("Deploy it")],
+        ["turn-2", completed],
+        ["turn-3", started("Tidy the notes")],
+        ["turn-3", completed],
+        ["turn-4", started("Say hi")],
+        ["turn-4", completed],
+        // A recap runs after its turn, so it can report after the next turn has started.
+        ["turn-1", recapped("2026-09-28-0192-fix-the-runtime")],
+        ["turn-2", recapped(null)],
+        ["turn-3", failed],
+      )
+      const { subscription } = openThread()
+
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+
+      expect(recapOf("Fix the runtime", "Recapped")).not.toBeNull()
+      expect(recapOf("Deploy it", "No episode")).not.toBeNull()
+      expect(recapOf("Tidy the notes", "Recap failed")).not.toBeNull()
+      for (const marker of ["Recapped", "No episode", "Recap failed"]) {
+        expect(recapOf("Say hi", marker)).toBeNull()
+      }
+      // The episode has no Memory page to open on yet.
+      expect(screen.queryByRole("link")).toBeNull()
+    })
+
+    it("shows a recap that reports live, after the turn has completed", async () => {
+      const events = thread(["turn-1", started("Fix the runtime")], ["turn-1", completed])
+      const { subscription } = openThread()
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+      expect(screen.getByText("Done · 0 steps · 100 tokens")).toBeDefined()
+      expect(screen.queryByText("No episode")).toBeNull()
+
+      await act(async () =>
+        subscription().deliver({
+          sequence: 3,
+          thread_id: "t1",
+          turn_id: "turn-1",
+          timestamp: "2026-09-28T10:00:30Z",
+          payload: recapped(null),
+        }),
+      )
+
+      expect(screen.getByText("No episode")).toBeDefined()
+    })
+
+    it("shows why the recap failed on hover of its marker, a button", async () => {
+      const events = thread(
+        ["turn-1", started("Fix the runtime")],
+        ["turn-1", completed],
+        ["turn-1", failed],
+      )
+      const { subscription } = openThread()
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+      expect(screen.queryByText(/TimeoutError/)).toBeNull()
+
+      await userEvent.hover(screen.getByRole("button", { name: "Recap failed" }))
+
+      expect(
+        await screen.findByText("The turn recap failed: TimeoutError: the model did not answer"),
+      ).toBeDefined()
+    })
+  })
+
   it("puts focus in the composer once the replay has loaded", async () => {
     const { subscription } = openThread()
 

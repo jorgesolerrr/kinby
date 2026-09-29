@@ -22,6 +22,8 @@ export interface TurnBlock {
   approval?: ParkedApproval
   /** How the turn closed. A running turn has none yet. */
   end?: TurnEnd
+  /** What the turn's recap left in memory. It runs after the turn, so it can report late or never. */
+  recap?: Recap
 }
 
 /** An approval the user has not answered, and the tool call it asks about. */
@@ -55,6 +57,11 @@ export type TurnEnd =
   | { kind: "done"; tokens: number }
   | { kind: "failed"; code: ErrorCode; message: string }
   | { kind: "stopped" }
+
+export type Recap =
+  | { kind: "episode"; node: string }
+  | { kind: "none" }
+  | { kind: "failed"; message: string }
 
 /** The timeline with one more of the thread's events on it. */
 export function project(timeline: Timeline, event: Event): Timeline {
@@ -149,6 +156,15 @@ function projectTurn(previous: TurnBlock, payload: Payload): TurnBlock {
       return { ...turn, end: { kind: "failed", code: payload.code, message: payload.message } }
     case "turn.interrupted":
       return { ...turn, end: { kind: "stopped" } }
+    case "memory.recapped":
+      return {
+        ...turn,
+        recap: payload.node === null ? { kind: "none" } : { kind: "episode", node: payload.node },
+      }
+    case "warning":
+      return payload.sources.includes("recap")
+        ? { ...turn, recap: { kind: "failed", message: payload.message } }
+        : turn
     default:
       return turn
   }
