@@ -1,5 +1,7 @@
 import asyncio
 import hashlib
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -8,6 +10,7 @@ import pytest
 from langchain_core.messages import AIMessageChunk
 from pydantic import JsonValue
 
+from kinby.cli import main
 from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
@@ -16,15 +19,19 @@ from kinby.contracts import (
     PermissionMode,
     SystemPrompt,
 )
-from kinby.core import LangGraphRunner
+from kinby.core import LangGraphRunner, boot_instance
+from kinby.core.dispatcher import Dispatcher, TurnConfig
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
+from kinby.instance import load_instance
 from kinby.instance.permissions import SHIPPED_BASH_DENY
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 from kinby.plugins import ToolContext
 from kinby.plugins.instance_tools import instance_tools
+from tests.fake_package import install_fake_package
+from tests.helpers import fixed_permission_ceiling, fixed_turn_preparation, turn_config_stub
 from tests.test_instance_tools import ScriptedModel
 from tests.test_routines import instance_at, routine_file
-from tests.test_scheduler import FailingRunner, FakeClock, call, runtime
+from tests.test_scheduler import FailingRunner, FakeClock, ScriptedRunner, call, runtime
 
 EMPTY_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -484,5 +491,162 @@ def test_permissions_set_with_a_stale_hash_leaves_the_file(tmp_path: Path) -> No
         assert (tmp_path / "permissions.toml").read_text(encoding="utf-8") == PERMISSIONS
         history = await call(dispatcher, "config.history", limit=10)
         assert history.changes == []
+
+    asyncio.run(scenario())
+
+
+@pytest.fixture
+def writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An instance of the fake package ``writer``, whose config is a tone and a token."""
+    package = install_fake_package(tmp_path / "site")
+    monkeypatch.syspath_prepend(str(package.site))
+    monkeypatch.setattr(
+        "kinby.core.runtime.turn_config",
+        turn_config_stub(
+            lambda: TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, ScriptedRunner())
+        ),
+    )
+    path = tmp_path / "instance"
+    assert main(["init", str(path), "--package", "writer", "--model", "openai:gpt-5"]) == 0
+    return path
+
+
+@asynccontextmanager
+async def _booted(path: Path) -> AsyncIterator[Dispatcher]:
+    runtime = await boot_instance(load_instance(path))
+    try:
+        yield runtime.dispatcher
+    finally:
+        await runtime.stop_after_running_routine()
+
+
+WRITER_CONFIG = "tone: plain\ntoken: EDITOR_TOKEN\n"
+
+
+def test_package_config_get_returns_the_packages_schema_and_the_file(writer: Path) -> None:
+    async def scenario() -> None:
+        async with _booted(writer) as dispatcher:
+            read = await call(dispatcher, "package.config.get")
+
+        assert read.model_dump(mode="json") == {
+            "schema": {
+                "additionalProperties": False,
+                "properties": {
+                    "tone": {"enum": ["plain", "formal"], "title": "Tone", "type": "string"},
+                    "token": {"title": "Token", "type": "string"},
+                },
+                "required": ["tone", "token"],
+                "title": "WriterConfig",
+                "type": "object",
+            },
+            "values": {"tone": "plain", "token": "EDITOR_TOKEN"},
+            "hash": _sha256(WRITER_CONFIG),
+        }
+
+    asyncio.run(scenario())
+
+
+def test_package_config_set_writes_the_validated_values(writer: Path) -> None:
+    async def scenario() -> None:
+        async with _booted(writer) as dispatcher:
+            written = await call(
+                dispatcher,
+                "package.config.set",
+                values={"token": "EDITOR_TOKEN", "tone": "formal"},
+                hash=_sha256(WRITER_CONFIG),
+            )
+            read = await call(dispatcher, "package.config.get")
+            history = await call(dispatcher, "config.history", file="package.yaml", limit=10)
+
+        file = (writer / "package.yaml").read_text(encoding="utf-8")
+        assert file == "tone: formal\ntoken: EDITOR_TOKEN\n"
+        assert written == read
+        assert (read.values, read.hash) == (
+            {"tone": "formal", "token": "EDITOR_TOKEN"},
+            _sha256(file),
+        )
+        [change] = history.changes
+        assert change.actor == "app"
+        assert change.diff.endswith("-tone: plain\n+tone: formal\n token: EDITOR_TOKEN\n")
+
+    asyncio.run(scenario())
+
+
+def test_package_config_set_puts_the_validators_errors_in_fields(writer: Path) -> None:
+    async def scenario() -> None:
+        async with _booted(writer) as dispatcher:
+            refused = await call(
+                dispatcher,
+                "package.config.set",
+                values={"tone": "shouty", "token": "GITHUB_TOKEN", "tonne": "formal"},
+                hash=_sha256(WRITER_CONFIG),
+            )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (refused.code, refused.fields) == (
+            ErrorCode.INVALID_ARGUMENT,
+            {
+                "tone": "Input should be 'plain' or 'formal'",
+                "token": '"GITHUB_TOKEN" is not a secret field this package declares.',
+                "tonne": "Extra inputs are not permitted",
+            },
+        )
+        assert (writer / "package.yaml").read_text(encoding="utf-8") == WRITER_CONFIG
+
+    asyncio.run(scenario())
+
+
+def test_package_config_set_with_a_stale_hash_leaves_the_file(writer: Path) -> None:
+    async def scenario() -> None:
+        async with _booted(writer) as dispatcher:
+            (writer / "package.yaml").write_text("tone: formal\ntoken: EDITOR_TOKEN\n")
+            refused = await call(
+                dispatcher,
+                "package.config.set",
+                values={"tone": "plain", "token": "EDITOR_TOKEN"},
+                hash=_sha256(WRITER_CONFIG),
+            )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.STALE
+        assert (writer / "package.yaml").read_text() == "tone: formal\ntoken: EDITOR_TOKEN\n"
+
+    asyncio.run(scenario())
+
+
+def test_a_vanilla_instance_has_no_package_config(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        read = await call(dispatcher, "package.config.get")
+        written = await call(dispatcher, "package.config.set", values={}, hash=EMPTY_HASH)
+        probed = await call(dispatcher, "instance.probe")
+
+        assert isinstance(read, ErrorEnvelope)
+        assert isinstance(written, ErrorEnvelope)
+        assert (read.code, written.code) == (ErrorCode.NOT_FOUND, ErrorCode.NOT_FOUND)
+        assert not (tmp_path / "package.yaml").exists()
+        assert probed.restart_reasons == []
+
+    asyncio.run(scenario())
+
+
+def test_the_probe_asks_for_a_restart_once_the_package_config_changed(writer: Path) -> None:
+    async def scenario() -> None:
+        async with _booted(writer) as dispatcher:
+            before = await call(dispatcher, "instance.probe")
+            await call(
+                dispatcher,
+                "package.config.set",
+                values={"tone": "formal", "token": "EDITOR_TOKEN"},
+                hash=_sha256(WRITER_CONFIG),
+            )
+            after = await call(dispatcher, "instance.probe")
+            (writer / "package.yaml").write_text(WRITER_CONFIG, encoding="utf-8")
+            restored = await call(dispatcher, "instance.probe")
+
+        assert before.restart_reasons == []
+        assert after.restart_reasons == ["package_config"]
+        assert restored.restart_reasons == []
 
     asyncio.run(scenario())

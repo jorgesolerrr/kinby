@@ -41,6 +41,9 @@ from kinby.contracts.models import (
     LifecycleOperationResult,
     OperationGetCommand,
     OperationGetResult,
+    PackageConfigGetCommand,
+    PackageConfigResult,
+    PackageConfigSetCommand,
     PackageDescribeCommand,
     PackageDescription,
     PackageListCommand,
@@ -176,6 +179,12 @@ PERMISSIONS_GET = Method(
 PERMISSIONS_SET = Method(
     "permissions.set", Scope.INSTANCE_ADMIN, PermissionsSetCommand, PermissionsResult
 )
+PACKAGE_CONFIG_GET = Method(
+    "package.config.get", Scope.INSTANCE_READ, PackageConfigGetCommand, PackageConfigResult
+)
+PACKAGE_CONFIG_SET = Method(
+    "package.config.set", Scope.INSTANCE_ADMIN, PackageConfigSetCommand, PackageConfigResult
+)
 CONFIG_HISTORY = Method(
     "config.history", Scope.INSTANCE_READ, ConfigHistoryCommand, ConfigHistoryResult
 )
@@ -270,6 +279,8 @@ METHODS = (
     PROMPT_SET,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
+    PACKAGE_CONFIG_GET,
+    PACKAGE_CONFIG_SET,
     CONFIG_HISTORY,
     INSTANCE_CREATE,
     INSTANCE_START,

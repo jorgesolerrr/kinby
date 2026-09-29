@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from textwrap import dedent
+from textwrap import dedent, indent
 from uuid import uuid4
 
 VALID_CONFIG = "tone: plain\ntoken: EDITOR_TOKEN\n"
@@ -39,6 +39,9 @@ SetupField(
 ),
 """
 
+#: The source of the fields the package's config model declares by default.
+WRITER_CONFIG_FIELDS = 'tone: Literal["plain", "formal"]\ntoken: SecretName\n'
+
 
 @dataclass(frozen=True)
 class FakePackage:
@@ -59,12 +62,14 @@ def install_fake_package(
     record_template: bool = True,
     logins: tuple[str, ...] = (EDITOR_LOGIN,),
     setup_fields: str = TONE_FIELD,
+    config_fields: str = WRITER_CONFIG_FIELDS,
 ) -> FakePackage:
     """Write package ``writer`` under *site* with a dist-info, entry points and RECORD.
 
     The module name is unique, so each test imports its own copy. *logins* is the source
     text of each login it declares. *setup_fields* is the source of its setup fields, which
-    come before its ``EDITOR_TOKEN`` secret field.
+    come before its ``EDITOR_TOKEN`` secret field. *config_fields* is the source of the fields
+    its config model ``WriterConfig`` declares.
     """
     module = f"kinby_fake_writer_{uuid4().hex[:8]}"
     root = site / module
@@ -117,8 +122,7 @@ def install_fake_package(
 
 
             class WriterConfig(PackageConfig):
-                tone: Literal["plain", "formal"]
-                token: SecretName
+            {{config_fields}}
 
 
             @tool(write=False)
@@ -141,7 +145,9 @@ def install_fake_package(
             )
             SKILLS = ROOT / "skills"
             '''
-        ).replace("{setup_fields}", setup_fields + EDITOR_TOKEN_FIELD),
+        )
+        .replace("{setup_fields}", setup_fields + EDITOR_TOKEN_FIELD)
+        .replace("{config_fields}\n", indent(config_fields, "    ")),
         encoding="utf-8",
     )
     dist_info = site / f"{module}-1.4.2.dist-info"

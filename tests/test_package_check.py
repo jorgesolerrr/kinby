@@ -309,6 +309,49 @@ def test_a_package_yaml_target_needs_a_config_validator(tmp_path, monkeypatch, c
     ]
 
 
+#: A config model in the shape of the software factory's, with only the types the form offers.
+FORM_CONFIG_FIELDS = (
+    'tone: Literal["plain", "formal"]\n'
+    "token: SecretName\n"
+    "check_commands: list[str] = []\n"
+    "skills: dict[str, str] = {}\n"
+    "round_limit: int = 2\n"
+    "review: bool = False\n"
+)
+
+
+def test_a_config_model_of_the_form_types_passes_the_check(tmp_path, monkeypatch, capsys):
+    _install(tmp_path, monkeypatch, config_fields=FORM_CONFIG_FIELDS)
+
+    status = main(["package", "check", "writer"])
+
+    assert (status, capsys.readouterr().err) == (0, "")
+
+
+def test_a_config_model_outside_the_form_types_fails_the_check(tmp_path, monkeypatch, capsys):
+    _install(
+        tmp_path,
+        monkeypatch,
+        config_fields=FORM_CONFIG_FIELDS
+        + "timeout_seconds: float = 60.0\n"
+        + "reviewer: str | None = None\n"
+        + "levels: list[int] = []\n"
+        + "weights: dict[str, int] = {}\n",
+    )
+
+    status = main(["package", "check", "writer"])
+
+    assert status == 1
+    offered = (
+        "The config form offers a string, an integer, a boolean, an enum, a list of strings, "
+        "and a map from string to string."
+    )
+    assert capsys.readouterr().err.splitlines() == [
+        f'Config field "{name}" is not a type the config form offers. {offered}'
+        for name in ("timeout_seconds", "reviewer", "levels", "weights")
+    ]
+
+
 def test_a_default_the_package_validator_refuses_at_its_target_fails_the_check(
     tmp_path, monkeypatch, capsys
 ):

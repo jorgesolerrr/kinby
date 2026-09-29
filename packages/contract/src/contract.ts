@@ -44,6 +44,10 @@ export type SetupValue = boolean | number | string;
 export type DrainState = "drained" | "interrupted";
 export type IntendedState = "stopped" | "running" | "removed" | "deleted";
 export type ProcessState = "missing" | "created" | "starting" | "running" | "stopped" | "failed" | "unavailable";
+/**
+ * A change a running instance applies only once it is recreated.
+ */
+export type RecreateReason = "package_config";
 export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "unknown";
 /**
  * How an instance's subscription login stands: not signed in yet, or how its last one ended.
@@ -203,6 +207,14 @@ export interface Contract {
     "operation.get": {
       command: OperationGetCommand;
       result: OperationGetResult;
+    };
+    "package.config.get": {
+      command: PackageConfigGetCommand;
+      result: PackageConfigResult;
+    };
+    "package.config.set": {
+      command: PackageConfigSetCommand;
+      result: PackageConfigResult;
     };
     "package.describe": {
       command: PackageDescribeCommand;
@@ -527,6 +539,7 @@ export interface InstanceProbeCommand {}
 export interface InstanceProbeResult {
   capabilities: Capability[];
   contract_version: string;
+  restart_reasons?: RecreateReason[];
 }
 export interface InstanceRecreateCommand {
   instance_id: string;
@@ -642,6 +655,22 @@ export interface OperationStep {
 export interface LoginPrompt {
   code: string;
   url: string;
+}
+export interface PackageConfigGetCommand {}
+export interface PackageConfigResult {
+  hash: string;
+  schema: {
+    [k: string]: JsonValue;
+  };
+  values: {
+    [k: string]: JsonValue;
+  };
+}
+export interface PackageConfigSetCommand {
+  hash: string;
+  values: {
+    [k: string]: JsonValue;
+  };
 }
 /**
  * Read what a prepared selection declares. It never builds.

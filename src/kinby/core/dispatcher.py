@@ -17,6 +17,8 @@ from kinby.contracts import (
     CONTRACT_VERSION,
     INSTANCE_DRAIN,
     INSTANCE_PROBE,
+    PACKAGE_CONFIG_GET,
+    PACKAGE_CONFIG_SET,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
     PROMPT_GET,
@@ -45,6 +47,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Event,
+    FileHash,
     InstanceProbeCommand,
     InstanceProbeResult,
     Method,
@@ -257,6 +260,7 @@ def build_dispatcher(
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     price_overrides: Mapping[str, ModelPrice] | None = None,
     clock: Callable[[], datetime] = utc_now,
+    booted_package_config: FileHash | None = None,
 ) -> ScheduledDispatcher: ...
 
 
@@ -280,7 +284,11 @@ def build_dispatcher(
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     price_overrides: Mapping[str, ModelPrice] | None = None,
     clock: Callable[[], datetime] = utc_now,
+    booted_package_config: FileHash | None = None,
 ) -> Dispatcher:
+    """The instance's contract methods. *booted_package_config* is the hash of the package.yaml
+    the instance validated at boot, which the probe compares with the file on disk.
+    """
     store = ThreadStore(state_dir)
     event_log = event_log or EventLog(state_dir)
     prices = price_map(price_overrides)
@@ -381,10 +389,17 @@ def build_dispatcher(
     async def subscribe_to_thread(command: ThreadSubscribeCommand) -> Stream[Event]:
         return await event_log.subscribe(command.thread_id, command.after_sequence)
 
+    config = (
+        InstanceConfig(turns.scheduler.instance, booted_package_config)
+        if isinstance(turns, ScheduledTurnConfig)
+        else None
+    )
+
     async def probe(command: InstanceProbeCommand) -> InstanceProbeResult:
         return InstanceProbeResult(
             contract_version=CONTRACT_VERSION,
             capabilities=instance_capabilities(dispatcher),
+            restart_reasons=config.restart_reasons() if config is not None else [],
         )
 
     dispatcher.register(THREAD_CREATE, create_thread)
@@ -395,12 +410,13 @@ def build_dispatcher(
     dispatcher.register(INSTANCE_PROBE, probe)
     dispatcher.register(THREAD_TURN_RATE, rate_turn)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
-    if isinstance(turns, ScheduledTurnConfig):
-        config = InstanceConfig(turns.scheduler.instance)
+    if config is not None:
         dispatcher.register(PROMPT_GET, config.get_prompt)
         dispatcher.register(PROMPT_SET, config.set_prompt)
         dispatcher.register(PERMISSIONS_GET, config.get_permissions)
         dispatcher.register(PERMISSIONS_SET, config.set_permissions)
+        dispatcher.register(PACKAGE_CONFIG_GET, config.get_package_config)
+        dispatcher.register(PACKAGE_CONFIG_SET, config.set_package_config)
         dispatcher.register(CONFIG_HISTORY, config.history)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)
