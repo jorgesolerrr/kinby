@@ -170,6 +170,45 @@ def test_the_schema_declares_the_prompt_and_config_history_calls() -> None:
     assert "STALE" in cast(list[str], _object(definitions["ErrorCode"])["enum"])
 
 
+def test_the_schema_declares_the_routine_config_calls() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"]
+        for name in ("routine.read", "routine.write", "routine.set_enabled", "routine.delete")
+    } == {
+        "routine.read": {
+            "command": {"$ref": "#/$defs/RoutineReadCommand"},
+            "result": {"$ref": "#/$defs/RoutineFile"},
+        },
+        "routine.write": {
+            "command": {"$ref": "#/$defs/RoutineWriteCommand"},
+            "result": {"$ref": "#/$defs/RoutineFile"},
+        },
+        "routine.set_enabled": {
+            "command": {"$ref": "#/$defs/RoutineSetEnabledCommand"},
+            "result": {"$ref": "#/$defs/RoutineFile"},
+        },
+        "routine.delete": {
+            "command": {"$ref": "#/$defs/RoutineDeleteCommand"},
+            "result": {"$ref": "#/$defs/RoutineDeleteResult"},
+        },
+    }
+    assert set(cast(list[str], _object(definitions["RoutineFile"])["required"])) == {
+        "name",
+        "content",
+        "hash",
+    }
+    assert set(cast(list[str], _object(definitions["RoutineWriteCommand"])["required"])) == {
+        "name",
+        "content",
+        "hash",
+    }
+    assert "ROUTINE_PENDING" in cast(list[str], _object(definitions["ErrorCode"])["enum"])
+
+
 def test_the_schema_declares_the_manifest_calls() -> None:
     schema = contract_schema()
     definitions = _object(schema["$defs"])
@@ -261,3 +300,92 @@ def test_an_instance_summary_carries_its_notices_as_a_union_on_code() -> None:
         "RevisionBehind": {"code", "message", "instance_revision", "hub_revision"},
         "PackageTemplateOlder": {"code", "message", "initialized_version", "installed_version"},
     }
+
+
+def test_the_schema_declares_the_package_config_calls_and_restart_reasons() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"]
+        for name in ("package.config.get", "package.config.set")
+    } == {
+        "package.config.get": {
+            "command": {"$ref": "#/$defs/PackageConfigGetCommand"},
+            "result": {"$ref": "#/$defs/PackageConfigResult"},
+        },
+        "package.config.set": {
+            "command": {"$ref": "#/$defs/PackageConfigSetCommand"},
+            "result": {"$ref": "#/$defs/PackageConfigResult"},
+        },
+    }
+    assert set(cast(list[str], _object(definitions["PackageConfigResult"])["required"])) == {
+        "schema",
+        "values",
+        "hash",
+    }
+    assert set(cast(list[str], _object(definitions["PackageConfigSetCommand"])["required"])) == {
+        "values",
+        "hash",
+    }
+    probe = _object(_object(definitions["InstanceProbeResult"])["properties"])
+    assert _object(probe["restart_reasons"])["items"] == {"$ref": "#/$defs/RecreateReason"}
+    assert _object(definitions["RecreateReason"])["enum"] == ["package_config"]
+
+
+def test_the_schema_declares_the_skill_and_tool_calls() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"]
+        for name in (
+            "skill.list",
+            "skill.read",
+            "skill.write",
+            "skill.customize",
+            "skill.delete",
+            "tool.list",
+        )
+    } == {
+        "skill.list": {
+            "command": {"$ref": "#/$defs/SkillListCommand"},
+            "result": {"$ref": "#/$defs/SkillListResult"},
+        },
+        "skill.read": {
+            "command": {"$ref": "#/$defs/SkillReadCommand"},
+            "result": {"$ref": "#/$defs/SkillResult"},
+        },
+        "skill.write": {
+            "command": {"$ref": "#/$defs/SkillWriteCommand"},
+            "result": {"$ref": "#/$defs/SkillResult"},
+        },
+        "skill.customize": {
+            "command": {"$ref": "#/$defs/SkillCustomizeCommand"},
+            "result": {"$ref": "#/$defs/SkillResult"},
+        },
+        "skill.delete": {
+            "command": {"$ref": "#/$defs/SkillDeleteCommand"},
+            "result": {"$ref": "#/$defs/SkillListResult"},
+        },
+        "tool.list": {
+            "command": {"$ref": "#/$defs/ToolListCommand"},
+            "result": {"$ref": "#/$defs/ToolListResult"},
+        },
+    }
+    assert set(cast(list[str], _object(definitions["SkillSummary"])["required"])) == {
+        "name",
+        "tier",
+        "description",
+        "source",
+        "shadowed_by",
+    }
+    assert set(cast(list[str], _object(definitions["SkillWriteCommand"])["required"])) == {
+        "name",
+        "content",
+        "hash",
+    }
+    assert _object(definitions["SkillTier"])["enum"] == ["instance", "package", "workspace"]
+    assert _object(definitions["ToolRule"])["enum"] == ["allow", "ask", "deny", "mode"]

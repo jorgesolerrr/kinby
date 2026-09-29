@@ -1,10 +1,14 @@
 import type { Client, Clock, InstanceClient, InstanceSummary, PromptName } from "@kinby/contract"
-import { useCallback, useEffect, useId, useState } from "react"
+import { Fragment, type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
 import { ManifestSection } from "@/components/manifest-section"
+import { PackageConfigSection } from "@/components/package-config-section"
 import { PackageSection } from "@/components/package-section"
 import { PermissionsSection } from "@/components/permissions-section"
+import { RoutinesSection } from "@/components/routines-section"
+import { SkillsSection } from "@/components/skills-section"
+import { ToolsSection } from "@/components/tools-section"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
@@ -39,16 +43,28 @@ import {
 
 type Caller = Pick<InstanceClient, "call">
 
-/** A section that is built: one of the prompts, the permissions, the manifest, or the package. */
-type SectionKey = PromptName | "permissions" | "manifest" | "package"
+/** What a section is given: the instance and its client, the hub, and a way to open another section by its label. */
+interface Context {
+  client: Caller
+  caller: Pick<Client, "call">
+  clock: Clock
+  instance: InstanceSummary
+  onChanged: () => void
+  open: (label: string) => void
+}
 
-/** One section of the panel. A section without a `key` is not built yet, and is unavailable. */
+/** What a section shows, given its context. */
+type Render = (context: Context) => ReactNode
+
+/** One section of the panel. A section without `render` is not built yet. */
 interface Section {
   label: string
   hint: string
   icon: LucideIcon
-  key?: SectionKey
+  render?: Render
 }
+
+const PACKAGE = "Package and version"
 
 const GROUPS: { label: string; sections: Section[] }[] = [
   {
@@ -58,45 +74,84 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Behavior prompt",
         hint: "SYSTEM.md, how the agent acts",
         icon: FileTextIcon,
-        key: "behavior",
+        render: ({ client }) => <PromptSection client={client} name="behavior" />,
       },
       {
         label: "Recap prompt",
         hint: "RECAP.md, what a recap looks at",
         icon: NotebookPenIcon,
-        key: "recap",
+        render: ({ client }) => <PromptSection client={client} name="recap" />,
       },
       {
         label: "Permissions",
         hint: "ceiling, mode, tool rules, shell patterns",
         icon: ShieldIcon,
-        key: "permissions",
+        render: ({ client }) => <PermissionsSection client={client} />,
       },
-      { label: "Manifest", hint: "models, budgets, timezone", icon: CpuIcon, key: "manifest" },
+      {
+        label: "Manifest",
+        hint: "models, budgets, timezone",
+        icon: CpuIcon,
+        render: ({ client }) => <ManifestSection client={client} />,
+      },
     ],
   },
   {
     label: "Capabilities",
     sections: [
-      { label: "Routines", hint: "schedules, signals, next firing", icon: RepeatIcon },
-      { label: "Skills", hint: "instance, package, workspace", icon: SparklesIcon },
-      { label: "Tools", hint: "what the instance can do", icon: WrenchIcon },
+      {
+        label: "Routines",
+        hint: "schedules, signals, next firing",
+        icon: RepeatIcon,
+        render: ({ client }) => <RoutinesSection client={client} />,
+      },
+      {
+        label: "Skills",
+        hint: "instance, package, workspace",
+        icon: SparklesIcon,
+        render: ({ client }) => <SkillsSection client={client} />,
+      },
+      {
+        label: "Tools",
+        hint: "what the instance can do",
+        icon: WrenchIcon,
+        render: ({ client, open }) => (
+          <ToolsSection
+            client={client}
+            onOpenPermissions={available(PERMISSIONS) ? () => open(PERMISSIONS) : undefined}
+          />
+        ),
+      },
     ],
   },
   {
     label: "Instance",
     sections: [
       { label: "Secrets and login", hint: "write-only values, sign-in", icon: KeyRoundIcon },
-      { label: "Package config", hint: "the package's own settings", icon: BoxIcon },
       {
-        label: "Package and version",
+        label: "Package config",
+        hint: "the package's own settings",
+        icon: BoxIcon,
+        render: ({ client }) => <PackageConfigSection client={client} />,
+      },
+      {
+        label: PACKAGE,
         hint: "template, installed, update",
         icon: PackageIcon,
-        key: "package",
+        render: ({ caller, clock, instance, onChanged }) => (
+          <PackageSection caller={caller} clock={clock} instance={instance} onChanged={onChanged} />
+        ),
       },
     ],
   },
 ]
+
+const SECTIONS = GROUPS.flatMap((group) => group.sections)
+const PERMISSIONS = "Permissions"
+
+function available(label: string): boolean {
+  return SECTIONS.some((section) => section.label === label && section.render !== undefined)
+}
 
 /** When a saved prompt takes effect. */
 const APPLIES: Record<PromptName, string> = {
@@ -122,14 +177,12 @@ export function ConfigPanel({
   instance: InstanceSummary
   onChanged: () => void
 }) {
-  const [selected, setSelected] = useState<SectionKey>("behavior")
-  const section = GROUPS.flatMap((group) => group.sections).find(
-    (candidate) => candidate.key === selected,
-  )
-  const needs: Partial<Record<SectionKey, string>> = instance.notices.some(
+  const [selected, setSelected] = useState("Behavior prompt")
+  const section = SECTIONS.find((candidate) => candidate.label === selected)
+  const needs: Partial<Record<string, string>> = instance.notices.some(
     (notice) => notice.code === "revision_behind",
   )
-    ? { package: "behind the hub" }
+    ? { [PACKAGE]: "behind the hub" }
     : {}
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -154,15 +207,9 @@ export function ConfigPanel({
           <p className="text-sm text-muted-foreground">{section?.hint}</p>
         </div>
         <Separator />
-        {selected === "permissions" ? (
-          <PermissionsSection client={client} />
-        ) : selected === "manifest" ? (
-          <ManifestSection client={client} />
-        ) : selected === "package" ? (
-          <PackageSection caller={caller} clock={clock} instance={instance} onChanged={onChanged} />
-        ) : (
-          <PromptSection key={selected} client={client} name={selected} />
-        )}
+        <Fragment key={selected}>
+          {section?.render?.({ client, caller, clock, instance, onChanged, open: setSelected })}
+        </Fragment>
       </main>
     </div>
   )
@@ -178,9 +225,9 @@ function SectionGroup({
 }: {
   label: string
   sections: Section[]
-  needs: Partial<Record<SectionKey, string>>
-  selected: SectionKey
-  onSelect: (key: SectionKey) => void
+  needs: Partial<Record<string, string>>
+  selected: string
+  onSelect: (label: string) => void
 }) {
   const labelId = useId()
   return (
@@ -189,18 +236,18 @@ function SectionGroup({
         {label}
       </span>
       <ItemGroup aria-labelledby={labelId}>
-        {sections.map(({ label, hint, icon: Icon, key }) => (
+        {sections.map(({ label, hint, icon: Icon, render }) => (
           <li key={label}>
             <Item
               size="xs"
-              variant={key !== undefined && key === selected ? "muted" : "default"}
+              variant={label === selected ? "muted" : "default"}
               render={
                 <button
                   type="button"
                   aria-label={label}
-                  aria-current={key === selected || undefined}
-                  disabled={key === undefined}
-                  onClick={() => key !== undefined && onSelect(key)}
+                  aria-current={label === selected || undefined}
+                  disabled={render === undefined}
+                  onClick={() => onSelect(label)}
                 />
               }
             >
@@ -210,7 +257,7 @@ function SectionGroup({
               <ItemContent>
                 <ItemTitle>{label}</ItemTitle>
                 <ItemDescription>
-                  {key === undefined ? "Not available yet" : (needs[key] ?? hint)}
+                  {render === undefined ? "Not available yet" : (needs[label] ?? hint)}
                 </ItemDescription>
               </ItemContent>
             </Item>

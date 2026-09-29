@@ -200,11 +200,24 @@ def read_package_config(package: Package, directory: Path) -> PackageConfig | No
         raise PackageConfigError(f"{path}: the package requires this file.") from None
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         raise PackageConfigError(f"{path}: {exc}") from exc
-    declared = secret_names(package.setup_fields)
     try:
-        return package.config.model_validate(raw, context=declared)
+        return validate_package_config(package.config, package.setup_fields, raw)
     except ValidationError as exc:
         raise PackageConfigError(f"{path}: {_validation_message(exc)}") from exc
+
+
+def validate_package_config(
+    config: type[PackageConfig], fields: Iterable[SetupField], values: object
+) -> PackageConfig:
+    """*values* validated by a package's config model, which checks each secret name it holds
+    against the secret fields among *fields*. Raises pydantic's ``ValidationError``.
+    """
+    return config.model_validate(values, context=secret_names(fields))
+
+
+def package_config_yaml(config: PackageConfig) -> str:
+    """The ``package.yaml`` for validated *config*, its keys in the order the model declares."""
+    return yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False, allow_unicode=True)
 
 
 def instance_package_config(instance: Instance) -> PackageConfig | None:
@@ -219,13 +232,27 @@ def instance_package_config(instance: Instance) -> PackageConfig | None:
     return read_package_config(package, instance.path)
 
 
+def _validation_errors(exc: ValidationError) -> list[tuple[str, str]]:
+    """Each error the validator found, as its dotted location and its message."""
+    return [
+        (
+            ".".join(str(part) for part in error["loc"]),
+            error["msg"].removeprefix("Value error, "),
+        )
+        for error in exc.errors()
+    ]
+
+
+def config_field_errors(exc: ValidationError) -> dict[str, str]:
+    """What the validator found wrong with each field, by its dotted location."""
+    return dict(_validation_errors(exc))
+
+
 def _validation_message(exc: ValidationError) -> str:
-    messages = []
-    for error in exc.errors():
-        message = error["msg"].removeprefix("Value error, ")
-        location = ".".join(str(part) for part in error["loc"])
-        messages.append(f"{location}: {message}" if location else message)
-    return "; ".join(messages)
+    return "; ".join(
+        f"{location}: {message}" if location else message
+        for location, message in _validation_errors(exc)
+    )
 
 
 def vanilla_description() -> PackageDescription:
@@ -402,11 +429,13 @@ __all__ = [
     "SetupValue",
     "SubscriptionLogin",
     "TargetFile",
+    "config_field_errors",
     "inspect_installed_package",
     "installed_package",
     "installed_package_from_json",
     "instance_package_config",
     "load_package",
+    "package_config_yaml",
     "package_description",
     "package_fields",
     "package_json",
@@ -414,6 +443,7 @@ __all__ = [
     "readable_template_files",
     "resolved_values",
     "secret_names",
+    "validate_package_config",
     "value_problem",
     "vanilla_description",
 ]

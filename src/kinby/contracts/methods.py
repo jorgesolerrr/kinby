@@ -44,6 +44,9 @@ from kinby.contracts.models import (
     ManifestSetCommand,
     OperationGetCommand,
     OperationGetResult,
+    PackageConfigGetCommand,
+    PackageConfigResult,
+    PackageConfigSetCommand,
     PackageDescribeCommand,
     PackageDescription,
     PackageListCommand,
@@ -54,10 +57,23 @@ from kinby.contracts.models import (
     PromptGetCommand,
     PromptResult,
     PromptSetCommand,
+    RoutineDeleteCommand,
+    RoutineDeleteResult,
+    RoutineFile,
     RoutineListCommand,
     RoutineListResult,
+    RoutineReadCommand,
     RoutineRunCommand,
+    RoutineSetEnabledCommand,
+    RoutineWriteCommand,
     Scope,
+    SkillCustomizeCommand,
+    SkillDeleteCommand,
+    SkillListCommand,
+    SkillListResult,
+    SkillReadCommand,
+    SkillResult,
+    SkillWriteCommand,
     StatsGetCommand,
     StatsGetResult,
     StatsSummaryResult,
@@ -82,6 +98,8 @@ from kinby.contracts.models import (
     ThreadTurnStartCommand,
     ThreadTurnTargetListCommand,
     ThreadTurnTargetListResult,
+    ToolListCommand,
+    ToolListResult,
     UsageGetCommand,
     UsageGetResult,
 )
@@ -171,6 +189,14 @@ INSTANCE_DRAIN = Method(
 
 ROUTINE_LIST = Method("routine.list", Scope.INSTANCE_READ, RoutineListCommand, RoutineListResult)
 ROUTINE_RUN = Method("routine.run", Scope.INSTANCE_ADMIN, RoutineRunCommand, AcceptedResult)
+ROUTINE_READ = Method("routine.read", Scope.INSTANCE_READ, RoutineReadCommand, RoutineFile)
+ROUTINE_WRITE = Method("routine.write", Scope.INSTANCE_ADMIN, RoutineWriteCommand, RoutineFile)
+ROUTINE_SET_ENABLED = Method(
+    "routine.set_enabled", Scope.INSTANCE_ADMIN, RoutineSetEnabledCommand, RoutineFile
+)
+ROUTINE_DELETE = Method(
+    "routine.delete", Scope.INSTANCE_ADMIN, RoutineDeleteCommand, RoutineDeleteResult
+)
 PROMPT_GET = Method("prompt.get", Scope.INSTANCE_READ, PromptGetCommand, PromptResult)
 PROMPT_SET = Method("prompt.set", Scope.INSTANCE_ADMIN, PromptSetCommand, PromptResult)
 MANIFEST_GET = Method("manifest.get", Scope.INSTANCE_READ, ManifestGetCommand, ManifestResult)
@@ -181,9 +207,23 @@ PERMISSIONS_GET = Method(
 PERMISSIONS_SET = Method(
     "permissions.set", Scope.INSTANCE_ADMIN, PermissionsSetCommand, PermissionsResult
 )
+PACKAGE_CONFIG_GET = Method(
+    "package.config.get", Scope.INSTANCE_READ, PackageConfigGetCommand, PackageConfigResult
+)
+PACKAGE_CONFIG_SET = Method(
+    "package.config.set", Scope.INSTANCE_ADMIN, PackageConfigSetCommand, PackageConfigResult
+)
 CONFIG_HISTORY = Method(
     "config.history", Scope.INSTANCE_READ, ConfigHistoryCommand, ConfigHistoryResult
 )
+SKILL_LIST = Method("skill.list", Scope.INSTANCE_READ, SkillListCommand, SkillListResult)
+SKILL_READ = Method("skill.read", Scope.INSTANCE_READ, SkillReadCommand, SkillResult)
+SKILL_WRITE = Method("skill.write", Scope.INSTANCE_ADMIN, SkillWriteCommand, SkillResult)
+SKILL_CUSTOMIZE = Method(
+    "skill.customize", Scope.INSTANCE_ADMIN, SkillCustomizeCommand, SkillResult
+)
+SKILL_DELETE = Method("skill.delete", Scope.INSTANCE_ADMIN, SkillDeleteCommand, SkillListResult)
+TOOL_LIST = Method("tool.list", Scope.INSTANCE_READ, ToolListCommand, ToolListResult)
 
 INSTANCE_CREATE = Method(
     "instance.create", Scope.HUB_ADMIN, InstanceCreateCommand, LifecycleOperationResult
@@ -271,13 +311,25 @@ METHODS = (
     INSTANCE_DRAIN,
     ROUTINE_LIST,
     ROUTINE_RUN,
+    ROUTINE_READ,
+    ROUTINE_WRITE,
+    ROUTINE_SET_ENABLED,
+    ROUTINE_DELETE,
     PROMPT_GET,
     PROMPT_SET,
     MANIFEST_GET,
     MANIFEST_SET,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
+    PACKAGE_CONFIG_GET,
+    PACKAGE_CONFIG_SET,
     CONFIG_HISTORY,
+    SKILL_LIST,
+    SKILL_READ,
+    SKILL_WRITE,
+    SKILL_CUSTOMIZE,
+    SKILL_DELETE,
+    TOOL_LIST,
     INSTANCE_CREATE,
     INSTANCE_START,
     INSTANCE_STOP,

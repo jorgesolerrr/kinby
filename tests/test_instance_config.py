@@ -1,5 +1,7 @@
 import asyncio
 import hashlib
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -8,23 +10,31 @@ import pytest
 from langchain_core.messages import AIMessageChunk
 from pydantic import JsonValue
 
+from kinby.cli import main
 from kinby.contracts import (
+    Delivery,
     ErrorCode,
     ErrorEnvelope,
     Event,
     Payload,
     PermissionMode,
+    RoutineName,
+    RoutineTrigger,
     SystemPrompt,
 )
-from kinby.core import LangGraphRunner
+from kinby.core import LangGraphRunner, boot_instance
+from kinby.core.dispatcher import Dispatcher, TurnConfig
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
+from kinby.instance import load_instance
 from kinby.instance.permissions import SHIPPED_BASH_DENY
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 from kinby.plugins import ToolContext
 from kinby.plugins.instance_tools import instance_tools
+from tests.fake_package import install_fake_package
+from tests.helpers import fixed_permission_ceiling, fixed_turn_preparation, turn_config_stub
 from tests.test_instance_tools import ScriptedModel
 from tests.test_routines import instance_at, routine_file
-from tests.test_scheduler import FailingRunner, FakeClock, call, runtime
+from tests.test_scheduler import FailingRunner, FakeClock, ScriptedRunner, call, runtime
 
 EMPTY_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -327,6 +337,241 @@ def test_the_failure_policy_records_the_routine_it_disables(tmp_path: Path) -> N
         assert change.actor == "failure_policy"
         assert "-enabled: true" in change.diff.splitlines()
         assert "+enabled: false" in change.diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+NEWS = "---\ndescription: News\n---\nRead the news.\n"
+CODE_STEP = """from kinby.plugins import tool
+
+
+@tool(write=False)
+def fetch() -> str:
+    \"\"\"Fetch the news.\"\"\"
+    return "news"
+"""
+
+
+def test_routine_read_returns_routine_md_and_the_directory_hash(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        dispatcher = _dispatcher(tmp_path)
+
+        read = await call(dispatcher, "routine.read", name="news")
+        again = await call(dispatcher, "routine.read", name="news")
+        (tmp_path / "routines" / "news" / "notes.txt").write_text("A note.", encoding="utf-8")
+        with_notes = await call(dispatcher, "routine.read", name="news")
+        missing = await call(dispatcher, "routine.read", name="weather")
+
+        assert (read.name, read.content) == ("news", NEWS)
+        assert again.hash == read.hash
+        assert (with_notes.content, with_notes.hash == read.hash) == (NEWS, False)
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
+
+    asyncio.run(scenario())
+
+
+def test_routine_write_creates_a_routine_with_a_null_hash(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        written = await call(dispatcher, "routine.write", name="news", content=NEWS, hash=None)
+
+        assert (tmp_path / "routines" / "news" / "ROUTINE.md").read_text(encoding="utf-8") == NEWS
+        assert written == await call(dispatcher, "routine.read", name="news")
+        [summary] = (await call(dispatcher, "routine.list")).routines
+        assert (summary.name, summary.enabled) == ("news", True)
+        [change] = (
+            await call(dispatcher, "config.history", file="routines/news", limit=10)
+        ).changes
+        assert (change.actor, change.thread_id, change.turn_id) == ("app", None, None)
+        assert "+Read the news." in change.diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+def test_routine_write_replaces_the_routine_read(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        (tmp_path / "routines" / "news" / "run.py").write_text(CODE_STEP, encoding="utf-8")
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+        content = "---\ndescription: News\n---\nRead the headlines.\n"
+
+        written = await call(
+            dispatcher, "routine.write", name="news", content=content, hash=read.hash
+        )
+
+        assert (written.content, written.hash == read.hash) == (content, False)
+        assert (tmp_path / "routines" / "news" / "run.py").read_text(encoding="utf-8") == CODE_STEP
+
+    asyncio.run(scenario())
+
+
+def test_routine_write_over_a_change_since_the_read_is_stale(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+        (tmp_path / "routines" / "news" / "run.py").write_text(CODE_STEP, encoding="utf-8")
+        mine = "---\ndescription: Mine\n---\nMine.\n"
+
+        stale = await call(dispatcher, "routine.write", name="news", content=mine, hash=read.hash)
+        exists = await call(dispatcher, "routine.write", name="news", content=mine, hash=None)
+
+        for refused in (stale, exists):
+            assert isinstance(refused, ErrorEnvelope)
+            assert (refused.code, refused.retryable) == (ErrorCode.STALE, False)
+        assert (tmp_path / "routines" / "news" / "ROUTINE.md").read_text(encoding="utf-8") == NEWS
+        assert (await call(dispatcher, "config.history", limit=10)).changes == []
+
+    asyncio.run(scenario())
+
+
+def test_routine_write_refuses_a_routine_the_loader_refuses(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        broken = await call(
+            dispatcher,
+            "routine.write",
+            name="news",
+            content="---\n---\nNo description.\n",
+            hash=None,
+        )
+        bad_name = await call(dispatcher, "routine.write", name="../news", content=NEWS, hash=None)
+
+        for refused in (broken, bad_name):
+            assert isinstance(refused, ErrorEnvelope)
+            assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert "description" in broken.message
+        assert not (tmp_path / "routines" / "news").exists()
+
+    asyncio.run(scenario())
+
+
+def test_routine_set_enabled_toggles_the_enabled_line_without_a_hash(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        path = routine_file(instance, "description: News\nschedule: 0 9 * * *")
+        dispatcher = _dispatcher(tmp_path)
+
+        off = await call(dispatcher, "routine.set_enabled", name="news", enabled=False)
+        [summary] = (await call(dispatcher, "routine.list")).routines
+        on = await call(dispatcher, "routine.set_enabled", name="news", enabled=True)
+        missing = await call(dispatcher, "routine.set_enabled", name="weather", enabled=True)
+
+        assert off.content == (
+            "---\ndescription: News\nschedule: 0 9 * * *\nenabled: false\n---\nRead the news.\n"
+        )
+        assert (summary.enabled, summary.next_run) == (False, None)
+        assert on == await call(dispatcher, "routine.read", name="news")
+        assert path.read_text(encoding="utf-8") == (
+            "---\ndescription: News\nschedule: 0 9 * * *\nenabled: true\n---\nRead the news.\n"
+        )
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
+        changes = (await call(dispatcher, "config.history", file="routines/news", limit=10)).changes
+        assert [change.actor for change in changes] == ["app", "app"]
+        assert "+enabled: true" in changes[0].diff.splitlines()
+        assert "+enabled: false" in changes[1].diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+def test_routine_delete_removes_the_routine_read(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+
+        await call(dispatcher, "routine.delete", name="news", hash=read.hash)
+        again = await call(dispatcher, "routine.delete", name="news", hash=read.hash)
+        missing = await call(dispatcher, "routine.delete", name="weather", hash=EMPTY_HASH)
+
+        assert not (tmp_path / "routines" / "news").exists()
+        assert (await call(dispatcher, "routine.list")).routines == []
+        assert isinstance(again, ErrorEnvelope)
+        assert again.code is ErrorCode.STALE
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
+        [change] = (
+            await call(dispatcher, "config.history", file="routines/news", limit=10)
+        ).changes
+        assert change.actor == "app"
+        assert "-Read the news." in change.diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+def test_routine_delete_over_a_change_since_the_read_is_stale(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        path = routine_file(instance, "description: News")
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+        path.write_text(NEWS.replace("news", "headlines"), encoding="utf-8")
+
+        refused = await call(dispatcher, "routine.delete", name="news", hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.STALE
+        assert path.is_file()
+
+    asyncio.run(scenario())
+
+
+def test_routine_delete_refuses_a_routine_with_pending_deliveries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: Issues\nsignal:\n  secret: SIGNAL_SECRET")
+        dispatcher = _dispatcher(tmp_path)
+        await dispatcher.scheduler.receive(
+            RoutineName("news"),
+            Delivery(
+                headers={},
+                content_type="text/plain",
+                body="opened",
+                received_at=datetime(2026, 9, 28, tzinfo=UTC),
+            ),
+            RoutineTrigger.SIGNAL,
+        )
+        read = await call(dispatcher, "routine.read", name="news")
+
+        refused = await call(dispatcher, "routine.delete", name="news", hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (refused.code, refused.retryable) == (ErrorCode.ROUTINE_PENDING, False)
+        assert refused.message == 'Routine "news" has 1 pending delivery and cannot be deleted.'
+        assert (tmp_path / "routines" / "news").is_dir()
+
+    asyncio.run(scenario())
+
+
+def test_an_app_write_after_an_agent_change_is_stale(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        dispatcher = _dispatcher(tmp_path)
+        tools = {each.name: each for each in instance_tools(instance)}
+        context = ToolContext(instance=instance, thread_id=uuid4(), turn_id=uuid4())
+        await tools["routine_write"].ainvoke({"name": "news", "content": NEWS}, context)
+        read = await call(dispatcher, "routine.read", name="news")
+
+        await tools["routine_set_enabled"].ainvoke({"name": "news", "enabled": False}, context)
+        refused = await call(dispatcher, "routine.write", name="news", content=NEWS, hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.STALE
+        theirs = await call(dispatcher, "routine.read", name="news")
+        assert "enabled: false" in theirs.content.splitlines()
 
     asyncio.run(scenario())
 
@@ -804,5 +1049,162 @@ def test_permissions_set_with_a_stale_hash_leaves_the_file(tmp_path: Path) -> No
         assert (tmp_path / "permissions.toml").read_text(encoding="utf-8") == PERMISSIONS
         history = await call(dispatcher, "config.history", limit=10)
         assert history.changes == []
+
+    asyncio.run(scenario())
+
+
+@pytest.fixture
+def writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An instance of the fake package ``writer``, whose config is a tone and a token."""
+    package = install_fake_package(tmp_path / "site")
+    monkeypatch.syspath_prepend(str(package.site))
+    monkeypatch.setattr(
+        "kinby.core.runtime.turn_config",
+        turn_config_stub(
+            lambda: TurnConfig(fixed_turn_preparation, fixed_permission_ceiling, ScriptedRunner())
+        ),
+    )
+    path = tmp_path / "instance"
+    assert main(["init", str(path), "--package", "writer", "--model", "openai:gpt-5"]) == 0
+    return path
+
+
+@asynccontextmanager
+async def _booted(path: Path) -> AsyncIterator[Dispatcher]:
+    runtime = await boot_instance(load_instance(path))
+    try:
+        yield runtime.dispatcher
+    finally:
+        await runtime.stop_after_running_routine()
+
+
+WRITER_CONFIG = "tone: plain\ntoken: EDITOR_TOKEN\n"
+
+
+def test_package_config_get_returns_the_packages_schema_and_the_file(writer: Path) -> None:
+    async def scenario() -> None:
+        async with _booted(writer) as dispatcher:
+            read = await call(dispatcher, "package.config.get")
+
+        assert read.model_dump(mode="json") == {
+            "schema": {
+                "additionalProperties": False,
+                "properties": {
+                    "tone": {"enum": ["plain", "formal"], "title": "Tone", "type": "string"},
+                    "token": {"title": "Token", "type": "string"},
+                },
+                "required": ["tone", "token"],
+                "title": "WriterConfig",
+                "type": "object",
+            },
+            "values": {"tone": "plain", "token": "EDITOR_TOKEN"},
+            "hash": _sha256(WRITER_CONFIG),
+        }
+
+    asyncio.run(scenario())
+
+
+def test_package_config_set_writes_the_validated_values(writer: Path) -> None:
+    async def scenario() -> None:
+        async with _booted(writer) as dispatcher:
+            written = await call(
+                dispatcher,
+                "package.config.set",
+                values={"token": "EDITOR_TOKEN", "tone": "formal"},
+                hash=_sha256(WRITER_CONFIG),
+            )
+            read = await call(dispatcher, "package.config.get")
+            history = await call(dispatcher, "config.history", file="package.yaml", limit=10)
+
+        file = (writer / "package.yaml").read_text(encoding="utf-8")
+        assert file == "tone: formal\ntoken: EDITOR_TOKEN\n"
+        assert written == read
+        assert (read.values, read.hash) == (
+            {"tone": "formal", "token": "EDITOR_TOKEN"},
+            _sha256(file),
+        )
+        [change] = history.changes
+        assert change.actor == "app"
+        assert change.diff.endswith("-tone: plain\n+tone: formal\n token: EDITOR_TOKEN\n")
+
+    asyncio.run(scenario())
+
+
+def test_package_config_set_puts_the_validators_errors_in_fields(writer: Path) -> None:
+    async def scenario() -> None:
+        async with _booted(writer) as dispatcher:
+            refused = await call(
+                dispatcher,
+                "package.config.set",
+                values={"tone": "shouty", "token": "GITHUB_TOKEN", "tonne": "formal"},
+                hash=_sha256(WRITER_CONFIG),
+            )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (refused.code, refused.fields) == (
+            ErrorCode.INVALID_ARGUMENT,
+            {
+                "tone": "Input should be 'plain' or 'formal'",
+                "token": '"GITHUB_TOKEN" is not a secret field this package declares.',
+                "tonne": "Extra inputs are not permitted",
+            },
+        )
+        assert (writer / "package.yaml").read_text(encoding="utf-8") == WRITER_CONFIG
+
+    asyncio.run(scenario())
+
+
+def test_package_config_set_with_a_stale_hash_leaves_the_file(writer: Path) -> None:
+    async def scenario() -> None:
+        async with _booted(writer) as dispatcher:
+            (writer / "package.yaml").write_text("tone: formal\ntoken: EDITOR_TOKEN\n")
+            refused = await call(
+                dispatcher,
+                "package.config.set",
+                values={"tone": "plain", "token": "EDITOR_TOKEN"},
+                hash=_sha256(WRITER_CONFIG),
+            )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.STALE
+        assert (writer / "package.yaml").read_text() == "tone: formal\ntoken: EDITOR_TOKEN\n"
+
+    asyncio.run(scenario())
+
+
+def test_a_vanilla_instance_has_no_package_config(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        read = await call(dispatcher, "package.config.get")
+        written = await call(dispatcher, "package.config.set", values={}, hash=EMPTY_HASH)
+        probed = await call(dispatcher, "instance.probe")
+
+        assert isinstance(read, ErrorEnvelope)
+        assert isinstance(written, ErrorEnvelope)
+        assert (read.code, written.code) == (ErrorCode.NOT_FOUND, ErrorCode.NOT_FOUND)
+        assert not (tmp_path / "package.yaml").exists()
+        assert probed.restart_reasons == []
+
+    asyncio.run(scenario())
+
+
+def test_the_probe_asks_for_a_restart_once_the_package_config_changed(writer: Path) -> None:
+    async def scenario() -> None:
+        async with _booted(writer) as dispatcher:
+            before = await call(dispatcher, "instance.probe")
+            await call(
+                dispatcher,
+                "package.config.set",
+                values={"tone": "formal", "token": "EDITOR_TOKEN"},
+                hash=_sha256(WRITER_CONFIG),
+            )
+            after = await call(dispatcher, "instance.probe")
+            (writer / "package.yaml").write_text(WRITER_CONFIG, encoding="utf-8")
+            restored = await call(dispatcher, "instance.probe")
+
+        assert before.restart_reasons == []
+        assert after.restart_reasons == ["package_config"]
+        assert restored.restart_reasons == []
 
     asyncio.run(scenario())

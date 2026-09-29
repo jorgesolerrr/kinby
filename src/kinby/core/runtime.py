@@ -14,6 +14,7 @@ from kinby.contracts import (
     InstanceDrainResult,
 )
 from kinby.core.clock import utc_now
+from kinby.core.config import package_config_hash
 from kinby.core.dispatcher import (
     ScheduledDispatcher,
     ScheduledTurnConfig,
@@ -92,6 +93,8 @@ async def boot_instance(
 
     An instance whose package.yaml fails its package's validator does not boot.
     """
+    # Hashed before it is validated, so an edit in between asks for a recreate instead of hiding.
+    booted_package_config = package_config_hash(instance)
     instance_package_config(instance)
     event_log = EventLog(instance.manifest.state_dir)
     turns = await turn_config(instance, event_log=event_log, model_override=model_override)
@@ -103,6 +106,7 @@ async def boot_instance(
         turns=ScheduledTurnConfig(turns, SchedulerConfig(instance, clock)),
         permissions=partial(load_permissions, instance),
         clock=clock,
+        booted_package_config=booted_package_config,
     )
     runtime = InstanceRuntime(dispatcher, turns.recap)
     dispatcher.register(INSTANCE_DRAIN, runtime.drain)

@@ -19,12 +19,23 @@ from kinby.contracts import (
     INSTANCE_PROBE,
     MANIFEST_GET,
     MANIFEST_SET,
+    PACKAGE_CONFIG_GET,
+    PACKAGE_CONFIG_SET,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
     PROMPT_GET,
     PROMPT_SET,
+    ROUTINE_DELETE,
     ROUTINE_LIST,
+    ROUTINE_READ,
     ROUTINE_RUN,
+    ROUTINE_SET_ENABLED,
+    ROUTINE_WRITE,
+    SKILL_CUSTOMIZE,
+    SKILL_DELETE,
+    SKILL_LIST,
+    SKILL_READ,
+    SKILL_WRITE,
     STATS_GET,
     THREAD_APPROVAL_RESPOND,
     THREAD_CREATE,
@@ -40,6 +51,7 @@ from kinby.contracts import (
     THREAD_TURN_REVERT_PREVIEW,
     THREAD_TURN_START,
     THREAD_TURN_TARGET_LIST,
+    TOOL_LIST,
     USAGE_GET,
     AcceptedResult,
     Capability,
@@ -47,6 +59,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Event,
+    FileHash,
     InstanceProbeCommand,
     InstanceProbeResult,
     Method,
@@ -259,6 +272,7 @@ def build_dispatcher(
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     price_overrides: Mapping[str, ModelPrice] | None = None,
     clock: Callable[[], datetime] = utc_now,
+    booted_package_config: FileHash | None = None,
 ) -> ScheduledDispatcher: ...
 
 
@@ -282,7 +296,11 @@ def build_dispatcher(
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     price_overrides: Mapping[str, ModelPrice] | None = None,
     clock: Callable[[], datetime] = utc_now,
+    booted_package_config: FileHash | None = None,
 ) -> Dispatcher:
+    """The instance's contract methods. *booted_package_config* is the hash of the package.yaml
+    the instance validated at boot, which the probe compares with the file on disk.
+    """
     store = ThreadStore(state_dir)
     event_log = event_log or EventLog(state_dir)
     prices = price_map(price_overrides)
@@ -383,10 +401,17 @@ def build_dispatcher(
     async def subscribe_to_thread(command: ThreadSubscribeCommand) -> Stream[Event]:
         return await event_log.subscribe(command.thread_id, command.after_sequence)
 
+    config = (
+        InstanceConfig(turns.scheduler.instance, booted_package_config)
+        if isinstance(turns, ScheduledTurnConfig)
+        else None
+    )
+
     async def probe(command: InstanceProbeCommand) -> InstanceProbeResult:
         return InstanceProbeResult(
             contract_version=CONTRACT_VERSION,
             capabilities=instance_capabilities(dispatcher),
+            restart_reasons=config.restart_reasons() if config is not None else [],
         )
 
     dispatcher.register(THREAD_CREATE, create_thread)
@@ -397,15 +422,26 @@ def build_dispatcher(
     dispatcher.register(INSTANCE_PROBE, probe)
     dispatcher.register(THREAD_TURN_RATE, rate_turn)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
-    if isinstance(turns, ScheduledTurnConfig):
-        config = InstanceConfig(turns.scheduler.instance)
+    if config is not None:
         dispatcher.register(PROMPT_GET, config.get_prompt)
         dispatcher.register(PROMPT_SET, config.set_prompt)
         dispatcher.register(MANIFEST_GET, config.get_manifest)
         dispatcher.register(MANIFEST_SET, config.set_manifest)
         dispatcher.register(PERMISSIONS_GET, config.get_permissions)
         dispatcher.register(PERMISSIONS_SET, config.set_permissions)
+        dispatcher.register(PACKAGE_CONFIG_GET, config.get_package_config)
+        dispatcher.register(PACKAGE_CONFIG_SET, config.set_package_config)
         dispatcher.register(CONFIG_HISTORY, config.history)
+        dispatcher.register(SKILL_LIST, config.list_skills)
+        dispatcher.register(SKILL_READ, config.read_skill)
+        dispatcher.register(SKILL_WRITE, config.write_skill)
+        dispatcher.register(SKILL_CUSTOMIZE, config.customize_skill)
+        dispatcher.register(SKILL_DELETE, config.delete_skill)
+        dispatcher.register(TOOL_LIST, config.list_tools)
+        dispatcher.register(ROUTINE_READ, config.read_routine)
+        dispatcher.register(ROUTINE_WRITE, config.write_routine)
+        dispatcher.register(ROUTINE_SET_ENABLED, config.set_routine_enabled)
+        dispatcher.register(ROUTINE_DELETE, config.delete_routine)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)
         dispatcher.register(ROUTINE_RUN, scheduler.run)
