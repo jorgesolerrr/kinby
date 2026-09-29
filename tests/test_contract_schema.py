@@ -280,6 +280,28 @@ def test_the_schema_declares_the_permissions_calls() -> None:
     assert _object(definitions["GateAction"])["enum"] == ["allow", "ask", "deny"]
 
 
+def test_an_instance_summary_carries_its_notices_as_a_union_on_code() -> None:
+    definitions = _object(contract_schema()["$defs"])
+    summary = _object(definitions["InstanceSummary"])
+
+    assert "notices" in cast(list[str], summary["required"])
+    notice = _object(_object(summary["properties"])["notices"])["items"]
+    assert _object(notice)["discriminator"] == {
+        "propertyName": "code",
+        "mapping": {
+            "package_template_older": "#/$defs/PackageTemplateOlder",
+            "revision_behind": "#/$defs/RevisionBehind",
+        },
+    }
+    assert {
+        name: set(cast(list[str], _object(definitions[name])["required"]))
+        for name in ("RevisionBehind", "PackageTemplateOlder")
+    } == {
+        "RevisionBehind": {"code", "message", "instance_revision", "hub_revision"},
+        "PackageTemplateOlder": {"code", "message", "initialized_version", "installed_version"},
+    }
+
+
 def test_the_schema_declares_the_package_config_calls_and_restart_reasons() -> None:
     schema = contract_schema()
     definitions = _object(schema["$defs"])

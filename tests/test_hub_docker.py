@@ -593,6 +593,9 @@ class PulledImage:
     async def describe(self, artifact: ImageArtifact) -> PackageDescription:
         return vanilla_description()
 
+    async def resolve(self, revision: str) -> str:
+        return "a" * 40
+
 
 @pytest.mark.skipif(not docker_available(), reason="Docker daemon is not available")
 def test_a_real_docker_hub_restart_keeps_one_instance_up_and_starts_the_other_again(tmp_path):

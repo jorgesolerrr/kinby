@@ -3,6 +3,7 @@ import type {
   ConfigChange,
   InstanceSetup,
   InstanceStatusResult,
+  InstanceSummary,
   OperationGetResult,
   PackageConfigResult,
   PackageConfigSetCommand,
@@ -10,8 +11,8 @@ import type {
   PermissionsSetCommand,
   PromptResult,
 } from "@kinby/contract"
-import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
-import { act, render, screen, waitFor, within } from "@testing-library/react"
+import { type Answers, fakeClock, instanceSummary, stubCaller } from "@kinby/contract/testing"
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -67,8 +68,10 @@ function operation(fields: Partial<OperationGetResult>): OperationGetResult {
   }
 }
 
+const ada = instanceSummary({ instance_id: "instance-1" })
+
 /** The panel, with one stub answering both the instance's calls and the hub's. */
-function openPanel(answers: Answers) {
+function openPanel(answers: Answers, instance: InstanceSummary = ada) {
   const caller = stubCaller({
     "prompt.get": ({ name }) =>
       name === "behavior"
@@ -79,7 +82,15 @@ function openPanel(answers: Answers) {
     ...answers,
   })
   const clock = fakeClock()
-  render(<ConfigPanel client={caller} caller={caller} clock={clock} instanceId="instance-1" />)
+  render(
+    <ConfigPanel
+      client={caller}
+      caller={caller}
+      clock={clock}
+      instance={instance}
+      onChanged={() => {}}
+    />,
+  )
   return { caller, clock, user: userEvent.setup() }
 }
 
@@ -126,9 +137,36 @@ describe("ConfigPanel", () => {
     expect(screen.getByRole("button", { name: "Manifest" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Package and version" })).toHaveProperty(
       "disabled",
-      true,
+      false,
     )
     expect(await screen.findByRole("heading", { name: "Behavior prompt" })).toBeDefined()
+  })
+
+  it("says the package section is behind the hub in place of its hint", async () => {
+    const behind = instanceSummary({
+      instance_id: "instance-1",
+      source_revision: "a".repeat(40),
+      notices: [
+        {
+          code: "revision_behind",
+          message: "The instance runs kinby aaaaaaa, and the hub is at bbbbbbb.",
+          instance_revision: "a".repeat(40),
+          hub_revision: "b".repeat(40),
+        },
+      ],
+    })
+    const section = () => screen.getByRole("button", { name: "Package and version" })
+
+    openPanel({}, ada)
+    expect(section().textContent).toContain("template, installed, update")
+    cleanup()
+    const { user } = openPanel({}, behind)
+
+    expect(section().textContent).toContain("behind the hub")
+    expect(section().textContent).not.toContain("template, installed, update")
+    await user.click(section())
+    expect(await screen.findByRole("heading", { name: "Package and version" })).toBeDefined()
+    expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
   })
 
   it("edits the behavior prompt and says who changed it last", async () => {

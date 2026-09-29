@@ -74,8 +74,11 @@ class ImagePreparer:
             package=await self._inspect_package(artifact, instance),
         )
 
+    async def resolve(self, revision: str) -> str:
+        return await asyncio.to_thread(self._resolve, revision)
+
     async def build(self, selection: ImageSelection) -> BuiltImage:
-        resolved = await asyncio.to_thread(self._resolve, selection.revision)
+        resolved = await self.resolve(selection.revision)
         with TemporaryDirectory(prefix="kinby-build-") as temporary:
             context = Path(temporary)
             await asyncio.to_thread(self._export, resolved, context)

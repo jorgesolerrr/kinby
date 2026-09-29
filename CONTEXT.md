@@ -128,6 +128,11 @@ _Avoid_: config event, audit entry
 The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares, carrying the instance's **package** selection along, or moving it with a **package pin**. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path, keeps every storage the instance owns, and leaves the instance's own configuration alone. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
 _Avoid_: upgrade, rollout
 
+### Instance notice
+
+Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, so an **instance update** is there, or its copied **instance template** came from another version of its **package** than the one installed.
+_Avoid_: warning, alert
+
 ### Instance removal
 
 The **lifecycle operation** that takes one **instance**'s container down the drain-then-stop path and removes it. The instance's directory, named volumes, **instance secrets**, selected **image artifact**, and **instance registry** record all stay. A removed instance leaves the active list, but its record stays readable and its storage stays reserved until the instance is restored or permanently deleted.

@@ -129,6 +129,8 @@ class FakeImages:
         #: Each instance package.yaml the candidate check read, as it read it.
         self.checked_configs: list[str] = []
         self.described: list[ImageArtifact] = []
+        #: The commit the hub's checkout is at: the one this fake builds, until a test moves it.
+        self.hub_revision = "a" * 40
 
     async def prepare(
         self,
@@ -169,6 +171,11 @@ class FakeImages:
             return vanilla_description()
         assert self.package is not None, "a package image needs the package it installs"
         return package_description(self.package)
+
+    async def resolve(self, revision: str) -> str:
+        """Only the hub's own checkout is asked for."""
+        assert revision == "HEAD"
+        return self.hub_revision
 
 
 #: How the Docker runtime reports a container its restart policy keeps bringing back.

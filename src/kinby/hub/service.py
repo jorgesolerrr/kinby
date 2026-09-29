@@ -55,6 +55,7 @@ from kinby.contracts import (
     InstanceLoginStartCommand,
     InstanceLogsCommand,
     InstanceLogsResult,
+    InstanceNotice,
     InstanceRecreateCommand,
     InstanceRemoveCommand,
     InstanceRestoreCommand,
@@ -81,9 +82,11 @@ from kinby.contracts import (
     PackagePin,
     PackageSelection,
     PackageSummary,
+    PackageTemplateOlder,
     ProcessState,
     Readiness,
     RecreateReason,
+    RevisionBehind,
     SetupFieldKind,
     StatsGetCommand,
     StatsGetResult,
@@ -141,6 +144,7 @@ from kinby.hub.usage import Uncounted, summed_usage
 from kinby.instance import (
     Instance,
     ManifestError,
+    PackageProvenance,
     api_key_variable,
     init_instance,
     inspect_instance,
@@ -152,6 +156,7 @@ from kinby.packages import (
     MODEL_FIELD,
     PACKAGE_CONFIG_NAME,
     InstalledPackage,
+    package_description,
 )
 
 _INSTANCE_HOST = "0.0.0.0"
@@ -234,6 +239,52 @@ def _pinned_package(record: ManagedInstance, pin: PackagePin | None) -> PackageS
                 f'Package "{pin.id}" is installed from the package index at version {version}, '
                 "so there is no git repository to move to another commit."
             )
+
+
+def _notices(
+    record: ManagedInstance,
+    hub_revision: str,
+    installed: PackageDescription | None,
+) -> list[InstanceNotice]:
+    """The kinby revision the hub moved past, and a template the installed package moved past.
+
+    *installed* is what the instance's package selection declares, as its image was described.
+    """
+    notices: list[InstanceNotice] = []
+    instance_revision = record.source_revision
+    if instance_revision and instance_revision != hub_revision:
+        notices.append(
+            RevisionBehind(
+                message=(
+                    f"The instance runs kinby {instance_revision[:7]}, "
+                    f"and the hub is at {hub_revision[:7]}."
+                ),
+                instance_revision=instance_revision,
+                hub_revision=hub_revision,
+            )
+        )
+    template = _template(record)
+    if template is not None and installed is not None and template.version != installed.version:
+        notices.append(
+            PackageTemplateOlder(
+                message=(
+                    f"The instance's configuration was copied from {template.id} "
+                    f"{template.version}, and {installed.version} is installed. "
+                    "An update never copies it again."
+                ),
+                initialized_version=template.version,
+                installed_version=installed.version,
+            )
+        )
+    return notices
+
+
+def _template(record: ManagedInstance) -> PackageProvenance | None:
+    """The package version the instance's configuration was copied from, as kinby.toml says."""
+    try:
+        return inspect_instance(record.path).manifest.package
+    except ManifestError:
+        return None
 
 
 def _delete_directory(directory: Path) -> None:
@@ -1150,6 +1201,11 @@ class Hub:
             await self._observe_ready(record)
         # A failed update keeps the previous pin: the package moves once the replacement is up.
         self.registry.record_package(record.instance_id, selection.package)
+        if package is not None:
+            # A pin selects a package no preparation described, so its version is kept here.
+            self.registry.record_description(
+                selection.package, artifact.image_id, package_description(package)
+            )
         return "Instance updated." if running else "Instance updated and left stopped."
 
     async def remove(self, command: InstanceRemoveCommand) -> LifecycleOperationResult:
@@ -1689,14 +1745,15 @@ class Hub:
         return finished.state if finished is not None else OperationState.FAILED
 
     async def list(self, command: InstanceListCommand) -> InstanceListResult:
+        hub_revision = await self._images.resolve(_PREPARED_REVISION)
         return InstanceListResult(
             instances=[
-                await self._summary(record)
+                await self._summary(record, hub_revision)
                 for record in self.registry.listed_instances(removed=command.removed)
             ]
         )
 
-    async def _summary(self, record: ManagedInstance) -> InstanceSummary:
+    async def _summary(self, record: ManagedInstance, hub_revision: str) -> InstanceSummary:
         observed = await self._observed(record)
         return InstanceSummary(
             instance_id=record.instance_id,
@@ -1720,6 +1777,7 @@ class Hub:
                 if record.package is not None
                 else None
             ),
+            notices=_notices(record, hub_revision, self.registry.description(record.package)),
         )
 
     async def status(self, command: InstanceStatusCommand) -> InstanceStatusResult:
