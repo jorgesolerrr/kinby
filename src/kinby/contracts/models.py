@@ -100,7 +100,8 @@ class ErrorEnvelope(ContractModel):
     code: ErrorCode
     message: str
     retryable: bool
-    #: What is wrong with each value the client sent, by field name. Only INVALID_SETUP fills it.
+    #: What is wrong with each value the client sent, by field name. INVALID_SETUP fills it, and
+    #: so does INVALID_ARGUMENT for a config write.
     fields: dict[str, str] = Field(default_factory=dict)
 
 
@@ -113,6 +114,14 @@ class PermissionMode(StrEnum):
 
 class GateOutcome(StrEnum):
     ALLOW = "allow"
+    DENY = "deny"
+
+
+class GateAction(StrEnum):
+    """What the gate answers for a tool call, and the rule a tool can be given in its place."""
+
+    ALLOW = "allow"
+    ASK = "ask"
     DENY = "deny"
 
 
@@ -1465,6 +1474,52 @@ class PromptResult(ContractModel):
     hash: FileHash
     #: True when the instance has no file and ``content`` is the text kinby ships.
     default: bool
+
+
+#: A regex the gate matches against a Bash command.
+BashPattern = NewType("BashPattern", str)
+
+
+class DenyPattern(ContractModel):
+    pattern: BashPattern
+    #: True for a pattern kinby ships. It always applies, and a client shows it locked.
+    shipped: bool
+
+
+class BashPermissions(ContractModel):
+    #: The shipped deny patterns first, then the instance's own.
+    deny: list[DenyPattern]
+    ask: list[BashPattern]
+
+
+class OwnBashPatterns(ContractModel):
+    #: Only the instance's own deny patterns. The shipped ones apply without being sent.
+    deny: list[BashPattern]
+    ask: list[BashPattern]
+
+
+class PermissionsGetCommand(ContractModel):
+    pass
+
+
+class PermissionsSetCommand(ContractModel):
+    mode: PermissionMode
+    ceiling: PermissionMode
+    #: The tools with a rule of their own. Every other tool follows the mode.
+    tools: dict[str, GateAction]
+    bash: OwnBashPatterns
+    #: The hash the client read. The write is refused as STALE when the file changed since.
+    hash: FileHash
+
+
+class PermissionsResult(ContractModel):
+    #: The mode a new thread starts in.
+    mode: PermissionMode
+    ceiling: PermissionMode
+    #: The tools with a rule of their own. Every other tool follows the mode.
+    tools: dict[str, GateAction]
+    bash: BashPermissions
+    hash: FileHash
 
 
 class ConfigActor(StrEnum):
