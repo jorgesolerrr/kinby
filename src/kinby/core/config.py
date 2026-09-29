@@ -4,21 +4,42 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import shutil
-from contextlib import AbstractContextManager
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from pydantic import ValidationError
+
 from kinby.contracts import (
+    BashPermissions,
     ConfigActor,
     ConfigFile,
     ConfigHistoryCommand,
     ConfigHistoryResult,
+    DenyPattern,
     FileHash,
+    ManifestGetCommand,
+    ManifestResult,
+    ManifestSetCommand,
+    ModelChoice,
+    PermissionsGetCommand,
+    PermissionsResult,
+    PermissionsSetCommand,
+    PriceSource,
     PromptGetCommand,
     PromptName,
     PromptResult,
     PromptSetCommand,
+    RoutineDeleteCommand,
+    RoutineDeleteResult,
+    RoutineFile,
+    RoutineName,
+    RoutineReadCommand,
+    RoutineSetEnabledCommand,
+    RoutineWriteCommand,
     SkillCustomizeCommand,
     SkillDeleteCommand,
     SkillListCommand,
@@ -34,14 +55,52 @@ from kinby.contracts import (
     ToolRule,
     ToolSummary,
 )
-from kinby.core.errors import InvalidConfig, SkillNotFound, StaleWrite
-from kinby.instance import Instance
+from kinby.core.errors import (
+    InvalidConfig,
+    RoutineNotFound,
+    RoutineRefused,
+    SkillNotFound,
+    StaleWrite,
+)
+from kinby.core.pricing import SHIPPED_PRICES
+from kinby.instance import Instance, api_key_variable
 from kinby.instance.config_changes import ConfigChangeLog, recorded_change
-from kinby.instance.layout import RECAP_NAME, SKILL_FILE, SKILLS_DIR, SYSTEM_NAME
-from kinby.instance.permissions import load_permissions
+from kinby.instance.layout import (
+    MANIFEST_NAME,
+    PERMISSIONS_NAME,
+    RECAP_NAME,
+    ROUTINE_FILE,
+    SKILL_FILE,
+    SKILLS_DIR,
+    SYSTEM_NAME,
+)
+from kinby.instance.manifest import (
+    edited_manifest,
+    manifest_field_errors,
+    offered_values,
+    parse_manifest,
+)
+from kinby.instance.permissions import (
+    SHIPPED_BASH_DENY,
+    SHIPPED_POLICY,
+    BashPolicy,
+    GatePolicy,
+    bash_regex_errors,
+    exceeds_ceiling,
+    load_permissions,
+    parse_permissions,
+    permissions_toml,
+)
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 from kinby.plugins.core import core_tools
-from kinby.plugins.instance_tools import validate_name, write_skill
+from kinby.plugins.instance_tools import (
+    delete_routine,
+    enable_routine,
+    routine_config_file,
+    validate_name,
+    write_routine,
+    write_skill,
+)
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skill_tiers, load_skills, lower_tier_skill
 
@@ -55,6 +114,39 @@ _SHIPPED_PROMPTS = {PromptName.BEHAVIOR: "", PromptName.RECAP: DEFAULT_RECAP_LEN
 
 def _file_hash(content: bytes) -> FileHash:
     return FileHash(hashlib.sha256(content).hexdigest())
+
+
+def _directory_hash(directory: Path) -> FileHash:
+    """Hash every file under *directory* by its relative path. A missing one hashes as empty."""
+    files = directory.rglob("*") if directory.is_dir() else ()
+    digest = hashlib.sha256()
+    for relative, path in sorted(
+        (path.relative_to(directory).as_posix(), path) for path in files if path.is_file()
+    ):
+        content = path.read_bytes()
+        digest.update(f"{relative}\0{len(content)}\0".encode())
+        digest.update(content)
+    return FileHash(digest.hexdigest())
+
+
+def _check_unchanged(instance_path: Path, file: ConfigFile, read: FileHash | None) -> None:
+    """Refuse a write over a directory changed since the client read it, or over one it creates."""
+    directory = instance_path / file
+    if read is None and directory.exists():
+        raise StaleWrite(f"{file} already exists. Read it first.")
+    if read is not None and _directory_hash(directory) != read:
+        raise StaleWrite(f"{file} changed since it was read. Read it again.")
+
+
+@contextmanager
+def _refusals() -> Iterator[None]:
+    """Report the instance tools' refusals as the contract errors a client reads."""
+    try:
+        yield
+    except LookupError as exc:
+        raise RoutineNotFound(str(exc)) from exc
+    except ValueError as exc:
+        raise RoutineRefused(str(exc)) from exc
 
 
 def _read_bytes(path: Path) -> bytes | None:
@@ -75,27 +167,13 @@ def _directory_files(directory: Path) -> dict[str, bytes]:
     }
 
 
-def _directory_hash(files: dict[str, bytes]) -> FileHash:
-    """Hash each file's path and bytes in order, so a missing directory hashes as empty bytes."""
-    digest = hashlib.sha256()
-    for name, content in files.items():
-        digest.update(f"{name}\0{len(content)}\0".encode())
-        digest.update(content)
-    return FileHash(digest.hexdigest())
-
-
 def _skill_result(directory: Path) -> SkillResult:
     files = _directory_files(directory)
     return SkillResult(
         content=files[SKILL_FILE].decode("utf-8"),
         files=[name for name in files if name != SKILL_FILE],
-        hash=_directory_hash(files),
+        hash=_directory_hash(directory),
     )
-
-
-def _check_unchanged(directory: Path, read: FileHash) -> None:
-    if _directory_hash(_directory_files(directory)) != read:
-        raise StaleWrite(f"{SKILLS_DIR}/{directory.name} changed since it was read. Read it again.")
 
 
 def _write_over(path: Path, content: bytes, read: FileHash) -> None:
@@ -105,6 +183,22 @@ def _write_over(path: Path, content: bytes, read: FileHash) -> None:
     staging = path.with_name(f".{path.name}.staging")
     staging.write_bytes(content)
     staging.replace(path)
+
+
+def _manifest_result(content: bytes) -> ManifestResult:
+    raw = parse_manifest(content.decode("utf-8"))
+    return ManifestResult(
+        values=offered_values(raw),
+        model_choices=[
+            ModelChoice(
+                model=model,
+                priced_from=PriceSource.MANIFEST if model in raw.prices else PriceSource.SHIPPED,
+                key_set=bool(os.environ.get(api_key_variable(model))),
+            )
+            for model in sorted(SHIPPED_PRICES.keys() | raw.prices.keys())
+        ],
+        hash=_file_hash(content),
+    )
 
 
 class InstanceConfig:
@@ -128,6 +222,63 @@ class InstanceConfig:
         async with self._instance.config_lock:
             await asyncio.to_thread(self._write, _PROMPT_FILES[command.name], content, command.hash)
         return PromptResult(content=command.content, hash=_file_hash(content), default=False)
+
+    async def read_routine(self, command: RoutineReadCommand) -> RoutineFile:
+        async with self._instance.routine_lock:
+            return await asyncio.to_thread(self._read_routine, command.name)
+
+    async def write_routine(self, command: RoutineWriteCommand) -> RoutineFile:
+        async with self._instance.routine_lock:
+            return await asyncio.to_thread(self._write_routine, command)
+
+    async def set_routine_enabled(self, command: RoutineSetEnabledCommand) -> RoutineFile:
+        async with self._instance.routine_lock:
+            return await asyncio.to_thread(self._set_routine_enabled, command)
+
+    async def delete_routine(self, command: RoutineDeleteCommand) -> RoutineDeleteResult:
+        async with self._instance.routine_lock:
+            await asyncio.to_thread(self._delete_routine, command)
+        return RoutineDeleteResult()
+
+    async def get_manifest(self, command: ManifestGetCommand) -> ManifestResult:
+        return _manifest_result((self._instance.path / MANIFEST_NAME).read_bytes())
+
+    async def set_manifest(self, command: ManifestSetCommand) -> ManifestResult:
+        path = self._instance.path / MANIFEST_NAME
+        async with self._instance.config_lock:
+            text = path.read_text(encoding="utf-8")
+            try:
+                edited = edited_manifest(text, command.values, command.prices)
+            except ValidationError as exc:
+                raise InvalidConfig(manifest_field_errors(exc)) from exc
+            content = edited.encode("utf-8")
+            await asyncio.to_thread(self._write, ConfigFile(MANIFEST_NAME), content, command.hash)
+        return _manifest_result(content)
+
+    async def get_permissions(self, command: PermissionsGetCommand) -> PermissionsResult:
+        content = _read_bytes(self._instance.path / PERMISSIONS_NAME)
+        if content is None:
+            return _permissions_result(SHIPPED_POLICY, _file_hash(b""))
+        return _permissions_result(parse_permissions(content), _file_hash(content))
+
+    async def set_permissions(self, command: PermissionsSetCommand) -> PermissionsResult:
+        policy = GatePolicy(
+            mode=command.mode,
+            ceiling=command.ceiling,
+            tools=command.tools,
+            bash=BashPolicy(deny=tuple(command.bash.deny), ask=tuple(command.bash.ask)),
+        )
+        errors = bash_regex_errors(policy.bash)
+        if exceeds_ceiling(policy.mode, policy.ceiling):
+            errors["mode"] = f"{policy.mode} is above the ceiling, {policy.ceiling}."
+        if errors:
+            raise InvalidConfig(errors)
+        content = permissions_toml(policy).encode("utf-8")
+        async with self._instance.config_lock:
+            await asyncio.to_thread(
+                self._write, ConfigFile(PERMISSIONS_NAME), content, command.hash
+            )
+        return _permissions_result(policy, _file_hash(content))
 
     async def list_skills(self, command: SkillListCommand) -> SkillListResult:
         tiered, warnings = load_skill_tiers(self._instance)
@@ -206,8 +357,40 @@ class InstanceConfig:
         return ConfigHistoryResult(changes=log.history(command.file, command.limit))
 
     def _write(self, file: ConfigFile, content: bytes, read: FileHash) -> None:
-        with recorded_change(self._instance, file, ConfigActor.APP):
+        with self._recorded(file):
             _write_over(self._instance.path / file, content, read)
+
+    def _recorded(self, file: ConfigFile) -> AbstractContextManager[None]:
+        return recorded_change(self._instance, file, ConfigActor.APP)
+
+    def _write_routine(self, command: RoutineWriteCommand) -> RoutineFile:
+        with _refusals():
+            validate_name(command.name)
+            _check_unchanged(self._instance.path, routine_config_file(command.name), command.hash)
+            write_routine(self._instance, command.name, command.content, self._recorded)
+        return self._read_routine(command.name)
+
+    def _set_routine_enabled(self, command: RoutineSetEnabledCommand) -> RoutineFile:
+        with _refusals():
+            enable_routine(self._instance, command.name, self._recorded, enabled=command.enabled)
+        return self._read_routine(command.name)
+
+    def _delete_routine(self, command: RoutineDeleteCommand) -> None:
+        with _refusals():
+            validate_name(command.name)
+            _check_unchanged(self._instance.path, routine_config_file(command.name), command.hash)
+            delete_routine(self._instance, command.name, self._recorded)
+
+    def _read_routine(self, name: RoutineName) -> RoutineFile:
+        with _refusals():
+            validate_name(name)
+        directory = self._instance.path / routine_config_file(name)
+        content = _read_bytes(directory / ROUTINE_FILE)
+        if content is None:
+            raise RoutineNotFound(f'Routine "{name}" was not found.')
+        return RoutineFile(
+            name=name, content=content.decode("utf-8"), hash=_directory_hash(directory)
+        )
 
     def _skill_directory(self, name: SkillName) -> Path:
         try:
@@ -228,17 +411,13 @@ class InstanceConfig:
             )
 
     def _recorded_skill(self, name: SkillName) -> AbstractContextManager[None]:
-        return recorded_change(self._instance, ConfigFile(f"{SKILLS_DIR}/{name}"), ConfigActor.APP)
+        return self._recorded(_skill_config_file(name))
 
     def _write_skill(self, command: SkillWriteCommand) -> SkillResult:
         directory = self._skill_directory(command.name)
-        if command.hash is None:
-            if directory.exists():
-                raise StaleWrite(f"{SKILLS_DIR}/{command.name} already exists. Read it again.")
-        else:
-            if not directory.exists():
-                self._refuse_read_only(command.name)
-            _check_unchanged(directory, command.hash)
+        if command.hash is not None and not directory.exists():
+            self._refuse_read_only(command.name)
+        _check_unchanged(self._instance.path, _skill_config_file(command.name), command.hash)
         with self._recorded_skill(command.name):
             try:
                 write_skill(self._instance, command.name, command.content)
@@ -268,6 +447,26 @@ class InstanceConfig:
         if not directory.is_dir():
             self._refuse_read_only(command.name)
             raise SkillNotFound(f'The instance has no skill "{command.name}".')
-        _check_unchanged(directory, command.hash)
+        _check_unchanged(self._instance.path, _skill_config_file(command.name), command.hash)
         with self._recorded_skill(command.name):
             shutil.rmtree(directory)
+
+
+def _permissions_result(policy: GatePolicy, read: FileHash) -> PermissionsResult:
+    return PermissionsResult(
+        mode=policy.mode,
+        ceiling=policy.ceiling,
+        tools=dict(policy.tools),
+        bash=BashPermissions(
+            deny=[
+                DenyPattern(pattern=pattern, shipped=pattern in SHIPPED_BASH_DENY)
+                for pattern in policy.bash.denylist
+            ],
+            ask=list(policy.bash.ask),
+        ),
+        hash=read,
+    )
+
+
+def _skill_config_file(name: SkillName) -> ConfigFile:
+    return ConfigFile(f"{SKILLS_DIR}/{name}")

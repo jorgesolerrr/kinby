@@ -35,6 +35,18 @@ class RoutineNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class RoutinePending(CoreError):
+    """Deliveries wait on the routine, so deleting it would drop them."""
+
+    code = ErrorCode.ROUTINE_PENDING
+
+
+class RoutineRefused(CoreError):
+    """The routine loader refused the routine, so nothing was written."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class SkillNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
@@ -82,11 +94,13 @@ class SelectionNotPrepared(CoreError):
     code = ErrorCode.NOT_PREPARED
 
 
-class InvalidFields(CoreError):
-    """Some values the client sent are wrong. The envelope names each field."""
+class InvalidValues(CoreError):
+    """Some values the client sent are invalid. The envelope names what is wrong with each."""
 
-    def __init__(self, message: str, fields: dict[str, str]) -> None:
-        super().__init__(message)
+    message = "Some values are invalid."
+
+    def __init__(self, fields: dict[str, str]) -> None:
+        super().__init__(self.message)
         self.fields = fields
 
     def envelope(self) -> ErrorEnvelope:
@@ -95,22 +109,17 @@ class InvalidFields(CoreError):
         )
 
 
-class InvalidSetup(InvalidFields):
+class InvalidSetup(InvalidValues):
     """Some setup values are missing or invalid, so nothing was created."""
 
     code = ErrorCode.INVALID_SETUP
-
-    def __init__(self, fields: dict[str, str]) -> None:
-        super().__init__("Some setup values are missing or invalid.", fields)
+    message = "Some setup values are missing or invalid."
 
 
-class InvalidConfig(InvalidFields):
-    """A config value the instance would not load, so nothing was written."""
+class InvalidConfig(InvalidValues):
+    """Some config values are invalid, so the file was left alone."""
 
     code = ErrorCode.INVALID_ARGUMENT
-
-    def __init__(self, fields: dict[str, str]) -> None:
-        super().__init__(" ".join(fields.values()), fields)
 
 
 class LifecycleOperationNotFound(CoreError):

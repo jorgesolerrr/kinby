@@ -1,7 +1,6 @@
-import { CallError } from "@kinby/contract"
 import type { ConfigChange, InstanceClient, PromptName, PromptResult } from "@kinby/contract"
 
-import { latestChange } from "@/lib/config-changes"
+import { latestChange, unlessStale } from "@/lib/config-changes"
 
 /** The file each prompt is kept in, as the config changes name it. */
 export const PROMPT_FILES: Record<PromptName, string> = {
@@ -35,13 +34,8 @@ export async function savePrompt(
   content: string,
   hash: string,
 ): Promise<Saved> {
-  let prompt: PromptResult
-  try {
-    prompt = await caller.call("prompt.set", { name, content, hash })
-  } catch (error) {
-    if (error instanceof CallError && error.code === "STALE") return { state: "stale" }
-    throw error
-  }
+  const prompt = await unlessStale(caller.call("prompt.set", { name, content, hash }))
+  if (prompt === "stale") return { state: "stale" }
   return {
     state: "saved",
     opened: { prompt, lastChange: await latestChange(caller, PROMPT_FILES[name]) },

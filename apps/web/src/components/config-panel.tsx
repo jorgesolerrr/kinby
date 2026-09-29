@@ -1,7 +1,10 @@
 import type { InstanceClient, PromptName } from "@kinby/contract"
 import { Fragment, type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
-import { Failure, StaleNotice } from "@/components/config-notices"
+import { Failure, StaleAlert } from "@/components/config-alerts"
+import { ManifestSection } from "@/components/manifest-section"
+import { PermissionsSection } from "@/components/permissions-section"
+import { RoutinesSection } from "@/components/routines-section"
 import { SkillsSection } from "@/components/skills-section"
 import { ToolsSection } from "@/components/tools-section"
 import { Badge } from "@/components/ui/badge"
@@ -19,8 +22,8 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
-import { reason } from "@/lib/operation"
 import { lastChanged } from "@/lib/config-changes"
+import { reason } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
 import {
   BoxIcon,
@@ -65,14 +68,29 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         icon: NotebookPenIcon,
         render: (client) => <PromptSection client={client} name="recap" />,
       },
-      { label: "Permissions", hint: "ceiling, mode, tool rules, shell patterns", icon: ShieldIcon },
-      { label: "Manifest", hint: "models, budgets, timezone", icon: CpuIcon },
+      {
+        label: "Permissions",
+        hint: "ceiling, mode, tool rules, shell patterns",
+        icon: ShieldIcon,
+        render: (client) => <PermissionsSection client={client} />,
+      },
+      {
+        label: "Manifest",
+        hint: "models, budgets, timezone",
+        icon: CpuIcon,
+        render: (client) => <ManifestSection client={client} />,
+      },
     ],
   },
   {
     label: "Capabilities",
     sections: [
-      { label: "Routines", hint: "schedules, signals, next firing", icon: RepeatIcon },
+      {
+        label: "Routines",
+        hint: "schedules, signals, next firing",
+        icon: RepeatIcon,
+        render: (client) => <RoutinesSection client={client} />,
+      },
       {
         label: "Skills",
         hint: "instance, package, workspace",
@@ -254,7 +272,7 @@ function PromptSection({ client, name }: { client: Caller; name: PromptName }) {
 
   return (
     <div className="flex flex-col gap-3">
-      {notice === "stale" && <StaleNotice file={file} onLoad={() => void load()} />}
+      {notice === "stale" && <StaleAlert file={file} onLoad={() => void load()} />}
       {failure !== undefined && <Failure>{failure}</Failure>}
       <Field>
         <div className="flex items-center gap-2">

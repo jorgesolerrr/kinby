@@ -91,6 +91,8 @@ class ErrorCode(StrEnum):
     INVALID_SETUP = "INVALID_SETUP"
     #: The file changed since the client read it, so the write was refused. Read it again.
     STALE = "STALE"
+    #: The routine has deliveries waiting to fire, so it cannot be deleted yet.
+    ROUTINE_PENDING = "ROUTINE_PENDING"
     #: Raised by a client, never sent by a server: its connection dropped under a call.
     CONNECTION_LOST = "CONNECTION_LOST"
     INTERNAL = "INTERNAL"
@@ -101,7 +103,7 @@ class ErrorEnvelope(ContractModel):
     message: str
     retryable: bool
     #: What is wrong with each value the client sent, by field name. INVALID_SETUP fills it, and
-    #: INVALID_ARGUMENT does for a config value.
+    #: so does INVALID_ARGUMENT for a config write.
     fields: dict[str, str] = Field(default_factory=dict)
 
 
@@ -114,6 +116,14 @@ class PermissionMode(StrEnum):
 
 class GateOutcome(StrEnum):
     ALLOW = "allow"
+    DENY = "deny"
+
+
+class GateAction(StrEnum):
+    """What the gate answers for a tool call, and the rule a tool can be given in its place."""
+
+    ALLOW = "allow"
+    ASK = "ask"
     DENY = "deny"
 
 
@@ -1468,6 +1478,52 @@ class PromptResult(ContractModel):
     default: bool
 
 
+#: A regex the gate matches against a Bash command.
+BashPattern = NewType("BashPattern", str)
+
+
+class DenyPattern(ContractModel):
+    pattern: BashPattern
+    #: True for a pattern kinby ships. It always applies, and a client shows it locked.
+    shipped: bool
+
+
+class BashPermissions(ContractModel):
+    #: The shipped deny patterns first, then the instance's own.
+    deny: list[DenyPattern]
+    ask: list[BashPattern]
+
+
+class OwnBashPatterns(ContractModel):
+    #: Only the instance's own deny patterns. The shipped ones apply without being sent.
+    deny: list[BashPattern]
+    ask: list[BashPattern]
+
+
+class PermissionsGetCommand(ContractModel):
+    pass
+
+
+class PermissionsSetCommand(ContractModel):
+    mode: PermissionMode
+    ceiling: PermissionMode
+    #: The tools with a rule of their own. Every other tool follows the mode.
+    tools: dict[str, GateAction]
+    bash: OwnBashPatterns
+    #: The hash the client read. The write is refused as STALE when the file changed since.
+    hash: FileHash
+
+
+class PermissionsResult(ContractModel):
+    #: The mode a new thread starts in.
+    mode: PermissionMode
+    ceiling: PermissionMode
+    #: The tools with a rule of their own. Every other tool follows the mode.
+    tools: dict[str, GateAction]
+    bash: BashPermissions
+    hash: FileHash
+
+
 class ConfigActor(StrEnum):
     APP = "app"
     AGENT = "agent"
@@ -1496,6 +1552,137 @@ class ConfigHistoryCommand(ContractModel):
 class ConfigHistoryResult(ContractModel):
     #: Newest first.
     changes: list[ConfigChange]
+
+
+class RoutineReadCommand(ContractModel):
+    name: RoutineName
+
+
+class RoutineFile(ContractModel):
+    name: RoutineName
+    #: The routine's ``ROUTINE.md``.
+    content: str
+    #: The sha256 over the sorted (relative path, bytes) pairs of the routine's directory.
+    hash: FileHash
+
+
+class RoutineWriteCommand(ContractModel):
+    name: RoutineName
+    content: str
+    #: The hash the client read, or null to create a routine that does not exist yet.
+    hash: FileHash | None
+
+
+class RoutineSetEnabledCommand(ContractModel):
+    name: RoutineName
+    enabled: bool
+
+
+class RoutineDeleteCommand(ContractModel):
+    name: RoutineName
+    hash: FileHash
+
+
+class RoutineDeleteResult(ContractModel):
+    pass
+
+
+class RecapPolicy(StrEnum):
+    """When kinby writes a model-assisted recap."""
+
+    EVERY_TURN = "every-turn"
+    TRACE_ONLY = "off"
+
+
+class FeedbackPolicy(StrEnum):
+    """When kinby asks the user to rate a completed turn."""
+
+    EVERY_TURN = "every-turn"
+    OFF = "off"
+
+
+class ManifestModels(ContractModel):
+    #: Each model as ``provider:model``. The recap model is the main one when absent.
+    main: str
+    recap: str | None
+    embed: str | None
+
+
+class ManifestBudgets(ContractModel):
+    #: Each limit is off when absent.
+    steps: int | None
+    tokens: int | None
+    seconds: float | None
+    usd_per_day: float | None
+
+
+class ManifestRoutines(ContractModel):
+    #: The IANA time zone routine schedules read in.
+    timezone: str
+
+
+class ManifestTools(ContractModel):
+    #: Whether kinby's default tools, such as bash and the file tools, are on.
+    defaults: bool
+    bash_timeout_seconds: int
+
+
+class ManifestMemory(ContractModel):
+    recap: RecapPolicy
+
+
+class ManifestFeedback(ContractModel):
+    ask: FeedbackPolicy
+
+
+class ManifestValues(ContractModel):
+    """The fields of ``kinby.toml`` a client may change. The hub owns the rest."""
+
+    persona_name: str | None
+    models: ManifestModels
+    budgets: ManifestBudgets
+    routines: ManifestRoutines
+    tools: ManifestTools
+    memory: ManifestMemory
+    feedback: ManifestFeedback
+
+
+class PriceSource(StrEnum):
+    SHIPPED = "shipped"
+    MANIFEST = "manifest"
+
+
+class ModelChoice(ContractModel):
+    """A model the budget can count, because kinby ships its price or the manifest sets one."""
+
+    model: str
+    priced_from: PriceSource
+    #: Whether ``<PROVIDER>_API_KEY`` is set in the instance's environment.
+    key_set: bool
+
+
+class ManifestGetCommand(ContractModel):
+    pass
+
+
+class ManifestResult(ContractModel):
+    values: ManifestValues
+    model_choices: list[ModelChoice]
+    hash: FileHash
+
+
+class NewModelPrice(ContractModel):
+    #: Dollars per million tokens.
+    input: float
+    output: float
+
+
+class ManifestSetCommand(ContractModel):
+    values: ManifestValues
+    #: Prices to write as ``[prices."provider:model"]`` entries, by model.
+    prices: dict[str, NewModelPrice] = Field(default_factory=dict)
+    #: The hash the client read. The write is refused as STALE when the file changed since.
+    hash: FileHash
 
 
 SkillName = NewType("SkillName", str)

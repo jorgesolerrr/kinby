@@ -30,7 +30,7 @@ from kinby.contracts import (
     ToolResult,
 )
 from kinby.core import LangGraphRunner
-from kinby.core.errors import RoutineNotFound
+from kinby.core.errors import RoutineNotFound, RoutinePending
 from kinby.core.turns import (
     ApprovalAnswer,
     ParkedTurn,
@@ -296,7 +296,7 @@ def test_routine_delete_refuses_pending_deliveries_and_they_still_fire(
             )
         delete = next(tool for tool in instance_tools(instance) if tool.name == "routine_delete")
 
-        with pytest.raises(ValueError, match="2 pending deliveries"):
+        with pytest.raises(RoutinePending, match="2 pending deliveries"):
             await delete.ainvoke(
                 {"name": "issues"},
                 ToolContext(instance=instance, thread_id=uuid4()),

@@ -9,15 +9,19 @@ from langchain_core.messages import AIMessageChunk
 from pydantic import JsonValue
 
 from kinby.contracts import (
+    Delivery,
     ErrorCode,
     ErrorEnvelope,
     Event,
     Payload,
     PermissionMode,
+    RoutineName,
+    RoutineTrigger,
     SystemPrompt,
 )
 from kinby.core import LangGraphRunner
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
+from kinby.instance.permissions import SHIPPED_BASH_DENY
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 from kinby.plugins import ToolContext
 from kinby.plugins.instance_tools import instance_tools
@@ -326,5 +330,717 @@ def test_the_failure_policy_records_the_routine_it_disables(tmp_path: Path) -> N
         assert change.actor == "failure_policy"
         assert "-enabled: true" in change.diff.splitlines()
         assert "+enabled: false" in change.diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+NEWS = "---\ndescription: News\n---\nRead the news.\n"
+CODE_STEP = """from kinby.plugins import tool
+
+
+@tool(write=False)
+def fetch() -> str:
+    \"\"\"Fetch the news.\"\"\"
+    return "news"
+"""
+
+
+def test_routine_read_returns_routine_md_and_the_directory_hash(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        dispatcher = _dispatcher(tmp_path)
+
+        read = await call(dispatcher, "routine.read", name="news")
+        again = await call(dispatcher, "routine.read", name="news")
+        (tmp_path / "routines" / "news" / "notes.txt").write_text("A note.", encoding="utf-8")
+        with_notes = await call(dispatcher, "routine.read", name="news")
+        missing = await call(dispatcher, "routine.read", name="weather")
+
+        assert (read.name, read.content) == ("news", NEWS)
+        assert again.hash == read.hash
+        assert (with_notes.content, with_notes.hash == read.hash) == (NEWS, False)
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
+
+    asyncio.run(scenario())
+
+
+def test_routine_write_creates_a_routine_with_a_null_hash(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        written = await call(dispatcher, "routine.write", name="news", content=NEWS, hash=None)
+
+        assert (tmp_path / "routines" / "news" / "ROUTINE.md").read_text(encoding="utf-8") == NEWS
+        assert written == await call(dispatcher, "routine.read", name="news")
+        [summary] = (await call(dispatcher, "routine.list")).routines
+        assert (summary.name, summary.enabled) == ("news", True)
+        [change] = (
+            await call(dispatcher, "config.history", file="routines/news", limit=10)
+        ).changes
+        assert (change.actor, change.thread_id, change.turn_id) == ("app", None, None)
+        assert "+Read the news." in change.diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+def test_routine_write_replaces_the_routine_read(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        (tmp_path / "routines" / "news" / "run.py").write_text(CODE_STEP, encoding="utf-8")
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+        content = "---\ndescription: News\n---\nRead the headlines.\n"
+
+        written = await call(
+            dispatcher, "routine.write", name="news", content=content, hash=read.hash
+        )
+
+        assert (written.content, written.hash == read.hash) == (content, False)
+        assert (tmp_path / "routines" / "news" / "run.py").read_text(encoding="utf-8") == CODE_STEP
+
+    asyncio.run(scenario())
+
+
+def test_routine_write_over_a_change_since_the_read_is_stale(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+        (tmp_path / "routines" / "news" / "run.py").write_text(CODE_STEP, encoding="utf-8")
+        mine = "---\ndescription: Mine\n---\nMine.\n"
+
+        stale = await call(dispatcher, "routine.write", name="news", content=mine, hash=read.hash)
+        exists = await call(dispatcher, "routine.write", name="news", content=mine, hash=None)
+
+        for refused in (stale, exists):
+            assert isinstance(refused, ErrorEnvelope)
+            assert (refused.code, refused.retryable) == (ErrorCode.STALE, False)
+        assert (tmp_path / "routines" / "news" / "ROUTINE.md").read_text(encoding="utf-8") == NEWS
+        assert (await call(dispatcher, "config.history", limit=10)).changes == []
+
+    asyncio.run(scenario())
+
+
+def test_routine_write_refuses_a_routine_the_loader_refuses(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        broken = await call(
+            dispatcher,
+            "routine.write",
+            name="news",
+            content="---\n---\nNo description.\n",
+            hash=None,
+        )
+        bad_name = await call(dispatcher, "routine.write", name="../news", content=NEWS, hash=None)
+
+        for refused in (broken, bad_name):
+            assert isinstance(refused, ErrorEnvelope)
+            assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert "description" in broken.message
+        assert not (tmp_path / "routines" / "news").exists()
+
+    asyncio.run(scenario())
+
+
+def test_routine_set_enabled_toggles_the_enabled_line_without_a_hash(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        path = routine_file(instance, "description: News\nschedule: 0 9 * * *")
+        dispatcher = _dispatcher(tmp_path)
+
+        off = await call(dispatcher, "routine.set_enabled", name="news", enabled=False)
+        [summary] = (await call(dispatcher, "routine.list")).routines
+        on = await call(dispatcher, "routine.set_enabled", name="news", enabled=True)
+        missing = await call(dispatcher, "routine.set_enabled", name="weather", enabled=True)
+
+        assert off.content == (
+            "---\ndescription: News\nschedule: 0 9 * * *\nenabled: false\n---\nRead the news.\n"
+        )
+        assert (summary.enabled, summary.next_run) == (False, None)
+        assert on == await call(dispatcher, "routine.read", name="news")
+        assert path.read_text(encoding="utf-8") == (
+            "---\ndescription: News\nschedule: 0 9 * * *\nenabled: true\n---\nRead the news.\n"
+        )
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
+        changes = (await call(dispatcher, "config.history", file="routines/news", limit=10)).changes
+        assert [change.actor for change in changes] == ["app", "app"]
+        assert "+enabled: true" in changes[0].diff.splitlines()
+        assert "+enabled: false" in changes[1].diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+def test_routine_delete_removes_the_routine_read(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+
+        await call(dispatcher, "routine.delete", name="news", hash=read.hash)
+        again = await call(dispatcher, "routine.delete", name="news", hash=read.hash)
+        missing = await call(dispatcher, "routine.delete", name="weather", hash=EMPTY_HASH)
+
+        assert not (tmp_path / "routines" / "news").exists()
+        assert (await call(dispatcher, "routine.list")).routines == []
+        assert isinstance(again, ErrorEnvelope)
+        assert again.code is ErrorCode.STALE
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
+        [change] = (
+            await call(dispatcher, "config.history", file="routines/news", limit=10)
+        ).changes
+        assert change.actor == "app"
+        assert "-Read the news." in change.diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+def test_routine_delete_over_a_change_since_the_read_is_stale(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        path = routine_file(instance, "description: News")
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+        path.write_text(NEWS.replace("news", "headlines"), encoding="utf-8")
+
+        refused = await call(dispatcher, "routine.delete", name="news", hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.STALE
+        assert path.is_file()
+
+    asyncio.run(scenario())
+
+
+def test_routine_delete_refuses_a_routine_with_pending_deliveries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: Issues\nsignal:\n  secret: SIGNAL_SECRET")
+        dispatcher = _dispatcher(tmp_path)
+        await dispatcher.scheduler.receive(
+            RoutineName("news"),
+            Delivery(
+                headers={},
+                content_type="text/plain",
+                body="opened",
+                received_at=datetime(2026, 9, 28, tzinfo=UTC),
+            ),
+            RoutineTrigger.SIGNAL,
+        )
+        read = await call(dispatcher, "routine.read", name="news")
+
+        refused = await call(dispatcher, "routine.delete", name="news", hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (refused.code, refused.retryable) == (ErrorCode.ROUTINE_PENDING, False)
+        assert refused.message == 'Routine "news" has 1 pending delivery and cannot be deleted.'
+        assert (tmp_path / "routines" / "news").is_dir()
+
+    asyncio.run(scenario())
+
+
+def test_an_app_write_after_an_agent_change_is_stale(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        dispatcher = _dispatcher(tmp_path)
+        tools = {each.name: each for each in instance_tools(instance)}
+        context = ToolContext(instance=instance, thread_id=uuid4(), turn_id=uuid4())
+        await tools["routine_write"].ainvoke({"name": "news", "content": NEWS}, context)
+        read = await call(dispatcher, "routine.read", name="news")
+
+        await tools["routine_set_enabled"].ainvoke({"name": "news", "enabled": False}, context)
+        refused = await call(dispatcher, "routine.write", name="news", content=NEWS, hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.STALE
+        theirs = await call(dispatcher, "routine.read", name="news")
+        assert "enabled: false" in theirs.content.splitlines()
+
+    asyncio.run(scenario())
+
+
+MANIFEST = """# Ada's instance
+id = "test"
+persona_name = "Ada"  # the name she answers to
+
+[models]
+# The main model runs every turn.
+main = "openai:gpt-5"
+
+[tools]
+defaults = false
+
+[routines]
+timezone = "Europe/Madrid"
+
+[serve]
+listen = "0.0.0.0:8080"
+"""
+
+MANIFEST_VALUES: dict[str, JsonValue] = {
+    "persona_name": "Ada",
+    "models": {"main": "openai:gpt-5", "recap": None, "embed": None},
+    "budgets": {"steps": None, "tokens": None, "seconds": None, "usd_per_day": None},
+    "routines": {"timezone": "Europe/Madrid"},
+    "tools": {"defaults": False, "bash_timeout_seconds": 120},
+    "memory": {"recap": "every-turn"},
+    "feedback": {"ask": "every-turn"},
+}
+
+
+def _manifest_dispatcher(path: Path):
+    dispatcher = _dispatcher(path)
+    (path / "kinby.toml").write_text(MANIFEST, encoding="utf-8")
+    return dispatcher
+
+
+def test_manifest_get_returns_the_offered_fields_and_the_hash(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        read = await call(_manifest_dispatcher(tmp_path), "manifest.get")
+
+        assert read.values.model_dump(mode="json") == MANIFEST_VALUES
+        assert read.hash == _sha256(MANIFEST)
+
+    asyncio.run(scenario())
+
+
+def test_manifest_set_writes_the_offered_fields_and_keeps_the_comments(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values["persona_name"] = None
+        values["models"]["main"] = "anthropic:claude-sonnet-5"
+        values["budgets"]["steps"] = 20
+        values["budgets"]["usd_per_day"] = 2.5
+        values["routines"]["timezone"] = "America/Bogota"
+        values["tools"]["defaults"] = True
+        values["feedback"]["ask"] = "off"
+
+        written = await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+
+        saved = (tmp_path / "kinby.toml").read_text(encoding="utf-8")
+        assert saved == (
+            "# Ada's instance\n"
+            'id = "test"\n'
+            "\n"
+            "[models]\n"
+            "# The main model runs every turn.\n"
+            'main = "anthropic:claude-sonnet-5"\n'
+            "\n"
+            "[tools]\n"
+            "defaults = true\n"
+            "\n"
+            "[routines]\n"
+            'timezone = "America/Bogota"\n'
+            "\n"
+            "[serve]\n"
+            'listen = "0.0.0.0:8080"\n'
+            "\n"
+            "[budgets]\n"
+            "steps = 20\n"
+            "usd_per_day = 2.5\n"
+            "\n"
+            "[feedback]\n"
+            'ask = "off"\n'
+        )
+        assert written.values.model_dump(mode="json") == values
+        assert written.hash == _sha256(saved)
+        again = await call(dispatcher, "manifest.get")
+        assert again.values.model_dump(mode="json") == values
+
+    asyncio.run(scenario())
+
+
+def test_manifest_set_with_the_values_read_leaves_the_file_as_it_was(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+
+        await call(
+            dispatcher,
+            "manifest.set",
+            values=read.values.model_dump(mode="json"),
+            hash=read.hash,
+        )
+
+        assert (tmp_path / "kinby.toml").read_text(encoding="utf-8") == MANIFEST
+
+    asyncio.run(scenario())
+
+
+def test_manifest_set_with_a_stale_hash_leaves_the_file_alone(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        theirs = MANIFEST.replace('persona_name = "Ada"', 'persona_name = "Grace"')
+        (tmp_path / "kinby.toml").write_text(theirs, encoding="utf-8")
+        values = read.values.model_dump(mode="json")
+        values["persona_name"] = "Ida"
+
+        refused = await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (refused.code, refused.retryable) == (ErrorCode.STALE, False)
+        assert (tmp_path / "kinby.toml").read_text(encoding="utf-8") == theirs
+
+    asyncio.run(scenario())
+
+
+def test_a_manifest_write_records_a_config_change(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values["tools"]["bash_timeout_seconds"] = 300
+
+        await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+
+        history = await call(dispatcher, "config.history", file="kinby.toml", limit=10)
+        [change] = history.changes
+        assert (change.actor, change.thread_id, change.turn_id) == ("app", None, None)
+        assert "+bash_timeout_seconds = 300" in change.diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("owned", "value"),
+    [("id", "other"), ("state_dir", "/elsewhere"), ("serve", {"listen": "0.0.0.0:9000"})],
+)
+def test_manifest_set_refuses_a_field_the_hub_owns(
+    tmp_path: Path, owned: str, value: JsonValue
+) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values[owned] = value
+
+        refused = await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert (tmp_path / "kinby.toml").read_text(encoding="utf-8") == MANIFEST
+
+    asyncio.run(scenario())
+
+
+def test_manifest_set_names_each_invalid_value(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values["models"]["recap"] = "no-provider"
+        values["budgets"]["steps"] = 0
+        values["routines"]["timezone"] = "Mars/Olympus"
+
+        refused = await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert refused.fields == {
+            "models.recap": "must use provider:model form",
+            "budgets.steps": "Input should be greater than 0",
+            "routines.timezone": "Unknown IANA time zone: Mars/Olympus",
+        }
+        assert (tmp_path / "kinby.toml").read_text(encoding="utf-8") == MANIFEST
+        assert (await call(dispatcher, "config.history", limit=10)).changes == []
+
+    asyncio.run(scenario())
+
+
+def test_manifest_set_writes_a_new_price_and_offers_its_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("MISTRAL_API_KEY", "")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values["models"]["main"] = "mistral:large-3"
+
+        written = await call(
+            dispatcher,
+            "manifest.set",
+            values=values,
+            prices={"mistral:large-3": {"input": 2, "output": 6}},
+            hash=read.hash,
+        )
+
+        assert (
+            (tmp_path / "kinby.toml")
+            .read_text(encoding="utf-8")
+            .endswith('\n[prices."mistral:large-3"]\ninput = 2.0\noutput = 6.0\n')
+        )
+        assert [
+            (choice.model, choice.priced_from, choice.key_set) for choice in written.model_choices
+        ] == [
+            ("anthropic:claude-fable-5-1", "shipped", False),
+            ("anthropic:claude-haiku-4-5", "shipped", False),
+            ("anthropic:claude-opus-5", "shipped", False),
+            ("anthropic:claude-opus-5-5", "shipped", False),
+            ("anthropic:claude-sonnet-4-6", "shipped", False),
+            ("anthropic:claude-sonnet-5", "shipped", False),
+            ("mistral:large-3", "manifest", False),
+            ("openai:gpt-5", "shipped", True),
+            ("openai:gpt-5-mini", "shipped", True),
+            ("openai:gpt-5-nano", "shipped", True),
+            ("openai:gpt-5.1", "shipped", True),
+            ("openai:gpt-5.2", "shipped", True),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_manifest_price_for_a_shipped_model_is_the_one_offered(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _manifest_dispatcher(tmp_path)
+        with (tmp_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+            manifest.write('\n[prices."openai:gpt-5"]\ninput = 1.0\noutput = 8.0\n')
+
+        read = await call(dispatcher, "manifest.get")
+
+        [choice] = [choice for choice in read.model_choices if choice.model == "openai:gpt-5"]
+        assert choice.priced_from == "manifest"
+
+    asyncio.run(scenario())
+
+
+def test_a_new_routines_timezone_applies_at_the_next_tick(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nschedule: 0 9 * * *")
+        clock = FakeClock(datetime(2026, 9, 6, 6, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        await dispatcher.scheduler.tick()
+        read = await call(dispatcher, "manifest.get")
+        values = read.values.model_dump(mode="json")
+        values["routines"]["timezone"] = "Europe/Madrid"
+
+        await call(dispatcher, "manifest.set", values=values, hash=read.hash)
+        await dispatcher.scheduler.tick()
+
+        listed = await call(dispatcher, "routine.list")
+        assert listed.routines[0].next_run == datetime(2026, 9, 6, 7, tzinfo=UTC)
+        clock.now = datetime(2026, 9, 6, 7, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+        assert len((await call(dispatcher, "thread.list")).threads) == 1
+
+    asyncio.run(scenario())
+
+
+def test_turning_the_default_tools_on_applies_at_the_next_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        model = ScriptedModel([AIMessageChunk(content="One."), AIMessageChunk(content="Two.")])
+        runner = LangGraphRunner(instance, model_factory=lambda _: model)
+
+        async def turn() -> set[str]:
+            preparation = runner.prepare_for_turn()
+            thread_id, turn_id = uuid4(), uuid4()
+
+            async def emit(payload: Payload) -> Event:
+                return Event(
+                    sequence=1,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    payload=payload,
+                    timestamp=datetime.now(UTC),
+                )
+
+            await runner.run(
+                PreparedTurnRequest(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    message="Hello.",
+                    model=preparation.model,
+                    permission_mode=PermissionMode.FULL_ACCESS,
+                    system_prompt=SystemPrompt("System prompt"),
+                ),
+                TurnContext(preparation.budgets, emit),
+            )
+            return {tool.name for tool in model.bound_tools[-1]}
+
+        without = await turn()
+        manifest = tmp_path / "kinby.toml"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace("defaults = false", "defaults = true"),
+            encoding="utf-8",
+        )
+        with_defaults = await turn()
+
+        assert "bash" not in without
+        assert {"bash", "read", "write", "edit"} <= with_defaults
+
+    asyncio.run(scenario())
+
+
+PERMISSIONS = (
+    'mode = "ask"\n'
+    'ceiling = "auto"\n'
+    "\n"
+    "[tools]\n"
+    'bash = "deny"\n'
+    "\n"
+    "[bash]\n"
+    f"deny = ['''{SHIPPED_BASH_DENY[1]}''', '^deploy production$']\n"
+    "ask = ['^npm publish']\n"
+)
+
+
+def test_permissions_get_marks_the_shipped_deny_patterns(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        (tmp_path / "permissions.toml").write_text(PERMISSIONS, encoding="utf-8")
+
+        read = await call(dispatcher, "permissions.get")
+
+        assert read.model_dump(mode="json") == {
+            "mode": "ask",
+            "ceiling": "auto",
+            "tools": {"bash": "deny"},
+            "bash": {
+                "deny": [
+                    *({"pattern": pattern, "shipped": True} for pattern in SHIPPED_BASH_DENY),
+                    {"pattern": "^deploy production$", "shipped": False},
+                ],
+                "ask": ["^npm publish"],
+            },
+            "hash": _sha256(PERMISSIONS),
+        }
+
+    asyncio.run(scenario())
+
+
+def test_permissions_get_without_a_file_reads_the_shipped_policy(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        read = await call(_dispatcher(tmp_path), "permissions.get")
+
+        assert read.model_dump(mode="json") == {
+            "mode": "ask",
+            "ceiling": "full-access",
+            "tools": {},
+            "bash": {
+                "deny": [{"pattern": pattern, "shipped": True} for pattern in SHIPPED_BASH_DENY],
+                "ask": [],
+            },
+            "hash": EMPTY_HASH,
+        }
+
+    asyncio.run(scenario())
+
+
+def _permissions(hash: str, **values: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "mode": "auto",
+        "ceiling": "auto",
+        "tools": {"bash": "ask", "web_fetch": "allow"},
+        "bash": {"deny": ["^deploy production$"], "ask": [r"\bnpm publish\b"]},
+        "hash": hash,
+    } | values
+
+
+def test_permissions_set_writes_only_the_instances_own_patterns(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        (tmp_path / "permissions.toml").write_text(PERMISSIONS, encoding="utf-8")
+
+        written = await call(dispatcher, "permissions.set", **_permissions(_sha256(PERMISSIONS)))
+        read = await call(dispatcher, "permissions.get")
+
+        file = (tmp_path / "permissions.toml").read_text(encoding="utf-8")
+        assert file == (
+            'mode = "auto"\n'
+            'ceiling = "auto"\n'
+            "\n"
+            "[tools]\n"
+            'bash = "ask"\n'
+            'web_fetch = "allow"\n'
+            "\n"
+            "[bash]\n"
+            'deny = ["^deploy production$"]\n'
+            'ask = ["\\\\bnpm publish\\\\b"]\n'
+        )
+        assert written == read
+        assert read.model_dump(mode="json") == {
+            "mode": "auto",
+            "ceiling": "auto",
+            "tools": {"bash": "ask", "web_fetch": "allow"},
+            "bash": {
+                "deny": [
+                    *({"pattern": pattern, "shipped": True} for pattern in SHIPPED_BASH_DENY),
+                    {"pattern": "^deploy production$", "shipped": False},
+                ],
+                "ask": [r"\bnpm publish\b"],
+            },
+            "hash": _sha256(file),
+        }
+        history = await call(dispatcher, "config.history", file="permissions.toml", limit=10)
+        [change] = history.changes
+        assert change.actor == "app"
+        assert '+mode = "auto"' in change.diff.splitlines()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("values", "fields"),
+    [
+        ({"mode": "full-access"}, {"mode": "full-access is above the ceiling, auto."}),
+        (
+            {"bash": {"deny": ["^ok$", "(unclosed"], "ask": ["[z-a]"]}},
+            {
+                "bash.deny.1": "invalid regex: missing ), unterminated subpattern at position 0",
+                "bash.ask.0": "invalid regex: bad character range z-a at position 1",
+            },
+        ),
+    ],
+    ids=["mode-above-ceiling", "bad-regex"],
+)
+def test_permissions_set_refuses_invalid_values_and_leaves_the_file(
+    tmp_path: Path, values: dict[str, JsonValue], fields: dict[str, str]
+) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        (tmp_path / "permissions.toml").write_text(PERMISSIONS, encoding="utf-8")
+
+        refused = await call(
+            dispatcher, "permissions.set", **_permissions(_sha256(PERMISSIONS), **values)
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (refused.code, refused.fields) == (ErrorCode.INVALID_ARGUMENT, fields)
+        assert (tmp_path / "permissions.toml").read_text(encoding="utf-8") == PERMISSIONS
+
+    asyncio.run(scenario())
+
+
+def test_permissions_set_with_a_stale_hash_leaves_the_file(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "permissions.get")
+        (tmp_path / "permissions.toml").write_text(PERMISSIONS, encoding="utf-8")
+
+        refused = await call(dispatcher, "permissions.set", **_permissions(read.hash))
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (refused.code, refused.retryable) == (ErrorCode.STALE, False)
+        assert (tmp_path / "permissions.toml").read_text(encoding="utf-8") == PERMISSIONS
+        history = await call(dispatcher, "config.history", limit=10)
+        assert history.changes == []
 
     asyncio.run(scenario())

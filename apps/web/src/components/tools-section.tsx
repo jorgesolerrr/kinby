@@ -1,7 +1,7 @@
 import type { InstanceClient, ToolListResult, ToolRule } from "@kinby/contract"
 import { useEffect, useState } from "react"
 
-import { Failure, Warnings } from "@/components/config-notices"
+import { Failure, Warnings } from "@/components/config-alerts"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"

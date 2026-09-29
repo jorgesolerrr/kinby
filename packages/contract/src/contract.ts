@@ -49,6 +49,15 @@ export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "un
  * How an instance's subscription login stands: not signed in yet, or how its last one ended.
  */
 export type LoginState = "pending" | "signed_in" | "failed";
+export type PriceSource = "shipped" | "manifest";
+/**
+ * When kinby asks the user to rate a completed turn.
+ */
+export type FeedbackPolicy = "every-turn" | "off";
+/**
+ * When kinby writes a model-assisted recap.
+ */
+export type RecapPolicy = "every-turn" | "off";
 export type OperationKind =
   | "create"
   | "start"
@@ -75,9 +84,13 @@ export type TargetFile = "kinby.toml" | "package.yaml";
  * How a client asks for a setup field's value, and so what the value is.
  */
 export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "choice" | "email" | "url";
+export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
+/**
+ * What the gate answers for a tool call, and the rule a tool can be given in its place.
+ */
+export type GateAction = "allow" | "ask" | "deny";
 export type PromptName = "behavior" | "recap";
 export type RoutineRunOutcome = "running" | "parked" | "work" | "no-work" | "failed" | "interrupted";
-export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
 export type RoutineNoticeKind = "first-failure" | "disabled";
 export type SignalAuth = "token" | "hmac-sha256";
 /**
@@ -114,6 +127,7 @@ export type ErrorCode =
   | "NOT_PREPARED"
   | "INVALID_SETUP"
   | "STALE"
+  | "ROUTINE_PENDING"
   | "CONNECTION_LOST"
   | "INTERNAL";
 export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
@@ -204,6 +218,14 @@ export interface Contract {
       command: InstanceUpdateCommand;
       result: LifecycleOperationResult;
     };
+    "manifest.get": {
+      command: ManifestGetCommand;
+      result: ManifestResult;
+    };
+    "manifest.set": {
+      command: ManifestSetCommand;
+      result: ManifestResult;
+    };
     "operation.get": {
       command: OperationGetCommand;
       result: OperationGetResult;
@@ -216,6 +238,14 @@ export interface Contract {
       command: PackageListCommand;
       result: PackageListResult;
     };
+    "permissions.get": {
+      command: PermissionsGetCommand;
+      result: PermissionsResult;
+    };
+    "permissions.set": {
+      command: PermissionsSetCommand;
+      result: PermissionsResult;
+    };
     "prompt.get": {
       command: PromptGetCommand;
       result: PromptResult;
@@ -224,13 +254,29 @@ export interface Contract {
       command: PromptSetCommand;
       result: PromptResult;
     };
+    "routine.delete": {
+      command: RoutineDeleteCommand;
+      result: RoutineDeleteResult;
+    };
     "routine.list": {
       command: RoutineListCommand;
       result: RoutineListResult;
     };
+    "routine.read": {
+      command: RoutineReadCommand;
+      result: RoutineFile;
+    };
     "routine.run": {
       command: RoutineRunCommand;
       result: AcceptedResult;
+    };
+    "routine.set_enabled": {
+      command: RoutineSetEnabledCommand;
+      result: RoutineFile;
+    };
+    "routine.write": {
+      command: RoutineWriteCommand;
+      result: RoutineFile;
     };
     "skill.customize": {
       command: SkillCustomizeCommand;
@@ -636,6 +682,67 @@ export interface PackagePin {
   image_recipe?: string | null;
   sha: CommitSha;
 }
+export interface ManifestGetCommand {}
+export interface ManifestResult {
+  hash: string;
+  model_choices: ModelChoice[];
+  values: ManifestValues;
+}
+/**
+ * A model the budget can count, because kinby ships its price or the manifest sets one.
+ */
+export interface ModelChoice {
+  key_set: boolean;
+  model: string;
+  priced_from: PriceSource;
+}
+/**
+ * The fields of ``kinby.toml`` a client may change. The hub owns the rest.
+ */
+export interface ManifestValues {
+  budgets: ManifestBudgets;
+  feedback: ManifestFeedback;
+  memory: ManifestMemory;
+  models: ManifestModels;
+  persona_name: string | null;
+  routines: ManifestRoutines;
+  tools: ManifestTools;
+}
+export interface ManifestBudgets {
+  seconds: number | null;
+  steps: number | null;
+  tokens: number | null;
+  usd_per_day: number | null;
+}
+export interface ManifestFeedback {
+  ask: FeedbackPolicy;
+}
+export interface ManifestMemory {
+  recap: RecapPolicy;
+}
+export interface ManifestModels {
+  embed: string | null;
+  main: string;
+  recap: string | null;
+}
+export interface ManifestRoutines {
+  timezone: string;
+}
+export interface ManifestTools {
+  bash_timeout_seconds: number;
+  defaults: boolean;
+}
+export interface ManifestSetCommand {
+  hash: string;
+  prices?: {
+    [k: string]: NewModelPrice;
+  };
+  values: ManifestValues;
+}
+export interface NewModelPrice {
+  input: number;
+  output: number;
+}
 export interface OperationGetCommand {
   operation_id: string;
 }
@@ -730,6 +837,37 @@ export interface CuratedPackage {
   id: string;
   selection: PackageSelection;
 }
+export interface PermissionsGetCommand {}
+export interface PermissionsResult {
+  bash: BashPermissions;
+  ceiling: PermissionMode;
+  hash: string;
+  mode: PermissionMode;
+  tools: {
+    [k: string]: GateAction;
+  };
+}
+export interface BashPermissions {
+  ask: string[];
+  deny: DenyPattern[];
+}
+export interface DenyPattern {
+  pattern: string;
+  shipped: boolean;
+}
+export interface PermissionsSetCommand {
+  bash: OwnBashPatterns;
+  ceiling: PermissionMode;
+  hash: string;
+  mode: PermissionMode;
+  tools: {
+    [k: string]: GateAction;
+  };
+}
+export interface OwnBashPatterns {
+  ask: string[];
+  deny: string[];
+}
 export interface PromptGetCommand {
   name: PromptName;
 }
@@ -743,6 +881,11 @@ export interface PromptSetCommand {
   hash: string;
   name: PromptName;
 }
+export interface RoutineDeleteCommand {
+  hash: string;
+  name: string;
+}
+export interface RoutineDeleteResult {}
 export interface RoutineListCommand {}
 export interface RoutineListResult {
   routines: RoutineSummary[];
@@ -784,6 +927,14 @@ export interface Warning {
   sources: string[];
   type: "warning";
 }
+export interface RoutineReadCommand {
+  name: string;
+}
+export interface RoutineFile {
+  content: string;
+  hash: string;
+  name: string;
+}
 export interface RoutineRunCommand {
   name: string;
   payload?: RoutinePayload | null;
@@ -796,6 +947,15 @@ export interface AcceptedResult {
   sequence: number;
   thread_id: string;
   turn_id: string;
+}
+export interface RoutineSetEnabledCommand {
+  enabled: boolean;
+  name: string;
+}
+export interface RoutineWriteCommand {
+  content: string;
+  hash: string | null;
+  name: string;
 }
 /**
  * Copy the skill the model reads into the instance, where it can be edited.

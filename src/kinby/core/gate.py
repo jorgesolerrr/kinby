@@ -50,7 +50,7 @@ def evaluate(
         and call.name == "bash"
         and isinstance(command := call.arguments.get("command"), str)
     ):
-        for index, pattern in enumerate(policy.bash.deny):
+        for index, pattern in enumerate(policy.bash.denylist):
             if re.search(pattern, command):
                 return GateDecision(GateAction.DENY, GateRule(f"bash.deny[{index}]"))
         for index, pattern in enumerate(policy.bash.ask):

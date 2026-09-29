@@ -4,19 +4,25 @@ import { CircleXIcon, TriangleAlertIcon } from "lucide-react"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 
-/** A call the section needs failed. */
-export function Failure({ children }: { children: string }) {
+/** A call the instance did not answer, or refused, with its reason. */
+export function Failure({
+  title = "The instance did not answer",
+  children,
+}: {
+  title?: string
+  children: string
+}) {
   return (
     <Alert variant="destructive">
       <CircleXIcon />
-      <AlertTitle>The instance did not answer</AlertTitle>
+      <AlertTitle>{title}</AlertTitle>
       <AlertDescription>{children}</AlertDescription>
     </Alert>
   )
 }
 
-/** A save was refused because `file` changed since it was read. "Load theirs" reads it again. */
-export function StaleNotice({ file, onLoad }: { file: string; onLoad: () => void }) {
+/** A save refused because `file` changed since it was read. "Load theirs" reads it again. */
+export function StaleAlert({ file, onLoad }: { file: string; onLoad: () => void }) {
   return (
     <Alert variant="destructive">
       <CircleXIcon />

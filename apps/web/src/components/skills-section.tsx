@@ -2,7 +2,7 @@ import type { InstanceClient, SkillListResult, SkillSummary, SkillTier } from "@
 import { cn } from "cn"
 import { useCallback, useEffect, useId, useState } from "react"
 
-import { Failure, StaleNotice, Warnings } from "@/components/config-notices"
+import { Failure, StaleAlert, Warnings } from "@/components/config-alerts"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -290,7 +290,7 @@ function SkillView({
 
   return (
     <div className="flex flex-col gap-3">
-      {notice === "stale" && <StaleNotice file={skillFile(name)} onLoad={() => void load()} />}
+      {notice === "stale" && <StaleAlert file={skillFile(name)} onLoad={() => void load()} />}
       {failure !== undefined && <Failure>{failure}</Failure>}
       <Field data-invalid={invalid !== undefined || undefined}>
         <div className="flex items-center gap-2">
