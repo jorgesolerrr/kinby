@@ -1,6 +1,6 @@
 import { CallError } from "@kinby/contract"
 import type { ManifestResult, ManifestSetCommand } from "@kinby/contract"
-import { type Answers, stubCaller } from "@kinby/contract/testing"
+import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
@@ -43,7 +43,7 @@ function openSection(answers: Answers = {}) {
     "config.history": () => ({ changes: [] }),
     ...answers,
   })
-  render(<ManifestSection client={caller} />)
+  render(<ManifestSection client={caller} clock={fakeClock()} />)
   return { caller, user: userEvent.setup() }
 }
 

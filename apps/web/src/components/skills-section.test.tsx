@@ -1,6 +1,6 @@
 import { CallError } from "@kinby/contract"
 import type { SkillListResult, SkillResult, SkillSummary } from "@kinby/contract"
-import { type Answers, stubCaller } from "@kinby/contract/testing"
+import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
@@ -70,7 +70,7 @@ function openSection(answers: Answers) {
     "config.history": () => ({ changes: [] }),
     ...answers,
   })
-  render(<SkillsSection client={caller} />)
+  render(<SkillsSection client={caller} clock={fakeClock()} />)
   return { caller, user: userEvent.setup() }
 }
 

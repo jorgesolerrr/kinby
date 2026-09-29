@@ -1,4 +1,5 @@
 import type {
+  Clock,
   InstanceClient,
   ManifestModels,
   ModelChoice,
@@ -42,6 +43,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { usePace } from "@/hooks/use-pace"
 import { lastChanged } from "@/lib/config-changes"
 import {
   draftOf,
@@ -53,7 +55,7 @@ import {
   saveManifest,
   valuesOf,
 } from "@/lib/manifest"
-import { reason } from "@/lib/operation"
+import { retried } from "@/lib/operation"
 import { CircleXIcon, PlusIcon } from "lucide-react"
 
 type Caller = Pick<InstanceClient, "call">
@@ -91,14 +93,15 @@ const TIMEZONES = [...new Set(["UTC", ...Intl.supportedValuesOf("timeZone")])]
  * The settings in `kinby.toml` the app may change. A save carries the hash of what was read,
  * so a save over a change made since is refused, and "Load theirs" reads the file again.
  */
-export function ManifestSection({ client }: { client: Caller }) {
+export function ManifestSection({ client, clock }: { client: Caller; clock: Clock }) {
+  const pacing = usePace(clock)
   const [opened, setOpened] = useState<OpenedManifest>()
   const [draft, setDraft] = useState<ManifestDraft>()
   const [prices, setPrices] = useState<Record<string, NewModelPrice>>({})
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState<"saved" | "stale">()
   const [refused, setRefused] = useState<Record<string, string>>({})
-  const [failure, setFailure] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
 
   const show = useCallback((read: OpenedManifest) => {
     setOpened(read)
@@ -108,15 +111,15 @@ export function ManifestSection({ client }: { client: Caller }) {
   }, [])
   const load = useCallback(
     () =>
-      openManifest(client).then(
+      retried(() => openManifest(client), pacing).then(
         (read) => {
           show(read)
           setNotice(undefined)
           setFailure(undefined)
         },
-        (error: unknown) => setFailure(reason(error)),
+        (error: unknown) => setFailure(error),
       ),
-    [client, show],
+    [client, pacing, show],
   )
   useEffect(() => {
     void load()
@@ -126,7 +129,7 @@ export function ManifestSection({ client }: { client: Caller }) {
     return failure === undefined ? (
       <Skeleton className="h-72 w-full" />
     ) : (
-      <Failure>{failure}</Failure>
+      <Failure error={failure} />
     )
   }
   const values = valuesOf(draft)
@@ -147,7 +150,7 @@ export function ManifestSection({ client }: { client: Caller }) {
       if (saved.state === "invalid") setRefused(saved.fields)
       else setNotice(saved.state)
     } catch (error) {
-      setFailure(reason(error))
+      setFailure(error)
     } finally {
       setSaving(false)
     }
@@ -159,7 +162,7 @@ export function ManifestSection({ client }: { client: Caller }) {
   return (
     <div className="flex flex-col gap-6">
       {notice === "stale" && <StaleAlert file={MANIFEST_FILE} onLoad={() => void load()} />}
-      {failure !== undefined && <Failure>{failure}</Failure>}
+      {failure !== undefined && <Failure error={failure} />}
       {unnamed.length > 0 && (
         <Alert variant="destructive">
           <CircleXIcon />

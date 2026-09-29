@@ -1,4 +1,4 @@
-import type { GateAction, InstanceClient, PermissionMode } from "@kinby/contract"
+import type { Clock, GateAction, InstanceClient, PermissionMode } from "@kinby/contract"
 import { useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
@@ -18,8 +18,9 @@ import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from "@/componen
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { usePace } from "@/hooks/use-pace"
 import { lastChanged } from "@/lib/config-changes"
-import { reason } from "@/lib/operation"
+import { retried } from "@/lib/operation"
 import {
   aboveCeiling,
   MODES,
@@ -55,7 +56,8 @@ function isMode(value: unknown): value is PermissionMode {
  * The ceiling, the default mode, each tool's rule, and the shell patterns. kinby's deny patterns
  * show locked, and a save sends only the instance's own.
  */
-export function PermissionsSection({ client }: { client: Caller }) {
+export function PermissionsSection({ client, clock }: { client: Caller; clock: Clock }) {
+  const pacing = usePace(clock)
   const toolId = useId()
   const [opened, setOpened] = useState<OpenedPermissions>()
   const [draft, setDraft] = useState<PermissionsDraft>()
@@ -66,7 +68,7 @@ export function PermissionsSection({ client }: { client: Caller }) {
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState<"saved" | "stale">()
   const [fields, setFields] = useState<Record<string, string>>({})
-  const [failure, setFailure] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
 
   const show = useCallback((read: OpenedPermissions) => {
     setOpened(read)
@@ -77,15 +79,15 @@ export function PermissionsSection({ client }: { client: Caller }) {
   }, [])
   const load = useCallback(
     () =>
-      openPermissions(client).then(
+      retried(() => openPermissions(client), pacing).then(
         (read) => {
           show(read)
           setNotice(undefined)
           setFailure(undefined)
         },
-        (error: unknown) => setFailure(reason(error)),
+        (error: unknown) => setFailure(error),
       ),
-    [client, show],
+    [client, pacing, show],
   )
   useEffect(() => {
     void load()
@@ -95,7 +97,7 @@ export function PermissionsSection({ client }: { client: Caller }) {
     return failure === undefined ? (
       <Skeleton className="h-72 w-full" />
     ) : (
-      <Failure>{failure}</Failure>
+      <Failure error={failure} />
     )
   }
   const change = (next: PermissionsDraft) => {
@@ -124,7 +126,7 @@ export function PermissionsSection({ client }: { client: Caller }) {
       if (saved.state === "saved") show(saved.opened)
       setNotice(saved.state)
     } catch (error) {
-      setFailure(reason(error))
+      setFailure(error)
     } finally {
       setSaving(false)
     }
@@ -134,7 +136,7 @@ export function PermissionsSection({ client }: { client: Caller }) {
   return (
     <div className="flex flex-col gap-6">
       {notice === "stale" && <StaleAlert file={PERMISSIONS_FILE} onLoad={() => void load()} />}
-      {failure !== undefined && <Failure>{failure}</Failure>}
+      {failure !== undefined && <Failure error={failure} />}
       <FieldGroup>
         <FieldSet>
           <FieldLegend variant="label">Ceiling</FieldLegend>

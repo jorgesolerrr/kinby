@@ -34,9 +34,11 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { usePace } from "@/hooks/use-pace"
 import { usePolled } from "@/hooks/use-polled"
 import { lastChanged } from "@/lib/config-changes"
-import { reason } from "@/lib/operation"
+import { OlderCore } from "@/lib/older-core"
+import { retried } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
 import {
   BoxIcon,
@@ -93,25 +95,27 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Behavior prompt",
         hint: "SYSTEM.md, how the agent acts",
         icon: FileTextIcon,
-        render: ({ client }) => <PromptSection client={client} name="behavior" />,
+        render: ({ client, clock }) => (
+          <PromptSection client={client} clock={clock} name="behavior" />
+        ),
       },
       {
         label: "Recap prompt",
         hint: "RECAP.md, what a recap looks at",
         icon: NotebookPenIcon,
-        render: ({ client }) => <PromptSection client={client} name="recap" />,
+        render: ({ client, clock }) => <PromptSection client={client} clock={clock} name="recap" />,
       },
       {
         label: "Permissions",
         hint: "ceiling, mode, tool rules, shell patterns",
         icon: ShieldIcon,
-        render: ({ client }) => <PermissionsSection client={client} />,
+        render: ({ client, clock }) => <PermissionsSection client={client} clock={clock} />,
       },
       {
         label: "Manifest",
         hint: "models, budgets, timezone",
         icon: CpuIcon,
-        render: ({ client }) => <ManifestSection client={client} />,
+        render: ({ client, clock }) => <ManifestSection client={client} clock={clock} />,
       },
     ],
   },
@@ -122,21 +126,22 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         label: "Routines",
         hint: "schedules, signals, next firing",
         icon: RepeatIcon,
-        render: ({ client }) => <RoutinesSection client={client} />,
+        render: ({ client, clock }) => <RoutinesSection client={client} clock={clock} />,
       },
       {
         label: "Skills",
         hint: "instance, package, workspace",
         icon: SparklesIcon,
-        render: ({ client }) => <SkillsSection client={client} />,
+        render: ({ client, clock }) => <SkillsSection client={client} clock={clock} />,
       },
       {
         label: "Tools",
         hint: "what the instance can do",
         icon: WrenchIcon,
-        render: ({ client, open }) => (
+        render: ({ client, clock, open }) => (
           <ToolsSection
             client={client}
+            clock={clock}
             onOpenPermissions={available(PERMISSIONS) ? () => open(PERMISSIONS) : undefined}
           />
         ),
@@ -166,8 +171,8 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         hint: "the package's own settings",
         icon: BoxIcon,
         reason: "package_config",
-        render: ({ client, statusChanged }) => (
-          <PackageConfigSection client={client} onSaved={statusChanged} />
+        render: ({ client, clock, statusChanged }) => (
+          <PackageConfigSection client={client} clock={clock} onSaved={statusChanged} />
         ),
       },
       {
@@ -268,7 +273,9 @@ export function ConfigPanel({
           <p className="text-sm text-muted-foreground">{section?.hint}</p>
         </div>
         <Separator />
-        <Fragment key={selected}>{section?.render?.(panel)}</Fragment>
+        <OlderCore value={behind(instance) ? () => setSelected(PACKAGE) : undefined}>
+          <Fragment key={selected}>{section?.render?.(panel)}</Fragment>
+        </OlderCore>
       </main>
     </div>
   )
@@ -286,10 +293,12 @@ function needsOf(
   for (const { label, reason } of SECTIONS) {
     if (reason !== undefined && reasons.includes(reason)) needs[label] = "Recreate to apply"
   }
-  if (instance.notices.some((notice) => notice.code === "revision_behind")) {
-    needs[PACKAGE] = "behind the hub"
-  }
+  if (behind(instance)) needs[PACKAGE] = "behind the hub"
   return needs
+}
+
+function behind(instance: InstanceSummary): boolean {
+  return instance.notices.some((notice) => notice.code === "revision_behind")
 }
 
 /** One group of the left column, as a list named for the group. A need replaces a hint. */
@@ -349,14 +358,23 @@ function SectionGroup({
  * One prompt as text. A save carries the hash of what was read, so a save over a change made
  * since is refused, and "Load theirs" reads the prompt again.
  */
-function PromptSection({ client, name }: { client: Caller; name: PromptName }) {
+function PromptSection({
+  client,
+  clock,
+  name,
+}: {
+  client: Caller
+  clock: Clock
+  name: PromptName
+}) {
   const id = useId()
+  const pacing = usePace(clock)
   const file = PROMPT_FILES[name]
   const [opened, setOpened] = useState<OpenedPrompt>()
   const [draft, setDraft] = useState("")
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState<"saved" | "stale">()
-  const [failure, setFailure] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
 
   const show = useCallback((read: OpenedPrompt) => {
     setOpened(read)
@@ -364,15 +382,15 @@ function PromptSection({ client, name }: { client: Caller; name: PromptName }) {
   }, [])
   const load = useCallback(
     () =>
-      openPrompt(client, name).then(
+      retried(() => openPrompt(client, name), pacing).then(
         (read) => {
           show(read)
           setNotice(undefined)
           setFailure(undefined)
         },
-        (error: unknown) => setFailure(reason(error)),
+        (error: unknown) => setFailure(error),
       ),
-    [client, name, show],
+    [client, name, pacing, show],
   )
   useEffect(() => {
     void load()
@@ -382,7 +400,7 @@ function PromptSection({ client, name }: { client: Caller; name: PromptName }) {
     return failure === undefined ? (
       <Skeleton className="h-72 w-full" />
     ) : (
-      <Failure>{failure}</Failure>
+      <Failure error={failure} />
     )
   }
   const save = async () => {
@@ -393,7 +411,7 @@ function PromptSection({ client, name }: { client: Caller; name: PromptName }) {
       if (saved.state === "saved") show(saved.opened)
       setNotice(saved.state)
     } catch (error) {
-      setFailure(reason(error))
+      setFailure(error)
     } finally {
       setSaving(false)
     }
@@ -402,7 +420,7 @@ function PromptSection({ client, name }: { client: Caller; name: PromptName }) {
   return (
     <div className="flex flex-col gap-3">
       {notice === "stale" && <StaleAlert file={file} onLoad={() => void load()} />}
-      {failure !== undefined && <Failure>{failure}</Failure>}
+      {failure !== undefined && <Failure error={failure} />}
       <Field>
         <div className="flex items-center gap-2">
           <FieldLabel htmlFor={id}>{file}</FieldLabel>

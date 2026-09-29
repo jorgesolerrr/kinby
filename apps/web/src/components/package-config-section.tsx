@@ -1,4 +1,4 @@
-import type { InstanceClient } from "@kinby/contract"
+import type { Clock, InstanceClient } from "@kinby/contract"
 import { useCallback, useEffect, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
@@ -27,8 +27,9 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { usePace } from "@/hooks/use-pace"
 import { lastChanged } from "@/lib/config-changes"
-import { reason } from "@/lib/operation"
+import { retried } from "@/lib/operation"
 import {
   type FormField,
   type OpenedPackageConfig,
@@ -44,13 +45,22 @@ type Caller = Pick<InstanceClient, "call">
  * The package's config as a form built from the model the package declares. The package's
  * validator judges a save, and its reasons show beside their fields. `onSaved` hears each save.
  */
-export function PackageConfigSection({ client, onSaved }: { client: Caller; onSaved: () => void }) {
+export function PackageConfigSection({
+  client,
+  clock,
+  onSaved,
+}: {
+  client: Caller
+  clock: Clock
+  onSaved: () => void
+}) {
+  const pacing = usePace(clock)
   const [opened, setOpened] = useState<OpenedPackageConfig | null>()
   const [fields, setFields] = useState<FormField[]>([])
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState<"saved" | "stale">()
   const [errors, setErrors] = useState<Record<string, string>>({})
-  const [failure, setFailure] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
 
   const show = useCallback((read: OpenedPackageConfig | null) => {
     setOpened(read)
@@ -59,15 +69,15 @@ export function PackageConfigSection({ client, onSaved }: { client: Caller; onSa
   }, [])
   const load = useCallback(
     () =>
-      openPackageConfig(client).then(
+      retried(() => openPackageConfig(client), pacing).then(
         (read) => {
           show(read)
           setNotice(undefined)
           setFailure(undefined)
         },
-        (error: unknown) => setFailure(reason(error)),
+        (error: unknown) => setFailure(error),
       ),
-    [client, show],
+    [client, pacing, show],
   )
   useEffect(() => {
     void load()
@@ -77,7 +87,7 @@ export function PackageConfigSection({ client, onSaved }: { client: Caller; onSa
     return failure === undefined ? (
       <Skeleton className="h-72 w-full" />
     ) : (
-      <Failure>{failure}</Failure>
+      <Failure error={failure} />
     )
   }
   if (opened === null) {
@@ -115,7 +125,7 @@ export function PackageConfigSection({ client, onSaved }: { client: Caller; onSa
       }
       setNotice(saved.state)
     } catch (error) {
-      setFailure(reason(error))
+      setFailure(error)
     } finally {
       setSaving(false)
     }
@@ -127,7 +137,7 @@ export function PackageConfigSection({ client, onSaved }: { client: Caller; onSa
   return (
     <div className="flex flex-col gap-6">
       {notice === "stale" && <StaleAlert file={PACKAGE_CONFIG_FILE} onLoad={() => void load()} />}
-      {failure !== undefined && <Failure>{failure}</Failure>}
+      {failure !== undefined && <Failure error={failure} />}
       <FieldGroup>
         {fields.map((field, index) => (
           <ConfigInput

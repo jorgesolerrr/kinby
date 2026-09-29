@@ -70,6 +70,34 @@ function operation(fields: Partial<OperationGetResult>): OperationGetResult {
 
 const ada = instanceSummary({ instance_id: "instance-1" })
 
+const behind = instanceSummary({
+  instance_id: "instance-1",
+  source_revision: "a".repeat(40),
+  notices: [
+    {
+      code: "revision_behind",
+      message: "The instance runs kinby aaaaaaa, and the hub is at bbbbbbb.",
+      instance_revision: "a".repeat(40),
+      hub_revision: "b".repeat(40),
+    },
+  ],
+})
+
+const methodNotFound = (method: string): never => {
+  throw new CallError({
+    code: "NOT_FOUND",
+    message: `Method "${method}" was not found.`,
+    retryable: false,
+  })
+}
+
+const notConnected = () =>
+  new CallError({
+    code: "CONNECTION_LOST",
+    message: "Not connected to the hub. The call was not sent.",
+    retryable: true,
+  })
+
 /** The panel, with one stub answering both the instance's calls and the hub's. */
 function openPanel(answers: Answers, instance: InstanceSummary = ada) {
   const caller = stubCaller({
@@ -143,18 +171,6 @@ describe("ConfigPanel", () => {
   })
 
   it("says the package section is behind the hub in place of its hint", async () => {
-    const behind = instanceSummary({
-      instance_id: "instance-1",
-      source_revision: "a".repeat(40),
-      notices: [
-        {
-          code: "revision_behind",
-          message: "The instance runs kinby aaaaaaa, and the hub is at bbbbbbb.",
-          instance_revision: "a".repeat(40),
-          hub_revision: "b".repeat(40),
-        },
-      ],
-    })
     const section = () => screen.getByRole("button", { name: "Package and version" })
 
     openPanel({}, ada)
@@ -167,6 +183,65 @@ describe("ConfigPanel", () => {
     await user.click(section())
     expect(await screen.findByRole("heading", { name: "Package and version" })).toBeDefined()
     expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
+  })
+
+  it("reads the first section again once the socket connects, with no error in between", async () => {
+    let connected = false
+    const { clock } = openPanel({
+      "prompt.get": () => {
+        if (!connected) throw notConnected()
+        return behavior
+      },
+    })
+
+    await act(() => clock.advance(0))
+    expect(screen.queryByRole("alert")).toBeNull()
+    connected = true
+    await act(() => clock.advance(1_000))
+
+    expect(await screen.findByRole("textbox", { name: "SYSTEM.md" })).toHaveProperty(
+      "value",
+      "Be brief.\n",
+    )
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("says the instance did not answer a save the dropped connection lost, and does not send it again", async () => {
+    const { caller, clock, user } = openPanel({
+      "prompt.set": () => {
+        throw notConnected()
+      },
+    })
+
+    await user.type(await screen.findByRole("textbox", { name: "SYSTEM.md" }), "Mine.")
+    await user.click(screen.getByRole("button", { name: "Save" }))
+    await act(() => clock.advance(1_000))
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toContain("The instance did not answer")
+    expect(alert.textContent).toContain("Not connected to the hub. The call was not sent.")
+    expect(caller.calls.filter((call) => call.method === "prompt.set")).toHaveLength(1)
+  })
+
+  it("says an instance behind the hub runs an older core without the section, and opens the update", async () => {
+    const { user } = openPanel({ "prompt.get": () => methodNotFound("prompt.get") }, behind)
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toContain("This instance runs an older core")
+    expect(alert.textContent).not.toContain('Method "prompt.get" was not found.')
+    await user.click(within(alert).getByRole("button", { name: "Open Package and version" }))
+
+    expect(await screen.findByRole("heading", { name: "Package and version" })).toBeDefined()
+    expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
+  })
+
+  it("shows the instance's own not found message when the instance is not behind", async () => {
+    openPanel({ "prompt.get": () => methodNotFound("prompt.get") })
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toContain("The instance refused it")
+    expect(alert.textContent).toContain('Method "prompt.get" was not found.')
+    expect(alert.textContent).not.toContain("older core")
   })
 
   it("edits the behavior prompt and says who changed it last", async () => {
