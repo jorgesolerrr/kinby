@@ -1153,7 +1153,7 @@ export interface StatsGetCommand {
 export interface StatsGetResult {
   buckets: StatsBucket[];
   limits: PlanLimit[];
-  plan_windows: PlanWindow[];
+  plan_use: PlanUse[];
   records: TurnMetrics[];
   total: StatsSummary;
   unpriced_models: string[];
@@ -1226,10 +1226,11 @@ export interface PlanLimit {
   usage_source: UsageSource;
 }
 /**
- * A rolling period over which a subscription usage source limits use.
+ * The runs a subscription usage source made in one plan window, up to now.
  */
-export interface PlanWindow {
+export interface PlanUse {
   duration_seconds: number;
+  runs: number;
   usage_source: UsageSource;
 }
 export interface TurnMetrics {
@@ -1351,6 +1352,7 @@ export interface StatsSummaryResult {
     [k: string]: StatsBucket[];
   };
   limits: PlanLimit[];
+  plan_use: PlanUse[];
   skipped: string[];
   subscriptions: SubscriptionUse[];
   unreachable: string[];

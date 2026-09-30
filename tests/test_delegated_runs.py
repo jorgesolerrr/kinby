@@ -737,20 +737,6 @@ def test_stats_get_shows_an_active_limit_reported_before_its_time_range(tmp_path
     asyncio.run(scenario())
 
 
-def test_stats_get_names_five_hour_and_seven_day_windows_for_each_subscription_source(
-    tmp_path: Path,
-) -> None:
-    stats = asyncio.run(call(runtime(instance_at(tmp_path)), "stats.get"))
-
-    assert isinstance(stats, StatsGetResult)
-    assert [(window.usage_source, window.duration_seconds) for window in stats.plan_windows] == [
-        (UsageSource.CLAUDE_SUBSCRIPTION, 5 * 60 * 60),
-        (UsageSource.CLAUDE_SUBSCRIPTION, 7 * 24 * 60 * 60),
-        (UsageSource.CHATGPT_SUBSCRIPTION, 5 * 60 * 60),
-        (UsageSource.CHATGPT_SUBSCRIPTION, 7 * 24 * 60 * 60),
-    ]
-
-
 def limited(source: UsageSource, resets_at: datetime) -> DelegatedRun:
     return LIMITED_RUN.model_copy(update={"usage_source": source, "resets_at": resets_at})
 

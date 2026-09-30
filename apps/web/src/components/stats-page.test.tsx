@@ -36,7 +36,7 @@ function stats(fields: Partial<StatsGetResult> = {}): StatsGetResult {
     records: [],
     buckets: [],
     total: summary(),
-    plan_windows: [],
+    plan_use: [],
     limits: [],
     unpriced_models: [],
     warnings: [],
@@ -135,6 +135,24 @@ describe("the stats page", () => {
       { since: "2026-09-01T00:00:00.000Z", by: "day" },
       { since: "2026-07-03T00:00:00.000Z", by: "week" },
     ])
+  })
+
+  it("shows each plan's recent runs under the title from the one stats.get it reads", async () => {
+    const client = openStats({
+      "stats.get": () =>
+        stats({
+          plan_use: [
+            { usage_source: "claude-subscription", duration_seconds: 18_000, runs: 2 },
+            { usage_source: "claude-subscription", duration_seconds: 604_800, runs: 9 },
+            { usage_source: "chatgpt-subscription", duration_seconds: 18_000, runs: 0 },
+            { usage_source: "chatgpt-subscription", duration_seconds: 604_800, runs: 3 },
+          ],
+        }),
+    })
+
+    expect(await screen.findByText("Claude runs: 2 in 5h · 9 in 7d")).toBeDefined()
+    expect(screen.getByText("ChatGPT runs: 0 in 5h · 3 in 7d")).toBeDefined()
+    expect(client.calls.map((call) => call.method)).toEqual(["stats.get"])
   })
 
   it("opens on Overview, and shows Spend, Origin, and Quality as unavailable", async () => {

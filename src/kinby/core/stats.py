@@ -1,4 +1,4 @@
-"""Aggregate per-turn metrics into UTC reporting buckets, and find active plan limits."""
+"""Aggregate per-turn metrics into UTC reporting buckets, and read each plan's use and limits."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from kinby.contracts import (
     MemoryCallCounts,
     NavigationMeans,
     PlanLimit,
-    PlanWindow,
+    PlanUse,
     ReportedRun,
     RunDelegated,
     StatsBucket,
@@ -30,10 +30,12 @@ from kinby.contracts import (
 
 #: Every usage source that is counted, never priced, in the order results list them.
 SUBSCRIPTION_SOURCES = tuple(source for source in UsageSource if source is not UsageSource.API)
-_PLAN_WINDOW_LENGTHS = {
-    UsageSource.CLAUDE_SUBSCRIPTION: (timedelta(hours=5), timedelta(days=7)),
-    UsageSource.CHATGPT_SUBSCRIPTION: (timedelta(hours=5), timedelta(days=7)),
-}
+#: Every subscription source's plan windows, in the order results list them: shortest first.
+PLAN_WINDOWS = tuple(
+    (source, length)
+    for source in SUBSCRIPTION_SOURCES
+    for length in (timedelta(hours=5), timedelta(days=7))
+)
 
 
 @dataclass
@@ -128,12 +130,24 @@ def stats_summary(records: Iterable[TurnMetrics], runs: Iterable[ReportedRun]) -
     return _stats_summary(totals)
 
 
-def plan_windows() -> list[PlanWindow]:
-    """The plan windows of every subscription source, which every client asks stats for."""
+def plan_use(events: Iterable[Event], now: datetime) -> list[PlanUse]:
+    """Each subscription source's runs in each of its plan windows, the one ending at *now*."""
+    reported = [
+        (event.timestamp, event.payload.run.usage_source)
+        for event in events
+        if isinstance(event.payload, RunDelegated)
+    ]
     return [
-        PlanWindow(usage_source=source, duration_seconds=int(length.total_seconds()))
-        for source, lengths in _PLAN_WINDOW_LENGTHS.items()
-        for length in lengths
+        PlanUse(
+            usage_source=source,
+            duration_seconds=int(length.total_seconds()),
+            runs=sum(
+                1
+                for timestamp, reported_source in reported
+                if reported_source is source and now - length < timestamp <= now
+            ),
+        )
+        for source, length in PLAN_WINDOWS
     ]
 
 

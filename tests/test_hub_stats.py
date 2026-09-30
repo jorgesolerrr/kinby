@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import UTC, date, datetime
+from uuid import uuid4
 
 from kinby.contracts import (
     STATS_SUMMARY,
@@ -9,7 +10,7 @@ from kinby.contracts import (
     ErrorEnvelope,
     MemoryCallCounts,
     PlanLimit,
-    PlanWindow,
+    PlanUse,
     Scope,
     StatsBucket,
     StatsBucketSize,
@@ -21,6 +22,7 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import build_dispatcher
 from kinby.hub import ControlEndpoint, HttpInstanceControl
+from kinby.hub.usage import Uncounted, summed_usage
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_hub import (
     FakeControl,
@@ -63,12 +65,28 @@ def _used(
     )
 
 
-def _answer(total: StatsSummary, limits: list[PlanLimit] | None = None) -> StatsGetResult:
+def _plan_use(claude: tuple[int, int], chatgpt: tuple[int, int]) -> list[PlanUse]:
+    """Each subscription's runs in its 5-hour and 7-day windows."""
+    return [
+        PlanUse(usage_source=source, duration_seconds=seconds, runs=runs)
+        for source, counts in [
+            (UsageSource.CLAUDE_SUBSCRIPTION, claude),
+            (UsageSource.CHATGPT_SUBSCRIPTION, chatgpt),
+        ]
+        for seconds, runs in zip([18_000, 604_800], counts, strict=True)
+    ]
+
+
+def _answer(
+    total: StatsSummary,
+    limits: list[PlanLimit] | None = None,
+    plan_use: list[PlanUse] | None = None,
+) -> StatsGetResult:
     return StatsGetResult(
         records=[],
         buckets=[StatsBucket(start=_DAY, **total.model_dump())],
         total=total,
-        plan_windows=[],
+        plan_use=plan_use or _plan_use((0, 0), (0, 0)),
         limits=limits or [],
         unpriced_models=[],
     )
@@ -244,6 +262,19 @@ def test_limits_merge_to_the_latest_reset_per_usage_source(tmp_path):
     asyncio.run(scenario())
 
 
+def test_plan_use_sums_each_source_and_window_over_the_counted_instances_only():
+    summary = summed_usage(
+        {
+            uuid4(): _answer(_used(), plan_use=_plan_use((1, 3), (0, 2))),
+            uuid4(): _answer(_used(), plan_use=_plan_use((2, 4), (1, 1))),
+            uuid4(): Uncounted.SKIPPED,
+            uuid4(): Uncounted.UNREACHABLE,
+        }
+    )
+
+    assert summary.plan_use == _plan_use((3, 7), (1, 3))
+
+
 def test_the_hub_reads_an_instance_s_stats_over_its_control_route(tmp_path):
     async def scenario() -> StatsGetResult:
         async with served_dispatcher(build_dispatcher(tmp_path)) as address:
@@ -256,9 +287,4 @@ def test_the_hub_reads_an_instance_s_stats_over_its_control_route(tmp_path):
 
     assert read.records == []
     assert read.buckets == []
-    assert read.plan_windows == [
-        PlanWindow(usage_source=UsageSource.CLAUDE_SUBSCRIPTION, duration_seconds=18_000),
-        PlanWindow(usage_source=UsageSource.CLAUDE_SUBSCRIPTION, duration_seconds=604_800),
-        PlanWindow(usage_source=UsageSource.CHATGPT_SUBSCRIPTION, duration_seconds=18_000),
-        PlanWindow(usage_source=UsageSource.CHATGPT_SUBSCRIPTION, duration_seconds=604_800),
-    ]
+    assert read.plan_use == _plan_use((0, 0), (0, 0))

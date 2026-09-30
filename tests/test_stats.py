@@ -1603,6 +1603,79 @@ def test_stats_get_groups_monday_week_and_applies_inclusive_bounds(tmp_path: Pat
     assert bounded.warnings == [ModelCallMismatch(thread_id=thread_id, turn_id=tuesday_id)]
 
 
+def _delegating_turn(thread_id: UUID, at: datetime, run: DelegatedRun) -> list[Event]:
+    """One turn that reports *run* at *at* and closes a minute later."""
+    turn_id = uuid4()
+    return [
+        _event(1, thread_id, turn_id, at, TurnStarted(message="delegate", model="model")),
+        _event(2, thread_id, turn_id, at, RunDelegated(run=run)),
+        _event(
+            3,
+            thread_id,
+            turn_id,
+            at + timedelta(minutes=1),
+            TurnCompleted(input_tokens=0, output_tokens=0),
+        ),
+    ]
+
+
+def test_stats_get_counts_subscription_runs_in_each_plan_window_whatever_the_range(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 9, 30, 15, tzinfo=UTC)
+    claude_run = DelegatedRun(
+        usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+        client="claude-code",
+        models=["claude-opus-5-5"],
+        input_tokens=100,
+        output_tokens=10,
+        duration_ms=1_000,
+        client_turns=1,
+        outcome=DelegatedRunOutcome.COMPLETED,
+    )
+    chatgpt_run = claude_run.model_copy(
+        update={"usage_source": UsageSource.CHATGPT_SUBSCRIPTION, "client": "codex"}
+    )
+    api_run = claude_run.model_copy(update={"usage_source": UsageSource.API, "client": "codex"})
+    thread_id = uuid4()
+    events = [
+        event
+        for at, run in [
+            (now - timedelta(days=8), claude_run),
+            (now - timedelta(days=6), claude_run),
+            (now - timedelta(hours=6), claude_run),
+            (now - timedelta(hours=1), claude_run),
+            (now - timedelta(hours=4), claude_run),
+            (now - timedelta(days=2), chatgpt_run),
+            (now - timedelta(hours=1), api_run),
+        ]
+        for event in _delegating_turn(thread_id, at, run)
+    ]
+    dispatcher = build_dispatcher(
+        tmp_path, event_log=StaticEventLog(tmp_path, events), clock=lambda: now
+    )
+
+    whole = asyncio.run(dispatcher.dispatch("stats.get", {}, {Scope.INSTANCE_READ}))
+    before = asyncio.run(
+        dispatcher.dispatch(
+            "stats.get",
+            {"until": (now - timedelta(days=10)).isoformat()},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(whole, StatsGetResult)
+    assert isinstance(before, StatsGetResult)
+    assert before.records == []
+    for result in (whole, before):
+        assert [(use.usage_source, use.duration_seconds, use.runs) for use in result.plan_use] == [
+            (UsageSource.CLAUDE_SUBSCRIPTION, 5 * 60 * 60, 2),
+            (UsageSource.CLAUDE_SUBSCRIPTION, 7 * 24 * 60 * 60, 4),
+            (UsageSource.CHATGPT_SUBSCRIPTION, 5 * 60 * 60, 0),
+            (UsageSource.CHATGPT_SUBSCRIPTION, 7 * 24 * 60 * 60, 1),
+        ]
+
+
 def test_stats_get_requires_instance_read_before_validating_payload(tmp_path: Path) -> None:
     result = asyncio.run(
         build_dispatcher(tmp_path).dispatch(
