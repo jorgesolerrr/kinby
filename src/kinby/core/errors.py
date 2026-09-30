@@ -67,6 +67,18 @@ class ThreadNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class MemoryNodeNotFound(CoreError):
+    """No live knowledge graph node has this id: none was written, or it was forgotten."""
+
+    code = ErrorCode.NOT_FOUND
+
+
+class InvalidMemoryNode(CoreError):
+    """The id cannot name a knowledge graph node, such as one with a path in it."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class InstanceBusy(CoreError):
     code = ErrorCode.INSTANCE_BUSY
     retryable = True

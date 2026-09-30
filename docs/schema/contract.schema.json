@@ -2087,6 +2087,199 @@
       "title": "MemoryCallCounts",
       "type": "object"
     },
+    "MemoryListCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "before": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NodeKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limit": {
+          "default": 50,
+          "maximum": 200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query": {
+          "default": "",
+          "type": "string"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "MemoryListCommand",
+      "type": "object"
+    },
+    "MemoryListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/NodeSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items",
+        "cursor"
+      ],
+      "title": "MemoryListResult",
+      "type": "object"
+    },
+    "MemoryOpenCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "node": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node"
+      ],
+      "title": "MemoryOpenCommand",
+      "type": "object"
+    },
+    "MemoryOpenResult": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "date": {
+          "format": "date",
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/NodeKind"
+        },
+        "node": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/NodeSource"
+        },
+        "subjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "thread": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "node",
+        "kind",
+        "date",
+        "description",
+        "subjects",
+        "source",
+        "body",
+        "thread",
+        "turn",
+        "tools"
+      ],
+      "title": "MemoryOpenResult",
+      "type": "object"
+    },
     "MemoryRecapped": {
       "additionalProperties": false,
       "properties": {
@@ -2363,6 +2556,61 @@
         "output"
       ],
       "title": "NewModelPrice",
+      "type": "object"
+    },
+    "NodeKind": {
+      "enum": [
+        "fact",
+        "episode"
+      ],
+      "title": "NodeKind",
+      "type": "string"
+    },
+    "NodeSource": {
+      "description": "Where a knowledge graph node came from. The instance derives it from the node's file.",
+      "enum": [
+        "agent",
+        "recap",
+        "user"
+      ],
+      "title": "NodeSource",
+      "type": "string"
+    },
+    "NodeSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "date": {
+          "format": "date",
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/NodeKind"
+        },
+        "node": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/NodeSource"
+        },
+        "subjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "node",
+        "kind",
+        "date",
+        "description",
+        "subjects",
+        "source"
+      ],
+      "title": "NodeSummary",
       "type": "object"
     },
     "OperationGetCommand": {
@@ -6142,6 +6390,38 @@
           ],
           "type": "object"
         },
+        "memory.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/MemoryListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/MemoryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "memory.open": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/MemoryOpenCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/MemoryOpenResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "operation.get": {
           "additionalProperties": false,
           "properties": {
@@ -6768,6 +7048,8 @@
         "package.config.get",
         "package.config.set",
         "config.history",
+        "memory.list",
+        "memory.open",
         "skill.list",
         "skill.read",
         "skill.write",

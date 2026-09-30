@@ -4,16 +4,18 @@ import type * as React from "react"
 
 import { ConfigPanel } from "@/components/config-panel"
 import { InstancePage } from "@/components/instance-page"
+import { MemoryPage } from "@/components/memory-page"
 import { ThreadPanel } from "@/components/thread-panel"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { instanceName } from "@/lib/instances"
-import { MousePointerClickIcon, ServerIcon } from "lucide-react"
+import { CirclePauseIcon, MousePointerClickIcon, ServerIcon } from "lucide-react"
 
 /**
- * The selected thread's panel, the selected instance's config panel or page, or why there is none.
- * A thread or the config panel opens once `instanceClient` reaches its instance, and the config
- * panel only on an instance meant to run, which is the one the hub relays to. It stays open while
- * an update restarts the container. `onChanged` lists the instances again.
+ * The selected thread's panel, the selected instance's config panel, memory page, or page, or why
+ * there is none. A thread, the config panel, or the memory page opens once `instanceClient`
+ * reaches its instance. The config panel opens only on an instance meant to run, which is the one
+ * the hub relays to, and stays open while an update restarts the container. The memory page needs
+ * a running instance. `onChanged` lists the instances again.
  */
 export function MainPanel({
   caller,
@@ -22,6 +24,7 @@ export function MainPanel({
   selected,
   threadId,
   configOpen = false,
+  memoryOpen = false,
   instanceClient,
   onChanged,
 }: {
@@ -31,6 +34,7 @@ export function MainPanel({
   selected: InstanceSummary | undefined
   threadId: string | undefined
   configOpen?: boolean
+  memoryOpen?: boolean
   instanceClient: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange"> | undefined
   onChanged: () => void
 }) {
@@ -56,6 +60,24 @@ export function MainPanel({
         clock={clock}
         instance={selected}
         onChanged={onChanged}
+      />
+    )
+  }
+  if (selected !== undefined && memoryOpen) {
+    if (selected.process !== "running") {
+      return (
+        <EmptyState icon={<CirclePauseIcon />} title={`${instanceName(selected)} is not running`}>
+          Start it to see its memory.
+        </EmptyState>
+      )
+    }
+    if (instanceClient === undefined) return null
+    return (
+      <MemoryPage
+        key={selected.instance_id}
+        client={instanceClient}
+        clock={clock}
+        instanceId={selected.instance_id}
       />
     )
   }

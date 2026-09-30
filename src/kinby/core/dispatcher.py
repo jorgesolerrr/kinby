@@ -19,6 +19,8 @@ from kinby.contracts import (
     INSTANCE_PROBE,
     MANIFEST_GET,
     MANIFEST_SET,
+    MEMORY_LIST,
+    MEMORY_OPEN,
     PACKAGE_CONFIG_GET,
     PACKAGE_CONFIG_SET,
     PERMISSIONS_GET,
@@ -88,6 +90,7 @@ from kinby.core.clock import utc_now
 from kinby.core.config import InstanceConfig
 from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
+from kinby.core.memory import InstanceMemory
 from kinby.core.pricing import price_map
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
@@ -442,6 +445,10 @@ def build_dispatcher(
         dispatcher.register(ROUTINE_WRITE, config.write_routine)
         dispatcher.register(ROUTINE_SET_ENABLED, config.set_routine_enabled)
         dispatcher.register(ROUTINE_DELETE, config.delete_routine)
+    if isinstance(turns, ScheduledTurnConfig):
+        memory = InstanceMemory(GraphStore(turns.scheduler.instance.path))
+        dispatcher.register(MEMORY_LIST, memory.list)
+        dispatcher.register(MEMORY_OPEN, memory.open)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)
         dispatcher.register(ROUTINE_RUN, scheduler.run)
