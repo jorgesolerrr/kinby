@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react"
 const SECTION = "instances"
 const THREADS = "threads"
 const CONFIG = "config"
+const MEMORY = "memory"
 export const CREATE_PATH = "/new"
 
 const listeners = new Set<() => void>()
@@ -20,6 +21,10 @@ function configPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${CONFIG}`
 }
 
+function memoryPath(instanceId: string): string {
+  return `${instancePath(instanceId)}/${MEMORY}`
+}
+
 /** Select an instance without reloading the page, as a new entry in the browser's history. */
 export function selectInstance(instanceId: string): void {
   navigate(instancePath(instanceId))
@@ -33,6 +38,11 @@ export function selectThread(instanceId: string, threadId: string): void {
 /** Open an instance's config panel the same way. */
 export function openConfig(instanceId: string): void {
   navigate(configPath(instanceId))
+}
+
+/** Open an instance's memory page the same way. */
+export function openMemory(instanceId: string): void {
+  navigate(memoryPath(instanceId))
 }
 
 /** Open the create wizard the same way. */
@@ -53,6 +63,11 @@ export function useSelectedThreadId(): string | undefined {
 /** Whether the URL opens its instance's config panel. */
 export function useConfigOpen(): boolean {
   return useSyncExternalStore(subscribe, configOpen)
+}
+
+/** Whether the URL opens its instance's memory page. */
+export function useMemoryOpen(): boolean {
+  return useSyncExternalStore(subscribe, memoryOpen)
 }
 
 /** Whether the URL opens the create wizard. */
@@ -80,6 +95,11 @@ function selectedThreadId(): string | undefined {
 function configOpen(): boolean {
   const [, section, instanceId, config] = window.location.pathname.split("/")
   return section === SECTION && Boolean(instanceId) && config === CONFIG
+}
+
+function memoryOpen(): boolean {
+  const [, section, instanceId, memory] = window.location.pathname.split("/")
+  return section === SECTION && Boolean(instanceId) && memory === MEMORY
 }
 
 // Back and forward change the URL too.

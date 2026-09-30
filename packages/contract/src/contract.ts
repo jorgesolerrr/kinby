@@ -62,6 +62,11 @@ export type FeedbackPolicy = "every-turn" | "off";
  * When kinby writes a model-assisted recap.
  */
 export type RecapPolicy = "every-turn" | "off";
+export type NodeKind = "fact" | "episode";
+/**
+ * Where a knowledge graph node came from. The instance derives it from the node's file.
+ */
+export type NodeSource = "agent" | "recap" | "user";
 export type OperationKind =
   | "create"
   | "start"
@@ -229,6 +234,14 @@ export interface Contract {
     "manifest.set": {
       command: ManifestSetCommand;
       result: ManifestResult;
+    };
+    "memory.list": {
+      command: MemoryListCommand;
+      result: MemoryListResult;
+    };
+    "memory.open": {
+      command: MemoryOpenCommand;
+      result: MemoryOpenResult;
     };
     "operation.get": {
       command: OperationGetCommand;
@@ -775,6 +788,42 @@ export interface ManifestSetCommand {
 export interface NewModelPrice {
   input: number;
   output: number;
+}
+export interface MemoryListCommand {
+  after?: string | null;
+  before?: string | null;
+  cursor?: string | null;
+  kind?: NodeKind | null;
+  limit?: number;
+  query?: string;
+  subject?: string | null;
+}
+export interface MemoryListResult {
+  cursor: string | null;
+  items: NodeSummary[];
+}
+export interface NodeSummary {
+  date: string;
+  description: string;
+  kind: NodeKind;
+  node: string;
+  source: NodeSource;
+  subjects: string[];
+}
+export interface MemoryOpenCommand {
+  node: string;
+}
+export interface MemoryOpenResult {
+  body: string;
+  date: string;
+  description: string;
+  kind: NodeKind;
+  node: string;
+  source: NodeSource;
+  subjects: string[];
+  thread: string | null;
+  tools: string[] | null;
+  turn: string | null;
 }
 export interface OperationGetCommand {
   operation_id: string;

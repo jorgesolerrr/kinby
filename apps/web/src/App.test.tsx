@@ -213,6 +213,34 @@ describe("the instances", () => {
     )
   })
 
+  it("opens a running instance's memory from its page, and puts it in the URL", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("button", { name: "Memory" }))
+
+    expect(window.location.pathname).toBe("/instances/hub-ada/memory")
+    expect(screen.getByRole("tab", { name: "Knowledge graph" })).toBeDefined()
+    const relayed = hub.sockets.find(
+      (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
+    )
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(relayed?.sent).toContainEqual(
+      expect.objectContaining({ type: "call", method: "memory.list", params: { query: "" } }),
+    )
+  })
+
+  it("asks to start a stopped instance to see its memory", async () => {
+    window.history.replaceState(null, "", "/instances/hub-unnamed/memory")
+
+    const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    expect(await screen.findByText("Start it to see its memory.")).toBeDefined()
+    expect(screen.queryByRole("tab", { name: "Knowledge graph" })).toBeNull()
+    expect(hub.sockets).toHaveLength(1)
+  })
+
   it("restores the config panel from the URL", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/config")
 

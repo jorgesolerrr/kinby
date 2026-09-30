@@ -12,6 +12,7 @@ from kinby.memory import (
     MemoryHit,
     MemoryNodeError,
     NodeId,
+    NodeNotFound,
 )
 
 _THREAD_ID = UUID("11111111-1111-1111-1111-111111111111")
@@ -298,6 +299,90 @@ def test_forget_tombstones_a_fact_and_excludes_it_from_recall_and_open(
     assert node_path.is_file()
     assert "tombstone: true\n" in node_path.read_text(encoding="utf-8")
     assert memory.recall("memory backend") == ()
-    with pytest.raises(MemoryNodeError, match="was forgotten"):
+    with pytest.raises(NodeNotFound, match="was forgotten"):
         memory.open(node)
     assert events_path.read_bytes() == b"canonical transcript\n"
+
+
+def test_a_fact_without_a_thread_added_by_the_user_is_recalled_and_opened(tmp_path: Path) -> None:
+    node = NodeId("2026-09-02-likes-coffee")
+    graph_path = tmp_path / "memory" / "graph"
+    graph_path.mkdir(parents=True)
+    (graph_path / f"{node}.md").write_text(
+        (
+            "---\n"
+            "date: 2026-09-02\n"
+            "description: Likes coffee\n"
+            "subjects: [coffee]\n"
+            "source: user\n"
+            "---\n"
+            "Black, no sugar.\n"
+        ),
+        encoding="utf-8",
+    )
+    memory = _graph_store(tmp_path)
+
+    assert [hit.node for hit in memory.recall("coffee")] == [node]
+    assert memory.open(node) == Fact(
+        node=node,
+        date=date(2026, 9, 2),
+        description="Likes coffee",
+        subjects=("coffee",),
+        body="Black, no sugar.",
+        thread=None,
+        added_by_user=True,
+    )
+
+
+def test_remember_writes_a_user_fact_with_its_source_and_no_thread(tmp_path: Path) -> None:
+    node = NodeId("2026-09-02-likes-coffee")
+    fact = Fact(
+        node=node,
+        date=date(2026, 9, 2),
+        description="Likes coffee",
+        subjects=("coffee",),
+        body="Black, no sugar.",
+        thread=None,
+        added_by_user=True,
+    )
+    memory = _graph_store(tmp_path)
+
+    memory.remember(fact)
+
+    assert memory.open(node) == fact
+    assert (tmp_path / "memory" / "graph" / f"{node}.md").read_text(encoding="utf-8") == (
+        "---\n"
+        "date: 2026-09-02\n"
+        'description: "Likes coffee"\n'
+        'subjects: ["coffee"]\n'
+        "source: user\n"
+        "---\n"
+        "Black, no sugar.\n"
+    )
+
+
+def test_episode_frontmatter_requires_a_thread(tmp_path: Path) -> None:
+    node = NodeId("2026-08-30-missing-thread")
+    graph_path = tmp_path / "memory" / "graph"
+    graph_path.mkdir(parents=True)
+    (graph_path / f"{node}.md").write_text(
+        (
+            "---\n"
+            "date: 2026-08-30\n"
+            f"turn: {_TURN_ID}\n"
+            "description: Missing the episode thread\n"
+            "subjects: [kinby]\n"
+            "tools: [bash]\n"
+            "---\n"
+            "Ran the tests.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MemoryNodeError, match="invalid frontmatter"):
+        _graph_store(tmp_path).open(node)
+
+
+def test_open_refuses_an_id_that_was_never_written(tmp_path: Path) -> None:
+    with pytest.raises(NodeNotFound, match="was not found"):
+        _graph_store(tmp_path).open(NodeId("2026-09-01-never-written"))

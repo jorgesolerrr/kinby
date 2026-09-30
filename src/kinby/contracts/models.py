@@ -1832,3 +1832,64 @@ class ToolListResult(ContractModel):
     #: By name.
     tools: list[ToolSummary]
     warnings: tuple[Warning, ...]
+
+
+class NodeKind(StrEnum):
+    FACT = "fact"
+    EPISODE = "episode"
+
+
+class NodeSource(StrEnum):
+    """Where a knowledge graph node came from. The instance derives it from the node's file."""
+
+    #: A fact the agent remembered in a thread.
+    AGENT = "agent"
+    #: An episode the recap wrote after a turn.
+    RECAP = "recap"
+    #: A fact the user added from a client.
+    USER = "user"
+
+
+class MemoryListCommand(ContractModel):
+    #: Every term is a case-insensitive substring of the description or a subject, as in recall.
+    #: Empty matches every node.
+    query: str = ""
+    kind: NodeKind | None = None
+    #: One subject, matched exactly and case-insensitively.
+    subject: str | None = None
+    #: Inclusive.
+    after: date | None = None
+    #: Inclusive.
+    before: date | None = None
+    #: The last node of the previous page. The next page holds the matches that sort below it.
+    cursor: NodeId | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class NodeSummary(ContractModel):
+    node: NodeId
+    kind: NodeKind
+    date: date
+    description: str
+    subjects: list[str]
+    source: NodeSource
+
+
+class MemoryListResult(ContractModel):
+    #: Newest first, by date and then node.
+    items: list[NodeSummary]
+    #: What the next page starts below, or null on the last page.
+    cursor: NodeId | None
+
+
+class MemoryOpenCommand(ContractModel):
+    node: NodeId
+
+
+class MemoryOpenResult(NodeSummary):
+    body: str
+    #: The thread the node was learned or recapped in. Null for a fact the user added.
+    thread: UUID | None
+    #: The recapped turn and its tool path. Null for a fact.
+    turn: UUID | None
+    tools: list[str] | None
