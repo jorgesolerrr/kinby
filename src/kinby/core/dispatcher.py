@@ -19,6 +19,9 @@ from kinby.contracts import (
     INSTANCE_PROBE,
     MANIFEST_GET,
     MANIFEST_SET,
+    MEMORY_ADD,
+    MEMORY_CORRECT,
+    MEMORY_FORGET,
     MEMORY_LIST,
     MEMORY_OPEN,
     PACKAGE_CONFIG_GET,
@@ -446,9 +449,12 @@ def build_dispatcher(
         dispatcher.register(ROUTINE_SET_ENABLED, config.set_routine_enabled)
         dispatcher.register(ROUTINE_DELETE, config.delete_routine)
     if isinstance(turns, ScheduledTurnConfig):
-        memory = InstanceMemory(GraphStore(turns.scheduler.instance.path))
+        memory = InstanceMemory(GraphStore(turns.scheduler.instance.path), turns.scheduler.clock)
         dispatcher.register(MEMORY_LIST, memory.list)
         dispatcher.register(MEMORY_OPEN, memory.open)
+        dispatcher.register(MEMORY_ADD, memory.add)
+        dispatcher.register(MEMORY_CORRECT, memory.correct)
+        dispatcher.register(MEMORY_FORGET, memory.forget)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)
         dispatcher.register(ROUTINE_RUN, scheduler.run)

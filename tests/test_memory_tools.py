@@ -393,6 +393,22 @@ def test_same_day_facts_are_recalled_in_creation_order(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_forgetting_a_forgotten_node_again_is_not_an_error(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance_with_episode(tmp_path)
+        forget = next(
+            tool for tool in memory_tools(GraphStore(instance.path)) if tool.name == "forget"
+        )
+        context = ToolContext(instance=instance, thread_id=uuid4())
+
+        first = await forget.ainvoke({"node": _NODE}, context)
+        again = await forget.ainvoke({"node": _NODE}, context)
+
+        assert first == again == f'Forgot memory node "{_NODE}".'
+
+    asyncio.run(scenario())
+
+
 def test_denied_remember_returns_an_error_and_the_turn_continues(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = _empty_instance(tmp_path)

@@ -1,18 +1,33 @@
-import type {
-  Clock,
-  InstanceClient,
-  MemoryListCommand,
-  MemoryListResult,
-  MemoryOpenResult,
-  NodeKind,
-  NodeSummary,
+import {
+  CallError,
+  type Clock,
+  type InstanceClient,
+  type MemoryAddCommand,
+  type MemoryListCommand,
+  type MemoryListResult,
+  type MemoryOpenResult,
+  type NodeKind,
+  type NodeSummary,
 } from "@kinby/contract"
 import { useEffect, useId, useState, useSyncExternalStore } from "react"
 
 import { Failure } from "@/components/config-alerts"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Item,
@@ -24,7 +39,9 @@ import {
 } from "@/components/ui/item"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { usePace } from "@/hooks/use-pace"
 import { type Pace, retried } from "@/lib/operation"
@@ -32,9 +49,12 @@ import { selectThread } from "@/lib/selection"
 import { threadList, threadTitle } from "@/lib/thread-list"
 import {
   BookOpenIcon,
+  CircleXIcon,
   LightbulbIcon,
   MessageSquareIcon,
+  PencilIcon,
   RefreshCwIcon,
+  Trash2Icon,
   UserIcon,
   XIcon,
 } from "lucide-react"
@@ -62,7 +82,8 @@ const KINDS: Record<NodeKind | "all", string> = { all: "All", fact: "Facts", epi
 
 /**
  * An instance's memory, as two tabs. The knowledge graph lists its nodes newest first, narrowed by
- * the filters above it, and opens one in the pane beside it. The page reads when it opens and on
+ * the filters above it, and opens one in the pane beside it, where the user corrects or forgets it.
+ * With nothing open, the pane adds a fact. The page reads when it opens, after each write, and on
  * Refresh, and never polls. The profile tab is not built yet.
  */
 export function MemoryPage({
@@ -107,11 +128,13 @@ function KnowledgeGraph({
 }) {
   const pacing = usePace(clock)
   const [filters, setFilters] = useState(NO_FILTERS)
-  // Each Refresh reads the list and the opened node again.
+  // Each Refresh and each write reads the list and the opened node again.
   const [reads, setReads] = useState(0)
   const [listed, setListed] = useState<MemoryListResult>()
   const [failure, setFailure] = useState<unknown>()
   const [selected, setSelected] = useState<string>()
+  // Whether a write found the opened node forgotten since the list was read.
+  const [gone, setGone] = useState(false)
 
   useEffect(() => {
     let current = true
@@ -131,6 +154,19 @@ function KnowledgeGraph({
   }, [client, pacing, filters, reads])
 
   const narrow = (changed: Partial<Filters>) => setFilters({ ...filters, ...changed })
+  const open = (node: string | undefined) => {
+    setSelected(node)
+    setGone(false)
+  }
+  /** After a write, read the list again and open the fact it wrote, or nothing. */
+  const written = (node: string | undefined) => {
+    open(node)
+    setReads(reads + 1)
+  }
+  const wentMissing = () => {
+    written(undefined)
+    setGone(true)
+  }
   const loadMore = async (shown: MemoryListResult) => {
     if (shown.cursor === null) return
     try {
@@ -159,7 +195,7 @@ function KnowledgeGraph({
             <NodeList
               listed={listed}
               selected={selected}
-              onSelect={setSelected}
+              onSelect={open}
               onLoadMore={() => void loadMore(listed)}
             />
           )}
@@ -169,7 +205,24 @@ function KnowledgeGraph({
           className="min-w-0 overflow-y-auto md:w-1/2 md:border-l md:pl-6"
         >
           {selected === undefined ? (
-            <p className="text-sm text-muted-foreground">Open a node to read it.</p>
+            <div className="flex flex-col gap-4">
+              {gone && (
+                <Alert variant="destructive">
+                  <CircleXIcon />
+                  <AlertTitle>That node is gone</AlertTitle>
+                  <AlertDescription>
+                    It was forgotten after the list was read, most likely by the agent.
+                  </AlertDescription>
+                </Alert>
+              )}
+              <FactForm
+                title="Add fact"
+                hint="Open a node to read it, or tell kinby something directly."
+                action="Add fact"
+                initial={NO_FACT}
+                save={async (fact) => written((await client.call("memory.add", fact)).node)}
+              />
+            </div>
           ) : (
             <NodePane
               key={`${selected} ${reads}`}
@@ -178,6 +231,9 @@ function KnowledgeGraph({
               instanceId={instanceId}
               node={selected}
               onSubject={(subject) => narrow({ subject })}
+              onClose={() => open(undefined)}
+              onWritten={written}
+              onGone={wentMissing}
             />
           )}
         </section>
@@ -331,21 +387,33 @@ function KindIcon({ kind }: { kind: NodeKind }) {
   return kind === "fact" ? <LightbulbIcon /> : <BookOpenIcon />
 }
 
-/** One node, read when it opens. A subject chip narrows the list to that subject. */
+/**
+ * One node, read when it opens. A subject chip narrows the list to that subject. A fact can be
+ * corrected, and any node forgotten. `onWritten` hears the fact a correction wrote, or nothing
+ * after a forget, and `onGone` hears that the node was forgotten before the write reached it.
+ */
 function NodePane({
   client,
   pacing,
   instanceId,
   node,
   onSubject,
+  onClose,
+  onWritten,
+  onGone,
 }: {
   client: Caller
   pacing: Pace
   instanceId: string
   node: string
   onSubject: (subject: string) => void
+  onClose: () => void
+  onWritten: (node: string | undefined) => void
+  onGone: () => void
 }) {
   const [opened, setOpened] = useState<MemoryOpenResult>()
+  const [correcting, setCorrecting] = useState(false)
+  const [forgetting, setForgetting] = useState(false)
   const [failure, setFailure] = useState<unknown>()
   const headingId = useId()
 
@@ -364,13 +432,60 @@ function NodePane({
     }
   }, [client, pacing, node])
 
-  if (failure !== undefined) return <Failure error={failure} />
-  if (opened === undefined) return <Skeleton className="h-48 w-full" />
+  if (opened === undefined) {
+    return failure === undefined ? (
+      <Skeleton className="h-48 w-full" />
+    ) : (
+      <Failure error={failure} />
+    )
+  }
+  if (correcting) {
+    return (
+      <FactForm
+        title="Correct fact"
+        hint="Saving writes a new fact dated today and forgets this one."
+        action="Save correction"
+        initial={{
+          description: opened.description,
+          subjects: opened.subjects.join(", "),
+          body: opened.body,
+        }}
+        save={async (fact) => {
+          const corrected = await unlessGone(client.call("memory.correct", { node, ...fact }))
+          if (corrected === "gone") onGone()
+          else onWritten(corrected.node)
+        }}
+        onCancel={() => setCorrecting(false)}
+      />
+    )
+  }
+  const forget = async () => {
+    setForgetting(true)
+    setFailure(undefined)
+    try {
+      const forgotten = await unlessGone(client.call("memory.forget", { node }))
+      if (forgotten === "gone") onGone()
+      else onWritten(undefined)
+    } catch (error) {
+      setFailure(error)
+      setForgetting(false)
+    }
+  }
   return (
     <article aria-labelledby={headingId} className="flex flex-col gap-3">
+      {failure !== undefined && <Failure error={failure} />}
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="outline">{opened.kind}</Badge>
         <span className="text-sm text-muted-foreground">{opened.date}</span>
+        <Button
+          className="ml-auto"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close"
+          onClick={onClose}
+        >
+          <XIcon />
+        </Button>
       </div>
       <h2 id={headingId} className="text-lg font-semibold">
         {opened.description}
@@ -395,7 +510,159 @@ function NodePane({
       )}
       <Separator />
       <Origin client={client} pacing={pacing} instanceId={instanceId} opened={opened} />
+      <div className="flex flex-wrap gap-2">
+        {opened.kind === "fact" && (
+          <Button variant="outline" disabled={forgetting} onClick={() => setCorrecting(true)}>
+            <PencilIcon data-icon="inline-start" />
+            Correct
+          </Button>
+        )}
+        <AlertDialog>
+          <AlertDialogTrigger
+            render={<Button className="ml-auto" variant="destructive" disabled={forgetting} />}
+          >
+            {forgetting ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <Trash2Icon data-icon="inline-start" />
+            )}
+            Forget
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Forget this {opened.kind}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                kinby stops using &quot;{opened.description}&quot;. Forgetting can&apos;t be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction variant="destructive" onClick={() => void forget()}>
+                Forget
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
     </article>
+  )
+}
+
+/** "gone" when the instance found no live node to write to, or what the write answered. */
+async function unlessGone<T>(write: Promise<T>): Promise<T | "gone"> {
+  try {
+    return await write
+  } catch (error) {
+    if (error instanceof CallError && error.code === "NOT_FOUND") return "gone"
+    throw error
+  }
+}
+
+/** A fact as the user edits it. Subjects are one line, separated by commas. */
+interface FactDraft {
+  description: string
+  subjects: string
+  body: string
+}
+
+const NO_FACT: FactDraft = { description: "", subjects: "", body: "" }
+
+function fact({ description, subjects, body }: FactDraft): MemoryAddCommand {
+  return {
+    description,
+    subjects: subjects
+      .split(",")
+      .map((subject) => subject.trim())
+      .filter(Boolean),
+    body,
+  }
+}
+
+/**
+ * A fact's description, subjects, and body, saved through `save` by the `action` button. A value
+ * the instance refuses shows its reason beside its field.
+ */
+function FactForm({
+  title,
+  hint,
+  action,
+  initial,
+  save,
+  onCancel,
+}: {
+  title: string
+  hint: string
+  action: string
+  initial: FactDraft
+  save: (fact: MemoryAddCommand) => Promise<void>
+  onCancel?: () => void
+}) {
+  const id = useId()
+  const [draft, setDraft] = useState(initial)
+  const [saving, setSaving] = useState(false)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [failure, setFailure] = useState<unknown>()
+
+  const edit = (changed: Partial<FactDraft>) => {
+    setDraft({ ...draft, ...changed })
+    setErrors({})
+  }
+  const submit = async () => {
+    setSaving(true)
+    setFailure(undefined)
+    try {
+      await save(fact(draft))
+    } catch (error) {
+      if (error instanceof CallError && Object.keys(error.fields).length > 0) {
+        setErrors(error.fields)
+      } else setFailure(error)
+    } finally {
+      setSaving(false)
+    }
+  }
+  const input = (name: keyof FactDraft) => ({
+    id: `${id}-${name}`,
+    value: draft[name],
+    readOnly: saving,
+    "aria-invalid": errors[name] !== undefined || undefined,
+    onChange: (event: { target: { value: string } }) => edit({ [name]: event.target.value }),
+  })
+
+  return (
+    <div className="flex flex-col gap-3">
+      <h2 className="text-lg font-semibold">{title}</h2>
+      <p className="text-sm text-muted-foreground">{hint}</p>
+      {failure !== undefined && <Failure error={failure} />}
+      <FieldGroup>
+        <Field data-invalid={errors.description !== undefined || undefined}>
+          <FieldLabel htmlFor={`${id}-description`}>Description</FieldLabel>
+          <Input {...input("description")} />
+          <FieldError>{errors.description}</FieldError>
+        </Field>
+        <Field data-invalid={errors.subjects !== undefined || undefined}>
+          <FieldLabel htmlFor={`${id}-subjects`}>Subjects</FieldLabel>
+          <Input {...input("subjects")} />
+          <FieldDescription>Separate subjects with commas.</FieldDescription>
+          <FieldError>{errors.subjects}</FieldError>
+        </Field>
+        <Field data-invalid={errors.body !== undefined || undefined}>
+          <FieldLabel htmlFor={`${id}-body`}>Body</FieldLabel>
+          <Textarea className="min-h-32" {...input("body")} />
+          <FieldError>{errors.body}</FieldError>
+        </Field>
+      </FieldGroup>
+      <div className="flex flex-wrap gap-2">
+        <Button disabled={saving || draft.description === ""} onClick={() => void submit()}>
+          {saving && <Spinner data-icon="inline-start" />}
+          {action}
+        </Button>
+        {onCancel !== undefined && (
+          <Button variant="ghost" disabled={saving} onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+      </div>
+    </div>
   )
 }
 

@@ -235,6 +235,18 @@ export interface Contract {
       command: ManifestSetCommand;
       result: ManifestResult;
     };
+    "memory.add": {
+      command: MemoryAddCommand;
+      result: MemoryWriteResult;
+    };
+    "memory.correct": {
+      command: MemoryCorrectCommand;
+      result: MemoryWriteResult;
+    };
+    "memory.forget": {
+      command: MemoryForgetCommand;
+      result: MemoryForgetResult;
+    };
     "memory.list": {
       command: MemoryListCommand;
       result: MemoryListResult;
@@ -789,6 +801,24 @@ export interface NewModelPrice {
   input: number;
   output: number;
 }
+export interface MemoryAddCommand {
+  body: string;
+  description: string;
+  subjects: string[];
+}
+export interface MemoryWriteResult {
+  node: string;
+}
+export interface MemoryCorrectCommand {
+  body: string;
+  description: string;
+  node: string;
+  subjects: string[];
+}
+export interface MemoryForgetCommand {
+  node: string;
+}
+export interface MemoryForgetResult {}
 export interface MemoryListCommand {
   after?: string | null;
   before?: string | null;

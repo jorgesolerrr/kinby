@@ -42,10 +42,15 @@ from kinby.contracts.models import (
     ManifestGetCommand,
     ManifestResult,
     ManifestSetCommand,
+    MemoryAddCommand,
+    MemoryCorrectCommand,
+    MemoryForgetCommand,
+    MemoryForgetResult,
     MemoryListCommand,
     MemoryListResult,
     MemoryOpenCommand,
     MemoryOpenResult,
+    MemoryWriteResult,
     OperationGetCommand,
     OperationGetResult,
     PackageConfigGetCommand,
@@ -219,6 +224,13 @@ PACKAGE_CONFIG_SET = Method(
 )
 MEMORY_LIST = Method("memory.list", Scope.INSTANCE_READ, MemoryListCommand, MemoryListResult)
 MEMORY_OPEN = Method("memory.open", Scope.INSTANCE_READ, MemoryOpenCommand, MemoryOpenResult)
+MEMORY_ADD = Method("memory.add", Scope.INSTANCE_ADMIN, MemoryAddCommand, MemoryWriteResult)
+MEMORY_CORRECT = Method(
+    "memory.correct", Scope.INSTANCE_ADMIN, MemoryCorrectCommand, MemoryWriteResult
+)
+MEMORY_FORGET = Method(
+    "memory.forget", Scope.INSTANCE_ADMIN, MemoryForgetCommand, MemoryForgetResult
+)
 CONFIG_HISTORY = Method(
     "config.history", Scope.INSTANCE_READ, ConfigHistoryCommand, ConfigHistoryResult
 )
@@ -332,6 +344,9 @@ METHODS = (
     CONFIG_HISTORY,
     MEMORY_LIST,
     MEMORY_OPEN,
+    MEMORY_ADD,
+    MEMORY_CORRECT,
+    MEMORY_FORGET,
     SKILL_LIST,
     SKILL_READ,
     SKILL_WRITE,

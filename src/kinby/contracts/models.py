@@ -1893,3 +1893,28 @@ class MemoryOpenResult(NodeSummary):
     #: The recapped turn and its tool path. Null for a fact.
     turn: UUID | None
     tools: list[str] | None
+
+
+class MemoryAddCommand(ContractModel):
+    #: Must not be blank. Leading and trailing whitespace is dropped.
+    description: str
+    subjects: list[str]
+    body: str
+
+
+class MemoryCorrectCommand(MemoryAddCommand):
+    #: The fact the correction replaces. It is tombstoned once the new fact is written.
+    node: NodeId
+
+
+class MemoryWriteResult(ContractModel):
+    #: The fact written.
+    node: NodeId
+
+
+class MemoryForgetCommand(ContractModel):
+    node: NodeId
+
+
+class MemoryForgetResult(ContractModel):
+    pass
