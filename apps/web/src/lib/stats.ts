@@ -3,6 +3,7 @@ import type {
   StatsBucket,
   StatsBucketSize,
   StatsGetCommand,
+  StatsGetResult,
   StatsSummary,
   TurnMetrics,
   UsageSource,
@@ -24,6 +25,15 @@ export function bucketSize(range: Range): StatsBucketSize {
 export function statsCommand(range: Range, now: Date): StatsGetCommand {
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
   return { since: new Date(today - (range - 1) * DAY_MS).toISOString(), by: bucketSize(range) }
+}
+
+/**
+ * Whether a stats.get answer comes from a core older than the page, one without each plan's recent
+ * runs or the turns by origin.
+ */
+export function fromOlderCore(answer: StatsGetResult): boolean {
+  const read: { plan_use?: unknown; total: { origins?: unknown } } = answer
+  return read.plan_use === undefined || read.total.origins === undefined
 }
 
 /** Every turn that closed, whatever way it closed. */

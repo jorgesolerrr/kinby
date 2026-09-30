@@ -7,6 +7,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { CreateWizard } from "@/components/create-wizard"
 import { MainPanel } from "@/components/main-panel"
 import { NavThreads } from "@/components/nav-threads"
+import { PageBoundary } from "@/components/page-boundary"
 import { SignIn } from "@/components/sign-in"
 import { UsagePage } from "@/components/usage-page"
 import { Badge } from "@/components/ui/badge"
@@ -18,6 +19,7 @@ import {
   useConfigOpen,
   useCreating,
   useMemoryOpen,
+  usePath,
   useSelectedInstanceId,
   useSelectedThreadId,
   useStatsOpen,
@@ -40,6 +42,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const memoryOpen = useMemoryOpen()
   const statsOpen = useStatsOpen()
   const usageOpen = useUsageOpen()
+  const path = usePath()
   // An instance the hub does not have, or no longer has, selects nothing.
   const selected = instances?.find((instance) => instance.instance_id === selectedId)
   // The hub relays only to a running instance. An open config panel keeps its connection while the
@@ -78,24 +81,26 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
             <SidebarTrigger />
             {!connected && <Badge variant="destructive">Reconnecting</Badge>}
           </header>
-          {creating ? (
-            <CreateWizard caller={client} clock={clock} onPublished={listAgain} />
-          ) : usageOpen ? (
-            <UsagePage client={client} clock={clock} />
-          ) : (
-            <MainPanel
-              caller={client}
-              clock={clock}
-              instances={instances}
-              selected={selected}
-              threadId={threadId}
-              configOpen={configOpen}
-              memoryOpen={memoryOpen}
-              statsOpen={statsOpen}
-              instanceClient={instanceClient}
-              onChanged={listAgain}
-            />
-          )}
+          <PageBoundary path={path}>
+            {creating ? (
+              <CreateWizard caller={client} clock={clock} onPublished={listAgain} />
+            ) : usageOpen ? (
+              <UsagePage client={client} clock={clock} />
+            ) : (
+              <MainPanel
+                caller={client}
+                clock={clock}
+                instances={instances}
+                selected={selected}
+                threadId={threadId}
+                configOpen={configOpen}
+                memoryOpen={memoryOpen}
+                statsOpen={statsOpen}
+                instanceClient={instanceClient}
+                onChanged={listAgain}
+              />
+            )}
+          </PageBoundary>
         </SidebarInset>
       </SidebarProvider>
     </TooltipProvider>

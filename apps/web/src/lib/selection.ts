@@ -5,6 +5,7 @@ const SECTION = "instances"
 const THREADS = "threads"
 const CONFIG = "config"
 const ROUTINES = "routines"
+const PACKAGE = "package"
 const MEMORY = "memory"
 const STATS = "stats"
 export const CREATE_PATH = "/new"
@@ -27,6 +28,10 @@ function configPath(instanceId: string): string {
 /** One routine in an instance's config panel. */
 export function routinePath(instanceId: string, name: string): string {
   return `${configPath(instanceId)}/${ROUTINES}/${encodeURIComponent(name)}`
+}
+
+function packagePath(instanceId: string): string {
+  return `${configPath(instanceId)}/${PACKAGE}`
 }
 
 function memoryPath(instanceId: string): string {
@@ -57,9 +62,19 @@ export function openRoutine(instanceId: string, name: string): void {
   navigate(routinePath(instanceId, name))
 }
 
-/** Drop the linked routine from the URL and keep the config panel, in the same history entry. */
-export function leaveRoutine(instanceId: string): void {
-  window.history.replaceState(null, "", configPath(instanceId))
+/** Open an instance's config panel on "Package and version" the same way. */
+export function openPackage(instanceId: string): void {
+  navigate(packagePath(instanceId))
+}
+
+/**
+ * Drop the routine or the section a link named from the URL and keep the config panel, in the same
+ * history entry.
+ */
+export function leaveLink(instanceId: string): void {
+  const path = configPath(instanceId)
+  if (window.location.pathname === path) return
+  window.history.replaceState(null, "", path)
   changed()
 }
 
@@ -81,6 +96,11 @@ export function openCreateWizard(): void {
 /** Open the hub's usage page the same way. */
 export function openUsage(): void {
   navigate(USAGE_PATH)
+}
+
+/** The URL's path, which changes with every page, instance, and thread picked. */
+export function usePath(): string {
+  return useSyncExternalStore(subscribe, () => window.location.pathname)
 }
 
 /** The hub instance ID the URL names, if it names one. */
@@ -150,6 +170,12 @@ export function linkedRoutine(): string | undefined {
   return section === SECTION && instanceId && config === CONFIG && routines === ROUTINES && name
     ? decodeURIComponent(name)
     : undefined
+}
+
+/** Whether the URL opens its instance's config panel on "Package and version". */
+export function linkedPackage(): boolean {
+  const [, section, instanceId, config, linked] = window.location.pathname.split("/")
+  return section === SECTION && Boolean(instanceId) && config === CONFIG && linked === PACKAGE
 }
 
 function memoryOpen(): boolean {

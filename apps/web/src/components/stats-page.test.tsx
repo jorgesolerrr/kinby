@@ -379,6 +379,39 @@ describe("the stats page", () => {
   })
 })
 
+describe("an older core", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/instances/hub-ada/stats")
+  })
+
+  // A core from before plan_use answers stats.get without it, and its summaries have no origins.
+  const older = {
+    ...stats(),
+    plan_use: undefined,
+    total: { ...summary(), origins: undefined },
+  } as unknown as StatsGetResult
+
+  it("says its answer needs an update, shows nothing from it, and opens Package and version", async () => {
+    openStats({ "stats.get": () => older })
+    const user = userEvent.setup()
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toContain("This instance runs an older core")
+    expect(screen.queryByRole("region", { name: "Turns" })).toBeNull()
+    await user.click(within(alert).getByRole("button", { name: "Open Package and version" }))
+
+    expect(window.location.pathname).toBe("/instances/hub-ada/config/package")
+  })
+
+  it("says the same when its core has no stats.get", async () => {
+    openStats({})
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toContain("This instance runs an older core")
+    expect(alert.textContent).not.toContain("The stub has no answer")
+  })
+})
+
 async function openTab(name: string) {
   const user = userEvent.setup()
   await user.click(await screen.findByRole("tab", { name }))
