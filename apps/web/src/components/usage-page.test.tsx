@@ -4,7 +4,7 @@ import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { bucketTooltips, rows } from "@/components/stats-testing"
+import { bucketTooltips, legend, rows } from "@/components/stats-testing"
 import { UsagePage } from "@/components/usage-page"
 
 const ada = instanceSummary({ instance_id: "hub-ada", persona_name: "Ada" })
@@ -242,6 +242,7 @@ describe("the usage page", () => {
         .getAllByRole("tab")
         .map((tab) => tab.textContent),
     ).toEqual(["API cost", "Plan runs", "Turns"])
+    expect(legend(chart)).toBe("Adaresearch")
     expect(bucketTooltips(chart, 2)).toEqual([
       "Sep 28Ada$0.50research$0.00",
       "Sep 29Adanot pricedresearch$0.10",

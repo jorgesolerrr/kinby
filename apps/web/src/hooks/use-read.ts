@@ -7,7 +7,7 @@ import { retried } from "@/lib/operation"
 /**
  * What `read` last returned, or why it failed. It reads on open, whenever `read` changes, when the
  * window regains focus, and on `readAgain`, and never polls. `read` must keep its identity across
- * renders, or it reads on every one.
+ * renders, or it reads on every one. A new `read` drops what the last one returned.
  */
 export function useRead<T>(
   read: () => Promise<T>,
@@ -15,20 +15,22 @@ export function useRead<T>(
 ): { value: T | undefined; failure: unknown; readAgain: () => void } {
   const pacing = usePace(clock)
   const [reads, setReads] = useState(0)
-  const [value, setValue] = useState<T>()
-  const [failure, setFailure] = useState<unknown>()
+  const [outcome, setOutcome] = useState<Outcome<T>>()
   const readAgain = useCallback(() => setReads((count) => count + 1), [])
 
   useEffect(() => {
     let current = true
     retried(read, pacing).then(
-      (next) => {
-        if (!current) return
-        setValue(next)
-        setFailure(undefined)
+      (value) => {
+        if (current) setOutcome({ read, value })
       },
-      (error: unknown) => {
-        if (current) setFailure(error)
+      (failure: unknown) => {
+        if (!current) return
+        setOutcome((last) => ({
+          read,
+          value: last?.read === read ? last.value : undefined,
+          failure,
+        }))
       },
     )
     return () => {
@@ -41,5 +43,13 @@ export function useRead<T>(
     return () => window.removeEventListener("focus", readAgain)
   }, [readAgain])
 
-  return { value, failure, readAgain }
+  const mine = outcome?.read === read ? outcome : undefined
+  return { value: mine?.value, failure: mine?.failure, readAgain }
+}
+
+/** What one `read` returned, or why it failed. A failed read again keeps what it last returned. */
+interface Outcome<T> {
+  read: () => Promise<T>
+  value: T | undefined
+  failure?: unknown
 }

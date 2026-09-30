@@ -279,7 +279,7 @@ function InstanceCharts({ counted, by }: { counted: CountedRow[]; by: StatsBucke
                           />
                         }
                       />
-                      <ChartLegend content={<ChartLegendContent />} />
+                      <ChartLegend content={<ChartLegendContent nameKey="value" />} />
                       {series.map((key, index) => (
                         <Bar
                           key={key}

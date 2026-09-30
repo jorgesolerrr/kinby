@@ -82,6 +82,8 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
   }
 
   return (
+    // The config's colors are theme tokens, scoped to this chart's series names.
+    // oxlint-disable-next-line shadcn/no-inline-styles
     <style
       dangerouslySetInnerHTML={{
         __html: Object.entries(THEMES)
@@ -287,10 +289,8 @@ function ChartLegendContent({
                 <itemConfig.icon />
               ) : (
                 <div
-                  className="h-2 w-2 shrink-0 rounded-[2px]"
-                  style={{
-                    backgroundColor: item.color,
-                  }}
+                  className="h-2 w-2 shrink-0 rounded-[2px] bg-(--color-bg)"
+                  style={{ "--color-bg": item.color } as React.CSSProperties}
                 />
               )}
               {itemConfig?.label}

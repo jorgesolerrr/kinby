@@ -17,7 +17,7 @@ import { PlansStrip } from "@/components/plans-strip"
 import { RangeHeader } from "@/components/range-header"
 import { Origins } from "@/components/stats-origin"
 import { Quality } from "@/components/stats-quality"
-import { Spend } from "@/components/stats-spend"
+import { Spend, UnpricedNotice } from "@/components/stats-spend"
 import { Tile } from "@/components/tile"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -199,15 +199,7 @@ function drillTitle({ bucket, origin }: Drill, by: StatsBucketSize): string {
 function Notices({ unpricedModels, mismatches }: { unpricedModels: string[]; mismatches: number }) {
   return (
     <>
-      {unpricedModels.length > 0 && (
-        <Alert>
-          <TriangleAlertIcon />
-          <AlertTitle>No price for {new Intl.ListFormat("en").format(unpricedModels)}</AlertTitle>
-          <AlertDescription>
-            Their turns add no API cost, so the cost shown is too low.
-          </AlertDescription>
-        </Alert>
-      )}
+      <UnpricedNotice models={unpricedModels} />
       {mismatches > 0 && (
         <Alert>
           <TriangleAlertIcon />

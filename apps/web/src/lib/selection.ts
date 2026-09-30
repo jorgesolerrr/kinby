@@ -57,6 +57,12 @@ export function openRoutine(instanceId: string, name: string): void {
   navigate(routinePath(instanceId, name))
 }
 
+/** Drop the linked routine from the URL and keep the config panel, in the same history entry. */
+export function leaveRoutine(instanceId: string): void {
+  window.history.replaceState(null, "", configPath(instanceId))
+  changed()
+}
+
 /** Open an instance's memory page the same way. */
 export function openMemory(instanceId: string): void {
   navigate(memoryPath(instanceId))
@@ -114,6 +120,10 @@ export function useUsageOpen(): boolean {
 
 function navigate(path: string): void {
   window.history.pushState(null, "", path)
+  changed()
+}
+
+function changed(): void {
   for (const listener of listeners) listener()
 }
 

@@ -1,7 +1,9 @@
 import type { StatsBucket, StatsBucketSize, StatsGetResult, UsageSource } from "@kinby/contract"
+import { TriangleAlertIcon } from "lucide-react"
 import { Bar, BarChart } from "recharts"
 
 import { BucketAxes } from "@/components/bucket-axes"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   type ChartConfig,
@@ -25,10 +27,26 @@ import { bucketLabel, duration, money, SOURCE_LABELS, tokens } from "@/lib/stats
 export function Spend({ stats, by }: { stats: StatsGetResult; by: StatsBucketSize }) {
   return (
     <>
+      <UnpricedNotice models={stats.unpriced_models} />
       <CostChart buckets={stats.buckets} by={by} />
       <Sources stats={stats} />
       <PlanRunsChart buckets={stats.buckets} by={by} />
     </>
+  )
+}
+
+/** The models the range has no price for, whose turns the API cost leaves out. */
+export function UnpricedNotice({ models }: { models: string[] }) {
+  return (
+    models.length > 0 && (
+      <Alert>
+        <TriangleAlertIcon />
+        <AlertTitle>No price for {new Intl.ListFormat("en").format(models)}</AlertTitle>
+        <AlertDescription>
+          Their turns add no API cost, so the cost shown is too low.
+        </AlertDescription>
+      </Alert>
+    )
   )
 }
 
@@ -164,7 +182,7 @@ function PlanRunsChart({ buckets, by }: { buckets: StatsBucket[]; by: StatsBucke
                   <ChartTooltipContent labelFormatter={(start) => bucketLabel(String(start), by)} />
                 }
               />
-              <ChartLegend content={<ChartLegendContent />} />
+              <ChartLegend content={<ChartLegendContent nameKey="value" />} />
               {(Object.keys(PLAN_SERIES) as (keyof typeof PLAN_SERIES)[]).map((source) => (
                 <Bar
                   key={source}

@@ -21,6 +21,11 @@ export function bucketTooltips(region: HTMLElement, count: number): string[] {
   return shown
 }
 
+/** What the legend of the chart in `region` reads, as one string. */
+export function legend(region: HTMLElement): string {
+  return region.querySelector(".recharts-legend-wrapper")?.textContent ?? ""
+}
+
 /** Each row of `table` below its header, as the text of its cells. */
 export function rows(table: HTMLElement): (string | null)[][] {
   return within(table)
