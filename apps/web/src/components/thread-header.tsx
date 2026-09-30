@@ -88,7 +88,8 @@ export function ThreadHeader({
 
 /**
  * Enter renames the thread, and Escape or leaving the field keeps the title it had. While the rename
- * is out, the field holds the new title and takes no keys.
+ * is out, the field holds the new title and takes no keys. A field that closes with focus in it
+ * gives focus back to the title.
  */
 function ThreadTitle({
   thread,
@@ -102,27 +103,40 @@ function ThreadTitle({
   const [draft, setDraft] = useState<string>()
   const [renaming, setRenaming] = useState(false)
   const field = useRef<HTMLInputElement>(null)
+  const titleButton = useRef<HTMLButtonElement>(null)
+  const refocus = useRef(false)
   const editing = draft !== undefined
   useEffect(() => {
     if (editing) field.current?.focus()
+    else if (refocus.current) titleButton.current?.focus()
+    refocus.current = false
   }, [editing])
 
   if (draft === undefined) {
     return (
       // No width of its own, so a long title truncates instead of widening the panel.
       <h1 className="w-0 flex-1">
-        <Button variant="ghost" className="max-w-full" onClick={() => setDraft(thread.title ?? "")}>
+        <Button
+          ref={titleButton}
+          variant="ghost"
+          className="max-w-full"
+          onClick={() => setDraft(thread.title ?? "")}
+        >
           <span className="truncate">{threadTitle(thread)}</span>
           <PencilIcon data-icon="inline-end" />
         </Button>
       </h1>
     )
   }
+  const close = () => {
+    refocus.current = document.activeElement === field.current
+    setDraft(undefined)
+  }
   const rename = async (title: string) => {
     setRenaming(true)
     const renamed = await onRename(title)
     setRenaming(false)
-    if (renamed) setDraft(undefined)
+    if (renamed) close()
   }
   return (
     <>
@@ -139,11 +153,11 @@ function ThreadTitle({
         }}
         onKeyDown={(event) => {
           if (renaming) return
-          if (event.key === "Escape") setDraft(undefined)
+          if (event.key === "Escape") close()
           if (event.key !== "Enter" || event.nativeEvent.isComposing) return
           event.preventDefault()
           const title = draft.trim()
-          if (title === "" || title === thread.title) return setDraft(undefined)
+          if (title === "" || title === thread.title) return close()
           void rename(title)
         }}
       />
@@ -172,7 +186,8 @@ function ModePicker({
   return (
     <Select<PermissionMode>
       value={mode}
-      disabled={changing}
+      // A disabled trigger drops focus, and a read-only one keeps it and refuses the next pick.
+      readOnly={changing}
       onValueChange={(picked) => picked !== null && picked !== mode && void pick(picked)}
     >
       <SelectTrigger size="sm" aria-label="Mode" className="shrink-0">

@@ -78,11 +78,16 @@ export function ThreadPanel({
   const latest = timeline.turns.at(-1)
   const approval = latest?.approval
   const reasonField = useRef<HTMLInputElement>(null)
-  // A thread that opens on a parked approval has no composer to take focus. An approval that parks
-  // later leaves focus where it is, so keys typed for the composer cannot deny it.
+  const approvalPanel = useRef<HTMLElement>(null)
+  // A thread that opens on a parked approval has no composer to take focus, so its reason does.
   useEffect(() => {
     if (replayed) takeFocus(reasonField.current)
   }, [replayed])
+  // An approval that parks later takes the composer's place, and focus falls to the page. The panel
+  // itself catches it, not a field in it, so keys typed for the composer cannot deny it.
+  useEffect(() => {
+    if (document.activeElement === document.body) approvalPanel.current?.focus()
+  }, [approval?.approvalId])
 
   if (failure !== undefined) {
     return (
@@ -114,6 +119,7 @@ export function ThreadPanel({
             ) : (
               <ApprovalPanel
                 key={approval.approvalId}
+                ref={approvalPanel}
                 reasonField={reasonField}
                 client={client}
                 threadId={threadId}
@@ -215,11 +221,13 @@ type Answer = "approve" | "deny" | "stop"
  * the model reads, or stop the turn. Enter in the reason denies with it.
  */
 function ApprovalPanel({
+  ref,
   reasonField,
   client,
   threadId,
   approval,
 }: {
+  ref: Ref<HTMLElement>
   reasonField: Ref<HTMLInputElement>
   client: Pick<InstanceClient, "call">
   threadId: string
@@ -258,7 +266,7 @@ function ApprovalPanel({
   const busy = answering !== undefined
 
   return (
-    <section aria-label={`Approve ${call}?`}>
+    <section ref={ref} tabIndex={-1} aria-label={`Approve ${call}?`}>
       <Card size="sm">
         <CardHeader>
           <CardTitle>{call}</CardTitle>
