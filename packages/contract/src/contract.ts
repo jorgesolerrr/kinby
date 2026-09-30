@@ -283,6 +283,14 @@ export interface Contract {
       command: PermissionsSetCommand;
       result: PermissionsResult;
     };
+    "profile.get": {
+      command: ProfileGetCommand;
+      result: ProfileResult;
+    };
+    "profile.set": {
+      command: ProfileSetCommand;
+      result: ProfileResult;
+    };
     "prompt.get": {
       command: PromptGetCommand;
       result: PromptResult;
@@ -995,6 +1003,16 @@ export interface PermissionsSetCommand {
 export interface OwnBashPatterns {
   ask: string[];
   deny: string[];
+}
+export interface ProfileGetCommand {}
+export interface ProfileResult {
+  hash: string;
+  text: string;
+  tokens: number;
+}
+export interface ProfileSetCommand {
+  hash: string;
+  text: string;
 }
 export interface PromptGetCommand {
   name: PromptName;

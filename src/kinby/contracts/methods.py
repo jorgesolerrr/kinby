@@ -63,6 +63,9 @@ from kinby.contracts.models import (
     PermissionsGetCommand,
     PermissionsResult,
     PermissionsSetCommand,
+    ProfileGetCommand,
+    ProfileResult,
+    ProfileSetCommand,
     PromptGetCommand,
     PromptResult,
     PromptSetCommand,
@@ -231,6 +234,8 @@ MEMORY_CORRECT = Method(
 MEMORY_FORGET = Method(
     "memory.forget", Scope.INSTANCE_ADMIN, MemoryForgetCommand, MemoryForgetResult
 )
+PROFILE_GET = Method("profile.get", Scope.INSTANCE_READ, ProfileGetCommand, ProfileResult)
+PROFILE_SET = Method("profile.set", Scope.INSTANCE_ADMIN, ProfileSetCommand, ProfileResult)
 CONFIG_HISTORY = Method(
     "config.history", Scope.INSTANCE_READ, ConfigHistoryCommand, ConfigHistoryResult
 )
@@ -347,6 +352,8 @@ METHODS = (
     MEMORY_ADD,
     MEMORY_CORRECT,
     MEMORY_FORGET,
+    PROFILE_GET,
+    PROFILE_SET,
     SKILL_LIST,
     SKILL_READ,
     SKILL_WRITE,

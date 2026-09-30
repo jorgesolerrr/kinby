@@ -1,8 +1,10 @@
 import type {
+  ConfigChange,
   MemoryListCommand,
   MemoryListResult,
   MemoryOpenResult,
   NodeSummary,
+  ProfileResult,
   ThreadSummary,
 } from "@kinby/contract"
 import { CallError } from "@kinby/contract"
@@ -144,6 +146,30 @@ function openWritablePage(answers: Answers = {}) {
   return page
 }
 
+const EMPTY = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+const profile: ProfileResult = { text: "Call me Jo.", hash: "hash-1", tokens: 3 }
+
+const byYou: ConfigChange = {
+  // Local time, so the page shows the same clock time wherever the test runs.
+  at: new Date(2026, 8, 28, 10, 4).toISOString(),
+  file: "memory/profile.md",
+  actor: "app",
+  thread_id: null,
+  turn_id: null,
+  diff: "",
+}
+
+/** The page with its Profile tab open. The profile was last changed by the user. */
+async function openProfile(answers: Answers = {}) {
+  const page = openPage({
+    "profile.get": () => profile,
+    "config.history": ({ file }) => ({ changes: file === "memory/profile.md" ? [byYou] : [] }),
+    ...answers,
+  })
+  await page.user.click(await screen.findByRole("tab", { name: "Profile" }))
+  return page
+}
+
 describe("the memory page", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", "/instances/instance-1/memory")
@@ -272,15 +298,69 @@ describe("the memory page", () => {
     expect(caller.calls.filter((call) => call.method === "memory.open")).toHaveLength(2)
   })
 
-  it("shows the profile tab as not available yet", async () => {
-    openPage()
+  it("edits the profile with an approximate token count and says who changed it last", async () => {
+    const { caller, user } = await openProfile({
+      "profile.set": ({ text }) => ({ text, hash: "hash-2", tokens: 7 }),
+    })
 
-    const profile = await screen.findByRole("tab", { name: "Profile" })
+    const editor = await screen.findByRole("textbox", { name: "memory/profile.md" })
+    expect(editor).toHaveProperty("value", "Call me Jo.")
+    expect(screen.getByText(/about 3 tokens/)).toBeDefined()
+    expect(screen.getByText("Last changed by you, Sep 28, 2026, 10:04 AM")).toBeDefined()
+    await user.type(editor, " Mornings only.")
+    expect(screen.getByText(/about 7 tokens/)).toBeDefined()
+    await user.click(screen.getByRole("button", { name: "Save" }))
 
-    expect(profile.getAttribute("aria-disabled")).toBe("true")
-    expect(screen.getByRole("tab", { name: "Knowledge graph" }).getAttribute("aria-selected")).toBe(
-      "true",
-    )
+    expect(await screen.findByText("Saved. It applies at the next turn.")).toBeDefined()
+    expect(called(caller, "profile.set")).toEqual([
+      { text: "Call me Jo. Mornings only.", hash: "hash-1" },
+    ])
+    expect(called(caller, "config.history")).toEqual([
+      { file: "memory/profile.md", limit: 1 },
+      { file: "memory/profile.md", limit: 1 },
+    ])
+    expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true)
+  })
+
+  it("counts the profile's tokens as the instance does, by characters", async () => {
+    const { user } = await openProfile({
+      "profile.get": () => ({ text: "", hash: EMPTY, tokens: 0 }),
+    })
+
+    const editor = await screen.findByRole("textbox", { name: "memory/profile.md" })
+    expect(screen.getByText(/about 0 tokens/)).toBeDefined()
+    await user.type(editor, "🌱🌱🌱🌱🌱")
+
+    expect(screen.getByText(/about 2 tokens/)).toBeDefined()
+  })
+
+  it("offers to load theirs when the profile changed since it was opened", async () => {
+    let theirs = false
+    const { caller, user } = await openProfile({
+      "profile.get": () =>
+        theirs ? { text: "Call me Jorge.", hash: "hash-3", tokens: 4 } : profile,
+      "profile.set": () => {
+        theirs = true
+        throw new CallError({ code: "STALE", message: "profile.md changed.", retryable: false })
+      },
+    })
+
+    const editor = await screen.findByRole("textbox", { name: "memory/profile.md" })
+    await user.type(editor, " Mine.")
+    await user.click(screen.getByRole("button", { name: "Save" }))
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toContain("Changed since you opened it")
+    await user.click(within(alert).getByRole("button", { name: "Load theirs" }))
+
+    expect(await screen.findByDisplayValue("Call me Jorge.")).toBe(editor)
+    expect(screen.getByText(/about 4 tokens/)).toBeDefined()
+    expect(screen.queryByRole("alert")).toBeNull()
+    await user.type(editor, " Mine.")
+    await user.click(screen.getByRole("button", { name: "Save" }))
+    expect(called(caller, "profile.set").at(-1)).toEqual({
+      text: "Call me Jorge. Mine.",
+      hash: "hash-3",
+    })
   })
 
   it("adds a fact from the pane with nothing open, then reloads the list and opens it", async () => {

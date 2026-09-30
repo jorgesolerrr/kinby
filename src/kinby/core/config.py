@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 import shutil
 from collections.abc import Iterator
@@ -33,6 +34,9 @@ from kinby.contracts import (
     PermissionsResult,
     PermissionsSetCommand,
     PriceSource,
+    ProfileGetCommand,
+    ProfileResult,
+    ProfileSetCommand,
     PromptGetCommand,
     PromptName,
     PromptResult,
@@ -73,7 +77,9 @@ from kinby.instance import Instance, api_key_variable
 from kinby.instance.config_changes import ConfigChangeLog, recorded_change
 from kinby.instance.layout import (
     MANIFEST_NAME,
+    MEMORY_DIR,
     PERMISSIONS_NAME,
+    PROFILE_NAME,
     RECAP_NAME,
     ROUTINE_FILE,
     SKILL_FILE,
@@ -125,6 +131,7 @@ _PROMPT_FILES = {
 }
 #: What each prompt reads as without its file. kinby ships no behavior prompt of its own.
 _SHIPPED_PROMPTS = {PromptName.BEHAVIOR: "", PromptName.RECAP: DEFAULT_RECAP_LENS}
+_PROFILE_FILE = ConfigFile(f"{MEMORY_DIR}/{PROFILE_NAME}")
 
 
 def _file_hash(content: bytes) -> FileHash:
@@ -195,6 +202,7 @@ def _write_over(path: Path, content: bytes, read: FileHash) -> None:
     """Replace the file the client read, staging beside it so no reader sees half a file."""
     if _file_hash(_read_bytes(path) or b"") != read:
         raise StaleWrite(f"{path.name} changed since it was read. Read it again.")
+    path.parent.mkdir(exist_ok=True)
     staging = path.with_name(f".{path.name}.staging")
     staging.write_bytes(content)
     staging.replace(path)
@@ -255,6 +263,16 @@ class InstanceConfig:
         async with self._instance.config_lock:
             await asyncio.to_thread(self._write, _PROMPT_FILES[command.name], content, command.hash)
         return PromptResult(content=command.content, hash=_file_hash(content), default=False)
+
+    async def get_profile(self, command: ProfileGetCommand) -> ProfileResult:
+        return _profile_result(_read_bytes(self._instance.path / _PROFILE_FILE) or b"")
+
+    async def set_profile(self, command: ProfileSetCommand) -> ProfileResult:
+        """Write the profile. The agent reads it into the system prompt at its next turn."""
+        content = command.text.encode("utf-8")
+        async with self._instance.config_lock:
+            await asyncio.to_thread(self._write, _PROFILE_FILE, content, command.hash)
+        return _profile_result(content)
 
     async def read_routine(self, command: RoutineReadCommand) -> RoutineFile:
         async with self._instance.routine_lock:
@@ -540,6 +558,11 @@ def _permissions_result(policy: GatePolicy, read: FileHash) -> PermissionsResult
         ),
         hash=read,
     )
+
+
+def _profile_result(content: bytes) -> ProfileResult:
+    text = content.decode("utf-8")
+    return ProfileResult(text=text, hash=_file_hash(content), tokens=math.ceil(len(text) / 4))
 
 
 def _skill_config_file(name: SkillName) -> ConfigFile:

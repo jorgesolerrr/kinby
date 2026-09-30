@@ -1,9 +1,11 @@
 import asyncio
+import hashlib
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import UUID
 
 from kinby.contracts import ErrorCode, ErrorEnvelope, Scope
+from kinby.core import LangGraphRunner
 from tests.test_routines import instance_at
 from tests.test_scheduler import FakeClock, call, runtime
 
@@ -584,5 +586,150 @@ def test_forget_refuses_a_forgotten_an_unknown_and_a_malformed_node(tmp_path: Pa
         _refused(unknown, ErrorCode.NOT_FOUND)
         _refused(malformed, ErrorCode.INVALID_ARGUMENT)
         assert _graph_files(tmp_path) == before
+
+    asyncio.run(scenario())
+
+
+def _profile(instance_path: Path) -> Path:
+    return instance_path / "memory" / "profile.md"
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_profile_get_returns_the_text_its_hash_and_about_how_many_tokens(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        _profile(tmp_path).parent.mkdir()
+        _profile(tmp_path).write_text("Call me Jo.\n", encoding="utf-8")
+
+        read = await call(dispatcher, "profile.get")
+
+        assert read.model_dump() == {
+            "text": "Call me Jo.\n",
+            "hash": _sha256("Call me Jo.\n"),
+            "tokens": 3,
+        }
+
+    asyncio.run(scenario())
+
+
+def test_a_missing_profile_reads_as_empty_text_with_the_empty_hash(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        read = await call(dispatcher, "profile.get")
+
+        assert read.model_dump() == {"text": "", "hash": _sha256(""), "tokens": 0}
+
+    asyncio.run(scenario())
+
+
+def test_profile_set_writes_the_profile_read_and_counts_its_tokens(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        _profile(tmp_path).parent.mkdir()
+        _profile(tmp_path).write_text("Call me Jo.\n", encoding="utf-8")
+        read = await call(dispatcher, "profile.get")
+
+        written = await call(
+            dispatcher, "profile.set", text="Call me Jo. Mornings only.", hash=read.hash
+        )
+
+        assert _profile(tmp_path).read_text(encoding="utf-8") == "Call me Jo. Mornings only."
+        assert written.model_dump() == {
+            "text": "Call me Jo. Mornings only.",
+            "hash": _sha256("Call me Jo. Mornings only."),
+            "tokens": 7,
+        }
+        assert await call(dispatcher, "profile.get") == written
+        assert [path.name for path in _profile(tmp_path).parent.iterdir()] == ["profile.md"]
+
+    asyncio.run(scenario())
+
+
+def test_profile_set_over_a_missing_file_takes_the_empty_hash(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        await call(dispatcher, "profile.set", text="Call me Jo.", hash=_sha256(""))
+
+        assert _profile(tmp_path).read_text(encoding="utf-8") == "Call me Jo."
+
+    asyncio.run(scenario())
+
+
+def test_profile_set_with_a_stale_hash_leaves_the_file_alone(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        _profile(tmp_path).parent.mkdir()
+        _profile(tmp_path).write_text("Call me Jo.\n", encoding="utf-8")
+        read = await call(dispatcher, "profile.get")
+        _profile(tmp_path).write_text("Call me Jorge.\n", encoding="utf-8")
+
+        refused = await call(dispatcher, "profile.set", text="Mine.", hash=read.hash)
+
+        assert not _refused(refused, ErrorCode.STALE).retryable
+        assert _profile(tmp_path).read_text(encoding="utf-8") == "Call me Jorge.\n"
+        assert (await call(dispatcher, "config.history", limit=10)).changes == []
+
+    asyncio.run(scenario())
+
+
+def test_each_profile_write_records_one_config_change_by_the_app(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        await call(dispatcher, "profile.set", text="Call me Jo.\n", hash=_sha256(""))
+        await call(
+            dispatcher, "profile.set", text="Call me Jorge.\n", hash=_sha256("Call me Jo.\n")
+        )
+
+        history = await call(dispatcher, "config.history", file="memory/profile.md", limit=10)
+        assert [(change.file, change.actor) for change in history.changes] == [
+            ("memory/profile.md", "app"),
+            ("memory/profile.md", "app"),
+        ]
+        assert history.changes[0].diff == (
+            "--- a/memory/profile.md\n"
+            "+++ b/memory/profile.md\n"
+            "@@ -1 +1 @@\n"
+            "-Call me Jo.\n"
+            "+Call me Jorge.\n"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_profile_set_needs_the_admin_scope(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        read = await dispatcher.dispatch("profile.get", {}, {Scope.INSTANCE_READ})
+        refused = await dispatcher.dispatch(
+            "profile.set", {"text": "Mine.", "hash": _sha256("")}, {Scope.INSTANCE_READ}
+        )
+
+        assert not isinstance(read, ErrorEnvelope)
+        _refused(refused, ErrorCode.PERMISSION_DENIED)
+        assert not _profile(tmp_path).exists()
+
+    asyncio.run(scenario())
+
+
+def test_a_saved_profile_applies_at_the_next_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 28, tzinfo=UTC)))
+        runner = LangGraphRunner(instance)
+        before = runner.prepare_for_turn().system_prompt
+
+        await call(dispatcher, "profile.set", text="Call me Jo.", hash=_sha256(""))
+
+        assert "Call me Jo." not in before
+        assert "Call me Jo." in runner.prepare_for_turn().system_prompt
 
     asyncio.run(scenario())

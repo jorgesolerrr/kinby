@@ -28,6 +28,8 @@ from kinby.contracts import (
     PACKAGE_CONFIG_SET,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
+    PROFILE_GET,
+    PROFILE_SET,
     PROMPT_GET,
     PROMPT_SET,
     ROUTINE_DELETE,
@@ -438,6 +440,8 @@ def build_dispatcher(
         dispatcher.register(PACKAGE_CONFIG_GET, config.get_package_config)
         dispatcher.register(PACKAGE_CONFIG_SET, config.set_package_config)
         dispatcher.register(CONFIG_HISTORY, config.history)
+        dispatcher.register(PROFILE_GET, config.get_profile)
+        dispatcher.register(PROFILE_SET, config.set_profile)
         dispatcher.register(SKILL_LIST, config.list_skills)
         dispatcher.register(SKILL_READ, config.read_skill)
         dispatcher.register(SKILL_WRITE, config.write_skill)
