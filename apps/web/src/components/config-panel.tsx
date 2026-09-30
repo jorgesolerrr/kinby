@@ -40,6 +40,7 @@ import { lastChanged } from "@/lib/config-changes"
 import { OlderCore } from "@/lib/older-core"
 import { retried } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
+import { linkedRoutine } from "@/lib/selection"
 import {
   BoxIcon,
   CpuIcon,
@@ -73,6 +74,8 @@ interface Panel {
   onChanged: () => void
   /** Open another section by its label. */
   open: (label: string) => void
+  /** The routine a link opened the panel on, until another section is opened. */
+  routine: string | undefined
 }
 
 /** One section of the panel. A section without `render` is not built yet. */
@@ -86,6 +89,7 @@ interface Section {
 }
 
 const PACKAGE = "Package and version"
+const ROUTINES = "Routines"
 
 const GROUPS: { label: string; sections: Section[] }[] = [
   {
@@ -123,10 +127,12 @@ const GROUPS: { label: string; sections: Section[] }[] = [
     label: "Capabilities",
     sections: [
       {
-        label: "Routines",
+        label: ROUTINES,
         hint: "schedules, signals, next firing",
         icon: RepeatIcon,
-        render: ({ client, clock }) => <RoutinesSection client={client} clock={clock} />,
+        render: ({ client, clock, routine }) => (
+          <RoutinesSection client={client} clock={clock} opened={routine} />
+        ),
       },
       {
         label: "Skills",
@@ -222,7 +228,12 @@ export function ConfigPanel({
   instance: InstanceSummary
   onChanged: () => void
 }) {
-  const [selected, setSelected] = useState("Behavior prompt")
+  const [routine, setRoutine] = useState(linkedRoutine)
+  const [selected, setSelected] = useState(routine === undefined ? "Behavior prompt" : ROUTINES)
+  const open = (label: string) => {
+    setSelected(label)
+    setRoutine(undefined)
+  }
   const section = SECTIONS.find((candidate) => candidate.label === selected)
   const instanceId = instance.instance_id
   const read = useCallback(
@@ -241,7 +252,8 @@ export function ConfigPanel({
     status,
     statusChanged,
     onChanged,
-    open: setSelected,
+    open,
+    routine,
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -256,7 +268,7 @@ export function ConfigPanel({
             sections={group.sections}
             needs={needs}
             selected={selected}
-            onSelect={setSelected}
+            onSelect={open}
           />
         ))}
       </nav>
@@ -273,7 +285,7 @@ export function ConfigPanel({
           <p className="text-sm text-muted-foreground">{section?.hint}</p>
         </div>
         <Separator />
-        <OlderCore value={behind(instance) ? () => setSelected(PACKAGE) : undefined}>
+        <OlderCore value={behind(instance) ? () => open(PACKAGE) : undefined}>
           <Fragment key={selected}>{section?.render?.(panel)}</Fragment>
         </OlderCore>
       </main>

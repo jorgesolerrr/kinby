@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react"
 const SECTION = "instances"
 const THREADS = "threads"
 const CONFIG = "config"
+const ROUTINES = "routines"
 const MEMORY = "memory"
 const STATS = "stats"
 export const CREATE_PATH = "/new"
@@ -20,6 +21,11 @@ export function threadPath(instanceId: string, threadId: string): string {
 
 function configPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${CONFIG}`
+}
+
+/** One routine in an instance's config panel. */
+export function routinePath(instanceId: string, name: string): string {
+  return `${configPath(instanceId)}/${ROUTINES}/${encodeURIComponent(name)}`
 }
 
 function memoryPath(instanceId: string): string {
@@ -43,6 +49,11 @@ export function selectThread(instanceId: string, threadId: string): void {
 /** Open an instance's config panel the same way. */
 export function openConfig(instanceId: string): void {
   navigate(configPath(instanceId))
+}
+
+/** Open a routine in an instance's config panel the same way. */
+export function openRoutine(instanceId: string, name: string): void {
+  navigate(routinePath(instanceId, name))
 }
 
 /** Open an instance's memory page the same way. */
@@ -110,6 +121,14 @@ function selectedThreadId(): string | undefined {
 function configOpen(): boolean {
   const [, section, instanceId, config] = window.location.pathname.split("/")
   return section === SECTION && Boolean(instanceId) && config === CONFIG
+}
+
+/** The routine the URL opens in its instance's config panel, if it names one. */
+export function linkedRoutine(): string | undefined {
+  const [, section, instanceId, config, routines, name] = window.location.pathname.split("/")
+  return section === SECTION && instanceId && config === CONFIG && routines === ROUTINES && name
+    ? decodeURIComponent(name)
+    : undefined
 }
 
 function memoryOpen(): boolean {

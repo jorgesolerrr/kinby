@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -25,11 +26,13 @@ from kinby.contracts import (
     Navigation,
     NavigationMeans,
     Origin,
+    OriginUse,
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
     RunDelegated,
     Scope,
+    SourceRuns,
     StatsBucket,
     StatsBucketSize,
     StatsGetResult,
@@ -1099,6 +1102,25 @@ NO_SUBSCRIPTION_USE = [
 ]
 
 
+def _runs(claude: int = 0, chatgpt: int = 0) -> list[SourceRuns]:
+    return [
+        SourceRuns(usage_source=UsageSource.CLAUDE_SUBSCRIPTION, runs=claude),
+        SourceRuns(usage_source=UsageSource.CHATGPT_SUBSCRIPTION, runs=chatgpt),
+    ]
+
+
+def _chat(**counts: object) -> OriginUse:
+    return OriginUse.model_validate(
+        {"origin": "user", "routine": None, "turns": 0, "no_work": 0, "failed": 0}
+        | {"cost": None, "runs": _runs()}
+        | counts
+    )
+
+
+def _routine(name: str, **counts: object) -> OriginUse:
+    return _chat(origin="routine", routine=name, **counts)
+
+
 def test_stats_get_marks_missing_start_metadata_as_unknown(tmp_path: Path) -> None:
     thread_id = uuid4()
     turn_id = uuid4()
@@ -1226,6 +1248,7 @@ def test_stats_get_aggregates_closed_turns_by_utc_day(tmp_path: Path) -> None:
             good_ratings=0,
             bad_ratings=0,
             subscriptions=NO_SUBSCRIPTION_USE,
+            origins=[_chat(turns=1)],
         ),
         StatsBucket(
             start=tuesday.date(),
@@ -1245,6 +1268,7 @@ def test_stats_get_aggregates_closed_turns_by_utc_day(tmp_path: Path) -> None:
             good_ratings=0,
             bad_ratings=0,
             subscriptions=NO_SUBSCRIPTION_USE,
+            origins=[_chat(turns=1, failed=1)],
         ),
     ]
     assert result.total == StatsSummary(
@@ -1264,6 +1288,7 @@ def test_stats_get_aggregates_closed_turns_by_utc_day(tmp_path: Path) -> None:
         good_ratings=0,
         bad_ratings=0,
         subscriptions=NO_SUBSCRIPTION_USE,
+        origins=[_chat(turns=2, failed=1)],
     )
 
 
@@ -1676,6 +1701,164 @@ def test_stats_get_counts_subscription_runs_in_each_plan_window_whatever_the_ran
         ]
 
 
+def test_stats_get_splits_each_bucket_and_the_total_by_chat_and_routine(tmp_path: Path) -> None:
+    thread_id = uuid4()
+    day_one = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    day_two = datetime(2026, 9, 2, 10, tzinfo=UTC)
+    claude_run = DelegatedRun(
+        usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+        client="claude-code",
+        models=["claude-opus-5-5"],
+        input_tokens=100,
+        output_tokens=10,
+        duration_ms=1_000,
+        client_turns=1,
+        outcome=DelegatedRunOutcome.COMPLETED,
+    )
+    chatgpt_run = claude_run.model_copy(
+        update={"usage_source": UsageSource.CHATGPT_SUBSCRIPTION, "client": "codex"}
+    )
+    api_run = claude_run.model_copy(update={"usage_source": UsageSource.API, "client": "codex"})
+    digest = RoutineName("digest")
+    events = [
+        *_turn_events(
+            thread_id,
+            uuid4(),
+            day_one,
+            TurnStarted(message="Hi", model="openai:gpt-5", origin=UserOrigin()),
+            RunDelegated(run=claude_run),
+            TurnCompleted(input_tokens=11, output_tokens=7),
+        ),
+        *_turn_events(
+            thread_id,
+            uuid4(),
+            day_one,
+            TurnStarted(
+                message="Check",
+                model="openai:gpt-5",
+                origin=RoutineOrigin(name=RoutineName("inbox"), trigger=RoutineTrigger.SCHEDULED),
+            ),
+            TurnCompleted(input_tokens=0, output_tokens=0, outcome=CompletionOutcome.NO_WORK),
+        ),
+        *_turn_events(
+            thread_id,
+            uuid4(),
+            day_one,
+            TurnStarted(
+                message="Sum up",
+                model="unpriced:model",
+                origin=RoutineOrigin(name=digest, trigger=RoutineTrigger.MANUAL),
+            ),
+            RunDelegated(run=chatgpt_run),
+            RunDelegated(run=api_run),
+            TurnFailed(code="INTERNAL", message="failed"),
+        ),
+        *_turn_events(thread_id, uuid4(), day_two, TurnCompleted(input_tokens=11, output_tokens=7)),
+        *_turn_events(
+            thread_id,
+            uuid4(),
+            day_two,
+            TurnStarted(
+                message="Sum up",
+                model="openai:gpt-5",
+                origin=RoutineOrigin(name=digest, trigger=RoutineTrigger.SCHEDULED),
+            ),
+            RunDelegated(run=claude_run),
+            TurnCompleted(input_tokens=11, output_tokens=7),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get", {}, {Scope.INSTANCE_READ}
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert [bucket.origins for bucket in result.buckets] == [
+        [
+            _chat(turns=1, cost=0.00008375, runs=_runs(claude=1)),
+            _routine("digest", turns=1, failed=1, cost=None, runs=_runs(chatgpt=1)),
+            _routine("inbox", no_work=1, cost=0),
+        ],
+        [
+            _chat(turns=1, cost=None),
+            _routine("digest", turns=1, cost=0.00008375, runs=_runs(claude=1)),
+        ],
+    ]
+    assert result.total.origins == [
+        _chat(turns=2, cost=0.00008375, runs=_runs(claude=1)),
+        _routine("digest", turns=2, failed=1, cost=0.00008375, runs=_runs(claude=1, chatgpt=1)),
+        _routine("inbox", no_work=1, cost=0),
+    ]
+    assert (result.total.completed, result.total.failed) == (4, 1)
+
+
+def test_stats_get_keeps_a_renamed_routine_in_two_rows_and_always_totals_chat(
+    tmp_path: Path,
+) -> None:
+    thread_id = uuid4()
+    at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        event
+        for name in ("morning", "morning-brief")
+        for event in _turn_events(
+            thread_id,
+            uuid4(),
+            at,
+            TurnStarted(
+                message="Brief me",
+                model="openai:gpt-5",
+                origin=RoutineOrigin(name=RoutineName(name), trigger=RoutineTrigger.SCHEDULED),
+            ),
+            TurnCompleted(input_tokens=11, output_tokens=7),
+        )
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get", {}, {Scope.INSTANCE_READ}
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    renamed = [
+        _routine("morning", turns=1, cost=0.00008375),
+        _routine("morning-brief", turns=1, cost=0.00008375),
+    ]
+    assert [bucket.origins for bucket in result.buckets] == [renamed]
+    assert result.total.origins == [_chat(cost=None), *renamed]
+
+
+def test_stats_get_reads_a_log_from_before_origins_with_every_turn_under_chat(
+    tmp_path: Path,
+) -> None:
+    thread_id = uuid4()
+    at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    lines = []
+    for turn_id in (uuid4(), uuid4()):
+        for event in _turn_events(
+            thread_id,
+            turn_id,
+            at,
+            TurnStarted(message="Hi", model="openai:gpt-5"),
+            TurnCompleted(input_tokens=11, output_tokens=7),
+        ):
+            stored = event.model_dump(mode="json")
+            stored["payload"].pop("origin", None)
+            lines.append(json.dumps(stored))
+    (tmp_path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=EventLog(tmp_path)).dispatch(
+            "stats.get", {}, {Scope.INSTANCE_READ}
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.total.origins == [_chat(turns=2, cost=0.0001675)]
+
+
 def test_stats_get_requires_instance_read_before_validating_payload(tmp_path: Path) -> None:
     result = asyncio.run(
         build_dispatcher(tmp_path).dispatch(
@@ -1814,6 +1997,8 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         tokens_before_first_write=0,
     )
     assert report.buckets[0].start == closed.timestamp.date()
+    assert report.buckets[0].origins == [_chat(turns=1, cost=0.00008375)]
+    assert report.total.origins == [_chat(turns=1, cost=0.00008375)]
     assert report.buckets[0].navigation == NavigationMeans(
         turns=1,
         read_calls=0.0,

@@ -102,6 +102,8 @@ class TurnMetricsResult:
     records: list[TurnMetrics]
     unpriced_models_by_turn: Mapping[TurnKey, frozenset[UnpricedModel]]
     warnings: list[ModelCallMismatch]
+    #: The turns that completed with no work.
+    no_work: frozenset[TurnKey]
 
 
 def turn_metrics(
@@ -273,6 +275,7 @@ def turn_metrics(
         records,
         {key: frozenset(models) for key, models in unpriced_models_by_turn.items()},
         mismatches,
+        frozenset(no_work),
     )
 
 

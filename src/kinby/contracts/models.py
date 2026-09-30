@@ -1346,6 +1346,31 @@ class SubscriptionUse(TokenTotals):
     duration_ms: int = 0
 
 
+class SourceRuns(ContractModel):
+    """The delegated runs one subscription usage source made."""
+
+    usage_source: UsageSource
+    runs: int
+
+
+class OriginUse(ContractModel):
+    """The turns chat or one routine started, and what they cost and ran.
+
+    A routine is keyed by the name its turns recorded, so a renamed routine has two rows.
+    """
+
+    origin: Literal["user", "routine"]
+    #: None for chat.
+    routine: RoutineName | None
+    #: Closed turns other than no-work completions.
+    turns: int
+    no_work: int
+    failed: int
+    #: None only when no turn in the row was priced.
+    cost: float | None
+    runs: list[SourceRuns]
+
+
 class StatsSummary(TokenTotals):
     completed: int
     failed: int
@@ -1364,6 +1389,8 @@ class StatsSummary(TokenTotals):
     bad_ratings: int
     navigation: NavigationMeans = Field(default_factory=NavigationMeans)
     subscriptions: list[SubscriptionUse]
+    #: Chat first, then each routine by name.
+    origins: list[OriginUse]
 
 
 class StatsBucket(StatsSummary):

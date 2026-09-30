@@ -1174,6 +1174,7 @@ export interface StatsBucket {
   mean_duration_seconds: number | null;
   memory_calls: MemoryCallCounts;
   navigation?: NavigationMeans;
+  origins: OriginUse[];
   output_tokens: number;
   recap_input_tokens: number;
   recap_output_tokens: number;
@@ -1201,6 +1202,27 @@ export interface NavigationMeans {
   repeat_opens?: number | null;
   tokens_before_first_write?: number | null;
   turns?: number;
+}
+/**
+ * The turns chat or one routine started, and what they cost and ran.
+ *
+ * A routine is keyed by the name its turns recorded, so a renamed routine has two rows.
+ */
+export interface OriginUse {
+  cost: number | null;
+  failed: number;
+  no_work: number;
+  origin: "user" | "routine";
+  routine: string | null;
+  runs: SourceRuns[];
+  turns: number;
+}
+/**
+ * The delegated runs one subscription usage source made.
+ */
+export interface SourceRuns {
+  runs: number;
+  usage_source: UsageSource;
 }
 /**
  * The delegated runs one subscription usage source paid for, counted and never priced.
@@ -1327,6 +1349,7 @@ export interface StatsSummary {
   mean_duration_seconds: number | null;
   memory_calls: MemoryCallCounts;
   navigation?: NavigationMeans;
+  origins: OriginUse[];
   output_tokens: number;
   recap_input_tokens: number;
   recap_output_tokens: number;

@@ -34,6 +34,7 @@ import { lastChanged } from "@/lib/config-changes"
 import { retried } from "@/lib/operation"
 import {
   deleteRoutine,
+  failuresInARow,
   lastFiring,
   type ListedRoutine,
   listRoutines,
@@ -46,14 +47,22 @@ import { ArrowLeftIcon, PencilIcon, PlayIcon, PlusIcon, Trash2Icon } from "lucid
 
 type Caller = Pick<InstanceClient, "call">
 
-/** The instance's routines, each with its switch. */
-export function RoutinesSection({ client, clock }: { client: Caller; clock: Clock }) {
+/** The instance's routines, each with its switch, or the editor of the one `opened` names. */
+export function RoutinesSection({
+  client,
+  clock,
+  opened,
+}: {
+  client: Caller
+  clock: Clock
+  opened?: string
+}) {
   const pacing = usePace(clock)
   const [routines, setRoutines] = useState<ListedRoutine[]>()
   const [failure, setFailure] = useState<unknown>()
   const [started, setStarted] = useState<string>()
   // The routine open in the editor, null for a new one, or undefined for the list.
-  const [editing, setEditing] = useState<string | null>()
+  const [editing, setEditing] = useState<string | null | undefined>(opened)
 
   const load = useCallback(
     () =>
@@ -153,11 +162,7 @@ function RoutineItem({
         </div>
         {(failures > 0 || summary.pending > 0) && (
           <div className="flex flex-wrap gap-2">
-            {failures > 0 && (
-              <Badge variant="destructive">
-                {failures} {failures === 1 ? "failure" : "failures"} in a row
-              </Badge>
-            )}
+            {failures > 0 && <Badge variant="destructive">{failuresInARow(failures)}</Badge>}
             {summary.pending > 0 && (
               <Badge variant="secondary">
                 {summary.pending} pending {summary.pending === 1 ? "delivery" : "deliveries"}

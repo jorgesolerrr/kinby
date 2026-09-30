@@ -1,4 +1,5 @@
 import type {
+  OriginUse,
   StatsBucket,
   StatsBucketSize,
   StatsGetCommand,
@@ -63,15 +64,28 @@ function bucketStart(closedAt: string, by: StatsBucketSize): string {
   return new Date(day - monday).toISOString().slice(0, 10)
 }
 
-/** The turns that closed in the bucket starting on `start`, most expensive first and unpriced last. */
-export function bucketTurns(
+/** What the drill-down lists: the turns of a clicked bar's bucket, of a clicked origin row, or both. */
+export interface Drill {
+  /** The start of the bucket whose bar was clicked. */
+  bucket?: string
+  origin?: OriginUse
+}
+
+/** The turns a drill picks, most expensive first and unpriced last. */
+export function drilledTurns(
   records: TurnMetrics[],
-  start: string,
+  { bucket, origin }: Drill,
   by: StatsBucketSize,
 ): TurnMetrics[] {
   return records
-    .filter((record) => bucketStart(record.closed_at, by) === start)
+    .filter((record) => bucket === undefined || bucketStart(record.closed_at, by) === bucket)
+    .filter((record) => origin === undefined || originRoutine(record.origin) === origin.routine)
     .sort((a, b) => (b.cost ?? -1) - (a.cost ?? -1))
+}
+
+/** The routine a turn counts under in stats.get's origins, or null for chat. */
+function originRoutine(origin: TurnMetrics["origin"]): string | null {
+  return origin?.kind === "routine" ? origin.name : null
 }
 
 /** One bucket's point on the navigation trend: null when no turn in it wrote. */
@@ -118,4 +132,9 @@ export function bucketLabel(start: string, by: StatsBucketSize): string {
 /** Who started a turn. A turn whose start the log lacks counts as chat, as stats.get counts it. */
 export function originLabel(origin: TurnMetrics["origin"]): string {
   return origin?.kind === "routine" ? `${origin.name} · ${origin.trigger}` : "Chat"
+}
+
+/** An origin row as the Origin tab names it: "Chat", or the routine's name. */
+export function originName({ routine }: OriginUse): string {
+  return routine ?? "Chat"
 }

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Set
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
@@ -13,10 +13,15 @@ from kinby.contracts import (
     Event,
     MemoryCallCounts,
     NavigationMeans,
+    Origin,
+    OriginUse,
     PlanLimit,
     PlanUse,
     ReportedRun,
+    RoutineName,
+    RoutineOrigin,
     RunDelegated,
+    SourceRuns,
     StatsBucket,
     StatsBucketSize,
     StatsSummary,
@@ -27,6 +32,7 @@ from kinby.contracts import (
     TurnVerdict,
     UsageSource,
 )
+from kinby.core.turn_metrics import TurnKey
 
 #: Every usage source that is counted, never priced, in the order results list them.
 SUBSCRIPTION_SOURCES = tuple(source for source in UsageSource if source is not UsageSource.API)
@@ -36,6 +42,23 @@ PLAN_WINDOWS = tuple(
     for source in SUBSCRIPTION_SOURCES
     for length in (timedelta(hours=5), timedelta(days=7))
 )
+
+
+@dataclass(frozen=True)
+class TurnRun:
+    """A delegated run and the origin of the turn it ran in."""
+
+    origin: Origin | None
+    reported: ReportedRun
+
+
+@dataclass
+class _OriginTotals:
+    turns: int = 0
+    no_work: int = 0
+    failed: int = 0
+    cost: float | None = None
+    runs: Counter[UsageSource] = field(default_factory=Counter)
 
 
 @dataclass
@@ -66,8 +89,17 @@ class _BucketTotals:
     tokens_before_first_write: int = 0
     navigation_repeat_opens: int = 0
     delegated_runs: list[DelegatedRun] = field(default_factory=list)
+    #: By the routine that started the turns, None for chat.
+    origins: dict[RoutineName | None, _OriginTotals] = field(default_factory=dict)
 
-    def add(self, record: TurnMetrics) -> None:
+    def add(self, record: TurnMetrics, *, no_work: bool) -> None:
+        origin = self._origin_totals(record.origin)
+        if no_work:
+            origin.no_work += 1
+        else:
+            origin.turns += 1
+        origin.failed += record.closing_kind is TurnClosingKind.FAILED
+        origin.cost = _added_cost(origin.cost, record.cost)
         match record.closing_kind:
             case TurnClosingKind.COMPLETED:
                 self.completed += 1
@@ -81,8 +113,7 @@ class _BucketTotals:
         self.cache_creation_tokens += record.cache_creation_tokens
         self.recap_input_tokens += record.recap_input_tokens
         self.recap_output_tokens += record.recap_output_tokens
-        if record.cost is not None:
-            self.cost = record.cost if self.cost is None else self.cost + record.cost
+        self.cost = _added_cost(self.cost, record.cost)
         self.tool_calls.update(record.tool_calls)
         self.memory_calls.update(record.memory_calls.model_dump())
         self.turns_without_memory += not record.memory_consulted
@@ -103,30 +134,43 @@ class _BucketTotals:
             self.tokens_before_first_write += record.navigation.tokens_before_first_write
             self.navigation_repeat_opens += record.navigation.repeat_opens
 
+    def add_run(self, run: TurnRun) -> None:
+        self.delegated_runs.append(run.reported.run)
+        self._origin_totals(run.origin).runs[run.reported.run.usage_source] += 1
+
+    def _origin_totals(self, origin: Origin | None) -> _OriginTotals:
+        return self.origins.setdefault(_routine(origin), _OriginTotals())
+
 
 def stats_buckets(
     records: Iterable[TurnMetrics],
-    runs: Iterable[ReportedRun],
+    runs: Iterable[TurnRun],
     by: StatsBucketSize,
+    no_work: Set[TurnKey],
 ) -> list[StatsBucket]:
     """Group turns by their UTC close and subscription runs by their own timestamp."""
     totals_by_start: dict[date, _BucketTotals] = {}
     for record in records:
         start = _bucket_start(record.closed_at, by)
-        totals_by_start.setdefault(start, _BucketTotals()).add(record)
-    for reported in _subscription_runs(runs):
-        start = _bucket_start(reported.timestamp, by)
-        totals_by_start.setdefault(start, _BucketTotals()).delegated_runs.append(reported.run)
+        totals_by_start.setdefault(start, _BucketTotals()).add(
+            record, no_work=TurnKey(record.thread_id, record.turn_id) in no_work
+        )
+    for run in _subscription_runs(runs):
+        start = _bucket_start(run.reported.timestamp, by)
+        totals_by_start.setdefault(start, _BucketTotals()).add_run(run)
 
     return [_stats_bucket(start, totals_by_start[start]) for start in sorted(totals_by_start)]
 
 
-def stats_summary(records: Iterable[TurnMetrics], runs: Iterable[ReportedRun]) -> StatsSummary:
-    """Aggregate turns and subscription runs without a date boundary."""
-    totals = _BucketTotals()
+def stats_summary(
+    records: Iterable[TurnMetrics], runs: Iterable[TurnRun], no_work: Set[TurnKey]
+) -> StatsSummary:
+    """Aggregate turns and subscription runs without a date boundary. Chat always has a row."""
+    totals = _BucketTotals(origins={None: _OriginTotals()})
     for record in records:
-        totals.add(record)
-    totals.delegated_runs.extend(reported.run for reported in _subscription_runs(runs))
+        totals.add(record, no_work=TurnKey(record.thread_id, record.turn_id) in no_work)
+    for run in _subscription_runs(runs):
+        totals.add_run(run)
     return _stats_summary(totals)
 
 
@@ -169,8 +213,20 @@ def active_limits(events: Iterable[Event], now: datetime) -> list[PlanLimit]:
     return [latest[source] for source in SUBSCRIPTION_SOURCES if source in latest]
 
 
-def _subscription_runs(runs: Iterable[ReportedRun]) -> Iterable[ReportedRun]:
-    return (reported for reported in runs if reported.run.usage_source in SUBSCRIPTION_SOURCES)
+def _subscription_runs(runs: Iterable[TurnRun]) -> Iterable[TurnRun]:
+    return (run for run in runs if run.reported.run.usage_source in SUBSCRIPTION_SOURCES)
+
+
+def _routine(origin: Origin | None) -> RoutineName | None:
+    """The routine that started a turn, or None for chat. A turn without an origin is chat."""
+    return origin.name if isinstance(origin, RoutineOrigin) else None
+
+
+def _added_cost(total: float | None, cost: float | None) -> float | None:
+    """Add a turn's cost to a total that stays None until a turn was priced."""
+    if cost is None:
+        return total
+    return cost if total is None else total + cost
 
 
 def _bucket_start(timestamp: datetime, by: StatsBucketSize) -> date:
@@ -237,5 +293,28 @@ def _stats_summary(totals: _BucketTotals) -> StatsSummary:
         navigation=_navigation_means(totals),
         subscriptions=[
             _subscription_use(source, totals.delegated_runs) for source in SUBSCRIPTION_SOURCES
+        ],
+        origins=[
+            _origin_use(routine, totals.origins[routine])
+            for routine in sorted(totals.origins, key=_chat_first)
+        ],
+    )
+
+
+def _chat_first(routine: RoutineName | None) -> tuple[bool, str]:
+    return routine is not None, routine or ""
+
+
+def _origin_use(routine: RoutineName | None, totals: _OriginTotals) -> OriginUse:
+    return OriginUse(
+        origin="user" if routine is None else "routine",
+        routine=routine,
+        turns=totals.turns,
+        no_work=totals.no_work,
+        failed=totals.failed,
+        cost=totals.cost,
+        runs=[
+            SourceRuns(usage_source=source, runs=totals.runs[source])
+            for source in SUBSCRIPTION_SOURCES
         ],
     )

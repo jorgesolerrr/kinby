@@ -350,6 +350,21 @@ describe("ConfigPanel", () => {
     expect(await screen.findByRole("heading", { name: "Permissions" })).toBeDefined()
   })
 
+  it("opens the routine a link names in the routines section's editor", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1/config/routines/inbox")
+    try {
+      openPanel({
+        "routine.list": () => ({ routines: [], warnings: [] }),
+        "routine.read": ({ name }) => ({ name, content: "Check the inbox.\n", hash: "hash-1" }),
+      })
+
+      expect(await screen.findByRole("heading", { name: "Routines" })).toBeDefined()
+      expect(await screen.findByDisplayValue("Check the inbox.")).toBeDefined()
+    } finally {
+      window.history.replaceState(null, "", "/")
+    }
+  })
+
   it("opens the routines section", async () => {
     const { user } = openPanel({ "routine.list": () => ({ routines: [], warnings: [] }) })
 

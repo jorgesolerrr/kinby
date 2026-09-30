@@ -79,5 +79,10 @@ export function lastFiring({ last_run }: RoutineSummary): string {
   return `Last firing ${when(last_run.started_at)}, ${OUTCOMES[last_run.outcome]}`
 }
 
+/** The failures a routine had since it last fired without one. */
+export function failuresInARow(failures: number): string {
+  return `${failures} ${failures === 1 ? "failure" : "failures"} in a row`
+}
+
 /** The template a new routine starts from: the frontmatter keys a routine needs first. */
 export const NEW_ROUTINE = "---\ndescription: \nschedule: 0 9 * * *\n---\n"
