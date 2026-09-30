@@ -12,7 +12,7 @@ import type {
   ItemFrame,
   PermissionMode,
   PlanLimit,
-  PlanWindow,
+  PlanUse,
   ResultFrame,
   RoutineOrigin,
   RunDelegated,
@@ -23,6 +23,7 @@ import type {
   SubscriptionUse,
   ThreadStatus,
   ThreadSummary,
+  UsageSource,
   UserOrigin,
 } from "./index"
 
@@ -85,10 +86,15 @@ test("stats.get splits every bucket and its total by subscription source", () =>
   expectTypeOf<Stats["total"]["subscriptions"]>().toEqualTypeOf<SubscriptionUse[]>()
 })
 
-test("stats.get names each subscription source's plan windows and active limits", () => {
+test("stats.get counts each subscription source's runs per plan window, and its active limits", () => {
   type Stats = Contract["methods"]["stats.get"]["result"]
 
-  expectTypeOf<Stats["plan_windows"]>().toEqualTypeOf<PlanWindow[]>()
+  expectTypeOf<Stats["plan_use"]>().toEqualTypeOf<PlanUse[]>()
+  expectTypeOf<PlanUse>().toEqualTypeOf<{
+    usage_source: UsageSource
+    duration_seconds: number
+    runs: number
+  }>()
   expectTypeOf<Stats["limits"]>().toEqualTypeOf<PlanLimit[]>()
 })
 
@@ -107,6 +113,7 @@ test("stats.summary takes stats.get's range and names each instance it counted o
   expectTypeOf<Summary["result"]["buckets"]>().toEqualTypeOf<Record<string, StatsBucket[]>>()
   expectTypeOf<Summary["result"]["api"]>().toEqualTypeOf<ApiUse>()
   expectTypeOf<Summary["result"]["subscriptions"]>().toEqualTypeOf<SubscriptionUse[]>()
+  expectTypeOf<Summary["result"]["plan_use"]>().toEqualTypeOf<PlanUse[]>()
   expectTypeOf<Summary["result"]["limits"]>().toEqualTypeOf<PlanLimit[]>()
   expectTypeOf<Summary["result"]["skipped"]>().toEqualTypeOf<string[]>()
   expectTypeOf<Summary["result"]["unreachable"]>().toEqualTypeOf<string[]>()

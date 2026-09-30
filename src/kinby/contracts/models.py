@@ -1381,11 +1381,12 @@ class StatsGetCommand(ContractModel):
     by: StatsBucketSize = StatsBucketSize.DAY
 
 
-class PlanWindow(ContractModel):
-    """A rolling period over which a subscription usage source limits use."""
+class PlanUse(ContractModel):
+    """The runs a subscription usage source made in one plan window, up to now."""
 
     usage_source: UsageSource
     duration_seconds: int
+    runs: int
 
 
 class PlanLimit(ContractModel):
@@ -1399,7 +1400,8 @@ class StatsGetResult(ContractModel):
     records: list[TurnMetrics]
     buckets: list[StatsBucket]
     total: StatsSummary
-    plan_windows: list[PlanWindow]
+    #: Each subscription's runs in its 5-hour and 7-day windows, whatever the range.
+    plan_use: list[PlanUse]
     limits: list[PlanLimit]
     unpriced_models: list[str]
     warnings: list[ModelCallMismatch] = Field(default_factory=list)
@@ -1421,6 +1423,8 @@ class StatsSummaryResult(ContractModel):
     buckets: dict[UUID, list[StatsBucket]]
     api: ApiUse
     subscriptions: list[SubscriptionUse]
+    #: Each subscription's runs per plan window, summed across instances.
+    plan_use: list[PlanUse]
     #: The latest reset per subscription usage source, across instances.
     limits: list[PlanLimit]
     #: Instances not running, so not asked.

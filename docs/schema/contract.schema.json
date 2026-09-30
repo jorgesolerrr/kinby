@@ -3213,11 +3213,14 @@
       "title": "PlanLimit",
       "type": "object"
     },
-    "PlanWindow": {
+    "PlanUse": {
       "additionalProperties": false,
-      "description": "A rolling period over which a subscription usage source limits use.",
+      "description": "The runs a subscription usage source made in one plan window, up to now.",
       "properties": {
         "duration_seconds": {
+          "type": "integer"
+        },
+        "runs": {
           "type": "integer"
         },
         "usage_source": {
@@ -3226,9 +3229,10 @@
       },
       "required": [
         "usage_source",
-        "duration_seconds"
+        "duration_seconds",
+        "runs"
       ],
-      "title": "PlanWindow",
+      "title": "PlanUse",
       "type": "object"
     },
     "PriceSource": {
@@ -4481,9 +4485,9 @@
           },
           "type": "array"
         },
-        "plan_windows": {
+        "plan_use": {
           "items": {
-            "$ref": "#/$defs/PlanWindow"
+            "$ref": "#/$defs/PlanUse"
           },
           "type": "array"
         },
@@ -4513,7 +4517,7 @@
         "records",
         "buckets",
         "total",
-        "plan_windows",
+        "plan_use",
         "limits",
         "unpriced_models"
       ],
@@ -4655,6 +4659,12 @@
           },
           "type": "array"
         },
+        "plan_use": {
+          "items": {
+            "$ref": "#/$defs/PlanUse"
+          },
+          "type": "array"
+        },
         "skipped": {
           "items": {
             "format": "uuid",
@@ -4680,6 +4690,7 @@
         "buckets",
         "api",
         "subscriptions",
+        "plan_use",
         "limits",
         "skipped",
         "unreachable"

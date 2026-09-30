@@ -11,6 +11,7 @@ import { useEffect, useId, useState } from "react"
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 
 import { Failure } from "@/components/config-alerts"
+import { PlansStrip } from "@/components/plans-strip"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -130,6 +131,7 @@ export function StatsPage({
           </Button>
         </div>
       </div>
+      {stats !== undefined && <PlansStrip planUse={stats.plan_use} limits={stats.limits} />}
       {failure !== undefined && <Failure error={failure} />}
       <Tabs defaultValue="overview">
         <TabsList variant="line">

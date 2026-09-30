@@ -9,12 +9,13 @@ from uuid import UUID
 from kinby.contracts import (
     ApiUse,
     PlanLimit,
+    PlanUse,
     StatsGetResult,
     StatsSummaryResult,
     SubscriptionUse,
     UsageSource,
 )
-from kinby.core.stats import SUBSCRIPTION_SOURCES
+from kinby.core.stats import PLAN_WINDOWS, SUBSCRIPTION_SOURCES
 
 
 class Uncounted(StrEnum):
@@ -46,6 +47,7 @@ def summed_usage(answers: Mapping[UUID, StatsGetResult | Uncounted]) -> StatsSum
             _summed_use(source, [use for use in uses if use.usage_source is source])
             for source in SUBSCRIPTION_SOURCES
         ],
+        plan_use=_summed_plan_use([use for answer in counted.values() for use in answer.plan_use]),
         limits=_latest_resets(limit for answer in counted.values() for limit in answer.limits),
         skipped=[
             instance_id for instance_id, answer in answers.items() if answer is Uncounted.SKIPPED
@@ -74,6 +76,23 @@ def _summed_use(source: UsageSource, uses: list[SubscriptionUse]) -> Subscriptio
         cache_creation_tokens=sum(use.cache_creation_tokens for use in uses),
         duration_ms=sum(use.duration_ms for use in uses),
     )
+
+
+def _summed_plan_use(uses: list[PlanUse]) -> list[PlanUse]:
+    """One entry per source and window, its runs summed across instances."""
+    windows = [(source, int(length.total_seconds())) for source, length in PLAN_WINDOWS]
+    return [
+        PlanUse(
+            usage_source=source,
+            duration_seconds=seconds,
+            runs=sum(
+                use.runs
+                for use in uses
+                if (use.usage_source, use.duration_seconds) == (source, seconds)
+            ),
+        )
+        for source, seconds in windows
+    ]
 
 
 def _latest_resets(limits: Iterable[PlanLimit]) -> list[PlanLimit]:
