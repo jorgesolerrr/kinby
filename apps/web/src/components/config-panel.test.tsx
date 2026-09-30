@@ -133,6 +133,18 @@ const marked = (item: HTMLElement) =>
   !item.classList.contains("flex") && !item.classList.contains("list-none")
 
 describe("ConfigPanel", () => {
+  it("left-aligns every line of a section row, since a button centers its text", () => {
+    openPanel({})
+
+    const sections = screen.getByRole("navigation", { name: "Config sections" })
+    // jsdom applies no Tailwind, so the class stands in for the computed alignment.
+    expect(
+      within(sections)
+        .getAllByRole("button")
+        .every((button) => button.classList.contains("text-left")),
+    ).toBe(true)
+  })
+
   it("lists every section in its group, and the ones not built yet as unavailable", async () => {
     openPanel({})
 

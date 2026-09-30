@@ -196,6 +196,18 @@ describe("the memory page", () => {
     expect(pane().getByRole("button", { name: "memory" })).toBeDefined()
   })
 
+  it("left-aligns every line of a node row, since a button centers its text", async () => {
+    openPage()
+
+    const nodes = await screen.findByRole("list", { name: "Nodes" })
+    // jsdom applies no Tailwind, so the class stands in for the computed alignment.
+    expect(
+      within(nodes)
+        .getAllByRole("button")
+        .map((button) => button.classList.contains("text-left")),
+    ).toEqual([true, true, true])
+  })
+
   it("narrows the list by search, kind, and date bounds", async () => {
     const { caller, user } = openPage()
     await nodeButton("Picked markdown")

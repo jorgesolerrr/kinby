@@ -352,6 +352,7 @@ function NodeList({
             <Item
               size="sm"
               variant={node.node === selected ? "muted" : "default"}
+              className="text-left"
               render={
                 <button
                   type="button"
