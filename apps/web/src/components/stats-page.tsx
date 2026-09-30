@@ -8,15 +8,17 @@ import type {
   StatsSummary,
   TurnMetrics,
 } from "@kinby/contract"
-import { type ReactNode, useEffect, useId, useState } from "react"
+import { type ReactNode, useCallback, useId, useState } from "react"
 import { Bar, BarChart } from "recharts"
 
 import { BucketAxes } from "@/components/bucket-axes"
 import { Failure } from "@/components/config-alerts"
 import { PlansStrip } from "@/components/plans-strip"
+import { RangeHeader } from "@/components/range-header"
 import { Origins } from "@/components/stats-origin"
 import { Quality } from "@/components/stats-quality"
-import { Spend } from "@/components/stats-spend"
+import { Spend, UnpricedNotice } from "@/components/stats-spend"
+import { Tile } from "@/components/tile"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -39,9 +41,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { usePace } from "@/hooks/use-pace"
-import { retried } from "@/lib/operation"
+import { useRead } from "@/hooks/use-read"
 import { selectThread, threadPath } from "@/lib/selection"
 import {
   bucketLabel,
@@ -52,13 +52,12 @@ import {
   money,
   originLabel,
   originName,
-  RANGES,
   type Range,
   SOURCE_LABELS,
   statsCommand,
   turnCount,
 } from "@/lib/stats"
-import { RefreshCwIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+import { TriangleAlertIcon, XIcon } from "lucide-react"
 
 type Caller = Pick<InstanceClient, "call">
 
@@ -75,11 +74,12 @@ export function StatsPage({
   clock: Clock
   instanceId: string
 }) {
-  const pacing = usePace(clock)
   const [range, setRange] = useState<Range>(7)
-  const [reads, setReads] = useState(0)
-  const [stats, setStats] = useState<StatsGetResult>()
-  const [failure, setFailure] = useState<unknown>()
+  const read = useCallback(
+    () => client.call("stats.get", statsCommand(range, new Date())),
+    [client, range],
+  )
+  const { value: stats, failure, readAgain } = useRead(read, clock)
   const [drill, setDrill] = useState<Drill>({})
   const by = bucketSize(range)
   // A second click on the picked row drops the filter.
@@ -98,62 +98,18 @@ export function StatsPage({
       />
     )
 
-  useEffect(() => {
-    let current = true
-    retried(() => client.call("stats.get", statsCommand(range, new Date())), pacing).then(
-      (read) => {
-        if (!current) return
-        setStats(read)
-        setFailure(undefined)
-      },
-      (error: unknown) => {
-        if (current) setFailure(error)
-      },
-    )
-    return () => {
-      current = false
-    }
-  }, [client, pacing, range, reads])
-  // Turns close while the user is elsewhere, and nothing tells the page.
-  useEffect(() => {
-    const readAgain = () => setReads((count) => count + 1)
-    window.addEventListener("focus", readAgain)
-    return () => window.removeEventListener("focus", readAgain)
-  }, [])
-
   return (
     <div className="flex flex-col gap-4 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold">Stats</h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <ToggleGroup
-            aria-label="Range"
-            size="sm"
-            variant="outline"
-            value={[String(range)]}
-            onValueChange={([picked]) => {
-              const next = RANGES.find((days) => String(days) === picked)
-              if (next === undefined) return
-              setRange(next)
-              // The range's buckets start on other days. An origin can have turns in any range.
-              setDrill(({ origin }) => ({ origin }))
-            }}
-          >
-            {RANGES.map((days) => (
-              <ToggleGroupItem key={days} value={String(days)}>
-                {days} days
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <span className="text-xs text-muted-foreground">
-            {by === "week" ? "Weekly" : "Daily"} buckets, UTC
-          </span>
-          <Button size="sm" variant="ghost" onClick={() => setReads(reads + 1)}>
-            <RefreshCwIcon data-icon="inline-start" />
-            Refresh
-          </Button>
-        </div>
-      </div>
+      <RangeHeader
+        title="Stats"
+        range={range}
+        onRange={(next) => {
+          setRange(next)
+          // The range's buckets start on other days. An origin can have turns in any range.
+          setDrill(({ origin }) => ({ origin }))
+        }}
+        onRefresh={readAgain}
+      />
       {stats !== undefined && <PlansStrip planUse={stats.plan_use} limits={stats.limits} />}
       {failure !== undefined && <Failure error={failure} />}
       <Tabs defaultValue="overview">
@@ -243,15 +199,7 @@ function drillTitle({ bucket, origin }: Drill, by: StatsBucketSize): string {
 function Notices({ unpricedModels, mismatches }: { unpricedModels: string[]; mismatches: number }) {
   return (
     <>
-      {unpricedModels.length > 0 && (
-        <Alert>
-          <TriangleAlertIcon />
-          <AlertTitle>No price for {new Intl.ListFormat("en").format(unpricedModels)}</AlertTitle>
-          <AlertDescription>
-            Their turns add no API cost, so the cost shown is too low.
-          </AlertDescription>
-        </Alert>
-      )}
+      <UnpricedNotice models={unpricedModels} />
       {mismatches > 0 && (
         <Alert>
           <TriangleAlertIcon />
@@ -294,22 +242,6 @@ function Tiles({ total }: { total: StatsSummary }) {
         note={rated ? `${total.bad_ratings} bad` : "No ratings"}
       />
     </div>
-  )
-}
-
-function Tile({ title, value, note }: { title: string; value: string; note: string }) {
-  return (
-    <section aria-label={title}>
-      <Card size="sm">
-        <CardHeader>
-          <CardDescription>{title}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="text-2xl font-semibold tabular-nums">{value}</p>
-          <p className="text-xs text-muted-foreground">{note}</p>
-        </CardContent>
-      </Card>
-    </section>
   )
 }
 

@@ -29,7 +29,6 @@
       "rules": {
         "shadcn/no-restyle": "off",
         "shadcn/no-arbitrary-values": "off",
-        "shadcn/no-inline-styles": "off",
         "typescript/restrict-template-expressions": "off",
         "react/only-export-components": "off",
         "shadcn/require-static-classes": "off",

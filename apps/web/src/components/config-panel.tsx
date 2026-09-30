@@ -40,7 +40,7 @@ import { lastChanged } from "@/lib/config-changes"
 import { OlderCore } from "@/lib/older-core"
 import { retried } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
-import { linkedRoutine } from "@/lib/selection"
+import { leaveRoutine, linkedRoutine } from "@/lib/selection"
 import {
   BoxIcon,
   CpuIcon,
@@ -230,12 +230,14 @@ export function ConfigPanel({
 }) {
   const [routine, setRoutine] = useState(linkedRoutine)
   const [selected, setSelected] = useState(routine === undefined ? "Behavior prompt" : ROUTINES)
+  const instanceId = instance.instance_id
   const open = (label: string) => {
     setSelected(label)
+    if (routine === undefined) return
     setRoutine(undefined)
+    leaveRoutine(instanceId)
   }
   const section = SECTIONS.find((candidate) => candidate.label === selected)
-  const instanceId = instance.instance_id
   const read = useCallback(
     () => caller.call("instance.status", { instance_id: instanceId }),
     [caller, instanceId],

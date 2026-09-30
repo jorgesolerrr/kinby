@@ -1,10 +1,11 @@
-import type {
-  OriginUse,
-  ReportedRun,
-  RoutineSummary,
-  StatsGetResult,
-  StatsSummary,
-  TurnMetrics,
+import {
+  CallError,
+  type OriginUse,
+  type ReportedRun,
+  type RoutineSummary,
+  type StatsGetResult,
+  type StatsSummary,
+  type TurnMetrics,
 } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, fireEvent, render, screen, within } from "@testing-library/react"
@@ -12,6 +13,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { StatsPage } from "@/components/stats-page"
+import { bucketTooltips, legend, rows } from "@/components/stats-testing"
 
 function originUse(routine: string | null, fields: Partial<OriginUse> = {}): OriginUse {
   return {
@@ -119,39 +121,6 @@ function clickBar(index: number) {
   fireEvent.click(bar)
 }
 
-/**
- * What the chart in `region` shows for each bucket, first to last, as a keyboard reader steps
- * through it: focusing the chart opens the first bucket's tooltip and ArrowRight moves along.
- */
-function bucketTooltips(region: HTMLElement, count: number): string[] {
-  const chart = region.querySelector("svg.recharts-surface")
-  if (!chart) throw new Error("The region has no chart")
-  const read = () => region.querySelector(".recharts-tooltip-wrapper")?.textContent ?? ""
-  act(() => {
-    fireEvent.focus(chart)
-  })
-  const shown = [read()]
-  while (shown.length < count) {
-    act(() => {
-      fireEvent.keyDown(chart, { key: "ArrowRight" })
-    })
-    shown.push(read())
-  }
-  return shown
-}
-
-/** Each row of `table` below its header, as the text of its cells. */
-function rows(table: HTMLElement): (string | null)[][] {
-  return within(table)
-    .getAllByRole("row")
-    .slice(1)
-    .map((row) =>
-      within(row)
-        .getAllByRole("cell")
-        .map((cell) => cell.textContent),
-    )
-}
-
 /** Each count a region lists, as its name and its value. */
 function counts(region: HTMLElement): [string | null, string | null][] {
   const values = within(region).getAllByRole("definition")
@@ -200,6 +169,24 @@ describe("the stats page", () => {
       { since: "2026-09-01T00:00:00.000Z", by: "day" },
       { since: "2026-07-03T00:00:00.000Z", by: "week" },
     ])
+  })
+
+  it("drops the last range's stats when the range changes, even if the new read fails", async () => {
+    let reads = 0
+    openStats({
+      "stats.get": () => {
+        reads += 1
+        if (reads === 1) return stats()
+        throw new CallError({ code: "INTERNAL", message: "The read failed.", retryable: false })
+      },
+    })
+    const user = userEvent.setup()
+    expect(await screen.findByRole("region", { name: "Turns" })).toBeTruthy()
+
+    await user.click(screen.getByRole("button", { name: "30 days" }))
+
+    expect(await screen.findByRole("alert")).toBeTruthy()
+    expect(screen.queryByRole("region", { name: "Turns" })).toBeNull()
   })
 
   it("shows each plan's recent runs under the title from the one stats.get it reads", async () => {
@@ -435,6 +422,14 @@ describe("the Spend tab", () => {
       ["ChatGPT", "1", "1,000", "1m 35s", "not priced"],
     ])
   })
+  it("names the unpriced models, since the cost it shows leaves their turns out", async () => {
+    openStats({ "stats.get": () => stats({ unpriced_models: ["mystery"] }) })
+
+    await openTab("Spend")
+
+    expect(screen.getByText("No price for mystery")).toBeDefined()
+  })
+
   it("shows the API cost of each bucket, and an unpriced one as not priced", async () => {
     openStats({
       "stats.get": () =>
@@ -501,10 +496,9 @@ describe("the Spend tab", () => {
 
     await openTab("Spend")
 
-    expect(bucketTooltips(screen.getByRole("region", { name: "Plan runs" }), 2)).toEqual([
-      "Sep 27Claude2ChatGPT1",
-      "Sep 28Claude0ChatGPT3",
-    ])
+    const chart = screen.getByRole("region", { name: "Plan runs" })
+    expect(legend(chart)).toBe("ChatGPTClaude")
+    expect(bucketTooltips(chart, 2)).toEqual(["Sep 27Claude2ChatGPT1", "Sep 28Claude0ChatGPT3"])
   })
 })
 

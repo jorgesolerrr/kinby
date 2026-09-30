@@ -8,6 +8,7 @@ const ROUTINES = "routines"
 const MEMORY = "memory"
 const STATS = "stats"
 export const CREATE_PATH = "/new"
+export const USAGE_PATH = "/usage"
 
 const listeners = new Set<() => void>()
 
@@ -32,7 +33,7 @@ function memoryPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${MEMORY}`
 }
 
-function statsPath(instanceId: string): string {
+export function statsPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${STATS}`
 }
 
@@ -56,6 +57,12 @@ export function openRoutine(instanceId: string, name: string): void {
   navigate(routinePath(instanceId, name))
 }
 
+/** Drop the linked routine from the URL and keep the config panel, in the same history entry. */
+export function leaveRoutine(instanceId: string): void {
+  window.history.replaceState(null, "", configPath(instanceId))
+  changed()
+}
+
 /** Open an instance's memory page the same way. */
 export function openMemory(instanceId: string): void {
   navigate(memoryPath(instanceId))
@@ -69,6 +76,11 @@ export function openStats(instanceId: string): void {
 /** Open the create wizard the same way. */
 export function openCreateWizard(): void {
   navigate(CREATE_PATH)
+}
+
+/** Open the hub's usage page the same way. */
+export function openUsage(): void {
+  navigate(USAGE_PATH)
 }
 
 /** The hub instance ID the URL names, if it names one. */
@@ -101,8 +113,17 @@ export function useCreating(): boolean {
   return useSyncExternalStore(subscribe, () => window.location.pathname === CREATE_PATH)
 }
 
+/** Whether the URL opens the hub's usage page. */
+export function useUsageOpen(): boolean {
+  return useSyncExternalStore(subscribe, () => window.location.pathname === USAGE_PATH)
+}
+
 function navigate(path: string): void {
   window.history.pushState(null, "", path)
+  changed()
+}
+
+function changed(): void {
   for (const listener of listeners) listener()
 }
 

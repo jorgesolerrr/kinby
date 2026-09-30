@@ -368,7 +368,44 @@ describe("the instances", () => {
     openApp({ signedIn: true })
 
     expect(await screen.findByText("No instances yet")).toBeDefined()
-    expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual(["New instance"])
+    expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "Usage",
+      "New instance",
+    ])
+  })
+})
+
+describe("the usage page", () => {
+  beforeEach(() => window.history.replaceState(null, "", "/"))
+
+  it("opens from the top of the sidebar, above the instances, and reads on the hub", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
+    const user = userEvent.setup()
+    const usage = await screen.findByRole("link", { name: "Usage" })
+
+    expect(usage.compareDocumentPosition(await instanceLink("Ada"))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+    await user.click(usage)
+
+    expect(window.location.pathname).toBe("/usage")
+    expect(await screen.findByRole("heading", { name: "Usage" })).toBeDefined()
+    expect(usage.getAttribute("aria-current")).toBe("page")
+    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBeNull()
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    const onHub = hub.sockets.find((socket) => socket.url === "ws://hub.test/ws")
+    expect(onHub?.sent).toContainEqual(
+      expect.objectContaining({ type: "call", method: "stats.summary" }),
+    )
+  })
+
+  it("restores the usage page from the URL", async () => {
+    window.history.replaceState(null, "", "/usage")
+
+    openApp({ signedIn: true, instances: [ada] })
+
+    expect(await screen.findByRole("heading", { name: "Usage" })).toBeDefined()
   })
 })
 

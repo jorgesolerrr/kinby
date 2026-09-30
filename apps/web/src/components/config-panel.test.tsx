@@ -365,6 +365,23 @@ describe("ConfigPanel", () => {
     }
   })
 
+  it("drops the routine from the URL when another section opens", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1/config/routines/inbox")
+    try {
+      const { user } = openPanel({
+        "routine.list": () => ({ routines: [], warnings: [] }),
+        "routine.read": ({ name }) => ({ name, content: "Check the inbox.\n", hash: "hash-1" }),
+      })
+      await screen.findByDisplayValue("Check the inbox.")
+
+      await user.click(screen.getByRole("button", { name: "Tools" }))
+
+      expect(window.location.pathname).toBe("/instances/instance-1/config")
+    } finally {
+      window.history.replaceState(null, "", "/")
+    }
+  })
+
   it("opens the routines section", async () => {
     const { user } = openPanel({ "routine.list": () => ({ routines: [], warnings: [] }) })
 

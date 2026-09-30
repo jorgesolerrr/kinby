@@ -14,18 +14,13 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
-import { ChartColumnIcon, MessagesSquareIcon, SparklesIcon } from "lucide-react"
-
-// Placeholders until the flows that own them land.
-const entries = [
-  { title: "Threads", icon: <MessagesSquareIcon /> },
-  { title: "Usage", icon: <ChartColumnIcon /> },
-]
+import { SparklesIcon } from "lucide-react"
 
 export function AppSidebar({
   instances,
   selected,
   creating,
+  usageOpen,
   threads,
   onSignOut,
   ...props
@@ -33,6 +28,7 @@ export function AppSidebar({
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
   creating: boolean
+  usageOpen: boolean
   /** The selected instance's threads, when it has them to show. */
   threads: React.ReactNode
   onSignOut: () => void
@@ -50,7 +46,7 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <NavMain entries={entries} />
+        <NavMain usageOpen={usageOpen} />
         <NavInstances
           instances={instances}
           selected={selected}
