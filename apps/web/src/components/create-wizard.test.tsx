@@ -294,6 +294,17 @@ describe("the create wizard's package step", () => {
     expect(description.className).not.toMatch(/line-clamp-\d/)
   })
 
+  it("shows each login's whole description, however narrow the screen", async () => {
+    await pickVanilla({
+      ...preparation({ state: "succeeded" }),
+      "package.describe": () => ({ ...vanilla, logins: [codex] }),
+    })
+
+    const logins = within(await screen.findByRole("list", { name: "Subscription logins" }))
+    const description = logins.getByText("Signs Codex in with your ChatGPT plan.")
+    expect(description.className).not.toMatch(/line-clamp-\d/)
+  })
+
   it("marks the step that failed with what went wrong", async () => {
     await pickVanilla(
       preparation({
