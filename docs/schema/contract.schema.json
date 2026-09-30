@@ -2816,6 +2816,65 @@
       "title": "OperationStep",
       "type": "object"
     },
+    "OriginUse": {
+      "additionalProperties": false,
+      "description": "The turns chat or one routine started, and what they cost and ran.\n\nA routine is keyed by the name its turns recorded, so a renamed routine has two rows.",
+      "properties": {
+        "cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "failed": {
+          "type": "integer"
+        },
+        "no_work": {
+          "type": "integer"
+        },
+        "origin": {
+          "enum": [
+            "user",
+            "routine"
+          ],
+          "type": "string"
+        },
+        "routine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/SourceRuns"
+          },
+          "type": "array"
+        },
+        "turns": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "origin",
+        "routine",
+        "turns",
+        "no_work",
+        "failed",
+        "cost",
+        "runs"
+      ],
+      "title": "OriginUse",
+      "type": "object"
+    },
     "OwnBashPatterns": {
       "additionalProperties": false,
       "properties": {
@@ -4312,6 +4371,24 @@
       "title": "SkillWriteCommand",
       "type": "object"
     },
+    "SourceRuns": {
+      "additionalProperties": false,
+      "description": "The delegated runs one subscription usage source made.",
+      "properties": {
+        "runs": {
+          "type": "integer"
+        },
+        "usage_source": {
+          "$ref": "#/$defs/UsageSource"
+        }
+      },
+      "required": [
+        "usage_source",
+        "runs"
+      ],
+      "title": "SourceRuns",
+      "type": "object"
+    },
     "StatsBucket": {
       "additionalProperties": false,
       "properties": {
@@ -4374,6 +4451,12 @@
         "navigation": {
           "$ref": "#/$defs/NavigationMeans"
         },
+        "origins": {
+          "items": {
+            "$ref": "#/$defs/OriginUse"
+          },
+          "type": "array"
+        },
         "output_tokens": {
           "type": "integer"
         },
@@ -4422,6 +4505,7 @@
         "good_ratings",
         "bad_ratings",
         "subscriptions",
+        "origins",
         "start"
       ],
       "title": "StatsBucket",
@@ -4586,6 +4670,12 @@
         "navigation": {
           "$ref": "#/$defs/NavigationMeans"
         },
+        "origins": {
+          "items": {
+            "$ref": "#/$defs/OriginUse"
+          },
+          "type": "array"
+        },
         "output_tokens": {
           "type": "integer"
         },
@@ -4629,7 +4719,8 @@
         "mean_duration_seconds",
         "good_ratings",
         "bad_ratings",
-        "subscriptions"
+        "subscriptions",
+        "origins"
       ],
       "title": "StatsSummary",
       "type": "object"

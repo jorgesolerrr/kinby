@@ -9,9 +9,12 @@ from kinby.contracts import (
     ApiUse,
     ErrorEnvelope,
     MemoryCallCounts,
+    OriginUse,
     PlanLimit,
     PlanUse,
+    RoutineName,
     Scope,
+    SourceRuns,
     StatsBucket,
     StatsBucketSize,
     StatsGetCommand,
@@ -42,6 +45,11 @@ def _used(
     cost: float | None = None,
     claude: SubscriptionUse | None = None,
 ) -> StatsSummary:
+    """One routine turn, and the runs it made."""
+    subscriptions = [
+        claude or SubscriptionUse(usage_source=UsageSource.CLAUDE_SUBSCRIPTION),
+        SubscriptionUse(usage_source=UsageSource.CHATGPT_SUBSCRIPTION),
+    ]
     return StatsSummary(
         completed=1,
         failed=0,
@@ -58,9 +66,20 @@ def _used(
         mean_duration_seconds=None,
         good_ratings=0,
         bad_ratings=0,
-        subscriptions=[
-            claude or SubscriptionUse(usage_source=UsageSource.CLAUDE_SUBSCRIPTION),
-            SubscriptionUse(usage_source=UsageSource.CHATGPT_SUBSCRIPTION),
+        subscriptions=subscriptions,
+        origins=[
+            OriginUse(
+                origin="routine",
+                routine=RoutineName("inbox"),
+                turns=1,
+                no_work=0,
+                failed=0,
+                cost=cost,
+                runs=[
+                    SourceRuns(usage_source=use.usage_source, runs=use.runs)
+                    for use in subscriptions
+                ],
+            )
         ],
     )
 
@@ -149,6 +168,9 @@ def test_the_hub_adds_up_usage_across_two_running_instances(tmp_path):
             first.instance_id: first_answer.buckets,
             second.instance_id: second_answer.buckets,
         }
+        assert [bucket.origins for bucket in summary.buckets[first.instance_id]] == [
+            first_answer.total.origins
+        ]
         assert summary.api == ApiUse(input_tokens=150, output_tokens=30, cost=0.75)
         assert summary.subscriptions == [
             SubscriptionUse(

@@ -1,18 +1,20 @@
 import type {
   Clock,
   InstanceClient,
+  OriginUse,
   StatsBucket,
   StatsBucketSize,
   StatsGetResult,
   StatsSummary,
   TurnMetrics,
 } from "@kinby/contract"
-import { useEffect, useId, useState } from "react"
+import { type ReactNode, useEffect, useId, useState } from "react"
 import { Bar, BarChart } from "recharts"
 
 import { BucketAxes } from "@/components/bucket-axes"
 import { Failure } from "@/components/config-alerts"
 import { PlansStrip } from "@/components/plans-strip"
+import { Origins } from "@/components/stats-origin"
 import { Quality } from "@/components/stats-quality"
 import { Spend } from "@/components/stats-spend"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -44,10 +46,12 @@ import { selectThread, threadPath } from "@/lib/selection"
 import {
   bucketLabel,
   bucketSize,
-  bucketTurns,
   dayLabel,
+  type Drill,
+  drilledTurns,
   money,
   originLabel,
+  originName,
   RANGES,
   type Range,
   SOURCE_LABELS,
@@ -76,9 +80,23 @@ export function StatsPage({
   const [reads, setReads] = useState(0)
   const [stats, setStats] = useState<StatsGetResult>()
   const [failure, setFailure] = useState<unknown>()
-  // The start of the bucket whose bar was clicked.
-  const [bucket, setBucket] = useState<string>()
+  const [drill, setDrill] = useState<Drill>({})
   const by = bucketSize(range)
+  // A second click on the picked row drops the filter.
+  const pickOrigin = (origin: OriginUse) =>
+    setDrill(({ bucket, origin: picked }) => ({
+      bucket,
+      origin: picked?.routine === origin.routine ? undefined : origin,
+    }))
+  const drillDown = (stats: StatsGetResult) =>
+    (drill.bucket !== undefined || drill.origin !== undefined) && (
+      <DrilledTurns
+        title={drillTitle(drill, by)}
+        turns={drilledTurns(stats.records, drill, by)}
+        instanceId={instanceId}
+        onClose={() => setDrill({})}
+      />
+    )
 
   useEffect(() => {
     let current = true
@@ -117,7 +135,8 @@ export function StatsPage({
               const next = RANGES.find((days) => String(days) === picked)
               if (next === undefined) return
               setRange(next)
-              setBucket(undefined)
+              // The range's buckets start on other days. An origin can have turns in any range.
+              setDrill(({ origin }) => ({ origin }))
             }}
           >
             {RANGES.map((days) => (
@@ -141,10 +160,7 @@ export function StatsPage({
         <TabsList variant="line">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="spend">Spend</TabsTrigger>
-          {/* Lands with its own ticket. */}
-          <TabsTrigger value="origin" disabled>
-            Origin
-          </TabsTrigger>
+          <TabsTrigger value="origin">Origin</TabsTrigger>
           <TabsTrigger value="quality">Quality</TabsTrigger>
         </TabsList>
         {stats === undefined ? (
@@ -156,15 +172,29 @@ export function StatsPage({
                 <Overview
                   stats={stats}
                   by={by}
-                  bucket={bucket}
-                  instanceId={instanceId}
-                  onBucket={setBucket}
-                />
+                  onBucket={(bucket) => setDrill(({ origin }) => ({ bucket, origin }))}
+                >
+                  {drillDown(stats)}
+                </Overview>
               </div>
             </TabsContent>
             <TabsContent value="spend">
               <div className="flex flex-col gap-4 pt-4">
                 <Spend stats={stats} by={by} />
+              </div>
+            </TabsContent>
+            <TabsContent value="origin">
+              <div className="flex flex-col gap-4 pt-4">
+                <Origins
+                  client={client}
+                  clock={clock}
+                  stats={stats}
+                  instanceId={instanceId}
+                  picked={drill.origin}
+                  onPick={pickOrigin}
+                >
+                  {drillDown(stats)}
+                </Origins>
               </div>
             </TabsContent>
             <TabsContent value="quality">
@@ -179,38 +209,34 @@ export function StatsPage({
   )
 }
 
+/** The notices, the tiles, and the turns chart, then the drill-down in `children`. */
 function Overview({
   stats,
   by,
-  bucket,
-  instanceId,
   onBucket,
+  children,
 }: {
   stats: StatsGetResult
   by: StatsBucketSize
-  bucket: string | undefined
-  instanceId: string
-  onBucket: (start: string | undefined) => void
+  onBucket: (start: string) => void
+  children: ReactNode
 }) {
   return (
     <>
       <Notices unpricedModels={stats.unpriced_models} mismatches={stats.warnings?.length ?? 0} />
       <Tiles total={stats.total} />
       <TurnsChart buckets={stats.buckets} by={by} onBucket={onBucket} />
-      {bucket !== undefined && (
-        <BucketTurns
-          title={
-            by === "week"
-              ? `Turns closed in the week of ${dayLabel(bucket)}`
-              : `Turns closed on ${dayLabel(bucket)}`
-          }
-          turns={bucketTurns(stats.records, bucket, by)}
-          instanceId={instanceId}
-          onClose={() => onBucket(undefined)}
-        />
-      )}
+      {children}
     </>
   )
+}
+
+/** What a drill lists, as "inbox turns closed on Sep 28" or "Turns closed in this range". */
+function drillTitle({ bucket, origin }: Drill, by: StatsBucketSize): string {
+  const whose = origin === undefined ? "Turns" : `${originName(origin)} turns`
+  if (bucket === undefined) return `${whose} closed in this range`
+  if (by === "week") return `${whose} closed in the week of ${dayLabel(bucket)}`
+  return `${whose} closed on ${dayLabel(bucket)}`
 }
 
 /** Why a cost or a token count in the range may be off. */
@@ -342,8 +368,8 @@ function TurnsChart({
 
 const VERDICTS = { good: "Good", bad: "Bad" }
 
-/** One bucket's turns, each with who started it, how it ended, and a link to its thread. */
-function BucketTurns({
+/** A drill's turns, each with who started it, how it ended, and a link to its thread. */
+function DrilledTurns({
   title,
   turns,
   instanceId,

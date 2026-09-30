@@ -99,7 +99,7 @@ from kinby.core.memory import InstanceMemory
 from kinby.core.pricing import price_map
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
-from kinby.core.stats import active_limits, plan_use, stats_buckets, stats_summary
+from kinby.core.stats import TurnRun, active_limits, plan_use, stats_buckets, stats_summary
 from kinby.core.threads import ThreadStore, thread_list, thread_summary
 from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
@@ -359,7 +359,7 @@ def build_dispatcher(
         time_range = TimeRange(command.since, command.until)
         records = [record for record in metrics.records if time_range.includes(record.closed_at)]
         runs = [
-            reported
+            TurnRun(record.origin, reported)
             for record in metrics.records
             for reported in record.delegated_runs
             if time_range.includes(reported.timestamp)
@@ -367,8 +367,8 @@ def build_dispatcher(
         selected_turns = {TurnKey(record.thread_id, record.turn_id) for record in records}
         return StatsGetResult(
             records=records,
-            buckets=stats_buckets(records, runs, command.by),
-            total=stats_summary(records, runs),
+            buckets=stats_buckets(records, runs, command.by, metrics.no_work),
+            total=stats_summary(records, runs, metrics.no_work),
             plan_use=plan_use(events, now),
             limits=active_limits(events, now),
             unpriced_models=sorted(

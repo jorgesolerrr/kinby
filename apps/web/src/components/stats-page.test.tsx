@@ -1,10 +1,33 @@
-import type { ReportedRun, StatsGetResult, StatsSummary, TurnMetrics } from "@kinby/contract"
+import type {
+  OriginUse,
+  ReportedRun,
+  RoutineSummary,
+  StatsGetResult,
+  StatsSummary,
+  TurnMetrics,
+} from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { StatsPage } from "@/components/stats-page"
+
+function originUse(routine: string | null, fields: Partial<OriginUse> = {}): OriginUse {
+  return {
+    origin: routine === null ? "user" : "routine",
+    routine,
+    turns: 0,
+    no_work: 0,
+    failed: 0,
+    cost: null,
+    runs: [
+      { usage_source: "claude-subscription", runs: 0 },
+      { usage_source: "chatgpt-subscription", runs: 0 },
+    ],
+    ...fields,
+  }
+}
 
 function summary(fields: Partial<StatsSummary> = {}): StatsSummary {
   return {
@@ -27,6 +50,7 @@ function summary(fields: Partial<StatsSummary> = {}): StatsSummary {
       { usage_source: "claude-subscription", runs: 0 },
       { usage_source: "chatgpt-subscription", runs: 0 },
     ],
+    origins: [originUse(null)],
     ...fields,
   }
 }
@@ -196,14 +220,13 @@ describe("the stats page", () => {
     expect(client.calls.map((call) => call.method)).toEqual(["stats.get"])
   })
 
-  it("opens on Overview, and shows Origin as unavailable", async () => {
+  it("opens on Overview, with every other tab available", async () => {
     openStats()
 
     const overview = await screen.findByRole("tab", { name: "Overview" })
 
     expect(overview.getAttribute("aria-selected")).toBe("true")
-    expect(screen.getByRole("tab", { name: "Origin" }).getAttribute("aria-disabled")).toBe("true")
-    for (const name of ["Spend", "Quality"]) {
+    for (const name of ["Spend", "Origin", "Quality"]) {
       expect(screen.getByRole("tab", { name }).getAttribute("aria-disabled")).toBe("false")
     }
   })
@@ -572,5 +595,150 @@ describe("the Quality tab", () => {
 
     expect(screen.getByRole("region", { name: "Ratings" })).toBeDefined()
     expect(screen.queryByRole("region", { name: "Navigation" })).toBeNull()
+  })
+})
+
+function routine(fields: Partial<RoutineSummary> & Pick<RoutineSummary, "name">): RoutineSummary {
+  return {
+    description: "",
+    schedule: null,
+    enabled: true,
+    mode: "auto",
+    next_run: null,
+    last_run: null,
+    failure_count: 0,
+    pending: 0,
+    ...fields,
+  }
+}
+
+describe("the Origin tab", () => {
+  const byOrigin = stats({
+    records: [
+      turn({ turn_id: "chat", cost: 0.5 }),
+      turn({
+        turn_id: "inbox",
+        cost: 1.2,
+        origin: { kind: "routine", name: "inbox", trigger: "scheduled" },
+      }),
+      turn({ turn_id: "unknown", cost: 0.1, origin: null }),
+      turn({
+        turn_id: "inbox next day",
+        closed_at: "2026-09-29T08:00:00Z",
+        cost: 0.7,
+        origin: { kind: "routine", name: "inbox", trigger: "manual" },
+      }),
+    ],
+    buckets: [
+      { ...summary({ completed: 3 }), start: "2026-09-28" },
+      { ...summary({ completed: 1 }), start: "2026-09-29" },
+    ],
+    total: summary({
+      completed: 4,
+      origins: [
+        originUse(null, {
+          turns: 2,
+          cost: 0.6,
+          runs: [
+            { usage_source: "claude-subscription", runs: 3 },
+            { usage_source: "chatgpt-subscription", runs: 1 },
+          ],
+        }),
+        originUse("inbox", { turns: 2, no_work: 5, failed: 1, cost: 1.9 }),
+        originUse("morning", { turns: 1 }),
+      ],
+    }),
+  })
+
+  function openOrigins(routines: RoutineSummary[] = [routine({ name: "inbox" })]) {
+    return openStats({
+      "stats.get": () => byOrigin,
+      "routine.list": () => ({ routines, warnings: [] }),
+    })
+  }
+
+  it("shows a row for chat and one per routine: turns, no work, failed, API cost, plan runs", async () => {
+    openOrigins()
+
+    await openTab("Origin")
+
+    const table = screen.getByRole("table", { name: "Turns by origin" })
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((cell) => cell.textContent),
+    ).toEqual(["Origin", "Turns", "No work", "Failed", "API cost", "Claude runs", "ChatGPT runs"])
+    await within(table).findByRole("link", { name: "inbox" })
+    expect(rows(table)).toEqual([
+      ["Chat", "2", "0", "0", "$0.60", "3", "1"],
+      ["inbox", "2", "5", "1", "$1.90", "0", "0"],
+      ["morningremoved or renamed", "1", "0", "0", "not priced", "0", "0"],
+    ])
+  })
+
+  it("links a routine to it in the config panel, and a name routine.list lacks to nothing", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/stats")
+    openOrigins()
+    const user = userEvent.setup()
+    await openTab("Origin")
+    const table = screen.getByRole("table", { name: "Turns by origin" })
+
+    await user.click(await within(table).findByRole("link", { name: "inbox" }))
+
+    expect(within(table).queryByRole("link", { name: /morning/ })).toBeNull()
+    expect(window.location.pathname).toBe("/instances/hub-ada/config/routines/inbox")
+  })
+
+  it("filters the drill-down to a clicked row, here and in the Overview", async () => {
+    openOrigins()
+    const user = userEvent.setup()
+    await openTab("Origin")
+    const origins = screen.getByRole("table", { name: "Turns by origin" })
+    const costs = (name: string) => rows(screen.getByRole("table", { name })).map((row) => row[4])
+
+    await user.click(within(origins).getByRole("row", { name: /^Chat/ }))
+    expect(costs("Chat turns closed in this range")).toEqual(["$0.50", "$0.10"])
+    await user.click(within(origins).getByRole("row", { name: /^inbox/ }))
+    expect(costs("inbox turns closed in this range")).toEqual(["$1.20", "$0.70"])
+
+    await openTab("Overview")
+    clickBar(0)
+    expect(costs("inbox turns closed on Sep 28")).toEqual(["$1.20"])
+
+    await openTab("Origin")
+    await user.click(
+      within(screen.getByRole("table", { name: "Turns by origin" })).getByRole("row", {
+        name: /^inbox/,
+      }),
+    )
+    expect(costs("Turns closed on Sep 28")).toEqual(["$1.20", "$0.50", "$0.10"])
+  })
+
+  it("lists each routine's last outcome, failures in a row, and next run below the table", async () => {
+    openOrigins([
+      routine({
+        name: "inbox",
+        next_run: new Date(2026, 9, 1, 9, 0).toISOString(),
+        last_run: {
+          started_at: new Date(2026, 8, 30, 9, 0).toISOString(),
+          outcome: "no-work",
+          thread_id: "thread-1",
+          turn_id: "turn-1",
+        },
+      }),
+      routine({ name: "triage", failure_count: 3 }),
+    ])
+
+    await openTab("Origin")
+
+    const listed = await screen.findByRole("list", { name: "Routines" })
+    const inbox = within(listed).getByRole("listitem", { name: "inbox" }).textContent
+    expect(inbox).toContain("nothing new")
+    expect(inbox).toContain("No failures")
+    expect(inbox).toContain("Next firing")
+    const triage = within(listed).getByRole("listitem", { name: "triage" }).textContent
+    expect(triage).toContain("Never fired")
+    expect(triage).toContain("3 failures in a row")
+    expect(triage).toContain("No next firing")
   })
 })

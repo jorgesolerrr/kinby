@@ -10,12 +10,14 @@ import type {
   Event,
   InstanceListResult,
   ItemFrame,
+  OriginUse,
   PermissionMode,
   PlanLimit,
   PlanUse,
   ResultFrame,
   RoutineOrigin,
   RunDelegated,
+  SourceRuns,
   ServerFrame,
   StatsBucket,
   StatsGetCommand,
@@ -84,6 +86,23 @@ test("stats.get splits every bucket and its total by subscription source", () =>
 
   expectTypeOf<Stats["buckets"][number]["subscriptions"]>().toEqualTypeOf<SubscriptionUse[]>()
   expectTypeOf<Stats["total"]["subscriptions"]>().toEqualTypeOf<SubscriptionUse[]>()
+})
+
+test("stats.get splits every bucket and its total by chat and routine", () => {
+  type Stats = Contract["methods"]["stats.get"]["result"]
+
+  expectTypeOf<Stats["buckets"][number]["origins"]>().toEqualTypeOf<OriginUse[]>()
+  expectTypeOf<Stats["total"]["origins"]>().toEqualTypeOf<OriginUse[]>()
+  expectTypeOf<OriginUse>().toEqualTypeOf<{
+    origin: "user" | "routine"
+    routine: string | null
+    turns: number
+    no_work: number
+    failed: number
+    cost: number | null
+    runs: SourceRuns[]
+  }>()
+  expectTypeOf<SourceRuns>().toEqualTypeOf<{ usage_source: UsageSource; runs: number }>()
 })
 
 test("stats.get counts each subscription source's runs per plan window, and its active limits", () => {
