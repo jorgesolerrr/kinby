@@ -174,7 +174,7 @@ function Totals({ usage }: { usage: StatsSummaryResult }) {
   const titleId = useId()
   const buckets = Object.values(usage.buckets).flat()
   const counted = Object.keys(usage.buckets).length
-  const asked = counted + usage.skipped.length + usage.unreachable.length
+  const asked = counted + usage.skipped.length + usage.unreachable.length + usage.outdated.length
   const sum = (count: (bucket: StatsBucket) => number) =>
     buckets.reduce((total, bucket) => total + count(bucket), 0)
   return (

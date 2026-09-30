@@ -16,6 +16,7 @@ const idle = instanceSummary({
   process: "stopped",
 })
 const far = instanceSummary({ instance_id: "hub-far", persona_name: "Far" })
+const old = instanceSummary({ instance_id: "hub-old", persona_name: "Old" })
 
 function bucket(start: string, fields: Partial<StatsBucket> = {}): StatsBucket {
   return {
@@ -56,6 +57,7 @@ function usage(fields: Partial<StatsSummaryResult> = {}): StatsSummaryResult {
     limits: [],
     skipped: [],
     unreachable: [],
+    outdated: [],
     ...fields,
   }
 }
@@ -65,7 +67,10 @@ const runs = (claude: number, chatgpt: number): StatsBucket["subscriptions"] => 
   { usage_source: "chatgpt-subscription", runs: chatgpt },
 ]
 
-/** Ada ran on two days, research ran nothing, idle is stopped, and far did not answer in time. */
+/**
+ * Ada ran on two days, research ran nothing, idle is stopped, far did not answer in time, and old
+ * runs a core whose answer the hub cannot read.
+ */
 const hubUsage = usage({
   buckets: {
     "hub-ada": [
@@ -97,11 +102,12 @@ const hubUsage = usage({
   ],
   skipped: ["hub-idle"],
   unreachable: ["hub-far"],
+  outdated: ["hub-old"],
 })
 
 const hubAnswers: Answers = {
   "stats.summary": () => hubUsage,
-  "instance.list": () => ({ instances: [ada, research, idle, far] }),
+  "instance.list": () => ({ instances: [ada, research, idle, far, old] }),
 }
 
 function openUsage(
@@ -203,6 +209,7 @@ describe("the usage page", () => {
       ["research", "0", "not priced", "0", "0"],
       ["Idle", "Not counted: not running"],
       ["Far", "Not counted: didn't answer"],
+      ["Old", "Not counted: runs an older kinby, update core"],
     ])
   })
 
@@ -215,7 +222,7 @@ describe("the usage page", () => {
     expect(tile("Turns")).toBe("Turns71 failed · 1 interrupted")
     expect(tile("API cost")).toBe("API cost$0.5012,000 in · 3,400 out")
     expect(tile("Plan runs")).toBe("Plan runs4Claude 3 · ChatGPT 1")
-    expect(within(totals).getByText("2 of 4 instances counted.")).toBeDefined()
+    expect(within(totals).getByText("2 of 5 instances counted.")).toBeDefined()
     const table = screen.getByRole("table", { name: "Instances" })
     expect(table.compareDocumentPosition(totals)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   })
