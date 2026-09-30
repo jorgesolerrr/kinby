@@ -99,7 +99,10 @@ function LoginRow({
   const followed =
     useFollowing(request, follow) ??
     (request === undefined ? undefined : { state: "signing-in", prompt: null })
-  const signIn = followed ?? STORED[login.state]
+  const latest = followed ?? STORED[login.state]
+  // A sign-in that did not finish leaves a signed-in login signed in (ADR 0068).
+  const unfinished = latest?.state === "failed" && login.state === "signed_in" ? latest : undefined
+  const signIn = unfinished ? STORED.signed_in : latest
   const busy = signIn?.state === "signing-in"
   return (
     <Item render={<li />} aria-label={login.label} variant="outline">
@@ -118,6 +121,11 @@ function LoginRow({
         )}
         {signIn?.state === "failed" && (
           <ItemDescription lines="all">{signIn.detail}</ItemDescription>
+        )}
+        {unfinished && (
+          <ItemDescription lines="all">
+            The new sign-in did not finish, and the one before it still works. {unfinished.detail}
+          </ItemDescription>
         )}
       </ItemContent>
       <ItemActions>

@@ -170,6 +170,44 @@ describe("the setup card", () => {
     expect(onChanged).toHaveBeenCalledOnce()
   })
 
+  it("keeps a signed-in login signed in when signing it in again expires, and says so", async () => {
+    const detail = "The code expired. Sign in again for a new one."
+    const { user, clock, onChanged } = await openPage({
+      "instance.login.start": () => ({ operation_id: "op-1", instance_id: "instance-1" }),
+      "operation.get": () => operation({ state: "failed", detail }),
+    })
+
+    await user.click(login("Editor account").getByRole("button", { name: "Sign in again" }))
+    await act(() => clock.advance(0))
+
+    expect(onChanged).toHaveBeenCalledOnce()
+    expect(login("Editor account").getByText("Signed in").getAttribute("data-variant")).toBe(
+      "success",
+    )
+    expect(login("Editor account").queryByText("Failed")).toBeNull()
+    expect(
+      login("Editor account").getByText(
+        `The new sign-in did not finish, and the one before it still works. ${detail}`,
+      ),
+    ).toBeDefined()
+    expect(login("Editor account").getByRole("button", { name: "Sign in again" })).toBeDefined()
+  })
+
+  it("says a sign-in failed on a login that was not signed in", async () => {
+    const detail = "The code expired. Sign in again for a new one."
+    const { user, clock } = await openPage({
+      "instance.login.start": () => ({ operation_id: "op-1", instance_id: "instance-1" }),
+      "operation.get": () => operation({ state: "failed", detail }),
+    })
+
+    await user.click(login("Codex").getByRole("button", { name: "Sign in" }))
+    await act(() => clock.advance(0))
+
+    expect(login("Codex").getByText("Failed")).toBeDefined()
+    expect(login("Codex").getByText(detail)).toBeDefined()
+    expect(login("Codex").getByRole("button", { name: "Sign in again" })).toBeDefined()
+  })
+
   it("sets a secret and replaces one there, and lists the instances again once the hub holds it", async () => {
     const { user, clock, caller, onChanged } = await openPage({
       "instance.secrets.set": () => ({ operation_id: "op-secret", instance_id: "instance-1" }),
