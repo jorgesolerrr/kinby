@@ -19,6 +19,7 @@ import {
   useMemoryOpen,
   useSelectedInstanceId,
   useSelectedThreadId,
+  useStatsOpen,
 } from "@/lib/selection"
 
 export default function App({ client, clock = browserClock }: { client: Client; clock?: Clock }) {
@@ -35,6 +36,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const creating = useCreating()
   const configOpen = useConfigOpen()
   const memoryOpen = useMemoryOpen()
+  const statsOpen = useStatsOpen()
   // An instance the hub does not have, or no longer has, selects nothing.
   const selected = instances?.find((instance) => instance.instance_id === selectedId)
   // The hub relays only to a running instance. An open config panel keeps its connection while the
@@ -61,9 +63,12 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           }
           onSignOut={() => void client.signOut()}
         />
-        {/* An open thread, config panel, or memory page scrolls inside the window, not the page. */}
+        {/* An open thread, config panel, memory page, or stats page scrolls inside the window, not
+            the page. */}
         <SidebarInset
-          className={cn((threadId !== undefined || configOpen || memoryOpen) && "h-svh")}
+          className={cn(
+            (threadId !== undefined || configOpen || memoryOpen || statsOpen) && "h-svh",
+          )}
         >
           <header className="flex h-12 items-center gap-2 px-2">
             <SidebarTrigger />
@@ -80,6 +85,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
               threadId={threadId}
               configOpen={configOpen}
               memoryOpen={memoryOpen}
+              statsOpen={statsOpen}
               instanceClient={instanceClient}
               onChanged={listAgain}
             />

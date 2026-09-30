@@ -1,0 +1,413 @@
+import type {
+  Clock,
+  InstanceClient,
+  StatsBucket,
+  StatsBucketSize,
+  StatsGetResult,
+  StatsSummary,
+  TurnMetrics,
+} from "@kinby/contract"
+import { useEffect, useId, useState } from "react"
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
+
+import { Failure } from "@/components/config-alerts"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  type ChartConfig,
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { usePace } from "@/hooks/use-pace"
+import { retried } from "@/lib/operation"
+import { selectThread, threadPath } from "@/lib/selection"
+import {
+  bucketSize,
+  bucketTurns,
+  dayLabel,
+  money,
+  originLabel,
+  RANGES,
+  type Range,
+  SOURCE_LABELS,
+  statsCommand,
+  turnCount,
+} from "@/lib/stats"
+import { RefreshCwIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+
+type Caller = Pick<InstanceClient, "call">
+
+/**
+ * An instance's stats over the last 7, 30, or 90 UTC days. It reads when it opens, when the range
+ * changes, when the window regains focus, and on Refresh, and never polls.
+ */
+export function StatsPage({
+  client,
+  clock,
+  instanceId,
+}: {
+  client: Caller
+  clock: Clock
+  instanceId: string
+}) {
+  const pacing = usePace(clock)
+  const [range, setRange] = useState<Range>(7)
+  const [reads, setReads] = useState(0)
+  const [stats, setStats] = useState<StatsGetResult>()
+  const [failure, setFailure] = useState<unknown>()
+  // The start of the bucket whose bar was clicked.
+  const [bucket, setBucket] = useState<string>()
+  const by = bucketSize(range)
+
+  useEffect(() => {
+    let current = true
+    retried(() => client.call("stats.get", statsCommand(range, new Date())), pacing).then(
+      (read) => {
+        if (!current) return
+        setStats(read)
+        setFailure(undefined)
+      },
+      (error: unknown) => {
+        if (current) setFailure(error)
+      },
+    )
+    return () => {
+      current = false
+    }
+  }, [client, pacing, range, reads])
+  // Turns close while the user is elsewhere, and nothing tells the page.
+  useEffect(() => {
+    const readAgain = () => setReads((count) => count + 1)
+    window.addEventListener("focus", readAgain)
+    return () => window.removeEventListener("focus", readAgain)
+  }, [])
+
+  return (
+    <div className="flex flex-col gap-4 p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-xl font-semibold">Stats</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <ToggleGroup
+            aria-label="Range"
+            size="sm"
+            variant="outline"
+            value={[String(range)]}
+            onValueChange={([picked]) => {
+              const next = RANGES.find((days) => String(days) === picked)
+              if (next === undefined) return
+              setRange(next)
+              setBucket(undefined)
+            }}
+          >
+            {RANGES.map((days) => (
+              <ToggleGroupItem key={days} value={String(days)}>
+                {days} days
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+          <span className="text-xs text-muted-foreground">
+            {by === "week" ? "Weekly" : "Daily"} buckets, UTC
+          </span>
+          <Button size="sm" variant="ghost" onClick={() => setReads(reads + 1)}>
+            <RefreshCwIcon data-icon="inline-start" />
+            Refresh
+          </Button>
+        </div>
+      </div>
+      {failure !== undefined && <Failure error={failure} />}
+      <Tabs defaultValue="overview">
+        <TabsList variant="line">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          {/* Each of these lands with its own ticket. */}
+          <TabsTrigger value="spend" disabled>
+            Spend
+          </TabsTrigger>
+          <TabsTrigger value="origin" disabled>
+            Origin
+          </TabsTrigger>
+          <TabsTrigger value="quality" disabled>
+            Quality
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="overview">
+          <div className="flex flex-col gap-4 pt-4">
+            {stats === undefined ? (
+              failure === undefined && <Skeleton className="h-72 w-full" />
+            ) : (
+              <Overview
+                stats={stats}
+                by={by}
+                bucket={bucket}
+                instanceId={instanceId}
+                onBucket={setBucket}
+              />
+            )}
+          </div>
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+function Overview({
+  stats,
+  by,
+  bucket,
+  instanceId,
+  onBucket,
+}: {
+  stats: StatsGetResult
+  by: StatsBucketSize
+  bucket: string | undefined
+  instanceId: string
+  onBucket: (start: string | undefined) => void
+}) {
+  return (
+    <>
+      <Notices unpricedModels={stats.unpriced_models} mismatches={stats.warnings?.length ?? 0} />
+      <Tiles total={stats.total} />
+      <TurnsChart buckets={stats.buckets} by={by} onBucket={onBucket} />
+      {bucket !== undefined && (
+        <BucketTurns
+          title={
+            by === "week"
+              ? `Turns closed in the week of ${dayLabel(bucket)}`
+              : `Turns closed on ${dayLabel(bucket)}`
+          }
+          turns={bucketTurns(stats.records, bucket, by)}
+          instanceId={instanceId}
+          onClose={() => onBucket(undefined)}
+        />
+      )}
+    </>
+  )
+}
+
+/** Why a cost or a token count in the range may be off. */
+function Notices({ unpricedModels, mismatches }: { unpricedModels: string[]; mismatches: number }) {
+  return (
+    <>
+      {unpricedModels.length > 0 && (
+        <Alert>
+          <TriangleAlertIcon />
+          <AlertTitle>No price for {new Intl.ListFormat("en").format(unpricedModels)}</AlertTitle>
+          <AlertDescription>
+            Their turns add no API cost, so the cost shown is too low.
+          </AlertDescription>
+        </Alert>
+      )}
+      {mismatches > 0 && (
+        <Alert>
+          <TriangleAlertIcon />
+          <AlertTitle>
+            {mismatches === 1 ? "1 turn's" : `${mismatches} turns'`} model calls don't add up
+          </AlertTitle>
+          <AlertDescription>
+            The tokens of the model calls differ from the tokens the turn closed with.
+          </AlertDescription>
+        </Alert>
+      )}
+    </>
+  )
+}
+
+function Tiles({ total }: { total: StatsSummary }) {
+  const rated = total.good_ratings + total.bad_ratings > 0
+  return (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <Tile
+        title="Turns"
+        value={String(turnCount(total))}
+        note={`${total.failed} failed · ${total.interrupted} interrupted`}
+      />
+      <Tile
+        title="API cost"
+        value={money(total.cost)}
+        note={`${total.input_tokens.toLocaleString("en")} in · ${total.output_tokens.toLocaleString("en")} out`}
+      />
+      <Tile
+        title="Plan runs"
+        value={String(total.subscriptions.reduce((runs, use) => runs + (use.runs ?? 0), 0))}
+        note={total.subscriptions
+          .map((use) => `${SOURCE_LABELS[use.usage_source]} ${use.runs ?? 0}`)
+          .join(" · ")}
+      />
+      <Tile
+        title="Ratings"
+        value={rated ? `${total.good_ratings} good` : "—"}
+        note={rated ? `${total.bad_ratings} bad` : "No ratings"}
+      />
+    </div>
+  )
+}
+
+function Tile({ title, value, note }: { title: string; value: string; note: string }) {
+  return (
+    <section aria-label={title}>
+      <Card size="sm">
+        <CardHeader>
+          <CardDescription>{title}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-2xl font-semibold tabular-nums">{value}</p>
+          <p className="text-xs text-muted-foreground">{note}</p>
+        </CardContent>
+      </Card>
+    </section>
+  )
+}
+
+const TURN_SERIES = {
+  completed: { label: "Completed", color: "var(--chart-2)" },
+  failed: { label: "Failed", color: "var(--destructive)" },
+  interrupted: { label: "Interrupted", color: "var(--chart-4)" },
+} satisfies ChartConfig
+
+/** The turns that closed in each bucket, stacked by how they closed. A bar opens its turns. */
+function TurnsChart({
+  buckets,
+  by,
+  onBucket,
+}: {
+  buckets: StatsBucket[]
+  by: StatsBucketSize
+  onBucket: (start: string) => void
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Turns</CardTitle>
+        <CardDescription>
+          {buckets.length === 0
+            ? "No turn closed in this range."
+            : `Per ${by}, UTC. Click a bar to list its turns.`}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ChartContainer config={TURN_SERIES} className="aspect-auto h-64 w-full">
+          <BarChart data={buckets} accessibilityLayer>
+            <CartesianGrid vertical={false} />
+            <XAxis
+              dataKey="start"
+              tickLine={false}
+              axisLine={false}
+              minTickGap={16}
+              tickFormatter={dayLabel}
+            />
+            <YAxis tickLine={false} axisLine={false} width={32} allowDecimals={false} />
+            <ChartTooltip
+              content={
+                <ChartTooltipContent
+                  labelFormatter={(start) =>
+                    by === "week" ? `Week of ${dayLabel(String(start))}` : dayLabel(String(start))
+                  }
+                />
+              }
+            />
+            <ChartLegend content={<ChartLegendContent />} />
+            {Object.keys(TURN_SERIES).map((series) => (
+              <Bar
+                key={series}
+                dataKey={series}
+                stackId="turns"
+                fill={`var(--color-${series})`}
+                className="cursor-pointer"
+                onClick={(_, index) => onBucket(buckets[index].start)}
+              />
+            ))}
+          </BarChart>
+        </ChartContainer>
+      </CardContent>
+    </Card>
+  )
+}
+
+const VERDICTS = { good: "Good", bad: "Bad" }
+
+/** One bucket's turns, each with who started it, how it ended, and a link to its thread. */
+function BucketTurns({
+  title,
+  turns,
+  instanceId,
+  onClose,
+}: {
+  title: string
+  turns: TurnMetrics[]
+  instanceId: string
+  onClose: () => void
+}) {
+  const titleId = useId()
+  return (
+    <section aria-labelledby={titleId} className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <h2 id={titleId} className="font-medium">
+          {title}
+        </h2>
+        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose}>
+          <XIcon />
+        </Button>
+      </div>
+      <Table aria-labelledby={titleId}>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Origin</TableHead>
+            <TableHead>Outcome</TableHead>
+            <TableHead>Rating</TableHead>
+            <TableHead>Delegated runs</TableHead>
+            <TableHead className="text-right">API cost</TableHead>
+            <TableHead>
+              <span className="sr-only">Link</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {turns.map((turn) => (
+            <TableRow key={`${turn.thread_id} ${turn.turn_id}`}>
+              <TableCell>{originLabel(turn.origin)}</TableCell>
+              <TableCell>
+                <Badge variant={turn.closing_kind === "completed" ? "outline" : "destructive"}>
+                  {turn.closing_kind}
+                </Badge>
+              </TableCell>
+              <TableCell>{turn.rating === null ? "—" : VERDICTS[turn.rating.verdict]}</TableCell>
+              <TableCell>
+                {turn.delegated_runs?.length
+                  ? turn.delegated_runs.map((reported) => reported.run.client).join(" · ")
+                  : "—"}
+              </TableCell>
+              <TableCell className="text-right">{money(turn.cost)}</TableCell>
+              <TableCell className="text-right">
+                <a
+                  className={buttonVariants({ variant: "link", size: "sm" })}
+                  href={threadPath(instanceId, turn.thread_id)}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    selectThread(instanceId, turn.thread_id)
+                  }}
+                >
+                  Open in chat
+                </a>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </section>
+  )
+}

@@ -5,6 +5,7 @@ const SECTION = "instances"
 const THREADS = "threads"
 const CONFIG = "config"
 const MEMORY = "memory"
+const STATS = "stats"
 export const CREATE_PATH = "/new"
 
 const listeners = new Set<() => void>()
@@ -25,6 +26,10 @@ function memoryPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${MEMORY}`
 }
 
+function statsPath(instanceId: string): string {
+  return `${instancePath(instanceId)}/${STATS}`
+}
+
 /** Select an instance without reloading the page, as a new entry in the browser's history. */
 export function selectInstance(instanceId: string): void {
   navigate(instancePath(instanceId))
@@ -43,6 +48,11 @@ export function openConfig(instanceId: string): void {
 /** Open an instance's memory page the same way. */
 export function openMemory(instanceId: string): void {
   navigate(memoryPath(instanceId))
+}
+
+/** Open an instance's stats page the same way. */
+export function openStats(instanceId: string): void {
+  navigate(statsPath(instanceId))
 }
 
 /** Open the create wizard the same way. */
@@ -68,6 +78,11 @@ export function useConfigOpen(): boolean {
 /** Whether the URL opens its instance's memory page. */
 export function useMemoryOpen(): boolean {
   return useSyncExternalStore(subscribe, memoryOpen)
+}
+
+/** Whether the URL opens its instance's stats page. */
+export function useStatsOpen(): boolean {
+  return useSyncExternalStore(subscribe, statsOpen)
 }
 
 /** Whether the URL opens the create wizard. */
@@ -100,6 +115,11 @@ function configOpen(): boolean {
 function memoryOpen(): boolean {
   const [, section, instanceId, memory] = window.location.pathname.split("/")
   return section === SECTION && Boolean(instanceId) && memory === MEMORY
+}
+
+function statsOpen(): boolean {
+  const [, section, instanceId, stats] = window.location.pathname.split("/")
+  return section === SECTION && Boolean(instanceId) && stats === STATS
 }
 
 // Back and forward change the URL too.

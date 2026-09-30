@@ -241,6 +241,34 @@ describe("the instances", () => {
     expect(hub.sockets).toHaveLength(1)
   })
 
+  it("opens a running instance's stats from its page, and puts it in the URL", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("button", { name: "Stats" }))
+
+    expect(window.location.pathname).toBe("/instances/hub-ada/stats")
+    expect(screen.getByRole("tab", { name: "Overview" })).toBeDefined()
+    const relayed = hub.sockets.find(
+      (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
+    )
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(relayed?.sent).toContainEqual(
+      expect.objectContaining({ type: "call", method: "stats.get" }),
+    )
+  })
+
+  it("asks to start a stopped instance to see its stats", async () => {
+    window.history.replaceState(null, "", "/instances/hub-unnamed/stats")
+
+    const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    expect(await screen.findByText("Start it to see its stats.")).toBeDefined()
+    expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull()
+    expect(hub.sockets).toHaveLength(1)
+  })
+
   it("restores the config panel from the URL", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/config")
 

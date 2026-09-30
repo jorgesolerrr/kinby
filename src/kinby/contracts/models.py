@@ -1316,6 +1316,7 @@ class TurnMetrics(TokenTotals):
     turn_id: UUID
     model: str | None
     prompt_version: PromptVersion | None
+    origin: Origin | None
     closing_kind: TurnClosingKind
     started_at: datetime | None
     closed_at: datetime

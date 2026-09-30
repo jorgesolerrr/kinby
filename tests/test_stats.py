@@ -12,6 +12,7 @@ from kinby.contracts import (
     CompletionOutcome,
     DelegatedRun,
     DelegatedRunOutcome,
+    DeliveryId,
     DenyCounts,
     ErrorCode,
     ErrorEnvelope,
@@ -23,6 +24,10 @@ from kinby.contracts import (
     ModelCompleted,
     Navigation,
     NavigationMeans,
+    Origin,
+    RoutineName,
+    RoutineOrigin,
+    RoutineTrigger,
     RunDelegated,
     Scope,
     StatsBucket,
@@ -42,6 +47,7 @@ from kinby.contracts import (
     TurnStarted,
     TurnVerdict,
     UsageSource,
+    UserOrigin,
 )
 from kinby.core import turn_metrics
 from kinby.core.budgets import daily_cost
@@ -1120,7 +1126,44 @@ def test_stats_get_marks_missing_start_metadata_as_unknown(tmp_path: Path) -> No
     assert result.records[0].model is None
     assert result.records[0].started_at is None
     assert result.records[0].duration_seconds is None
+    assert result.records[0].origin is None
     assert result.buckets[0].mean_duration_seconds is None
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        UserOrigin(),
+        RoutineOrigin(name=RoutineName("inbox"), trigger=RoutineTrigger.SCHEDULED),
+        RoutineOrigin(name=RoutineName("inbox"), trigger=RoutineTrigger.MANUAL),
+        RoutineOrigin(name=RoutineName("inbox"), trigger=RoutineTrigger.CATCH_UP),
+        RoutineOrigin(
+            name=RoutineName("babysit"),
+            trigger=RoutineTrigger.SIGNAL,
+            delivery_id=DeliveryId("delivery-7"),
+        ),
+    ],
+    ids=["chat", "scheduled", "manual", "catch-up", "signal"],
+)
+def test_stats_get_carries_the_origin_its_turn_started_with(tmp_path: Path, origin: Origin) -> None:
+    events = _turn_events(
+        uuid4(),
+        uuid4(),
+        datetime(2026, 9, 1, 10, tzinfo=UTC),
+        TurnStarted(message="Go", model="claude-sonnet-4-5", origin=origin),
+        TurnCompleted(input_tokens=11, output_tokens=7),
+    )
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get",
+            {},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert [record.origin for record in result.records] == [origin]
 
 
 def test_stats_get_aggregates_closed_turns_by_utc_day(tmp_path: Path) -> None:
@@ -1688,6 +1731,7 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
     assert len(report.records) == 1
     assert report.records[0].turn_id == closed.turn_id
     assert report.records[0].prompt_version == "123456789abc"
+    assert report.records[0].origin == UserOrigin()
     assert report.records[0].navigation == Navigation(
         read_calls=0,
         write_calls=2,
