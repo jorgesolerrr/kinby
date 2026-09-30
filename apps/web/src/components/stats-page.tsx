@@ -8,10 +8,13 @@ import type {
   TurnMetrics,
 } from "@kinby/contract"
 import { useEffect, useId, useState } from "react"
-import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
+import { Bar, BarChart } from "recharts"
 
+import { BucketAxes } from "@/components/bucket-axes"
 import { Failure } from "@/components/config-alerts"
 import { PlansStrip } from "@/components/plans-strip"
+import { Quality } from "@/components/stats-quality"
+import { Spend } from "@/components/stats-spend"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -39,6 +42,7 @@ import { usePace } from "@/hooks/use-pace"
 import { retried } from "@/lib/operation"
 import { selectThread, threadPath } from "@/lib/selection"
 import {
+  bucketLabel,
   bucketSize,
   bucketTurns,
   dayLabel,
@@ -136,32 +140,40 @@ export function StatsPage({
       <Tabs defaultValue="overview">
         <TabsList variant="line">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          {/* Each of these lands with its own ticket. */}
-          <TabsTrigger value="spend" disabled>
-            Spend
-          </TabsTrigger>
+          <TabsTrigger value="spend">Spend</TabsTrigger>
+          {/* Lands with its own ticket. */}
           <TabsTrigger value="origin" disabled>
             Origin
           </TabsTrigger>
-          <TabsTrigger value="quality" disabled>
-            Quality
-          </TabsTrigger>
+          <TabsTrigger value="quality">Quality</TabsTrigger>
         </TabsList>
-        <TabsContent value="overview">
-          <div className="flex flex-col gap-4 pt-4">
-            {stats === undefined ? (
-              failure === undefined && <Skeleton className="h-72 w-full" />
-            ) : (
-              <Overview
-                stats={stats}
-                by={by}
-                bucket={bucket}
-                instanceId={instanceId}
-                onBucket={setBucket}
-              />
-            )}
-          </div>
-        </TabsContent>
+        {stats === undefined ? (
+          failure === undefined && <Skeleton className="mt-4 h-72 w-full" />
+        ) : (
+          <>
+            <TabsContent value="overview">
+              <div className="flex flex-col gap-4 pt-4">
+                <Overview
+                  stats={stats}
+                  by={by}
+                  bucket={bucket}
+                  instanceId={instanceId}
+                  onBucket={setBucket}
+                />
+              </div>
+            </TabsContent>
+            <TabsContent value="spend">
+              <div className="flex flex-col gap-4 pt-4">
+                <Spend stats={stats} by={by} />
+              </div>
+            </TabsContent>
+            <TabsContent value="quality">
+              <div className="flex flex-col gap-4 pt-4">
+                <Quality stats={stats} by={by} />
+              </div>
+            </TabsContent>
+          </>
+        )}
       </Tabs>
     </div>
   )
@@ -304,22 +316,10 @@ function TurnsChart({
       <CardContent>
         <ChartContainer config={TURN_SERIES} className="aspect-auto h-64 w-full">
           <BarChart data={buckets} accessibilityLayer>
-            <CartesianGrid vertical={false} />
-            <XAxis
-              dataKey="start"
-              tickLine={false}
-              axisLine={false}
-              minTickGap={16}
-              tickFormatter={dayLabel}
-            />
-            <YAxis tickLine={false} axisLine={false} width={32} allowDecimals={false} />
+            <BucketAxes />
             <ChartTooltip
               content={
-                <ChartTooltipContent
-                  labelFormatter={(start) =>
-                    by === "week" ? `Week of ${dayLabel(String(start))}` : dayLabel(String(start))
-                  }
-                />
+                <ChartTooltipContent labelFormatter={(start) => bucketLabel(String(start), by)} />
               }
             />
             <ChartLegend content={<ChartLegendContent />} />

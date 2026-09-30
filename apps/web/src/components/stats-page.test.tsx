@@ -95,6 +95,47 @@ function clickBar(index: number) {
   fireEvent.click(bar)
 }
 
+/**
+ * What the chart in `region` shows for each bucket, first to last, as a keyboard reader steps
+ * through it: focusing the chart opens the first bucket's tooltip and ArrowRight moves along.
+ */
+function bucketTooltips(region: HTMLElement, count: number): string[] {
+  const chart = region.querySelector("svg.recharts-surface")
+  if (!chart) throw new Error("The region has no chart")
+  const read = () => region.querySelector(".recharts-tooltip-wrapper")?.textContent ?? ""
+  act(() => {
+    fireEvent.focus(chart)
+  })
+  const shown = [read()]
+  while (shown.length < count) {
+    act(() => {
+      fireEvent.keyDown(chart, { key: "ArrowRight" })
+    })
+    shown.push(read())
+  }
+  return shown
+}
+
+/** Each row of `table` below its header, as the text of its cells. */
+function rows(table: HTMLElement): (string | null)[][] {
+  return within(table)
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) =>
+      within(row)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    )
+}
+
+/** Each count a region lists, as its name and its value. */
+function counts(region: HTMLElement): [string | null, string | null][] {
+  const values = within(region).getAllByRole("definition")
+  return within(region)
+    .getAllByRole("term")
+    .map((term, index) => [term.textContent, values[index].textContent])
+}
+
 function openStats(answers: Answers = { "stats.get": () => stats() }) {
   const client = stubCaller(answers)
   render(<StatsPage client={client} clock={fakeClock()} instanceId="hub-ada" />)
@@ -155,14 +196,15 @@ describe("the stats page", () => {
     expect(client.calls.map((call) => call.method)).toEqual(["stats.get"])
   })
 
-  it("opens on Overview, and shows Spend, Origin, and Quality as unavailable", async () => {
+  it("opens on Overview, and shows Origin as unavailable", async () => {
     openStats()
 
     const overview = await screen.findByRole("tab", { name: "Overview" })
 
     expect(overview.getAttribute("aria-selected")).toBe("true")
-    for (const name of ["Spend", "Origin", "Quality"]) {
-      expect(screen.getByRole("tab", { name }).getAttribute("aria-disabled")).toBe("true")
+    expect(screen.getByRole("tab", { name: "Origin" }).getAttribute("aria-disabled")).toBe("true")
+    for (const name of ["Spend", "Quality"]) {
+      expect(screen.getByRole("tab", { name }).getAttribute("aria-disabled")).toBe("false")
     }
   })
 
@@ -195,10 +237,12 @@ describe("the stats page", () => {
     expect(await tile("Ratings")).toBe("Ratings3 good1 bad")
   })
 
-  it("shows no cost and no ratings as a dash", async () => {
+  it("shows an unpriced cost as not priced and no ratings as a dash", async () => {
     openStats()
 
-    expect((await screen.findByRole("region", { name: "API cost" })).textContent).toContain("—")
+    expect((await screen.findByRole("region", { name: "API cost" })).textContent).toContain(
+      "not priced",
+    )
     expect(screen.getByRole("region", { name: "Ratings" }).textContent).toContain("—")
   })
 
@@ -274,7 +318,7 @@ describe("the stats page", () => {
       ["inbox · scheduled", "failed", "—", "claude-code · codex", "$1.20", "Open in chat"],
       ["Chat", "completed", "Good", "—", "$0.50", "Open in chat"],
       ["Chat", "completed", "—", "—", "$0.10", "Open in chat"],
-      ["babysit · signal", "completed", "—", "—", "—", "Open in chat"],
+      ["babysit · signal", "completed", "—", "—", "not priced", "Open in chat"],
     ])
     await user.click(within(listed).getAllByRole("link", { name: "Open in chat" })[0])
     expect(window.location.pathname).toBe("/instances/hub-ada/threads/thread-inbox")
@@ -322,5 +366,211 @@ describe("the stats page", () => {
     expect(statsReads(client)).toEqual(
       Array(3).fill({ since: "2026-09-24T00:00:00.000Z", by: "day" }),
     )
+  })
+})
+
+async function openTab(name: string) {
+  const user = userEvent.setup()
+  await user.click(await screen.findByRole("tab", { name }))
+}
+
+describe("the Spend tab", () => {
+  it("shows the range's usage by source: API tokens and cost, and each plan's runs", async () => {
+    openStats({
+      "stats.get": () =>
+        stats({
+          total: summary({
+            completed: 4,
+            input_tokens: 12_000,
+            output_tokens: 3_400,
+            cost: 1.236,
+            subscriptions: [
+              {
+                usage_source: "claude-subscription",
+                runs: 3,
+                input_tokens: 40_000,
+                output_tokens: 2_000,
+                duration_ms: 5_400_000,
+              },
+              {
+                usage_source: "chatgpt-subscription",
+                runs: 1,
+                input_tokens: 900,
+                output_tokens: 100,
+                duration_ms: 95_000,
+              },
+            ],
+          }),
+        }),
+    })
+
+    await openTab("Spend")
+
+    expect(rows(screen.getByRole("table", { name: "Usage by source" }))).toEqual([
+      ["API", "—", "15,400", "—", "$1.24"],
+      ["Claude", "3", "42,000", "1h 30m", "not priced"],
+      ["ChatGPT", "1", "1,000", "1m 35s", "not priced"],
+    ])
+  })
+  it("shows the API cost of each bucket, and an unpriced one as not priced", async () => {
+    openStats({
+      "stats.get": () =>
+        stats({
+          buckets: [
+            { ...summary({ completed: 2, cost: 0.5 }), start: "2026-09-27" },
+            { ...summary({ completed: 1, cost: null }), start: "2026-09-28" },
+            { ...summary({ completed: 3, cost: 1.236 }), start: "2026-09-29" },
+          ],
+          total: summary({ completed: 6, cost: 1.736 }),
+        }),
+    })
+
+    await openTab("Spend")
+
+    expect(bucketTooltips(screen.getByRole("region", { name: "API cost" }), 3)).toEqual([
+      "Sep 27API cost$0.50",
+      "Sep 28API costnot priced",
+      "Sep 29API cost$1.24",
+    ])
+  })
+
+  it("says so when no turn in the range was priced, and never shows the cost as 0", async () => {
+    openStats({
+      "stats.get": () =>
+        stats({
+          buckets: [
+            { ...summary({ completed: 2 }), start: "2026-09-27" },
+            { ...summary({ completed: 1 }), start: "2026-09-28" },
+          ],
+          total: summary({ completed: 3, input_tokens: 800 }),
+          unpriced_models: ["ollama:llama3"],
+        }),
+    })
+
+    await openTab("Spend")
+
+    const cost = screen.getByRole("region", { name: "API cost" })
+    expect(within(cost).getByText("No turn in this range was priced.")).toBeDefined()
+    expect(cost.querySelector("svg.recharts-surface")).toBeNull()
+    expect(rows(screen.getByRole("table", { name: "Usage by source" }))[0]).toEqual([
+      "API",
+      "—",
+      "800",
+      "—",
+      "not priced",
+    ])
+    expect(within(screen.getByRole("tabpanel")).queryByText(/\$0/)).toBeNull()
+  })
+  it("shows each plan's runs in each bucket", async () => {
+    const runs = (claude: number, chatgpt: number) => [
+      { usage_source: "claude-subscription" as const, runs: claude },
+      { usage_source: "chatgpt-subscription" as const, runs: chatgpt },
+    ]
+    openStats({
+      "stats.get": () =>
+        stats({
+          buckets: [
+            { ...summary({ subscriptions: runs(2, 1) }), start: "2026-09-27" },
+            { ...summary({ subscriptions: runs(0, 3) }), start: "2026-09-28" },
+          ],
+        }),
+    })
+
+    await openTab("Spend")
+
+    expect(bucketTooltips(screen.getByRole("region", { name: "Plan runs" }), 2)).toEqual([
+      "Sep 27Claude2ChatGPT1",
+      "Sep 28Claude0ChatGPT3",
+    ])
+  })
+})
+
+describe("the Quality tab", () => {
+  it("counts the range's tools, memory calls, approvals and denials, and ratings", async () => {
+    openStats({
+      "stats.get": () =>
+        stats({
+          total: summary({
+            completed: 6,
+            tool_calls: { read_file: 12, bash: 30, write_file: 4 },
+            memory_calls: { search: 5, open: 3, remember: 1 },
+            turns_without_memory: 2,
+            approvals_requested: 4,
+            denies: { policy: 1, user: 2 },
+            good_ratings: 3,
+            bad_ratings: 1,
+          }),
+        }),
+    })
+
+    await openTab("Quality")
+
+    const region = (name: string) => counts(screen.getByRole("region", { name }))
+    expect(region("Most-called tools")).toEqual([
+      ["bash", "30"],
+      ["read_file", "12"],
+      ["write_file", "4"],
+    ])
+    expect(region("Memory")).toEqual([
+      ["Searches", "5"],
+      ["Opens", "3"],
+      ["Remembered", "1"],
+      ["Forgotten", "0"],
+      ["Turns without memory", "2"],
+    ])
+    expect(region("Approvals")).toEqual([
+      ["Asked", "4"],
+      ["Denied by policy", "1"],
+      ["Denied by you", "2"],
+    ])
+    expect(region("Ratings")).toEqual([
+      ["Good", "3"],
+      ["Bad", "1"],
+    ])
+  })
+  it("shows each bucket's mean reads before the first write, over the turns that wrote", async () => {
+    const navigated = (turnId: string, closedAt: string, reads: number, writes: number) =>
+      turn({
+        turn_id: turnId,
+        closed_at: closedAt,
+        navigation: { read_calls: reads + 4, reads_before_first_write: reads, write_calls: writes },
+      })
+    openStats({
+      "stats.get": () =>
+        stats({
+          records: [
+            navigated("fix", "2026-09-27T09:00:00Z", 6, 2),
+            navigated("refactor", "2026-09-27T17:00:00Z", 3, 1),
+            navigated("look around", "2026-09-27T18:00:00Z", 10, 0),
+            navigated("rename", "2026-09-28T08:00:00Z", 2, 1),
+          ],
+          buckets: [
+            { ...summary({ completed: 3 }), start: "2026-09-27" },
+            { ...summary({ completed: 1 }), start: "2026-09-28" },
+          ],
+        }),
+    })
+
+    await openTab("Quality")
+
+    expect(bucketTooltips(screen.getByRole("region", { name: "Navigation" }), 2)).toEqual([
+      "Sep 27Reads before the first write4.5",
+      "Sep 28Reads before the first write2",
+    ])
+  })
+
+  it("hides the navigation trend when no turn in the range navigated", async () => {
+    openStats({
+      "stats.get": () =>
+        stats({
+          records: [turn({ turn_id: "chat", navigation: { read_calls: 3, write_calls: 0 } })],
+          buckets: [{ ...summary({ completed: 1 }), start: "2026-09-28" }],
+        }),
+    })
+
+    await openTab("Quality")
+
+    expect(screen.getByRole("region", { name: "Ratings" })).toBeDefined()
+    expect(screen.queryByRole("region", { name: "Navigation" })).toBeNull()
   })
 })
