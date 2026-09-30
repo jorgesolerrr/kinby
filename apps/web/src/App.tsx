@@ -8,6 +8,7 @@ import { CreateWizard } from "@/components/create-wizard"
 import { MainPanel } from "@/components/main-panel"
 import { NavThreads } from "@/components/nav-threads"
 import { SignIn } from "@/components/sign-in"
+import { UsagePage } from "@/components/usage-page"
 import { Badge } from "@/components/ui/badge"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -20,6 +21,7 @@ import {
   useSelectedInstanceId,
   useSelectedThreadId,
   useStatsOpen,
+  useUsageOpen,
 } from "@/lib/selection"
 
 export default function App({ client, clock = browserClock }: { client: Client; clock?: Clock }) {
@@ -37,6 +39,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const configOpen = useConfigOpen()
   const memoryOpen = useMemoryOpen()
   const statsOpen = useStatsOpen()
+  const usageOpen = useUsageOpen()
   // An instance the hub does not have, or no longer has, selects nothing.
   const selected = instances?.find((instance) => instance.instance_id === selectedId)
   // The hub relays only to a running instance. An open config panel keeps its connection while the
@@ -55,6 +58,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           instances={instances ?? []}
           selected={selected}
           creating={creating}
+          usageOpen={usageOpen}
           threads={
             instanceClient !== undefined &&
             running !== undefined && (
@@ -76,6 +80,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           </header>
           {creating ? (
             <CreateWizard caller={client} clock={clock} onPublished={listAgain} />
+          ) : usageOpen ? (
+            <UsagePage client={client} clock={clock} />
           ) : (
             <MainPanel
               caller={client}

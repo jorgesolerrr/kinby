@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { StatsPage } from "@/components/stats-page"
+import { bucketTooltips, rows } from "@/components/stats-testing"
 
 function originUse(routine: string | null, fields: Partial<OriginUse> = {}): OriginUse {
   return {
@@ -117,39 +118,6 @@ function clickBar(index: number) {
   const bar = document.querySelectorAll(".recharts-bar-rectangle")[index]?.firstElementChild
   if (!bar) throw new Error(`The chart has no bar ${index}`)
   fireEvent.click(bar)
-}
-
-/**
- * What the chart in `region` shows for each bucket, first to last, as a keyboard reader steps
- * through it: focusing the chart opens the first bucket's tooltip and ArrowRight moves along.
- */
-function bucketTooltips(region: HTMLElement, count: number): string[] {
-  const chart = region.querySelector("svg.recharts-surface")
-  if (!chart) throw new Error("The region has no chart")
-  const read = () => region.querySelector(".recharts-tooltip-wrapper")?.textContent ?? ""
-  act(() => {
-    fireEvent.focus(chart)
-  })
-  const shown = [read()]
-  while (shown.length < count) {
-    act(() => {
-      fireEvent.keyDown(chart, { key: "ArrowRight" })
-    })
-    shown.push(read())
-  }
-  return shown
-}
-
-/** Each row of `table` below its header, as the text of its cells. */
-function rows(table: HTMLElement): (string | null)[][] {
-  return within(table)
-    .getAllByRole("row")
-    .slice(1)
-    .map((row) =>
-      within(row)
-        .getAllByRole("cell")
-        .map((cell) => cell.textContent),
-    )
 }
 
 /** Each count a region lists, as its name and its value. */
