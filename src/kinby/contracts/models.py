@@ -1079,6 +1079,9 @@ class SecretSetup(ContractModel):
     """One secret field an instance declares, and whether it holds a value. Never the value."""
 
     name: str
+    #: The environment variable the value lands in. The API key's has none while the instance's
+    #: model cannot be read.
+    variable: str | None
     label: str
     required: bool
     is_set: bool

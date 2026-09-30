@@ -28,9 +28,27 @@ const setup: InstanceSetup = {
     },
   ],
   secrets: [
-    { name: "api_key", label: "API key", required: true, is_set: true },
-    { name: "GH_TOKEN", label: "GitHub token", required: true, is_set: false },
-    { name: "WEBHOOK_SECRET", label: "Webhook secret", required: false, is_set: false },
+    {
+      name: "api_key",
+      variable: "ANTHROPIC_API_KEY",
+      label: "API key",
+      required: true,
+      is_set: true,
+    },
+    {
+      name: "GH_TOKEN",
+      variable: "GH_TOKEN",
+      label: "GitHub token",
+      required: true,
+      is_set: false,
+    },
+    {
+      name: "WEBHOOK_SECRET",
+      variable: "WEBHOOK_SECRET",
+      label: "Webhook secret",
+      required: false,
+      is_set: false,
+    },
   ],
 }
 

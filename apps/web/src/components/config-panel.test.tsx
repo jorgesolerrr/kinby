@@ -40,8 +40,20 @@ const setup: InstanceSetup = {
     },
   ],
   secrets: [
-    { name: "api_key", label: "API key", required: true, is_set: true },
-    { name: "GH_TOKEN", label: "GitHub token", required: true, is_set: false },
+    {
+      name: "api_key",
+      variable: "ANTHROPIC_API_KEY",
+      label: "API key",
+      required: true,
+      is_set: true,
+    },
+    {
+      name: "GH_TOKEN",
+      variable: "GH_TOKEN",
+      label: "GitHub token",
+      required: true,
+      is_set: false,
+    },
   ],
 }
 
@@ -764,14 +776,28 @@ describe("ConfigPanel", () => {
     const secret = (name: string) =>
       within(within(screen.getByRole("list", { name: "Secrets" })).getByRole("listitem", { name }))
 
-    it("lists each secret and whether it is set, with Set or Replace", async () => {
+    it("lists each secret, the variable it lands in, and whether it is set, with Set or Replace", async () => {
       await openSecrets({})
 
       expect(secret("API key").getByText("Set")).toBeDefined()
-      expect(secret("API key").getByText("api_key")).toBeDefined()
+      expect(secret("API key").getByText("ANTHROPIC_API_KEY")).toBeDefined()
+      expect(secret("API key").queryByText("api_key")).toBeNull()
+      expect(secret("GitHub token").getByText("GH_TOKEN")).toBeDefined()
       expect(secret("API key").getByRole("button", { name: "Replace" })).toBeDefined()
       expect(secret("GitHub token").getByText("Not set")).toBeDefined()
       expect(secret("GitHub token").getByRole("button", { name: "Set" })).toBeDefined()
+    })
+
+    it("names no variable for the API key while the instance's model cannot be read", async () => {
+      const unread = setup.secrets.map((each) =>
+        each.name === "api_key" ? { ...each, variable: null } : each,
+      )
+      await openSecrets({
+        "instance.status": () => status({ setup: { ...setup, secrets: unread } }),
+      })
+
+      expect(secret("API key").queryByText("api_key")).toBeNull()
+      expect(secret("API key").queryByRole("code")).toBeNull()
     })
 
     it("replaces a secret, and the notice asks for a recreate", async () => {

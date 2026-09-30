@@ -17,6 +17,7 @@ from kinby.contracts import (
     LoginSetup,
     LoginState,
     OperationState,
+    PackageDescription,
     SecretSetup,
     SetupField,
     SetupFieldKind,
@@ -24,7 +25,8 @@ from kinby.contracts import (
     SubscriptionLogin,
 )
 from kinby.hub import Hub
-from kinby.packages import InstalledPackage, PackageDescriptor
+from kinby.hub.setup import instance_setup
+from kinby.packages import API_KEY_FIELD, InstalledPackage, PackageDescriptor
 from tests.test_hub import (
     FakeControl,
     FakeImages,
@@ -116,10 +118,26 @@ def test_a_created_instance_reads_its_logins_pending_and_which_secrets_are_set(t
                 ),
             ],
             secrets=[
-                SecretSetup(name="api_key", label="API key", required=True, is_set=True),
-                SecretSetup(name="WRITER_TOKEN", label="Writer token", required=True, is_set=True),
                 SecretSetup(
-                    name="WRITER_WEBHOOK", label="Webhook secret", required=False, is_set=False
+                    name="api_key",
+                    variable="OPENAI_API_KEY",
+                    label="API key",
+                    required=True,
+                    is_set=True,
+                ),
+                SecretSetup(
+                    name="WRITER_TOKEN",
+                    variable="WRITER_TOKEN",
+                    label="Writer token",
+                    required=True,
+                    is_set=True,
+                ),
+                SecretSetup(
+                    name="WRITER_WEBHOOK",
+                    variable="WRITER_WEBHOOK",
+                    label="Webhook secret",
+                    required=False,
+                    is_set=False,
                 ),
             ],
         )
@@ -319,10 +337,22 @@ def test_an_api_key_set_from_the_setup_card_reads_set(tmp_path):
         await finished_operation(hub_client(hub), replaced)
 
         assert missing.secrets == [
-            SecretSetup(name="api_key", label="API key", required=True, is_set=False)
+            SecretSetup(
+                name="api_key",
+                variable="OPENAI_API_KEY",
+                label="API key",
+                required=True,
+                is_set=False,
+            )
         ]
         assert (await setup_of(hub, instance_id)).secrets == [
-            SecretSetup(name="api_key", label="API key", required=True, is_set=True)
+            SecretSetup(
+                name="api_key",
+                variable="OPENAI_API_KEY",
+                label="API key",
+                required=True,
+                is_set=True,
+            )
         ]
         assert await pending_by_instance(hub) == {instance_id: False}
 
@@ -364,3 +394,32 @@ def test_an_instance_starts_while_its_setup_is_pending(tmp_path):
         assert await pending_by_instance(hub) == {instance_id: True}
 
     asyncio.run(scenario())
+
+
+def secret_variables(model: str | None) -> dict[str, str | None]:
+    description = PackageDescription(
+        display_name="Writing teammate",
+        description="Drafts articles.",
+        icon="pen",
+        version="1.4.2",
+        setup_fields=[API_KEY_FIELD, TOKEN, WEBHOOK],
+    )
+    setup = instance_setup(description, logins={}, running={}, secrets={}, model=model)
+    return {secret.name: secret.variable for secret in setup.secrets}
+
+
+def test_each_secret_names_the_variable_its_value_lands_in():
+    assert secret_variables("anthropic:claude-opus-5-5") == {
+        "api_key": "ANTHROPIC_API_KEY",
+        "WRITER_TOKEN": "WRITER_TOKEN",
+        "WRITER_WEBHOOK": "WRITER_WEBHOOK",
+    }
+    assert secret_variables("openai:gpt-5")["api_key"] == "OPENAI_API_KEY"
+
+
+def test_the_api_key_names_no_variable_when_the_model_cannot_be_read():
+    assert secret_variables(None) == {
+        "api_key": None,
+        "WRITER_TOKEN": "WRITER_TOKEN",
+        "WRITER_WEBHOOK": "WRITER_WEBHOOK",
+    }
