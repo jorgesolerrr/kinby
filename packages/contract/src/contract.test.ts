@@ -14,6 +14,7 @@ import type {
   PlanLimit,
   PlanWindow,
   ResultFrame,
+  RoutineOrigin,
   RunDelegated,
   ServerFrame,
   StatsBucket,
@@ -22,6 +23,7 @@ import type {
   SubscriptionUse,
   ThreadStatus,
   ThreadSummary,
+  UserOrigin,
 } from "./index"
 
 test("the committed types are a fresh generation of the contract schema", async () => {
@@ -88,6 +90,14 @@ test("stats.get names each subscription source's plan windows and active limits"
 
   expectTypeOf<Stats["plan_windows"]>().toEqualTypeOf<PlanWindow[]>()
   expectTypeOf<Stats["limits"]>().toEqualTypeOf<PlanLimit[]>()
+})
+
+test("stats.get carries each turn's origin, or null when the log has no start for it", () => {
+  type Stats = Contract["methods"]["stats.get"]["result"]
+
+  expectTypeOf<Stats["records"][number]["origin"]>().toEqualTypeOf<
+    UserOrigin | RoutineOrigin | null
+  >()
 })
 
 test("stats.summary takes stats.get's range and names each instance it counted or left out", () => {

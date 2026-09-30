@@ -31,10 +31,11 @@ import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
 import { followStart, type Starting } from "@/lib/creation"
 import { instanceName, observedState } from "@/lib/instances"
-import { openConfig, openMemory } from "@/lib/selection"
+import { openConfig, openMemory, openStats } from "@/lib/selection"
 import {
   BotIcon,
   BrainIcon,
+  ChartColumnIcon,
   CirclePauseIcon,
   CircleXIcon,
   SlidersHorizontalIcon,
@@ -42,8 +43,8 @@ import {
 
 /**
  * What one instance shows. A stopped instance with setup pending opens on its setup card, and
- * keeps it until it runs. Any other stopped one offers Start. A running one opens its config panel
- * and its memory, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
+ * keeps it until it runs. Any other stopped one offers Start. A running one opens its config panel,
+ * its memory, and its stats, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
  * all are.
  * `onChanged` hears a sign-in or a start end, so the instances are listed again, and must keep
  * its identity.
@@ -96,6 +97,10 @@ export function InstancePage({
           <Button variant="outline" onClick={() => openMemory(instance.instance_id)}>
             <BrainIcon data-icon="inline-start" />
             Memory
+          </Button>
+          <Button variant="outline" onClick={() => openStats(instance.instance_id)}>
+            <ChartColumnIcon data-icon="inline-start" />
+            Stats
           </Button>
         </div>
         <ProcessAlert instance={instance} name={name} />

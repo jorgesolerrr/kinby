@@ -20,6 +20,7 @@ from kinby.contracts import (
     ModelCallMismatch,
     ModelCompleted,
     Navigation,
+    Origin,
     PromptVersion,
     ReportedRun,
     RunDelegated,
@@ -63,6 +64,7 @@ class _TurnEvents:
     started_at: datetime
     model: str
     prompt_version: PromptVersion | None
+    origin: Origin
     tool_calls: Counter[str] = field(default_factory=Counter)
     tool_writes: dict[str, bool | None] = field(default_factory=dict)
     denies: Counter[str] = field(default_factory=Counter)
@@ -123,6 +125,7 @@ def turn_metrics(
                 event.timestamp,
                 payload.model,
                 payload.prompt_version,
+                payload.origin,
             )
             continue
 
@@ -203,6 +206,7 @@ def turn_metrics(
                 turn_id=event.turn_id,
                 model=turn.model if turn else None,
                 prompt_version=turn.prompt_version if turn else None,
+                origin=turn.origin if turn else None,
                 closing_kind=_closing_kind(payload),
                 started_at=turn.started_at if turn else None,
                 closed_at=event.timestamp,

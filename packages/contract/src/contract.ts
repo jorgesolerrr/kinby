@@ -110,6 +110,7 @@ export type StatsBucketSize = "day" | "week";
 export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
 export type TurnClosingKind = "completed" | "failed" | "interrupted";
 export type DelegatedRunOutcome = "completed" | "failed" | "limited";
+export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
 export type TurnVerdict = "good" | "bad";
 export type ApprovalDecision = "approve" | "deny";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
@@ -139,7 +140,6 @@ export type ErrorCode =
   | "ROUTINE_PENDING"
   | "CONNECTION_LOST"
   | "INTERNAL";
-export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
 export type GateOutcome = "allow" | "deny";
 export type GateDecider = "policy" | "user";
 export type CompletionOutcome = "work" | "no-work";
@@ -1248,6 +1248,7 @@ export interface TurnMetrics {
   memory_tokens: number;
   model: string | null;
   navigation?: Navigation;
+  origin: (UserOrigin | RoutineOrigin) | null;
   output_tokens: number;
   prompt_version: string | null;
   rating: TurnRated | null;
@@ -1295,6 +1296,15 @@ export interface Navigation {
   repeat_opens?: number;
   tokens_before_first_write?: number;
   write_calls?: number;
+}
+export interface UserOrigin {
+  kind: "user";
+}
+export interface RoutineOrigin {
+  delivery_id?: string | null;
+  kind: "routine";
+  name: string;
+  trigger: RoutineTrigger;
 }
 export interface TurnRated {
   reason?: string | null;
@@ -1567,15 +1577,6 @@ export interface TurnStarted {
   prompt_version?: string | null;
   snapshot?: string | null;
   type: "turn.started";
-}
-export interface UserOrigin {
-  kind: "user";
-}
-export interface RoutineOrigin {
-  delivery_id?: string | null;
-  kind: "routine";
-  name: string;
-  trigger: RoutineTrigger;
 }
 export interface MessageDelta {
   text: string;

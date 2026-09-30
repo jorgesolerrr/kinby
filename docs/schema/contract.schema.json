@@ -5775,6 +5775,30 @@
         "navigation": {
           "$ref": "#/$defs/Navigation"
         },
+        "origin": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "routine": "#/$defs/RoutineOrigin",
+                  "user": "#/$defs/UserOrigin"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/UserOrigin"
+                },
+                {
+                  "$ref": "#/$defs/RoutineOrigin"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "output_tokens": {
           "type": "integer"
         },
@@ -5840,6 +5864,7 @@
         "turn_id",
         "model",
         "prompt_version",
+        "origin",
         "closing_kind",
         "started_at",
         "closed_at",

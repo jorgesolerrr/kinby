@@ -5,17 +5,18 @@ import type * as React from "react"
 import { ConfigPanel } from "@/components/config-panel"
 import { InstancePage } from "@/components/instance-page"
 import { MemoryPage } from "@/components/memory-page"
+import { StatsPage } from "@/components/stats-page"
 import { ThreadPanel } from "@/components/thread-panel"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { instanceName } from "@/lib/instances"
 import { CirclePauseIcon, MousePointerClickIcon, ServerIcon } from "lucide-react"
 
 /**
- * The selected thread's panel, the selected instance's config panel, memory page, or page, or why
- * there is none. A thread, the config panel, or the memory page opens once `instanceClient`
- * reaches its instance. The config panel opens only on an instance meant to run, which is the one
- * the hub relays to, and stays open while an update restarts the container. The memory page needs
- * a running instance. `onChanged` lists the instances again.
+ * The selected thread's panel, the selected instance's config panel, memory page, stats page, or
+ * page, or why there is none. A thread, the config panel, the memory page, or the stats page opens
+ * once `instanceClient` reaches its instance. The config panel opens only on an instance meant to
+ * run, which is the one the hub relays to, and stays open while an update restarts the container.
+ * The memory and stats pages need a running instance. `onChanged` lists the instances again.
  */
 export function MainPanel({
   caller,
@@ -25,6 +26,7 @@ export function MainPanel({
   threadId,
   configOpen = false,
   memoryOpen = false,
+  statsOpen = false,
   instanceClient,
   onChanged,
 }: {
@@ -35,6 +37,7 @@ export function MainPanel({
   threadId: string | undefined
   configOpen?: boolean
   memoryOpen?: boolean
+  statsOpen?: boolean
   instanceClient: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange"> | undefined
   onChanged: () => void
 }) {
@@ -74,6 +77,24 @@ export function MainPanel({
     if (instanceClient === undefined) return null
     return (
       <MemoryPage
+        key={selected.instance_id}
+        client={instanceClient}
+        clock={clock}
+        instanceId={selected.instance_id}
+      />
+    )
+  }
+  if (selected !== undefined && statsOpen) {
+    if (selected.process !== "running") {
+      return (
+        <EmptyState icon={<CirclePauseIcon />} title={`${instanceName(selected)} is not running`}>
+          Start it to see its stats.
+        </EmptyState>
+      )
+    }
+    if (instanceClient === undefined) return null
+    return (
+      <StatsPage
         key={selected.instance_id}
         client={instanceClient}
         clock={clock}
