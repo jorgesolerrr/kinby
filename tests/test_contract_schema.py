@@ -280,6 +280,73 @@ def test_the_schema_declares_the_permissions_calls() -> None:
     assert _object(definitions["GateAction"])["enum"] == ["allow", "ask", "deny"]
 
 
+def test_the_schema_declares_the_memory_write_calls() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"]
+        for name in ("memory.add", "memory.correct", "memory.forget")
+    } == {
+        "memory.add": {
+            "command": {"$ref": "#/$defs/MemoryAddCommand"},
+            "result": {"$ref": "#/$defs/MemoryWriteResult"},
+        },
+        "memory.correct": {
+            "command": {"$ref": "#/$defs/MemoryCorrectCommand"},
+            "result": {"$ref": "#/$defs/MemoryWriteResult"},
+        },
+        "memory.forget": {
+            "command": {"$ref": "#/$defs/MemoryForgetCommand"},
+            "result": {"$ref": "#/$defs/MemoryForgetResult"},
+        },
+    }
+    assert {
+        name: set(cast(list[str], _object(definitions[name]).get("required", [])))
+        for name in (
+            "MemoryAddCommand",
+            "MemoryCorrectCommand",
+            "MemoryWriteResult",
+            "MemoryForgetCommand",
+            "MemoryForgetResult",
+        )
+    } == {
+        "MemoryAddCommand": {"description", "subjects", "body"},
+        "MemoryCorrectCommand": {"node", "description", "subjects", "body"},
+        "MemoryWriteResult": {"node"},
+        "MemoryForgetCommand": {"node"},
+        "MemoryForgetResult": set(),
+    }
+
+
+def test_the_schema_declares_the_profile_calls() -> None:
+    schema = contract_schema()
+    definitions = _object(schema["$defs"])
+    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
+
+    assert {
+        name: _object(methods_schema[name])["properties"] for name in ("profile.get", "profile.set")
+    } == {
+        "profile.get": {
+            "command": {"$ref": "#/$defs/ProfileGetCommand"},
+            "result": {"$ref": "#/$defs/ProfileResult"},
+        },
+        "profile.set": {
+            "command": {"$ref": "#/$defs/ProfileSetCommand"},
+            "result": {"$ref": "#/$defs/ProfileResult"},
+        },
+    }
+    assert {
+        name: set(cast(list[str], _object(definitions[name]).get("required", [])))
+        for name in ("ProfileGetCommand", "ProfileSetCommand", "ProfileResult")
+    } == {
+        "ProfileGetCommand": set(),
+        "ProfileSetCommand": {"text", "hash"},
+        "ProfileResult": {"text", "hash", "tokens"},
+    }
+
+
 def test_an_instance_summary_carries_its_notices_as_a_union_on_code() -> None:
     definitions = _object(contract_schema()["$defs"])
     summary = _object(definitions["InstanceSummary"])

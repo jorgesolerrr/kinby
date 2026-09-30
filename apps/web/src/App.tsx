@@ -16,6 +16,7 @@ import { usePolled } from "@/hooks/use-polled"
 import {
   useConfigOpen,
   useCreating,
+  useMemoryOpen,
   useSelectedInstanceId,
   useSelectedThreadId,
 } from "@/lib/selection"
@@ -33,6 +34,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const selectedId = useSelectedInstanceId()
   const creating = useCreating()
   const configOpen = useConfigOpen()
+  const memoryOpen = useMemoryOpen()
   // An instance the hub does not have, or no longer has, selects nothing.
   const selected = instances?.find((instance) => instance.instance_id === selectedId)
   // The hub relays only to a running instance. An open config panel keeps its connection while the
@@ -59,8 +61,10 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           }
           onSignOut={() => void client.signOut()}
         />
-        {/* An open thread or config panel scrolls inside the window, not the page. */}
-        <SidebarInset className={cn((threadId !== undefined || configOpen) && "h-svh")}>
+        {/* An open thread, config panel, or memory page scrolls inside the window, not the page. */}
+        <SidebarInset
+          className={cn((threadId !== undefined || configOpen || memoryOpen) && "h-svh")}
+        >
           <header className="flex h-12 items-center gap-2 px-2">
             <SidebarTrigger />
             {!connected && <Badge variant="destructive">Reconnecting</Badge>}
@@ -75,6 +79,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
               selected={selected}
               threadId={threadId}
               configOpen={configOpen}
+              memoryOpen={memoryOpen}
               instanceClient={instanceClient}
               onChanged={listAgain}
             />

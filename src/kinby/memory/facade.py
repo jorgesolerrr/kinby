@@ -26,7 +26,6 @@ class _MemoryNode:
 
     node: NodeId
     date: date
-    thread: UUID
     description: str
     subjects: tuple[str, ...]
     body: str
@@ -34,13 +33,17 @@ class _MemoryNode:
 
 @dataclass(frozen=True)
 class Fact(_MemoryNode):
-    """One opened, time-stamped fact."""
+    """One opened, time-stamped fact. A fact the user added belongs to no thread."""
+
+    thread: UUID | None
+    added_by_user: bool = False
 
 
 @dataclass(frozen=True)
 class Episode(_MemoryNode):
     """One opened turn record with its tool trace."""
 
+    thread: UUID
     turn: UUID
     tools: tuple[str, ...]
 

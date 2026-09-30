@@ -67,6 +67,24 @@ class ThreadNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class MemoryNodeNotFound(CoreError):
+    """No live knowledge graph node has this id: none was written, or it was forgotten."""
+
+    code = ErrorCode.NOT_FOUND
+
+
+class InvalidMemoryNode(CoreError):
+    """The id cannot name a knowledge graph node, such as one with a path in it."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
+class EpisodeNotCorrectable(CoreError):
+    """An episode records what happened in a turn, so it can be forgotten but not corrected."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class InstanceBusy(CoreError):
     code = ErrorCode.INSTANCE_BUSY
     retryable = True
@@ -124,6 +142,12 @@ class InvalidSetup(InvalidValues):
 
 class InvalidConfig(InvalidValues):
     """Some config values are invalid, so the file was left alone."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
+class InvalidFact(InvalidValues):
+    """Some of a fact's values are invalid, so nothing was written."""
 
     code = ErrorCode.INVALID_ARGUMENT
 

@@ -19,10 +19,17 @@ from kinby.contracts import (
     INSTANCE_PROBE,
     MANIFEST_GET,
     MANIFEST_SET,
+    MEMORY_ADD,
+    MEMORY_CORRECT,
+    MEMORY_FORGET,
+    MEMORY_LIST,
+    MEMORY_OPEN,
     PACKAGE_CONFIG_GET,
     PACKAGE_CONFIG_SET,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
+    PROFILE_GET,
+    PROFILE_SET,
     PROMPT_GET,
     PROMPT_SET,
     ROUTINE_DELETE,
@@ -88,6 +95,7 @@ from kinby.core.clock import utc_now
 from kinby.core.config import InstanceConfig
 from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
+from kinby.core.memory import InstanceMemory
 from kinby.core.pricing import price_map
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
@@ -432,6 +440,8 @@ def build_dispatcher(
         dispatcher.register(PACKAGE_CONFIG_GET, config.get_package_config)
         dispatcher.register(PACKAGE_CONFIG_SET, config.set_package_config)
         dispatcher.register(CONFIG_HISTORY, config.history)
+        dispatcher.register(PROFILE_GET, config.get_profile)
+        dispatcher.register(PROFILE_SET, config.set_profile)
         dispatcher.register(SKILL_LIST, config.list_skills)
         dispatcher.register(SKILL_READ, config.read_skill)
         dispatcher.register(SKILL_WRITE, config.write_skill)
@@ -442,6 +452,13 @@ def build_dispatcher(
         dispatcher.register(ROUTINE_WRITE, config.write_routine)
         dispatcher.register(ROUTINE_SET_ENABLED, config.set_routine_enabled)
         dispatcher.register(ROUTINE_DELETE, config.delete_routine)
+    if isinstance(turns, ScheduledTurnConfig):
+        memory = InstanceMemory(GraphStore(turns.scheduler.instance.path), turns.scheduler.clock)
+        dispatcher.register(MEMORY_LIST, memory.list)
+        dispatcher.register(MEMORY_OPEN, memory.open)
+        dispatcher.register(MEMORY_ADD, memory.add)
+        dispatcher.register(MEMORY_CORRECT, memory.correct)
+        dispatcher.register(MEMORY_FORGET, memory.forget)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)
         dispatcher.register(ROUTINE_RUN, scheduler.run)

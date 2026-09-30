@@ -62,6 +62,11 @@ export type FeedbackPolicy = "every-turn" | "off";
  * When kinby writes a model-assisted recap.
  */
 export type RecapPolicy = "every-turn" | "off";
+export type NodeKind = "fact" | "episode";
+/**
+ * Where a knowledge graph node came from. The instance derives it from the node's file.
+ */
+export type NodeSource = "agent" | "recap" | "user";
 export type OperationKind =
   | "create"
   | "start"
@@ -230,6 +235,26 @@ export interface Contract {
       command: ManifestSetCommand;
       result: ManifestResult;
     };
+    "memory.add": {
+      command: MemoryAddCommand;
+      result: MemoryWriteResult;
+    };
+    "memory.correct": {
+      command: MemoryCorrectCommand;
+      result: MemoryWriteResult;
+    };
+    "memory.forget": {
+      command: MemoryForgetCommand;
+      result: MemoryForgetResult;
+    };
+    "memory.list": {
+      command: MemoryListCommand;
+      result: MemoryListResult;
+    };
+    "memory.open": {
+      command: MemoryOpenCommand;
+      result: MemoryOpenResult;
+    };
     "operation.get": {
       command: OperationGetCommand;
       result: OperationGetResult;
@@ -257,6 +282,14 @@ export interface Contract {
     "permissions.set": {
       command: PermissionsSetCommand;
       result: PermissionsResult;
+    };
+    "profile.get": {
+      command: ProfileGetCommand;
+      result: ProfileResult;
+    };
+    "profile.set": {
+      command: ProfileSetCommand;
+      result: ProfileResult;
     };
     "prompt.get": {
       command: PromptGetCommand;
@@ -776,6 +809,60 @@ export interface NewModelPrice {
   input: number;
   output: number;
 }
+export interface MemoryAddCommand {
+  body: string;
+  description: string;
+  subjects: string[];
+}
+export interface MemoryWriteResult {
+  node: string;
+}
+export interface MemoryCorrectCommand {
+  body: string;
+  description: string;
+  node: string;
+  subjects: string[];
+}
+export interface MemoryForgetCommand {
+  node: string;
+}
+export interface MemoryForgetResult {}
+export interface MemoryListCommand {
+  after?: string | null;
+  before?: string | null;
+  cursor?: string | null;
+  kind?: NodeKind | null;
+  limit?: number;
+  query?: string;
+  subject?: string | null;
+}
+export interface MemoryListResult {
+  cursor: string | null;
+  items: NodeSummary[];
+}
+export interface NodeSummary {
+  date: string;
+  description: string;
+  kind: NodeKind;
+  node: string;
+  source: NodeSource;
+  subjects: string[];
+}
+export interface MemoryOpenCommand {
+  node: string;
+}
+export interface MemoryOpenResult {
+  body: string;
+  date: string;
+  description: string;
+  kind: NodeKind;
+  node: string;
+  source: NodeSource;
+  subjects: string[];
+  thread: string | null;
+  tools: string[] | null;
+  turn: string | null;
+}
 export interface OperationGetCommand {
   operation_id: string;
 }
@@ -916,6 +1003,16 @@ export interface PermissionsSetCommand {
 export interface OwnBashPatterns {
   ask: string[];
   deny: string[];
+}
+export interface ProfileGetCommand {}
+export interface ProfileResult {
+  hash: string;
+  text: string;
+  tokens: number;
+}
+export interface ProfileSetCommand {
+  hash: string;
+  text: string;
 }
 export interface PromptGetCommand {
   name: PromptName;

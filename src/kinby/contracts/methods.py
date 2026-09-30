@@ -42,6 +42,15 @@ from kinby.contracts.models import (
     ManifestGetCommand,
     ManifestResult,
     ManifestSetCommand,
+    MemoryAddCommand,
+    MemoryCorrectCommand,
+    MemoryForgetCommand,
+    MemoryForgetResult,
+    MemoryListCommand,
+    MemoryListResult,
+    MemoryOpenCommand,
+    MemoryOpenResult,
+    MemoryWriteResult,
     OperationGetCommand,
     OperationGetResult,
     PackageConfigGetCommand,
@@ -54,6 +63,9 @@ from kinby.contracts.models import (
     PermissionsGetCommand,
     PermissionsResult,
     PermissionsSetCommand,
+    ProfileGetCommand,
+    ProfileResult,
+    ProfileSetCommand,
     PromptGetCommand,
     PromptResult,
     PromptSetCommand,
@@ -213,6 +225,17 @@ PACKAGE_CONFIG_GET = Method(
 PACKAGE_CONFIG_SET = Method(
     "package.config.set", Scope.INSTANCE_ADMIN, PackageConfigSetCommand, PackageConfigResult
 )
+MEMORY_LIST = Method("memory.list", Scope.INSTANCE_READ, MemoryListCommand, MemoryListResult)
+MEMORY_OPEN = Method("memory.open", Scope.INSTANCE_READ, MemoryOpenCommand, MemoryOpenResult)
+MEMORY_ADD = Method("memory.add", Scope.INSTANCE_ADMIN, MemoryAddCommand, MemoryWriteResult)
+MEMORY_CORRECT = Method(
+    "memory.correct", Scope.INSTANCE_ADMIN, MemoryCorrectCommand, MemoryWriteResult
+)
+MEMORY_FORGET = Method(
+    "memory.forget", Scope.INSTANCE_ADMIN, MemoryForgetCommand, MemoryForgetResult
+)
+PROFILE_GET = Method("profile.get", Scope.INSTANCE_READ, ProfileGetCommand, ProfileResult)
+PROFILE_SET = Method("profile.set", Scope.INSTANCE_ADMIN, ProfileSetCommand, ProfileResult)
 CONFIG_HISTORY = Method(
     "config.history", Scope.INSTANCE_READ, ConfigHistoryCommand, ConfigHistoryResult
 )
@@ -324,6 +347,13 @@ METHODS = (
     PACKAGE_CONFIG_GET,
     PACKAGE_CONFIG_SET,
     CONFIG_HISTORY,
+    MEMORY_LIST,
+    MEMORY_OPEN,
+    MEMORY_ADD,
+    MEMORY_CORRECT,
+    MEMORY_FORGET,
+    PROFILE_GET,
+    PROFILE_SET,
     SKILL_LIST,
     SKILL_READ,
     SKILL_WRITE,

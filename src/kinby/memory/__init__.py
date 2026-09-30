@@ -2,7 +2,7 @@
 
 from kinby.contracts import NodeId
 from kinby.memory.facade import Episode, Fact, Memory, MemoryHit, MemoryNode
-from kinby.memory.graph import GraphStore, MemoryNodeError
+from kinby.memory.graph import GraphStore, InvalidNodeId, MemoryNodeError, NodeNotFound
 from kinby.memory.recap import RecapDraft, RecapWriter
 from kinby.memory.tools import memory_tools
 
@@ -10,11 +10,13 @@ __all__ = [
     "Episode",
     "Fact",
     "GraphStore",
+    "InvalidNodeId",
     "Memory",
     "MemoryHit",
     "MemoryNode",
     "MemoryNodeError",
     "NodeId",
+    "NodeNotFound",
     "RecapDraft",
     "RecapWriter",
     "memory_tools",
