@@ -231,6 +231,26 @@ describe("the instances", () => {
     )
   })
 
+  it("opens the memory page on the node a link names", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/memory/2026-09-28-fixed-the-deploy")
+
+    const { hub, clock } = openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    expect(await screen.findByRole("tab", { name: "Knowledge graph" })).toBeDefined()
+    const relayed = hub.sockets.find(
+      (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
+    )
+    // The page reads before the relayed socket is up, and asks again a second later.
+    await act(() => clock.advance(1_000))
+    expect(relayed?.sent).toContainEqual(
+      expect.objectContaining({
+        type: "call",
+        method: "memory.open",
+        params: { node: "2026-09-28-fixed-the-deploy" },
+      }),
+    )
+  })
+
   it("asks to start a stopped instance to see its memory", async () => {
     window.history.replaceState(null, "", "/instances/hub-unnamed/memory")
 
