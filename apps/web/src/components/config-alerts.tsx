@@ -16,26 +16,31 @@ export function Failure({ error }: { error: unknown }) {
   const openUpdate = use(OlderCore)
   const refused = error instanceof CallError && !lost(error)
   if (refused && error.code === "NOT_FOUND" && openUpdate !== undefined) {
-    return (
-      <Alert>
-        <TriangleAlertIcon />
-        <AlertTitle>This instance runs an older core</AlertTitle>
-        <AlertDescription>
-          Its core does not have this section yet. Update it from Package and version.
-        </AlertDescription>
-        <AlertAction>
-          <Button size="sm" variant="outline" onClick={openUpdate}>
-            Open Package and version
-          </Button>
-        </AlertAction>
-      </Alert>
-    )
+    return <OlderCoreAlert onOpenUpdate={openUpdate} />
   }
   return (
     <Alert variant="destructive">
       <CircleXIcon />
       <AlertTitle>{refused ? "The instance refused it" : "The instance did not answer"}</AlertTitle>
       <AlertDescription>{reason(error)}</AlertDescription>
+    </Alert>
+  )
+}
+
+/** What the page needs is newer than the instance's core. The button opens Package and version. */
+export function OlderCoreAlert({ onOpenUpdate }: { onOpenUpdate: () => void }) {
+  return (
+    <Alert>
+      <TriangleAlertIcon />
+      <AlertTitle>This instance runs an older core</AlertTitle>
+      <AlertDescription>
+        Its core does not have this yet. Update it from Package and version.
+      </AlertDescription>
+      <AlertAction>
+        <Button size="sm" variant="outline" onClick={onOpenUpdate}>
+          Open Package and version
+        </Button>
+      </AlertAction>
     </Alert>
   )
 }
