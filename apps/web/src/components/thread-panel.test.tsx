@@ -21,7 +21,9 @@ function instanceClient(answers: Answers = {}) {
 
 /** Open thread t1 of Ada's instance, from a client that answers from `answers`. */
 function openThread(answers: Answers = {}, client = instanceClient(answers)) {
-  const rendered = render(<ThreadPanel client={client} threadId="t1" name="Ada" />)
+  const rendered = render(
+    <ThreadPanel client={client} instanceId="hub-ada" threadId="t1" name="Ada" />,
+  )
   const subscription = () => {
     const latest = client.subscriptions.at(-1)
     if (latest === undefined) throw new Error("The panel did not subscribe.")
@@ -290,8 +292,31 @@ describe("a thread's panel", () => {
       for (const marker of ["Recapped", "No episode", "Recap failed"]) {
         expect(recapOf("Say hi", marker)).toBeNull()
       }
-      // The episode has no Memory page to open on yet.
-      expect(screen.queryByRole("link")).toBeNull()
+      // Only the episode has somewhere to open.
+      expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual(["Recapped"])
+    })
+
+    it("links Recapped to its episode on the Memory page, as a new history entry", async () => {
+      window.history.replaceState(null, "", "/instances/hub-ada/threads/t1")
+      const events = thread(
+        ["turn-1", started("Fix the runtime")],
+        ["turn-1", completed],
+        ["turn-1", recapped("2026-09-28-0192-fix-the-runtime")],
+      )
+      const { subscription } = openThread()
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+      const link = screen.getByRole("link", { name: "Recapped" })
+      const entries = window.history.length
+
+      await userEvent.click(link)
+
+      const episode = "/instances/hub-ada/memory/2026-09-28-0192-fix-the-runtime"
+      expect(link.getAttribute("href")).toBe(episode)
+      expect(window.location.pathname).toBe(episode)
+      expect(window.history.length).toBe(entries + 1)
     })
 
     it("shows a recap that reports live, after the turn has completed", async () => {
@@ -568,6 +593,72 @@ describe("a thread's panel", () => {
       expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reason" }))
     })
 
+    /** The instance's thread list, so the header shows t1's title. */
+    const listed: Answers = {
+      "thread.list": () => ({
+        threads: [
+          {
+            id: "t1",
+            title: "Deploy notes",
+            created_at: "2026-09-28T10:00:00Z",
+            last_activity_at: "2026-09-28T10:00:00Z",
+            status: "running",
+            mode: "ask",
+            mode_pinned: false,
+          },
+        ],
+        ceiling: "full-access",
+      }),
+    }
+
+    /**
+     * Open the thread with its turn running and nothing parked, do what the test does before, and
+     * then park approval a1 on the turn.
+     */
+    async function parkLive(before: () => Promise<void> = async () => {}) {
+      const opened = openThread({ ...listed, "thread.approval.respond": accepted })
+      const [start, ...rest] = parked
+      await act(async () => {
+        opened.subscription().subscribed(1)
+        opened.subscription().deliver(start as Event)
+      })
+      await before()
+      await act(async () => {
+        for (const event of rest) opened.subscription().deliver(event)
+      })
+      return opened
+    }
+
+    it("takes focus from the composer into the panel itself, not a field or button in it", async () => {
+      const { sent } = await parkLive(async () => {
+        expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message Ada" }))
+      })
+      const user = userEvent.setup()
+
+      expect(document.activeElement).toBe(
+        screen.getByRole("region", { name: "Approve bash make deploy?" }),
+      )
+
+      await user.keyboard("x{Enter}")
+      expect(sent()).toEqual([])
+      expect(screen.getByRole("textbox", { name: "Reason" })).toHaveProperty("value", "")
+
+      await user.tab()
+      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reason" }))
+      await user.tab()
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Approve" }))
+    })
+
+    it("leaves focus in the title being renamed when it parks", async () => {
+      await parkLive(async () => {
+        const user = userEvent.setup()
+        await user.click(await screen.findByRole("button", { name: "Deploy notes" }))
+        await user.type(screen.getByRole("textbox", { name: "Thread title" }), " for staging")
+      })
+
+      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Thread title" }))
+    })
+
     it("approves it", async () => {
       const { sent } = await reopenParked()
 
@@ -730,22 +821,7 @@ describe("a thread's panel", () => {
     })
 
     it("leaves focus in the title being renamed when the approval clears", async () => {
-      const { client, subscription } = await reopenParked({
-        "thread.list": () => ({
-          threads: [
-            {
-              id: "t1",
-              title: "Deploy notes",
-              created_at: "2026-09-28T10:00:00Z",
-              last_activity_at: "2026-09-28T10:00:00Z",
-              status: "awaiting_approval",
-              mode: "ask",
-              mode_pinned: false,
-            },
-          ],
-          ceiling: "full-access",
-        }),
-      })
+      const { client, subscription } = await reopenParked(listed)
       await act(() => threadList(client).list())
       const user = userEvent.setup()
 

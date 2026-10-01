@@ -6,6 +6,7 @@ const THREADS = "threads"
 const TURNS = "turns"
 const CONFIG = "config"
 const ROUTINES = "routines"
+const PACKAGE = "package"
 const MEMORY = "memory"
 const STATS = "stats"
 export const CREATE_PATH = "/new"
@@ -35,8 +36,17 @@ export function routinePath(instanceId: string, name: string): string {
   return `${configPath(instanceId)}/${ROUTINES}/${encodeURIComponent(name)}`
 }
 
+function packagePath(instanceId: string): string {
+  return `${configPath(instanceId)}/${PACKAGE}`
+}
+
 function memoryPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${MEMORY}`
+}
+
+/** One node open on an instance's memory page. */
+export function nodePath(instanceId: string, node: string): string {
+  return `${memoryPath(instanceId)}/${encodeURIComponent(node)}`
 }
 
 export function statsPath(instanceId: string): string {
@@ -68,15 +78,36 @@ export function openRoutine(instanceId: string, name: string): void {
   navigate(routinePath(instanceId, name))
 }
 
-/** Drop the linked routine from the URL and keep the config panel, in the same history entry. */
-export function leaveRoutine(instanceId: string): void {
-  window.history.replaceState(null, "", configPath(instanceId))
+/** Open an instance's config panel on "Package and version" the same way. */
+export function openPackage(instanceId: string): void {
+  navigate(packagePath(instanceId))
+}
+
+/**
+ * Drop the routine or the section a link named from the URL and keep the config panel, in the same
+ * history entry.
+ */
+export function leaveLink(instanceId: string): void {
+  const path = configPath(instanceId)
+  if (window.location.pathname === path) return
+  window.history.replaceState(null, "", path)
   changed()
 }
 
 /** Open an instance's memory page the same way. */
 export function openMemory(instanceId: string): void {
   navigate(memoryPath(instanceId))
+}
+
+/** Open a node on an instance's memory page the same way. */
+export function openNode(instanceId: string, node: string): void {
+  navigate(nodePath(instanceId, node))
+}
+
+/** Drop the linked node from the URL and keep the memory page, in the same history entry. */
+export function leaveNode(instanceId: string): void {
+  window.history.replaceState(null, "", memoryPath(instanceId))
+  changed()
 }
 
 /** Open an instance's stats page the same way. */
@@ -92,6 +123,11 @@ export function openCreateWizard(): void {
 /** Open the hub's usage page the same way. */
 export function openUsage(): void {
   navigate(USAGE_PATH)
+}
+
+/** The URL's path, which changes with every page, instance, and thread picked. */
+export function usePath(): string {
+  return useSyncExternalStore(subscribe, () => window.location.pathname)
 }
 
 /** The hub instance ID the URL names, if it names one. */
@@ -175,9 +211,23 @@ export function linkedRoutine(): string | undefined {
     : undefined
 }
 
+/** Whether the URL opens its instance's config panel on "Package and version". */
+export function linkedPackage(): boolean {
+  const [, section, instanceId, config, linked] = window.location.pathname.split("/")
+  return section === SECTION && Boolean(instanceId) && config === CONFIG && linked === PACKAGE
+}
+
 function memoryOpen(): boolean {
   const [, section, instanceId, memory] = window.location.pathname.split("/")
   return section === SECTION && Boolean(instanceId) && memory === MEMORY
+}
+
+/** The node the URL opens on its instance's memory page, if it names one. */
+export function linkedNode(): string | undefined {
+  const [, section, instanceId, memory, node] = window.location.pathname.split("/")
+  return section === SECTION && instanceId && memory === MEMORY && node
+    ? decodeURIComponent(node)
+    : undefined
 }
 
 function statsOpen(): boolean {

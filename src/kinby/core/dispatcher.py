@@ -367,8 +367,8 @@ def build_dispatcher(
         selected_turns = {TurnKey(record.thread_id, record.turn_id) for record in records}
         return StatsGetResult(
             records=records,
-            buckets=stats_buckets(records, runs, command.by, metrics.no_work),
-            total=stats_summary(records, runs, metrics.no_work),
+            buckets=stats_buckets(records, runs, command.by),
+            total=stats_summary(records, runs),
             plan_use=plan_use(events, now),
             limits=active_limits(events, now),
             unpriced_models=sorted(

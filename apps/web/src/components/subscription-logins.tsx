@@ -81,6 +81,8 @@ function LoginRow({
   const [request, setRequest] = useState<LoginRequest | undefined>(() =>
     login.operation_id ? { loginId: login.id, running: login.operation_id } : undefined,
   )
+  // A sign-in this row followed to the end, for a page that does not read the hub's state again.
+  const [signedInHere, setSignedInHere] = useState(false)
   const follow = useCallback(
     (asked: LoginRequest, report: (signIn: SignIn) => void) =>
       followLogin(
@@ -89,6 +91,7 @@ function LoginRow({
         asked.loginId,
         (signIn) => {
           report(signIn)
+          if (signIn.state === "signed-in") setSignedInHere(true)
           if (signIn.state !== "signing-in") onEnded()
         },
         clock,
@@ -99,7 +102,11 @@ function LoginRow({
   const followed =
     useFollowing(request, follow) ??
     (request === undefined ? undefined : { state: "signing-in", prompt: null })
-  const signIn = followed ?? STORED[login.state]
+  const latest = followed ?? STORED[login.state]
+  // A sign-in that did not finish leaves a signed-in login signed in (ADR 0068).
+  const signedIn = login.state === "signed_in" || signedInHere
+  const unfinished = latest?.state === "failed" && signedIn ? latest : undefined
+  const signIn = unfinished ? STORED.signed_in : latest
   const busy = signIn?.state === "signing-in"
   return (
     <Item render={<li />} aria-label={login.label} variant="outline">
@@ -118,6 +125,11 @@ function LoginRow({
         )}
         {signIn?.state === "failed" && (
           <ItemDescription lines="all">{signIn.detail}</ItemDescription>
+        )}
+        {unfinished && (
+          <ItemDescription lines="all">
+            The new sign-in did not finish, and the one before it still works. {unfinished.detail}
+          </ItemDescription>
         )}
       </ItemContent>
       <ItemActions>

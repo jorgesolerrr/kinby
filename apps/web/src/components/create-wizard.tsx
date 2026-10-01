@@ -783,7 +783,7 @@ function Logins({ logins }: { logins: SubscriptionLogin[] }) {
         <Item key={login.id} render={<li />} aria-label={login.label} variant="outline" size="sm">
           <ItemContent>
             <ItemTitle>{login.label}</ItemTitle>
-            <ItemDescription>{login.description}</ItemDescription>
+            <ItemDescription lines="all">{login.description}</ItemDescription>
           </ItemContent>
           <ItemActions>
             <Badge variant="outline">Sign-in</Badge>

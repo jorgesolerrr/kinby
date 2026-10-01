@@ -161,9 +161,11 @@ function SecretRow({
     <Item render={<li />} aria-label={secret.label} variant="outline" size="sm">
       <ItemContent>
         <ItemTitle>{secret.label}</ItemTitle>
-        <ItemDescription>
-          <code className="font-mono">{secret.name}</code>
-        </ItemDescription>
+        {secret.variable !== null && (
+          <ItemDescription>
+            <code className="font-mono">{secret.variable}</code>
+          </ItemDescription>
+        )}
       </ItemContent>
       <ItemActions>
         {!secret.required && <Badge variant="secondary">Optional</Badge>}

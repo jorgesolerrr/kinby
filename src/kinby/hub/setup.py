@@ -128,10 +128,14 @@ def instance_setup(
     if description is None:
         return InstanceSetup(logins=[], secrets=[])
 
-    def is_set(field: SetupField) -> bool:
+    def variable(field: SetupField) -> str | None:
         if field.name != API_KEY_FIELD.name:
-            return bool(secrets.get(field.name, "").strip())
-        return model is not None and bool(secrets.get(api_key_variable(model), "").strip())
+            return field.name
+        return None if model is None else api_key_variable(model)
+
+    def is_set(field: SetupField) -> bool:
+        held = variable(field)
+        return held is not None and bool(secrets.get(held, "").strip())
 
     return InstanceSetup(
         logins=[
@@ -146,7 +150,11 @@ def instance_setup(
         ],
         secrets=[
             SecretSetup(
-                name=field.name, label=field.label, required=field.required, is_set=is_set(field)
+                name=field.name,
+                variable=variable(field),
+                label=field.label,
+                required=field.required,
+                is_set=is_set(field),
             )
             for field in description.setup_fields
             if field.kind is SetupFieldKind.SECRET

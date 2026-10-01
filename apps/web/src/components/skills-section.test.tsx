@@ -115,6 +115,18 @@ describe("SkillsSection", () => {
     expect(items.map((item) => item.classList.contains("pl-6"))).toEqual([false, true, false, true])
   })
 
+  it("left-aligns every line of a skill row, since a button centers its text", async () => {
+    openSection({})
+
+    const list = await screen.findByRole("list", { name: "Skills" })
+    // jsdom applies no Tailwind, so the class stands in for the computed alignment.
+    expect(
+      within(list)
+        .getAllByRole("button")
+        .map((button) => button.classList.contains("text-left")),
+    ).toEqual([true, true, true, true])
+  })
+
   it("reads a package skill as read-only and customizes it into the instance", async () => {
     let customized = false
     const { caller, user } = openSection({

@@ -231,6 +231,26 @@ describe("the instances", () => {
     )
   })
 
+  it("opens the memory page on the node a link names", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/memory/2026-09-28-fixed-the-deploy")
+
+    const { hub, clock } = openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    expect(await screen.findByRole("tab", { name: "Knowledge graph" })).toBeDefined()
+    const relayed = hub.sockets.find(
+      (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
+    )
+    // The page reads before the relayed socket is up, and asks again a second later.
+    await act(() => clock.advance(1_000))
+    expect(relayed?.sent).toContainEqual(
+      expect.objectContaining({
+        type: "call",
+        method: "memory.open",
+        params: { node: "2026-09-28-fixed-the-deploy" },
+      }),
+    )
+  })
+
   it("asks to start a stopped instance to see its memory", async () => {
     window.history.replaceState(null, "", "/instances/hub-unnamed/memory")
 
@@ -406,6 +426,33 @@ describe("the usage page", () => {
     openApp({ signedIn: true, instances: [ada] })
 
     expect(await screen.findByRole("heading", { name: "Usage" })).toBeDefined()
+  })
+})
+
+describe("a page that breaks", () => {
+  beforeEach(() => window.history.replaceState(null, "", "/"))
+
+  it("shows an error in its place, keeps the sidebar, and opens the next page picked", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    const { hub } = openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole("button", { name: "Memory" }))
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    const relayed = hub.sockets.find(
+      (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
+    )
+    const listed = relayed?.sent.find(
+      (frame) => (frame as { method?: string }).method === "memory.list",
+    ) as { id: string } | undefined
+
+    // An answer the page cannot read, so it throws while it renders.
+    act(() => relayed?.receive({ type: "result", id: listed?.id, result: {} }))
+
+    expect((await screen.findByRole("alert")).textContent).toContain("This page could not be shown")
+    expect(await instanceLink("Ada")).toBeDefined()
+    await user.click(await screen.findByRole("link", { name: "Usage" }))
+    expect(await screen.findByRole("heading", { name: "Usage" })).toBeDefined()
+    expect(screen.queryByRole("alert")).toBeNull()
   })
 })
 

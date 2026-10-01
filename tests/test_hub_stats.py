@@ -1,17 +1,26 @@
 """The hub adds up usage across its running instances and stores none of it."""
 
 import asyncio
+import logging
 from datetime import UTC, date, datetime
 from uuid import uuid4
+
+import pytest
+from aiohttp import web
 
 from kinby.contracts import (
     STATS_SUMMARY,
     ApiUse,
+    ControlToken,
+    ErrorCode,
     ErrorEnvelope,
+    ErrorFrame,
+    FrameId,
     MemoryCallCounts,
     OriginUse,
     PlanLimit,
     PlanUse,
+    ResultFrame,
     RoutineName,
     Scope,
     SourceRuns,
@@ -24,11 +33,17 @@ from kinby.contracts import (
     UsageSource,
 )
 from kinby.core.dispatcher import build_dispatcher
-from kinby.hub import ControlEndpoint, HttpInstanceControl
+from kinby.hub import (
+    ControlEndpoint,
+    ControlUnreachable,
+    HttpInstanceControl,
+    IncompatibleLifecycleEndpoint,
+)
 from kinby.hub.usage import Uncounted, summed_usage
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_hub import (
     FakeControl,
+    control_server,
     created_instance,
     hub_at,
     hub_client,
@@ -237,6 +252,55 @@ def test_an_instance_that_does_not_answer_in_time_is_unreachable_and_the_rest_co
     asyncio.run(scenario())
 
 
+def test_an_instance_on_an_older_core_is_outdated_and_logged_and_the_rest_count(
+    tmp_path, caplog: pytest.LogCaptureFixture
+):
+    async def scenario() -> None:
+        control = FakeControl()
+        hub = hub_at(tmp_path / "hub", control=control)
+        client = hub_client(hub)
+        answering = await started_instance(client, hub)
+        older = await started_instance(client, hub)
+        answer = _answer(_used(input_tokens=100, output_tokens=20, cost=0.5))
+        control.usage[_address(answering.instance_id)] = answer
+        control.usage[_address(older.instance_id)] = IncompatibleLifecycleEndpoint(
+            "The answer to the stats call could not be read: plan_use Field required"
+        )
+
+        with caplog.at_level(logging.WARNING):
+            summary = await client.call(STATS_SUMMARY, StatsGetCommand())
+
+        assert not isinstance(summary, ErrorEnvelope)
+        assert summary.buckets == {answering.instance_id: answer.buckets}
+        assert summary.api == ApiUse(input_tokens=100, output_tokens=20, cost=0.5)
+        assert summary.outdated == [older.instance_id]
+        assert summary.unreachable == []
+        [warning] = [record for record in caplog.records if record.levelno == logging.WARNING]
+        assert str(older.instance_id) in warning.getMessage()
+        assert "plan_use Field required" in warning.getMessage()
+
+    asyncio.run(scenario())
+
+
+def test_an_instance_the_hub_cannot_connect_to_is_unreachable(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl()
+        hub = hub_at(tmp_path / "hub", control=control)
+        client = hub_client(hub)
+        closed = await started_instance(client, hub)
+        control.usage[_address(closed.instance_id)] = ControlUnreachable(
+            "Cannot connect to host kinby-instance:8787"
+        )
+
+        summary = await client.call(STATS_SUMMARY, StatsGetCommand())
+
+        assert not isinstance(summary, ErrorEnvelope)
+        assert summary.unreachable == [closed.instance_id]
+        assert summary.outdated == []
+
+    asyncio.run(scenario())
+
+
 def test_limits_merge_to_the_latest_reset_per_usage_source(tmp_path):
     async def scenario() -> None:
         control = FakeControl()
@@ -291,6 +355,7 @@ def test_plan_use_sums_each_source_and_window_over_the_counted_instances_only():
             uuid4(): _answer(_used(), plan_use=_plan_use((2, 4), (1, 1))),
             uuid4(): Uncounted.SKIPPED,
             uuid4(): Uncounted.UNREACHABLE,
+            uuid4(): Uncounted.OUTDATED,
         }
     )
 
@@ -310,3 +375,49 @@ def test_the_hub_reads_an_instance_s_stats_over_its_control_route(tmp_path):
     assert read.records == []
     assert read.buckets == []
     assert read.plan_use == _plan_use((0, 0), (0, 0))
+
+
+def test_a_stats_answer_from_an_older_core_is_an_incompatible_endpoint():
+    """A core from before ``plan_use`` answers with a body this hub cannot read."""
+    older = _answer(_used()).model_dump(mode="json", exclude={"plan_use"})
+
+    async def answer(opened: web.WebSocketResponse) -> None:
+        await opened.receive()
+        await opened.send_str(ResultFrame(id=FrameId("1"), result=older).model_dump_json())
+
+    async def scenario() -> None:
+        async with control_server(answer) as endpoint:
+            with pytest.raises(IncompatibleLifecycleEndpoint, match="plan_use") as raised:
+                await HttpInstanceControl().stats(endpoint, StatsGetCommand())
+            assert not isinstance(raised.value, ControlUnreachable)
+
+    asyncio.run(scenario())
+
+
+def test_a_core_that_does_not_know_stats_get_is_an_incompatible_endpoint():
+    async def refuse(opened: web.WebSocketResponse) -> None:
+        await opened.receive()
+        await opened.send_str(
+            ErrorFrame(
+                id=FrameId("1"),
+                error=ErrorEnvelope(
+                    code=ErrorCode.NOT_FOUND,
+                    message='Method "stats.get" was not found.',
+                    retryable=False,
+                ),
+            ).model_dump_json()
+        )
+
+    async def scenario() -> None:
+        async with control_server(refuse) as endpoint:
+            with pytest.raises(IncompatibleLifecycleEndpoint, match=r"stats\.get"):
+                await HttpInstanceControl().stats(endpoint, StatsGetCommand())
+
+    asyncio.run(scenario())
+
+
+def test_a_stats_call_that_cannot_connect_is_unreachable():
+    nobody = ControlEndpoint(address="http://127.0.0.1:1", token=ControlToken("token"))
+
+    with pytest.raises(ControlUnreachable):
+        asyncio.run(HttpInstanceControl().stats(nobody, StatsGetCommand()))

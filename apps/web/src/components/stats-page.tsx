@@ -12,7 +12,7 @@ import { type ReactNode, useCallback, useId, useState } from "react"
 import { Bar, BarChart } from "recharts"
 
 import { BucketAxes } from "@/components/bucket-axes"
-import { Failure } from "@/components/config-alerts"
+import { Failure, OlderCoreAlert } from "@/components/config-alerts"
 import { PlansStrip } from "@/components/plans-strip"
 import { RangeHeader } from "@/components/range-header"
 import { Origins } from "@/components/stats-origin"
@@ -42,13 +42,15 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useRead } from "@/hooks/use-read"
-import { selectTurn, turnPath } from "@/lib/selection"
+import { OlderCore } from "@/lib/older-core"
+import { openPackage, selectTurn, turnPath } from "@/lib/selection"
 import {
   bucketLabel,
   bucketSize,
   dayLabel,
   type Drill,
   drilledTurns,
+  fromOlderCore,
   money,
   originLabel,
   originName,
@@ -63,7 +65,8 @@ type Caller = Pick<InstanceClient, "call">
 
 /**
  * An instance's stats over the last 7, 30, or 90 UTC days. It reads when it opens, when the range
- * changes, when the window regains focus, and on Refresh, and never polls.
+ * changes, when the window regains focus, and on Refresh, and never polls. A core too old for the
+ * page, one whose answer lacks what the page reads or one without stats.get, points to its update.
  */
 export function StatsPage({
   client,
@@ -79,7 +82,10 @@ export function StatsPage({
     () => client.call("stats.get", statsCommand(range, new Date())),
     [client, range],
   )
-  const { value: stats, failure, readAgain } = useRead(read, clock)
+  const { value, failure, readAgain } = useRead(read, clock)
+  const older = value !== undefined && fromOlderCore(value)
+  const stats = older ? undefined : value
+  const openUpdate = () => openPackage(instanceId)
   const [drill, setDrill] = useState<Drill>({})
   const by = bucketSize(range)
   // A second click on the picked row drops the filter.
@@ -99,69 +105,73 @@ export function StatsPage({
     )
 
   return (
-    <div className="flex flex-col gap-4 p-6">
-      <RangeHeader
-        title="Stats"
-        range={range}
-        onRange={(next) => {
-          setRange(next)
-          // The range's buckets start on other days. An origin can have turns in any range.
-          setDrill(({ origin }) => ({ origin }))
-        }}
-        onRefresh={readAgain}
-      />
-      {stats !== undefined && <PlansStrip planUse={stats.plan_use} limits={stats.limits} />}
-      {failure !== undefined && <Failure error={failure} />}
-      <Tabs defaultValue="overview">
-        <TabsList variant="line">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="spend">Spend</TabsTrigger>
-          <TabsTrigger value="origin">Origin</TabsTrigger>
-          <TabsTrigger value="quality">Quality</TabsTrigger>
-        </TabsList>
-        {stats === undefined ? (
-          failure === undefined && <Skeleton className="mt-4 h-72 w-full" />
-        ) : (
-          <>
-            <TabsContent value="overview">
-              <div className="flex flex-col gap-4 pt-4">
-                <Overview
-                  stats={stats}
-                  by={by}
-                  onBucket={(bucket) => setDrill(({ origin }) => ({ bucket, origin }))}
-                >
-                  {drillDown(stats)}
-                </Overview>
-              </div>
-            </TabsContent>
-            <TabsContent value="spend">
-              <div className="flex flex-col gap-4 pt-4">
-                <Spend stats={stats} by={by} />
-              </div>
-            </TabsContent>
-            <TabsContent value="origin">
-              <div className="flex flex-col gap-4 pt-4">
-                <Origins
-                  client={client}
-                  clock={clock}
-                  stats={stats}
-                  instanceId={instanceId}
-                  picked={drill.origin}
-                  onPick={pickOrigin}
-                >
-                  {drillDown(stats)}
-                </Origins>
-              </div>
-            </TabsContent>
-            <TabsContent value="quality">
-              <div className="flex flex-col gap-4 pt-4">
-                <Quality stats={stats} by={by} />
-              </div>
-            </TabsContent>
-          </>
-        )}
-      </Tabs>
-    </div>
+    <OlderCore value={openUpdate}>
+      <div className="flex flex-col gap-4 p-6">
+        <RangeHeader
+          title="Stats"
+          range={range}
+          onRange={(next) => {
+            setRange(next)
+            // The range's buckets start on other days. An origin can have turns in any range.
+            setDrill(({ origin }) => ({ origin }))
+          }}
+          onRefresh={readAgain}
+        />
+        {stats !== undefined && <PlansStrip planUse={stats.plan_use} limits={stats.limits} />}
+        {older && <OlderCoreAlert onOpenUpdate={openUpdate} />}
+        {failure !== undefined && <Failure error={failure} />}
+        <Tabs defaultValue="overview">
+          <TabsList variant="line">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="spend">Spend</TabsTrigger>
+            <TabsTrigger value="origin">Origin</TabsTrigger>
+            <TabsTrigger value="quality">Quality</TabsTrigger>
+          </TabsList>
+          {stats === undefined ? (
+            value === undefined &&
+            failure === undefined && <Skeleton className="mt-4 h-72 w-full" />
+          ) : (
+            <>
+              <TabsContent value="overview">
+                <div className="flex flex-col gap-4 pt-4">
+                  <Overview
+                    stats={stats}
+                    by={by}
+                    onBucket={(bucket) => setDrill(({ origin }) => ({ bucket, origin }))}
+                  >
+                    {drillDown(stats)}
+                  </Overview>
+                </div>
+              </TabsContent>
+              <TabsContent value="spend">
+                <div className="flex flex-col gap-4 pt-4">
+                  <Spend stats={stats} by={by} />
+                </div>
+              </TabsContent>
+              <TabsContent value="origin">
+                <div className="flex flex-col gap-4 pt-4">
+                  <Origins
+                    client={client}
+                    clock={clock}
+                    stats={stats}
+                    instanceId={instanceId}
+                    picked={drill.origin}
+                    onPick={pickOrigin}
+                  >
+                    {drillDown(stats)}
+                  </Origins>
+                </div>
+              </TabsContent>
+              <TabsContent value="quality">
+                <div className="flex flex-col gap-4 pt-4">
+                  <Quality stats={stats} by={by} />
+                </div>
+              </TabsContent>
+            </>
+          )}
+        </Tabs>
+      </div>
+    </OlderCore>
   )
 }
 
@@ -288,7 +298,7 @@ function TurnsChart({
                 stackId="turns"
                 fill={`var(--color-${series})`}
                 className="cursor-pointer"
-                onClick={(_, index) => onBucket(buckets[index].start)}
+                onClick={({ originalDataIndex }) => onBucket(buckets[originalDataIndex].start)}
               />
             ))}
           </BarChart>
@@ -299,6 +309,16 @@ function TurnsChart({
 }
 
 const VERDICTS = { good: "Good", bad: "Bad" }
+
+/** How a turn ended. A completed turn that found no work is set apart from one that did. */
+function OutcomeBadge({ turn }: { turn: TurnMetrics }) {
+  if (turn.outcome === "no-work") return <Badge variant="secondary">no work</Badge>
+  return (
+    <Badge variant={turn.closing_kind === "completed" ? "outline" : "destructive"}>
+      {turn.closing_kind}
+    </Badge>
+  )
+}
 
 /** A drill's turns, each with who started it, how it ended, and a link to its thread. */
 function DrilledTurns({
@@ -341,9 +361,7 @@ function DrilledTurns({
             <TableRow key={`${turn.thread_id} ${turn.turn_id}`}>
               <TableCell>{originLabel(turn.origin)}</TableCell>
               <TableCell>
-                <Badge variant={turn.closing_kind === "completed" ? "outline" : "destructive"}>
-                  {turn.closing_kind}
-                </Badge>
+                <OutcomeBadge turn={turn} />
               </TableCell>
               <TableCell>{turn.rating === null ? "—" : VERDICTS[turn.rating.verdict]}</TableCell>
               <TableCell>

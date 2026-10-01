@@ -3982,10 +3982,21 @@
         },
         "required": {
           "type": "boolean"
+        },
+        "variable": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "name",
+        "variable",
         "label",
         "required",
         "is_set"
@@ -4523,8 +4534,7 @@
       "additionalProperties": false,
       "properties": {
         "by": {
-          "$ref": "#/$defs/StatsBucketSize",
-          "default": "day"
+          "$ref": "#/$defs/StatsBucketSize"
         },
         "since": {
           "anyOf": [
@@ -4727,7 +4737,7 @@
     },
     "StatsSummaryResult": {
       "additionalProperties": false,
-      "description": "Usage across the hub's running instances, read live from each one and stored nowhere.\n\nA total leaves out every instance in ``skipped`` or ``unreachable``.",
+      "description": "Usage across the hub's running instances, read live from each one and stored nowhere.\n\nA total leaves out every instance in ``skipped``, ``unreachable``, or ``outdated``.",
       "properties": {
         "api": {
           "$ref": "#/$defs/ApiUse"
@@ -4747,6 +4757,13 @@
         "limits": {
           "items": {
             "$ref": "#/$defs/PlanLimit"
+          },
+          "type": "array"
+        },
+        "outdated": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
           },
           "type": "array"
         },
@@ -4784,7 +4801,8 @@
         "plan_use",
         "limits",
         "skipped",
-        "unreachable"
+        "unreachable",
+        "outdated"
       ],
       "title": "StatsSummaryResult",
       "type": "object"
@@ -5678,8 +5696,7 @@
           "type": "integer"
         },
         "outcome": {
-          "$ref": "#/$defs/CompletionOutcome",
-          "default": "work"
+          "$ref": "#/$defs/CompletionOutcome"
         },
         "output_tokens": {
           "type": "integer"
@@ -5900,6 +5917,9 @@
               "type": "null"
             }
           ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/CompletionOutcome"
         },
         "output_tokens": {
           "type": "integer"
