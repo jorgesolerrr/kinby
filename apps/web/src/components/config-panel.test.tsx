@@ -394,6 +394,21 @@ describe("ConfigPanel", () => {
     }
   })
 
+  it("opens on Package and version when a link names it, and drops it from the URL on leaving", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1/config/package")
+    try {
+      const { user } = openPanel({}, behind)
+
+      expect(await screen.findByRole("heading", { name: "Package and version" })).toBeDefined()
+      expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
+      await user.click(screen.getByRole("button", { name: "Recap prompt" }))
+
+      expect(window.location.pathname).toBe("/instances/instance-1/config")
+    } finally {
+      window.history.replaceState(null, "", "/")
+    }
+  })
+
   it("opens the routines section", async () => {
     const { user } = openPanel({ "routine.list": () => ({ routines: [], warnings: [] }) })
 

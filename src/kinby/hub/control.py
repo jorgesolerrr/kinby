@@ -17,6 +17,7 @@ from kinby.contracts import (
     ContractModel,
     ControlToken,
     DrainState,
+    ErrorCode,
     ErrorEnvelope,
     ErrorFrame,
     FrameId,
@@ -169,12 +170,19 @@ def _probed(body: object) -> InstanceProbeResult:
 
 
 def _result[Result: ContractModel](message: str, result: type[Result], named: str) -> Result:
+    """An answer in an older contract's shape, or a refusal of the method, means an older core."""
     match parse_server_frame(message):
         case ResultFrame() as answered:
             try:
                 return result.model_validate(answered.result)
             except ValidationError as exc:
-                raise ControlUnreachable(f"The answer to {named} could not be read: {exc}") from exc
+                raise IncompatibleLifecycleEndpoint(
+                    f"The answer to {named} could not be read: {exc}"
+                ) from exc
+        case ErrorFrame(error=ErrorEnvelope(code=ErrorCode.NOT_FOUND)) as error:
+            raise IncompatibleLifecycleEndpoint(
+                f"The instance does not know {named}: {error.error.message}"
+            )
         case ErrorFrame() as error:
             raise ControlUnreachable(f"The instance refused {named}: {error.error.message}")
         case ErrorEnvelope() as unreadable:

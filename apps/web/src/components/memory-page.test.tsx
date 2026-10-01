@@ -208,6 +208,40 @@ describe("the memory page", () => {
     ).toEqual([true, true, true])
   })
 
+  it("opens the node a link names in the pane", async () => {
+    window.history.replaceState(null, "", `/instances/instance-1/memory/${deploy.node}`)
+    const { caller } = openPage()
+
+    expect(await pane().findByText("The body of Fixed the deploy.")).toBeDefined()
+    expect(called(caller, "memory.open")).toEqual([{ node: deploy.node }])
+  })
+
+  it("says why a linked node forgotten since the link was made did not open", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1/memory/2026-09-01-forgotten")
+    openPage({
+      "memory.open": () => {
+        throw refused("NOT_FOUND")
+      },
+    })
+
+    expect(await pane().findByText("Refused with NOT_FOUND.")).toBeDefined()
+  })
+
+  it.each([
+    ["another node opens", () => nodeButton("Likes coffee")],
+    ["the pane closes", () => pane().findByRole("button", { name: "Close" })],
+  ])("drops the linked node from the URL when %s", async (_, control) => {
+    window.history.replaceState(null, "", `/instances/instance-1/memory/${deploy.node}`)
+    const { user } = openPage()
+    await pane().findByText("The body of Fixed the deploy.")
+    const entries = window.history.length
+
+    await user.click(await control())
+
+    expect(window.location.pathname).toBe("/instances/instance-1/memory")
+    expect(window.history.length).toBe(entries)
+  })
+
   it("narrows the list by search, kind, and date bounds", async () => {
     const { caller, user } = openPage()
     await nodeButton("Picked markdown")

@@ -3,6 +3,7 @@ import type {
   StatsBucket,
   StatsBucketSize,
   StatsGetCommand,
+  StatsGetResult,
   StatsSummary,
   TurnMetrics,
   UsageSource,
@@ -26,6 +27,15 @@ export function statsCommand(range: Range, now: Date): StatsGetCommand {
   return { since: new Date(today - (range - 1) * DAY_MS).toISOString(), by: bucketSize(range) }
 }
 
+/**
+ * Whether a stats.get answer comes from a core older than the page, one without each plan's recent
+ * runs or the turns by origin.
+ */
+export function fromOlderCore(answer: StatsGetResult): boolean {
+  const read: { plan_use?: unknown; total: { origins?: unknown } } = answer
+  return read.plan_use === undefined || read.total.origins === undefined
+}
+
 /** Every turn that closed, whatever way it closed. */
 export function turnCount({ completed, failed, interrupted }: StatsSummary): number {
   return completed + failed + interrupted
@@ -40,6 +50,16 @@ export const SOURCE_LABELS: Record<UsageSource, string> = {
 /** An API cost in dollars, or "not priced" when no turn in it was priced, so it never reads as 0. */
 export function money(cost: number | null | undefined): string {
   return cost === null || cost === undefined ? "not priced" : `$${cost.toFixed(2)}`
+}
+
+/** An API cost in cents. A chart plots cost in cents, so its whole-number ticks land on whole cents. */
+export function cents(cost: number | null | undefined): number | null {
+  return cost === null || cost === undefined ? null : cost * 100
+}
+
+/** A cost a chart plots in cents, written in dollars as `money` writes it. */
+export function centsMoney(cents: number | null): string {
+  return money(cents === null ? null : cents / 100)
 }
 
 /** A token count with thousands separators. */
