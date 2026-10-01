@@ -275,7 +275,7 @@ describe("the stats page", () => {
     expect(screen.queryByRole("alert")).toBeNull()
   })
 
-  it("lists the turns of a clicked bar's bucket by cost, each linking to its thread", async () => {
+  it("lists the turns of a clicked bar's bucket by cost, each linking to the turn in its thread", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/stats")
     openStats({
       "stats.get": () =>
@@ -330,8 +330,17 @@ describe("the stats page", () => {
       ["Chat", "completed", "—", "—", "$0.10", "Open in chat"],
       ["babysit · signal", "completed", "—", "—", "not priced", "Open in chat"],
     ])
-    await user.click(within(listed).getAllByRole("link", { name: "Open in chat" })[0])
-    expect(window.location.pathname).toBe("/instances/hub-ada/threads/thread-inbox")
+    const links = within(listed).getAllByRole("link", { name: "Open in chat" })
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      "/instances/hub-ada/threads/thread-inbox/turns/inbox",
+      "/instances/hub-ada/threads/thread-chat/turns/chat",
+      "/instances/hub-ada/threads/thread-chat/turns/unknown",
+      "/instances/hub-ada/threads/thread-chat/turns/babysit",
+    ])
+    const entries = window.history.length
+    await user.click(links[0])
+    expect(window.history.length).toBe(entries + 1)
+    expect(window.location.pathname).toBe("/instances/hub-ada/threads/thread-inbox/turns/inbox")
   })
 
   it("lists a week bucket's turns from its Monday through its Sunday, in UTC", async () => {
