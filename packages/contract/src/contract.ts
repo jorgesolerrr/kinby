@@ -723,6 +723,7 @@ export interface SecretSetup {
   label: string;
   name: string;
   required: boolean;
+  variable: string | null;
 }
 export interface InstanceStopCommand {
   force?: boolean;

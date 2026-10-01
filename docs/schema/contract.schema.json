@@ -3982,10 +3982,21 @@
         },
         "required": {
           "type": "boolean"
+        },
+        "variable": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "name",
+        "variable",
         "label",
         "required",
         "is_set"

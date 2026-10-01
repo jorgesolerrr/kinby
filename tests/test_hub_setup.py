@@ -116,10 +116,26 @@ def test_a_created_instance_reads_its_logins_pending_and_which_secrets_are_set(t
                 ),
             ],
             secrets=[
-                SecretSetup(name="api_key", label="API key", required=True, is_set=True),
-                SecretSetup(name="WRITER_TOKEN", label="Writer token", required=True, is_set=True),
                 SecretSetup(
-                    name="WRITER_WEBHOOK", label="Webhook secret", required=False, is_set=False
+                    name="api_key",
+                    variable="OPENAI_API_KEY",
+                    label="API key",
+                    required=True,
+                    is_set=True,
+                ),
+                SecretSetup(
+                    name="WRITER_TOKEN",
+                    variable="WRITER_TOKEN",
+                    label="Writer token",
+                    required=True,
+                    is_set=True,
+                ),
+                SecretSetup(
+                    name="WRITER_WEBHOOK",
+                    variable="WRITER_WEBHOOK",
+                    label="Webhook secret",
+                    required=False,
+                    is_set=False,
                 ),
             ],
         )
@@ -319,10 +335,22 @@ def test_an_api_key_set_from_the_setup_card_reads_set(tmp_path):
         await finished_operation(hub_client(hub), replaced)
 
         assert missing.secrets == [
-            SecretSetup(name="api_key", label="API key", required=True, is_set=False)
+            SecretSetup(
+                name="api_key",
+                variable="OPENAI_API_KEY",
+                label="API key",
+                required=True,
+                is_set=False,
+            )
         ]
         assert (await setup_of(hub, instance_id)).secrets == [
-            SecretSetup(name="api_key", label="API key", required=True, is_set=True)
+            SecretSetup(
+                name="api_key",
+                variable="OPENAI_API_KEY",
+                label="API key",
+                required=True,
+                is_set=True,
+            )
         ]
         assert await pending_by_instance(hub) == {instance_id: False}
 
@@ -362,5 +390,42 @@ def test_an_instance_starts_while_its_setup_is_pending(tmp_path):
         assert outcome.state is OperationState.SUCCEEDED
         assert runtime.started == [str(instance_id)]
         assert await pending_by_instance(hub) == {instance_id: True}
+
+    asyncio.run(scenario())
+
+
+async def secret_variables(hub: Hub, instance_id: UUID) -> dict[str, str | None]:
+    return {secret.name: secret.variable for secret in (await setup_of(hub, instance_id)).secrets}
+
+
+def test_each_secret_names_the_variable_its_value_lands_in(tmp_path):
+    async def scenario() -> None:
+        hub = setup_hub(tmp_path, FakeImages(package=writer(fields=(TOKEN, WEBHOOK))))
+        instance_id = (
+            await created_writer(
+                hub, secrets={"WRITER_TOKEN": "tok"}, model="anthropic:claude-opus-5-5"
+            )
+        ).instance_id
+
+        assert await secret_variables(hub, instance_id) == {
+            "api_key": "ANTHROPIC_API_KEY",
+            "WRITER_TOKEN": "WRITER_TOKEN",
+            "WRITER_WEBHOOK": "WRITER_WEBHOOK",
+        }
+
+    asyncio.run(scenario())
+
+
+def test_the_api_key_names_no_variable_when_the_model_cannot_be_read(tmp_path):
+    async def scenario() -> None:
+        hub = setup_hub(tmp_path, FakeImages(package=writer(fields=(TOKEN, WEBHOOK))))
+        instance_id = (await created_writer(hub, secrets={"WRITER_TOKEN": "tok"})).instance_id
+        (hub.instances_directory / str(instance_id) / "kinby.toml").write_text("not = [toml")
+
+        assert await secret_variables(hub, instance_id) == {
+            "api_key": None,
+            "WRITER_TOKEN": "WRITER_TOKEN",
+            "WRITER_WEBHOOK": "WRITER_WEBHOOK",
+        }
 
     asyncio.run(scenario())
