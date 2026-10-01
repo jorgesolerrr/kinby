@@ -40,7 +40,7 @@ import { lastChanged } from "@/lib/config-changes"
 import { OlderCore } from "@/lib/older-core"
 import { retried } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
-import { leaveRoutine, linkedRoutine } from "@/lib/selection"
+import { leaveLink, linkedPackage, linkedRoutine } from "@/lib/selection"
 import {
   BoxIcon,
   CpuIcon,
@@ -229,13 +229,12 @@ export function ConfigPanel({
   onChanged: () => void
 }) {
   const [routine, setRoutine] = useState(linkedRoutine)
-  const [selected, setSelected] = useState(routine === undefined ? "Behavior prompt" : ROUTINES)
+  const [selected, setSelected] = useState(() => linkedSection(routine))
   const instanceId = instance.instance_id
   const open = (label: string) => {
     setSelected(label)
-    if (routine === undefined) return
     setRoutine(undefined)
-    leaveRoutine(instanceId)
+    leaveLink(instanceId)
   }
   const section = SECTIONS.find((candidate) => candidate.label === selected)
   const read = useCallback(
@@ -293,6 +292,13 @@ export function ConfigPanel({
       </main>
     </div>
   )
+}
+
+/** The section a link opens the panel on: the routines for a linked routine, or the first one. */
+function linkedSection(routine: string | undefined): string {
+  if (routine !== undefined) return ROUTINES
+  if (linkedPackage()) return PACKAGE
+  return "Behavior prompt"
 }
 
 /**

@@ -1445,7 +1445,7 @@ class ApiUse(TokenTotals):
 class StatsSummaryResult(ContractModel):
     """Usage across the hub's running instances, read live from each one and stored nowhere.
 
-    A total leaves out every instance in ``skipped`` or ``unreachable``.
+    A total leaves out every instance in ``skipped``, ``unreachable``, or ``outdated``.
     """
 
     #: Each counted instance's buckets, by hub instance ID.
@@ -1460,6 +1460,8 @@ class StatsSummaryResult(ContractModel):
     skipped: list[UUID]
     #: Running instances that failed to answer, or did not answer in time.
     unreachable: list[UUID]
+    #: Running instances on an older core, whose answer this hub cannot read.
+    outdated: list[UUID]
 
 
 class RoutineListCommand(ContractModel):

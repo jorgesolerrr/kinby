@@ -136,6 +136,7 @@ test("stats.summary takes stats.get's range and names each instance it counted o
   expectTypeOf<Summary["result"]["limits"]>().toEqualTypeOf<PlanLimit[]>()
   expectTypeOf<Summary["result"]["skipped"]>().toEqualTypeOf<string[]>()
   expectTypeOf<Summary["result"]["unreachable"]>().toEqualTypeOf<string[]>()
+  expectTypeOf<Summary["result"]["outdated"]>().toEqualTypeOf<string[]>()
 })
 
 test("thread.list reads each thread's status and last activity", () => {

@@ -1368,7 +1368,7 @@ export interface ModelCallMismatch {
 /**
  * Usage across the hub's running instances, read live from each one and stored nowhere.
  *
- * A total leaves out every instance in ``skipped`` or ``unreachable``.
+ * A total leaves out every instance in ``skipped``, ``unreachable``, or ``outdated``.
  */
 export interface StatsSummaryResult {
   api: ApiUse;
@@ -1376,6 +1376,7 @@ export interface StatsSummaryResult {
     [k: string]: StatsBucket[];
   };
   limits: PlanLimit[];
+  outdated: string[];
   plan_use: PlanUse[];
   skipped: string[];
   subscriptions: SubscriptionUse[];

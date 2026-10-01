@@ -9,6 +9,7 @@ from typing import Self
 from uuid import UUID, uuid4
 
 import pytest
+from langchain_core.exceptions import ModelNotFoundError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import ValidationError
 
@@ -125,6 +126,20 @@ class FailingRecapModel:
             "parsed": None,
             "parsing_error": RuntimeError("recap response could not be parsed"),
         }
+
+
+class UnknownRecapModel:
+    def with_structured_output(
+        self,
+        schema: type[RecapDraft],
+        *,
+        method: str,
+        include_raw: bool,
+    ) -> Self:
+        return self
+
+    async def ainvoke(self, messages: Sequence[BaseMessage]) -> object:
+        raise ModelNotFoundError("Error code: 404 - {'type': 'not_found_error'}")
 
 
 def _instance(tmp_path: Path, *, policy: str, recap_model: str | None = None):
@@ -462,6 +477,64 @@ def test_recap_model_error_warns_without_changing_the_closed_turn(tmp_path: Path
         assert not list((tmp_path / "memory" / "graph").glob("*.md"))
 
     asyncio.run(scenario())
+
+
+def test_unknown_recap_model_warns_that_the_model_does_not_exist(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def scenario() -> None:
+        state_dir = tmp_path / ".state"
+        event_log = EventLog(state_dir)
+        recap = RecapWriter(
+            event_log,
+            GraphStore(tmp_path),
+            _instance(
+                tmp_path,
+                policy="every-turn",
+                recap_model="anthropic:claude-no-such-model-9",
+            ),
+            model_factory=lambda _: UnknownRecapModel(),
+        )
+        dispatcher = build_dispatcher(
+            state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ClosingRunner(),
+                recap,
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        accepted = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "First"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(accepted, AcceptedResult)
+        closing_events = (await event_log.subscribe(created.id, accepted.sequence)).items
+        for _ in range(2):
+            await anext(closing_events)
+        await closing_events.aclose()
+
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        events = event_log.stored(created.id)
+        warnings = [event.payload for event in events if isinstance(event.payload, Warning)]
+        assert warnings == [
+            Warning(
+                sources=("recap",),
+                message="The recap model anthropic:claude-no-such-model-9 doesn't exist.",
+            )
+        ]
+        assert not any(isinstance(event.payload, MemoryRecapped) for event in events)
+
+    asyncio.run(scenario())
+
+    [record] = [record for record in caplog.records if record.name == "kinby.memory.recap"]
+    assert record.levelname == "ERROR"
+    assert record.exc_info is not None
 
 
 def test_catch_up_retries_a_failed_recap_and_writes_its_marker(tmp_path: Path) -> None:
