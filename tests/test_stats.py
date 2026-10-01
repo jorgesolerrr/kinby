@@ -46,6 +46,7 @@ from kinby.contracts import (
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
+    TurnMetrics,
     TurnRated,
     TurnStarted,
     TurnVerdict,
@@ -421,6 +422,47 @@ def test_stats_does_not_warn_for_no_work_closing_totals(tmp_path: Path) -> None:
 
     assert isinstance(result, StatsGetResult)
     assert result.warnings == []
+
+
+def test_turn_metrics_records_whether_a_completed_turn_did_work() -> None:
+    thread_id = uuid4()
+    started_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        *_turn_events(
+            thread_id,
+            uuid4(),
+            started_at,
+            TurnStarted(message="check", model="openai:gpt-5"),
+            TurnCompleted(input_tokens=0, output_tokens=0, outcome=CompletionOutcome.NO_WORK),
+        ),
+        *_turn_events(
+            thread_id,
+            uuid4(),
+            started_at,
+            TurnStarted(message="do", model="openai:gpt-5"),
+            TurnCompleted(input_tokens=3, output_tokens=2),
+        ),
+    ]
+
+    records = turn_metrics(events).records
+
+    assert [record.outcome for record in records] == ["no-work", "work"]
+
+
+def test_a_turn_metrics_record_without_an_outcome_reads_as_work() -> None:
+    record = turn_metrics(
+        _turn_events(
+            uuid4(),
+            uuid4(),
+            datetime(2026, 9, 1, 10, tzinfo=UTC),
+            TurnStarted(message="do", model="openai:gpt-5"),
+            TurnCompleted(input_tokens=3, output_tokens=2),
+        )
+    ).records[0]
+    stored = record.model_dump(mode="json")
+    del stored["outcome"]
+
+    assert TurnMetrics.model_validate(stored).outcome == "work"
 
 
 def test_stats_warning_eligibility_is_scoped_to_each_turn(

@@ -334,6 +334,35 @@ describe("the stats page", () => {
     expect(window.location.pathname).toBe("/instances/hub-ada/threads/thread-inbox")
   })
 
+  it("labels a drilled turn that found no work apart from a completed one", async () => {
+    openStats({
+      "stats.get": () =>
+        stats({
+          records: [
+            turn({ turn_id: "chat", cost: 0.5 }),
+            turn({
+              turn_id: "babysit",
+              outcome: "no-work",
+              origin: { kind: "routine", name: "babysit", trigger: "scheduled" },
+            }),
+          ],
+          buckets: [{ ...summary({ completed: 2 }), start: "2026-09-28" }],
+        }),
+    })
+    await screen.findByRole("region", { name: "Turns" })
+
+    clickBar(0)
+
+    const listed = screen.getByRole("table", { name: "Turns closed on Sep 28" })
+    const [completed, noWork] = within(listed)
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => within(row).getAllByRole("cell")[1].firstElementChild)
+    expect(completed?.textContent).toBe("completed")
+    expect(noWork?.textContent).toBe("no work")
+    expect(noWork?.className).not.toBe(completed?.className)
+  })
+
   it("lists a week bucket's turns from its Monday through its Sunday, in UTC", async () => {
     openStats({
       "stats.get": () =>

@@ -111,6 +111,7 @@ export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription"
 export type TurnClosingKind = "completed" | "failed" | "interrupted";
 export type DelegatedRunOutcome = "completed" | "failed" | "limited";
 export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
+export type CompletionOutcome = "work" | "no-work";
 export type TurnVerdict = "good" | "bad";
 export type ApprovalDecision = "approve" | "deny";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
@@ -142,7 +143,6 @@ export type ErrorCode =
   | "INTERNAL";
 export type GateOutcome = "allow" | "deny";
 export type GateDecider = "policy" | "user";
-export type CompletionOutcome = "work" | "no-work";
 
 export interface Contract {
   client_frame: ClientFrame;
@@ -1272,6 +1272,7 @@ export interface TurnMetrics {
   model: string | null;
   navigation?: Navigation;
   origin: (UserOrigin | RoutineOrigin) | null;
+  outcome?: CompletionOutcome;
   output_tokens: number;
   prompt_version: string | null;
   rating: TurnRated | null;
