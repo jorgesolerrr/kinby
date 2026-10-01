@@ -42,6 +42,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { reason } from "@/lib/operation"
+import { nodePath, openNode } from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
 import type { ParkedApproval, Recap, ToolStep, TurnBlock, TurnEnd } from "@/lib/timeline"
 import {
@@ -64,10 +65,13 @@ import {
 /** A thread's turns as a timeline, followed live once its history has loaded. */
 export function ThreadPanel({
   client,
+  instanceId,
   threadId,
   name,
 }: {
   client: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange">
+  /** The hub's ID for the instance, which its pages' links name. */
+  instanceId: string
   threadId: string
   /** What the instance is called. */
   name: string
@@ -106,7 +110,7 @@ export function ThreadPanel({
       {/* Half a history must not pass for all of it. */}
       {replayed ? (
         <>
-          <Transcript turns={timeline.turns} name={name} />
+          <Transcript turns={timeline.turns} instanceId={instanceId} name={name} />
           <div className="mx-auto w-full max-w-3xl p-4">
             {/* Nothing else is sent while the turn waits on the user. */}
             {approval === undefined ? (
@@ -351,7 +355,15 @@ function takeFocus(field: HTMLElement | null) {
   field?.focus()
 }
 
-function Transcript({ turns, name }: { turns: TurnBlock[]; name: string }) {
+function Transcript({
+  turns,
+  instanceId,
+  name,
+}: {
+  turns: TurnBlock[]
+  instanceId: string
+  name: string
+}) {
   return (
     // A turn opens from its first marker, without a peek at the turn before it.
     <MessageScrollerProvider
@@ -365,7 +377,7 @@ function Transcript({ turns, name }: { turns: TurnBlock[]; name: string }) {
           <MessageScrollerContent className="mx-auto w-full max-w-3xl">
             {turns.map((turn) => (
               <MessageScrollerItem key={turn.turnId} messageId={turn.turnId} scrollAnchor>
-                <Turn turn={turn} name={name} />
+                <Turn turn={turn} instanceId={instanceId} name={name} />
               </MessageScrollerItem>
             ))}
           </MessageScrollerContent>
@@ -376,7 +388,7 @@ function Transcript({ turns, name }: { turns: TurnBlock[]; name: string }) {
   )
 }
 
-function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
+function Turn({ turn, instanceId, name }: { turn: TurnBlock; instanceId: string; name: string }) {
   const { startedBy } = turn
   return (
     <div className="flex flex-col gap-3 px-6">
@@ -415,7 +427,7 @@ function Turn({ turn, name }: { turn: TurnBlock; name: string }) {
             ),
           )}
           <EndMarker turn={turn} />
-          {turn.recap !== undefined && <RecapMarker recap={turn.recap} />}
+          {turn.recap !== undefined && <RecapMarker recap={turn.recap} instanceId={instanceId} />}
         </MessageContent>
       </Message>
     </div>
@@ -537,17 +549,26 @@ function turnOutcome({ end, steps }: TurnBlock): {
   }
 }
 
-/** What the turn's recap left in memory. */
-function RecapMarker({ recap }: { recap: Recap }) {
+/** What the turn's recap left in memory, linking to the episode it kept. */
+function RecapMarker({ recap, instanceId }: { recap: Recap; instanceId: string }) {
   switch (recap.kind) {
-    // The episode has no Memory page to open on yet, so the marker names it without a link.
     case "episode":
       return (
         <Marker>
           <MarkerIcon>
             <BrainIcon />
           </MarkerIcon>
-          <MarkerContent>Recapped</MarkerContent>
+          <MarkerContent>
+            <a
+              href={nodePath(instanceId, recap.node)}
+              onClick={(event) => {
+                event.preventDefault()
+                openNode(instanceId, recap.node)
+              }}
+            >
+              Recapped
+            </a>
+          </MarkerContent>
         </Marker>
       )
     case "none":

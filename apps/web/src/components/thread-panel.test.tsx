@@ -21,7 +21,9 @@ function instanceClient(answers: Answers = {}) {
 
 /** Open thread t1 of Ada's instance, from a client that answers from `answers`. */
 function openThread(answers: Answers = {}, client = instanceClient(answers)) {
-  const rendered = render(<ThreadPanel client={client} threadId="t1" name="Ada" />)
+  const rendered = render(
+    <ThreadPanel client={client} instanceId="hub-ada" threadId="t1" name="Ada" />,
+  )
   const subscription = () => {
     const latest = client.subscriptions.at(-1)
     if (latest === undefined) throw new Error("The panel did not subscribe.")
@@ -290,8 +292,31 @@ describe("a thread's panel", () => {
       for (const marker of ["Recapped", "No episode", "Recap failed"]) {
         expect(recapOf("Say hi", marker)).toBeNull()
       }
-      // The episode has no Memory page to open on yet.
-      expect(screen.queryByRole("link")).toBeNull()
+      // Only the episode has somewhere to open.
+      expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual(["Recapped"])
+    })
+
+    it("links Recapped to its episode on the Memory page, as a new history entry", async () => {
+      window.history.replaceState(null, "", "/instances/hub-ada/threads/t1")
+      const events = thread(
+        ["turn-1", started("Fix the runtime")],
+        ["turn-1", completed],
+        ["turn-1", recapped("2026-09-28-0192-fix-the-runtime")],
+      )
+      const { subscription } = openThread()
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+      const link = screen.getByRole("link", { name: "Recapped" })
+      const entries = window.history.length
+
+      await userEvent.click(link)
+
+      const episode = "/instances/hub-ada/memory/2026-09-28-0192-fix-the-runtime"
+      expect(link.getAttribute("href")).toBe(episode)
+      expect(window.location.pathname).toBe(episode)
+      expect(window.history.length).toBe(entries + 1)
     })
 
     it("shows a recap that reports live, after the turn has completed", async () => {

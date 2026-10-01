@@ -38,6 +38,11 @@ function memoryPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${MEMORY}`
 }
 
+/** One node open on an instance's memory page. */
+export function nodePath(instanceId: string, node: string): string {
+  return `${memoryPath(instanceId)}/${encodeURIComponent(node)}`
+}
+
 export function statsPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${STATS}`
 }
@@ -81,6 +86,17 @@ export function leaveLink(instanceId: string): void {
 /** Open an instance's memory page the same way. */
 export function openMemory(instanceId: string): void {
   navigate(memoryPath(instanceId))
+}
+
+/** Open a node on an instance's memory page the same way. */
+export function openNode(instanceId: string, node: string): void {
+  navigate(nodePath(instanceId, node))
+}
+
+/** Drop the linked node from the URL and keep the memory page, in the same history entry. */
+export function leaveNode(instanceId: string): void {
+  window.history.replaceState(null, "", memoryPath(instanceId))
+  changed()
 }
 
 /** Open an instance's stats page the same way. */
@@ -181,6 +197,14 @@ export function linkedPackage(): boolean {
 function memoryOpen(): boolean {
   const [, section, instanceId, memory] = window.location.pathname.split("/")
   return section === SECTION && Boolean(instanceId) && memory === MEMORY
+}
+
+/** The node the URL opens on its instance's memory page, if it names one. */
+export function linkedNode(): string | undefined {
+  const [, section, instanceId, memory, node] = window.location.pathname.split("/")
+  return section === SECTION && instanceId && memory === MEMORY && node
+    ? decodeURIComponent(node)
+    : undefined
 }
 
 function statsOpen(): boolean {
