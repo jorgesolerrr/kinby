@@ -10,6 +10,17 @@ import { useCallback, useEffect, useId, useState } from "react"
 import { Secrets } from "@/components/secrets-section"
 import { SubscriptionLogins } from "@/components/subscription-logins"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -31,12 +42,14 @@ import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
 import { followStart, type Starting } from "@/lib/creation"
 import { instanceName, observedState } from "@/lib/instances"
+import { type Followed, followOperation } from "@/lib/operation"
 import { openConfig, openMemory, openStats } from "@/lib/selection"
 import {
   BotIcon,
   BrainIcon,
   ChartColumnIcon,
   CirclePauseIcon,
+  CircleStopIcon,
   CircleXIcon,
   SlidersHorizontalIcon,
 } from "lucide-react"
@@ -44,10 +57,10 @@ import {
 /**
  * What one instance shows. A stopped instance with setup pending opens on its setup card, and
  * keeps it until it runs. Any other stopped one offers Start. A running one opens its config panel,
- * its memory, and its stats, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
+ * its memory, and its stats, offers Stop, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
  * all are.
- * `onChanged` hears a sign-in or a start end, so the instances are listed again, and must keep
- * its identity.
+ * `onChanged` hears a sign-in, a start or a stop end, so the instances are listed again, and must
+ * keep its identity.
  */
 export function InstancePage({
   caller,
@@ -89,7 +102,7 @@ export function InstancePage({
     const logins = status?.setup.logins ?? []
     return (
       <>
-        <div className="flex gap-2 px-6 pt-6">
+        <div className="flex flex-wrap gap-2 px-6 pt-6">
           <Button variant="outline" onClick={() => openConfig(instance.instance_id)}>
             <SlidersHorizontalIcon data-icon="inline-start" />
             Configure
@@ -102,6 +115,13 @@ export function InstancePage({
             <ChartColumnIcon data-icon="inline-start" />
             Stats
           </Button>
+          <StopButton
+            caller={caller}
+            clock={clock}
+            instanceId={instance.instance_id}
+            name={name}
+            onStopped={onChanged}
+          />
         </div>
         <ProcessAlert instance={instance} name={name} />
         {logins.length > 0 ? (
@@ -125,6 +145,97 @@ export function InstancePage({
     )
   }
   return <NothingHereYet name={name} />
+}
+
+/**
+ * Stop, once confirmed, and Force stop while a stop runs or after one failed. A force stop asked
+ * while a stop drains escalates it, and the hub answers with that stop's operation.
+ */
+function StopButton({
+  caller,
+  clock,
+  instanceId,
+  name,
+  onStopped,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  instanceId: string
+  name: string
+  onStopped: () => void
+}) {
+  const [asking, setAsking] = useState(false)
+  // A new object for each click, so stopping again follows the operation the hub answers with.
+  const [request, setRequest] = useState<{ force: boolean }>()
+  const stop = useCallback(
+    ({ force }: { force: boolean }, report: (followed: Followed) => void) =>
+      followOperation(
+        caller,
+        () =>
+          caller.call(
+            "instance.stop",
+            force ? { instance_id: instanceId, force } : { instance_id: instanceId },
+          ),
+        (followed) => {
+          report(followed)
+          if (followed.state === "succeeded") onStopped()
+        },
+        clock,
+      ),
+    [caller, clock, instanceId, onStopped],
+  )
+  const followed = useFollowing(request, stop)
+  const state = request === undefined ? undefined : (followed?.state ?? "running")
+  const busy = state === "running" || state === "succeeded"
+  return (
+    <>
+      <AlertDialog open={asking} onOpenChange={setAsking}>
+        <AlertDialogTrigger render={<Button variant="outline" disabled={busy} />}>
+          {busy ? (
+            <Spinner data-icon="inline-start" />
+          ) : (
+            <CircleStopIcon data-icon="inline-start" />
+          )}
+          Stop
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Stop {name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {name} finishes the work it has accepted, then does nothing until it starts again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setAsking(false)
+                setRequest({ force: false })
+              }}
+            >
+              Stop
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      {(state === "running" || state === "failed") && (
+        <Button
+          variant="destructive"
+          disabled={state === "running" && request?.force}
+          onClick={() => setRequest({ force: true })}
+        >
+          Force stop
+        </Button>
+      )}
+      {followed?.state === "failed" && (
+        <Alert variant="destructive" className="max-w-2xl basis-full">
+          <CircleXIcon />
+          <AlertTitle>The stop failed</AlertTitle>
+          <AlertDescription>{followed.detail}</AlertDescription>
+        </Alert>
+      )}
+    </>
+  )
 }
 
 /** Says so when an instance meant to run is restarting in a loop or has failed. */
