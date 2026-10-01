@@ -40,14 +40,14 @@ export interface InstancePoint {
 }
 
 /**
- * A point per bucket any instance has, in time order, holding `value` for each instance in the
- * order given. An instance with nothing in a bucket has 0 there.
+ * A point per start, holding `value` for each instance in the order given. An instance with
+ * nothing in a bucket has 0 there.
  */
 export function instancePoints(
+  starts: string[],
   instances: StatsBucket[][],
   value: (bucket: StatsBucket) => number | null,
 ): InstancePoint[] {
-  const starts = [...new Set(instances.flat().map((bucket) => bucket.start))].sort()
   return starts.map((start) => ({
     start,
     values: instances.map((buckets) => {

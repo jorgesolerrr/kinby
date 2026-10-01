@@ -41,6 +41,7 @@ import { openStats, statsPath } from "@/lib/selection"
 import {
   bucketLabel,
   bucketSize,
+  bucketStarts,
   cents,
   centsMoney,
   money,
@@ -70,12 +71,15 @@ type Caller = Pick<Client, "call">
 export function UsagePage({ client, clock }: { client: Caller; clock: Clock }) {
   const [range, setRange] = useState<Range>(7)
   // The instances are listed with every summary, so the names and the counts show the same moment.
+  // The charts' buckets come from the moment the read asked about, so midnight never splits them.
   const read = useCallback(async () => {
+    const now = new Date()
     const [usage, listed] = await Promise.all([
-      client.call("stats.summary", statsCommand(range, new Date())),
+      client.call("stats.summary", statsCommand(range, now)),
       client.call("instance.list", {}),
     ])
-    return { usage, instances: listed.instances }
+    const starts = bucketStarts(range, bucketSize(range), now)
+    return { usage, instances: listed.instances, starts }
   }, [client, range])
   const { value, failure, readAgain } = useRead(read, clock)
   const by = bucketSize(range)
@@ -90,7 +94,12 @@ export function UsagePage({ client, clock }: { client: Caller; clock: Clock }) {
       {value === undefined ? (
         failure === undefined && <Skeleton className="h-72 w-full" />
       ) : (
-        <Usage usage={value.usage} rows={usageRows(value.usage, value.instances)} by={by} />
+        <Usage
+          usage={value.usage}
+          rows={usageRows(value.usage, value.instances)}
+          by={by}
+          starts={value.starts}
+        />
       )}
     </div>
   )
@@ -101,10 +110,12 @@ function Usage({
   usage,
   rows,
   by,
+  starts,
 }: {
   usage: StatsSummaryResult
   rows: UsageRow[]
   by: StatsBucketSize
+  starts: string[]
 }) {
   // The hub lists every plan, counted or not, so its plans name the columns.
   const sources = usage.subscriptions.map((use) => use.usage_source)
@@ -113,7 +124,7 @@ function Usage({
     <>
       <InstanceTable rows={rows} sources={sources} />
       <Totals usage={usage} />
-      <InstanceCharts counted={counted} by={by} />
+      <InstanceCharts counted={counted} by={by} starts={starts} />
     </>
   )
 }
@@ -229,7 +240,15 @@ const MEASURES = [
 }[]
 
 /** Each counted instance's API cost, plan runs, or turns in each bucket, stacked. */
-function InstanceCharts({ counted, by }: { counted: CountedRow[]; by: StatsBucketSize }) {
+function InstanceCharts({
+  counted,
+  by,
+  starts,
+}: {
+  counted: CountedRow[]
+  by: StatsBucketSize
+  starts: string[]
+}) {
   const series = counted.map((_, index) => `instance-${index}`)
   const config: ChartConfig = Object.fromEntries(
     counted.map(({ instance }, index) => [
@@ -259,7 +278,7 @@ function InstanceCharts({ counted, by }: { counted: CountedRow[]; by: StatsBucke
               ))}
             </TabsList>
             {MEASURES.map(({ tab, value, format }) => {
-              const points = instancePoints(buckets, value)
+              const points = instancePoints(starts, buckets, value)
               return (
                 <TabsContent key={tab} value={tab}>
                   <ChartContainer config={config} className="aspect-auto h-64 w-full">

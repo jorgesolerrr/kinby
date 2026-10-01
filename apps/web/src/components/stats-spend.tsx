@@ -21,16 +21,34 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { bucketLabel, cents, centsMoney, duration, money, SOURCE_LABELS, tokens } from "@/lib/stats"
+import {
+  bucketLabel,
+  type BucketPoint,
+  bucketPoints,
+  cents,
+  centsMoney,
+  duration,
+  money,
+  SOURCE_LABELS,
+  tokens,
+} from "@/lib/stats"
 
 /** Where the range's API cost and plan runs went. */
-export function Spend({ stats, by }: { stats: StatsGetResult; by: StatsBucketSize }) {
+export function Spend({
+  stats,
+  by,
+  starts,
+}: {
+  stats: StatsGetResult
+  by: StatsBucketSize
+  starts: string[]
+}) {
   return (
     <>
       <UnpricedNotice models={stats.unpriced_models} />
-      <CostChart buckets={stats.buckets} by={by} />
+      <CostChart buckets={stats.buckets} by={by} starts={starts} />
       <Sources stats={stats} />
-      <PlanRunsChart buckets={stats.buckets} by={by} />
+      <PlanRunsChart buckets={stats.buckets} by={by} starts={starts} />
     </>
   )
 }
@@ -56,9 +74,17 @@ const COST_SERIES = {
 
 /**
  * The API cost of each bucket. A bucket with no priced turn has no bar, and its tooltip says it
- * was not priced, so it never reads as free.
+ * was not priced, so it never reads as free. A bucket with no turn at all costs $0.00.
  */
-function CostChart({ buckets, by }: { buckets: StatsBucket[]; by: StatsBucketSize }) {
+function CostChart({
+  buckets,
+  by,
+  starts,
+}: {
+  buckets: StatsBucket[]
+  by: StatsBucketSize
+  starts: string[]
+}) {
   const priced = buckets.some((bucket) => bucket.cost != null)
   return (
     <section aria-label="API cost">
@@ -72,20 +98,20 @@ function CostChart({ buckets, by }: { buckets: StatsBucket[]; by: StatsBucketSiz
         {priced && (
           <CardContent>
             <ChartContainer config={COST_SERIES} className="aspect-auto h-48 w-full">
-              <BarChart data={buckets} accessibilityLayer>
+              <BarChart data={bucketPoints(starts, buckets)} accessibilityLayer>
                 <BucketAxes tickFormatter={centsMoney} />
                 <ChartTooltip
                   content={
                     <ChartTooltipContent
                       labelFormatter={(start) => bucketLabel(String(start), by)}
                       formatter={(_, __, item) => (
-                        <CostRow cost={(item.payload as StatsBucket).cost} />
+                        <CostRow cost={(item.payload as BucketPoint).cost} />
                       )}
                     />
                   }
                 />
                 <Bar
-                  dataKey={(bucket: StatsBucket) => cents(bucket.cost) ?? 0}
+                  dataKey={(point: BucketPoint) => cents(point.cost) ?? 0}
                   name="cost"
                   fill="var(--color-cost)"
                 />
@@ -98,7 +124,7 @@ function CostChart({ buckets, by }: { buckets: StatsBucket[]; by: StatsBucketSiz
   )
 }
 
-function CostRow({ cost }: { cost: StatsBucket["cost"] }) {
+function CostRow({ cost }: { cost: BucketPoint["cost"] }) {
   return (
     <div className="flex flex-1 items-center justify-between gap-2">
       <span className="text-muted-foreground">{COST_SERIES.cost.label}</span>
@@ -160,9 +186,17 @@ const PLAN_SERIES = {
 } satisfies ChartConfig
 
 /** How many delegated runs each plan made in each bucket. */
-function PlanRunsChart({ buckets, by }: { buckets: StatsBucket[]; by: StatsBucketSize }) {
-  const runs = (bucket: StatsBucket, source: UsageSource) =>
-    bucket.subscriptions.find((use) => use.usage_source === source)?.runs ?? 0
+function PlanRunsChart({
+  buckets,
+  by,
+  starts,
+}: {
+  buckets: StatsBucket[]
+  by: StatsBucketSize
+  starts: string[]
+}) {
+  const runs = (point: BucketPoint, source: UsageSource) =>
+    point.subscriptions.find((use) => use.usage_source === source)?.runs ?? 0
   const ran = buckets.some((bucket) => bucket.subscriptions.some((use) => (use.runs ?? 0) > 0))
   return (
     <section aria-label="Plan runs">
@@ -175,7 +209,7 @@ function PlanRunsChart({ buckets, by }: { buckets: StatsBucket[]; by: StatsBucke
         </CardHeader>
         <CardContent>
           <ChartContainer config={PLAN_SERIES} className="aspect-auto h-48 w-full">
-            <BarChart data={buckets} accessibilityLayer>
+            <BarChart data={bucketPoints(starts, buckets)} accessibilityLayer>
               <BucketAxes />
               <ChartTooltip
                 content={
@@ -186,7 +220,7 @@ function PlanRunsChart({ buckets, by }: { buckets: StatsBucket[]; by: StatsBucke
               {(Object.keys(PLAN_SERIES) as (keyof typeof PLAN_SERIES)[]).map((source) => (
                 <Bar
                   key={source}
-                  dataKey={(bucket: StatsBucket) => runs(bucket, source)}
+                  dataKey={(point: BucketPoint) => runs(point, source)}
                   name={source}
                   stackId="runs"
                   fill={`var(--color-${source})`}

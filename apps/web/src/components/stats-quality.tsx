@@ -15,9 +15,17 @@ import { bucketLabel, type NavigationPoint, navigationTrend } from "@/lib/stats"
 const TOP_TOOLS = 10
 
 /** How well the range's work went: what it called, what it asked, and how it was rated. */
-export function Quality({ stats, by }: { stats: StatsGetResult; by: StatsBucketSize }) {
+export function Quality({
+  stats,
+  by,
+  starts,
+}: {
+  stats: StatsGetResult
+  by: StatsBucketSize
+  starts: string[]
+}) {
   const { total } = stats
-  const trend = navigationTrend(stats.buckets, stats.records, by)
+  const trend = navigationTrend(starts, stats.records, by)
   const tools = Object.entries(total.tool_calls)
     .sort(([a, aCalls], [b, bCalls]) => bCalls - aCalls || a.localeCompare(b))
     .slice(0, TOP_TOOLS)
@@ -128,7 +136,6 @@ function NavigationChart({ trend, by }: { trend: NavigationPoint[]; by: StatsBuc
                 name="reads"
                 stroke="var(--color-reads)"
                 strokeWidth={2}
-                connectNulls
               />
             </LineChart>
           </ChartContainer>
