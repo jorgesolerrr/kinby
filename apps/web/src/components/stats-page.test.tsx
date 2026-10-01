@@ -111,13 +111,17 @@ function delegated(client: string): ReportedRun {
   }
 }
 
+const TURN_SERIES = ["completed", "failed", "interrupted"] as const
+
 /**
- * Click the bar of the bucket at `index`, as a pointer does. jsdom lays nothing out, so Recharts
- * draws no shape to find by role, only the layer each bar sits in.
+ * Click the `index`th drawn segment of `series` in the turns chart, as a pointer does. jsdom lays
+ * nothing out, so Recharts draws no shape to find by role, only the layer each segment sits in.
+ * Recharts draws no segment for a zero count, so `index` skips the buckets where `series` is 0.
  */
-function clickBar(index: number) {
-  const bar = document.querySelectorAll(".recharts-bar-rectangle")[index]?.firstElementChild
-  if (!bar) throw new Error(`The chart has no bar ${index}`)
+function clickBar(index: number, series: (typeof TURN_SERIES)[number] = "completed") {
+  const layer = document.querySelectorAll(".recharts-bar")[TURN_SERIES.indexOf(series)]
+  const bar = layer?.querySelectorAll(".recharts-bar-rectangle")[index]?.firstElementChild
+  if (!bar) throw new Error(`The chart has no ${series} segment ${index}`)
   fireEvent.click(bar)
 }
 
@@ -333,6 +337,26 @@ describe("the stats page", () => {
     await user.click(within(listed).getAllByRole("link", { name: "Open in chat" })[0])
     expect(window.location.pathname).toBe("/instances/hub-ada/threads/thread-inbox")
   })
+
+  it.each(["failed", "interrupted"] as const)(
+    "lists the turns of the bucket whose %s segment was clicked, past days with none",
+    async (series) => {
+      openStats({
+        "stats.get": () =>
+          stats({
+            buckets: [
+              { ...summary({ completed: 1 }), start: "2026-09-27" },
+              { ...summary({ completed: 10, failed: 2, interrupted: 4 }), start: "2026-09-28" },
+            ],
+          }),
+      })
+      await screen.findByRole("region", { name: "Turns" })
+
+      clickBar(0, series)
+
+      expect(screen.getByRole("table", { name: "Turns closed on Sep 28" })).toBeDefined()
+    },
+  )
 
   it("lists a week bucket's turns from its Monday through its Sunday, in UTC", async () => {
     openStats({

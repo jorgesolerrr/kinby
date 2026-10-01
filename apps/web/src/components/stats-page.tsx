@@ -298,7 +298,7 @@ function TurnsChart({
                 stackId="turns"
                 fill={`var(--color-${series})`}
                 className="cursor-pointer"
-                onClick={(_, index) => onBucket(buckets[index].start)}
+                onClick={({ originalDataIndex }) => onBucket(buckets[originalDataIndex].start)}
               />
             ))}
           </BarChart>
