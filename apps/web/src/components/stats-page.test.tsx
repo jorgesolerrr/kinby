@@ -279,6 +279,55 @@ describe("the stats page", () => {
     expect(screen.queryByRole("alert")).toBeNull()
   })
 
+  it("charts every day of the range, with no turns on the days that had none", async () => {
+    openStats({
+      "stats.get": () =>
+        stats({
+          buckets: [
+            { ...summary({ completed: 2, failed: 1 }), start: "2026-09-25" },
+            { ...summary({ completed: 1, interrupted: 1 }), start: "2026-09-28" },
+          ],
+        }),
+    })
+    await screen.findByRole("region", { name: "Turns" })
+
+    expect(bucketTooltips(screen.getByRole("tabpanel"), 7)).toEqual([
+      "Sep 24Completed0Failed0Interrupted0",
+      "Sep 25Completed2Failed1Interrupted0",
+      "Sep 26Completed0Failed0Interrupted0",
+      "Sep 27Completed0Failed0Interrupted0",
+      "Sep 28Completed1Failed0Interrupted1",
+      "Sep 29Completed0Failed0Interrupted0",
+      "Sep 30Completed0Failed0Interrupted0",
+    ])
+  })
+
+  it("keeps charting the days it read when a refresh after midnight UTC fails", async () => {
+    let reads = 0
+    openStats({
+      "stats.get": () => {
+        reads += 1
+        if (reads === 1) return stats()
+        throw new CallError({ code: "INTERNAL", message: "The read failed.", retryable: false })
+      },
+    })
+    const user = userEvent.setup()
+    await screen.findByRole("region", { name: "Turns" })
+
+    vi.setSystemTime(new Date("2026-10-01T00:05:00Z"))
+    await user.click(screen.getByRole("button", { name: "Refresh" }))
+
+    expect(await screen.findByRole("alert")).toBeTruthy()
+    const days = bucketTooltips(screen.getByRole("tabpanel"), 7).map((tip) => tip.slice(0, 6))
+    expect(days).toEqual(["Sep 24", "Sep 25", "Sep 26", "Sep 27", "Sep 28", "Sep 29", "Sep 30"])
+  })
+
+  it("says so when no turn closed in the range", async () => {
+    openStats()
+
+    expect(await screen.findByText("No turn closed in this range.")).toBeDefined()
+  })
+
   it("lists the turns of a clicked bar's bucket by cost, each linking to the turn in its thread", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/stats")
     openStats({
@@ -525,7 +574,7 @@ describe("the Spend tab", () => {
     expect(screen.getByText("No price for mystery")).toBeDefined()
   })
 
-  it("shows the API cost of each bucket, and an unpriced one as not priced", async () => {
+  it("shows each bucket's API cost, an unpriced one as not priced, an empty one as $0.00", async () => {
     openStats({
       "stats.get": () =>
         stats({
@@ -540,10 +589,14 @@ describe("the Spend tab", () => {
 
     await openTab("Spend")
 
-    expect(bucketTooltips(screen.getByRole("region", { name: "API cost" }), 3)).toEqual([
+    expect(bucketTooltips(screen.getByRole("region", { name: "API cost" }), 7)).toEqual([
+      "Sep 24API cost$0.00",
+      "Sep 25API cost$0.00",
+      "Sep 26API cost$0.00",
       "Sep 27API cost$0.50",
       "Sep 28API costnot priced",
       "Sep 29API cost$1.24",
+      "Sep 30API cost$0.00",
     ])
   })
 
@@ -637,7 +690,15 @@ describe("the Spend tab", () => {
 
     const chart = screen.getByRole("region", { name: "Plan runs" })
     expect(legend(chart)).toBe("ChatGPTClaude")
-    expect(bucketTooltips(chart, 2)).toEqual(["Sep 27Claude2ChatGPT1", "Sep 28Claude0ChatGPT3"])
+    expect(bucketTooltips(chart, 7)).toEqual([
+      "Sep 24Claude0ChatGPT0",
+      "Sep 25Claude0ChatGPT0",
+      "Sep 26Claude0ChatGPT0",
+      "Sep 27Claude2ChatGPT1",
+      "Sep 28Claude0ChatGPT3",
+      "Sep 29Claude0ChatGPT0",
+      "Sep 30Claude0ChatGPT0",
+    ])
   })
 })
 
@@ -709,9 +770,14 @@ describe("the Quality tab", () => {
 
     await openTab("Quality")
 
-    expect(bucketTooltips(screen.getByRole("region", { name: "Navigation" }), 2)).toEqual([
+    expect(bucketTooltips(screen.getByRole("region", { name: "Navigation" }), 7)).toEqual([
+      "",
+      "",
+      "",
       "Sep 27Reads before the first write4.5",
       "Sep 28Reads before the first write2",
+      "",
+      "",
     ])
   })
 
