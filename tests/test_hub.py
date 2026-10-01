@@ -372,8 +372,9 @@ class FakeControl:
         self.reasons = reasons or []
         self.endpoints: list[ControlEndpoint] = []
         self.forces: list[bool] = []
-        #: What each instance answers stats with, by address. A missing address never answers.
-        self.usage: dict[str, StatsGetResult] = {}
+        #: What each instance answers stats with, or raises, by address. A missing address
+        #: never answers.
+        self.usage: dict[str, StatsGetResult | Exception] = {}
         self.stats_asked: list[StatsGetCommand] = []
         self.asked = asyncio.Event()
         self.release = asyncio.Event()
@@ -415,7 +416,10 @@ class FakeControl:
         self.stats_asked.append(command)
         if endpoint.address not in self.usage:
             await asyncio.Event().wait()
-        return self.usage[endpoint.address]
+        answer = self.usage[endpoint.address]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
 
 def hub_at(
@@ -1838,7 +1842,7 @@ def test_status_names_the_running_stop_while_a_start_is_queued(tmp_path):
 
 def test_a_control_socket_that_closes_after_the_drain_is_sent_is_a_lost_connection():
     async def scenario() -> None:
-        async with _control_server(_close_after_call) as endpoint:
+        async with control_server(_close_after_call) as endpoint:
             with pytest.raises(ControlConnectionLost, match="closed before it answered"):
                 await HttpInstanceControl().drain(endpoint, force=False)
 
@@ -1847,7 +1851,7 @@ def test_a_control_socket_that_closes_after_the_drain_is_sent_is_a_lost_connecti
 
 def test_a_drain_answer_that_refuses_is_not_a_lost_connection():
     async def scenario() -> None:
-        async with _control_server(_refuse_drain) as endpoint:
+        async with control_server(_refuse_drain) as endpoint:
             with pytest.raises(ControlUnreachable, match="refused the drain") as raised:
                 await HttpInstanceControl().drain(endpoint, force=False)
             assert not isinstance(raised.value, ControlConnectionLost)
@@ -1872,7 +1876,7 @@ async def _refuse_drain(opened: web.WebSocketResponse) -> None:
 
 
 @asynccontextmanager
-async def _control_server(
+async def control_server(
     handle: Callable[[web.WebSocketResponse], Awaitable[None]],
 ) -> AsyncIterator[ControlEndpoint]:
     application = web.Application()

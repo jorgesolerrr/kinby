@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import logging
 import os
 import re
 import shutil
@@ -158,6 +159,8 @@ from kinby.packages import (
     InstalledPackage,
     package_description,
 )
+
+_logger = logging.getLogger(__name__)
 
 _INSTANCE_HOST = "0.0.0.0"
 _INSTANCE_PORT = 8787
@@ -1810,11 +1813,13 @@ class Hub:
         return (*secrets, *await self._restart_reasons(record))
 
     async def _restart_reasons(self, record: ManagedInstance) -> tuple[RecreateReason, ...]:
-        """An instance that does not answer in time reports none, so a status never waits long."""
+        """An instance that does not answer in time, or runs an older core, reports none, so a
+        status never waits long or fails.
+        """
         try:
             async with asyncio.timeout(REASONS_SECONDS):
                 return tuple(await self._control.restart_reasons(await self._endpoint(record)))
-        except ControlUnreachable, TimeoutError:
+        except ControlUnreachable, IncompatibleLifecycleEndpoint, TimeoutError:
             return ()
 
     async def _observed(self, record: ManagedInstance) -> ObservedProcess:
@@ -1908,6 +1913,9 @@ class Hub:
                 return await self._control.stats(await self._endpoint(record), command)
         except ControlUnreachable, TimeoutError:
             return Uncounted.UNREACHABLE
+        except IncompatibleLifecycleEndpoint as exc:
+            _logger.warning("Instance %s runs an older core: %s", record.instance_id, exc)
+            return Uncounted.OUTDATED
 
     async def operation(self, command: OperationGetCommand) -> OperationGetResult:
         result = self.registry.operation(command.operation_id)
