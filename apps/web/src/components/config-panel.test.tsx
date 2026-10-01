@@ -843,6 +843,46 @@ describe("ConfigPanel", () => {
       expect(login.getByText("WXYZ-98765")).toBeDefined()
       expect(login.getByRole("link", { name: "https://claude.ai/device" })).toBeDefined()
     })
+
+    const expired = "The code expired. Sign in again for a new one."
+
+    it("keeps a signed-in login signed in when signing it in again expires, and says so", async () => {
+      const { user, clock, caller } = await openSecrets({
+        "instance.login.start": () => ({ operation_id: "op-login", instance_id: "instance-1" }),
+        "operation.get": () => operation({ kind: "login", state: "failed", detail: expired }),
+      })
+
+      const login = within(screen.getByRole("listitem", { name: "Claude Code" }))
+      await user.click(login.getByRole("button", { name: "Sign in again" }))
+      await act(() => clock.advance(0))
+
+      expect(caller.calls.filter((call) => call.method === "instance.status")).toHaveLength(2)
+      expect(login.getByText("Signed in").getAttribute("data-variant")).toBe("success")
+      expect(login.queryByText("Failed")).toBeNull()
+      expect(
+        login.getByText(
+          `The new sign-in did not finish, and the one before it still works. ${expired}`,
+        ),
+      ).toBeDefined()
+      expect(login.getByRole("button", { name: "Sign in again" })).toBeDefined()
+    })
+
+    it("says a sign-in failed on a login whose last sign-in failed", async () => {
+      const failed = { ...setup, logins: [{ ...setup.logins[0]!, state: "failed" as const }] }
+      const { user, clock } = await openSecrets({
+        "instance.status": () => status({ setup: failed }),
+        "instance.login.start": () => ({ operation_id: "op-login", instance_id: "instance-1" }),
+        "operation.get": () => operation({ kind: "login", state: "failed", detail: expired }),
+      })
+
+      const login = within(screen.getByRole("listitem", { name: "Claude Code" }))
+      await user.click(login.getByRole("button", { name: "Sign in again" }))
+      await act(() => clock.advance(0))
+
+      expect(login.getByText("Failed")).toBeDefined()
+      expect(login.getByText(expired)).toBeDefined()
+      expect(login.getByRole("button", { name: "Sign in again" })).toBeDefined()
+    })
   })
 
   describe("Recreate to apply", () => {
