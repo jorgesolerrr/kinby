@@ -310,6 +310,16 @@ function TurnsChart({
 
 const VERDICTS = { good: "Good", bad: "Bad" }
 
+/** How a turn ended. A completed turn that found no work is set apart from one that did. */
+function OutcomeBadge({ turn }: { turn: TurnMetrics }) {
+  if (turn.outcome === "no-work") return <Badge variant="secondary">no work</Badge>
+  return (
+    <Badge variant={turn.closing_kind === "completed" ? "outline" : "destructive"}>
+      {turn.closing_kind}
+    </Badge>
+  )
+}
+
 /** A drill's turns, each with who started it, how it ended, and a link to its thread. */
 function DrilledTurns({
   title,
@@ -351,9 +361,7 @@ function DrilledTurns({
             <TableRow key={`${turn.thread_id} ${turn.turn_id}`}>
               <TableCell>{originLabel(turn.origin)}</TableCell>
               <TableCell>
-                <Badge variant={turn.closing_kind === "completed" ? "outline" : "destructive"}>
-                  {turn.closing_kind}
-                </Badge>
+                <OutcomeBadge turn={turn} />
               </TableCell>
               <TableCell>{turn.rating === null ? "—" : VERDICTS[turn.rating.verdict]}</TableCell>
               <TableCell>

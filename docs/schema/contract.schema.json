@@ -4534,8 +4534,7 @@
       "additionalProperties": false,
       "properties": {
         "by": {
-          "$ref": "#/$defs/StatsBucketSize",
-          "default": "day"
+          "$ref": "#/$defs/StatsBucketSize"
         },
         "since": {
           "anyOf": [
@@ -5697,8 +5696,7 @@
           "type": "integer"
         },
         "outcome": {
-          "$ref": "#/$defs/CompletionOutcome",
-          "default": "work"
+          "$ref": "#/$defs/CompletionOutcome"
         },
         "output_tokens": {
           "type": "integer"
@@ -5919,6 +5917,9 @@
               "type": "null"
             }
           ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/CompletionOutcome"
         },
         "output_tokens": {
           "type": "integer"

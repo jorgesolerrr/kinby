@@ -1321,6 +1321,8 @@ class TurnMetrics(TokenTotals):
     prompt_version: PromptVersion | None
     origin: Origin | None
     closing_kind: TurnClosingKind
+    #: Whether a completed turn did work. Always work for a failed or interrupted turn.
+    outcome: CompletionOutcome = CompletionOutcome.WORK
     started_at: datetime | None
     closed_at: datetime
     duration_seconds: float | None

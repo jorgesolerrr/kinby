@@ -89,6 +89,14 @@ def test_every_const_discriminant_is_required_so_a_union_narrows_on_it() -> None
     assert discriminated > 0
 
 
+def test_no_reference_carries_a_default_so_a_shared_enum_is_declared_once() -> None:
+    definitions = _object(contract_schema()["$defs"])
+
+    for definition in definitions.values():
+        for field in _object(_object(definition).get("properties", {})).values():
+            assert "$ref" not in _object(field) or "default" not in _object(field)
+
+
 def test_a_thread_summary_carries_its_status_and_last_activity() -> None:
     definitions = _object(contract_schema()["$defs"])
     summary = _object(definitions["ThreadSummary"])
