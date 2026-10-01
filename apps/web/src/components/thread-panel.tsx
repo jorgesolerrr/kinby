@@ -373,7 +373,8 @@ function Transcript({ turns, name }: { turns: TurnBlock[]; name: string }) {
 
 /**
  * Scrolls to the turn the URL names once it is in the transcript. Each turn named is scrolled to
- * once, so the events that follow leave the reader where they are.
+ * once, so the events that follow leave the reader where they are. A URL that names no turn
+ * forgets the last one, so going Back to it scrolls there again.
  */
 function LinkedTurn({ turns }: { turns: TurnBlock[] }) {
   const turnId = useSelectedTurnId()
@@ -381,6 +382,7 @@ function LinkedTurn({ turns }: { turns: TurnBlock[] }) {
   const { scrollToMessage } = useMessageScroller()
   const reached = useRef<string>(undefined)
   useEffect(() => {
+    if (turnId === undefined) reached.current = undefined
     if (turnId === undefined || !present || reached.current === turnId) return
     reached.current = turnId
     scrollToMessage(turnId)

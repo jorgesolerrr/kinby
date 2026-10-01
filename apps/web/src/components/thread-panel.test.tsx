@@ -388,6 +388,23 @@ describe("a thread's panel", () => {
     it("leaves a thread opened without a turn on its latest turn", async () => {
       expect(await scrolledAt("/instances/hub-ada/threads/t1")).toBe(2_000)
     })
+
+    it("scrolls to the turn again when Back returns to it from the plain thread", async () => {
+      await scrolledAt("/instances/hub-ada/threads/t1/turns/turn-2")
+      const transcript = screen.getByRole("region", { name: "Messages" })
+
+      act(() => {
+        window.history.pushState(null, "", "/instances/hub-ada/threads/t1")
+        window.dispatchEvent(new PopStateEvent("popstate"))
+      })
+      transcript.scrollTop = 0
+      act(() => {
+        window.history.pushState(null, "", "/instances/hub-ada/threads/t1/turns/turn-2")
+        window.dispatchEvent(new PopStateEvent("popstate"))
+      })
+
+      await waitFor(() => expect(transcript.scrollTop).toBe(1_000))
+    })
   })
 
   it("puts focus in the composer once the replay has loaded", async () => {
