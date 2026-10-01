@@ -23,6 +23,7 @@ class Uncounted(StrEnum):
 
     SKIPPED = "skipped"
     UNREACHABLE = "unreachable"
+    OUTDATED = "outdated"
 
 
 def summed_usage(answers: Mapping[UUID, StatsGetResult | Uncounted]) -> StatsSummaryResult:
@@ -56,6 +57,9 @@ def summed_usage(answers: Mapping[UUID, StatsGetResult | Uncounted]) -> StatsSum
             instance_id
             for instance_id, answer in answers.items()
             if answer is Uncounted.UNREACHABLE
+        ],
+        outdated=[
+            instance_id for instance_id, answer in answers.items() if answer is Uncounted.OUTDATED
         ],
     )
 

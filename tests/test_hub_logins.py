@@ -116,7 +116,7 @@ def writer_hub(
 
 
 async def created_writer(
-    hub: Hub, secrets: dict[str, str] | None = None
+    hub: Hub, secrets: dict[str, str] | None = None, model: str = "openai:gpt-5"
 ) -> LifecycleOperationResult:
     """Prepare the writer, create one instance from it, and wait until it is published."""
     client = hub_client(hub)
@@ -127,7 +127,7 @@ async def created_writer(
         INSTANCE_CREATE,
         InstanceCreateCommand(
             manifest_id="writer",
-            model="openai:gpt-5",
+            model=model,
             package=WRITER,
             secrets={"api_key": "sk-private", **(secrets or {})},
         ),

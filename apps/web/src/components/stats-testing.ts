@@ -21,6 +21,14 @@ export function bucketTooltips(region: HTMLElement, count: number): string[] {
   return shown
 }
 
+/** The labels on the value axis of the chart in `region`, bottom to top. */
+export function axisTicks(region: HTMLElement): (string | null)[] {
+  return Array.from(
+    region.querySelectorAll(".recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value"),
+    (tick) => tick.textContent,
+  )
+}
+
 /** What the legend of the chart in `region` reads, as one string. */
 export function legend(region: HTMLElement): string {
   return region.querySelector(".recharts-legend-wrapper")?.textContent ?? ""

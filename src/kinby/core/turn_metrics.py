@@ -102,8 +102,6 @@ class TurnMetricsResult:
     records: list[TurnMetrics]
     unpriced_models_by_turn: Mapping[TurnKey, frozenset[UnpricedModel]]
     warnings: list[ModelCallMismatch]
-    #: The turns that completed with no work.
-    no_work: frozenset[TurnKey]
 
 
 def turn_metrics(
@@ -115,7 +113,6 @@ def turn_metrics(
     closed_turns: dict[TurnKey, TurnMetrics] = {}
     closing_totals: dict[TurnKey, TokenTotals] = {}
     records: list[TurnMetrics] = []
-    no_work: set[TurnKey] = set()
     unpriced_models_by_turn: dict[TurnKey, set[UnpricedModel]] = {}
     mismatches: list[ModelCallMismatch] = []
 
@@ -176,13 +173,14 @@ def turn_metrics(
             turn = open_turns.pop(key, None)
             input_tokens = payload.input_tokens
             output_tokens = payload.output_tokens
-            no_work_completion = (
-                isinstance(payload, TurnCompleted) and payload.outcome is CompletionOutcome.NO_WORK
+            outcome = (
+                payload.outcome if isinstance(payload, TurnCompleted) else CompletionOutcome.WORK
             )
+            no_work = outcome is CompletionOutcome.NO_WORK
             if (
                 turn is not None
                 and turn.has_model_calls
-                and not no_work_completion
+                and not no_work
                 and _model_totals(turn)
                 != TokenTotals(
                     input_tokens=payload.input_tokens,
@@ -199,9 +197,7 @@ def turn_metrics(
                 )
             memory_calls = MemoryCallCounts.model_validate(turn.memory_calls if turn else {})
             price = prices.get(turn.model) if turn is not None else None
-            if no_work_completion:
-                no_work.add(key)
-            if turn is not None and price is None and key not in no_work:
+            if turn is not None and price is None and not no_work:
                 unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(turn.model))
             record = TurnMetrics(
                 thread_id=event.thread_id,
@@ -210,6 +206,7 @@ def turn_metrics(
                 prompt_version=turn.prompt_version if turn else None,
                 origin=turn.origin if turn else None,
                 closing_kind=_closing_kind(payload),
+                outcome=outcome,
                 started_at=turn.started_at if turn else None,
                 closed_at=event.timestamp,
                 duration_seconds=(
@@ -221,13 +218,7 @@ def turn_metrics(
                 cache_creation_tokens=payload.cache_creation_tokens,
                 recap_input_tokens=0,
                 recap_output_tokens=0,
-                cost=(
-                    0
-                    if key in no_work
-                    else token_cost(payload, price)
-                    if price is not None
-                    else None
-                ),
+                cost=(0 if no_work else token_cost(payload, price) if price is not None else None),
                 tool_calls=dict(turn.tool_calls) if turn else {},
                 memory_calls=memory_calls,
                 memory_consulted=bool(memory_calls.search or memory_calls.open),
@@ -248,7 +239,7 @@ def turn_metrics(
         if record is None:
             continue
         if isinstance(payload, MemoryRecapped):
-            if key in no_work:
+            if record.outcome is CompletionOutcome.NO_WORK:
                 continue
             main_totals = closing_totals[key]
             main_price = prices.get(record.model) if record.model is not None else None
@@ -275,7 +266,6 @@ def turn_metrics(
         records,
         {key: frozenset(models) for key, models in unpriced_models_by_turn.items()},
         mismatches,
-        frozenset(no_work),
     )
 
 

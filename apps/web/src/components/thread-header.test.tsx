@@ -152,7 +152,34 @@ describe("a thread's header", () => {
     expect(screen.getByRole("heading").textContent).toBe("Release plan")
   })
 
-  it("keeps the title when the rename is cancelled", async () => {
+  it("gives focus back to the title once a rename typed from the keyboard is in", async () => {
+    let title = "Deploy notes"
+    await openHeader({
+      listed: () => thread({ title }),
+      "thread.rename": (params) => {
+        title = params.title
+        return thread({ title })
+      },
+    })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole("button", { name: "Deploy notes" }))
+    await user.keyboard(" v2{Enter}")
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Deploy notes v2" }))
+  })
+
+  it("gives focus back to the title when Enter leaves it as it was", async () => {
+    await openHeader()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole("button", { name: "Deploy notes" }))
+    await user.keyboard("{Enter}")
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Deploy notes" }))
+  })
+
+  it("keeps the title when the rename is cancelled, and gives focus back to it", async () => {
     const client = await openHeader()
     const user = userEvent.setup()
 
@@ -161,9 +188,21 @@ describe("a thread's header", () => {
 
     expect(client.calls.map((call) => call.method)).not.toContain("thread.rename")
     expect(screen.getByRole("heading").textContent).toBe("Deploy notes")
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Deploy notes" }))
   })
 
-  it("shows why the instance refused a rename, and keeps the title being typed", async () => {
+  it("leaves focus where it went when leaving the title closes it", async () => {
+    await openHeader()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole("button", { name: "Deploy notes" }))
+    await user.click(modePicker())
+
+    expect(screen.queryByRole("textbox", { name: "Thread title" })).toBeNull()
+    expect(document.activeElement).toBe(modePicker())
+  })
+
+  it("shows why the instance refused a rename, and keeps the title being typed in focus", async () => {
     await openHeader({
       "thread.rename": () => {
         throw new CallError({
@@ -179,10 +218,9 @@ describe("a thread's header", () => {
     await user.type(screen.getByRole("textbox", { name: "Thread title" }), " v2{Enter}")
 
     expect((await screen.findByRole("alert")).textContent).toContain("The title is too long.")
-    expect(screen.getByRole("textbox", { name: "Thread title" })).toHaveProperty(
-      "value",
-      "Deploy notes v2",
-    )
+    const field = screen.getByRole("textbox", { name: "Thread title" })
+    expect(field).toHaveProperty("value", "Deploy notes v2")
+    expect(document.activeElement).toBe(field)
   })
 
   it("holds the new title while the rename is out, and shows why once it fails", async () => {
@@ -209,16 +247,25 @@ describe("a thread's header", () => {
     expect(field).toHaveProperty("value", "Deploy notes v2")
   })
 
-  it("disables the mode picker while the change is out, and shows why once it fails", async () => {
+  it("holds the mode picker in focus while the change is out, and shows why once it fails", async () => {
     const { sent, loseConnection } = await openHeaderOffline()
     const user = userEvent.setup()
 
-    await user.click(modePicker())
-    await user.click(await screen.findByRole("option", { name: /^Read-only/ }))
+    act(() => modePicker().focus())
+    await user.keyboard("{ArrowDown}")
+    await screen.findAllByRole("option")
+    await user.keyboard("{ArrowUp}{Enter}")
 
     expect(sent).toEqual(["thread.mode.set"])
-    expect(modePicker()).toHaveProperty("disabled", true)
+    expect(modePicker().hasAttribute("disabled")).toBe(false)
+    expect(modePicker().getAttribute("aria-readonly")).toBe("true")
+    expect(document.activeElement).toBe(modePicker())
     expect(screen.getByRole("status", { name: "Changing the mode" })).toBeDefined()
+
+    await user.click(modePicker())
+    await user.click(await screen.findByRole("option", { name: /^Full access/ }))
+
+    expect(sent).toEqual(["thread.mode.set"])
 
     await loseConnection()
 
@@ -226,7 +273,7 @@ describe("a thread's header", () => {
       "The connection to the instance dropped.",
     )
     expect(screen.queryByRole("status", { name: "Changing the mode" })).toBeNull()
-    expect(modePicker()).toHaveProperty("disabled", false)
+    expect(modePicker().hasAttribute("aria-readonly")).toBe(false)
     expect(modePicker().textContent).toContain("Ask")
   })
 

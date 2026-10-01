@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Set
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
 from kinby.contracts import (
+    CompletionOutcome,
     DelegatedRun,
     DenyCounts,
     Event,
@@ -32,7 +33,6 @@ from kinby.contracts import (
     TurnVerdict,
     UsageSource,
 )
-from kinby.core.turn_metrics import TurnKey
 
 #: Every usage source that is counted, never priced, in the order results list them.
 SUBSCRIPTION_SOURCES = tuple(source for source in UsageSource if source is not UsageSource.API)
@@ -92,9 +92,9 @@ class _BucketTotals:
     #: By the routine that started the turns, None for chat.
     origins: dict[RoutineName | None, _OriginTotals] = field(default_factory=dict)
 
-    def add(self, record: TurnMetrics, *, no_work: bool) -> None:
+    def add(self, record: TurnMetrics) -> None:
         origin = self._origin_totals(record.origin)
-        if no_work:
+        if record.outcome is CompletionOutcome.NO_WORK:
             origin.no_work += 1
         else:
             origin.turns += 1
@@ -146,15 +146,12 @@ def stats_buckets(
     records: Iterable[TurnMetrics],
     runs: Iterable[TurnRun],
     by: StatsBucketSize,
-    no_work: Set[TurnKey],
 ) -> list[StatsBucket]:
     """Group turns by their UTC close and subscription runs by their own timestamp."""
     totals_by_start: dict[date, _BucketTotals] = {}
     for record in records:
         start = _bucket_start(record.closed_at, by)
-        totals_by_start.setdefault(start, _BucketTotals()).add(
-            record, no_work=TurnKey(record.thread_id, record.turn_id) in no_work
-        )
+        totals_by_start.setdefault(start, _BucketTotals()).add(record)
     for run in _subscription_runs(runs):
         start = _bucket_start(run.reported.timestamp, by)
         totals_by_start.setdefault(start, _BucketTotals()).add_run(run)
@@ -162,13 +159,11 @@ def stats_buckets(
     return [_stats_bucket(start, totals_by_start[start]) for start in sorted(totals_by_start)]
 
 
-def stats_summary(
-    records: Iterable[TurnMetrics], runs: Iterable[TurnRun], no_work: Set[TurnKey]
-) -> StatsSummary:
+def stats_summary(records: Iterable[TurnMetrics], runs: Iterable[TurnRun]) -> StatsSummary:
     """Aggregate turns and subscription runs without a date boundary. Chat always has a row."""
     totals = _BucketTotals(origins={None: _OriginTotals()})
     for record in records:
-        totals.add(record, no_work=TurnKey(record.thread_id, record.turn_id) in no_work)
+        totals.add(record)
     for run in _subscription_runs(runs):
         totals.add_run(run)
     return _stats_summary(totals)

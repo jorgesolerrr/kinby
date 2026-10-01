@@ -46,7 +46,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { usePace } from "@/hooks/use-pace"
 import { type Pace, retried } from "@/lib/operation"
-import { selectThread } from "@/lib/selection"
+import { leaveNode, linkedNode, selectThread } from "@/lib/selection"
 import { threadList, threadTitle } from "@/lib/thread-list"
 import {
   BookOpenIcon,
@@ -84,8 +84,9 @@ const KINDS: Record<NodeKind | "all", string> = { all: "All", fact: "Facts", epi
 /**
  * An instance's memory, as two tabs. The profile is text the user edits. The knowledge graph lists
  * its nodes newest first, narrowed by the filters above it, and opens one in the pane beside it,
- * where the user corrects or forgets it. With nothing open, the pane adds a fact. Each tab reads
- * when it opens and after each write, the graph also on Refresh, and neither polls.
+ * where the user corrects or forgets it. A link can name the node to open first. With nothing
+ * open, the pane adds a fact. Each tab reads when it opens and after each write, the graph also on
+ * Refresh, and neither polls.
  */
 export function MemoryPage({
   client,
@@ -136,7 +137,7 @@ function KnowledgeGraph({
   const [reads, setReads] = useState(0)
   const [listed, setListed] = useState<MemoryListResult>()
   const [failure, setFailure] = useState<unknown>()
-  const [selected, setSelected] = useState<string>()
+  const [selected, setSelected] = useState(linkedNode)
   // Whether a write found the opened node forgotten since the list was read.
   const [gone, setGone] = useState(false)
 
@@ -158,9 +159,11 @@ function KnowledgeGraph({
   }, [client, pacing, filters, reads])
 
   const narrow = (changed: Partial<Filters>) => setFilters({ ...filters, ...changed })
+  // Once the user moves off a linked node, a reload no longer opens it.
   const open = (node: string | undefined) => {
     setSelected(node)
     setGone(false)
+    if (linkedNode() !== undefined) leaveNode(instanceId)
   }
   /** After a write, read the list again and open the fact it wrote, or nothing. */
   const written = (node: string | undefined) => {
@@ -352,6 +355,7 @@ function NodeList({
             <Item
               size="sm"
               variant={node.node === selected ? "muted" : "default"}
+              className="text-left"
               render={
                 <button
                   type="button"

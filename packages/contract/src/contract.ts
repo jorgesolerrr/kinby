@@ -111,6 +111,7 @@ export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription"
 export type TurnClosingKind = "completed" | "failed" | "interrupted";
 export type DelegatedRunOutcome = "completed" | "failed" | "limited";
 export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
+export type CompletionOutcome = "work" | "no-work";
 export type TurnVerdict = "good" | "bad";
 export type ApprovalDecision = "approve" | "deny";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
@@ -142,7 +143,6 @@ export type ErrorCode =
   | "INTERNAL";
 export type GateOutcome = "allow" | "deny";
 export type GateDecider = "policy" | "user";
-export type CompletionOutcome = "work" | "no-work";
 
 export interface Contract {
   client_frame: ClientFrame;
@@ -723,6 +723,7 @@ export interface SecretSetup {
   label: string;
   name: string;
   required: boolean;
+  variable: string | null;
 }
 export interface InstanceStopCommand {
   force?: boolean;
@@ -1272,6 +1273,7 @@ export interface TurnMetrics {
   model: string | null;
   navigation?: Navigation;
   origin: (UserOrigin | RoutineOrigin) | null;
+  outcome?: CompletionOutcome;
   output_tokens: number;
   prompt_version: string | null;
   rating: TurnRated | null;
@@ -1367,7 +1369,7 @@ export interface ModelCallMismatch {
 /**
  * Usage across the hub's running instances, read live from each one and stored nowhere.
  *
- * A total leaves out every instance in ``skipped`` or ``unreachable``.
+ * A total leaves out every instance in ``skipped``, ``unreachable``, or ``outdated``.
  */
 export interface StatsSummaryResult {
   api: ApiUse;
@@ -1375,6 +1377,7 @@ export interface StatsSummaryResult {
     [k: string]: StatsBucket[];
   };
   limits: PlanLimit[];
+  outdated: string[];
   plan_use: PlanUse[];
   skipped: string[];
   subscriptions: SubscriptionUse[];

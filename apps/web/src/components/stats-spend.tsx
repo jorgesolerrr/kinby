@@ -25,6 +25,8 @@ import {
   bucketLabel,
   type BucketPoint,
   bucketPoints,
+  cents,
+  centsMoney,
   duration,
   money,
   SOURCE_LABELS,
@@ -97,7 +99,7 @@ function CostChart({
           <CardContent>
             <ChartContainer config={COST_SERIES} className="aspect-auto h-48 w-full">
               <BarChart data={bucketPoints(starts, buckets)} accessibilityLayer>
-                <BucketAxes allowDecimals tickFormatter={money} />
+                <BucketAxes tickFormatter={centsMoney} />
                 <ChartTooltip
                   content={
                     <ChartTooltipContent
@@ -109,7 +111,7 @@ function CostChart({
                   }
                 />
                 <Bar
-                  dataKey={(point: BucketPoint) => point.cost ?? 0}
+                  dataKey={(point: BucketPoint) => cents(point.cost) ?? 0}
                   name="cost"
                   fill="var(--color-cost)"
                 />

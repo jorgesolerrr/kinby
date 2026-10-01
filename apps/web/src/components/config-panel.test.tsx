@@ -40,8 +40,20 @@ const setup: InstanceSetup = {
     },
   ],
   secrets: [
-    { name: "api_key", label: "API key", required: true, is_set: true },
-    { name: "GH_TOKEN", label: "GitHub token", required: true, is_set: false },
+    {
+      name: "api_key",
+      variable: "ANTHROPIC_API_KEY",
+      label: "API key",
+      required: true,
+      is_set: true,
+    },
+    {
+      name: "GH_TOKEN",
+      variable: "GH_TOKEN",
+      label: "GitHub token",
+      required: true,
+      is_set: false,
+    },
   ],
 }
 
@@ -133,6 +145,18 @@ const marked = (item: HTMLElement) =>
   !item.classList.contains("flex") && !item.classList.contains("list-none")
 
 describe("ConfigPanel", () => {
+  it("left-aligns every line of a section row, since a button centers its text", () => {
+    openPanel({})
+
+    const sections = screen.getByRole("navigation", { name: "Config sections" })
+    // jsdom applies no Tailwind, so the class stands in for the computed alignment.
+    expect(
+      within(sections)
+        .getAllByRole("button")
+        .every((button) => button.classList.contains("text-left")),
+    ).toBe(true)
+  })
+
   it("lists every section in its group, and the ones not built yet as unavailable", async () => {
     openPanel({})
 
@@ -375,6 +399,21 @@ describe("ConfigPanel", () => {
       await screen.findByDisplayValue("Check the inbox.")
 
       await user.click(screen.getByRole("button", { name: "Tools" }))
+
+      expect(window.location.pathname).toBe("/instances/instance-1/config")
+    } finally {
+      window.history.replaceState(null, "", "/")
+    }
+  })
+
+  it("opens on Package and version when a link names it, and drops it from the URL on leaving", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1/config/package")
+    try {
+      const { user } = openPanel({}, behind)
+
+      expect(await screen.findByRole("heading", { name: "Package and version" })).toBeDefined()
+      expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
+      await user.click(screen.getByRole("button", { name: "Recap prompt" }))
 
       expect(window.location.pathname).toBe("/instances/instance-1/config")
     } finally {
@@ -764,14 +803,28 @@ describe("ConfigPanel", () => {
     const secret = (name: string) =>
       within(within(screen.getByRole("list", { name: "Secrets" })).getByRole("listitem", { name }))
 
-    it("lists each secret and whether it is set, with Set or Replace", async () => {
+    it("lists each secret, the variable it lands in, and whether it is set, with Set or Replace", async () => {
       await openSecrets({})
 
       expect(secret("API key").getByText("Set")).toBeDefined()
-      expect(secret("API key").getByText("api_key")).toBeDefined()
+      expect(secret("API key").getByText("ANTHROPIC_API_KEY")).toBeDefined()
+      expect(secret("API key").queryByText("api_key")).toBeNull()
+      expect(secret("GitHub token").getByText("GH_TOKEN")).toBeDefined()
       expect(secret("API key").getByRole("button", { name: "Replace" })).toBeDefined()
       expect(secret("GitHub token").getByText("Not set")).toBeDefined()
       expect(secret("GitHub token").getByRole("button", { name: "Set" })).toBeDefined()
+    })
+
+    it("names no variable for the API key while the instance's model cannot be read", async () => {
+      const unread = setup.secrets.map((each) =>
+        each.name === "api_key" ? { ...each, variable: null } : each,
+      )
+      await openSecrets({
+        "instance.status": () => status({ setup: { ...setup, secrets: unread } }),
+      })
+
+      expect(secret("API key").queryByText("api_key")).toBeNull()
+      expect(secret("API key").queryByRole("code")).toBeNull()
     })
 
     it("replaces a secret, and the notice asks for a recreate", async () => {
@@ -827,6 +880,46 @@ describe("ConfigPanel", () => {
       })
       expect(login.getByText("WXYZ-98765")).toBeDefined()
       expect(login.getByRole("link", { name: "https://claude.ai/device" })).toBeDefined()
+    })
+
+    const expired = "The code expired. Sign in again for a new one."
+
+    it("keeps a signed-in login signed in when signing it in again expires, and says so", async () => {
+      const { user, clock, caller } = await openSecrets({
+        "instance.login.start": () => ({ operation_id: "op-login", instance_id: "instance-1" }),
+        "operation.get": () => operation({ kind: "login", state: "failed", detail: expired }),
+      })
+
+      const login = within(screen.getByRole("listitem", { name: "Claude Code" }))
+      await user.click(login.getByRole("button", { name: "Sign in again" }))
+      await act(() => clock.advance(0))
+
+      expect(caller.calls.filter((call) => call.method === "instance.status")).toHaveLength(2)
+      expect(login.getByText("Signed in").getAttribute("data-variant")).toBe("success")
+      expect(login.queryByText("Failed")).toBeNull()
+      expect(
+        login.getByText(
+          `The new sign-in did not finish, and the one before it still works. ${expired}`,
+        ),
+      ).toBeDefined()
+      expect(login.getByRole("button", { name: "Sign in again" })).toBeDefined()
+    })
+
+    it("says a sign-in failed on a login whose last sign-in failed", async () => {
+      const failed = { ...setup, logins: [{ ...setup.logins[0]!, state: "failed" as const }] }
+      const { user, clock } = await openSecrets({
+        "instance.status": () => status({ setup: failed }),
+        "instance.login.start": () => ({ operation_id: "op-login", instance_id: "instance-1" }),
+        "operation.get": () => operation({ kind: "login", state: "failed", detail: expired }),
+      })
+
+      const login = within(screen.getByRole("listitem", { name: "Claude Code" }))
+      await user.click(login.getByRole("button", { name: "Sign in again" }))
+      await act(() => clock.advance(0))
+
+      expect(login.getByText("Failed")).toBeDefined()
+      expect(login.getByText(expired)).toBeDefined()
+      expect(login.getByRole("button", { name: "Sign in again" })).toBeDefined()
     })
   })
 

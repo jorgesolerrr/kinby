@@ -25,6 +25,9 @@ export function usageRows(usage: StatsSummaryResult, instances: InstanceSummary[
     if (buckets !== undefined) return [{ instance, buckets }]
     if (usage.skipped.includes(id)) return [{ instance, notCounted: "not running" }]
     if (usage.unreachable.includes(id)) return [{ instance, notCounted: "didn't answer" }]
+    if (usage.outdated.includes(id)) {
+      return [{ instance, notCounted: "runs an older kinby, update core" }]
+    }
     // Made after the hub summed, so there is nothing to show for it yet.
     return []
   })

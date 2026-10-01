@@ -1079,6 +1079,9 @@ class SecretSetup(ContractModel):
     """One secret field an instance declares, and whether it holds a value. Never the value."""
 
     name: str
+    #: The environment variable the value lands in. The API key's has none while the instance's
+    #: model cannot be read.
+    variable: str | None
     label: str
     required: bool
     is_set: bool
@@ -1318,6 +1321,8 @@ class TurnMetrics(TokenTotals):
     prompt_version: PromptVersion | None
     origin: Origin | None
     closing_kind: TurnClosingKind
+    #: Whether a completed turn did work. Always work for a failed or interrupted turn.
+    outcome: CompletionOutcome = CompletionOutcome.WORK
     started_at: datetime | None
     closed_at: datetime
     duration_seconds: float | None
@@ -1443,7 +1448,7 @@ class ApiUse(TokenTotals):
 class StatsSummaryResult(ContractModel):
     """Usage across the hub's running instances, read live from each one and stored nowhere.
 
-    A total leaves out every instance in ``skipped`` or ``unreachable``.
+    A total leaves out every instance in ``skipped``, ``unreachable``, or ``outdated``.
     """
 
     #: Each counted instance's buckets, by hub instance ID.
@@ -1458,6 +1463,8 @@ class StatsSummaryResult(ContractModel):
     skipped: list[UUID]
     #: Running instances that failed to answer, or did not answer in time.
     unreachable: list[UUID]
+    #: Running instances on an older core, whose answer this hub cannot read.
+    outdated: list[UUID]
 
 
 class RoutineListCommand(ContractModel):

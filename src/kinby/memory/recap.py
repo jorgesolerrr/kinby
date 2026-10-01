@@ -11,6 +11,7 @@ from datetime import date
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 from uuid import UUID
 
+from langchain_core.exceptions import ModelNotFoundError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import (
     BaseModel,  # noqa: TID251 - model output boundary
@@ -68,6 +69,11 @@ class RecapDraft(BaseModel):
         if not value:
             raise ValueError("must not be empty")
         return value
+
+
+class RecapModelNotFound(LookupError):
+    def __init__(self, model: str) -> None:
+        super().__init__(f"The recap model {model} doesn't exist.")
 
 
 class StructuredRecap(Protocol):
@@ -155,13 +161,15 @@ class RecapWriter:
                 await self._write(request)
             except Exception as exc:
                 logger.exception("The turn recap failed.")
+                message = (
+                    str(exc)
+                    if isinstance(exc, RecapModelNotFound)
+                    else f"The turn recap failed: {type(exc).__name__}: {exc}"
+                )
                 await self._event_log.append(
                     request.thread_id,
                     request.turn_id,
-                    Warning(
-                        sources=("recap",),
-                        message=(f"The turn recap failed: {type(exc).__name__}: {exc}"),
-                    ),
+                    Warning(sources=("recap",), message=message),
                 )
             finally:
                 self._queue.task_done()
@@ -282,7 +290,12 @@ class RecapWriter:
             include_raw=True,
         )
         started_at = asyncio.get_running_loop().time()
-        result = await runnable.ainvoke((HumanMessage(content=_recap_frame(events, calls, lens)),))
+        try:
+            result = await runnable.ainvoke(
+                (HumanMessage(content=_recap_frame(events, calls, lens)),)
+            )
+        except ModelNotFoundError as exc:
+            raise RecapModelNotFound(model_name) from exc
         if not isinstance(result, Mapping):
             raise TypeError("The recap model returned an invalid structured response.")
         raw = result.get("raw")
