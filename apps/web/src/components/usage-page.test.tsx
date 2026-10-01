@@ -220,7 +220,7 @@ describe("the usage page", () => {
     expect(table.compareDocumentPosition(totals)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   })
 
-  it("charts each counted instance per bucket, on API cost, plan runs, and turns tabs", async () => {
+  it("charts each counted instance on every day, on API cost, plan runs, and turns tabs", async () => {
     openUsage({
       "stats.summary": () =>
         usage({
@@ -243,14 +243,29 @@ describe("the usage page", () => {
         .map((tab) => tab.textContent),
     ).toEqual(["API cost", "Plan runs", "Turns"])
     expect(legend(chart)).toBe("Adaresearch")
-    expect(bucketTooltips(chart, 2)).toEqual([
+    expect(bucketTooltips(chart, 7)).toEqual([
+      "Sep 24Ada$0.00research$0.00",
+      "Sep 25Ada$0.00research$0.00",
+      "Sep 26Ada$0.00research$0.00",
+      "Sep 27Ada$0.00research$0.00",
       "Sep 28Ada$0.50research$0.00",
       "Sep 29Adanot pricedresearch$0.10",
+      "Sep 30Ada$0.00research$0.00",
     ])
     await user.click(within(chart).getByRole("tab", { name: "Plan runs" }))
-    expect(bucketTooltips(chart, 2)).toEqual(["Sep 28Ada3research0", "Sep 29Ada1research2"])
+    expect(bucketTooltips(chart, 7).slice(3)).toEqual([
+      "Sep 27Ada0research0",
+      "Sep 28Ada3research0",
+      "Sep 29Ada1research2",
+      "Sep 30Ada0research0",
+    ])
     await user.click(within(chart).getByRole("tab", { name: "Turns" }))
-    expect(bucketTooltips(chart, 2)).toEqual(["Sep 28Ada4research0", "Sep 29Ada3research1"])
+    expect(bucketTooltips(chart, 7).slice(3)).toEqual([
+      "Sep 27Ada0research0",
+      "Sep 28Ada4research0",
+      "Sep 29Ada3research1",
+      "Sep 30Ada0research0",
+    ])
   })
 
   it("splits nothing by origin and measures no quality", async () => {

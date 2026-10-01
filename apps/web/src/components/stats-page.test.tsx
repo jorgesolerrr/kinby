@@ -112,8 +112,8 @@ function delegated(client: string): ReportedRun {
 }
 
 /**
- * Click the bar of the bucket at `index`, as a pointer does. jsdom lays nothing out, so Recharts
- * draws no shape to find by role, only the layer each bar sits in.
+ * Click the bar at `index` of those drawn, as a pointer does. jsdom lays nothing out, so Recharts
+ * draws no shape to find by role, only the layer each bar sits in. An empty bucket draws no bar.
  */
 function clickBar(index: number) {
   const bar = document.querySelectorAll(".recharts-bar-rectangle")[index]?.firstElementChild
@@ -275,6 +275,35 @@ describe("the stats page", () => {
     expect(screen.queryByRole("alert")).toBeNull()
   })
 
+  it("charts every day of the range, with no turns on the days that had none", async () => {
+    openStats({
+      "stats.get": () =>
+        stats({
+          buckets: [
+            { ...summary({ completed: 2, failed: 1 }), start: "2026-09-25" },
+            { ...summary({ completed: 1, interrupted: 1 }), start: "2026-09-28" },
+          ],
+        }),
+    })
+    await screen.findByRole("region", { name: "Turns" })
+
+    expect(bucketTooltips(screen.getByRole("tabpanel"), 7)).toEqual([
+      "Sep 24Completed0Failed0Interrupted0",
+      "Sep 25Completed2Failed1Interrupted0",
+      "Sep 26Completed0Failed0Interrupted0",
+      "Sep 27Completed0Failed0Interrupted0",
+      "Sep 28Completed1Failed0Interrupted1",
+      "Sep 29Completed0Failed0Interrupted0",
+      "Sep 30Completed0Failed0Interrupted0",
+    ])
+  })
+
+  it("says so when no turn closed in the range", async () => {
+    openStats()
+
+    expect(await screen.findByText("No turn closed in this range.")).toBeDefined()
+  })
+
   it("lists the turns of a clicked bar's bucket by cost, each linking to its thread", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/stats")
     openStats({
@@ -430,7 +459,7 @@ describe("the Spend tab", () => {
     expect(screen.getByText("No price for mystery")).toBeDefined()
   })
 
-  it("shows the API cost of each bucket, and an unpriced one as not priced", async () => {
+  it("shows each bucket's API cost, an unpriced one as not priced, an empty one as $0.00", async () => {
     openStats({
       "stats.get": () =>
         stats({
@@ -445,10 +474,14 @@ describe("the Spend tab", () => {
 
     await openTab("Spend")
 
-    expect(bucketTooltips(screen.getByRole("region", { name: "API cost" }), 3)).toEqual([
+    expect(bucketTooltips(screen.getByRole("region", { name: "API cost" }), 7)).toEqual([
+      "Sep 24API cost$0.00",
+      "Sep 25API cost$0.00",
+      "Sep 26API cost$0.00",
       "Sep 27API cost$0.50",
       "Sep 28API costnot priced",
       "Sep 29API cost$1.24",
+      "Sep 30API cost$0.00",
     ])
   })
 
@@ -498,7 +531,15 @@ describe("the Spend tab", () => {
 
     const chart = screen.getByRole("region", { name: "Plan runs" })
     expect(legend(chart)).toBe("ChatGPTClaude")
-    expect(bucketTooltips(chart, 2)).toEqual(["Sep 27Claude2ChatGPT1", "Sep 28Claude0ChatGPT3"])
+    expect(bucketTooltips(chart, 7)).toEqual([
+      "Sep 24Claude0ChatGPT0",
+      "Sep 25Claude0ChatGPT0",
+      "Sep 26Claude0ChatGPT0",
+      "Sep 27Claude2ChatGPT1",
+      "Sep 28Claude0ChatGPT3",
+      "Sep 29Claude0ChatGPT0",
+      "Sep 30Claude0ChatGPT0",
+    ])
   })
 })
 
@@ -570,9 +611,14 @@ describe("the Quality tab", () => {
 
     await openTab("Quality")
 
-    expect(bucketTooltips(screen.getByRole("region", { name: "Navigation" }), 2)).toEqual([
+    expect(bucketTooltips(screen.getByRole("region", { name: "Navigation" }), 7)).toEqual([
+      "",
+      "",
+      "",
       "Sep 27Reads before the first write4.5",
       "Sep 28Reads before the first write2",
+      "",
+      "",
     ])
   })
 

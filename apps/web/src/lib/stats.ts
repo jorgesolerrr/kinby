@@ -22,8 +22,47 @@ export function bucketSize(range: Range): StatsBucketSize {
 
 /** The stats.get for `range` days up to `now`: from midnight UTC on the first one, with no end. */
 export function statsCommand(range: Range, now: Date): StatsGetCommand {
+  return { since: firstDay(range, now).toISOString(), by: bucketSize(range) }
+}
+
+/** Midnight UTC on the first of `range` days up to `now`. */
+function firstDay(range: Range, now: Date): Date {
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-  return { since: new Date(today - (range - 1) * DAY_MS).toISOString(), by: bucketSize(range) }
+  return new Date(today - (range - 1) * DAY_MS)
+}
+
+/** The start of every bucket in `range` days up to `now`, first to last, as stats.get names them. */
+export function bucketStarts(range: Range, by: StatsBucketSize, now: Date): string[] {
+  const first = Date.parse(bucketStart(firstDay(range, now).toISOString(), by))
+  const last = Date.parse(bucketStart(now.toISOString(), by))
+  const step = by === "week" ? 7 * DAY_MS : DAY_MS
+  return Array.from({ length: (last - first) / step + 1 }, (_, index) =>
+    new Date(first + index * step).toISOString().slice(0, 10),
+  )
+}
+
+/** What a bucket chart draws of a bucket. */
+export type BucketPoint = Pick<
+  StatsBucket,
+  "start" | "completed" | "failed" | "interrupted" | "cost" | "subscriptions"
+>
+
+/**
+ * A point per start: the bucket stats.get returned for it, or an empty one. An empty bucket's
+ * cost is 0, not unpriced, since it holds no turn that could lack a price.
+ */
+export function bucketPoints(starts: string[], buckets: StatsBucket[]): BucketPoint[] {
+  return starts.map(
+    (start) =>
+      buckets.find((bucket) => bucket.start === start) ?? {
+        start,
+        completed: 0,
+        failed: 0,
+        interrupted: 0,
+        cost: 0,
+        subscriptions: [],
+      },
+  )
 }
 
 /** Every turn that closed, whatever way it closed. */
@@ -99,12 +138,12 @@ export interface NavigationPoint {
  * counts a turn that navigated. The records carry the reads; the buckets' own means do not.
  */
 export function navigationTrend(
-  buckets: StatsBucket[],
+  starts: string[],
   records: TurnMetrics[],
   by: StatsBucketSize,
 ): NavigationPoint[] {
   const wrote = records.filter((record) => (record.navigation?.write_calls ?? 0) > 0)
-  return buckets.map(({ start }) => {
+  return starts.map((start) => {
     const reads = wrote
       .filter((record) => bucketStart(record.closed_at, by) === start)
       .map((record) => record.navigation?.reads_before_first_write ?? 0)

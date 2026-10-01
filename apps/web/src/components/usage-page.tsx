@@ -41,6 +41,7 @@ import { openStats, statsPath } from "@/lib/selection"
 import {
   bucketLabel,
   bucketSize,
+  bucketStarts,
   money,
   type Range,
   SOURCE_LABELS,
@@ -77,6 +78,7 @@ export function UsagePage({ client, clock }: { client: Caller; clock: Clock }) {
   }, [client, range])
   const { value, failure, readAgain } = useRead(read, clock)
   const by = bucketSize(range)
+  const starts = bucketStarts(range, by, new Date())
 
   return (
     <div className="flex flex-col gap-4 p-6">
@@ -88,7 +90,12 @@ export function UsagePage({ client, clock }: { client: Caller; clock: Clock }) {
       {value === undefined ? (
         failure === undefined && <Skeleton className="h-72 w-full" />
       ) : (
-        <Usage usage={value.usage} rows={usageRows(value.usage, value.instances)} by={by} />
+        <Usage
+          usage={value.usage}
+          rows={usageRows(value.usage, value.instances)}
+          by={by}
+          starts={starts}
+        />
       )}
     </div>
   )
@@ -99,10 +106,12 @@ function Usage({
   usage,
   rows,
   by,
+  starts,
 }: {
   usage: StatsSummaryResult
   rows: UsageRow[]
   by: StatsBucketSize
+  starts: string[]
 }) {
   // The hub lists every plan, counted or not, so its plans name the columns.
   const sources = usage.subscriptions.map((use) => use.usage_source)
@@ -111,7 +120,7 @@ function Usage({
     <>
       <InstanceTable rows={rows} sources={sources} />
       <Totals usage={usage} />
-      <InstanceCharts counted={counted} by={by} />
+      <InstanceCharts counted={counted} by={by} starts={starts} />
     </>
   )
 }
@@ -227,7 +236,15 @@ const MEASURES = [
 }[]
 
 /** Each counted instance's API cost, plan runs, or turns in each bucket, stacked. */
-function InstanceCharts({ counted, by }: { counted: CountedRow[]; by: StatsBucketSize }) {
+function InstanceCharts({
+  counted,
+  by,
+  starts,
+}: {
+  counted: CountedRow[]
+  by: StatsBucketSize
+  starts: string[]
+}) {
   const series = counted.map((_, index) => `instance-${index}`)
   const config: ChartConfig = Object.fromEntries(
     counted.map(({ instance }, index) => [
@@ -257,7 +274,7 @@ function InstanceCharts({ counted, by }: { counted: CountedRow[]; by: StatsBucke
               ))}
             </TabsList>
             {MEASURES.map(({ tab, value, format }) => {
-              const points = instancePoints(buckets, value)
+              const points = instancePoints(starts, buckets, value)
               return (
                 <TabsContent key={tab} value={tab}>
                   <ChartContainer config={config} className="aspect-auto h-64 w-full">

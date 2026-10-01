@@ -45,7 +45,9 @@ import { useRead } from "@/hooks/use-read"
 import { selectThread, threadPath } from "@/lib/selection"
 import {
   bucketLabel,
+  bucketPoints,
   bucketSize,
+  bucketStarts,
   dayLabel,
   type Drill,
   drilledTurns,
@@ -82,6 +84,7 @@ export function StatsPage({
   const { value: stats, failure, readAgain } = useRead(read, clock)
   const [drill, setDrill] = useState<Drill>({})
   const by = bucketSize(range)
+  const starts = bucketStarts(range, by, new Date())
   // A second click on the picked row drops the filter.
   const pickOrigin = (origin: OriginUse) =>
     setDrill(({ bucket, origin: picked }) => ({
@@ -128,6 +131,7 @@ export function StatsPage({
                 <Overview
                   stats={stats}
                   by={by}
+                  starts={starts}
                   onBucket={(bucket) => setDrill(({ origin }) => ({ bucket, origin }))}
                 >
                   {drillDown(stats)}
@@ -136,7 +140,7 @@ export function StatsPage({
             </TabsContent>
             <TabsContent value="spend">
               <div className="flex flex-col gap-4 pt-4">
-                <Spend stats={stats} by={by} />
+                <Spend stats={stats} by={by} starts={starts} />
               </div>
             </TabsContent>
             <TabsContent value="origin">
@@ -155,7 +159,7 @@ export function StatsPage({
             </TabsContent>
             <TabsContent value="quality">
               <div className="flex flex-col gap-4 pt-4">
-                <Quality stats={stats} by={by} />
+                <Quality stats={stats} by={by} starts={starts} />
               </div>
             </TabsContent>
           </>
@@ -169,11 +173,13 @@ export function StatsPage({
 function Overview({
   stats,
   by,
+  starts,
   onBucket,
   children,
 }: {
   stats: StatsGetResult
   by: StatsBucketSize
+  starts: string[]
   onBucket: (start: string) => void
   children: ReactNode
 }) {
@@ -181,7 +187,7 @@ function Overview({
     <>
       <Notices unpricedModels={stats.unpriced_models} mismatches={stats.warnings?.length ?? 0} />
       <Tiles total={stats.total} />
-      <TurnsChart buckets={stats.buckets} by={by} onBucket={onBucket} />
+      <TurnsChart buckets={stats.buckets} by={by} starts={starts} onBucket={onBucket} />
       {children}
     </>
   )
@@ -255,12 +261,15 @@ const TURN_SERIES = {
 function TurnsChart({
   buckets,
   by,
+  starts,
   onBucket,
 }: {
   buckets: StatsBucket[]
   by: StatsBucketSize
+  starts: string[]
   onBucket: (start: string) => void
 }) {
+  const points = bucketPoints(starts, buckets)
   return (
     <Card>
       <CardHeader>
@@ -273,7 +282,7 @@ function TurnsChart({
       </CardHeader>
       <CardContent>
         <ChartContainer config={TURN_SERIES} className="aspect-auto h-64 w-full">
-          <BarChart data={buckets} accessibilityLayer>
+          <BarChart data={points} accessibilityLayer>
             <BucketAxes />
             <ChartTooltip
               content={
@@ -288,7 +297,7 @@ function TurnsChart({
                 stackId="turns"
                 fill={`var(--color-${series})`}
                 className="cursor-pointer"
-                onClick={(_, index) => onBucket(buckets[index].start)}
+                onClick={(bar) => onBucket(points[bar.originalDataIndex].start)}
               />
             ))}
           </BarChart>
