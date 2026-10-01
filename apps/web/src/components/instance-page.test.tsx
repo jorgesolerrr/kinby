@@ -5,8 +5,14 @@ import type {
   InstanceSummary,
   OperationGetResult,
 } from "@kinby/contract"
-import { type Answers, fakeClock, instanceSummary, stubCaller } from "@kinby/contract/testing"
-import { act, render, screen, within } from "@testing-library/react"
+import {
+  type Answers,
+  fakeClock,
+  instanceSummary,
+  type StubCaller,
+  stubCaller,
+} from "@kinby/contract/testing"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
@@ -437,3 +443,164 @@ describe("a running instance", () => {
     expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
   })
 })
+
+describe("stopping a running instance", () => {
+  const running = { ...stopped, intended_state: "running", process: "running" } as const
+
+  it.each([
+    ["running", running],
+    ["restarting", { ...running, process: "starting", detail: "restarting" }],
+    ["failed", { ...running, process: "failed", detail: "exited (1)" }],
+  ] as const)("offers Stop when its process is %s", async (_process, instance) => {
+    await openPage({}, instance)
+
+    expect(screen.getByRole("button", { name: "Stop" })).toBeDefined()
+  })
+
+  it("asks first, and makes no call when the stop is cancelled", async () => {
+    const { user, caller } = await openPage({}, running)
+
+    await user.click(screen.getByRole("button", { name: "Stop" }))
+    const dialog = await screen.findByRole("alertdialog", { name: "Stop Ada?" })
+    expect(dialog.textContent).toContain(
+      "Ada finishes the work it has accepted, then does nothing until it starts again.",
+    )
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
+
+    expect(caller.calls.some((call) => call.method === "instance.stop")).toBe(false)
+  })
+
+  it("stops it once confirmed, busy until the stop ends", async () => {
+    const { user, clock, caller, onChanged } = await openPage(
+      {
+        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
+        "operation.get": () => operation({ kind: "stop", state: "running" }),
+      },
+      running,
+    )
+
+    await confirmStop(user)
+    await act(() => clock.advance(0))
+
+    expect(stops(caller)).toEqual([{ instance_id: "instance-1" }])
+    const stop = screen.getByRole("button", { name: /Stop/ })
+    expect(stop.hasAttribute("disabled")).toBe(true)
+    expect(within(stop).getByRole("status", { name: "Loading" })).toBeDefined()
+    expect(onChanged).not.toHaveBeenCalled()
+  })
+
+  it("lists the instances again once it stops, and shows it stopped", async () => {
+    const polls = [
+      operation({ kind: "stop", state: "running" }),
+      operation({ kind: "stop", state: "succeeded" }),
+    ]
+    const { user, clock, onChanged, relist } = await openPage(
+      {
+        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
+        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+      },
+      running,
+    )
+
+    await confirmStop(user)
+    await act(() => clock.advance(0))
+    expect(onChanged).not.toHaveBeenCalled()
+    await act(() => clock.advance(1_000))
+
+    expect(onChanged).toHaveBeenCalledOnce()
+    relist({ ...running, intended_state: "stopped", setup_pending: false })
+    await act(() => clock.advance(0))
+    expect(screen.getByRole("region", { name: "Ada is stopped" })).toBeDefined()
+  })
+
+  it("says why a stop failed, and offers to force it", async () => {
+    const unreachable = "Its lifecycle endpoint did not answer. Force stop it."
+    const polls = [
+      operation({ kind: "stop", state: "failed", detail: unreachable }),
+      operation({ kind: "stop", state: "succeeded" }),
+    ]
+    const { user, clock, caller, onChanged } = await openPage(
+      {
+        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
+        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+      },
+      running,
+    )
+
+    expect(screen.queryByRole("button", { name: "Force stop" })).toBeNull()
+    await confirmStop(user)
+    await act(() => clock.advance(0))
+    expect(within(screen.getByRole("alert")).getByText(unreachable)).toBeDefined()
+    expect(onChanged).not.toHaveBeenCalled()
+    await user.click(screen.getByRole("button", { name: "Force stop" }))
+    await act(() => clock.advance(0))
+
+    expect(stops(caller)).toEqual([
+      { instance_id: "instance-1" },
+      { instance_id: "instance-1", force: true },
+    ])
+    expect(onChanged).toHaveBeenCalledOnce()
+  })
+
+  it("keeps the stop and Force stop when a relist marks it stopped mid-drain", async () => {
+    const { user, clock, relist } = await openPage(
+      {
+        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
+        "operation.get": () => operation({ kind: "stop", state: "running" }),
+      },
+      running,
+    )
+
+    await confirmStop(user)
+    await act(() => clock.advance(0))
+    relist({ ...running, intended_state: "stopped", setup_pending: false })
+    await act(() => clock.advance(0))
+
+    expect(screen.queryByRole("region", { name: "Ada is stopped" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Force stop" })).toBeDefined()
+  })
+
+  it("forces a stop that is still draining, and keeps following it", async () => {
+    const polls = [
+      operation({ operation_id: "op-stop", kind: "stop", state: "running" }),
+      operation({ operation_id: "op-stop", kind: "stop", state: "running" }),
+      operation({ operation_id: "op-stop", kind: "stop", state: "succeeded" }),
+    ]
+    const { user, clock, caller, onChanged } = await openPage(
+      {
+        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
+        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+      },
+      running,
+    )
+
+    await confirmStop(user)
+    await act(() => clock.advance(0))
+    await user.click(screen.getByRole("button", { name: "Force stop" }))
+    await act(() => clock.advance(0))
+    expect(screen.getByRole("button", { name: "Force stop" }).hasAttribute("disabled")).toBe(true)
+    expect(screen.getByRole("button", { name: /Stop/ }).hasAttribute("disabled")).toBe(true)
+    expect(onChanged).not.toHaveBeenCalled()
+    await act(() => clock.advance(1_000))
+
+    expect(stops(caller)).toEqual([
+      { instance_id: "instance-1" },
+      { instance_id: "instance-1", force: true },
+    ])
+    const followed = caller.calls
+      .filter((call) => call.method === "operation.get")
+      .map((call) => (call.params as { operation_id: string }).operation_id)
+    expect(new Set(followed)).toEqual(new Set(["op-stop"]))
+    expect(onChanged).toHaveBeenCalledOnce()
+  })
+})
+
+async function confirmStop(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Stop" }))
+  const dialog = await screen.findByRole("alertdialog", { name: "Stop Ada?" })
+  await user.click(within(dialog).getByRole("button", { name: "Stop" }))
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+}
+
+const stops = (caller: StubCaller) =>
+  caller.calls.filter((call) => call.method === "instance.stop").map((call) => call.params)
