@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { bucketLabel, duration, money, SOURCE_LABELS, tokens } from "@/lib/stats"
+import { bucketLabel, cents, centsMoney, duration, money, SOURCE_LABELS, tokens } from "@/lib/stats"
 
 /** Where the range's API cost and plan runs went. */
 export function Spend({ stats, by }: { stats: StatsGetResult; by: StatsBucketSize }) {
@@ -73,7 +73,7 @@ function CostChart({ buckets, by }: { buckets: StatsBucket[]; by: StatsBucketSiz
           <CardContent>
             <ChartContainer config={COST_SERIES} className="aspect-auto h-48 w-full">
               <BarChart data={buckets} accessibilityLayer>
-                <BucketAxes allowDecimals tickFormatter={money} />
+                <BucketAxes tickFormatter={centsMoney} />
                 <ChartTooltip
                   content={
                     <ChartTooltipContent
@@ -85,7 +85,7 @@ function CostChart({ buckets, by }: { buckets: StatsBucket[]; by: StatsBucketSiz
                   }
                 />
                 <Bar
-                  dataKey={(bucket: StatsBucket) => bucket.cost ?? 0}
+                  dataKey={(bucket: StatsBucket) => cents(bucket.cost) ?? 0}
                   name="cost"
                   fill="var(--color-cost)"
                 />

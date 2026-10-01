@@ -41,6 +41,8 @@ import { openStats, statsPath } from "@/lib/selection"
 import {
   bucketLabel,
   bucketSize,
+  cents,
+  centsMoney,
   money,
   type Range,
   SOURCE_LABELS,
@@ -210,9 +212,9 @@ function Totals({ usage }: { usage: StatsSummaryResult }) {
   )
 }
 
-/** What the chart can show per instance, each with how its tooltip writes a value. */
+/** What the chart can show per instance, each with how its tooltip and axis write a value. */
 const MEASURES = [
-  { tab: "API cost", value: (bucket: StatsBucket) => bucket.cost ?? null, format: money },
+  { tab: "API cost", value: (bucket: StatsBucket) => cents(bucket.cost), format: centsMoney },
   {
     tab: "Plan runs",
     value: (bucket: StatsBucket) =>
@@ -262,7 +264,7 @@ function InstanceCharts({ counted, by }: { counted: CountedRow[]; by: StatsBucke
                 <TabsContent key={tab} value={tab}>
                   <ChartContainer config={config} className="aspect-auto h-64 w-full">
                     <BarChart data={points} accessibilityLayer>
-                      <BucketAxes />
+                      <BucketAxes tickFormatter={format} />
                       <ChartTooltip
                         content={
                           <ChartTooltipContent

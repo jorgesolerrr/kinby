@@ -13,7 +13,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { StatsPage } from "@/components/stats-page"
-import { bucketTooltips, legend, rows } from "@/components/stats-testing"
+import { axisTicks, bucketTooltips, legend, rows } from "@/components/stats-testing"
 
 function originUse(routine: string | null, fields: Partial<OriginUse> = {}): OriginUse {
   return {
@@ -449,6 +449,50 @@ describe("the Spend tab", () => {
       "Sep 27API cost$0.50",
       "Sep 28API costnot priced",
       "Sep 29API cost$1.24",
+    ])
+  })
+
+  it("ticks the API cost axis on evenly spaced whole cents", async () => {
+    openStats({
+      "stats.get": () =>
+        stats({
+          buckets: [
+            { ...summary({ completed: 1, cost: 0.07 }), start: "2026-09-27" },
+            { ...summary({ completed: 2, cost: 0.18 }), start: "2026-09-28" },
+          ],
+        }),
+    })
+
+    await openTab("Spend")
+
+    expect(axisTicks(screen.getByRole("region", { name: "API cost" }))).toEqual([
+      "$0.00",
+      "$0.05",
+      "$0.10",
+      "$0.15",
+      "$0.20",
+    ])
+  })
+
+  it("ticks an API cost over a dollar on whole cents, with no label repeated", async () => {
+    openStats({
+      "stats.get": () =>
+        stats({
+          buckets: [
+            { ...summary({ completed: 2, cost: 0.5 }), start: "2026-09-27" },
+            { ...summary({ completed: 3, cost: 12.345 }), start: "2026-09-28" },
+          ],
+        }),
+    })
+
+    await openTab("Spend")
+
+    expect(axisTicks(screen.getByRole("region", { name: "API cost" }))).toEqual([
+      "$0.00",
+      "$3.50",
+      "$7.00",
+      "$10.50",
+      "$14.00",
     ])
   })
 

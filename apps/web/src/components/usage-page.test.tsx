@@ -4,7 +4,7 @@ import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { bucketTooltips, legend, rows } from "@/components/stats-testing"
+import { axisTicks, bucketTooltips, legend, rows } from "@/components/stats-testing"
 import { UsagePage } from "@/components/usage-page"
 
 const ada = instanceSummary({ instance_id: "hub-ada", persona_name: "Ada" })
@@ -251,6 +251,25 @@ describe("the usage page", () => {
     expect(bucketTooltips(chart, 2)).toEqual(["Sep 28Ada3research0", "Sep 29Ada1research2"])
     await user.click(within(chart).getByRole("tab", { name: "Turns" }))
     expect(bucketTooltips(chart, 2)).toEqual(["Sep 28Ada4research0", "Sep 29Ada3research1"])
+  })
+
+  it("ticks the API cost tab on evenly spaced whole cents, and the counts on whole numbers", async () => {
+    openUsage({
+      "stats.summary": () =>
+        usage({
+          buckets: {
+            "hub-ada": [bucket("2026-09-28", { completed: 3, cost: 0.08 })],
+            "hub-research": [bucket("2026-09-28", { completed: 1, cost: 0.1 })],
+          },
+        }),
+      "instance.list": () => ({ instances: [ada, research] }),
+    })
+    const user = userEvent.setup()
+    const chart = await screen.findByRole("region", { name: "Per instance" })
+
+    expect(axisTicks(chart)).toEqual(["$0.00", "$0.05", "$0.10", "$0.15", "$0.20"])
+    await user.click(within(chart).getByRole("tab", { name: "Turns" }))
+    expect(axisTicks(chart)).toEqual(["0", "1", "2", "3", "4"])
   })
 
   it("splits nothing by origin and measures no quality", async () => {
