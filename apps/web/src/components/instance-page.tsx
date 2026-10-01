@@ -60,7 +60,8 @@ import {
  * its memory, and its stats, offers Stop, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
  * all are.
  * `onChanged` hears a sign-in, a start or a stop end, so the instances are listed again, and must
- * keep its identity.
+ * keep its identity. The hub marks the instance stopped before it drains, so a stop asked here
+ * keeps the running view, and its Force stop, until the stop succeeds.
  */
 export function InstancePage({
   caller,
@@ -75,9 +76,15 @@ export function InstancePage({
 }) {
   // Read once: finishing the last sign-in on the card leaves the card open, with Start.
   const [openedOnSetup] = useState(instance.intended_state === "stopped" && instance.setup_pending)
+  const [stopping, setStopping] = useState(false)
+  const stopped = useCallback(() => {
+    setStopping(false)
+    onChanged()
+  }, [onChanged])
   const { status, waiting } = useStatus(caller, instance)
   const name = instanceName(instance)
-  const onSetup = openedOnSetup && instance.intended_state === "stopped"
+  const intended = stopping ? "running" : instance.intended_state
+  const onSetup = openedOnSetup && intended === "stopped"
 
   if (onSetup) {
     if (status === undefined) return null
@@ -85,7 +92,7 @@ export function InstancePage({
       <SetupCard caller={caller} clock={clock} name={name} status={status} onChanged={onChanged} />
     )
   }
-  if (instance.intended_state === "stopped") {
+  if (intended === "stopped") {
     return (
       <Stopped
         caller={caller}
@@ -97,7 +104,7 @@ export function InstancePage({
     )
   }
   // The empty state waits until the status is read. A read that failed has nothing to sign in to.
-  if (instance.intended_state === "running") {
+  if (intended === "running") {
     if (waiting && status === undefined) return null
     const logins = status?.setup.logins ?? []
     return (
@@ -120,7 +127,8 @@ export function InstancePage({
             clock={clock}
             instanceId={instance.instance_id}
             name={name}
-            onStopped={onChanged}
+            onStopping={() => setStopping(true)}
+            onStopped={stopped}
           />
         </div>
         <ProcessAlert instance={instance} name={name} />
@@ -156,12 +164,14 @@ function StopButton({
   clock,
   instanceId,
   name,
+  onStopping,
   onStopped,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   instanceId: string
   name: string
+  onStopping: () => void
   onStopped: () => void
 }) {
   const [asking, setAsking] = useState(false)
@@ -210,6 +220,7 @@ function StopButton({
             <AlertDialogAction
               onClick={() => {
                 setAsking(false)
+                onStopping()
                 setRequest({ force: false })
               }}
             >

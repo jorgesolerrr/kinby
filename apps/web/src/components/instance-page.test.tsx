@@ -542,6 +542,24 @@ describe("stopping a running instance", () => {
     expect(onChanged).toHaveBeenCalledOnce()
   })
 
+  it("keeps the stop and Force stop when a relist marks it stopped mid-drain", async () => {
+    const { user, clock, relist } = await openPage(
+      {
+        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
+        "operation.get": () => operation({ kind: "stop", state: "running" }),
+      },
+      running,
+    )
+
+    await confirmStop(user)
+    await act(() => clock.advance(0))
+    relist({ ...running, intended_state: "stopped", setup_pending: false })
+    await act(() => clock.advance(0))
+
+    expect(screen.queryByRole("region", { name: "Ada is stopped" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Force stop" })).toBeDefined()
+  })
+
   it("forces a stop that is still draining, and keeps following it", async () => {
     const polls = [
       operation({ operation_id: "op-stop", kind: "stop", state: "running" }),
