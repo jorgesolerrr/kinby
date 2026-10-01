@@ -77,14 +77,17 @@ export function StatsPage({
   instanceId: string
 }) {
   const [range, setRange] = useState<Range>(7)
-  const read = useCallback(
-    () => client.call("stats.get", statsCommand(range, new Date())),
-    [client, range],
-  )
-  const { value: stats, failure, readAgain } = useRead(read, clock)
+  // The charts' buckets come from the moment the read asked about, so midnight never splits them.
+  const read = useCallback(async () => {
+    const now = new Date()
+    const stats = await client.call("stats.get", statsCommand(range, now))
+    return { stats, starts: bucketStarts(range, bucketSize(range), now) }
+  }, [client, range])
+  const { value, failure, readAgain } = useRead(read, clock)
+  const stats = value?.stats
+  const starts = value?.starts ?? []
   const [drill, setDrill] = useState<Drill>({})
   const by = bucketSize(range)
-  const starts = bucketStarts(range, by, new Date())
   // A second click on the picked row drops the filter.
   const pickOrigin = (origin: OriginUse) =>
     setDrill(({ bucket, origin: picked }) => ({

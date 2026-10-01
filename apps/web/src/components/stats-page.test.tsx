@@ -298,6 +298,26 @@ describe("the stats page", () => {
     ])
   })
 
+  it("keeps charting the days it read when a refresh after midnight UTC fails", async () => {
+    let reads = 0
+    openStats({
+      "stats.get": () => {
+        reads += 1
+        if (reads === 1) return stats()
+        throw new CallError({ code: "INTERNAL", message: "The read failed.", retryable: false })
+      },
+    })
+    const user = userEvent.setup()
+    await screen.findByRole("region", { name: "Turns" })
+
+    vi.setSystemTime(new Date("2026-10-01T00:05:00Z"))
+    await user.click(screen.getByRole("button", { name: "Refresh" }))
+
+    expect(await screen.findByRole("alert")).toBeTruthy()
+    const days = bucketTooltips(screen.getByRole("tabpanel"), 7).map((tip) => tip.slice(0, 6))
+    expect(days).toEqual(["Sep 24", "Sep 25", "Sep 26", "Sep 27", "Sep 28", "Sep 29", "Sep 30"])
+  })
+
   it("says so when no turn closed in the range", async () => {
     openStats()
 

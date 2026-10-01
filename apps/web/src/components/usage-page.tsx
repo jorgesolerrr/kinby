@@ -69,16 +69,18 @@ type Caller = Pick<Client, "call">
 export function UsagePage({ client, clock }: { client: Caller; clock: Clock }) {
   const [range, setRange] = useState<Range>(7)
   // The instances are listed with every summary, so the names and the counts show the same moment.
+  // The charts' buckets come from the moment the read asked about, so midnight never splits them.
   const read = useCallback(async () => {
+    const now = new Date()
     const [usage, listed] = await Promise.all([
-      client.call("stats.summary", statsCommand(range, new Date())),
+      client.call("stats.summary", statsCommand(range, now)),
       client.call("instance.list", {}),
     ])
-    return { usage, instances: listed.instances }
+    const starts = bucketStarts(range, bucketSize(range), now)
+    return { usage, instances: listed.instances, starts }
   }, [client, range])
   const { value, failure, readAgain } = useRead(read, clock)
   const by = bucketSize(range)
-  const starts = bucketStarts(range, by, new Date())
 
   return (
     <div className="flex flex-col gap-4 p-6">
@@ -94,7 +96,7 @@ export function UsagePage({ client, clock }: { client: Caller; clock: Clock }) {
           usage={value.usage}
           rows={usageRows(value.usage, value.instances)}
           by={by}
-          starts={starts}
+          starts={value.starts}
         />
       )}
     </div>
