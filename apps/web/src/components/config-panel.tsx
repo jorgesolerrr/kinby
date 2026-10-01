@@ -347,6 +347,7 @@ function SectionGroup({
             <Item
               size="xs"
               variant={label === selected ? "muted" : "default"}
+              className="text-left"
               render={
                 <button
                   type="button"

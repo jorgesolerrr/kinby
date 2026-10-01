@@ -179,6 +179,7 @@ function SkillItem({
     <Item
       size="sm"
       variant={variant}
+      className="text-left"
       render={
         <button
           type="button"
