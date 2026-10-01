@@ -1033,6 +1033,28 @@ describe("the create wizard's sign in step", () => {
     expect(caller.calls.filter((call) => call.method === "instance.login.start")).toHaveLength(2)
   })
 
+  it("keeps the row signed in when signing in again after a sign-in expires", async () => {
+    const detail = "The code expired. Sign in again for a new one."
+    const caller = withLogin(
+      operationAnswer({ operation_id: "op-login", kind: "login", state: "succeeded" }),
+      operationAnswer({ operation_id: "op-login", kind: "login", state: "failed", detail }),
+    )
+    const { user, clock } = await created(caller)
+
+    await user.click(row().getByRole("button", { name: "Sign in" }))
+    await act(() => clock.advance(0))
+    await user.click(row().getByRole("button", { name: "Sign in again" }))
+    await act(() => clock.advance(0))
+
+    expect(row().getByText("Signed in").getAttribute("data-variant")).toBe("success")
+    expect(row().queryByText("Failed")).toBeNull()
+    expect(
+      row().getByText(
+        `The new sign-in did not finish, and the one before it still works. ${detail}`,
+      ),
+    ).toBeDefined()
+  })
+
   it("has no sign in step when the image declares no login", async () => {
     await created(hub({}, published))
 
