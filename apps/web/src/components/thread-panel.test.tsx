@@ -2,7 +2,7 @@ import { CallError, type Event } from "@kinby/contract"
 import { type Answers, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ThreadPanel } from "@/components/thread-panel"
 import { threadList } from "@/lib/thread-list"
@@ -360,6 +360,75 @@ describe("a thread's panel", () => {
       expect(
         await screen.findByText("The turn recap failed: TimeoutError: the model did not answer"),
       ).toBeDefined()
+    })
+  })
+
+  describe("a turn the URL names", () => {
+    const turns = ["turn-1", "turn-2", "turn-3"]
+
+    // jsdom lays nothing out and cannot scroll. Here each turn stands 1,000 px tall below the one
+    // before it, scrolling the transcript moves them up, and the thread opens on the last at 2,000.
+    beforeEach(() => {
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+        this: Element,
+      ) {
+        const index = turns.indexOf(this.getAttribute("data-message-id") ?? "")
+        if (index === -1) return DOMRect.fromRect()
+        const scrolled = this.closest("[data-slot=message-scroller-viewport]")?.scrollTop ?? 0
+        return DOMRect.fromRect({ y: index * 1_000 - scrolled, height: 1_000 })
+      })
+      Object.defineProperty(Element.prototype, "scrollTo", {
+        configurable: true,
+        value(this: Element, { top = 0 }: ScrollToOptions) {
+          this.scrollTop = top
+        },
+      })
+    })
+
+    afterEach(() => {
+      vi.restoreAllMocks()
+      Reflect.deleteProperty(Element.prototype, "scrollTo")
+    })
+
+    /** Open the thread at `path` and replay its three turns, then say where the transcript sits. */
+    async function scrolledAt(path: string) {
+      window.history.replaceState(null, "", path)
+      const { subscription } = openThread()
+      const events = thread(...turns.map((turn): [string, Payload] => [turn, started(turn)]))
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+      return screen.getByRole("region", { name: "Messages" }).scrollTop
+    }
+
+    it("opens the thread scrolled to that turn, not the latest", async () => {
+      expect(await scrolledAt("/instances/hub-ada/threads/t1/turns/turn-2")).toBe(1_000)
+    })
+
+    it("opens the thread on its latest turn when the thread has no such turn", async () => {
+      expect(await scrolledAt("/instances/hub-ada/threads/t1/turns/turn-9")).toBe(2_000)
+    })
+
+    it("leaves a thread opened without a turn on its latest turn", async () => {
+      expect(await scrolledAt("/instances/hub-ada/threads/t1")).toBe(2_000)
+    })
+
+    it("scrolls to the turn again when Back returns to it from the plain thread", async () => {
+      await scrolledAt("/instances/hub-ada/threads/t1/turns/turn-2")
+      const transcript = screen.getByRole("region", { name: "Messages" })
+
+      act(() => {
+        window.history.pushState(null, "", "/instances/hub-ada/threads/t1")
+        window.dispatchEvent(new PopStateEvent("popstate"))
+      })
+      transcript.scrollTop = 0
+      act(() => {
+        window.history.pushState(null, "", "/instances/hub-ada/threads/t1/turns/turn-2")
+        window.dispatchEvent(new PopStateEvent("popstate"))
+      })
+
+      await waitFor(() => expect(transcript.scrollTop).toBe(1_000))
     })
   })
 

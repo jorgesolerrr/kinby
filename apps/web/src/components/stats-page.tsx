@@ -43,7 +43,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useRead } from "@/hooks/use-read"
 import { OlderCore } from "@/lib/older-core"
-import { openPackage, selectThread, threadPath } from "@/lib/selection"
+import { openPackage, selectTurn, turnPath } from "@/lib/selection"
 import {
   bucketLabel,
   bucketPoints,
@@ -384,10 +384,10 @@ function DrilledTurns({
               <TableCell className="text-right">
                 <a
                   className={buttonVariants({ variant: "link", size: "sm" })}
-                  href={threadPath(instanceId, turn.thread_id)}
+                  href={turnPath(instanceId, turn.thread_id, turn.turn_id)}
                   onClick={(event) => {
                     event.preventDefault()
-                    selectThread(instanceId, turn.thread_id)
+                    selectTurn(instanceId, turn.thread_id, turn.turn_id)
                   }}
                 >
                   Open in chat

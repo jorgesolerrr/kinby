@@ -36,13 +36,14 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
+  useMessageScroller,
 } from "@/components/ui/message-scroller"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { reason } from "@/lib/operation"
-import { nodePath, openNode } from "@/lib/selection"
+import { nodePath, openNode, useSelectedTurnId } from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
 import type { ParkedApproval, Recap, ToolStep, TurnBlock, TurnEnd } from "@/lib/timeline"
 import {
@@ -384,8 +385,28 @@ function Transcript({
         </MessageScrollerViewport>
         <MessageScrollerButton />
       </MessageScroller>
+      <LinkedTurn turns={turns} />
     </MessageScrollerProvider>
   )
+}
+
+/**
+ * Scrolls to the turn the URL names once it is in the transcript. Each turn named is scrolled to
+ * once, so the events that follow leave the reader where they are. A URL that names no turn
+ * forgets the last one, so going Back to it scrolls there again.
+ */
+function LinkedTurn({ turns }: { turns: TurnBlock[] }) {
+  const turnId = useSelectedTurnId()
+  const present = turns.some((turn) => turn.turnId === turnId)
+  const { scrollToMessage } = useMessageScroller()
+  const reached = useRef<string>(undefined)
+  useEffect(() => {
+    if (turnId === undefined) reached.current = undefined
+    if (turnId === undefined || !present || reached.current === turnId) return
+    reached.current = turnId
+    scrollToMessage(turnId)
+  }, [turnId, present, scrollToMessage])
+  return null
 }
 
 function Turn({ turn, instanceId, name }: { turn: TurnBlock; instanceId: string; name: string }) {

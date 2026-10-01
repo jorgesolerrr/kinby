@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react"
 // What the page shows lives in the URL, so a reload or an opened link lands on it.
 const SECTION = "instances"
 const THREADS = "threads"
+const TURNS = "turns"
 const CONFIG = "config"
 const ROUTINES = "routines"
 const PACKAGE = "package"
@@ -19,6 +20,11 @@ export function instancePath(instanceId: string): string {
 
 export function threadPath(instanceId: string, threadId: string): string {
   return `${instancePath(instanceId)}/${THREADS}/${encodeURIComponent(threadId)}`
+}
+
+/** One turn of a thread, which the thread opens scrolled to. */
+export function turnPath(instanceId: string, threadId: string, turnId: string): string {
+  return `${threadPath(instanceId, threadId)}/${TURNS}/${encodeURIComponent(turnId)}`
 }
 
 function configPath(instanceId: string): string {
@@ -55,6 +61,11 @@ export function selectInstance(instanceId: string): void {
 /** Select one of an instance's threads the same way. */
 export function selectThread(instanceId: string, threadId: string): void {
   navigate(threadPath(instanceId, threadId))
+}
+
+/** Select a thread scrolled to one of its turns the same way. */
+export function selectTurn(instanceId: string, threadId: string, turnId: string): void {
+  navigate(turnPath(instanceId, threadId, turnId))
 }
 
 /** Open an instance's config panel the same way. */
@@ -129,6 +140,11 @@ export function useSelectedThreadId(): string | undefined {
   return useSyncExternalStore(subscribe, selectedThreadId)
 }
 
+/** The turn the URL names in its thread, if it names one. */
+export function useSelectedTurnId(): string | undefined {
+  return useSyncExternalStore(subscribe, selectedTurnId)
+}
+
 /** Whether the URL opens its instance's config panel. */
 export function useConfigOpen(): boolean {
   return useSyncExternalStore(subscribe, configOpen)
@@ -172,6 +188,13 @@ function selectedThreadId(): string | undefined {
   const [, section, instanceId, threads, threadId] = window.location.pathname.split("/")
   return section === SECTION && instanceId && threads === THREADS && threadId
     ? decodeURIComponent(threadId)
+    : undefined
+}
+
+function selectedTurnId(): string | undefined {
+  const [, , , , , turns, turnId] = window.location.pathname.split("/")
+  return selectedThreadId() !== undefined && turns === TURNS && turnId
+    ? decodeURIComponent(turnId)
     : undefined
 }
 
