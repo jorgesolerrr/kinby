@@ -10,6 +10,7 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Literal
 
 from cronsim import CronSim
 
@@ -154,24 +155,31 @@ def enable_routine(
     return routine
 
 
-def delete_routine(instance: Instance, name: RoutineName, recorded: Recorder) -> None:
-    """Delete a routine unless deliveries wait on it. Hold the routine lock."""
-    validate_name(name)
+def refuse_pending(
+    instance: Instance, name: RoutineName, change: Literal["deleted", "renamed"]
+) -> None:
+    """Refuse a *change* that would drop the deliveries waiting on a routine."""
     from kinby.core.errors import RoutinePending
     from kinby.core.events import EventLog
     from kinby.core.routine_history import routine_history
 
-    target = instance.path / ROUTINES_DIR / name
-    if not target.is_dir():
-        raise LookupError(f'Routine "{name}" was not found.')
     histories = routine_history(EventLog(instance.manifest.state_dir).all_events()).routines
     history = histories.get(name)
     pending = len(history.pending) if history is not None else 0
     if pending:
         noun = "delivery" if pending == 1 else "deliveries"
         raise RoutinePending(
-            f'Routine "{name}" has {pending} pending {noun} and cannot be deleted.'
+            f'Routine "{name}" has {pending} pending {noun} and cannot be {change}.'
         )
+
+
+def delete_routine(instance: Instance, name: RoutineName, recorded: Recorder) -> None:
+    """Delete a routine unless deliveries wait on it. Hold the routine lock."""
+    validate_name(name)
+    target = instance.path / ROUTINES_DIR / name
+    if not target.is_dir():
+        raise LookupError(f'Routine "{name}" was not found.')
+    refuse_pending(instance, name, "deleted")
     with recorded(routine_config_file(name)):
         shutil.rmtree(target)
 

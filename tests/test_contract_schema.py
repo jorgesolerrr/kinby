@@ -185,7 +185,13 @@ def test_the_schema_declares_the_routine_config_calls() -> None:
 
     assert {
         name: _object(methods_schema[name])["properties"]
-        for name in ("routine.read", "routine.write", "routine.set_enabled", "routine.delete")
+        for name in (
+            "routine.read",
+            "routine.write",
+            "routine.set_enabled",
+            "routine.delete",
+            "routine.rename",
+        )
     } == {
         "routine.read": {
             "command": {"$ref": "#/$defs/RoutineReadCommand"},
@@ -203,6 +209,15 @@ def test_the_schema_declares_the_routine_config_calls() -> None:
             "command": {"$ref": "#/$defs/RoutineDeleteCommand"},
             "result": {"$ref": "#/$defs/RoutineDeleteResult"},
         },
+        "routine.rename": {
+            "command": {"$ref": "#/$defs/RoutineRenameCommand"},
+            "result": {"$ref": "#/$defs/RoutineFile"},
+        },
+    }
+    assert set(cast(list[str], _object(definitions["RoutineRenameCommand"])["required"])) == {
+        "name",
+        "new_name",
+        "hash",
     }
     assert set(cast(list[str], _object(definitions["RoutineFile"])["required"])) == {
         "name",

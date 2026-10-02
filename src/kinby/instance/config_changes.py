@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from difflib import unified_diff
@@ -48,19 +48,36 @@ def recorded_change(
     turn_id: UUID | None = None,
 ) -> Iterator[None]:
     """Record what the body changes in *file*, a file or a directory, once the body succeeds."""
-    before = _texts(instance.path, file)
+    with recorded_changes(instance, (file,), actor, thread_id=thread_id, turn_id=turn_id):
+        yield
+
+
+@contextmanager
+def recorded_changes(
+    instance: Instance,
+    files: Sequence[ConfigFile],
+    actor: ConfigActor,
+    *,
+    thread_id: UUID | None = None,
+    turn_id: UUID | None = None,
+) -> Iterator[None]:
+    """Record what the body changes in each of *files* as one change each, all at one time."""
+    before = [_texts(instance.path, file) for file in files]
     yield
-    ConfigChangeLog(instance.manifest.state_dir).append(
-        ConfigChange(
-            at=datetime.now(UTC),
-            file=file,
-            actor=actor,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            diff=_diff(before, _texts(instance.path, file)),
-            hash=_hash(instance.path / file),
+    at = datetime.now(UTC)
+    log = ConfigChangeLog(instance.manifest.state_dir)
+    for file, texts in zip(files, before, strict=True):
+        log.append(
+            ConfigChange(
+                at=at,
+                file=file,
+                actor=actor,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                diff=_diff(texts, _texts(instance.path, file)),
+                hash=_hash(instance.path / file),
+            )
         )
-    )
 
 
 def file_hash(content: bytes) -> FileHash:

@@ -75,6 +75,7 @@ from kinby.contracts.models import (
     RoutineListCommand,
     RoutineListResult,
     RoutineReadCommand,
+    RoutineRenameCommand,
     RoutineRunCommand,
     RoutineSetEnabledCommand,
     RoutineWriteCommand,
@@ -209,6 +210,7 @@ ROUTINE_SET_ENABLED = Method(
 ROUTINE_DELETE = Method(
     "routine.delete", Scope.INSTANCE_ADMIN, RoutineDeleteCommand, RoutineDeleteResult
 )
+ROUTINE_RENAME = Method("routine.rename", Scope.INSTANCE_ADMIN, RoutineRenameCommand, RoutineFile)
 PROMPT_GET = Method("prompt.get", Scope.INSTANCE_READ, PromptGetCommand, PromptResult)
 PROMPT_SET = Method("prompt.set", Scope.INSTANCE_ADMIN, PromptSetCommand, PromptResult)
 MANIFEST_GET = Method("manifest.get", Scope.INSTANCE_READ, ManifestGetCommand, ManifestResult)
@@ -338,6 +340,7 @@ METHODS = (
     ROUTINE_WRITE,
     ROUTINE_SET_ENABLED,
     ROUTINE_DELETE,
+    ROUTINE_RENAME,
     PROMPT_GET,
     PROMPT_SET,
     MANIFEST_GET,
