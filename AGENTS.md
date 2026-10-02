@@ -22,7 +22,7 @@ I'm a passionate programmer who likes complex things done in a simple way. That 
 
 ### Registry skills
 
-Skills in `.claude/skills/` whose `skills-lock.json` source is `jorgesolerrr/skills` are copies of that registry. Change one in the registry, then run `bun run skills:sync` and commit the result. Never edit those copies in place. `bun run check` fails when a copy stops matching its locked hash. `open-pr` belongs to this repo and is not in the lock, so edit it here.
+Skills in `.claude/skills/` whose `skills-lock.json` source is `jorgesolerrr/skills` are copies of that registry. Change one in the registry, then run `bun run skills:sync` and commit the result. Never edit those copies in place. `bun run check` fails when a copy stops matching its locked hash. `open-pr` and `e2e-pass` belong to this repo and are not in the lock, so edit them here.
 
 ### Issue tracker
 

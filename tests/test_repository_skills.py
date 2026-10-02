@@ -59,10 +59,10 @@ def _folder_hash(folder: Path) -> str:
     return digest.hexdigest()
 
 
-def test_every_vendored_skill_is_locked_except_the_repository_own_open_pr() -> None:
+def test_every_vendored_skill_is_locked_except_the_repository_own_skills() -> None:
     vendored = {folder.name for folder in SKILLS.iterdir() if folder.is_dir()}
 
-    assert vendored - LOCK.keys() == {"open-pr"}
+    assert vendored - LOCK.keys() == {"open-pr", "e2e-pass"}
 
 
 @pytest.mark.parametrize(
