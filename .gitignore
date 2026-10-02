@@ -1,5 +1,6 @@
 .teach/
 .venv/
+.venv-linux/
 .env
 .vscode/
 __pycache__/

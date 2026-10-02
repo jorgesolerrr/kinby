@@ -4,7 +4,7 @@ description: "Implement one ticket from the repo's issue tracker: TDD at the sea
 disable-model-invocation: true
 ---
 
-Implement the ticket the user names. The ticket is the spec: fetch it per `docs/agents/issue-tracker.md` (if that file is missing, tell the user to run `/setup-matt-pocock-skills` and stop). Read `CONTEXT.md`, any ADR in the area you will touch, and the repo's coding standards (`CODING_STANDARDS.md`, `CONTRIBUTING.md`, or whatever documents how code is written here).
+Implement the ticket the user names. The ticket is the spec: fetch it per `docs/agents/issue-tracker.md`. When that file is missing and the repo has a GitHub remote, fetch it with `gh issue view <id> --comments` and take the conventions from `AGENTS.md`/`CLAUDE.md`; with neither, tell the user to run `/setup-matt-pocock-skills` and stop. Read `CONTEXT.md`, any ADR in the area you will touch, and the repo's coding standards (`CODING_STANDARDS.md`, `CONTRIBUTING.md`, or whatever documents how code is written here).
 
 ## Process
 
