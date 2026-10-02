@@ -1685,6 +1685,13 @@ class RoutineDeleteResult(ContractModel):
     pass
 
 
+class RoutineRenameCommand(ContractModel):
+    name: RoutineName
+    #: The routine's new name, and so its new directory and signal path.
+    new_name: RoutineName
+    hash: FileHash
+
+
 class RecapPolicy(StrEnum):
     """When kinby writes a model-assisted recap."""
 

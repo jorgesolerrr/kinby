@@ -3773,6 +3773,27 @@
       "title": "RoutineReadCommand",
       "type": "object"
     },
+    "RoutineRenameCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "new_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "new_name",
+        "hash"
+      ],
+      "title": "RoutineRenameCommand",
+      "type": "object"
+    },
     "RoutineRunCommand": {
       "additionalProperties": false,
       "properties": {
@@ -6980,6 +7001,22 @@
           ],
           "type": "object"
         },
+        "routine.rename": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineRenameCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineFile"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "routine.run": {
           "additionalProperties": false,
           "properties": {
@@ -7405,6 +7442,7 @@
         "routine.write",
         "routine.set_enabled",
         "routine.delete",
+        "routine.rename",
         "prompt.get",
         "prompt.set",
         "manifest.get",

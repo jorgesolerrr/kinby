@@ -311,6 +311,10 @@ export interface Contract {
       command: RoutineReadCommand;
       result: RoutineFile;
     };
+    "routine.rename": {
+      command: RoutineRenameCommand;
+      result: RoutineFile;
+    };
     "routine.run": {
       command: RoutineRunCommand;
       result: AcceptedResult;
@@ -1082,6 +1086,11 @@ export interface RoutineFile {
   content: string;
   hash: string;
   name: string;
+}
+export interface RoutineRenameCommand {
+  hash: string;
+  name: string;
+  new_name: string;
 }
 export interface RoutineRunCommand {
   name: string;

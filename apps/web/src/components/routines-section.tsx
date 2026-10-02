@@ -1,4 +1,5 @@
-import type { Clock, InstanceClient, RoutineFile } from "@kinby/contract"
+import { CallError } from "@kinby/contract"
+import type { Clock, InstanceClient, RoutineFile, RoutineSummary } from "@kinby/contract"
 import { useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
@@ -16,6 +17,16 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import {
   Item,
   ItemActions,
   ItemContent,
@@ -23,7 +34,7 @@ import {
   ItemGroup,
   ItemTitle,
 } from "@/components/ui/item"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
@@ -43,7 +54,14 @@ import {
   saveRoutine,
   trigger,
 } from "@/lib/routines"
-import { ArrowLeftIcon, PencilIcon, PlayIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import {
+  ArrowLeftIcon,
+  PencilIcon,
+  PlayIcon,
+  PlusIcon,
+  TextCursorInputIcon,
+  Trash2Icon,
+} from "lucide-react"
 
 type Caller = Pick<InstanceClient, "call">
 
@@ -88,6 +106,9 @@ export function RoutinesSection({
       await client.call("routine.run", { name })
       setStarted(name)
     })
+  // The list reads again either way: the new name, or the hash a retry needs after a refusal.
+  const rename = (name: string, newName: string, hash: string) =>
+    client.call("routine.rename", { name, new_name: newName, hash }).finally(() => void load())
 
   if (editing !== undefined) {
     return (
@@ -131,6 +152,7 @@ export function RoutinesSection({
             onToggle={(enabled) => void toggle(listed.summary.name, enabled)}
             onRun={() => void run(listed.summary.name)}
             onEdit={() => setEditing(listed.summary.name)}
+            onRename={(newName) => rename(listed.summary.name, newName, listed.hash)}
           />
         ))}
       </ItemGroup>
@@ -143,11 +165,13 @@ function RoutineItem({
   onToggle,
   onRun,
   onEdit,
+  onRename,
 }: {
   listed: ListedRoutine
   onToggle: (enabled: boolean) => void
   onRun: () => void
   onEdit: () => void
+  onRename: (newName: string) => Promise<unknown>
 }) {
   const failures = summary.failure_count ?? 0
   return (
@@ -182,8 +206,90 @@ function RoutineItem({
           <PencilIcon data-icon="inline-start" />
           Edit
         </Button>
+        <RenameDialog summary={summary} onRename={onRename} />
       </ItemActions>
     </Item>
+  )
+}
+
+/**
+ * Asks for a routine's new name. Its whole directory moves, and its signal path with it, so the
+ * old path stops answering. A refusal shows in the dialog, and a refused name under its field.
+ */
+function RenameDialog({
+  summary,
+  onRename,
+}: {
+  summary: RoutineSummary
+  onRename: (newName: string) => Promise<unknown>
+}) {
+  const id = useId()
+  const [open, setOpen] = useState(false)
+  const [newName, setNewName] = useState("")
+  const [renaming, setRenaming] = useState(false)
+  const [invalid, setInvalid] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
+
+  const rename = async () => {
+    setRenaming(true)
+    setInvalid(undefined)
+    setFailure(undefined)
+    try {
+      await onRename(newName)
+      setOpen(false)
+    } catch (error) {
+      if (error instanceof CallError && error.fields.new_name !== undefined) {
+        setInvalid(error.fields.new_name)
+      } else setFailure(error)
+    } finally {
+      setRenaming(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger render={<Button size="sm" variant="outline" />}>
+        <TextCursorInputIcon data-icon="inline-start" />
+        Rename
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Rename {summary.name}</DialogTitle>
+          <DialogDescription>
+            This moves routines/{summary.name} and every file in it.
+          </DialogDescription>
+        </DialogHeader>
+        {failure !== undefined && <Failure error={failure} />}
+        <Field data-invalid={invalid !== undefined || undefined}>
+          <FieldLabel htmlFor={id}>New name</FieldLabel>
+          <Input
+            id={id}
+            value={newName}
+            readOnly={renaming}
+            aria-invalid={invalid !== undefined || undefined}
+            onChange={(event) => {
+              setNewName(event.target.value)
+              setInvalid(undefined)
+            }}
+          />
+          <FieldDescription>Letters, digits, hyphens, and underscores.</FieldDescription>
+          <FieldError>{invalid}</FieldError>
+        </Field>
+        {summary.signal && (
+          <p className="text-sm text-muted-foreground">
+            Its webhook path changes from {summary.signal.path} to /signals/{newName}. The old path
+            stops answering.
+          </p>
+        )}
+        <DialogFooter>
+          <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+          <Button disabled={renaming || newName === ""} onClick={() => void rename()}>
+            {renaming && <Spinner data-icon="inline-start" />}
+            Rename
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -46,6 +46,7 @@ from kinby.contracts import (
     RoutineFile,
     RoutineName,
     RoutineReadCommand,
+    RoutineRenameCommand,
     RoutineSetEnabledCommand,
     RoutineWriteCommand,
     SkillCustomizeCommand,
@@ -78,6 +79,7 @@ from kinby.instance.config_changes import (
     directory_hash,
     file_hash,
     recorded_change,
+    recorded_changes,
 )
 from kinby.instance.layout import (
     MANIFEST_NAME,
@@ -121,6 +123,7 @@ from kinby.plugins.core import core_tools
 from kinby.plugins.instance_tools import (
     delete_routine,
     enable_routine,
+    refuse_pending,
     routine_config_file,
     validate_name,
     write_routine,
@@ -275,6 +278,10 @@ class InstanceConfig:
         async with self._instance.routine_lock:
             await asyncio.to_thread(self._delete_routine, command)
         return RoutineDeleteResult()
+
+    async def rename_routine(self, command: RoutineRenameCommand) -> RoutineFile:
+        async with self._instance.routine_lock:
+            return await asyncio.to_thread(self._rename_routine, command)
 
     async def get_manifest(self, command: ManifestGetCommand) -> ManifestResult:
         return _manifest_result((self._instance.path / MANIFEST_NAME).read_bytes())
@@ -457,6 +464,25 @@ class InstanceConfig:
             validate_name(command.name)
             _check_unchanged(self._instance.path, routine_config_file(command.name), command.hash)
             delete_routine(self._instance, command.name, self._recorded)
+
+    def _rename_routine(self, command: RoutineRenameCommand) -> RoutineFile:
+        with _refusals():
+            validate_name(command.name)
+        try:
+            validate_name(command.new_name)
+        except ValueError as exc:
+            raise InvalidConfig({"new_name": str(exc)}) from exc
+        old, new = routine_config_file(command.name), routine_config_file(command.new_name)
+        _check_unchanged(self._instance.path, old, command.hash)
+        if not (self._instance.path / old).is_dir():
+            raise RoutineNotFound(f'Routine "{command.name}" was not found.')
+        refuse_pending(self._instance, command.name, "renamed")
+        if (self._instance.path / new).exists():
+            raise InvalidConfig({"new_name": f'Routine "{command.new_name}" already exists.'})
+        with recorded_changes(self._instance, (old, new), ConfigActor.APP):
+            # One rename, so the scheduler's next read finds the old directory or the new one.
+            (self._instance.path / old).rename(self._instance.path / new)
+        return self._read_routine(command.new_name)
 
     def _read_routine(self, name: RoutineName) -> RoutineFile:
         with _refusals():

@@ -245,6 +245,117 @@ describe("RoutinesSection", () => {
     })
   })
 
+  it("renames a routine, naming its old and new signal paths, and lists it under the new name", async () => {
+    let routines = [issues, news]
+    const { caller, user } = openSection({
+      "routine.list": () => ({ routines, warnings: [] }),
+      "routine.rename": ({ name, new_name }) => {
+        routines = routines.map((routine) =>
+          routine.name === name
+            ? {
+                ...routine,
+                name: new_name,
+                signal: { path: `/signals/${new_name}`, auth: "hmac-sha256" },
+              }
+            : routine,
+        )
+        return { name: new_name, content: NEWS, hash: `hash-${new_name}` }
+      },
+    })
+
+    const item = await screen.findByRole("listitem", { name: "issues" })
+    await user.click(within(item).getByRole("button", { name: "Rename" }))
+    const dialog = await screen.findByRole("dialog", { name: "Rename issues" })
+    await user.type(within(dialog).getByRole("textbox", { name: "New name" }), "triage")
+    expect(
+      within(dialog).getByText(
+        "Its webhook path changes from /signals/issues to /signals/triage. The old path stops answering.",
+      ),
+    ).toBeDefined()
+    await user.click(within(dialog).getByRole("button", { name: "Rename" }))
+
+    expect(await screen.findByRole("listitem", { name: "triage" })).toBeDefined()
+    expect(screen.queryByRole("listitem", { name: "issues" })).toBeNull()
+    expect(screen.queryByRole("dialog")).toBeNull()
+    expect(
+      caller.calls.filter((call) => call.method === "routine.rename").map((call) => call.params),
+    ).toEqual([{ name: "issues", new_name: "triage", hash: "hash-issues" }])
+  })
+
+  it("says nothing of a signal path when renaming a routine without a signal", async () => {
+    const { user } = openSection()
+
+    const item = await screen.findByRole("listitem", { name: "news" })
+    await user.click(within(item).getByRole("button", { name: "Rename" }))
+    const dialog = await screen.findByRole("dialog", { name: "Rename news" })
+
+    expect(within(dialog).queryByText(/signals/)).toBeNull()
+  })
+
+  it("shows each refusal in the rename dialog, and renames over the hash read again", async () => {
+    let read = 1
+    const refusals = [
+      new CallError({
+        code: "INVALID_ARGUMENT",
+        message: "Some config values are invalid.",
+        retryable: false,
+        fields: { new_name: 'Routine "news" already exists.' },
+      }),
+      new CallError({
+        code: "ROUTINE_PENDING",
+        message: 'Routine "issues" has 2 pending deliveries and cannot be renamed.',
+        retryable: false,
+      }),
+      new CallError({
+        code: "STALE",
+        message: "routines/issues changed since it was read. Read it again.",
+        retryable: false,
+      }),
+    ]
+    const { caller, user } = openSection({
+      "routine.read": ({ name }) => ({ name, content: NEWS, hash: `hash-${name}-${read}` }),
+      "routine.rename": ({ new_name }) => {
+        const refusal = refusals.shift()
+        if (refusal === undefined) return { name: new_name, content: NEWS, hash: "hash-triage" }
+        if (refusal.code === "STALE") read = 2
+        throw refusal
+      },
+    })
+
+    const item = await screen.findByRole("listitem", { name: "issues" })
+    await user.click(within(item).getByRole("button", { name: "Rename" }))
+    const dialog = await screen.findByRole("dialog", { name: "Rename issues" })
+    const field = within(dialog).getByRole("textbox", { name: "New name" })
+    const submit = within(dialog).getByRole("button", { name: "Rename" })
+    await user.type(field, "news")
+    await user.click(submit)
+    expect(await within(dialog).findByText('Routine "news" already exists.')).toBeDefined()
+    expect(field.getAttribute("aria-invalid")).toBe("true")
+    await user.clear(field)
+    await user.type(field, "triage")
+    await user.click(submit)
+    expect(
+      await within(dialog).findByText(
+        'Routine "issues" has 2 pending deliveries and cannot be renamed.',
+      ),
+    ).toBeDefined()
+    await user.click(submit)
+    expect(
+      await within(dialog).findByText("routines/issues changed since it was read. Read it again."),
+    ).toBeDefined()
+    await user.click(submit)
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(
+      caller.calls.filter((call) => call.method === "routine.rename").map((call) => call.params),
+    ).toEqual([
+      { name: "issues", new_name: "news", hash: "hash-issues-1" },
+      { name: "issues", new_name: "triage", hash: "hash-issues-1" },
+      { name: "issues", new_name: "triage", hash: "hash-issues-1" },
+      { name: "issues", new_name: "triage", hash: "hash-issues-2" },
+    ])
+  })
+
   it("deletes a routine once confirmed, and shows why when deliveries are pending", async () => {
     let routines = [issues, news]
     const { caller, user } = openSection({

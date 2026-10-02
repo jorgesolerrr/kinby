@@ -35,6 +35,7 @@ from kinby.contracts import (
     ROUTINE_DELETE,
     ROUTINE_LIST,
     ROUTINE_READ,
+    ROUTINE_RENAME,
     ROUTINE_RUN,
     ROUTINE_SET_ENABLED,
     ROUTINE_WRITE,
@@ -453,6 +454,7 @@ def build_dispatcher(
         dispatcher.register(ROUTINE_WRITE, config.write_routine)
         dispatcher.register(ROUTINE_SET_ENABLED, config.set_routine_enabled)
         dispatcher.register(ROUTINE_DELETE, config.delete_routine)
+        dispatcher.register(ROUTINE_RENAME, config.rename_routine)
     if isinstance(turns, ScheduledTurnConfig):
         memory = InstanceMemory(GraphStore(turns.scheduler.instance.path), turns.scheduler.clock)
         dispatcher.register(MEMORY_LIST, memory.list)

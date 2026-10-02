@@ -36,7 +36,7 @@ class RoutineNotFound(CoreError):
 
 
 class RoutinePending(CoreError):
-    """Deliveries wait on the routine, so deleting it would drop them."""
+    """Deliveries wait on the routine, so deleting or renaming it would drop them."""
 
     code = ErrorCode.ROUTINE_PENDING
 

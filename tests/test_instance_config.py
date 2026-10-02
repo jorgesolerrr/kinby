@@ -25,9 +25,11 @@ from kinby.contracts import (
 )
 from kinby.core import LangGraphRunner, boot_instance
 from kinby.core.dispatcher import Dispatcher, TurnConfig
+from kinby.core.errors import RoutineNotFound
+from kinby.core.receiver import Receiver
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
 from kinby.hub import ControlEndpoint, HttpInstanceControl
-from kinby.instance import load_instance
+from kinby.instance import Serve, load_instance
 from kinby.instance.permissions import SHIPPED_BASH_DENY
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 from kinby.plugins import ToolContext
@@ -36,6 +38,7 @@ from tests.fake_package import install_fake_package
 from tests.helpers import fixed_permission_ceiling, fixed_turn_preparation, turn_config_stub
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_instance_tools import ScriptedModel
+from tests.test_receiver import request
 from tests.test_routines import instance_at, routine_file
 from tests.test_scheduler import FailingRunner, FakeClock, ScriptedRunner, call, runtime
 
@@ -589,6 +592,221 @@ def test_routine_delete_refuses_a_routine_with_pending_deliveries(
         assert (refused.code, refused.retryable) == (ErrorCode.ROUTINE_PENDING, False)
         assert refused.message == 'Routine "news" has 1 pending delivery and cannot be deleted.'
         assert (tmp_path / "routines" / "news").is_dir()
+
+    asyncio.run(scenario())
+
+
+def test_routine_rename_moves_every_file_to_the_new_name(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        (tmp_path / "routines" / "news" / "run.py").write_text(CODE_STEP, encoding="utf-8")
+        (tmp_path / "routines" / "news" / "notes").mkdir()
+        (tmp_path / "routines" / "news" / "notes" / "sources.txt").write_text(
+            "Wire services.", encoding="utf-8"
+        )
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+
+        renamed = await call(
+            dispatcher, "routine.rename", name="news", new_name="headlines", hash=read.hash
+        )
+
+        assert (renamed.name, renamed.content, renamed.hash) == ("headlines", NEWS, read.hash)
+        assert renamed == await call(dispatcher, "routine.read", name="headlines")
+        assert not (tmp_path / "routines" / "news").exists()
+        moved = tmp_path / "routines" / "headlines"
+        assert {
+            path.relative_to(moved).as_posix(): path.read_text(encoding="utf-8")
+            for path in moved.rglob("*")
+            if path.is_file()
+        } == {"ROUTINE.md": NEWS, "run.py": CODE_STEP, "notes/sources.txt": "Wire services."}
+        assert [each.name for each in (await call(dispatcher, "routine.list")).routines] == [
+            "headlines"
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_routine_rename_ends_the_old_names_history_and_starts_the_new_ones(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        (tmp_path / "routines" / "news" / "run.py").write_text(CODE_STEP, encoding="utf-8")
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+
+        renamed = await call(
+            dispatcher, "routine.rename", name="news", new_name="headlines", hash=read.hash
+        )
+
+        [removed] = (
+            await call(dispatcher, "config.history", file="routines/news", limit=10)
+        ).changes
+        [added] = (
+            await call(dispatcher, "config.history", file="routines/headlines", limit=10)
+        ).changes
+        assert removed.at == added.at
+        assert (removed.actor, removed.hash) == ("app", None)
+        assert (added.actor, added.hash) == ("app", renamed.hash)
+        removed_lines = removed.diff.splitlines()
+        added_lines = added.diff.splitlines()
+        assert {"--- a/routines/news/ROUTINE.md", "--- a/routines/news/run.py"} <= set(
+            removed_lines
+        )
+        assert {"+++ b/routines/headlines/ROUTINE.md", "+++ b/routines/headlines/run.py"} <= set(
+            added_lines
+        )
+        assert "-Read the news." in removed_lines
+        assert "+Read the news." in added_lines
+        assert [line for line in removed_lines if line[:1] == "+" and line[:3] != "+++"] == []
+        assert [line for line in added_lines if line[:1] == "-" and line[:3] != "---"] == []
+
+    asyncio.run(scenario())
+
+
+def test_routine_rename_refuses_a_stale_hash_and_a_taken_or_invalid_name(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        weather = routine_file(instance, "description: Weather", "Check the sky.", name="weather")
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+
+        taken = await call(
+            dispatcher, "routine.rename", name="news", new_name="weather", hash=read.hash
+        )
+        invalid = await call(
+            dispatcher, "routine.rename", name="news", new_name="../headlines", hash=read.hash
+        )
+        (tmp_path / "routines" / "news" / "run.py").write_text(CODE_STEP, encoding="utf-8")
+        stale = await call(
+            dispatcher, "routine.rename", name="news", new_name="headlines", hash=read.hash
+        )
+        missing = await call(
+            dispatcher, "routine.rename", name="sports", new_name="games", hash=EMPTY_HASH
+        )
+
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
+        assert isinstance(taken, ErrorEnvelope)
+        assert (taken.code, taken.fields) == (
+            ErrorCode.INVALID_ARGUMENT,
+            {"new_name": 'Routine "weather" already exists.'},
+        )
+        assert isinstance(invalid, ErrorEnvelope)
+        assert invalid.code is ErrorCode.INVALID_ARGUMENT
+        assert list(invalid.fields or {}) == ["new_name"]
+        assert isinstance(stale, ErrorEnvelope)
+        assert stale.code is ErrorCode.STALE
+        assert sorted(path.name for path in (tmp_path / "routines").iterdir()) == [
+            "news",
+            "weather",
+        ]
+        assert (tmp_path / "routines" / "news" / "ROUTINE.md").read_text(encoding="utf-8") == NEWS
+        assert weather.read_text(encoding="utf-8") == (
+            "---\ndescription: Weather\n---\nCheck the sky.\n"
+        )
+        assert (await call(dispatcher, "config.history", limit=10)).changes == []
+
+    asyncio.run(scenario())
+
+
+def test_routine_rename_refuses_a_routine_with_pending_deliveries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: Issues\nsignal:\n  secret: SIGNAL_SECRET")
+        dispatcher = _dispatcher(tmp_path)
+        await dispatcher.scheduler.receive(
+            RoutineName("news"),
+            Delivery(
+                headers={},
+                content_type="text/plain",
+                body="opened",
+                received_at=datetime(2026, 9, 28, tzinfo=UTC),
+            ),
+            RoutineTrigger.SIGNAL,
+        )
+        read = await call(dispatcher, "routine.read", name="news")
+
+        refused = await call(
+            dispatcher, "routine.rename", name="news", new_name="headlines", hash=read.hash
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (refused.code, refused.retryable) == (ErrorCode.ROUTINE_PENDING, False)
+        assert refused.message == 'Routine "news" has 1 pending delivery and cannot be renamed.'
+        assert (tmp_path / "routines" / "news").is_dir()
+        assert not (tmp_path / "routines" / "headlines").exists()
+        assert (await call(dispatcher, "config.history", limit=10)).changes == []
+
+    asyncio.run(scenario())
+
+
+def test_a_signal_to_the_old_name_is_refused_as_an_unknown_routine_after_a_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "token")
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: Issues\nsignal:\n  secret: SIGNAL_SECRET")
+        dispatcher = _dispatcher(tmp_path)
+        read = await call(dispatcher, "routine.read", name="news")
+        await call(dispatcher, "routine.rename", name="news", new_name="issues", hash=read.hash)
+        receiver = Receiver(Serve("127.0.0.1", 0), dispatcher.scheduler, instance)
+        address = await receiver.start()
+        bearer = {"Authorization": "Bearer token"}
+        try:
+            old = await request(address, "POST", "/signals/news", headers=bearer)
+            unknown = await request(address, "POST", "/signals/missing", headers=bearer)
+            new_status, _ = await request(address, "POST", "/signals/issues", headers=bearer)
+        finally:
+            await receiver.stop()
+
+        assert old == unknown
+        assert (old[0], new_status) == (404, 202)
+        with pytest.raises(RoutineNotFound):
+            await dispatcher.scheduler.receive(
+                RoutineName("news"),
+                Delivery(
+                    headers={},
+                    content_type="text/plain",
+                    body="opened",
+                    received_at=datetime(2026, 9, 28, tzinfo=UTC),
+                ),
+                RoutineTrigger.SIGNAL,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_the_scheduler_fires_a_renamed_routine_once_under_each_name(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nschedule: * * * * *\ncatch_up: true")
+        clock = FakeClock(datetime(2026, 9, 28, 8, 0, 30, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        clock.now = datetime(2026, 9, 28, 8, 1, 10, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+        await dispatcher.scheduler.drain()
+        read = await call(dispatcher, "routine.read", name="news")
+
+        await call(dispatcher, "routine.rename", name="news", new_name="headlines", hash=read.hash)
+        await dispatcher.scheduler.tick()
+        clock.now = datetime(2026, 9, 28, 8, 2, 10, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+        await dispatcher.scheduler.drain()
+
+        threads = (await call(dispatcher, "thread.list")).threads
+        assert sorted(thread.title for thread in threads) == [
+            "headlines · 2026-09-28 08:02",
+            "news · 2026-09-28 08:01",
+        ]
 
     asyncio.run(scenario())
 
