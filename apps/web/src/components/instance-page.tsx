@@ -97,7 +97,7 @@ export function InstancePage({
       <Stopped
         caller={caller}
         clock={clock}
-        instanceId={instance.instance_id}
+        instance={instance}
         name={name}
         onChanged={onChanged}
       />
@@ -391,16 +391,17 @@ function SetupCard({
   )
 }
 
+/** Offers Start, and says how the last run ended when it crashed, since a stop keeps its error. */
 function Stopped({
   caller,
   clock,
-  instanceId,
+  instance,
   name,
   onChanged,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
-  instanceId: string
+  instance: InstanceSummary
   name: string
   onChanged: () => void
 }) {
@@ -414,12 +415,15 @@ function Stopped({
           </EmptyMedia>
           <EmptyTitle id={titleId}>{name} is stopped</EmptyTitle>
           <EmptyDescription>It does nothing until it starts.</EmptyDescription>
+          {instance.process === "failed" && (
+            <EmptyDescription>The last run ended with an error: {instance.detail}</EmptyDescription>
+          )}
         </EmptyHeader>
         <EmptyContent>
           <StartButton
             caller={caller}
             clock={clock}
-            instanceId={instanceId}
+            instanceId={instance.instance_id}
             onStarted={onChanged}
           />
         </EmptyContent>
