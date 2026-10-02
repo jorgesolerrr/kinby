@@ -10,7 +10,12 @@ Two-axis review of the diff between `HEAD` and a fixed point:
 
 Both axes run as **parallel reviewer processes** in the other model's CLI, so they share neither each other's context nor yours. The session that wrote the code believes the code is right; a fresh model with no memory of writing it does not. This skill dispatches the reviewers and aggregates what they return.
 
-The issue tracker should have been provided to you. If `docs/agents/issue-tracker.md` is missing, tell the user to run `/setup-matt-pocock-skills`.
+The issue tracker should have been provided to you. When `docs/agents/issue-tracker.md` is missing and the repo has a GitHub remote, fetch tickets with `gh issue view <id> --comments`; with neither, tell the user to run `/setup-matt-pocock-skills`.
+
+A calling loop may pass two more inputs:
+
+- **Check result**: the outcome of the repo's typecheck and test suite on `HEAD`. Reviewers read it; they never run the suite themselves.
+- **Round history**: the previous round's head sha and a file listing that round's hard findings and how each was handled. It turns this run into a **delta round** (see step 5).
 
 ## Process
 
@@ -42,18 +47,24 @@ On top of whatever the repo documents, the Standards axis always carries the **s
 
 ### 4. Pick the reviewer CLI
 
-Detect which agent you are and dispatch the other one. Verify the binary first (`codex --version` / `claude --version`).
+Detect which agent you are and dispatch the other one. The commands carry no model flag: each CLI runs the model its own config sets.
 
 | You are | Reviewer command (prompt on stdin, answer to a file) |
 |---|---|
-| Claude Code | `codex exec -m gpt-5.6-sol -s read-only -C <repo> -o <out.md> - < <prompt.md>` |
-| Codex | `claude -p --model claude-fable-5 --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)" < <prompt.md> > <out.md>` |
+| Claude Code | `codex exec -s read-only -C <repo> -o <out.md> - < <prompt.md>` |
+| Codex | `claude -p --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)" < <prompt.md> > <out.md>` |
 
-The reviewer is read-only: it reports, it does not edit. If the other CLI is missing or fails to start, fall back to two sub-agents of your own model and state that in the report under **Reviewer**, since a same-model review is the weaker result.
+**Preflight.** Send the same command the prompt `Reply with the single word ok` with a 60-second timeout. An answer containing `ok` means the CLI is installed, signed in, and has credits. Anything else (missing binary, auth or credit error, timeout) means fall back: run the two reviewers as sub-agents of your own model, and name the fallback and the preflight's error under **Reviewer**, since a same-model review is the weaker result.
+
+The reviewer is read-only: it reports, it does not edit.
 
 ### 5. Dispatch both reviewers in parallel
 
-Write each prompt to a scratch file, start both processes in the background, wait for both. Each prompt states the repo path, the exact diff command and commit list, and ends with the brief below. Reviewers read files themselves; the prompt carries paths, not pasted contents.
+Write each prompt to a scratch file, start both processes in the background, and wait for both, up to 15 minutes each. Each prompt states the repo path, the exact diff command and commit list, and ends with the brief below. Reviewers read files themselves; the prompt carries paths, not pasted contents.
+
+Every prompt also carries the **reading rule**: "Review by reading the diff, the files, and git history. The checks have already run; their result is <check result, or 'not provided'>. Your answer is the report itself."
+
+In a **delta round** (round history given), each prompt also carries: "This is a follow-up round. The previous round reviewed up to <prev-sha>; its findings and how each was handled are in <history file>. Review `git diff <prev-sha>..HEAD`, reading the full diff only for context. Report (a) previous findings that are still unresolved, and (b) new findings in the delta. A new finding on code unchanged since <prev-sha> is tagged `[suggestion]`, whatever its kind."
 
 **Standards prompt** should include:
 
@@ -73,7 +84,9 @@ If the spec is missing, skip the Spec reviewer and note this in the final report
 
 Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings, because the two axes are deliberately separate (see _Why two axes_).
 
-End with one line: **Reviewer** (which CLI and model ran, or the fallback), the fixed point, hard and suggestion counts per axis, and the worst hard issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent. A run is **clean** when neither axis returned a `[hard]` finding; suggestions alone do not make it unclean, they are the user's call. Say `Clean` or `Not clean` as the last word so a calling loop can stop on it.
+An axis is **incomplete** when its reviewer timed out, exited with an error, or answered with neither tagged findings nor `No findings`. Report it under its heading with whatever output exists. Do not dispatch it again: a retry is the caller's or the user's decision.
+
+End with one line: **Reviewer** (which CLI ran, or the fallback and why), the fixed point, hard and suggestion counts per axis, and the worst hard issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent. A run is **clean** when neither axis returned a `[hard]` finding and neither is incomplete; suggestions alone do not make it unclean, they are the user's call. The last word is `Clean`, `Not clean`, or `Incomplete` (any axis incomplete), so a calling loop can stop on it.
 
 ## Why two axes
 

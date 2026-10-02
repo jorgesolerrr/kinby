@@ -11,12 +11,18 @@ I'm a passionate programmer who likes complex things done in a simple way. That 
 ## How to work here
 
 - **Code.** Lean and pythonic: approach, book, PEP 8, Protocol, Callable, tests, type checking, and lint live in `CODING-STANDARD.md`. `bun run check` passes before any commit: the four uv checks (`ruff check`, `ruff format`, `ty check`, `pytest`), then each workspace's `tsc -b`, oxlint, oxfmt, and `vitest run`, then knip. It stops at the first failure.
-- **The gate runs on Linux.** The runtime and hub locks use `fcntl`, so pytest cannot import them on Windows. On Windows, run `bun run check` inside WSL or a container. `bun run dev` works on any platform.
+- **The gate runs on Linux.** The runtime and hub locks use `fcntl`, so pytest cannot import them on Windows. On Windows, run the gate with `bun run check:linux`, which runs `bun run check` in the Docker image from `docker/check.Dockerfile`. The other way is WSL with its own environment, `UV_PROJECT_ENVIRONMENT=.venv-linux`. The shared `.venv` belongs to Windows: never install into it or touch it from WSL. `bun run dev` works on any platform.
+- **Docs go straight to main.** Commit changes to docs, ADRs and `CONTEXT.md` on main and push them, without a PR.
 - **Web UI.** The web app lives in `apps/web` and is built from shadcn/ui (Base UI, preset `nova`). Use the `shadcn` skill for UI work there. Add components with `bunx --bun shadcn@latest add` from `apps/web` and never hand-write one the registry has. Fix every `shadcn/*` lint error with a variant or a theme token, not by disabling the rule.
+- **Browser testing.** Any browser testing follows the Browser section of `.claude/skills/e2e-pass/SKILL.md`: Playwright's bundled Chromium through its `browser.py`. A full pass on the playground hub is `/e2e-pass #N`.
 - **User-facing communication.** Run the `unslop` skill (`/unslop`) over anything the user reads: replies, PR descriptions, issue comments, README and doc prose. Plain and specific.
 - **Architecture decisions.** Record them as ADRs in `docs/adr/`, one decision per file.
 
 ## Agent skills
+
+### Registry skills
+
+Skills in `.claude/skills/` whose `skills-lock.json` source is `jorgesolerrr/skills` are copies of that registry. Change one in the registry, then run `bun run skills:sync` and commit the result. Never edit those copies in place. `bun run check` fails when a copy stops matching its locked hash. `open-pr` and `e2e-pass` belong to this repo and are not in the lock, so edit them here.
 
 ### Issue tracker
 
@@ -27,6 +33,8 @@ Issues are GitHub Issues on `jorgesolerrr/kinby`, operated via the `gh` CLI. See
 Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, plus `spec`. See `docs/agents/triage-labels.md`.
 
 `ready-for-agent` starts the coder on the box within seconds, so it goes only on tickets cut by the maintainer's `to-tickets` skill. A spec published by the maintainer's `to-spec` skill gets `spec` until it is broken into tickets. These two skills are installed by the maintainer and are not bundled with the repository.
+
+When cutting tickets, a blocked ticket gets `ready-for-agent` too. The factory skips a ticket while it has open blockers.
 
 ### Domain docs
 

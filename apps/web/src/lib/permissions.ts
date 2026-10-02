@@ -6,7 +6,7 @@ import type {
   PermissionsResult,
 } from "@kinby/contract"
 
-import { latestChange } from "@/lib/config-changes"
+import { latestChange, readWithChange } from "@/lib/config-changes"
 import { type Refused, refusal } from "@/lib/config-writes"
 
 export const PERMISSIONS_FILE = "permissions.toml"
@@ -42,10 +42,9 @@ export function aboveCeiling(mode: PermissionMode, ceiling: PermissionMode): boo
 }
 
 export async function openPermissions(caller: Caller): Promise<OpenedPermissions> {
-  const [permissions, lastChange] = await Promise.all([
+  const [permissions, lastChange] = await readWithChange(caller, PERMISSIONS_FILE, () =>
     caller.call("permissions.get", {}),
-    latestChange(caller, PERMISSIONS_FILE),
-  ])
+  )
   return opened(permissions, lastChange)
 }
 
