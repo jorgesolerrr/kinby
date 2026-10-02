@@ -1,6 +1,6 @@
 import type { ConfigChange, InstanceClient, ProfileResult } from "@kinby/contract"
 
-import { latestChange, unlessStale } from "@/lib/config-changes"
+import { latestChange, readWithChange, unlessStale } from "@/lib/config-changes"
 
 /** The profile's file, as the config changes name it. */
 export const PROFILE_FILE = "memory/profile.md"
@@ -25,10 +25,9 @@ export function tokens(text: string): number {
 }
 
 export async function openProfile(caller: Caller): Promise<OpenedProfile> {
-  const [profile, lastChange] = await Promise.all([
+  const [profile, lastChange] = await readWithChange(caller, PROFILE_FILE, () =>
     caller.call("profile.get", {}),
-    latestChange(caller, PROFILE_FILE),
-  ])
+  )
   return { profile, lastChange }
 }
 

@@ -1,6 +1,6 @@
 import type { ConfigChange, InstanceClient, PromptName, PromptResult } from "@kinby/contract"
 
-import { latestChange, unlessStale } from "@/lib/config-changes"
+import { latestChange, readWithChange, unlessStale } from "@/lib/config-changes"
 
 /** The file each prompt is kept in, as the config changes name it. */
 export const PROMPT_FILES: Record<PromptName, string> = {
@@ -20,10 +20,9 @@ export type Saved = { state: "saved"; opened: OpenedPrompt } | { state: "stale" 
 type Caller = Pick<InstanceClient, "call">
 
 export async function openPrompt(caller: Caller, name: PromptName): Promise<OpenedPrompt> {
-  const [prompt, lastChange] = await Promise.all([
+  const [prompt, lastChange] = await readWithChange(caller, PROMPT_FILES[name], () =>
     caller.call("prompt.get", { name }),
-    latestChange(caller, PROMPT_FILES[name]),
-  ])
+  )
   return { prompt, lastChange }
 }
 
