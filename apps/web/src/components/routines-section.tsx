@@ -139,7 +139,7 @@ export function RoutinesSection({
 }
 
 function RoutineItem({
-  listed: { summary, lastChange },
+  listed: { summary, hash, lastChange },
   onToggle,
   onRun,
   onEdit,
@@ -170,7 +170,7 @@ function RoutineItem({
             )}
           </div>
         )}
-        <ItemDescription>{lastChanged(lastChange)}</ItemDescription>
+        <ItemDescription>{lastChanged(lastChange, hash)}</ItemDescription>
       </ItemContent>
       <ItemActions>
         <Switch aria-label="On" checked={summary.enabled} onCheckedChange={onToggle} />

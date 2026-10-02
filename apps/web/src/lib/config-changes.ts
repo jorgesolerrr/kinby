@@ -16,9 +16,14 @@ export function when(at: string): string {
   return WHEN.format(new Date(at))
 }
 
-/** Who changed a file last and when, or that nobody has since the log began. */
-export function lastChanged(change: ConfigChange | undefined): string {
+/**
+ * Who changed a file last and when, or that nobody has since the log began. `hash` is the one
+ * the file's read returned: when it differs from what the change left, the file changed outside
+ * kinby since, and the logged actor no longer gets the credit.
+ */
+export function lastChanged(change: ConfigChange | undefined, hash: string): string {
   if (change === undefined) return "Never changed"
+  if (change.hash != null && change.hash !== hash) return "Changed outside kinby"
   return `Last changed by ${ACTORS[change.actor]}, ${when(change.at)}`
 }
 

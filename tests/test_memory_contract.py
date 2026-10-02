@@ -704,6 +704,19 @@ def test_each_profile_write_records_one_config_change_by_the_app(tmp_path: Path)
     asyncio.run(scenario())
 
 
+def test_a_profile_write_records_the_hash_the_next_read_returns(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        await call(dispatcher, "profile.set", text="Call me Jo.\n", hash=_sha256(""))
+
+        [change] = (await call(dispatcher, "config.history", limit=1)).changes
+        read = await call(dispatcher, "profile.get")
+        assert change.hash == read.hash == _sha256("Call me Jo.\n")
+
+    asyncio.run(scenario())
+
+
 def test_profile_set_needs_the_admin_scope(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = _dispatcher(tmp_path)

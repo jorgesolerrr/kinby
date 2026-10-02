@@ -170,7 +170,7 @@ export function PackageConfigSection({
           </span>
         )}
       </div>
-      <p className="text-sm text-muted-foreground">{lastChanged(opened.lastChange)}</p>
+      <p className="text-sm text-muted-foreground">{lastChanged(opened.lastChange, opened.hash)}</p>
     </div>
   )
 }

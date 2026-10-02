@@ -455,6 +455,7 @@ export interface ConfigChange {
   at: string;
   diff: string;
   file: string;
+  hash?: string | null;
   thread_id?: string | null;
   turn_id?: string | null;
 }

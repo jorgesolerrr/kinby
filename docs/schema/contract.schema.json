@@ -356,6 +356,17 @@
         "file": {
           "type": "string"
         },
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "thread_id": {
           "anyOf": [
             {

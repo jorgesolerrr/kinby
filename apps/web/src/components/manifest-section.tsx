@@ -295,7 +295,7 @@ export function ManifestSection({ client, clock }: { client: Caller; clock: Cloc
           />
         </FieldGroup>
       </FieldSet>
-      <FieldDescription>{lastChanged(opened.lastChange)}</FieldDescription>
+      <FieldDescription>{lastChanged(opened.lastChange, opened.manifest.hash)}</FieldDescription>
       <div className="flex items-center gap-3">
         <Button disabled={saving || values === undefined || !changed} onClick={() => void save()}>
           {saving && <Spinner data-icon="inline-start" />}
