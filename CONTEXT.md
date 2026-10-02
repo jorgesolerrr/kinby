@@ -658,6 +658,8 @@ _Avoid_: issue tree, branch chain
 
 An open issue marked `ready-for-agent` that has no **agent PR** and whose open blockers already have an agent PR in the same **stack**.
 
+The label counts only on the issue itself. A parent's `ready-for-agent` doesn't make its sub-issues eligible, so each sub-issue in a **stack** carries its own label, and its blockers decide the order.
+
 ### Pipeline report
 
 The structured result of one **delegated pipeline** run. It identifies the issue and outcome, the PR when opened, review findings, checks, client usage, durations, and any failure.
