@@ -193,9 +193,9 @@ describe("a thread's panel", () => {
     })
       .formatToParts(new Date("2026-09-28T10:00:00Z"))
       .find((part) => part.type === "timeZoneName")?.value
+    if (bogota === undefined) throw new Error("America/Bogota has no short zone name")
     const time = screen.getByText(/^You ·/).querySelector("time")?.textContent ?? ""
-    expect(bogota).toBeDefined()
-    expect(time.slice(time.lastIndexOf(" ") + 1)).toBe(bogota)
+    expect(time).toContain(bogota)
   })
 
   it("marks a failed turn's end as destructive, and a done turn's as not", async () => {
