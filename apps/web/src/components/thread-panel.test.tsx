@@ -187,7 +187,15 @@ describe("a thread's panel", () => {
       for (const event of events) subscription().deliver(event)
     })
 
-    expect(screen.getByText(/^You ·/).querySelector("time")?.textContent).toMatch(/5:00.* GMT-5$/)
+    const bogota = new Intl.DateTimeFormat(undefined, {
+      timeZone: "America/Bogota",
+      timeZoneName: "short",
+    })
+      .formatToParts(new Date("2026-09-28T10:00:00Z"))
+      .find((part) => part.type === "timeZoneName")?.value
+    const time = screen.getByText(/^You ·/).querySelector("time")?.textContent ?? ""
+    expect(bogota).toBeDefined()
+    expect(time.slice(time.lastIndexOf(" ") + 1)).toBe(bogota)
   })
 
   it("marks a failed turn's end as destructive, and a done turn's as not", async () => {
