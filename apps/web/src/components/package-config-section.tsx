@@ -105,8 +105,8 @@ export function PackageConfigSection({
       </Empty>
     )
   }
-  const change = (index: number, field: FormField) => {
-    setFields(fields.map((other, at) => (at === index ? field : other)))
+  const change = (next: FormField[]) => {
+    setFields(next)
     setErrors({})
     if (notice === "saved") setNotice(undefined)
   }
@@ -130,29 +130,14 @@ export function PackageConfigSection({
       setSaving(false)
     }
   }
-  const unplaced = Object.entries(errors).filter(
-    ([location]) => !fields.some((field) => belongsTo(location, field)),
-  )
-
   return (
     <div className="flex flex-col gap-6">
       {notice === "stale" && <StaleAlert file={PACKAGE_CONFIG_FILE} onLoad={() => void load()} />}
       {failure !== undefined && <Failure error={failure} />}
       <FieldGroup>
-        {fields.map((field, index) => (
-          <ConfigInput
-            key={field.name}
-            field={field}
-            errors={fieldErrors(field, errors)}
-            onChange={(next) => change(index, next)}
-          />
-        ))}
+        <ConfigFields fields={fields} path="" errors={errors} onChange={change} />
       </FieldGroup>
-      <FieldError
-        errors={unplaced.map(([location, message]) => ({
-          message: location === "" ? message : `${location}: ${message}`,
-        }))}
-      />
+      <FieldError errors={unplaced(fields, "", errors)} />
       <p className="text-sm text-muted-foreground">
         Saving rewrites package.yaml from these values, so the comments in it are not kept.
       </p>
@@ -175,40 +160,131 @@ export function PackageConfigSection({
   )
 }
 
-/** Whether the validator's `location`, such as `skills.review`, is in `field`. */
-function belongsTo(location: string, field: FormField): boolean {
-  return location === field.name || location.startsWith(`${field.name}.`)
+type Errors = Record<string, string>
+
+/** The validator's `location` of a field, such as `review.round_limit`, in the section at `path`. */
+function located(path: string, name: string): string {
+  return path === "" ? name : `${path}.${name}`
 }
 
-/** The validator's reasons for `field`, each naming the item or key it is about. */
-function fieldErrors(field: FormField, errors: Record<string, string>): { message: string }[] {
+/** Whether the validator's `location`, such as `skills.review`, is at `path` or within it. */
+function belongsTo(location: string, path: string): boolean {
+  return location === path || location.startsWith(`${path}.`)
+}
+
+function errorsAt(errors: Errors, path: string): Errors {
+  return Object.fromEntries(
+    Object.entries(errors).filter(([location]) => belongsTo(location, path)),
+  )
+}
+
+/** Where `location` is within `path`: `skills.review` is `review` within `skills`. */
+function within(location: string, path: string): string {
+  return path === "" ? location : location.slice(path.length + 1)
+}
+
+/** The reasons within the section at `path` that none of its `fields` takes, each naming where. */
+function unplaced(fields: FormField[], path: string, errors: Errors): { message: string }[] {
   return Object.entries(errors)
-    .filter(([location]) => belongsTo(location, field))
+    .filter(([location]) => !fields.some((field) => belongsTo(location, located(path, field.name))))
     .map(([location, message]) => {
-      const within = location.slice(field.name.length + 1)
-      if (within === "") return { message }
-      const item = Number.parseInt(within, 10)
-      return {
-        message: field.type === "list" ? `Item ${item + 1}: ${message}` : `${within}: ${message}`,
-      }
+      const where = within(location, path)
+      return { message: where === "" ? message : `${where}: ${message}` }
     })
 }
 
-/** The control for one field, by the type the package declared for it. */
+/** The validator's reasons for the leaf `field` at `path`, each naming the item or key. */
+function leafErrors(field: FormField, path: string, errors: Errors): { message: string }[] {
+  return Object.entries(errors).map(([location, message]) => {
+    const where = within(location, path)
+    if (where === "") return { message }
+    const item = Number.parseInt(where, 10)
+    return {
+      message: field.type === "list" ? `Item ${item + 1}: ${message}` : `${where}: ${message}`,
+    }
+  })
+}
+
+/** The controls for the `fields` of the section at `path`, each given the reasons within it. */
+function ConfigFields({
+  fields,
+  path,
+  errors,
+  onChange,
+}: {
+  fields: FormField[]
+  path: string
+  errors: Errors
+  onChange: (fields: FormField[]) => void
+}) {
+  return fields.map((field, index) => {
+    const at = located(path, field.name)
+    return (
+      <ConfigInput
+        key={field.name}
+        field={field}
+        path={at}
+        errors={errorsAt(errors, at)}
+        onChange={(next) =>
+          onChange(fields.map((other, place) => (place === index ? next : other)))
+        }
+      />
+    )
+  })
+}
+
+/** The control for the field at `path`, by the type the package declared for it. */
 function ConfigInput({
   field,
+  path,
   errors,
   onChange,
 }: {
   field: FormField
-  errors: { message: string }[]
+  path: string
+  errors: Errors
   onChange: (field: FormField) => void
 }) {
-  const id = `package-config-${field.name}`
-  const invalid = errors.length > 0 || undefined
+  const id = `package-config-${path}`
   const description = field.description !== undefined && (
     <FieldDescription>{field.description}</FieldDescription>
   )
+  if (field.type === "section" || field.type === "optional section") {
+    // An absent section shows no fields, so the reasons within it all show on the section.
+    const shown = field.type === "section" || field.present ? field.fields : []
+    return (
+      <FieldSet>
+        {field.type === "section" ? (
+          <FieldLegend>{field.label}</FieldLegend>
+        ) : (
+          <FieldLegend>
+            <span className="flex items-center gap-2">
+              <Switch
+                id={id}
+                checked={field.present}
+                onCheckedChange={(present) => onChange({ ...field, present })}
+              />
+              <FieldLabel htmlFor={id}>{field.label}</FieldLabel>
+            </span>
+          </FieldLegend>
+        )}
+        {description}
+        {shown.length > 0 && (
+          <FieldGroup>
+            <ConfigFields
+              fields={shown}
+              path={path}
+              errors={errors}
+              onChange={(fields) => onChange({ ...field, fields })}
+            />
+          </FieldGroup>
+        )}
+        <FieldError errors={unplaced(shown, path, errors)} />
+      </FieldSet>
+    )
+  }
+  const messages = leafErrors(field, path, errors)
+  const invalid = messages.length > 0 || undefined
   switch (field.type) {
     case "boolean":
       return (
@@ -222,7 +298,7 @@ function ConfigInput({
           <FieldContent>
             <FieldLabel htmlFor={id}>{field.label}</FieldLabel>
             {description}
-            <FieldError errors={errors} />
+            <FieldError errors={messages} />
           </FieldContent>
         </Field>
       )
@@ -236,7 +312,7 @@ function ConfigInput({
             rows={field.value}
             onChange={(value) => onChange({ ...field, value })}
           />
-          <FieldError errors={errors} />
+          <FieldError errors={messages} />
         </FieldSet>
       )
     case "unsupported":
@@ -246,6 +322,7 @@ function ConfigInput({
           <FieldDescription>
             The form cannot edit this field, so a save keeps its value. Edit it in package.yaml.
           </FieldDescription>
+          <FieldError errors={messages} />
         </Field>
       )
   }
@@ -303,7 +380,7 @@ function ConfigInput({
       {control}
       {description}
       {field.type === "list" && <FieldDescription>One per line.</FieldDescription>}
-      <FieldError errors={errors} />
+      <FieldError errors={messages} />
     </Field>
   )
 }

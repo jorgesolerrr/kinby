@@ -775,6 +775,359 @@ describe("ConfigPanel", () => {
       expect(sent(caller).at(-1)?.hash).toBe("yaml-3")
     })
 
+    describe("nested sections", () => {
+      // The factory's shape as pydantic's model_json_schema() gives it: each section a reference
+      // into $defs, and the optional commit section an anyOf of that reference and null.
+      const effort = {
+        description: "A reasoning effort requested from a coding client.",
+        enum: ["low", "medium", "high"],
+        title: "ReasoningEffort",
+        type: "string",
+      }
+      const seconds = { exclusiveMinimum: 0, title: "Timeout Seconds", type: "number" }
+      const nestedFactory: PackageConfigResult = {
+        schema: {
+          $defs: {
+            Checks: {
+              additionalProperties: false,
+              properties: {
+                commands: { items: { type: "string" }, title: "Commands", type: "array" },
+                timeout_seconds: seconds,
+              },
+              required: ["commands", "timeout_seconds"],
+              title: "Checks",
+              type: "object",
+            },
+            CodingClient: {
+              description: "The command-line client that owns an implementation session.",
+              enum: ["codex", "claude"],
+              title: "CodingClient",
+              type: "string",
+            },
+            CommitIdentity: {
+              additionalProperties: false,
+              properties: {
+                name: { minLength: 1, title: "Name", type: "string" },
+                email: { minLength: 1, title: "Email", type: "string" },
+              },
+              required: ["name", "email"],
+              title: "CommitIdentity",
+              type: "object",
+            },
+            Implementation: {
+              additionalProperties: false,
+              description: "How the coder writes a change.",
+              properties: {
+                client: { $ref: "#/$defs/CodingClient" },
+                model: { title: "Model", type: "string" },
+                effort: { $ref: "#/$defs/ReasoningEffort" },
+                timeout_seconds: seconds,
+              },
+              required: ["client", "model", "effort", "timeout_seconds"],
+              title: "Implementation",
+              type: "object",
+            },
+            ReasoningEffort: effort,
+            Review: {
+              additionalProperties: false,
+              properties: {
+                enabled: { title: "Enabled", type: "boolean" },
+                round_limit: { minimum: 1, title: "Round Limit", type: "integer" },
+              },
+              required: ["enabled", "round_limit"],
+              title: "Review",
+              type: "object",
+            },
+          },
+          additionalProperties: false,
+          description: "The validated contents of an instance's package.yaml.",
+          properties: {
+            implementation: { $ref: "#/$defs/Implementation" },
+            review: { $ref: "#/$defs/Review" },
+            checks: { $ref: "#/$defs/Checks" },
+            commit: {
+              anyOf: [{ $ref: "#/$defs/CommitIdentity" }, { type: "null" }],
+              default: null,
+            },
+          },
+          required: ["implementation", "review", "checks"],
+          title: "FactoryConfig",
+          type: "object",
+        },
+        values: {
+          implementation: {
+            client: "claude",
+            model: "opus",
+            effort: "high",
+            timeout_seconds: 1800.0,
+          },
+          review: { enabled: true, round_limit: 2 },
+          checks: { commands: ["uv run pytest"], timeout_seconds: 600.0 },
+          commit: { name: "kinby", email: "kinby@example.com" },
+        },
+        hash: "yaml-1",
+      }
+
+      const group = (name: string) => within(screen.getByRole("group", { name }))
+
+      it("renders each nested section as a titled group and saves its fields", async () => {
+        const { caller, user } = await openPackageConfig({
+          "package.config.get": () => nestedFactory,
+          "package.config.set": ({ values }) => ({ ...nestedFactory, values, hash: "yaml-2" }),
+        })
+
+        const implementation = within(await screen.findByRole("group", { name: "Implementation" }))
+        expect(implementation.getByText("How the coder writes a change.")).toBeDefined()
+        expect(implementation.getByRole("combobox", { name: "Client" }).textContent).toContain(
+          "claude",
+        )
+        expect(implementation.getByRole("combobox", { name: "Effort" }).textContent).toContain(
+          "high",
+        )
+        const model = implementation.getByRole("textbox", { name: "Model" })
+        expect(model).toHaveProperty("value", "opus")
+        expect(group("Review").getByRole("switch", { name: "Enabled" })).toBeDefined()
+        expect(group("Review").getByRole("spinbutton", { name: "Round Limit" })).toHaveProperty(
+          "value",
+          "2",
+        )
+        const commands = group("Checks").getByRole("textbox", { name: "Commands" })
+        expect(commands).toHaveProperty("value", "uv run pytest")
+
+        await user.clear(model)
+        await user.type(model, "sonnet")
+        await user.click(implementation.getByRole("combobox", { name: "Effort" }))
+        await user.click(await screen.findByRole("option", { name: "medium" }))
+        await user.click(group("Review").getByRole("switch", { name: "Enabled" }))
+        const rounds = group("Review").getByRole("spinbutton", { name: "Round Limit" })
+        await user.clear(rounds)
+        await user.type(rounds, "3")
+        await user.type(commands, "\nuv run ty check")
+        await user.click(screen.getByRole("button", { name: "Save" }))
+
+        await screen.findByText("Saved. It applies once the instance is recreated.")
+        expect(sent(caller).at(-1)?.values).toEqual({
+          implementation: {
+            client: "claude",
+            model: "sonnet",
+            effort: "medium",
+            timeout_seconds: 1800.0,
+          },
+          review: { enabled: false, round_limit: 3 },
+          checks: { commands: ["uv run pytest", "uv run ty check"], timeout_seconds: 600.0 },
+          commit: { name: "kinby", email: "kinby@example.com" },
+        })
+      })
+
+      // A section within a section, and an optional section that is absent and has defaults.
+      const deep: PackageConfigResult = {
+        schema: {
+          $defs: {
+            Delivery: {
+              additionalProperties: false,
+              properties: {
+                channel: { default: "email", title: "Channel", type: "string" },
+                retry: { $ref: "#/$defs/Retry" },
+              },
+              required: ["retry"],
+              title: "Delivery",
+              type: "object",
+            },
+            Retry: {
+              additionalProperties: false,
+              properties: { attempts: { default: 3, title: "Attempts", type: "integer" } },
+              title: "Retry",
+              type: "object",
+            },
+            Signature: {
+              additionalProperties: false,
+              properties: {
+                sign_off: { default: "The coder", title: "Sign Off", type: "string" },
+                footer: { title: "Footer", type: "string" },
+              },
+              required: ["footer"],
+              title: "Signature",
+              type: "object",
+            },
+          },
+          additionalProperties: false,
+          properties: {
+            delivery: { $ref: "#/$defs/Delivery" },
+            signature: {
+              anyOf: [{ $ref: "#/$defs/Signature" }, { type: "null" }],
+              default: null,
+            },
+          },
+          required: ["delivery"],
+          title: "ReportConfig",
+          type: "object",
+        },
+        values: { delivery: { channel: "slack", retry: { attempts: 5 } }, signature: null },
+        hash: "deep-1",
+      }
+
+      it("renders a section nested two levels deep", async () => {
+        const { caller, user } = await openPackageConfig({
+          "package.config.get": () => deep,
+          "package.config.set": ({ values }) => ({ ...deep, values, hash: "deep-2" }),
+        })
+
+        const delivery = within(await screen.findByRole("group", { name: "Delivery" }))
+        expect(delivery.getByRole("textbox", { name: "Channel" })).toHaveProperty("value", "slack")
+        const attempts = within(delivery.getByRole("group", { name: "Retry" })).getByRole(
+          "spinbutton",
+          { name: "Attempts" },
+        )
+        expect(attempts).toHaveProperty("value", "5")
+
+        await user.clear(attempts)
+        await user.type(attempts, "6")
+        await user.click(screen.getByRole("button", { name: "Save" }))
+
+        await screen.findByText("Saved. It applies once the instance is recreated.")
+        expect(sent(caller).at(-1)?.values).toEqual({
+          delivery: { channel: "slack", retry: { attempts: 6 } },
+          signature: null,
+        })
+      })
+
+      it("switches an optional section on with its fields at their defaults", async () => {
+        const { caller, user } = await openPackageConfig({
+          "package.config.get": () => deep,
+          "package.config.set": ({ values }) => ({ ...deep, values, hash: "deep-2" }),
+        })
+
+        const signature = await screen.findByRole("switch", { name: "Signature" })
+        expect(signature.getAttribute("aria-checked")).toBe("false")
+        expect(screen.queryByRole("textbox", { name: "Sign Off" })).toBeNull()
+
+        await user.click(signature)
+        const fields = group("Signature")
+        expect(fields.getByRole("textbox", { name: "Sign Off" })).toHaveProperty(
+          "value",
+          "The coder",
+        )
+        expect(fields.getByRole("textbox", { name: "Footer" })).toHaveProperty("value", "")
+        await user.type(fields.getByRole("textbox", { name: "Footer" }), "Sent by kinby")
+        await user.click(screen.getByRole("button", { name: "Save" }))
+
+        await screen.findByText("Saved. It applies once the instance is recreated.")
+        expect(sent(caller).at(-1)?.values).toEqual({
+          delivery: { channel: "slack", retry: { attempts: 5 } },
+          signature: { sign_off: "The coder", footer: "Sent by kinby" },
+        })
+      })
+
+      it("switches a set optional section off and saves null", async () => {
+        const { caller, user } = await openPackageConfig({
+          "package.config.get": () => nestedFactory,
+          "package.config.set": ({ values }) => ({ ...nestedFactory, values, hash: "yaml-2" }),
+        })
+
+        const commit = await screen.findByRole("switch", { name: "Commit" })
+        expect(commit.getAttribute("aria-checked")).toBe("true")
+        expect(group("Commit").getByRole("textbox", { name: "Email" })).toHaveProperty(
+          "value",
+          "kinby@example.com",
+        )
+
+        await user.click(commit)
+        expect(screen.queryByRole("textbox", { name: "Email" })).toBeNull()
+        await user.click(screen.getByRole("button", { name: "Save" }))
+
+        await screen.findByText("Saved. It applies once the instance is recreated.")
+        expect(sent(caller).at(-1)?.values).toMatchObject({ commit: null })
+      })
+
+      it("shows an error under its nested field, and one matching no field on its section", async () => {
+        const { user } = await openPackageConfig({
+          "package.config.get": () => nestedFactory,
+          "package.config.set": () => {
+            throw new CallError({
+              code: "INVALID_ARGUMENT",
+              message: "Some values are invalid.",
+              retryable: false,
+              fields: {
+                "implementation.model": "Codex does not offer this model.",
+                "review.reviewer": "Extra inputs are not permitted",
+              },
+            })
+          },
+        })
+
+        const model = await screen.findByRole("textbox", { name: "Model" })
+        await user.clear(model)
+        await user.type(model, "gpt")
+        await user.click(screen.getByRole("button", { name: "Save" }))
+
+        const modelError = await screen.findByText("Codex does not offer this model.")
+        expect(model.closest("[data-slot=field]")?.contains(modelError)).toBe(true)
+        const reviewerError = screen.getByText("reviewer: Extra inputs are not permitted")
+        expect(screen.getByRole("group", { name: "Review" }).contains(reviewerError)).toBe(true)
+        expect(
+          screen
+            .getByRole("spinbutton", { name: "Round Limit" })
+            .closest("[data-slot=field]")
+            ?.contains(reviewerError),
+        ).toBe(false)
+      })
+
+      it("keeps the values of fields it cannot edit, in a section and at the top level", async () => {
+        // An optional single field, a list of objects, and a map of integers, at both levels.
+        const cannotEdit = {
+          label: { anyOf: [{ type: "string" }, { type: "null" }], default: null, title: "Label" },
+          reviewers: { items: { $ref: "#/$defs/Reviewer" }, title: "Reviewers", type: "array" },
+          limits: { additionalProperties: { type: "integer" }, title: "Limits", type: "object" },
+        }
+        const kept = {
+          label: "needs-review",
+          reviewers: [{ login: "ada" }],
+          limits: { daily: 3 },
+        }
+        const partial: PackageConfigResult = {
+          schema: {
+            $defs: {
+              Reviewer: {
+                additionalProperties: false,
+                properties: { login: { title: "Login", type: "string" } },
+                required: ["login"],
+                title: "Reviewer",
+                type: "object",
+              },
+              Review: {
+                additionalProperties: false,
+                properties: { enabled: { title: "Enabled", type: "boolean" }, ...cannotEdit },
+                required: ["enabled", "reviewers", "limits"],
+                title: "Review",
+                type: "object",
+              },
+            },
+            additionalProperties: false,
+            properties: { review: { $ref: "#/$defs/Review" }, ...cannotEdit },
+            required: ["review", "reviewers", "limits"],
+            title: "PartialConfig",
+            type: "object",
+          },
+          values: { review: { enabled: false, ...kept }, ...kept },
+          hash: "partial-1",
+        }
+        const { caller, user } = await openPackageConfig({
+          "package.config.get": () => partial,
+          "package.config.set": ({ values }) => ({ ...partial, values, hash: "partial-2" }),
+        })
+
+        await user.click(await screen.findByRole("switch", { name: "Enabled" }))
+        expect(group("Review").getAllByText(/The form cannot edit this field/)).toHaveLength(3)
+        await user.click(screen.getByRole("button", { name: "Save" }))
+
+        await screen.findByText("Saved. It applies once the instance is recreated.")
+        expect(sent(caller).at(-1)?.values).toEqual({
+          review: { enabled: true, ...kept },
+          ...kept,
+        })
+      })
+    })
+
     it("says a vanilla instance has no package config", async () => {
       await openPackageConfig({
         "package.config.get": () => {
