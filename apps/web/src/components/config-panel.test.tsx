@@ -1128,6 +1128,47 @@ describe("ConfigPanel", () => {
       })
     })
 
+    it("stops a model that holds itself at its second level and keeps what lies below", async () => {
+      const node = {
+        properties: {
+          name: { default: "", title: "Name", type: "string" },
+          child: { anyOf: [{ $ref: "#/$defs/Node" }, { type: "null" }], default: null },
+        },
+        title: "Node",
+        type: "object",
+      }
+      const tree = { name: "root", child: { name: "leaf", child: null } }
+      const recursive: PackageConfigResult = {
+        schema: {
+          $defs: { Node: node },
+          properties: {
+            tree: { anyOf: [{ $ref: "#/$defs/Node" }, { type: "null" }], default: null },
+          },
+          title: "TreeConfig",
+          type: "object",
+        },
+        values: { tree },
+        hash: "tree-1",
+      }
+      const { caller, user } = await openPackageConfig({
+        "package.config.get": () => recursive,
+        "package.config.set": ({ values }) => ({ ...recursive, values, hash: "tree-2" }),
+      })
+
+      const name = await screen.findByDisplayValue("root")
+      expect(
+        within(screen.getByRole("group", { name: "Tree" })).getAllByText(
+          /The form cannot edit this field/,
+        ),
+      ).toHaveLength(1)
+      await user.clear(name)
+      await user.type(name, "trunk")
+      await user.click(screen.getByRole("button", { name: "Save" }))
+
+      await screen.findByText("Saved. It applies once the instance is recreated.")
+      expect(sent(caller).at(-1)?.values).toEqual({ tree: { ...tree, name: "trunk" } })
+    })
+
     it("says a vanilla instance has no package config", async () => {
       await openPackageConfig({
         "package.config.get": () => {

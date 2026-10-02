@@ -76,15 +76,23 @@ function opened(
   { schema, values, hash }: PackageConfigResult,
   lastChange: ConfigChange | undefined,
 ): OpenedPackageConfig {
-  return { fields: formFields(schema, values, object(schema.$defs)), hash, lastChange }
+  return { fields: formFields(schema, values, object(schema.$defs), []), hash, lastChange }
 }
 
-/** The fields of a model's schema, each holding its value in `values` or else its default. */
-function formFields(model: JsonObject, values: unknown, definitions: JsonObject): FormField[] {
+/**
+ * The fields of a model's schema, each holding its value in `values` or else its default.
+ * `within` holds the definitions of the sections around these fields.
+ */
+function formFields(
+  model: JsonObject,
+  values: unknown,
+  definitions: JsonObject,
+  within: string[],
+): FormField[] {
   const given = object(values)
   return Object.entries(object(model.properties)).map(([name, declared]) => {
     const own = object(declared)
-    return formField(name, own, name in given ? given[name] : own.default, definitions)
+    return formField(name, own, name in given ? given[name] : own.default, definitions, within)
   })
 }
 
@@ -93,6 +101,7 @@ function formField(
   declared: JsonObject,
   value: unknown,
   definitions: JsonObject,
+  within: string[],
 ): FormField {
   const optional = optionalModel(declared, definitions)
   const property = optional ?? resolved(declared, definitions)
@@ -103,16 +112,27 @@ function formField(
     label: text(declared.title) ?? titled(name),
     description: text(declared.description) ?? text(property.description),
   }
+  // A model that holds itself, such as a node with an optional child node, would nest without end:
+  // the form stops at its second appearance and keeps that field's value as it is.
+  const reference = definitionOf(declared)
+  if (reference !== undefined && within.includes(reference)) {
+    return { ...described, type: "unsupported", value }
+  }
+  const nested = reference === undefined ? within : [...within, reference]
   if (optional !== undefined) {
     return {
       ...described,
       type: "optional section",
-      fields: formFields(optional, value, definitions),
+      fields: formFields(optional, value, definitions, nested),
       present: value !== null && value !== undefined,
     }
   }
   if (isModel(property)) {
-    return { ...described, type: "section", fields: formFields(property, value, definitions) }
+    return {
+      ...described,
+      type: "section",
+      fields: formFields(property, value, definitions, nested),
+    }
   }
   if (Array.isArray(property.enum)) {
     const choices = property.enum.filter((choice) => typeof choice === "string")
@@ -180,6 +200,12 @@ function resolved(property: unknown, definitions: JsonObject): JsonObject {
   const own = object(property)
   const reference = text(own.$ref)
   return reference === undefined ? own : object(definitions[reference.replace("#/$defs/", "")])
+}
+
+/** The definition a field references, itself or through a branch of its `anyOf`. */
+function definitionOf(declared: JsonObject): string | undefined {
+  const branches: unknown[] = Array.isArray(declared.anyOf) ? declared.anyOf : [declared]
+  return branches.map((branch) => text(object(branch).$ref)).find((ref) => ref !== undefined)
 }
 
 /** Whether `property` is a nested model, whose fields the form shows as a section. */
