@@ -2,7 +2,7 @@ import { CallError, type Event } from "@kinby/contract"
 import { type Answers, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest"
 
 import { ThreadPanel } from "@/components/thread-panel"
 import { threadList } from "@/lib/thread-list"
@@ -174,6 +174,28 @@ describe("a thread's panel", () => {
     }
     expect(screen.getAllByText(/^You ·/)).toHaveLength(3)
     expect(screen.getByText(/^Routine nightly-digest ·/)).toBeDefined()
+  })
+
+  it("names the browser's zone in the time a turn started", async () => {
+    vi.stubEnv("TZ", "America/Bogota")
+    onTestFinished(() => void vi.unstubAllEnvs())
+    const events = thread(["turn-1", started("Fix the runtime")])
+    const { subscription } = openThread()
+
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+
+    const bogota = new Intl.DateTimeFormat(undefined, {
+      timeZone: "America/Bogota",
+      timeZoneName: "short",
+    })
+      .formatToParts(new Date("2026-09-28T10:00:00Z"))
+      .find((part) => part.type === "timeZoneName")?.value
+    if (bogota === undefined) throw new Error("America/Bogota has no short zone name")
+    const time = screen.getByText(/^You ·/).querySelector("time")?.textContent ?? ""
+    expect(time).toContain(bogota)
   })
 
   it("marks a failed turn's end as destructive, and a done turn's as not", async () => {

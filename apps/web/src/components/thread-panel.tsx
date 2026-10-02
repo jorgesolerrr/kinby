@@ -617,7 +617,14 @@ function RecapMarker({ recap, instanceId }: { recap: Recap; instanceId: string }
 }
 
 function startedAt(timestamp: string): string {
-  return new Date(timestamp).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+  return new Date(timestamp).toLocaleString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  })
 }
 
 function TranscriptSkeleton() {
