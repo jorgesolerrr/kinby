@@ -1,7 +1,7 @@
 import { CallError } from "@kinby/contract"
 import type { ConfigChange, RoutineSummary } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -365,6 +365,60 @@ describe("RoutinesSection", () => {
     ).toEqual([
       { name: "issues", new_name: "news", hash: "hash-issues-1" },
       { name: "issues", new_name: "triage", hash: "hash-issues-1" },
+      { name: "issues", new_name: "triage", hash: "hash-issues-1" },
+      { name: "issues", new_name: "triage", hash: "hash-issues-2" },
+    ])
+  })
+
+  it("keeps Rename off after a stale refusal until the list has read the new hash", async () => {
+    let read = 1
+    const stub = stubCaller({
+      "routine.list": () => ({ routines: [issues, news], warnings: [] }),
+      "routine.read": ({ name }) => ({ name, content: NEWS, hash: `hash-${name}-${read}` }),
+      "config.history": () => ({ changes: [] }),
+      "routine.rename": ({ new_name, hash }) => {
+        if (hash === "hash-issues-2") return { name: new_name, content: NEWS, hash: "hash-triage" }
+        read = 2
+        throw new CallError({ code: "STALE", message: "Read it again.", retryable: false })
+      },
+    })
+    // Holds the list's reads until the test lets them through.
+    let lists = 0
+    let gate = Promise.resolve()
+    const caller: typeof stub = {
+      calls: stub.calls,
+      call: async (method, params) => {
+        if (method === "routine.list") {
+          lists += 1
+          await gate
+        }
+        return stub.call(method, params)
+      },
+    }
+    render(<RoutinesSection client={caller} clock={fakeClock()} />)
+    const user = userEvent.setup()
+
+    const item = await screen.findByRole("listitem", { name: "issues" })
+    await user.click(within(item).getByRole("button", { name: "Rename" }))
+    const dialog = await screen.findByRole("dialog", { name: "Rename issues" })
+    await user.type(within(dialog).getByRole("textbox", { name: "New name" }), "triage")
+    const submit = within(dialog).getByRole<HTMLButtonElement>("button", { name: "Rename" })
+    let release = () => {}
+    gate = new Promise((resolve) => (release = resolve))
+    await user.click(submit)
+    await waitFor(() => expect(lists).toBe(2))
+    await act(async () => {})
+    expect(submit.disabled).toBe(true)
+
+    release()
+    expect(await within(dialog).findByText("Read it again.")).toBeDefined()
+    await waitFor(() => expect(submit.disabled).toBe(false))
+    await user.click(submit)
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(
+      stub.calls.filter((call) => call.method === "routine.rename").map((call) => call.params),
+    ).toEqual([
       { name: "issues", new_name: "triage", hash: "hash-issues-1" },
       { name: "issues", new_name: "triage", hash: "hash-issues-2" },
     ])

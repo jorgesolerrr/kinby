@@ -107,8 +107,9 @@ export function RoutinesSection({
       setStarted(name)
     })
   // The list reads again either way: the new name, or the hash a retry needs after a refusal.
+  // The rename settles only once it has, so the dialog offers no retry over the old hash.
   const rename = (name: string, newName: string, hash: string) =>
-    client.call("routine.rename", { name, new_name: newName, hash }).finally(() => void load())
+    client.call("routine.rename", { name, new_name: newName, hash }).finally(load)
 
   if (editing !== undefined) {
     return (
