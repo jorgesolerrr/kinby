@@ -775,6 +775,63 @@ describe("ConfigPanel", () => {
       expect(sent(caller).at(-1)?.hash).toBe("yaml-3")
     })
 
+    describe("number bounds", () => {
+      const bounded: PackageConfigResult = {
+        schema: {
+          additionalProperties: false,
+          properties: {
+            attempts: { maximum: 5, minimum: 1, title: "Attempts", type: "integer" },
+            share: { exclusiveMaximum: 1, exclusiveMinimum: 0, title: "Share", type: "number" },
+          },
+          required: ["attempts", "share"],
+          title: "BoundedConfig",
+          type: "object",
+        },
+        values: { attempts: 3, share: 0.5 },
+        hash: "bounded-1",
+      }
+
+      it("steps an integer by whole numbers and a float by any amount", async () => {
+        await openPackageConfig({ "package.config.get": () => bounded })
+
+        const attempts = await screen.findByRole("spinbutton", { name: "Attempts" })
+        expect(attempts.getAttribute("step")).toBe("1")
+        expect(attempts.getAttribute("min")).toBe("1")
+        expect(attempts.getAttribute("max")).toBe("5")
+        expect(screen.getByRole("spinbutton", { name: "Share" }).getAttribute("step")).toBe("any")
+      })
+
+      it.each([
+        { label: "Attempts", refused: "0", accepted: "1", reason: "Must be at least 1." },
+        { label: "Attempts", refused: "6", accepted: "5", reason: "Must be at most 5." },
+        { label: "Share", refused: "0", accepted: "0.01", reason: "Must be greater than 0." },
+        { label: "Share", refused: "1", accepted: "0.99", reason: "Must be less than 1." },
+      ])("refuses $refused for $label and saves $accepted", async (bound) => {
+        const { caller, user } = await openPackageConfig({
+          "package.config.get": () => bounded,
+          "package.config.set": ({ values }) => ({ ...bounded, values, hash: "bounded-2" }),
+        })
+
+        const input = await screen.findByRole("spinbutton", { name: bound.label })
+        await user.clear(input)
+        await user.type(input, bound.refused)
+        const reason = screen.getByText(bound.reason)
+        expect(input.closest("[data-slot=field]")?.contains(reason)).toBe(true)
+        expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true)
+
+        await user.clear(input)
+        await user.type(input, bound.accepted)
+        expect(screen.queryByText(bound.reason)).toBeNull()
+        await user.click(screen.getByRole("button", { name: "Save" }))
+
+        await screen.findByText("Saved. It applies once the instance is recreated.")
+        expect(sent(caller).at(-1)?.values).toEqual({
+          ...bounded.values,
+          [bound.label.toLowerCase()]: Number(bound.accepted),
+        })
+      })
+    })
+
     describe("nested sections", () => {
       // The factory's shape as pydantic's model_json_schema() gives it: each section a reference
       // into $defs, and the optional commit section an anyOf of that reference and null.
@@ -1069,6 +1126,83 @@ describe("ConfigPanel", () => {
             .getByRole("spinbutton", { name: "Round Limit" })
             .closest("[data-slot=field]")
             ?.contains(reviewerError),
+        ).toBe(false)
+      })
+
+      it("edits and saves every timeout of the factory's config", async () => {
+        const { caller, user } = await openPackageConfig({
+          "package.config.get": () => nestedFactory,
+          "package.config.set": ({ values }) => ({ ...nestedFactory, values, hash: "yaml-2" }),
+        })
+
+        const implementation = within(await screen.findByRole("group", { name: "Implementation" }))
+        const coding = implementation.getByRole("spinbutton", { name: "Timeout Seconds" })
+        expect(coding).toHaveProperty("value", "1800")
+        const checks = group("Checks").getByRole("spinbutton", { name: "Timeout Seconds" })
+        expect(checks).toHaveProperty("value", "600")
+
+        await user.clear(coding)
+        await user.type(coding, "2700.5")
+        await user.clear(checks)
+        await user.type(checks, "0.25")
+        await user.click(screen.getByRole("button", { name: "Save" }))
+
+        await screen.findByText("Saved. It applies once the instance is recreated.")
+        expect(sent(caller).at(-1)?.values).toMatchObject({
+          implementation: { timeout_seconds: 2700.5 },
+          checks: { timeout_seconds: 0.25 },
+        })
+      })
+
+      it("refuses 0 for a timeout that must be greater than 0", async () => {
+        const { caller, user } = await openPackageConfig({
+          "package.config.get": () => nestedFactory,
+        })
+
+        const checks = within(await screen.findByRole("group", { name: "Checks" }))
+        const timeout = checks.getByRole("spinbutton", { name: "Timeout Seconds" })
+        await user.clear(timeout)
+        await user.type(timeout, "0")
+
+        const reason = checks.getByText("Must be greater than 0.")
+        expect(timeout.closest("[data-slot=field]")?.contains(reason)).toBe(true)
+        expect(timeout.getAttribute("aria-invalid")).toBe("true")
+        expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true)
+        expect(sent(caller)).toEqual([])
+
+        await user.type(timeout, ".5")
+        expect(checks.queryByText("Must be greater than 0.")).toBeNull()
+        expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", false)
+      })
+
+      it("shows the validator's error under a timeout it refuses", async () => {
+        const { user } = await openPackageConfig({
+          "package.config.get": () => nestedFactory,
+          "package.config.set": () => {
+            throw new CallError({
+              code: "INVALID_ARGUMENT",
+              message: "Some values are invalid.",
+              retryable: false,
+              fields: {
+                "implementation.timeout_seconds": "A session cannot run longer than 7200 seconds.",
+              },
+            })
+          },
+        })
+
+        const implementation = within(await screen.findByRole("group", { name: "Implementation" }))
+        const timeout = implementation.getByRole("spinbutton", { name: "Timeout Seconds" })
+        await user.clear(timeout)
+        await user.type(timeout, "9000")
+        await user.click(screen.getByRole("button", { name: "Save" }))
+
+        const reason = await screen.findByText("A session cannot run longer than 7200 seconds.")
+        expect(timeout.closest("[data-slot=field]")?.contains(reason)).toBe(true)
+        expect(
+          group("Checks")
+            .getByRole("spinbutton", { name: "Timeout Seconds" })
+            .closest("[data-slot=field]")
+            ?.contains(reason),
         ).toBe(false)
       })
 
