@@ -2,7 +2,7 @@ import { CallError, type Event } from "@kinby/contract"
 import { type Answers, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest"
 
 import { ThreadPanel } from "@/components/thread-panel"
 import { threadList } from "@/lib/thread-list"
@@ -174,6 +174,20 @@ describe("a thread's panel", () => {
     }
     expect(screen.getAllByText(/^You ·/)).toHaveLength(3)
     expect(screen.getByText(/^Routine nightly-digest ·/)).toBeDefined()
+  })
+
+  it("names the browser's zone in the time a turn started", async () => {
+    vi.stubEnv("TZ", "America/Bogota")
+    onTestFinished(() => void vi.unstubAllEnvs())
+    const events = thread(["turn-1", started("Fix the runtime")])
+    const { subscription } = openThread()
+
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+
+    expect(screen.getByText(/^You ·/).querySelector("time")?.textContent).toMatch(/5:00.* GMT-5$/)
   })
 
   it("marks a failed turn's end as destructive, and a done turn's as not", async () => {

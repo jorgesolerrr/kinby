@@ -183,7 +183,7 @@ class Scheduler:
 
     def _local_minute(self, time: datetime) -> str:
         zone = self._instance.manifest.routines.timezone
-        return f"{time.astimezone(zone):%Y-%m-%d %H:%M}"
+        return f"{time.astimezone(zone):%Y-%m-%d %H:%M %Z}"
 
     def _arm(
         self, routines: Sequence[Routine], history: Mapping[RoutineName, RoutineHistory]

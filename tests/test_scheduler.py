@@ -190,7 +190,7 @@ def test_scheduled_fire_through_dispatcher(tmp_path: Path) -> None:
         threads = await call(dispatcher, "thread.list")
         assert isinstance(threads, ThreadListResult)
         assert len(threads.threads) == 1
-        assert threads.threads[0].title == "news · 2026-09-06 09:01"
+        assert threads.threads[0].title == "news · 2026-09-06 09:01 UTC"
         events = await events_for(dispatcher, threads.threads[0].id)
         assert isinstance(events[0].payload, TurnStarted)
         assert events[0].payload.message == "Read the news."
@@ -320,14 +320,14 @@ def test_fired_routine_thread_is_titled_with_local_minute(tmp_path: Path) -> Non
         await dispatcher.scheduler.drain()
         threads = await call(dispatcher, "thread.list")
         assert isinstance(threads, ThreadListResult)
-        assert [thread.title for thread in threads.threads] == ["news · 2026-09-06 09:00"]
+        assert [thread.title for thread in threads.threads] == ["news · 2026-09-06 09:00 CEST"]
 
     asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
     "delivery_id,title",
-    [(None, "issues · 2026-09-07 00:30"), (DeliveryId("delivery-1"), "issues · delivery-1")],
+    [(None, "issues · 2026-09-07 00:30 CEST"), (DeliveryId("delivery-1"), "issues · delivery-1")],
 )
 def test_delivery_thread_is_titled_with_its_id_or_local_minute(
     tmp_path: Path, delivery_id: DeliveryId | None, title: str
