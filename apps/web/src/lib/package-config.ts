@@ -12,16 +12,24 @@ interface Described {
   description: string | undefined
 }
 
+/** A number field's bounds as its schema declares them, each absent when not declared. */
+interface Bounds {
+  minimum: number | undefined
+  maximum: number | undefined
+  exclusiveMinimum: number | undefined
+  exclusiveMaximum: number | undefined
+}
+
 /**
- * One field of the package's config with its value as the form edits it. An integer is its text
- * and a list is one item per line, so the package's validator judges what was typed. A section
+ * One field of the package's config with its value as the form edits it. A number is its text and
+ * a list is one item per line, so the package's validator judges what was typed. A section
  * holds the fields of a nested model, and an optional section is sent as null when not present. A
  * field of a type the form does not offer keeps its value and is sent back unchanged.
  */
 export type FormField = Described &
   (
     | { type: "string"; value: string }
-    | { type: "integer"; value: string }
+    | { type: "number"; integer: boolean; bounds: Bounds; value: string }
     | { type: "boolean"; value: boolean }
     | { type: "enum"; choices: string[]; value: string }
     | { type: "list"; value: string }
@@ -70,6 +78,43 @@ export async function savePackageConfig(
     return refusal(error)
   }
   return { state: "saved", opened: opened(config, await latestChange(caller, PACKAGE_CONFIG_FILE)) }
+}
+
+/** The validator's `location` of a field, such as `review.round_limit`, in the section at `path`. */
+export function located(path: string, name: string): string {
+  return path === "" ? name : `${path}.${name}`
+}
+
+/**
+ * The reasons the form refuses to save, by the location of their field. A number out of its bounds
+ * is one. The package's validator still judges every value that passes.
+ */
+export function refusals(fields: FormField[], path = ""): Record<string, string> {
+  return Object.fromEntries(
+    fields.flatMap((field): [string, string][] => {
+      const at = located(path, field.name)
+      if (field.type === "section" || (field.type === "optional section" && field.present)) {
+        return Object.entries(refusals(field.fields, at))
+      }
+      if (field.type !== "number") return []
+      const reason = outOfBounds(typed(field.value), field.bounds)
+      return reason === undefined ? [] : [[at, reason]]
+    }),
+  )
+}
+
+function outOfBounds(value: number | undefined, bounds: Bounds): string | undefined {
+  if (value === undefined) return undefined
+  const { minimum, maximum, exclusiveMinimum, exclusiveMaximum } = bounds
+  if (minimum !== undefined && value < minimum) return `Must be at least ${minimum}.`
+  if (maximum !== undefined && value > maximum) return `Must be at most ${maximum}.`
+  if (exclusiveMinimum !== undefined && value <= exclusiveMinimum) {
+    return `Must be greater than ${exclusiveMinimum}.`
+  }
+  if (exclusiveMaximum !== undefined && value >= exclusiveMaximum) {
+    return `Must be less than ${exclusiveMaximum}.`
+  }
+  return undefined
 }
 
 function opened(
@@ -143,10 +188,18 @@ function formField(
   switch (property.type) {
     case "string":
       return { ...described, type: "string", value: text(value) ?? "" }
+    case "number":
     case "integer":
       return {
         ...described,
-        type: "integer",
+        type: "number",
+        integer: property.type === "integer",
+        bounds: {
+          minimum: numeric(property.minimum),
+          maximum: numeric(property.maximum),
+          exclusiveMinimum: numeric(property.exclusiveMinimum),
+          exclusiveMaximum: numeric(property.exclusiveMaximum),
+        },
         value: typeof value === "number" ? String(value) : "",
       }
     case "boolean":
@@ -184,8 +237,8 @@ function sent(field: FormField): unknown {
       return sentValues(field.fields)
     case "optional section":
       return field.present ? sentValues(field.fields) : null
-    case "integer":
-      return /^-?\d+$/.test(field.value.trim()) ? Number(field.value) : field.value
+    case "number":
+      return typed(field.value) ?? field.value
     case "list":
       return field.value.split("\n").filter((line) => line.trim() !== "")
     case "map":
@@ -240,6 +293,16 @@ function object(value: unknown): JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? Object.fromEntries(Object.entries(value))
     : {}
+}
+
+function numeric(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined
+}
+
+/** The number `value` reads as, or undefined when it reads as none. */
+function typed(value: string): number | undefined {
+  const number = Number(value)
+  return value.trim() !== "" && Number.isFinite(number) ? number : undefined
 }
 
 function text(value: unknown): string | undefined {

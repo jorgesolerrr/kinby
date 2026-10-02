@@ -32,9 +32,11 @@ import { lastChanged } from "@/lib/config-changes"
 import { retried } from "@/lib/operation"
 import {
   type FormField,
+  located,
   type OpenedPackageConfig,
   openPackageConfig,
   PACKAGE_CONFIG_FILE,
+  refusals,
   savePackageConfig,
 } from "@/lib/package-config"
 import { BoxIcon, XIcon } from "lucide-react"
@@ -130,20 +132,26 @@ export function PackageConfigSection({
       setSaving(false)
     }
   }
+  const refused = refusals(fields)
+  const reasons = { ...errors, ...refused }
   return (
     <div className="flex flex-col gap-6">
       {notice === "stale" && <StaleAlert file={PACKAGE_CONFIG_FILE} onLoad={() => void load()} />}
       {failure !== undefined && <Failure error={failure} />}
       <FieldGroup>
-        <ConfigFields fields={fields} path="" errors={errors} onChange={change} />
+        <ConfigFields fields={fields} path="" errors={reasons} onChange={change} />
       </FieldGroup>
-      <FieldError errors={unplaced(fields, "", errors)} />
+      <FieldError errors={unplaced(fields, "", reasons)} />
       <p className="text-sm text-muted-foreground">
         Saving rewrites package.yaml from these values, so the comments in it are not kept.
       </p>
       <div className="flex items-center gap-3">
         <Button
-          disabled={saving || JSON.stringify(fields) === JSON.stringify(opened.fields)}
+          disabled={
+            saving ||
+            Object.keys(refused).length > 0 ||
+            JSON.stringify(fields) === JSON.stringify(opened.fields)
+          }
           onClick={() => void save()}
         >
           {saving && <Spinner data-icon="inline-start" />}
@@ -161,11 +169,6 @@ export function PackageConfigSection({
 }
 
 type Errors = Record<string, string>
-
-/** The validator's `location` of a field, such as `review.round_limit`, in the section at `path`. */
-function located(path: string, name: string): string {
-  return path === "" ? name : `${path}.${name}`
-}
 
 /** Whether the validator's `location`, such as `skills.review`, is at `path` or within it. */
 function belongsTo(location: string, path: string): boolean {
@@ -361,12 +364,25 @@ function ConfigInput({
         />
       )
       break
+    case "number":
+      control = (
+        <Input
+          id={id}
+          type="number"
+          step={field.integer ? 1 : "any"}
+          min={field.bounds.minimum}
+          max={field.bounds.maximum}
+          autoComplete="off"
+          value={field.value}
+          aria-invalid={invalid}
+          onChange={(event) => onChange({ ...field, value: event.target.value })}
+        />
+      )
+      break
     default:
       control = (
         <Input
           id={id}
-          type={field.type === "integer" ? "number" : "text"}
-          step={field.type === "integer" ? 1 : undefined}
           autoComplete="off"
           value={field.value}
           aria-invalid={invalid}
