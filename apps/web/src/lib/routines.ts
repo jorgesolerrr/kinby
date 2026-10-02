@@ -1,3 +1,4 @@
+import { CallError } from "@kinby/contract"
 import type {
   ConfigChange,
   InstanceClient,
@@ -6,13 +7,14 @@ import type {
   RoutineSummary,
 } from "@kinby/contract"
 
-import { latestChange, unlessStale, when } from "@/lib/config-changes"
+import { readWithChange, unlessStale, when } from "@/lib/config-changes"
 
 type Caller = Pick<InstanceClient, "call">
 
-/** A routine as the list shows it, and the latest change to its directory. */
+/** A routine as the list shows it, its directory's hash, and the latest change to it. */
 export interface ListedRoutine {
   summary: RoutineSummary
+  hash: string
   lastChange: ConfigChange | undefined
 }
 
@@ -21,14 +23,23 @@ function routineFile(name: string): string {
   return `routines/${name}`
 }
 
+/** The routines the list names, less any removed before its read: the next load drops them. */
 export async function listRoutines(caller: Caller): Promise<ListedRoutine[]> {
   const { routines } = await caller.call("routine.list", {})
-  return Promise.all(
-    routines.map(async (summary) => ({
-      summary,
-      lastChange: await latestChange(caller, routineFile(summary.name)),
-    })),
+  const listed = await Promise.all(
+    routines.map(async (summary): Promise<ListedRoutine | undefined> => {
+      try {
+        const [{ hash }, lastChange] = await readWithChange(caller, routineFile(summary.name), () =>
+          caller.call("routine.read", { name: summary.name }),
+        )
+        return { summary, hash, lastChange }
+      } catch (error) {
+        if (error instanceof CallError && error.code === "NOT_FOUND") return undefined
+        throw error
+      }
+    }),
   )
+  return listed.filter((routine) => routine !== undefined)
 }
 
 /**

@@ -8,7 +8,7 @@ import type {
   SkillTier,
 } from "@kinby/contract"
 
-import { latestChange } from "@/lib/config-changes"
+import { latestChange, readWithChange } from "@/lib/config-changes"
 
 type Caller = Pick<InstanceClient, "call">
 
@@ -52,10 +52,9 @@ export async function openSkill(
   name: string,
   tier: SkillTier,
 ): Promise<OpenedSkill> {
-  const [skill, lastChange] = await Promise.all([
-    caller.call("skill.read", { name, tier }),
-    tier === "instance" ? latestChange(caller, skillFile(name)) : undefined,
-  ])
+  const read = () => caller.call("skill.read", { name, tier })
+  if (tier !== "instance") return { skill: await read(), lastChange: undefined }
+  const [skill, lastChange] = await readWithChange(caller, skillFile(name), read)
   return { skill, lastChange }
 }
 

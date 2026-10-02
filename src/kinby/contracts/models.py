@@ -1636,6 +1636,9 @@ class ConfigChange(ContractModel):
     turn_id: UUID | None = None
     #: A unified diff from the content before the change to the content after it.
     diff: str
+    #: The hash of what the change left on disk, as the file's read returns it. Null when the
+    #: change left nothing there, or when the log predates the field.
+    hash: FileHash | None = None
 
 
 class ConfigHistoryCommand(ContractModel):

@@ -1,7 +1,7 @@
 import { CallError } from "@kinby/contract"
 import type { ConfigChange, InstanceClient, PackageConfigResult } from "@kinby/contract"
 
-import { latestChange } from "@/lib/config-changes"
+import { latestChange, readWithChange } from "@/lib/config-changes"
 import { type Refused, refusal } from "@/lib/config-writes"
 
 export const PACKAGE_CONFIG_FILE = "package.yaml"
@@ -42,14 +42,16 @@ type JsonObject = Record<string, unknown>
 
 /** The package config, or null when the instance runs no package or its package declares none. */
 export async function openPackageConfig(caller: Caller): Promise<OpenedPackageConfig | null> {
-  let config: PackageConfigResult
   try {
-    config = await caller.call("package.config.get", {})
+    return opened(
+      ...(await readWithChange(caller, PACKAGE_CONFIG_FILE, () =>
+        caller.call("package.config.get", {}),
+      )),
+    )
   } catch (error) {
     if (error instanceof CallError && error.code === "NOT_FOUND") return null
     throw error
   }
-  return opened(config, await latestChange(caller, PACKAGE_CONFIG_FILE))
 }
 
 /** Write `fields` over the package config read with `hash`. */

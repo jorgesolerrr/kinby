@@ -462,7 +462,7 @@ function PromptSection({
             if (notice === "saved") setNotice(undefined)
           }}
         />
-        <FieldDescription>{lastChanged(opened.lastChange)}</FieldDescription>
+        <FieldDescription>{lastChanged(opened.lastChange, opened.prompt.hash)}</FieldDescription>
       </Field>
       <div className="flex items-center gap-3">
         <Button disabled={saving || draft === opened.prompt.content} onClick={() => void save()}>

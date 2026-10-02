@@ -8,7 +8,7 @@ import type {
   NewModelPrice,
 } from "@kinby/contract"
 
-import { latestChange } from "@/lib/config-changes"
+import { latestChange, readWithChange } from "@/lib/config-changes"
 
 /** The file the manifest is kept in, as the config changes name it. */
 export const MANIFEST_FILE = "kinby.toml"
@@ -34,10 +34,9 @@ export type SavedManifest =
 type Caller = Pick<InstanceClient, "call">
 
 export async function openManifest(caller: Caller): Promise<OpenedManifest> {
-  const [manifest, lastChange] = await Promise.all([
+  const [manifest, lastChange] = await readWithChange(caller, MANIFEST_FILE, () =>
     caller.call("manifest.get", {}),
-    latestChange(caller, MANIFEST_FILE),
-  ])
+  )
   return { manifest, lastChange }
 }
 

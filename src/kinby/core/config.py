@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import math
 import os
 import shutil
@@ -74,7 +73,12 @@ from kinby.core.errors import (
 )
 from kinby.core.pricing import SHIPPED_PRICES
 from kinby.instance import Instance, api_key_variable
-from kinby.instance.config_changes import ConfigChangeLog, recorded_change
+from kinby.instance.config_changes import (
+    ConfigChangeLog,
+    directory_hash,
+    file_hash,
+    recorded_change,
+)
 from kinby.instance.layout import (
     MANIFEST_NAME,
     MEMORY_DIR,
@@ -134,29 +138,12 @@ _SHIPPED_PROMPTS = {PromptName.BEHAVIOR: "", PromptName.RECAP: DEFAULT_RECAP_LEN
 _PROFILE_FILE = ConfigFile(f"{MEMORY_DIR}/{PROFILE_NAME}")
 
 
-def _file_hash(content: bytes) -> FileHash:
-    return FileHash(hashlib.sha256(content).hexdigest())
-
-
-def _directory_hash(directory: Path) -> FileHash:
-    """Hash every file under *directory* by its relative path. A missing one hashes as empty."""
-    files = directory.rglob("*") if directory.is_dir() else ()
-    digest = hashlib.sha256()
-    for relative, path in sorted(
-        (path.relative_to(directory).as_posix(), path) for path in files if path.is_file()
-    ):
-        content = path.read_bytes()
-        digest.update(f"{relative}\0{len(content)}\0".encode())
-        digest.update(content)
-    return FileHash(digest.hexdigest())
-
-
 def _check_unchanged(instance_path: Path, file: ConfigFile, read: FileHash | None) -> None:
     """Refuse a write over a directory changed since the client read it, or over one it creates."""
     directory = instance_path / file
     if read is None and directory.exists():
         raise StaleWrite(f"{file} already exists. Read it first.")
-    if read is not None and _directory_hash(directory) != read:
+    if read is not None and directory_hash(directory) != read:
         raise StaleWrite(f"{file} changed since it was read. Read it again.")
 
 
@@ -194,13 +181,13 @@ def _skill_result(directory: Path) -> SkillResult:
     return SkillResult(
         content=files[SKILL_FILE].decode("utf-8"),
         files=[name for name in files if name != SKILL_FILE],
-        hash=_directory_hash(directory),
+        hash=directory_hash(directory),
     )
 
 
 def _write_over(path: Path, content: bytes, read: FileHash) -> None:
     """Replace the file the client read, staging beside it so no reader sees half a file."""
-    if _file_hash(_read_bytes(path) or b"") != read:
+    if file_hash(_read_bytes(path) or b"") != read:
         raise StaleWrite(f"{path.name} changed since it was read. Read it again.")
     path.parent.mkdir(exist_ok=True)
     staging = path.with_name(f".{path.name}.staging")
@@ -212,7 +199,7 @@ def package_config_hash(instance: Instance) -> FileHash | None:
     """The hash of a packaged instance's package.yaml. None for a vanilla instance."""
     if instance.manifest.package is None:
         return None
-    return _file_hash(_read_bytes(instance.path / PACKAGE_CONFIG_NAME) or b"")
+    return file_hash(_read_bytes(instance.path / PACKAGE_CONFIG_NAME) or b"")
 
 
 def _manifest_result(content: bytes) -> ManifestResult:
@@ -227,7 +214,7 @@ def _manifest_result(content: bytes) -> ManifestResult:
             )
             for model in sorted(SHIPPED_PRICES.keys() | raw.prices.keys())
         ],
-        hash=_file_hash(content),
+        hash=file_hash(content),
     )
 
 
@@ -252,17 +239,15 @@ class InstanceConfig:
         content = _read_bytes(self._instance.path / _PROMPT_FILES[command.name])
         if content is None:
             return PromptResult(
-                content=_SHIPPED_PROMPTS[command.name], hash=_file_hash(b""), default=True
+                content=_SHIPPED_PROMPTS[command.name], hash=file_hash(b""), default=True
             )
-        return PromptResult(
-            content=content.decode("utf-8"), hash=_file_hash(content), default=False
-        )
+        return PromptResult(content=content.decode("utf-8"), hash=file_hash(content), default=False)
 
     async def set_prompt(self, command: PromptSetCommand) -> PromptResult:
         content = command.content.encode("utf-8")
         async with self._instance.config_lock:
             await asyncio.to_thread(self._write, _PROMPT_FILES[command.name], content, command.hash)
-        return PromptResult(content=command.content, hash=_file_hash(content), default=False)
+        return PromptResult(content=command.content, hash=file_hash(content), default=False)
 
     async def get_profile(self, command: ProfileGetCommand) -> ProfileResult:
         return _profile_result(_read_bytes(self._instance.path / _PROFILE_FILE) or b"")
@@ -309,8 +294,8 @@ class InstanceConfig:
     async def get_permissions(self, command: PermissionsGetCommand) -> PermissionsResult:
         content = _read_bytes(self._instance.path / PERMISSIONS_NAME)
         if content is None:
-            return _permissions_result(SHIPPED_POLICY, _file_hash(b""))
-        return _permissions_result(parse_permissions(content), _file_hash(content))
+            return _permissions_result(SHIPPED_POLICY, file_hash(b""))
+        return _permissions_result(parse_permissions(content), file_hash(content))
 
     async def set_permissions(self, command: PermissionsSetCommand) -> PermissionsResult:
         policy = GatePolicy(
@@ -331,7 +316,7 @@ class InstanceConfig:
             await asyncio.to_thread(
                 self._write, ConfigFile(PERMISSIONS_NAME), content, command.hash
             )
-        return _permissions_result(policy, _file_hash(content))
+        return _permissions_result(policy, file_hash(content))
 
     async def get_package_config(self, command: PackageConfigGetCommand) -> PackageConfigResult:
         config, _ = self._package_config()
@@ -340,7 +325,7 @@ class InstanceConfig:
         return PackageConfigResult(
             schema=config.model_json_schema(),
             values=values if isinstance(values, dict) else {},
-            hash=_file_hash(content),
+            hash=file_hash(content),
         )
 
     async def set_package_config(self, command: PackageConfigSetCommand) -> PackageConfigResult:
@@ -357,7 +342,7 @@ class InstanceConfig:
         return PackageConfigResult(
             schema=config.model_json_schema(),
             values=validated.model_dump(mode="json"),
-            hash=_file_hash(content),
+            hash=file_hash(content),
         )
 
     async def list_skills(self, command: SkillListCommand) -> SkillListResult:
@@ -481,7 +466,7 @@ class InstanceConfig:
         if content is None:
             raise RoutineNotFound(f'Routine "{name}" was not found.')
         return RoutineFile(
-            name=name, content=content.decode("utf-8"), hash=_directory_hash(directory)
+            name=name, content=content.decode("utf-8"), hash=directory_hash(directory)
         )
 
     def _skill_directory(self, name: SkillName) -> Path:
@@ -562,7 +547,7 @@ def _permissions_result(policy: GatePolicy, read: FileHash) -> PermissionsResult
 
 def _profile_result(content: bytes) -> ProfileResult:
     text = content.decode("utf-8")
-    return ProfileResult(text=text, hash=_file_hash(content), tokens=math.ceil(len(text) / 4))
+    return ProfileResult(text=text, hash=file_hash(content), tokens=math.ceil(len(text) / 4))
 
 
 def _skill_config_file(name: SkillName) -> ConfigFile:

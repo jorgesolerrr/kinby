@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -10,7 +11,7 @@ from itertools import islice
 from pathlib import Path
 from uuid import UUID
 
-from kinby.contracts import ConfigActor, ConfigChange, ConfigFile
+from kinby.contracts import ConfigActor, ConfigChange, ConfigFile, FileHash
 from kinby.instance.dataclasses import Instance
 
 CONFIG_CHANGES_NAME = "config-changes.jsonl"
@@ -57,8 +58,35 @@ def recorded_change(
             thread_id=thread_id,
             turn_id=turn_id,
             diff=_diff(before, _texts(instance.path, file)),
+            hash=_hash(instance.path / file),
         )
     )
+
+
+def file_hash(content: bytes) -> FileHash:
+    return FileHash(hashlib.sha256(content).hexdigest())
+
+
+def directory_hash(directory: Path) -> FileHash:
+    """Hash every file under *directory* by its relative path. A missing one hashes as empty."""
+    files = directory.rglob("*") if directory.is_dir() else ()
+    digest = hashlib.sha256()
+    for relative, path in sorted(
+        (path.relative_to(directory).as_posix(), path) for path in files if path.is_file()
+    ):
+        content = path.read_bytes()
+        digest.update(f"{relative}\0{len(content)}\0".encode())
+        digest.update(content)
+    return FileHash(digest.hexdigest())
+
+
+def _hash(path: Path) -> FileHash | None:
+    """The hash the read of *path* returns, or None when nothing is there."""
+    if path.is_file():
+        return file_hash(path.read_bytes())
+    if path.is_dir():
+        return directory_hash(path)
+    return None
 
 
 def _texts(instance_path: Path, file: ConfigFile) -> dict[str, str]:

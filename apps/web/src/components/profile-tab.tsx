@@ -88,7 +88,7 @@ export function ProfileTab({ client, clock }: { client: Caller; clock: Clock }) 
             if (notice === "saved") setNotice(undefined)
           }}
         />
-        <FieldDescription>{lastChanged(opened.lastChange)}</FieldDescription>
+        <FieldDescription>{lastChanged(opened.lastChange, opened.profile.hash)}</FieldDescription>
       </Field>
       <div className="flex items-center gap-3">
         <Button disabled={saving || draft === opened.profile.text} onClick={() => void save()}>

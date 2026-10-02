@@ -512,6 +512,40 @@ def test_routine_delete_removes_the_routine_read(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_a_routine_change_records_the_directory_hash_and_a_delete_records_none(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        written = await call(dispatcher, "routine.write", name="news", content=NEWS, hash=None)
+        await call(dispatcher, "routine.delete", name="news", hash=written.hash)
+
+        deleted, created = (
+            await call(dispatcher, "config.history", file="routines/news", limit=10)
+        ).changes
+        assert (created.hash, deleted.hash) == (written.hash, None)
+
+    asyncio.run(scenario())
+
+
+def test_a_log_line_written_before_the_hash_still_reads(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        instance.manifest.state_dir.mkdir(parents=True, exist_ok=True)
+        (instance.manifest.state_dir / "config-changes.jsonl").write_text(
+            '{"at":"2026-09-28T10:00:00Z","file":"SYSTEM.md","actor":"app",'
+            '"thread_id":null,"turn_id":null,"diff":""}\n',
+            encoding="utf-8",
+        )
+
+        [change] = (await call(_dispatcher(tmp_path), "config.history", limit=10)).changes
+
+        assert (change.file, change.actor, change.hash) == ("SYSTEM.md", "app", None)
+
+    asyncio.run(scenario())
+
+
 def test_routine_delete_over_a_change_since_the_read_is_stale(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)

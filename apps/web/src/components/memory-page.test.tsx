@@ -157,6 +157,7 @@ const byYou: ConfigChange = {
   thread_id: null,
   turn_id: null,
   diff: "",
+  hash: "hash-1",
 }
 
 /** The page with its Profile tab open. The profile was last changed by the user. */
@@ -366,6 +367,27 @@ describe("the memory page", () => {
       { file: "memory/profile.md", limit: 1 },
     ])
     expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true)
+  })
+
+  it("says the profile changed outside kinby after a hand edit, until the next save", async () => {
+    let changes = [byYou]
+    const { user } = await openProfile({
+      "profile.get": () => ({ text: "Call me Jorge.", hash: "hash-3", tokens: 4 }),
+      "profile.set": ({ text }) => {
+        changes = [{ ...byYou, at: new Date(2026, 8, 28, 11, 30).toISOString(), hash: "hash-4" }]
+        return { text, hash: "hash-4", tokens: 5 }
+      },
+      "config.history": () => ({ changes }),
+    })
+
+    const editor = await screen.findByRole("textbox", { name: "memory/profile.md" })
+    expect(screen.getByText("Changed outside kinby")).toBeDefined()
+    expect(screen.queryByText(/Last changed by/)).toBeNull()
+    await user.type(editor, " Mine.")
+    await user.click(screen.getByRole("button", { name: "Save" }))
+
+    expect(await screen.findByText("Last changed by you, Sep 28, 2026, 11:30 AM")).toBeDefined()
+    expect(screen.queryByText("Changed outside kinby")).toBeNull()
   })
 
   it("counts the profile's tokens as the instance does, by characters", async () => {

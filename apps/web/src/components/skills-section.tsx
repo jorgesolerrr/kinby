@@ -338,7 +338,9 @@ function SkillView({
         {opened.skill.files.length > 0 && (
           <FieldDescription>Other files: {opened.skill.files.join(", ")}</FieldDescription>
         )}
-        {editable && <FieldDescription>{lastChanged(opened.lastChange)}</FieldDescription>}
+        {editable && (
+          <FieldDescription>{lastChanged(opened.lastChange, opened.skill.hash)}</FieldDescription>
+        )}
       </Field>
       <div className="flex flex-wrap items-center gap-3">
         {editable && (

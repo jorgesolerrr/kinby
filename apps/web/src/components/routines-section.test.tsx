@@ -47,11 +47,13 @@ const disabledByThePolicy: ConfigChange = {
   thread_id: "thread-2",
   turn_id: "turn-2",
   diff: "",
+  hash: "hash-issues",
 }
 
 function openSection(answers: Answers = {}) {
   const caller = stubCaller({
     "routine.list": () => ({ routines: [issues, news], warnings: [] }),
+    "routine.read": ({ name }) => ({ name, content: NEWS, hash: `hash-${name}` }),
     "config.history": ({ file }) => ({
       changes: file === "routines/issues" ? [disabledByThePolicy] : [],
     }),
@@ -97,6 +99,31 @@ describe("RoutinesSection", () => {
         "Last changed by the routine failure policy, Sep 28, 2026, 10:04 AM",
       ),
     ).toBeDefined()
+  })
+
+  it("says a routine changed outside kinby when its directory differs from the last change", async () => {
+    openSection({
+      "routine.read": ({ name }) => ({ name, content: NEWS, hash: "hash-by-hand" }),
+    })
+
+    const issuesItem = await screen.findByRole("listitem", { name: "issues" })
+
+    expect(within(issuesItem).getByText("Changed outside kinby")).toBeDefined()
+    expect(within(issuesItem).queryByText(/Last changed by/)).toBeNull()
+  })
+
+  it("leaves out a routine removed between the list and its read", async () => {
+    openSection({
+      "routine.read": ({ name }) => {
+        if (name === "issues") {
+          throw new CallError({ code: "NOT_FOUND", message: "Gone.", retryable: false })
+        }
+        return { name, content: NEWS, hash: `hash-${name}` }
+      },
+    })
+
+    await screen.findByRole("listitem", { name: "news" })
+    expect(screen.queryByRole("listitem", { name: "issues" })).toBeNull()
   })
 
   it("turns a routine off with its switch and shows it off", async () => {

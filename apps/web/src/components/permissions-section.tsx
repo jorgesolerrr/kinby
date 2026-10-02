@@ -245,7 +245,7 @@ export function PermissionsSection({ client, clock }: { client: Caller; clock: C
           <span className="text-sm text-muted-foreground">Saved. It applies at the next turn.</span>
         )}
       </div>
-      <p className="text-sm text-muted-foreground">{lastChanged(opened.lastChange)}</p>
+      <p className="text-sm text-muted-foreground">{lastChanged(opened.lastChange, opened.hash)}</p>
     </div>
   )
 }
