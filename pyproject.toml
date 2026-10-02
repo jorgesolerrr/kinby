@@ -71,4 +71,5 @@ possibly-unresolved-reference = "error"
 
 [tool.ty.src]
 # Eval modules are checked explicitly with their optional dependency group installed.
-exclude = ["evals"]
+# The e2e browser helper declares its own dependencies inline and runs with `uv run`.
+exclude = ["evals", ".claude/skills/e2e-pass/browser.py"]

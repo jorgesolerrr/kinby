@@ -14,6 +14,7 @@ I'm a passionate programmer who likes complex things done in a simple way. That 
 - **The gate runs on Linux.** The runtime and hub locks use `fcntl`, so pytest cannot import them on Windows. On Windows, run the gate with `bun run check:linux`, which runs `bun run check` in the Docker image from `docker/check.Dockerfile`. The other way is WSL with its own environment, `UV_PROJECT_ENVIRONMENT=.venv-linux`. The shared `.venv` belongs to Windows: never install into it or touch it from WSL. `bun run dev` works on any platform.
 - **Docs go straight to main.** Commit changes to docs, ADRs and `CONTEXT.md` on main and push them, without a PR.
 - **Web UI.** The web app lives in `apps/web` and is built from shadcn/ui (Base UI, preset `nova`). Use the `shadcn` skill for UI work there. Add components with `bunx --bun shadcn@latest add` from `apps/web` and never hand-write one the registry has. Fix every `shadcn/*` lint error with a variant or a theme token, not by disabling the rule.
+- **Browser testing.** Any browser testing follows the Browser section of `.claude/skills/e2e-pass/SKILL.md`: Playwright's bundled Chromium through its `browser.py`. A full pass on the playground hub is `/e2e-pass #N`.
 - **User-facing communication.** Run the `unslop` skill (`/unslop`) over anything the user reads: replies, PR descriptions, issue comments, README and doc prose. Plain and specific.
 - **Architecture decisions.** Record them as ADRs in `docs/adr/`, one decision per file.
 
