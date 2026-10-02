@@ -322,6 +322,19 @@ describe("a stopped instance with setup complete", () => {
     expect(screen.queryByRole("region", { name: "Finish setting up Ada" })).toBeNull()
   })
 
+  it("says the last run ended with an error when it crashed before the stop", async () => {
+    await openPage({}, { ...complete, process: "failed", detail: "exited (1)" })
+
+    expect(stoppedView().getByText("The last run ended with an error: exited (1)")).toBeDefined()
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("says nothing of the last run when it exited cleanly", async () => {
+    await openPage({}, { ...complete, process: "stopped", detail: "exited (0)" })
+
+    expect(stoppedView().queryByText(/The last run ended with an error/)).toBeNull()
+  })
+
   it("starts it, and leaves the stopped view once it runs", async () => {
     const polls = [
       operation({ kind: "start", state: "running" }),

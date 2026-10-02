@@ -11,3 +11,12 @@ export function observedState(instance: InstanceSummary): ProcessState | "restar
     ? "restarting"
     : instance.process
 }
+
+/**
+ * What the sidebar says the instance is doing. One the user stopped reads stopped when its
+ * container is down for any reason, a crash included. The process reads as observed otherwise.
+ */
+export function shownState(instance: InstanceSummary): ProcessState | "restarting" {
+  const down = ["stopped", "failed", "created", "missing"].includes(instance.process)
+  return instance.intended_state === "stopped" && down ? "stopped" : observedState(instance)
+}
