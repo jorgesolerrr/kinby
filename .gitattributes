@@ -1,3 +1,5 @@
+# Every text file keeps LF endings on every checkout. The rules below override this one.
+* text=auto eol=lf
 # The container entrypoint must keep LF endings on every checkout.
 docker/entrypoint.sh text eol=lf
 # Preserve the vendored skill sources byte for byte on every checkout.

@@ -112,6 +112,20 @@ describe("RoutinesSection", () => {
     expect(within(issuesItem).queryByText(/Last changed by/)).toBeNull()
   })
 
+  it("leaves out a routine removed between the list and its read", async () => {
+    openSection({
+      "routine.read": ({ name }) => {
+        if (name === "issues") {
+          throw new CallError({ code: "NOT_FOUND", message: "Gone.", retryable: false })
+        }
+        return { name, content: NEWS, hash: `hash-${name}` }
+      },
+    })
+
+    await screen.findByRole("listitem", { name: "news" })
+    expect(screen.queryByRole("listitem", { name: "issues" })).toBeNull()
+  })
+
   it("turns a routine off with its switch and shows it off", async () => {
     let enabled = true
     const { caller, user } = openSection({
