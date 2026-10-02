@@ -36,6 +36,23 @@ export async function latestChange(
   return history.changes[0]
 }
 
+/**
+ * A read of `file` and the latest change to it, as one view of the file. They are two calls, so a
+ * save landing between them can pair a read from one side of it with a change from the other.
+ * When their hashes differ, both run once more: a save that finished meanwhile then shows in
+ * both, and only a change made outside kinby keeps them apart.
+ */
+export async function readWithChange<R extends { hash: string }>(
+  caller: Caller,
+  file: string,
+  read: () => Promise<R>,
+): Promise<[R, ConfigChange | undefined]> {
+  const first = await Promise.all([read(), latestChange(caller, file)])
+  const [result, change] = first
+  if (change?.hash == null || change.hash === result.hash) return first
+  return Promise.all([read(), latestChange(caller, file)])
+}
+
 /** A write's result, or "stale" when the instance refused it over a change made since the read. */
 export async function unlessStale<T>(write: Promise<T>): Promise<T | "stale"> {
   try {
