@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "bun run --filter @kinby/web dev",
     "check": "uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest && bun run check:web",
-    "check:web": "bun run --workspaces --sequential check && knip"
+    "check:web": "bun run --workspaces --sequential check && knip",
+    "check:linux": "docker build --file docker/check.Dockerfile --tag kinby-check . && docker run --rm --volume .:/kinby --volume /kinby/node_modules --volume /kinby/apps/web/node_modules --volume /kinby/packages/contract/node_modules kinby-check"
   },
   "devDependencies": {
     "knip": "6.38.0"
