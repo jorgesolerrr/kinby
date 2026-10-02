@@ -20,6 +20,10 @@ I'm a passionate programmer who likes complex things done in a simple way. That 
 
 ## Agent skills
 
+### Registry skills
+
+Skills in `.claude/skills/` whose `skills-lock.json` source is `jorgesolerrr/skills` are copies of that registry. Change one in the registry, then run `bun run skills:sync` and commit the result. Never edit those copies in place. `bun run check` fails when a copy stops matching its locked hash. `open-pr` and `e2e-pass` belong to this repo and are not in the lock, so edit them here.
+
 ### Issue tracker
 
 Issues are GitHub Issues on `jorgesolerrr/kinby`, operated via the `gh` CLI. See `docs/agents/issue-tracker.md`.
