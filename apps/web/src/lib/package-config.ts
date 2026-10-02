@@ -14,8 +14,9 @@ interface Described {
 
 /**
  * One field of the package's config with its value as the form edits it. An integer is its text
- * and a list is one item per line, so the package's validator judges what was typed. A field of a
- * type the form does not offer keeps its value and is sent back unchanged.
+ * and a list is one item per line, so the package's validator judges what was typed. A section
+ * holds the fields of a nested model, and an optional section is sent as null when not present. A
+ * field of a type the form does not offer keeps its value and is sent back unchanged.
  */
 export type FormField = Described &
   (
@@ -25,6 +26,8 @@ export type FormField = Described &
     | { type: "enum"; choices: string[]; value: string }
     | { type: "list"; value: string }
     | { type: "map"; value: [string, string][] }
+    | { type: "section"; fields: FormField[] }
+    | { type: "optional section"; fields: FormField[]; present: boolean }
     | { type: "unsupported"; value: unknown }
   )
 
@@ -62,10 +65,7 @@ export async function savePackageConfig(
 ): Promise<SavedPackageConfig> {
   let config: PackageConfigResult
   try {
-    config = await caller.call("package.config.set", {
-      values: Object.fromEntries(fields.map((field) => [field.name, sent(field)])),
-      hash,
-    })
+    config = await caller.call("package.config.set", { values: sentValues(fields), hash })
   } catch (error) {
     return refusal(error)
   }
@@ -76,31 +76,64 @@ function opened(
   { schema, values, hash }: PackageConfigResult,
   lastChange: ConfigChange | undefined,
 ): OpenedPackageConfig {
-  const definitions = object(schema.$defs)
-  const fields = Object.entries(object(schema.properties)).map(([name, declared]) => {
-    const property = resolved(declared, definitions)
+  return { fields: formFields(schema, values, object(schema.$defs), []), hash, lastChange }
+}
+
+/**
+ * The fields of a model's schema, each holding its value in `values` or else its default.
+ * `within` holds the definitions of the sections around these fields.
+ */
+function formFields(
+  model: JsonObject,
+  values: unknown,
+  definitions: JsonObject,
+  within: string[],
+): FormField[] {
+  const given = object(values)
+  return Object.entries(object(model.properties)).map(([name, declared]) => {
     const own = object(declared)
-    const described: Described = {
-      name,
-      label: text(own.title) ?? text(property.title) ?? name,
-      description: text(own.description) ?? text(property.description),
-    }
-    return formField(
-      described,
-      property,
-      name in values ? values[name] : property.default,
-      definitions,
-    )
+    return formField(name, own, name in given ? given[name] : own.default, definitions, within)
   })
-  return { fields, hash, lastChange }
 }
 
 function formField(
-  described: Described,
-  property: JsonObject,
+  name: string,
+  declared: JsonObject,
   value: unknown,
   definitions: JsonObject,
+  within: string[],
 ): FormField {
+  const optional = optionalModel(declared, definitions)
+  const property = optional ?? resolved(declared, definitions)
+  // A referenced definition's title names its type, such as ReasoningEffort, so a field without a
+  // title of its own takes the one pydantic gives a field.
+  const described: Described = {
+    name,
+    label: text(declared.title) ?? titled(name),
+    description: text(declared.description) ?? text(property.description),
+  }
+  // A model that holds itself, such as a node with an optional child node, would nest without end:
+  // the form stops at its second appearance and keeps that field's value as it is.
+  const reference = definitionOf(declared)
+  if (reference !== undefined && within.includes(reference)) {
+    return { ...described, type: "unsupported", value }
+  }
+  const nested = reference === undefined ? within : [...within, reference]
+  if (optional !== undefined) {
+    return {
+      ...described,
+      type: "optional section",
+      fields: formFields(optional, value, definitions, nested),
+      present: value !== null && value !== undefined,
+    }
+  }
+  if (isModel(property)) {
+    return {
+      ...described,
+      type: "section",
+      fields: formFields(property, value, definitions, nested),
+    }
+  }
   if (Array.isArray(property.enum)) {
     const choices = property.enum.filter((choice) => typeof choice === "string")
     return choices.length === property.enum.length
@@ -140,9 +173,17 @@ function formField(
   return { ...described, type: "unsupported", value }
 }
 
+function sentValues(fields: FormField[]): Record<string, unknown> {
+  return Object.fromEntries(fields.map((field) => [field.name, sent(field)]))
+}
+
 /** A field's value as the package's config model takes it. */
 function sent(field: FormField): unknown {
   switch (field.type) {
+    case "section":
+      return sentValues(field.fields)
+    case "optional section":
+      return field.present ? sentValues(field.fields) : null
     case "integer":
       return /^-?\d+$/.test(field.value.trim()) ? Number(field.value) : field.value
     case "list":
@@ -159,6 +200,35 @@ function resolved(property: unknown, definitions: JsonObject): JsonObject {
   const own = object(property)
   const reference = text(own.$ref)
   return reference === undefined ? own : object(definitions[reference.replace("#/$defs/", "")])
+}
+
+/** The definition a field references, itself or through a branch of its `anyOf`. */
+function definitionOf(declared: JsonObject): string | undefined {
+  const branches: unknown[] = Array.isArray(declared.anyOf) ? declared.anyOf : [declared]
+  return branches.map((branch) => text(object(branch).$ref)).find((ref) => ref !== undefined)
+}
+
+/** Whether `property` is a nested model, whose fields the form shows as a section. */
+function isModel(property: JsonObject): boolean {
+  return property.type === "object" && property.properties !== undefined
+}
+
+/** The model a field of type `Model | None` holds when present, as `anyOf` of the model and null. */
+function optionalModel(declared: JsonObject, definitions: JsonObject): JsonObject | undefined {
+  if (!Array.isArray(declared.anyOf) || declared.anyOf.length !== 2) return undefined
+  const branches = declared.anyOf.map((branch) => resolved(branch, definitions))
+  const model = branches.find(isModel)
+  return model !== undefined && branches.some((branch) => branch.type === "null")
+    ? model
+    : undefined
+}
+
+/** A field's name as pydantic titles it: `round_limit` is "Round Limit". */
+function titled(name: string): string {
+  return name
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ")
 }
 
 function plainString(schema: unknown): boolean {
