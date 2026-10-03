@@ -274,6 +274,15 @@ One conversation with its own durable history. Survives across sessions; can be 
 
 What a **thread**'s latest **turn** is doing: running while it is open, awaiting approval while it waits on an **approval**, failed when it closed as failed, and idle otherwise, including after a **turn interruption**. Derived from the thread's events when it is read, never stored. Failed clears when the next turn starts.
 
+### Routine run
+
+A **thread** whose first **turn** a **routine** started. It stays a routine run after the user starts a turn in it. Derived from that turn's **origin**, never stored.
+_Avoid_: routine thread, job run
+
+### Archived thread
+
+A **thread** the user has put away. It leaves the sidebar and nothing else changes: its events, **episodes** and statistics stay, and the user can bring it back. Threads are archived, never deleted.
+
 ### Session
 
 One run of the agent loop against a thread, from start to exit (a process, a REPL open–close). Ephemeral; the unit a server wraps. A session contains one or more **turns**. Not a model call: a turn makes one or more model calls, and a model-assisted **recap** makes one more after it.
