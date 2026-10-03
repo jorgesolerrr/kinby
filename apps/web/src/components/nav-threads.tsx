@@ -35,7 +35,7 @@ export function NavThreads({
   instanceId: string
 }) {
   const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
-  const list = threadList(client)
+  const list = threadList(client, "sidebar")
   const [, listAgain] = usePolled(list.list, clock, connected, LIST_INTERVAL_MS)
   const threads = useSyncExternalStore(list.onChange, list.view)?.threads
   const selectedId = useSelectedThreadId()

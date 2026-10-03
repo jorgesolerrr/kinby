@@ -115,6 +115,7 @@ export type CompletionOutcome = "work" | "no-work";
 export type TurnVerdict = "good" | "bad";
 export type ApprovalDecision = "approve" | "deny";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
+export type ThreadFilter = "sidebar" | "all" | "archived";
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
 /**
  * What the gate does with a tool: its own rule in permissions.toml, or the mode's.
@@ -359,6 +360,10 @@ export interface Contract {
       command: ThreadApprovalRespondCommand;
       result: AcceptedResult;
     };
+    "thread.archive": {
+      command: ThreadArchiveCommand;
+      result: ThreadSummary;
+    };
     "thread.create": {
       command: ThreadCreateCommand;
       result: ThreadCreateResult;
@@ -406,6 +411,10 @@ export interface Contract {
     "thread.turn.target.list": {
       command: ThreadTurnTargetListCommand;
       result: ThreadTurnTargetListResult;
+    };
+    "thread.unarchive": {
+      command: ThreadUnarchiveCommand;
+      result: ThreadSummary;
     };
     "tool.list": {
       command: ToolListCommand;
@@ -1409,19 +1418,11 @@ export interface ThreadApprovalRespondCommand {
   reason?: string | null;
   thread_id: string;
 }
-export interface ThreadCreateCommand {
-  title?: string | null;
-}
-export interface ThreadCreateResult {
-  created_at: string;
-  id: string;
-}
-export interface ThreadListCommand {}
-export interface ThreadListResult {
-  ceiling: PermissionMode;
-  threads: ThreadSummary[];
+export interface ThreadArchiveCommand {
+  thread_id: string;
 }
 export interface ThreadSummary {
+  archived: boolean;
   created_at: string;
   id: string;
   last_activity_at: string;
@@ -1429,6 +1430,20 @@ export interface ThreadSummary {
   mode_pinned: boolean;
   status: ThreadStatus;
   title: string | null;
+}
+export interface ThreadCreateCommand {
+  title?: string | null;
+}
+export interface ThreadCreateResult {
+  created_at: string;
+  id: string;
+}
+export interface ThreadListCommand {
+  filter?: ThreadFilter;
+}
+export interface ThreadListResult {
+  ceiling: PermissionMode;
+  threads: ThreadSummary[];
 }
 export interface ThreadModeSetCommand {
   mode: PermissionMode;
@@ -1498,6 +1513,9 @@ export interface ThreadTurnTargetListResult {
 export interface TurnTarget {
   closed: boolean;
   turn_id: string;
+}
+export interface ThreadUnarchiveCommand {
+  thread_id: string;
 }
 export interface ToolListCommand {}
 export interface ToolListResult {

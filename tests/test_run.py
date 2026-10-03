@@ -228,6 +228,27 @@ def test_run_resumes_an_existing_thread_instead_of_creating_one(
     assert thread_id in threads[0]
 
 
+def test_run_resumes_an_archived_thread(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = tmp_path / "alice"
+    init_instance(instance)
+    main(["thread", "create", str(instance)])
+    thread_id = capsys.readouterr().out.splitlines()[0].removeprefix("id: ")
+    main(["thread", "archive", thread_id, str(instance)])
+    capsys.readouterr()
+
+    monkeypatch.setattr("sys.stdin", StringIO(""))
+    exit_code = main(["repl", str(instance), "--thread", thread_id])
+    run_output = capsys.readouterr()
+
+    assert exit_code == 0
+    assert run_output.err == ""
+    assert run_output.out.endswith("> ")
+
+
 def test_run_rejects_an_unknown_thread(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

@@ -75,6 +75,7 @@ const thread: ThreadSummary = {
   last_activity_at: "2026-09-01T10:00:00Z",
   mode: "ask",
   mode_pinned: false,
+  archived: false,
   status: "idle",
 }
 
@@ -298,6 +299,21 @@ describe("the memory page", () => {
     expect(await pane().findByText("Tool path: grep → bash")).toBeDefined()
     expect(pane().getByText(/Recap of a turn in/)).toBeDefined()
     await user.click(await pane().findByRole("button", { name: "Deploy day" }))
+    expect(window.location.pathname).toBe(`/instances/instance-1/threads/${THREAD}`)
+  })
+
+  it("links to an archived thread, which only the full thread list has", async () => {
+    const archived = { ...thread, title: "Old deploy day", archived: true }
+    const { user } = openPage({
+      "thread.list": ({ filter }) => ({
+        threads: filter === "all" ? [archived] : [],
+        ceiling: "full-access",
+      }),
+    })
+
+    await user.click(await nodeButton("Fixed the deploy"))
+    await user.click(await pane().findByRole("button", { name: "Old deploy day" }))
+
     expect(window.location.pathname).toBe(`/instances/instance-1/threads/${THREAD}`)
   })
 

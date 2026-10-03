@@ -16,6 +16,7 @@ function thread(fields: Pick<ThreadSummary, "id"> & Partial<ThreadSummary>): Thr
     status: "idle",
     mode: "ask",
     mode_pinned: false,
+    archived: false,
     ...fields,
   }
 }
@@ -83,6 +84,25 @@ describe("an instance's threads", () => {
       "Nightly digestfailed",
       "Groceries",
     ])
+  })
+
+  it("lists the instance's sidebar set, which leaves archived threads out", async () => {
+    const { client } = openThreads({
+      "thread.list": ({ filter }) =>
+        listing(
+          filter === "sidebar"
+            ? [thread({ id: "t1", title: "Deploy notes" })]
+            : [
+                thread({ id: "t1", title: "Deploy notes" }),
+                thread({ id: "t2", title: "Groceries", archived: true }),
+              ],
+        ),
+    })
+
+    const links = await threadLinks()
+
+    expect(links.map((link) => link.textContent)).toEqual(["Deploy notes"])
+    expect(client.calls).toEqual([{ method: "thread.list", params: { filter: "sidebar" } }])
   })
 
   it("keeps a long title on one line beside its badge", async () => {
@@ -172,7 +192,7 @@ describe("an instance's threads", () => {
     await threadLinks()
 
     title = "Release plan"
-    await act(() => threadList(client).list())
+    await act(() => threadList(client, "all").list())
 
     expect((await threadLinks()).map((link) => link.textContent)).toEqual(["Release plan"])
   })

@@ -31,9 +31,11 @@ from kinby.contracts import (
     INSTANCE_SCOPES,
     ROUTINE_RUN,
     STATS_GET,
+    THREAD_ARCHIVE,
     THREAD_CREATE,
     THREAD_LIST,
     THREAD_SUBSCRIBE,
+    THREAD_UNARCHIVE,
     USAGE_GET,
     AccessToken,
     ApprovalRequested,
@@ -48,9 +50,12 @@ from kinby.contracts import (
     StatsBucketSize,
     StatsGetCommand,
     StatsSummary,
+    ThreadArchiveCommand,
     ThreadCreateCommand,
+    ThreadFilter,
     ThreadListCommand,
     ThreadSubscribeCommand,
+    ThreadUnarchiveCommand,
     TokenTotals,
     TurnFailed,
     TurnUsage,
@@ -609,7 +614,7 @@ async def _thread_for_session(
         if isinstance(created, ErrorEnvelope):
             return created
         return created.id
-    listed = await client.call(THREAD_LIST, ThreadListCommand())
+    listed = await client.call(THREAD_LIST, ThreadListCommand(filter=ThreadFilter.ALL))
     if isinstance(listed, ErrorEnvelope):
         return listed
     if thread_id not in {thread.id for thread in listed.threads}:
@@ -631,13 +636,31 @@ async def _create_thread(client: ContractClient, title: str | None) -> int:
     return 0
 
 
-async def _list_threads(client: ContractClient) -> int:
-    listed = await client.call(THREAD_LIST, ThreadListCommand())
+async def _list_threads(client: ContractClient, thread_filter: ThreadFilter) -> int:
+    listed = await client.call(THREAD_LIST, ThreadListCommand(filter=thread_filter))
     if isinstance(listed, ErrorEnvelope):
         print(format_error(listed), file=sys.stderr)
         return 1
     for thread in listed.threads:
         print(f"{thread.id}\t{thread.created_at.isoformat()}\t{thread.title or ''}")
+    return 0
+
+
+async def _archive_thread(client: ContractClient, thread_id: UUID) -> int:
+    archived = await client.call(THREAD_ARCHIVE, ThreadArchiveCommand(thread_id=thread_id))
+    if isinstance(archived, ErrorEnvelope):
+        print(format_error(archived), file=sys.stderr)
+        return 1
+    print(f"archived {archived.id}")
+    return 0
+
+
+async def _unarchive_thread(client: ContractClient, thread_id: UUID) -> int:
+    unarchived = await client.call(THREAD_UNARCHIVE, ThreadUnarchiveCommand(thread_id=thread_id))
+    if isinstance(unarchived, ErrorEnvelope):
+        print(format_error(unarchived), file=sys.stderr)
+        return 1
+    print(f"unarchived {unarchived.id}")
     return 0
 
 
@@ -868,7 +891,7 @@ def main(
     )
     thread_parser = subparsers.add_parser(
         "thread",
-        help="create and list threads",
+        help="create, list and archive threads",
     )
     thread_subparsers = thread_parser.add_subparsers(dest="thread_command")
     thread_create_parser = thread_subparsers.add_parser(
@@ -882,6 +905,25 @@ def main(
         help="list threads",
     )
     _add_instance_selector(thread_list_parser, "instance whose threads to list")
+    thread_list_parser.add_argument(
+        "--filter",
+        type=ThreadFilter,
+        choices=list(ThreadFilter),
+        default=ThreadFilter.SIDEBAR,
+        help="which threads to list: the sidebar's (the default), all, or the archived ones",
+    )
+    thread_archive_parser = thread_subparsers.add_parser(
+        "archive",
+        help="archive a thread, which leaves the sidebar",
+    )
+    thread_archive_parser.add_argument("thread_id", type=UUID, help="thread to archive")
+    _add_instance_selector(thread_archive_parser, "instance that owns the thread")
+    thread_unarchive_parser = thread_subparsers.add_parser(
+        "unarchive",
+        help="bring an archived thread back to the sidebar",
+    )
+    thread_unarchive_parser.add_argument("thread_id", type=UUID, help="thread to unarchive")
+    _add_instance_selector(thread_unarchive_parser, "instance that owns the thread")
     routine_parser = subparsers.add_parser("routine", help="list and run routines")
     routine_subparsers = routine_parser.add_subparsers(dest="routine_command")
     routine_list = routine_subparsers.add_parser("list", help="show routine schedules and history")
@@ -1007,11 +1049,16 @@ def main(
                 _print_instance(instance)
                 with runtime_lock(instance.manifest.state_dir):
                     return asyncio.run(_serve_instance(instance))
-            case "thread" if args.thread_command in {"create", "list"}:
+            case "thread" if args.thread_command is not None:
                 client = _contract_client(_load_selected_instance(args), now)
-                if args.thread_command == "create":
-                    return asyncio.run(_create_thread(client, args.title))
-                return asyncio.run(_list_threads(client))
+                match args.thread_command:
+                    case "create":
+                        return asyncio.run(_create_thread(client, args.title))
+                    case "archive":
+                        return asyncio.run(_archive_thread(client, args.thread_id))
+                    case "unarchive":
+                        return asyncio.run(_unarchive_thread(client, args.thread_id))
+                return asyncio.run(_list_threads(client, args.filter))
             case "routine" if args.routine_command in {"list", "run"}:
                 instance = _load_selected_instance(args)
                 if args.routine_command == "run":
