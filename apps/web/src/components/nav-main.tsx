@@ -5,7 +5,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import { openUsage, USAGE_PATH } from "@/lib/selection"
-import { ChartColumnIcon, MessagesSquareIcon } from "lucide-react"
+import { ChartColumnIcon } from "lucide-react"
 
 /** The hub's own pages, above the instances. */
 export function NavMain({ usageOpen }: { usageOpen: boolean }) {
@@ -28,13 +28,6 @@ export function NavMain({ usageOpen }: { usageOpen: boolean }) {
               </a>
             }
           />
-        </SidebarMenuItem>
-        {/* A placeholder until the flow that owns it lands. */}
-        <SidebarMenuItem>
-          <SidebarMenuButton tooltip="Threads">
-            <MessagesSquareIcon />
-            <span>Threads</span>
-          </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>
     </SidebarGroup>

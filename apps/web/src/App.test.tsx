@@ -420,6 +420,13 @@ describe("the usage page", () => {
     )
   })
 
+  it("is the only hub page above the instances, which own their threads", async () => {
+    openApp({ signedIn: true, instances: [ada] })
+
+    await instanceLink("Ada")
+    expect(screen.queryByRole("button", { name: "Threads" })).toBeNull()
+  })
+
   it("restores the usage page from the URL", async () => {
     window.history.replaceState(null, "", "/usage")
 
