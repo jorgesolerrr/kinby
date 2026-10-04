@@ -23,6 +23,7 @@ function thread(fields: Pick<ThreadSummary, "id"> & Partial<ThreadSummary>): Thr
     mode: "ask",
     mode_pinned: false,
     archived: false,
+    origin: { kind: "user" },
     ...fields,
   }
 }

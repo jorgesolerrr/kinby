@@ -628,6 +628,7 @@ describe("a thread's panel", () => {
             mode: "ask",
             mode_pinned: false,
             archived: false,
+            origin: { kind: "user" },
           },
         ],
         ceiling: "full-access",

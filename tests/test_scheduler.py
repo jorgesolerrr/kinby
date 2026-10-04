@@ -187,7 +187,7 @@ def test_scheduled_fire_through_dispatcher(tmp_path: Path) -> None:
         clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
         await dispatcher.scheduler.tick()
         await dispatcher.scheduler.drain()
-        threads = await call(dispatcher, "thread.list")
+        threads = await call(dispatcher, "thread.list", filter="all")
         assert isinstance(threads, ThreadListResult)
         assert len(threads.threads) == 1
         assert threads.threads[0].title == "news · 2026-09-06 09:01 UTC"
@@ -230,7 +230,7 @@ def test_start_catches_up_once(tmp_path, catch_up, history, expected):
         dispatcher = runtime(instance, clock)
         await dispatcher.scheduler.tick()
         await dispatcher.scheduler.tick()
-        threads = await call(dispatcher, "thread.list")
+        threads = await call(dispatcher, "thread.list", filter="all")
         assert len(threads.threads) == int(history) + expected
         if expected:
             listed = await call(dispatcher, "routine.list")
@@ -250,7 +250,7 @@ def test_interrupted_scheduled_run_does_not_catch_up_after_restart(tmp_path):
 
         clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
         ticking = asyncio.create_task(dispatcher.scheduler.tick())
-        while not (await call(dispatcher, "thread.list")).threads:
+        while not (await call(dispatcher, "thread.list", filter="all")).threads:
             await asyncio.sleep(0)
         await dispatcher.scheduler.interrupt()
         await ticking
@@ -267,7 +267,7 @@ def test_interrupted_scheduled_run_does_not_catch_up_after_restart(tmp_path):
         restarted = runtime(instance, clock)
         await restarted.scheduler.tick()
 
-        threads = await call(restarted, "thread.list")
+        threads = await call(restarted, "thread.list", filter="all")
         assert len(threads.threads) == 1
         listed = await call(restarted, "routine.list")
         assert listed.routines[0].last_run.outcome == "interrupted"
@@ -296,7 +296,7 @@ def test_madrid_schedule_across_dst(tmp_path, start, expected):
         assert listed.routines[0].next_run == datetime.fromisoformat(expected)
         clock.now = datetime.fromisoformat(expected)
         await dispatcher.scheduler.tick()
-        assert len((await call(dispatcher, "thread.list")).threads) == 1
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 1
 
     asyncio.run(scenario())
 
@@ -318,7 +318,7 @@ def test_fired_routine_thread_is_titled_with_local_minute(tmp_path: Path) -> Non
         clock.now = datetime(2026, 9, 6, 7, 0, 42, 838099, tzinfo=UTC)
         await dispatcher.scheduler.tick()
         await dispatcher.scheduler.drain()
-        threads = await call(dispatcher, "thread.list")
+        threads = await call(dispatcher, "thread.list", filter="all")
         assert isinstance(threads, ThreadListResult)
         assert [thread.title for thread in threads.threads] == ["news · 2026-09-06 09:00 CEST"]
 
@@ -349,7 +349,7 @@ def test_delivery_thread_is_titled_with_its_id_or_local_minute(
             ),
             RoutineTrigger.SIGNAL,
         )
-        threads = await call(dispatcher, "thread.list")
+        threads = await call(dispatcher, "thread.list", filter="all")
         assert isinstance(threads, ThreadListResult)
         assert [thread.title for thread in threads.threads] == [title]
 
@@ -366,14 +366,14 @@ def test_reload_and_invalid_schedules(tmp_path):
         path.write_text(path.read_text().replace("0 9", "0 10"))
         clock.now = datetime(2026, 9, 6, 9, tzinfo=UTC)
         await dispatcher.scheduler.tick()
-        assert len((await call(dispatcher, "thread.list")).threads) == 0
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 0
         assert (await call(dispatcher, "routine.list")).routines[0].next_run.hour == 10
         path.write_text(
             path.read_text().replace("description: News", "description: News\nenabled: false")
         )
         clock.now = datetime(2026, 9, 6, 10, tzinfo=UTC)
         await dispatcher.scheduler.tick()
-        assert len((await call(dispatcher, "thread.list")).threads) == 0
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 0
         path.write_text(path.read_text().replace("0 10 * * *", "invalid"))
         listed = await call(dispatcher, "routine.list")
         assert listed.routines == []
@@ -525,7 +525,7 @@ def test_failure_notices_disable_and_restart(tmp_path):
         assert path.read_text() == original.replace("enabled: true", "enabled: false", 1)
         clock.now = datetime(2026, 9, 6, 10, tzinfo=UTC)
         await dispatcher.scheduler.tick()
-        assert len((await call(dispatcher, "thread.list")).threads) == 10
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 10
         dispatcher = runtime(instance, clock, runner)
         await dispatcher.scheduler.tick()
         assert (await call(dispatcher, "routine.list")).routines[0].failure_count == 10
@@ -618,7 +618,7 @@ def test_worker_fires_and_drains(tmp_path):
         clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
         dispatcher.scheduler.schedule()
         async with asyncio.timeout(3):
-            while not (await call(dispatcher, "thread.list")).threads:
+            while not (await call(dispatcher, "thread.list", filter="all")).threads:
                 await asyncio.sleep(0)
         await dispatcher.scheduler.stop()
         listed = await call(dispatcher, "routine.list")
@@ -689,7 +689,7 @@ def test_receive_records_delivery_and_drops_repeated_id(tmp_path: Path) -> None:
         assert not accepted.repeated
         assert repeated.repeated
         assert repeated.accepted == accepted.accepted
-        threads = await call(dispatcher, "thread.list")
+        threads = await call(dispatcher, "thread.list", filter="all")
         assert isinstance(threads, ThreadListResult)
         assert [(thread.id, thread.title) for thread in threads.threads] == [
             (accepted.accepted.thread_id, "issues · delivery-1")
@@ -1291,7 +1291,7 @@ def test_daily_refusal_leaves_failure_count_unchanged(tmp_path):
         assert dispatcher.scheduler is not None
         refused = await call(dispatcher, "routine.run", name="news")
         assert refused.code == "BUDGET_EXCEEDED"
-        assert len((await call(dispatcher, "thread.list")).threads) == 1
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 1
         accepted = await call(
             dispatcher,
             "routine.run",
@@ -1304,7 +1304,7 @@ def test_daily_refusal_leaves_failure_count_unchanged(tmp_path):
         await dispatcher.scheduler.tick()
         clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
         await dispatcher.scheduler.tick()
-        assert len((await call(dispatcher, "thread.list")).threads) == 2
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 2
         await dispatcher.scheduler.drain()
         routine = (await call(dispatcher, "routine.list")).routines[0]
         assert routine.failure_count == 1 and len(routine.notices) == 1
@@ -1326,7 +1326,7 @@ def test_many_frequent_routines_have_no_artificial_limit(tmp_path):
         clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
         for _ in range(21):
             await dispatcher.scheduler.tick()
-        assert len((await call(dispatcher, "thread.list")).threads) == 21
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 21
 
     asyncio.run(scenario())
 
@@ -1610,7 +1610,7 @@ def test_scheduler_keeps_the_last_valid_timezone_when_the_manifest_breaks(tmp_pa
         await dispatcher.scheduler.tick()
         clock.now = datetime(2026, 9, 6, 9, tzinfo=UTC)
         await dispatcher.scheduler.tick()
-        assert len((await call(dispatcher, "thread.list")).threads) == 1
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 1
 
     asyncio.run(scenario())
 

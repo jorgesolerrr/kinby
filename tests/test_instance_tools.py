@@ -228,7 +228,7 @@ def fetch() -> str:
         assert result == "Deleted routines/news/."
         assert not target.exists()
         assert (await call(dispatcher, "routine.list")).routines == []
-        assert (await call(dispatcher, "thread.list")).threads == []
+        assert (await call(dispatcher, "thread.list", filter="all")).threads == []
 
     asyncio.run(scenario())
 
@@ -306,7 +306,7 @@ def test_routine_delete_refuses_pending_deliveries_and_they_still_fire(
         await dispatcher.scheduler.tick()
         await dispatcher.scheduler.tick()
         assert (await call(dispatcher, "routine.list")).routines[0].pending == 0
-        assert len((await call(dispatcher, "thread.list")).threads) == 2
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 2
 
     asyncio.run(scenario())
 

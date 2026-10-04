@@ -802,7 +802,7 @@ def test_the_scheduler_fires_a_renamed_routine_once_under_each_name(tmp_path: Pa
         await dispatcher.scheduler.tick()
         await dispatcher.scheduler.drain()
 
-        threads = (await call(dispatcher, "thread.list")).threads
+        threads = (await call(dispatcher, "thread.list", filter="all")).threads
         assert sorted(thread.title for thread in threads) == [
             "headlines · 2026-09-28 08:02 UTC",
             "news · 2026-09-28 08:01 UTC",
@@ -1115,7 +1115,7 @@ def test_a_new_routines_timezone_applies_at_the_next_tick(tmp_path: Path) -> Non
         assert listed.routines[0].next_run == datetime(2026, 9, 6, 7, tzinfo=UTC)
         clock.now = datetime(2026, 9, 6, 7, tzinfo=UTC)
         await dispatcher.scheduler.tick()
-        assert len((await call(dispatcher, "thread.list")).threads) == 1
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 1
 
     asyncio.run(scenario())
 

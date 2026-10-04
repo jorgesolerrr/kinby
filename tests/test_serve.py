@@ -105,7 +105,9 @@ def test_boot_instance_starts_the_scheduler(tmp_path, monkeypatch) -> None:
             runtime.scheduler.schedule()
             async with asyncio.timeout(3):
                 while True:
-                    threads = await runtime.dispatcher.dispatch("thread.list", {}, set(Scope))
+                    threads = await runtime.dispatcher.dispatch(
+                        "thread.list", {"filter": "all"}, set(Scope)
+                    )
                     assert isinstance(threads, ThreadListResult)
                     if threads.threads:
                         break
