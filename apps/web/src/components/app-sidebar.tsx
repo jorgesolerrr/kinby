@@ -1,4 +1,4 @@
-import type { InstanceSummary } from "@kinby/contract"
+import type { Client, Clock, InstanceSummary } from "@kinby/contract"
 import type * as React from "react"
 
 import { NavInstances } from "@/components/nav-instances"
@@ -21,6 +21,8 @@ export function AppSidebar({
   selected,
   creating,
   usageOpen,
+  client,
+  clock,
   threads,
   onSignOut,
   ...props
@@ -29,6 +31,9 @@ export function AppSidebar({
   selected: InstanceSummary | undefined
   creating: boolean
   usageOpen: boolean
+  /** Reaches the instances that are not selected, to count their threads that need the user. */
+  client: Pick<Client, "instance">
+  clock: Clock
   /** The selected instance's threads, when it has them to show. */
   threads: React.ReactNode
   onSignOut: () => void
@@ -51,6 +56,8 @@ export function AppSidebar({
           instances={instances}
           selected={selected}
           creating={creating}
+          client={client}
+          clock={clock}
           threads={threads}
         />
       </SidebarContent>

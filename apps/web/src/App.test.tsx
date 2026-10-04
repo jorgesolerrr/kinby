@@ -258,7 +258,9 @@ describe("the instances", () => {
 
     expect(await screen.findByText("Start it to see its memory.")).toBeDefined()
     expect(screen.queryByRole("tab", { name: "Knowledge graph" })).toBeNull()
-    expect(hub.sockets).toHaveLength(1)
+    expect(hub.sockets.map((socket) => socket.url)).not.toContain(
+      "ws://hub.test/instances/hub-unnamed/ws",
+    )
   })
 
   it("opens a running instance's stats from its page, and puts it in the URL", async () => {
@@ -286,7 +288,9 @@ describe("the instances", () => {
 
     expect(await screen.findByText("Start it to see its stats.")).toBeDefined()
     expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull()
-    expect(hub.sockets).toHaveLength(1)
+    expect(hub.sockets.map((socket) => socket.url)).not.toContain(
+      "ws://hub.test/instances/hub-unnamed/ws",
+    )
   })
 
   it("restores the config panel from the URL", async () => {
@@ -319,7 +323,9 @@ describe("the instances", () => {
 
     expect((await instanceLink("research")).getAttribute("aria-current")).toBe("page")
     expect(screen.queryByRole("button", { name: "New thread" })).toBeNull()
-    expect(hub.sockets).toHaveLength(1)
+    expect(hub.sockets.map((socket) => socket.url)).not.toContain(
+      "ws://hub.test/instances/hub-unnamed/ws",
+    )
   })
 
   it("selects nothing when the URL names an instance the hub does not have", async () => {

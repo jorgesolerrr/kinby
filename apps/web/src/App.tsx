@@ -1,5 +1,5 @@
 import { browserClock } from "@kinby/contract"
-import type { Client, Clock, InstanceClient, InstanceSummary } from "@kinby/contract"
+import type { Client, Clock, InstanceSummary } from "@kinby/contract"
 import { cn } from "cn"
 import { useCallback, useSyncExternalStore } from "react"
 
@@ -13,7 +13,7 @@ import { UsagePage } from "@/components/usage-page"
 import { Badge } from "@/components/ui/badge"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { useFollowing } from "@/hooks/use-following"
+import { useInstanceClient } from "@/hooks/use-instance-client"
 import { usePolled } from "@/hooks/use-polled"
 import {
   useConfigOpen,
@@ -62,6 +62,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           selected={selected}
           creating={creating}
           usageOpen={usageOpen}
+          client={client}
+          clock={clock}
           threads={
             instanceClient !== undefined &&
             running !== undefined && (
@@ -124,20 +126,4 @@ function useInstances(
     [client],
   )
   return usePolled(list, clock, connected, LIST_INTERVAL_MS)
-}
-
-/** One instance's own connection, open while `instanceId` names it and closed after. */
-function useInstanceClient(
-  client: Client,
-  instanceId: string | undefined,
-): InstanceClient | undefined {
-  const open = useCallback(
-    (instanceId: string, report: (opened: InstanceClient) => void) => {
-      const opened = client.instance(instanceId)
-      report(opened)
-      return () => opened.close()
-    },
-    [client],
-  )
-  return useFollowing(instanceId, open)
 }
