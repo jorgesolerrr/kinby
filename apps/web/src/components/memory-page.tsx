@@ -686,7 +686,7 @@ function Origin({
   instanceId: string
   opened: MemoryOpenResult
 }) {
-  const threads = threadList(client)
+  const threads = threadList(client, "all")
   const listed = useSyncExternalStore(threads.onChange, threads.view)
   const threadId = opened.thread
   const thread = listed?.threads.find((summary) => summary.id === threadId)

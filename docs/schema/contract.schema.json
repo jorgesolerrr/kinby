@@ -5043,6 +5043,20 @@
       "title": "ThreadApprovalRespondCommand",
       "type": "object"
     },
+    "ThreadArchiveCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id"
+      ],
+      "title": "ThreadArchiveCommand",
+      "type": "object"
+    },
     "ThreadCreateCommand": {
       "additionalProperties": false,
       "properties": {
@@ -5080,9 +5094,22 @@
       "title": "ThreadCreateResult",
       "type": "object"
     },
+    "ThreadFilter": {
+      "enum": [
+        "sidebar",
+        "all",
+        "archived"
+      ],
+      "title": "ThreadFilter",
+      "type": "string"
+    },
     "ThreadListCommand": {
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "filter": {
+          "$ref": "#/$defs/ThreadFilter"
+        }
+      },
       "title": "ThreadListCommand",
       "type": "object"
     },
@@ -5176,6 +5203,9 @@
     "ThreadSummary": {
       "additionalProperties": false,
       "properties": {
+        "archived": {
+          "type": "boolean"
+        },
         "created_at": {
           "format": "date-time",
           "type": "string"
@@ -5215,7 +5245,8 @@
         "status",
         "last_activity_at",
         "mode",
-        "mode_pinned"
+        "mode_pinned",
+        "archived"
       ],
       "title": "ThreadSummary",
       "type": "object"
@@ -5456,6 +5487,20 @@
         "targets"
       ],
       "title": "ThreadTurnTargetListResult",
+      "type": "object"
+    },
+    "ThreadUnarchiveCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id"
+      ],
+      "title": "ThreadUnarchiveCommand",
       "type": "object"
     },
     "ThreadUsage": {
@@ -7193,6 +7238,22 @@
           ],
           "type": "object"
         },
+        "thread.archive": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadArchiveCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadSummary"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "thread.create": {
           "additionalProperties": false,
           "properties": {
@@ -7385,6 +7446,22 @@
           ],
           "type": "object"
         },
+        "thread.unarchive": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadUnarchiveCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadSummary"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "tool.list": {
           "additionalProperties": false,
           "properties": {
@@ -7422,6 +7499,8 @@
         "thread.create",
         "thread.list",
         "thread.rename",
+        "thread.archive",
+        "thread.unarchive",
         "thread.mode.set",
         "thread.turn.start",
         "thread.turn.diff",

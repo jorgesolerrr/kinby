@@ -15,7 +15,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { reason } from "@/lib/operation"
 import { threadList, threadTitle } from "@/lib/thread-list"
-import { PencilIcon } from "lucide-react"
+import { ArchiveIcon, ArchiveRestoreIcon, PencilIcon } from "lucide-react"
 
 /** Every mode, from the least the instance may do to the most. */
 const MODES: { mode: PermissionMode; label: string; hint: string }[] = [
@@ -26,8 +26,9 @@ const MODES: { mode: PermissionMode; label: string; hint: string }[] = [
 ]
 
 /**
- * The thread's title, which a click renames, and the mode it runs in. Both come from the instance's
- * thread list, which is read again after each change so the sidebar shows it too.
+ * The thread's title, which a click renames, the mode it runs in, and archive or unarchive. They
+ * come from the instance's full thread list, so an archived thread keeps its header, and the lists
+ * are read again after each change so the sidebar shows it too.
  */
 export function ThreadHeader({
   client,
@@ -37,7 +38,7 @@ export function ThreadHeader({
   threadId: string
 }) {
   const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
-  const threads = threadList(client)
+  const threads = threadList(client, "all")
   const listed = useSyncExternalStore(threads.onChange, threads.view)
   const thread = listed?.threads.find((summary) => summary.id === threadId)
   const missing = thread === undefined
@@ -78,6 +79,16 @@ export function ThreadHeader({
           ceiling={listed.ceiling}
           onPick={(mode) =>
             change(() => client.call("thread.mode.set", { thread_id: threadId, mode }))
+          }
+        />
+        <ArchiveButton
+          archived={thread.archived}
+          onToggle={() =>
+            change(() =>
+              client.call(thread.archived ? "thread.unarchive" : "thread.archive", {
+                thread_id: threadId,
+              }),
+            )
           }
         />
       </div>
@@ -211,5 +222,32 @@ function ModePicker({
         </SelectGroup>
       </SelectContent>
     </Select>
+  )
+}
+
+/** Archive puts the thread away, out of the sidebar, and unarchive brings it back. */
+function ArchiveButton({
+  archived,
+  onToggle,
+}: {
+  archived: boolean
+  onToggle: () => Promise<boolean>
+}) {
+  const [changing, setChanging] = useState(false)
+  const toggle = async () => {
+    if (changing) return
+    setChanging(true)
+    await onToggle()
+    setChanging(false)
+  }
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      aria-label={archived ? "Unarchive" : "Archive"}
+      onClick={() => void toggle()}
+    >
+      {changing ? <Spinner /> : archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
+    </Button>
   )
 }

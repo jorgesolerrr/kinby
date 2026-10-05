@@ -46,6 +46,7 @@ from kinby.contracts import (
     SKILL_WRITE,
     STATS_GET,
     THREAD_APPROVAL_RESPOND,
+    THREAD_ARCHIVE,
     THREAD_CREATE,
     THREAD_LIST,
     THREAD_MODE_SET,
@@ -59,6 +60,7 @@ from kinby.contracts import (
     THREAD_TURN_REVERT_PREVIEW,
     THREAD_TURN_START,
     THREAD_TURN_TARGET_LIST,
+    THREAD_UNARCHIVE,
     TOOL_LIST,
     USAGE_GET,
     AcceptedResult,
@@ -77,6 +79,7 @@ from kinby.contracts import (
     StatsGetResult,
     Stream,
     Subscription,
+    ThreadArchiveCommand,
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListCommand,
@@ -85,6 +88,7 @@ from kinby.contracts import (
     ThreadSubscribeCommand,
     ThreadSummary,
     ThreadTurnRateCommand,
+    ThreadUnarchiveCommand,
     TurnRated,
     TurnStarted,
     UsageGetCommand,
@@ -101,7 +105,7 @@ from kinby.core.pricing import price_map
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
 from kinby.core.stats import TurnRun, active_limits, plan_use, stats_buckets, stats_summary
-from kinby.core.threads import ThreadStore, thread_list, thread_summary
+from kinby.core.threads import ThreadRecord, ThreadStore, thread_list, thread_summary
 from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnPreparation, TurnRunner, Turns
@@ -341,11 +345,19 @@ def build_dispatcher(
         return store.create(command.title)
 
     async def list_threads(command: ThreadListCommand) -> ThreadListResult:
-        return thread_list(store.threads(), event_log.all_events(), permissions())
+        return thread_list(store.threads(), event_log.all_events(), permissions(), command.filter)
+
+    def summary(thread: ThreadRecord) -> ThreadSummary:
+        return thread_summary(thread, event_log.stored(thread.id), permissions())
 
     async def rename_thread(command: ThreadRenameCommand) -> ThreadSummary:
-        renamed = store.rename(command.thread_id, command.title)
-        return thread_summary(renamed, event_log.stored(command.thread_id), permissions())
+        return summary(store.rename(command.thread_id, command.title))
+
+    async def archive_thread(command: ThreadArchiveCommand) -> ThreadSummary:
+        return summary(store.archive(command.thread_id))
+
+    async def unarchive_thread(command: ThreadUnarchiveCommand) -> ThreadSummary:
+        return summary(store.unarchive(command.thread_id))
 
     async def get_usage(command: UsageGetCommand) -> UsageGetResult:
         return usage_totals(
@@ -427,6 +439,8 @@ def build_dispatcher(
     dispatcher.register(THREAD_CREATE, create_thread)
     dispatcher.register(THREAD_LIST, list_threads)
     dispatcher.register(THREAD_RENAME, rename_thread)
+    dispatcher.register(THREAD_ARCHIVE, archive_thread)
+    dispatcher.register(THREAD_UNARCHIVE, unarchive_thread)
     dispatcher.register(USAGE_GET, get_usage)
     dispatcher.register(STATS_GET, get_stats)
     dispatcher.register(INSTANCE_PROBE, probe)

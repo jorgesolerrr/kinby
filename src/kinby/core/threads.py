@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +16,7 @@ from kinby.contracts import (
     ModePinned,
     PermissionMode,
     ThreadCreateResult,
+    ThreadFilter,
     ThreadListResult,
     ThreadStatus,
     ThreadSummary,
@@ -39,6 +40,8 @@ class ThreadRecord(BaseModel):
     id: UUID
     title: str | None
     created_at: datetime
+    #: Records from before threads could be archived carry no flag.
+    archived: bool = False
 
 
 @dataclass(frozen=True)
@@ -48,7 +51,9 @@ class PendingApproval:
 
 
 class ThreadStore:
-    """Append-only: a rename appends the thread's record again, and its latest record wins."""
+    """Append-only: a rename or an archive appends the thread's record again, and its latest
+    record wins.
+    """
 
     def __init__(self, state_dir: Path) -> None:
         self._path = state_dir / THREADS_NAME
@@ -59,12 +64,13 @@ class ThreadStore:
         return ThreadCreateResult(id=thread.id, created_at=thread.created_at)
 
     def rename(self, thread_id: UUID, title: str) -> ThreadRecord:
-        thread = self.thread(thread_id)
-        if thread is None:
-            raise ThreadNotFound(f'Thread "{thread_id}" was not found.')
-        renamed = thread.model_copy(update={"title": title})
-        self._append(renamed)
-        return renamed
+        return self._change(thread_id, {"title": title})
+
+    def archive(self, thread_id: UUID) -> ThreadRecord:
+        return self._change(thread_id, {"archived": True})
+
+    def unarchive(self, thread_id: UUID) -> ThreadRecord:
+        return self._change(thread_id, {"archived": False})
 
     def threads(self) -> list[ThreadRecord]:
         """Each thread once, in the order they were created."""
@@ -82,6 +88,16 @@ class ThreadStore:
 
     def exists(self, thread_id: UUID) -> bool:
         return self.thread(thread_id) is not None
+
+    def _change(self, thread_id: UUID, update: Mapping[str, object]) -> ThreadRecord:
+        """Record the thread again with *update*, unless it already reads that way."""
+        thread = self.thread(thread_id)
+        if thread is None:
+            raise ThreadNotFound(f'Thread "{thread_id}" was not found.')
+        changed = thread.model_copy(update=update)
+        if changed != thread:
+            self._append(changed)
+        return changed
 
     def _append(self, thread: ThreadRecord) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -113,13 +129,31 @@ def events_by_thread(
 
 
 def thread_list(
-    threads: Sequence[ThreadRecord], events: Iterable[Event], policy: GatePolicy
+    threads: Sequence[ThreadRecord],
+    events: Iterable[Event],
+    policy: GatePolicy,
+    thread_filter: ThreadFilter,
 ) -> ThreadListResult:
-    """Summarize each thread from its events, the most recently active first."""
+    """Summarize each thread the filter takes from its events, the most recently active first."""
     grouped = events_by_thread(threads, events)
-    summaries = [thread_summary(thread, grouped[thread.id], policy) for thread in threads]
+    summaries = [
+        summary
+        for summary in (thread_summary(thread, grouped[thread.id], policy) for thread in threads)
+        if is_in(summary, thread_filter)
+    ]
     summaries.sort(key=lambda summary: summary.last_activity_at, reverse=True)
     return ThreadListResult(threads=summaries, ceiling=policy.ceiling)
+
+
+def is_in(summary: ThreadSummary, thread_filter: ThreadFilter) -> bool:
+    match thread_filter:
+        case ThreadFilter.SIDEBAR:
+            # Archiving never hides an approval that waits on the user.
+            return not summary.archived or summary.status is ThreadStatus.AWAITING_APPROVAL
+        case ThreadFilter.ARCHIVED:
+            return summary.archived
+        case ThreadFilter.ALL:
+            return True
 
 
 def thread_summary(
@@ -134,6 +168,7 @@ def thread_summary(
         last_activity_at=events[-1].timestamp if events else thread.created_at,
         mode=constrain_mode(pinned or policy.mode, policy.ceiling),
         mode_pinned=pinned is not None,
+        archived=thread.archived,
     )
 
 

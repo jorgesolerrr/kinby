@@ -581,14 +581,29 @@ class ThreadCreateResult(ContractModel):
     created_at: datetime
 
 
+class ThreadFilter(StrEnum):
+    #: The threads the sidebar shows: every thread not archived, and any awaiting approval.
+    SIDEBAR = "sidebar"
+    ALL = "all"
+    ARCHIVED = "archived"
+
+
 class ThreadListCommand(ContractModel):
-    pass
+    filter: ThreadFilter = ThreadFilter.SIDEBAR
 
 
 class ThreadRenameCommand(ContractModel):
     thread_id: UUID
     #: Trimmed before it is checked, so a title of spaces is empty.
     title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+
+
+class ThreadArchiveCommand(ContractModel):
+    thread_id: UUID
+
+
+class ThreadUnarchiveCommand(ContractModel):
+    thread_id: UUID
 
 
 class ThreadStatus(StrEnum):
@@ -608,6 +623,7 @@ class ThreadSummary(ContractModel):
     #: The pinned mode, or the instance's default when none is pinned, capped at the ceiling.
     mode: PermissionMode
     mode_pinned: bool
+    archived: bool
 
 
 class ThreadListResult(ContractModel):

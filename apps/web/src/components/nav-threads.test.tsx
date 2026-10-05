@@ -1,3 +1,4 @@
+import { CallError } from "@kinby/contract"
 import type { ThreadListResult, ThreadSummary } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen, within } from "@testing-library/react"
@@ -16,6 +17,7 @@ function thread(fields: Pick<ThreadSummary, "id"> & Partial<ThreadSummary>): Thr
     status: "idle",
     mode: "ask",
     mode_pinned: false,
+    archived: false,
     ...fields,
   }
 }
@@ -83,6 +85,45 @@ describe("an instance's threads", () => {
       "Nightly digestfailed",
       "Groceries",
     ])
+  })
+
+  it("lists the instance's sidebar set, which leaves archived threads out", async () => {
+    const { client } = openThreads({
+      "thread.list": ({ filter }) =>
+        listing(
+          filter === "sidebar"
+            ? [thread({ id: "t1", title: "Deploy notes" })]
+            : [
+                thread({ id: "t1", title: "Deploy notes" }),
+                thread({ id: "t2", title: "Groceries", archived: true }),
+              ],
+        ),
+    })
+
+    const links = await threadLinks()
+
+    expect(links.map((link) => link.textContent)).toEqual(["Deploy notes"])
+    expect(client.calls).toEqual([{ method: "thread.list", params: { filter: "sidebar" } }])
+  })
+
+  it("lists every thread of a core from before archiving, which refuses the filter", async () => {
+    const { client } = openThreads({
+      "thread.list": (params) => {
+        if ("filter" in params) {
+          throw new CallError({
+            code: "INVALID_ARGUMENT",
+            message: "filter: Extra inputs are not permitted",
+            retryable: false,
+          })
+        }
+        return listing([thread({ id: "t1", title: "Deploy notes" })])
+      },
+    })
+
+    const links = await threadLinks()
+
+    expect(links.map((link) => link.textContent)).toEqual(["Deploy notes"])
+    expect(client.calls.at(-1)).toEqual({ method: "thread.list", params: {} })
   })
 
   it("keeps a long title on one line beside its badge", async () => {
@@ -172,7 +213,7 @@ describe("an instance's threads", () => {
     await threadLinks()
 
     title = "Release plan"
-    await act(() => threadList(client).list())
+    await act(() => threadList(client, "all").list())
 
     expect((await threadLinks()).map((link) => link.textContent)).toEqual(["Release plan"])
   })

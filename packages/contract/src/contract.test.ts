@@ -162,6 +162,25 @@ test("thread.rename takes a title and returns the thread's summary", () => {
   expectTypeOf<Rename["result"]>().toEqualTypeOf<ThreadSummary>()
 })
 
+test("thread.list takes a filter, and each thread says whether it is archived", () => {
+  type List = Contract["methods"]["thread.list"]
+
+  expectTypeOf<List["command"]>().toEqualTypeOf<{
+    filter?: "sidebar" | "all" | "archived"
+  }>()
+  expectTypeOf<List["result"]["threads"][number]["archived"]>().toEqualTypeOf<boolean>()
+})
+
+test("thread.archive and thread.unarchive take a thread and return its summary", () => {
+  type Archive = Contract["methods"]["thread.archive"]
+  type Unarchive = Contract["methods"]["thread.unarchive"]
+
+  expectTypeOf<Archive["command"]>().toEqualTypeOf<{ thread_id: string }>()
+  expectTypeOf<Archive["result"]>().toEqualTypeOf<ThreadSummary>()
+  expectTypeOf<Unarchive["command"]>().toEqualTypeOf<{ thread_id: string }>()
+  expectTypeOf<Unarchive["result"]>().toEqualTypeOf<ThreadSummary>()
+})
+
 test("thread.approval.respond takes a decision and, on a denial, a reason", () => {
   type Respond = Contract["methods"]["thread.approval.respond"]["command"]
   type Gated = Extract<Event["payload"], { type: "tool.gated" }>

@@ -91,6 +91,7 @@ from kinby.contracts.models import (
     StatsGetResult,
     StatsSummaryResult,
     ThreadApprovalRespondCommand,
+    ThreadArchiveCommand,
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListCommand,
@@ -111,6 +112,7 @@ from kinby.contracts.models import (
     ThreadTurnStartCommand,
     ThreadTurnTargetListCommand,
     ThreadTurnTargetListResult,
+    ThreadUnarchiveCommand,
     ToolListCommand,
     ToolListResult,
     UsageGetCommand,
@@ -145,6 +147,10 @@ THREAD_CREATE = Method(
 )
 THREAD_LIST = Method("thread.list", Scope.THREAD_READ, ThreadListCommand, ThreadListResult)
 THREAD_RENAME = Method("thread.rename", Scope.THREAD_OPERATE, ThreadRenameCommand, ThreadSummary)
+THREAD_ARCHIVE = Method("thread.archive", Scope.THREAD_OPERATE, ThreadArchiveCommand, ThreadSummary)
+THREAD_UNARCHIVE = Method(
+    "thread.unarchive", Scope.THREAD_OPERATE, ThreadUnarchiveCommand, ThreadSummary
+)
 THREAD_MODE_SET = Method(
     "thread.mode.set", Scope.THREAD_ADMIN, ThreadModeSetCommand, AcceptedResult
 )
@@ -320,6 +326,8 @@ METHODS = (
     THREAD_CREATE,
     THREAD_LIST,
     THREAD_RENAME,
+    THREAD_ARCHIVE,
+    THREAD_UNARCHIVE,
     THREAD_MODE_SET,
     THREAD_TURN_START,
     THREAD_TURN_DIFF,

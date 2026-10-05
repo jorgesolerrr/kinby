@@ -4,6 +4,8 @@ import {
   type InstanceClient,
   type Method,
   type PermissionMode,
+  type ThreadFilter,
+  type ThreadListCommand,
   type ThreadSummary,
 } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
@@ -25,6 +27,7 @@ function thread(fields: Partial<ThreadSummary> = {}): ThreadSummary {
     status: "idle",
     mode: "ask",
     mode_pinned: false,
+    archived: false,
     ...fields,
   }
 }
@@ -45,7 +48,7 @@ async function openHeader(
   const client = connected(
     stubCaller({ "thread.list": () => ({ threads: [listed()], ceiling }), ...calls }),
   )
-  await act(() => threadList(client).list())
+  await act(() => threadList(client, "all").list())
   render(<ThreadHeader client={client} threadId="t1" />)
   return client
 }
@@ -67,7 +70,7 @@ async function openHeaderOffline() {
       return new Promise<never>((_resolve, reject) => (fail = reject))
     },
   })
-  await act(() => threadList(client).list())
+  await act(() => threadList(client, "all").list())
   render(<ThreadHeader client={client} threadId="t1" />)
   const lost = new CallError({
     code: "CONNECTION_LOST",
@@ -277,6 +280,48 @@ describe("a thread's header", () => {
     expect(modePicker().textContent).toContain("Ask")
   })
 
+  it("archives the thread out of the sidebar beside it, and unarchives it back", async () => {
+    let archived = false
+    const put = (to: boolean) => () => {
+      archived = to
+      return thread({ archived })
+    }
+    const client = connected(
+      stubCaller({
+        "thread.list": ({ filter }) => ({
+          threads: filter === "sidebar" && archived ? [] : [thread({ archived })],
+          ceiling: "full-access",
+        }),
+        "thread.archive": put(true),
+        "thread.unarchive": put(false),
+      }),
+    )
+    render(
+      <SidebarProvider>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <NavThreads client={client} clock={fakeClock()} instanceId="hub-ada" />
+          </SidebarMenuItem>
+        </SidebarMenu>
+        <ThreadHeader client={client} threadId="t1" />
+      </SidebarProvider>,
+    )
+    const user = userEvent.setup()
+    await screen.findByRole("link", { name: "Deploy notes" })
+
+    await user.click(await screen.findByRole("button", { name: "Archive" }))
+
+    expect(client.calls).toContainEqual({ method: "thread.archive", params: { thread_id: "t1" } })
+    expect(screen.queryByRole("link", { name: "Deploy notes" })).toBeNull()
+    expect(screen.getByRole("heading").textContent).toBe("Deploy notes")
+
+    await user.click(screen.getByRole("button", { name: "Unarchive" }))
+
+    expect(client.calls).toContainEqual({ method: "thread.unarchive", params: { thread_id: "t1" } })
+    expect(screen.getByRole("link", { name: "Deploy notes" })).toBeDefined()
+    expect(screen.getByRole("button", { name: "Archive" })).toBeDefined()
+  })
+
   describe("without the sidebar", () => {
     it("lists the threads itself when nothing has listed them", async () => {
       const client = connected(
@@ -294,7 +339,7 @@ describe("a thread's header", () => {
       const client = connected(
         stubCaller({ "thread.list": () => ({ threads, ceiling: "full-access" }) }),
       )
-      await act(() => threadList(client).list())
+      await act(() => threadList(client, "all").list())
 
       threads = [thread()]
       render(<ThreadHeader client={client} threadId="t1" />)
@@ -365,12 +410,19 @@ describe("a thread's header", () => {
       </SidebarProvider>,
     )
     await screen.findByRole("heading")
-    const listings = () => client.calls.filter((call) => call.method === "thread.list").length
-    const onMount = listings()
+    const listings = (filter: ThreadFilter) =>
+      client.calls.filter(
+        (call) =>
+          call.method === "thread.list" && (call.params as ThreadListCommand).filter === filter,
+      ).length
+    const onMount = { sidebar: listings("sidebar"), all: listings("all") }
 
     for (const _ of [1, 2, 3]) await act(() => clock.advance(5_000))
 
-    expect(onMount).toBeLessThanOrEqual(2)
-    expect(listings() - onMount).toBe(3)
+    expect(onMount.sidebar).toBeLessThanOrEqual(2)
+    expect(onMount.all).toBeLessThanOrEqual(2)
+    // Each poll lists the full set the header reads along with the sidebar's own.
+    expect(listings("sidebar") - onMount.sidebar).toBe(3)
+    expect(listings("all") - onMount.all).toBe(3)
   })
 })

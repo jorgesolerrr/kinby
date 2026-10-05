@@ -804,8 +804,8 @@ def test_the_scheduler_fires_a_renamed_routine_once_under_each_name(tmp_path: Pa
 
         threads = (await call(dispatcher, "thread.list")).threads
         assert sorted(thread.title for thread in threads) == [
-            "headlines · 2026-09-28 08:02",
-            "news · 2026-09-28 08:01",
+            "headlines · 2026-09-28 08:02 UTC",
+            "news · 2026-09-28 08:01 UTC",
         ]
 
     asyncio.run(scenario())

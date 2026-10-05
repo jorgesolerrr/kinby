@@ -627,6 +627,7 @@ describe("a thread's panel", () => {
             status: "running",
             mode: "ask",
             mode_pinned: false,
+            archived: false,
           },
         ],
         ceiling: "full-access",
@@ -844,7 +845,7 @@ describe("a thread's panel", () => {
 
     it("leaves focus in the title being renamed when the approval clears", async () => {
       const { client, subscription } = await reopenParked(listed)
-      await act(() => threadList(client).list())
+      await act(() => threadList(client, "all").list())
       const user = userEvent.setup()
 
       await user.click(screen.getByRole("button", { name: "Deploy notes" }))
