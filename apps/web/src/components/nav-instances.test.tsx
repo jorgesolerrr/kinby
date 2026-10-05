@@ -55,6 +55,7 @@ function fakeHub(threads: Record<string, ThreadSummary[]>) {
           "thread.list": ({ filter }) => ({
             threads: inSet(threads[instanceId] ?? [], filter),
             ceiling: "full-access",
+            cursor: null,
           }),
         }),
         ...stubSubscriber(),

@@ -589,8 +589,21 @@ class ThreadFilter(StrEnum):
     ARCHIVED = "archived"
 
 
+class ThreadCursor(ContractModel):
+    """Where a page of threads ends: its last thread's activity and id, which the list sorts by."""
+
+    last_activity_at: datetime
+    id: UUID
+
+
 class ThreadListCommand(ContractModel):
     filter: ThreadFilter = ThreadFilter.SIDEBAR
+    #: Only this routine's runs, within the filter.
+    routine: RoutineName | None = None
+    #: Where the previous page ended. The next page holds the threads that sort below it.
+    cursor: ThreadCursor | None = None
+    #: The most threads on a page. Without one, a single page holds every thread.
+    limit: int | None = Field(default=None, ge=1)
 
 
 class ThreadRenameCommand(ContractModel):
@@ -630,9 +643,12 @@ class ThreadSummary(ContractModel):
 
 
 class ThreadListResult(ContractModel):
+    #: The most recently active first, and by id between threads active at the same moment.
     threads: list[ThreadSummary]
     #: The highest mode the instance lets a thread pin.
     ceiling: PermissionMode
+    #: What the next page starts below, or null on the last page.
+    cursor: ThreadCursor | None
 
 
 class IntendedState(StrEnum):

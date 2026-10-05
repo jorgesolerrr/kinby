@@ -16,9 +16,13 @@ from kinby.contracts import (
     ModePinned,
     Origin,
     PermissionMode,
+    RoutineName,
+    RoutineOrigin,
     SignalReceived,
     ThreadCreateResult,
+    ThreadCursor,
     ThreadFilter,
+    ThreadListCommand,
     ThreadListResult,
     ThreadStatus,
     ThreadSummary,
@@ -135,9 +139,9 @@ def thread_list(
     threads: Sequence[ThreadRecord],
     events: Iterable[Event],
     policy: GatePolicy,
-    thread_filter: ThreadFilter,
+    command: ThreadListCommand,
 ) -> ThreadListResult:
-    """Summarize each thread the filter takes from its events, the most recently active first."""
+    """Summarize each thread the command takes from its events, the most recently active first."""
     grouped = events_by_thread(threads, events)
     summaries = [
         summary
@@ -145,11 +149,22 @@ def thread_list(
         if is_in(
             summary := thread_summary(thread, grouped[thread.id], policy),
             grouped[thread.id],
-            thread_filter,
+            command.filter,
         )
+        and (command.routine is None or is_run_of(summary, command.routine))
+        and (command.cursor is None or sort_key(summary) < sort_key(command.cursor))
     ]
-    summaries.sort(key=lambda summary: summary.last_activity_at, reverse=True)
-    return ThreadListResult(threads=summaries, ceiling=policy.ceiling)
+    summaries.sort(key=sort_key, reverse=True)
+    page = summaries[: command.limit]
+    last = page[-1] if len(summaries) > len(page) else None
+    cursor = (
+        None if last is None else ThreadCursor(last_activity_at=last.last_activity_at, id=last.id)
+    )
+    return ThreadListResult(threads=page, ceiling=policy.ceiling, cursor=cursor)
+
+
+def sort_key(thread: ThreadSummary | ThreadCursor) -> tuple[datetime, UUID]:
+    return thread.last_activity_at, thread.id
 
 
 def is_in(summary: ThreadSummary, events: Sequence[Event], thread_filter: ThreadFilter) -> bool:
@@ -168,6 +183,10 @@ def is_in(summary: ThreadSummary, events: Sequence[Event], thread_filter: Thread
             return summary.archived
         case ThreadFilter.ALL:
             return True
+
+
+def is_run_of(summary: ThreadSummary, routine: RoutineName) -> bool:
+    return isinstance(summary.origin, RoutineOrigin) and summary.origin.name == routine
 
 
 def thread_summary(

@@ -632,6 +632,7 @@ describe("a thread's panel", () => {
           },
         ],
         ceiling: "full-access",
+        cursor: null,
       }),
     }
 
