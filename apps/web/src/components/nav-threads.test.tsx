@@ -1,3 +1,4 @@
+import { CallError } from "@kinby/contract"
 import type { ThreadListResult, ThreadSummary } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen, within } from "@testing-library/react"
@@ -103,6 +104,26 @@ describe("an instance's threads", () => {
 
     expect(links.map((link) => link.textContent)).toEqual(["Deploy notes"])
     expect(client.calls).toEqual([{ method: "thread.list", params: { filter: "sidebar" } }])
+  })
+
+  it("lists every thread of a core from before archiving, which refuses the filter", async () => {
+    const { client } = openThreads({
+      "thread.list": (params) => {
+        if ("filter" in params) {
+          throw new CallError({
+            code: "INVALID_ARGUMENT",
+            message: "filter: Extra inputs are not permitted",
+            retryable: false,
+          })
+        }
+        return listing([thread({ id: "t1", title: "Deploy notes" })])
+      },
+    })
+
+    const links = await threadLinks()
+
+    expect(links.map((link) => link.textContent)).toEqual(["Deploy notes"])
+    expect(client.calls.at(-1)).toEqual({ method: "thread.list", params: {} })
   })
 
   it("keeps a long title on one line beside its badge", async () => {

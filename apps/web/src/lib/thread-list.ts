@@ -1,3 +1,4 @@
+import { CallError } from "@kinby/contract"
 import type { InstanceClient, ThreadFilter, ThreadListResult, ThreadSummary } from "@kinby/contract"
 
 type Lister = Pick<InstanceClient, "call">
@@ -60,11 +61,25 @@ function createThreadList(
     },
     async listOwn() {
       const mine = ++generation
-      const next = await client.call("thread.list", { filter })
+      const next = await listThreads(client, filter)
       if (mine !== generation) return
       listed = next
       for (const listener of listeners) listener()
     },
+  }
+}
+
+/**
+ * The `filter` set. A core from before archiving refuses the filter. It has no archived thread, so
+ * its whole list is the sidebar set and the all set, and its archived set is empty.
+ */
+async function listThreads(client: Lister, filter: ThreadFilter): Promise<ThreadListResult> {
+  try {
+    return await client.call("thread.list", { filter })
+  } catch (error) {
+    if (!(error instanceof CallError && error.code === "INVALID_ARGUMENT")) throw error
+    const listed = await client.call("thread.list", {})
+    return filter === "archived" ? { ...listed, threads: [] } : listed
   }
 }
 
