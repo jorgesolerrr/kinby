@@ -225,7 +225,7 @@ function ModePicker({
   )
 }
 
-/** Archive puts the thread away, out of the sidebar, and unarchive brings it back. */
+/** Archive puts the thread away, out of the sidebar; unarchive clears that, and the sidebar rule decides whether it shows again. */
 function ArchiveButton({
   archived,
   onToggle,
