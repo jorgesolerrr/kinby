@@ -187,7 +187,7 @@ describe("a thread's panel", () => {
       for (const event of events) subscription().deliver(event)
     })
 
-    const bogota = new Intl.DateTimeFormat(undefined, {
+    const bogota = new Intl.DateTimeFormat("en", {
       timeZone: "America/Bogota",
       timeZoneName: "short",
     })

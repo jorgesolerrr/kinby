@@ -553,7 +553,7 @@ function turnOutcome({ end, steps }: TurnBlock): {
       return { icon: <Spinner />, outcome: <span className="shimmer">Working</span> }
     case "done": {
       const calls = steps.filter((step) => step.kind === "tool").length
-      const tokens = end.tokens.toLocaleString()
+      const tokens = end.tokens.toLocaleString("en")
       return {
         icon: <CheckIcon />,
         outcome: `Done · ${calls} ${calls === 1 ? "step" : "steps"} · ${tokens} tokens`,
@@ -617,7 +617,7 @@ function RecapMarker({ recap, instanceId }: { recap: Recap; instanceId: string }
 }
 
 function startedAt(timestamp: string): string {
-  return new Date(timestamp).toLocaleString(undefined, {
+  return new Date(timestamp).toLocaleString("en", {
     day: "numeric",
     month: "short",
     year: "numeric",

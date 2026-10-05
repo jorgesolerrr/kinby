@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["eslint", "typescript", "unicorn", "oxc", "react", "jsx-a11y", "import"],
-  "jsPlugins": ["@shadcn/lint"],
+  "jsPlugins": ["@shadcn/lint", "./lint/explicit-locale.js"],
   "categories": { "correctness": "error" },
   "options": { "typeAware": true },
   "rules": {
@@ -10,6 +10,7 @@
     "react/react-in-jsx-scope": "off",
     "react/only-export-components": ["error", { "allowConstantExport": true }],
     "typescript/no-explicit-any": "error",
+    "locale/explicit-locale": "error",
     "shadcn/no-restyle": [
       "error",
       {
