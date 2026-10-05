@@ -76,6 +76,7 @@ const thread: ThreadSummary = {
   mode: "ask",
   mode_pinned: false,
   archived: false,
+  origin: { kind: "user" },
   status: "idle",
 }
 

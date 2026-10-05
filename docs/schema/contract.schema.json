@@ -5224,6 +5224,23 @@
         "mode_pinned": {
           "type": "boolean"
         },
+        "origin": {
+          "discriminator": {
+            "mapping": {
+              "routine": "#/$defs/RoutineOrigin",
+              "user": "#/$defs/UserOrigin"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/UserOrigin"
+            },
+            {
+              "$ref": "#/$defs/RoutineOrigin"
+            }
+          ]
+        },
         "status": {
           "$ref": "#/$defs/ThreadStatus"
         },
@@ -5246,7 +5263,8 @@
         "last_activity_at",
         "mode",
         "mode_pinned",
-        "archived"
+        "archived",
+        "origin"
       ],
       "title": "ThreadSummary",
       "type": "object"

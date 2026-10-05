@@ -582,7 +582,8 @@ class ThreadCreateResult(ContractModel):
 
 
 class ThreadFilter(StrEnum):
-    #: The threads the sidebar shows: every thread not archived, and any awaiting approval.
+    #: The threads the sidebar shows: those not archived that the user started, the user
+    #: started a turn in, or that failed, and any awaiting approval.
     SIDEBAR = "sidebar"
     ALL = "all"
     ARCHIVED = "archived"
@@ -624,6 +625,8 @@ class ThreadSummary(ContractModel):
     mode: PermissionMode
     mode_pinned: bool
     archived: bool
+    #: Who started the thread's first turn: the user, or the routine whose run it is.
+    origin: Origin
 
 
 class ThreadListResult(ContractModel):

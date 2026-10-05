@@ -920,7 +920,7 @@ def main(
     _add_instance_selector(thread_archive_parser, "instance that owns the thread")
     thread_unarchive_parser = thread_subparsers.add_parser(
         "unarchive",
-        help="bring an archived thread back to the sidebar",
+        help="mark an archived thread as no longer archived",
     )
     thread_unarchive_parser.add_argument("thread_id", type=UUID, help="thread to unarchive")
     _add_instance_selector(thread_unarchive_parser, "instance that owns the thread")

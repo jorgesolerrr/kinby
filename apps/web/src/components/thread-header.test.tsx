@@ -28,6 +28,7 @@ function thread(fields: Partial<ThreadSummary> = {}): ThreadSummary {
     mode: "ask",
     mode_pinned: false,
     archived: false,
+    origin: { kind: "user" },
     ...fields,
   }
 }

@@ -14,7 +14,9 @@ from kinby.contracts import (
     ApprovalRequested,
     Event,
     ModePinned,
+    Origin,
     PermissionMode,
+    SignalReceived,
     ThreadCreateResult,
     ThreadFilter,
     ThreadListResult,
@@ -22,6 +24,7 @@ from kinby.contracts import (
     ThreadSummary,
     TurnFailed,
     TurnStarted,
+    UserOrigin,
     is_turn_closing,
 )
 from kinby.core.errors import ThreadNotFound
@@ -138,18 +141,29 @@ def thread_list(
     grouped = events_by_thread(threads, events)
     summaries = [
         summary
-        for summary in (thread_summary(thread, grouped[thread.id], policy) for thread in threads)
-        if is_in(summary, thread_filter)
+        for thread in threads
+        if is_in(
+            summary := thread_summary(thread, grouped[thread.id], policy),
+            grouped[thread.id],
+            thread_filter,
+        )
     ]
     summaries.sort(key=lambda summary: summary.last_activity_at, reverse=True)
     return ThreadListResult(threads=summaries, ceiling=policy.ceiling)
 
 
-def is_in(summary: ThreadSummary, thread_filter: ThreadFilter) -> bool:
+def is_in(summary: ThreadSummary, events: Sequence[Event], thread_filter: ThreadFilter) -> bool:
     match thread_filter:
         case ThreadFilter.SIDEBAR:
             # Archiving never hides an approval that waits on the user.
-            return not summary.archived or summary.status is ThreadStatus.AWAITING_APPROVAL
+            return summary.status is ThreadStatus.AWAITING_APPROVAL or (
+                not summary.archived
+                and (
+                    isinstance(summary.origin, UserOrigin)
+                    or summary.status is ThreadStatus.FAILED
+                    or user_started_a_turn(events)
+                )
+            )
         case ThreadFilter.ARCHIVED:
             return summary.archived
         case ThreadFilter.ALL:
@@ -169,6 +183,29 @@ def thread_summary(
         mode=constrain_mode(pinned or policy.mode, policy.ceiling),
         mode_pinned=pinned is not None,
         archived=thread.archived,
+        origin=thread_origin(events),
+    )
+
+
+def thread_origin(events: Sequence[Event]) -> Origin:
+    """The origin of the thread's first turn, or of the delivery that will start it.
+
+    A thread with no turn yet is the user's.
+    """
+    return next(
+        (
+            event.payload.origin
+            for event in events
+            if isinstance(event.payload, TurnStarted | SignalReceived)
+        ),
+        UserOrigin(),
+    )
+
+
+def user_started_a_turn(events: Sequence[Event]) -> bool:
+    return any(
+        isinstance(event.payload, TurnStarted) and isinstance(event.payload.origin, UserOrigin)
+        for event in events
     )
 
 

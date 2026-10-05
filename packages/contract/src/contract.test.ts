@@ -171,6 +171,12 @@ test("thread.list takes a filter, and each thread says whether it is archived", 
   expectTypeOf<List["result"]["threads"][number]["archived"]>().toEqualTypeOf<boolean>()
 })
 
+test("each listed thread names its origin: the user, or the routine whose run it is", () => {
+  type Listed = Contract["methods"]["thread.list"]["result"]["threads"][number]
+
+  expectTypeOf<Listed["origin"]>().toEqualTypeOf<UserOrigin | RoutineOrigin>()
+})
+
 test("thread.archive and thread.unarchive take a thread and return its summary", () => {
   type Archive = Contract["methods"]["thread.archive"]
   type Unarchive = Contract["methods"]["thread.unarchive"]

@@ -1428,6 +1428,7 @@ export interface ThreadSummary {
   last_activity_at: string;
   mode: PermissionMode;
   mode_pinned: boolean;
+  origin: UserOrigin | RoutineOrigin;
   status: ThreadStatus;
   title: string | null;
 }
