@@ -6,17 +6,19 @@ import { ConfigPanel } from "@/components/config-panel"
 import { InstancePage } from "@/components/instance-page"
 import { MemoryPage } from "@/components/memory-page"
 import { StatsPage } from "@/components/stats-page"
+import { ThreadListPage } from "@/components/thread-list-page"
 import { ThreadPanel } from "@/components/thread-panel"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { instanceName } from "@/lib/instances"
 import { CirclePauseIcon, MousePointerClickIcon, ServerIcon } from "lucide-react"
 
 /**
- * The selected thread's panel, the selected instance's config panel, memory page, stats page, or
- * page, or why there is none. A thread, the config panel, the memory page, or the stats page opens
- * once `instanceClient` reaches its instance. The config panel opens only on an instance meant to
- * run, which is the one the hub relays to, and stays open while an update restarts the container.
- * The memory and stats pages need a running instance. `onChanged` lists the instances again.
+ * The selected thread's panel, the selected instance's thread list, config panel, memory page,
+ * stats page, or page, or why there is none. A thread, the thread list, the config panel, the
+ * memory page, or the stats page opens once `instanceClient` reaches its instance. The config panel
+ * opens only on an instance meant to run, which is the one the hub relays to, and stays open while
+ * an update restarts the container. The thread list, memory and stats pages need a running
+ * instance. `onChanged` lists the instances again.
  */
 export function MainPanel({
   caller,
@@ -24,6 +26,7 @@ export function MainPanel({
   instances,
   selected,
   threadId,
+  threadsOpen = false,
   configOpen = false,
   memoryOpen = false,
   statsOpen = false,
@@ -35,6 +38,7 @@ export function MainPanel({
   instances: InstanceSummary[] | undefined
   selected: InstanceSummary | undefined
   threadId: string | undefined
+  threadsOpen?: boolean
   configOpen?: boolean
   memoryOpen?: boolean
   statsOpen?: boolean
@@ -51,6 +55,24 @@ export function MainPanel({
         instanceId={selected.instance_id}
         threadId={threadId}
         name={instanceName(selected)}
+      />
+    )
+  }
+  if (selected !== undefined && threadsOpen) {
+    if (selected.process !== "running") {
+      return (
+        <EmptyState icon={<CirclePauseIcon />} title={`${instanceName(selected)} is not running`}>
+          Start it to see its threads.
+        </EmptyState>
+      )
+    }
+    if (instanceClient === undefined) return null
+    return (
+      <ThreadListPage
+        key={selected.instance_id}
+        client={instanceClient}
+        clock={clock}
+        instanceId={selected.instance_id}
       />
     )
   }

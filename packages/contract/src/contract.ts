@@ -1440,10 +1440,21 @@ export interface ThreadCreateResult {
   id: string;
 }
 export interface ThreadListCommand {
+  cursor?: ThreadCursor | null;
   filter?: ThreadFilter;
+  limit?: number | null;
+  routine?: string | null;
+}
+/**
+ * Where a page of threads ends: its last thread's activity and id, which the list sorts by.
+ */
+export interface ThreadCursor {
+  id: string;
+  last_activity_at: string;
 }
 export interface ThreadListResult {
   ceiling: PermissionMode;
+  cursor: ThreadCursor | null;
   threads: ThreadSummary[];
 }
 export interface ThreadModeSetCommand {

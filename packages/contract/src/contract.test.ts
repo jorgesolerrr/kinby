@@ -165,10 +165,23 @@ test("thread.rename takes a title and returns the thread's summary", () => {
 test("thread.list takes a filter, and each thread says whether it is archived", () => {
   type List = Contract["methods"]["thread.list"]
 
+  expectTypeOf<List["command"]["filter"]>().toEqualTypeOf<
+    "sidebar" | "all" | "archived" | undefined
+  >()
+  expectTypeOf<List["result"]["threads"][number]["archived"]>().toEqualTypeOf<boolean>()
+})
+
+test("thread.list takes a routine and pages by cursor", () => {
+  type List = Contract["methods"]["thread.list"]
+  type Cursor = { id: string; last_activity_at: string }
+
   expectTypeOf<List["command"]>().toEqualTypeOf<{
     filter?: "sidebar" | "all" | "archived"
+    routine?: string | null
+    cursor?: Cursor | null
+    limit?: number | null
   }>()
-  expectTypeOf<List["result"]["threads"][number]["archived"]>().toEqualTypeOf<boolean>()
+  expectTypeOf<List["result"]["cursor"]>().toEqualTypeOf<Cursor | null>()
 })
 
 test("each listed thread names its origin: the user, or the routine whose run it is", () => {

@@ -5094,6 +5094,26 @@
       "title": "ThreadCreateResult",
       "type": "object"
     },
+    "ThreadCursor": {
+      "additionalProperties": false,
+      "description": "Where a page of threads ends: its last thread's activity and id, which the list sorts by.",
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "last_activity_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "last_activity_at",
+        "id"
+      ],
+      "title": "ThreadCursor",
+      "type": "object"
+    },
     "ThreadFilter": {
       "enum": [
         "sidebar",
@@ -5106,8 +5126,42 @@
     "ThreadListCommand": {
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadCursor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "filter": {
           "$ref": "#/$defs/ThreadFilter"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "routine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "title": "ThreadListCommand",
@@ -5119,6 +5173,16 @@
         "ceiling": {
           "$ref": "#/$defs/PermissionMode"
         },
+        "cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threads": {
           "items": {
             "$ref": "#/$defs/ThreadSummary"
@@ -5128,7 +5192,8 @@
       },
       "required": [
         "threads",
-        "ceiling"
+        "ceiling",
+        "cursor"
       ],
       "title": "ThreadListResult",
       "type": "object"

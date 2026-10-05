@@ -25,7 +25,7 @@ function thread(fields: Pick<ThreadSummary, "id"> & Partial<ThreadSummary>): Thr
 
 /** What `thread.list` answers with `threads` on an instance whose ceiling is full access. */
 function listing(threads: ThreadSummary[]): ThreadListResult {
-  return { threads, ceiling: "full-access" }
+  return { threads, ceiling: "full-access", cursor: null }
 }
 
 /** Render Ada's threads from an instance client that is connected and answers from `answers`. */

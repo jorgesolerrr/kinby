@@ -18,8 +18,13 @@ export function instancePath(instanceId: string): string {
   return `/${SECTION}/${encodeURIComponent(instanceId)}`
 }
 
+/** An instance's thread list page. */
+export function threadsPath(instanceId: string): string {
+  return `${instancePath(instanceId)}/${THREADS}`
+}
+
 export function threadPath(instanceId: string, threadId: string): string {
-  return `${instancePath(instanceId)}/${THREADS}/${encodeURIComponent(threadId)}`
+  return `${threadsPath(instanceId)}/${encodeURIComponent(threadId)}`
 }
 
 /** One turn of a thread, which the thread opens scrolled to. */
@@ -66,6 +71,11 @@ export function selectThread(instanceId: string, threadId: string): void {
 /** Select a thread scrolled to one of its turns the same way. */
 export function selectTurn(instanceId: string, threadId: string, turnId: string): void {
   navigate(turnPath(instanceId, threadId, turnId))
+}
+
+/** Open an instance's thread list page the same way. */
+export function openThreads(instanceId: string): void {
+  navigate(threadsPath(instanceId))
 }
 
 /** Open an instance's config panel the same way. */
@@ -145,6 +155,11 @@ export function useSelectedTurnId(): string | undefined {
   return useSyncExternalStore(subscribe, selectedTurnId)
 }
 
+/** Whether the URL opens its instance's thread list page. */
+export function useThreadsOpen(): boolean {
+  return useSyncExternalStore(subscribe, threadsOpen)
+}
+
 /** Whether the URL opens its instance's config panel. */
 export function useConfigOpen(): boolean {
   return useSyncExternalStore(subscribe, configOpen)
@@ -189,6 +204,11 @@ function selectedThreadId(): string | undefined {
   return section === SECTION && instanceId && threads === THREADS && threadId
     ? decodeURIComponent(threadId)
     : undefined
+}
+
+function threadsOpen(): boolean {
+  const [, section, instanceId, threads, threadId] = window.location.pathname.split("/")
+  return section === SECTION && Boolean(instanceId) && threads === THREADS && !threadId
 }
 
 function selectedTurnId(): string | undefined {

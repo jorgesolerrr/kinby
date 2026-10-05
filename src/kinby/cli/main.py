@@ -636,8 +636,12 @@ async def _create_thread(client: ContractClient, title: str | None) -> int:
     return 0
 
 
-async def _list_threads(client: ContractClient, thread_filter: ThreadFilter) -> int:
-    listed = await client.call(THREAD_LIST, ThreadListCommand(filter=thread_filter))
+async def _list_threads(
+    client: ContractClient, thread_filter: ThreadFilter, routine: RoutineName | None
+) -> int:
+    listed = await client.call(
+        THREAD_LIST, ThreadListCommand(filter=thread_filter, routine=routine)
+    )
     if isinstance(listed, ErrorEnvelope):
         print(format_error(listed), file=sys.stderr)
         return 1
@@ -912,6 +916,11 @@ def main(
         default=ThreadFilter.SIDEBAR,
         help="which threads to list: the sidebar's (the default), all, or the archived ones",
     )
+    thread_list_parser.add_argument(
+        "--routine",
+        type=RoutineName,
+        help="list only this routine's runs, within the filter",
+    )
     thread_archive_parser = thread_subparsers.add_parser(
         "archive",
         help="archive a thread, which leaves the sidebar",
@@ -1058,7 +1067,7 @@ def main(
                         return asyncio.run(_archive_thread(client, args.thread_id))
                     case "unarchive":
                         return asyncio.run(_unarchive_thread(client, args.thread_id))
-                return asyncio.run(_list_threads(client, args.filter))
+                return asyncio.run(_list_threads(client, args.filter, args.routine))
             case "routine" if args.routine_command in {"list", "run"}:
                 instance = _load_selected_instance(args)
                 if args.routine_command == "run":

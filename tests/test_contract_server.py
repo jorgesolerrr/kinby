@@ -234,7 +234,7 @@ def test_a_malformed_frame_is_answered_and_the_connection_stays_open(tmp_path: P
         assert isinstance(incomplete["error"], dict)
         assert incomplete["error"]["code"] == ErrorCode.INVALID_ARGUMENT.value
         assert after["type"] == FrameType.RESULT.value
-        assert after["result"] == {"threads": [], "ceiling": "full-access"}
+        assert after["result"] == {"threads": [], "ceiling": "full-access", "cursor": None}
 
     asyncio.run(scenario())
 

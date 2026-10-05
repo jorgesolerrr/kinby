@@ -4,11 +4,22 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { openUsage, USAGE_PATH } from "@/lib/selection"
+import { openThreads, openUsage, threadsPath, USAGE_PATH } from "@/lib/selection"
 import { ChartColumnIcon, MessagesSquareIcon } from "lucide-react"
 
-/** The hub's own pages, above the instances. */
-export function NavMain({ usageOpen }: { usageOpen: boolean }) {
+/**
+ * The hub's own pages, above the instances, and the selected instance's thread list. With no
+ * instance selected, Threads has nothing to open.
+ */
+export function NavMain({
+  usageOpen,
+  threadsOpen,
+  instanceId,
+}: {
+  usageOpen: boolean
+  threadsOpen: boolean
+  instanceId: string | undefined
+}) {
   return (
     <SidebarGroup>
       <SidebarMenu>
@@ -29,12 +40,29 @@ export function NavMain({ usageOpen }: { usageOpen: boolean }) {
             }
           />
         </SidebarMenuItem>
-        {/* A placeholder until the flow that owns it lands. */}
         <SidebarMenuItem>
-          <SidebarMenuButton tooltip="Threads">
-            <MessagesSquareIcon />
-            <span>Threads</span>
-          </SidebarMenuButton>
+          {instanceId === undefined ? (
+            <SidebarMenuButton tooltip="Threads" disabled>
+              <MessagesSquareIcon />
+              <span>Threads</span>
+            </SidebarMenuButton>
+          ) : (
+            <SidebarMenuButton
+              tooltip="Threads"
+              isActive={threadsOpen}
+              aria-current={threadsOpen ? "page" : undefined}
+              onClick={(event) => {
+                event.preventDefault()
+                openThreads(instanceId)
+              }}
+              render={
+                <a href={threadsPath(instanceId)}>
+                  <MessagesSquareIcon />
+                  <span>Threads</span>
+                </a>
+              }
+            />
+          )}
         </SidebarMenuItem>
       </SidebarMenu>
     </SidebarGroup>

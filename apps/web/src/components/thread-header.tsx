@@ -1,6 +1,7 @@
 import type { InstanceClient, PermissionMode, ThreadSummary } from "@kinby/contract"
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 
+import { ArchiveButton } from "@/components/archive-button"
 import { Button } from "@/components/ui/button"
 import { Field, FieldError } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -15,7 +16,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { reason } from "@/lib/operation"
 import { threadList, threadTitle } from "@/lib/thread-list"
-import { ArchiveIcon, ArchiveRestoreIcon, PencilIcon } from "lucide-react"
+import { PencilIcon } from "lucide-react"
 
 /** Every mode, from the least the instance may do to the most. */
 const MODES: { mode: PermissionMode; label: string; hint: string }[] = [
@@ -222,32 +223,5 @@ function ModePicker({
         </SelectGroup>
       </SelectContent>
     </Select>
-  )
-}
-
-/** Archive puts the thread away, out of the sidebar; unarchive clears that, and the sidebar rule decides whether it shows again. */
-function ArchiveButton({
-  archived,
-  onToggle,
-}: {
-  archived: boolean
-  onToggle: () => Promise<boolean>
-}) {
-  const [changing, setChanging] = useState(false)
-  const toggle = async () => {
-    if (changing) return
-    setChanging(true)
-    await onToggle()
-    setChanging(false)
-  }
-  return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      aria-label={archived ? "Unarchive" : "Archive"}
-      onClick={() => void toggle()}
-    >
-      {changing ? <Spinner /> : archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
-    </Button>
   )
 }

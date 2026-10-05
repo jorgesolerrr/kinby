@@ -23,6 +23,7 @@ import {
   useSelectedInstanceId,
   useSelectedThreadId,
   useStatsOpen,
+  useThreadsOpen,
   useUsageOpen,
 } from "@/lib/selection"
 
@@ -42,6 +43,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const memoryOpen = useMemoryOpen()
   const statsOpen = useStatsOpen()
   const usageOpen = useUsageOpen()
+  const threadsOpen = useThreadsOpen()
   const path = usePath()
   // An instance the hub does not have, or no longer has, selects nothing.
   const selected = instances?.find((instance) => instance.instance_id === selectedId)
@@ -62,6 +64,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           selected={selected}
           creating={creating}
           usageOpen={usageOpen}
+          threadsOpen={threadsOpen}
           client={client}
           clock={clock}
           threads={
@@ -95,6 +98,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
                 instances={instances}
                 selected={selected}
                 threadId={threadId}
+                threadsOpen={threadsOpen}
                 configOpen={configOpen}
                 memoryOpen={memoryOpen}
                 statsOpen={statsOpen}

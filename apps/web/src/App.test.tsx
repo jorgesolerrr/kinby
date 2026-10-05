@@ -281,6 +281,37 @@ describe("the instances", () => {
     )
   })
 
+  it("opens the selected instance's thread list from the sidebar's Threads button, and puts it in the URL", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("link", { name: "Threads" }))
+
+    expect(window.location.pathname).toBe("/instances/hub-ada/threads")
+    expect(await screen.findByRole("heading", { name: "Threads" })).toBeDefined()
+    expect(screen.getByRole("link", { name: "Threads" }).getAttribute("aria-current")).toBe("page")
+    const relayed = hub.sockets.find(
+      (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
+    )
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(relayed?.sent).toContainEqual(
+      expect.objectContaining({
+        type: "call",
+        method: "thread.list",
+        params: { filter: "all", limit: 50 },
+      }),
+    )
+  })
+
+  it("asks to start a stopped instance to see its threads", async () => {
+    window.history.replaceState(null, "", "/instances/hub-unnamed/threads")
+
+    openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    expect(await screen.findByText("Start it to see its threads.")).toBeDefined()
+  })
+
   it("asks to start a stopped instance to see its stats", async () => {
     window.history.replaceState(null, "", "/instances/hub-unnamed/stats")
 

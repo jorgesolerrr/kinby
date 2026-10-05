@@ -345,7 +345,7 @@ def build_dispatcher(
         return store.create(command.title)
 
     async def list_threads(command: ThreadListCommand) -> ThreadListResult:
-        return thread_list(store.threads(), event_log.all_events(), permissions(), command.filter)
+        return thread_list(store.threads(), event_log.all_events(), permissions(), command)
 
     def summary(thread: ThreadRecord) -> ThreadSummary:
         return thread_summary(thread, event_log.stored(thread.id), permissions())

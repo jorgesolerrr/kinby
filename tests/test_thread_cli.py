@@ -5,6 +5,7 @@ import pytest
 
 from kinby.cli import main
 from kinby.instance import init_instance
+from tests.test_routines import instance_at, routine_file
 
 
 def test_cli_creates_and_lists_a_thread_through_separate_runs(
@@ -79,3 +80,23 @@ def test_cli_refuses_to_archive_an_unknown_thread(
 
     assert exit_code == 1
     assert f'NOT_FOUND: Thread "{thread_id}" was not found.' in capsys.readouterr().err
+
+
+def test_cli_lists_one_routines_runs(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = instance_at(tmp_path)
+    for name in ("news", "weather"):
+        path = routine_file(instance, "description: Scripted\nenabled: false", name=name)
+        (path.parent / "run.py").write_text(
+            "from kinby.plugins import tool\n@tool(write=False)\n"
+            'def fetch() -> None:\n    """Find nothing new."""\n    return None\n'
+        )
+        assert main(["routine", "run", name, "--instance", str(tmp_path)]) == 0
+    _create(tmp_path, "Launch notes", capsys)
+    capsys.readouterr()
+
+    [title] = _titles(tmp_path, capsys, "--filter", "all", "--routine", "news")
+
+    assert title.startswith("news · ")

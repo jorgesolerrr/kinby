@@ -92,7 +92,7 @@ function openPage(answers: Answers = {}) {
       if (found === undefined) throw new Error(`No node ${node}`)
       return found
     },
-    "thread.list": () => ({ threads: [thread], ceiling: "full-access" }),
+    "thread.list": () => ({ threads: [thread], ceiling: "full-access", cursor: null }),
     ...answers,
   })
   render(<MemoryPage client={caller} clock={fakeClock()} instanceId="instance-1" />)
@@ -309,6 +309,7 @@ describe("the memory page", () => {
       "thread.list": ({ filter }) => ({
         threads: filter === "all" ? [archived] : [],
         ceiling: "full-access",
+        cursor: null,
       }),
     })
 
@@ -345,7 +346,7 @@ describe("the memory page", () => {
     const caller = stubCaller({
       "memory.list": () => listing([markdown]),
       "memory.open": () => OPENED[markdown.node] as MemoryOpenResult,
-      "thread.list": () => ({ threads: [thread], ceiling: "full-access" }),
+      "thread.list": () => ({ threads: [thread], ceiling: "full-access", cursor: null }),
     })
     render(<MemoryPage client={caller} clock={clock} instanceId="instance-1" />)
     const user = userEvent.setup()

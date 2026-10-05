@@ -47,7 +47,7 @@ async function openHeader(
 ) {
   const { listed = () => thread(), ceiling = "full-access", ...calls } = answers
   const client = connected(
-    stubCaller({ "thread.list": () => ({ threads: [listed()], ceiling }), ...calls }),
+    stubCaller({ "thread.list": () => ({ threads: [listed()], ceiling, cursor: null }), ...calls }),
   )
   await act(() => threadList(client, "all").list())
   render(<ThreadHeader client={client} threadId="t1" />)
@@ -60,7 +60,7 @@ async function openHeader(
  */
 async function openHeaderOffline() {
   const lister = stubCaller({
-    "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }),
+    "thread.list": () => ({ threads: [thread()], ceiling: "full-access", cursor: null }),
   })
   const sent: Method[] = []
   let fail = (_error: CallError) => {}
@@ -292,6 +292,7 @@ describe("a thread's header", () => {
         "thread.list": ({ filter }) => ({
           threads: filter === "sidebar" && archived ? [] : [thread({ archived })],
           ceiling: "full-access",
+          cursor: null,
         }),
         "thread.archive": put(true),
         "thread.unarchive": put(false),
@@ -326,7 +327,9 @@ describe("a thread's header", () => {
   describe("without the sidebar", () => {
     it("lists the threads itself when nothing has listed them", async () => {
       const client = connected(
-        stubCaller({ "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }) }),
+        stubCaller({
+          "thread.list": () => ({ threads: [thread()], ceiling: "full-access", cursor: null }),
+        }),
       )
 
       render(<ThreadHeader client={client} threadId="t1" />)
@@ -338,7 +341,7 @@ describe("a thread's header", () => {
     it("lists the threads again when the last list came before the thread", async () => {
       let threads: ThreadSummary[] = []
       const client = connected(
-        stubCaller({ "thread.list": () => ({ threads, ceiling: "full-access" }) }),
+        stubCaller({ "thread.list": () => ({ threads, ceiling: "full-access", cursor: null }) }),
       )
       await act(() => threadList(client, "all").list())
 
@@ -350,7 +353,7 @@ describe("a thread's header", () => {
 
     it("lists the threads once the instance connects", async () => {
       const lister = stubCaller({
-        "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }),
+        "thread.list": () => ({ threads: [thread()], ceiling: "full-access", cursor: null }),
       })
       let state: ConnectionState = "connecting"
       const listeners = new Set<() => void>()
@@ -397,7 +400,9 @@ describe("a thread's header", () => {
 
   it("leaves listing the threads again to the sidebar beside it", async () => {
     const client = connected(
-      stubCaller({ "thread.list": () => ({ threads: [thread()], ceiling: "full-access" }) }),
+      stubCaller({
+        "thread.list": () => ({ threads: [thread()], ceiling: "full-access", cursor: null }),
+      }),
     )
     const clock = fakeClock()
     render(
