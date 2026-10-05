@@ -1,3 +1,4 @@
+import { CallError } from "@kinby/contract"
 import type { RoutineSummary, ThreadListResult, ThreadSummary } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { render, screen, within } from "@testing-library/react"
@@ -176,6 +177,50 @@ describe("the thread list page", () => {
       params: { filter: "all", limit: 50, cursor },
     })
     expect(screen.queryByRole("button", { name: "Load more" })).toBeNull()
+  })
+
+  it("drops a failed page's error once the next try loads it", async () => {
+    const cursor = { id: "t1", last_activity_at: "2026-09-27T10:00:00Z" }
+    let tries = 0
+    openPage({
+      "thread.list": (command) => {
+        if (command.cursor == null)
+          return page([thread({ id: "t1", title: "Morning news" })], cursor)
+        tries += 1
+        if (tries === 1) {
+          throw new CallError({ code: "INTERNAL", message: "Disk full.", retryable: false })
+        }
+        return page([thread({ id: "t2", title: "Standup" })])
+      },
+    })
+    const user = userEvent.setup()
+    await rows()
+
+    await user.click(screen.getByRole("button", { name: "Load more" }))
+    expect((await screen.findByRole("alert")).textContent).toContain("Disk full.")
+    await user.click(screen.getByRole("button", { name: "Load more" }))
+
+    expect((await rows()).map((cells) => cells[0])).toEqual(["Morning news", "Standup"])
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("points a core from before paging, which refuses the command, to its update", async () => {
+    openPage({
+      "thread.list": () => {
+        throw new CallError({
+          code: "INVALID_ARGUMENT",
+          message: "limit: Extra inputs are not permitted",
+          retryable: false,
+        })
+      },
+    })
+    const user = userEvent.setup()
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toContain("This instance runs an older core")
+    await user.click(within(alert).getByRole("button", { name: "Open Package and version" }))
+
+    expect(window.location.pathname).toBe("/instances/hub-ada/config/package")
   })
 
   it("searches the loaded threads by title without asking the instance", async () => {

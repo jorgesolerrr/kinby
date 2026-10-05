@@ -1,3 +1,4 @@
+import { CallError } from "@kinby/contract"
 import type {
   Clock,
   InstanceClient,
@@ -9,7 +10,7 @@ import type {
 import { type ReactNode, useEffect, useState } from "react"
 
 import { ArchiveButton } from "@/components/archive-button"
-import { Failure } from "@/components/config-alerts"
+import { Failure, OlderCoreAlert } from "@/components/config-alerts"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -35,7 +36,7 @@ import {
 import { usePace } from "@/hooks/use-pace"
 import { when } from "@/lib/config-changes"
 import { retried } from "@/lib/operation"
-import { selectThread, threadPath } from "@/lib/selection"
+import { openPackage, selectThread, threadPath } from "@/lib/selection"
 import { threadList, threadTitle } from "@/lib/thread-list"
 
 type Caller = Pick<InstanceClient, "call">
@@ -123,6 +124,7 @@ export function ThreadListPage({
       setListed((current) =>
         current === latest ? { ...next, threads: [...latest.threads, ...next.threads] } : current,
       )
+      setFailure(undefined)
     } catch (error) {
       setFailure(error)
     }
@@ -164,7 +166,12 @@ export function ThreadListPage({
           <ShownPicker shown={shown} routines={routines} onPick={setShown} />
         </div>
       </div>
-      {failure !== undefined && <Failure error={failure} />}
+      {failure !== undefined &&
+        (fromOlderCore(failure) ? (
+          <OlderCoreAlert onOpenUpdate={() => openPackage(instanceId)} />
+        ) : (
+          <Failure error={failure} />
+        ))}
       {listed === undefined && failure === undefined && <Skeleton className="h-72 w-full" />}
       {listed !== undefined && (
         <>
@@ -188,6 +195,11 @@ export function ThreadListPage({
 function matching(threads: ThreadSummary[], query: string): ThreadSummary[] {
   const wanted = query.trim().toLocaleLowerCase()
   return threads.filter((thread) => threadTitle(thread).toLocaleLowerCase().includes(wanted))
+}
+
+/** A core from before paging refuses the page's thread.list, whose command it does not know. */
+function fromOlderCore(error: unknown): boolean {
+  return error instanceof CallError && error.code === "INVALID_ARGUMENT"
 }
 
 function command(shown: Shown): ThreadListCommand {
