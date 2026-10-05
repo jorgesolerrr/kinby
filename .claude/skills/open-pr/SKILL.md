@@ -9,7 +9,7 @@ Open the pull request for the branch you are on. Done when `gh pr view` shows an
 
 2. **Push.** `git push -u origin <branch>`. Never push to the default branch.
 
-3. **Open.** `gh pr create --title "<title>" --body "<body>"` with a heredoc for the body. Title: what changed, in the imperative, under 70 characters. Body, in this order:
+3. **Open.** Write the body to a scratchpad file with the Write tool, then `gh pr create --title "<title>" --body-file <path>`. Title: what changed, in the imperative, under 70 characters. Body, in this order:
    - `Closes #<ticket>` on the first line.
    - What changed and why, in a few sentences. Name the design decisions you took where the ticket or the standards were silent.
    - Which checks ran and their result.

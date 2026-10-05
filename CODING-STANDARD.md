@@ -68,7 +68,7 @@ A signature is the first sentence of the documentation. A reader should know wha
 - **One type per state.** When the valid operations on a value change with its state, each state is its own type and the transition is a method returning the next one. Illegal combinations then fail at construction instead of deep in a call.
 - **Follow the types.** A precise signature leaves few implementations possible. When a body is hard to write, the signature is usually the thing to fix.
 
-Before adding or changing any signature in kinby, read `docs/types-before-after.md`: the mistakes this codebase already made, one per rule, with the signature that fixed each. Lint enforces the mechanical part (`TID251`, `ANN`, `FBT`, and the signature test in `tests/`); the doc covers what lint cannot see.
+Signature and type changes are judged against `docs/types-before-after.md`: the mistakes this codebase already made, one per rule, with the signature that fixed each. Lint enforces the mechanical part (`TID251`, `ANN`, `FBT`, and the signature test in `tests/`); the doc covers what lint cannot see.
 
 ## Tests
 
@@ -77,24 +77,11 @@ Before adding or changing any signature in kinby, read `docs/types-before-after.
 
 ## Type checking
 
-ty checks the whole project with the Python lower bound from `requires-python`. Run it before every commit:
-
-```sh
-uv run ty check
-```
-
-Fix the code or its annotations when ty reports an error. Put deliberate rule-level changes in `pyproject.toml` and explain why in review.
+A deliberate ty rule-level change goes in `pyproject.toml`, with its reason in review.
 
 ## Lint and format
 
-Ruff is both linter and formatter. Before any commit:
-
-```sh
-uv run ruff check .
-uv run ruff format .
-```
-
-Rule selection lives in `pyproject.toml` under `[tool.ruff]`. The families and why:
+The ruff rule families selected in `pyproject.toml`, and why:
 
 | Family | What it enforces |
 |---|---|

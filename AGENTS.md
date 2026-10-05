@@ -12,11 +12,15 @@ I'm a passionate programmer who likes complex things done in a simple way. That 
 
 - **Code.** Lean and pythonic: approach, book, PEP 8, Protocol, Callable, tests, type checking, and lint live in `CODING-STANDARD.md`. `bun run check` passes before any commit: the four uv checks (`ruff check`, `ruff format`, `ty check`, `pytest`), then each workspace's `tsc -b`, oxlint, oxfmt, and `vitest run`, then knip. It stops at the first failure.
 - **The gate runs on Linux.** The runtime and hub locks use `fcntl`, so pytest cannot import them on Windows. On Windows, run the gate with `bun run check:linux`, which runs `bun run check` in the Docker image from `docker/check.Dockerfile`. The other way is WSL with its own environment, `UV_PROJECT_ENVIRONMENT=.venv-linux`. The shared `.venv` belongs to Windows: never install into it or touch it from WSL. `bun run dev` works on any platform.
+- **Pre-commit hook.** Hooks live in `.githooks`; the pre-commit runs ruff, oxlint and oxfmt only. Enable it in a fresh clone with `git config core.hooksPath .githooks`.
 - **Docs go straight to main.** Commit changes to docs, ADRs and `CONTEXT.md` on main and push them, without a PR.
 - **Web UI.** The web app lives in `apps/web` and is built from shadcn/ui (Base UI, preset `nova`). Use the `shadcn` skill for UI work there. Add components with `bunx --bun shadcn@latest add` from `apps/web` and never hand-write one the registry has. Fix every `shadcn/*` lint error with a variant or a theme token, not by disabling the rule.
 - **Browser testing.** Any browser testing follows the Browser section of `.claude/skills/e2e-pass/SKILL.md`: Playwright's bundled Chromium through its `browser.py`. A full pass on the playground hub is `/e2e-pass #N`.
-- **User-facing communication.** Run the `unslop` skill (`/unslop`) over anything the user reads: replies, PR descriptions, issue comments, README and doc prose. Plain and specific.
+- **Prose that ships.** Run the `unslop` skill over PR bodies, issue bodies, and README and doc prose before publishing them.
 - **Architecture decisions.** Record them as ADRs in `docs/adr/`, one decision per file.
+- **Secrets.** Local secrets load from `.env`; variable names are in `.env.example`. Ask Jorge to set values.
+- **Docker down.** If `docker info` fails, ask Jorge to start Docker Desktop. Don't work around it in WSL.
+- **The deployed hub.** Debugging the deployed hub or coder: `docs/agents/playground.md`.
 
 ## Agent skills
 
