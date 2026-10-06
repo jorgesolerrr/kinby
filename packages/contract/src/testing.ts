@@ -42,8 +42,9 @@ export interface FakeHub {
 
 /**
  * A hub that answers like the real one: the socket upgrades only while the browser session is open.
- * A removal or a restoration moves the instance between the lists at once, and its operation has
- * already succeeded when it is first read.
+ * A removal or a restoration moves the instance between the lists at once, and a deletion drops
+ * it from the removed list. Their operations have already succeeded when first read. A deletion
+ * previews the instance's directory under /srv/kinby/instances.
  */
 export function fakeHub({
   signedIn = true,
@@ -55,7 +56,7 @@ export function fakeHub({
   removed?: InstanceSummary[]
 } = {}): FakeHub {
   const operations = new Map<string, OperationGetResult>()
-  const finished = (kind: "remove" | "restore", instanceId: string) => {
+  const finished = (kind: "remove" | "restore" | "delete", instanceId: string) => {
     const operation_id = `op-${operations.size + 1}`
     operations.set(operation_id, {
       operation_id,
@@ -99,6 +100,22 @@ export function fakeHub({
               { ...restoring, intended_state: "stopped", process: "stopped" },
             ]
             return finished("restore", restoring.instance_id)
+          }
+          if (method === "instance.delete.preview" && isRecord(params)) {
+            const instance_id = String(params.instance_id)
+            return {
+              instance_id,
+              directories: [`/srv/kinby/instances/${instance_id}`],
+              volumes: [],
+            }
+          }
+          if (method === "instance.delete" && isRecord(params)) {
+            const deleting = hub.removed.find(
+              (instance) => instance.instance_id === params.instance_id,
+            )
+            if (deleting === undefined) return undefined
+            hub.removed = hub.removed.filter((instance) => instance !== deleting)
+            return finished("delete", deleting.instance_id)
           }
           if (method === "operation.get" && isRecord(params)) {
             return operations.get(String(params.operation_id))
