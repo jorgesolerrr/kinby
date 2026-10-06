@@ -1,7 +1,7 @@
 import { createClient } from "@kinby/contract"
 import type { InstanceSummary } from "@kinby/contract"
 import { ACCESS_TOKEN, fakeClock, fakeHub, instanceSummary } from "@kinby/contract/testing"
-import { act, render, screen, within } from "@testing-library/react"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it } from "vitest"
 
@@ -10,11 +10,13 @@ import App from "@/App"
 function openApp({
   signedIn,
   instances = [],
+  removed = [],
 }: {
   signedIn: boolean
   instances?: InstanceSummary[]
+  removed?: InstanceSummary[]
 }) {
-  const hub = fakeHub({ signedIn, instances })
+  const hub = fakeHub({ signedIn, instances, removed })
   const clock = fakeClock()
   render(<App client={createClient("http://hub.test", hub.transport, clock)} clock={clock} />)
   return { hub, clock }
@@ -463,6 +465,102 @@ describe("the usage page", () => {
     openApp({ signedIn: true, instances: [ada] })
 
     expect(await screen.findByRole("heading", { name: "Usage" })).toBeDefined()
+  })
+})
+
+const grace = instanceSummary({
+  instance_id: "hub-grace",
+  persona_name: "Grace",
+  intended_state: "removed",
+  process: "missing",
+})
+
+const removedLink = () => screen.queryByRole("link", { name: "Removed instances" })
+
+describe("removed instances", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/")
+    Reflect.deleteProperty(document, "visibilityState")
+  })
+
+  it("links to them at the foot of the instances while one is removed, and not otherwise", async () => {
+    const { hub } = openApp({ signedIn: true, instances: [ada], removed: [grace] })
+
+    const link = await screen.findByRole("link", { name: "Removed instances" })
+    expect(link.getAttribute("href")).toBe("/removed")
+    expect((await instanceLink("New instance")).compareDocumentPosition(link)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+    expect(screen.queryByRole("link", { name: "Grace" })).toBeNull()
+
+    // Restored from the CLI.
+    hub.removed = []
+    act(() => {
+      window.dispatchEvent(new Event("focus"))
+    })
+
+    await waitFor(() => expect(removedLink()).toBeNull())
+  })
+
+  it("opens the Removed instances page from the link, and puts it in the URL", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    openApp({ signedIn: true, instances: [ada], removed: [grace] })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("link", { name: "Removed instances" }))
+
+    expect(window.location.pathname).toBe("/removed")
+    expect(await screen.findByRole("heading", { name: "Removed instances" })).toBeDefined()
+    expect(removedLink()?.getAttribute("aria-current")).toBe("page")
+    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBeNull()
+  })
+
+  it("restores the Removed instances page from the URL", async () => {
+    window.history.replaceState(null, "", "/removed")
+
+    openApp({ signedIn: true, instances: [ada], removed: [grace] })
+
+    expect(await screen.findByRole("heading", { name: "Removed instances" })).toBeDefined()
+    expect(await screen.findByText("Grace")).toBeDefined()
+  })
+
+  it("links to the removed instance once a removal finishes, with no reload", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    const { clock } = openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+    expect(await screen.findByRole("button", { name: "Configure" })).toBeDefined()
+    expect(removedLink()).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "More actions" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Remove" }))
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove Ada?" })
+    await user.click(within(dialog).getByRole("button", { name: "Remove" }))
+    await act(() => clock.advance(0))
+
+    expect(await screen.findByRole("link", { name: "Removed instances" })).toBeDefined()
+    expect(screen.queryByRole("link", { name: "Ada" })).toBeNull()
+  })
+
+  it("restores one, lands on it shown stopped with Start, and drops the link once none is left", async () => {
+    window.history.replaceState(null, "", "/removed")
+    const { clock } = openApp({ signedIn: true, instances: [ada], removed: [grace] })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("button", { name: "Restore" }))
+    await act(() => clock.advance(0))
+
+    expect(window.location.pathname).toBe("/instances/hub-grace")
+    expect(await screen.findByText("Grace is stopped")).toBeDefined()
+    expect(screen.getByRole("button", { name: "Start" })).toBeDefined()
+    expect((await instanceLink("Grace")).getAttribute("aria-current")).toBe("page")
+    expect(removedLink()).toBeNull()
+  })
+
+  it("shows no link when nothing is removed", async () => {
+    openApp({ signedIn: true, instances: [ada] })
+
+    expect(await instanceLink("Ada")).toBeDefined()
+    expect(removedLink()).toBeNull()
   })
 })
 

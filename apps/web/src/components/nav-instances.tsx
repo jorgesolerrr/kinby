@@ -15,13 +15,22 @@ import {
 import { useInstanceClient } from "@/hooks/use-instance-client"
 import { usePolled } from "@/hooks/use-polled"
 import { instanceName, shownState } from "@/lib/instances"
-import { CREATE_PATH, instancePath, openCreateWizard, selectInstance } from "@/lib/selection"
-import { CircleAlertIcon, PlusIcon } from "lucide-react"
+import {
+  CREATE_PATH,
+  instancePath,
+  openCreateWizard,
+  openRemoved,
+  REMOVED_PATH,
+  selectInstance,
+} from "@/lib/selection"
+import { ArchiveRestoreIcon, CircleAlertIcon, PlusIcon } from "lucide-react"
 
 export function NavInstances({
   instances,
   selected,
   creating,
+  anyRemoved,
+  removedOpen,
   client,
   clock,
   threads,
@@ -29,6 +38,9 @@ export function NavInstances({
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
   creating: boolean
+  /** Whether the hub has a removed instance, to link to the Removed instances page at the foot. */
+  anyRemoved: boolean
+  removedOpen: boolean
   /** Reaches the instances that are not selected, to count their threads that need the user. */
   client: Pick<Client, "instance">
   clock: Clock
@@ -87,6 +99,25 @@ export function NavInstances({
             }
           />
         </SidebarMenuItem>
+        {anyRemoved && (
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Removed instances"
+              isActive={removedOpen}
+              aria-current={removedOpen ? "page" : undefined}
+              onClick={(event) => {
+                event.preventDefault()
+                openRemoved()
+              }}
+              render={
+                <a href={REMOVED_PATH}>
+                  <ArchiveRestoreIcon />
+                  <span>Removed instances</span>
+                </a>
+              }
+            />
+          </SidebarMenuItem>
+        )}
       </SidebarMenu>
     </SidebarGroup>
   )

@@ -11,7 +11,7 @@ import {
   type SubscriptionMethod,
   type Transport,
 } from "./client"
-import type { InstanceSummary } from "./contract"
+import type { InstanceSummary, OperationGetResult } from "./contract"
 
 /** The one token the fake hub accepts at its login route. */
 export const ACCESS_TOKEN = "the-access-token"
@@ -36,22 +36,73 @@ export interface FakeHub {
   reachable: boolean
   /** What `instance.list` answers with. */
   instances: InstanceSummary[]
+  /** What `instance.list` answers with when asked for the removed instances. */
+  removed: InstanceSummary[]
 }
 
-/** A hub that answers like the real one: the socket upgrades only while the browser session is open. */
+/**
+ * A hub that answers like the real one: the socket upgrades only while the browser session is open.
+ * A removal or a restoration moves the instance between the lists at once, and its operation has
+ * already succeeded when it is first read.
+ */
 export function fakeHub({
   signedIn = true,
   instances = [],
-}: { signedIn?: boolean; instances?: InstanceSummary[] } = {}): FakeHub {
+  removed = [],
+}: {
+  signedIn?: boolean
+  instances?: InstanceSummary[]
+  removed?: InstanceSummary[]
+} = {}): FakeHub {
+  const operations = new Map<string, OperationGetResult>()
+  const finished = (kind: "remove" | "restore", instanceId: string) => {
+    const operation_id = `op-${operations.size + 1}`
+    operations.set(operation_id, {
+      operation_id,
+      instance_id: instanceId,
+      kind,
+      state: "succeeded",
+      detail: "",
+      steps: [],
+    })
+    return { operation_id, instance_id: instanceId }
+  }
   const hub: FakeHub = {
     signedIn,
     reachable: true,
     instances,
+    removed,
     sockets: [],
     transport: {
       openSocket(url, events) {
-        const socket = fakeSocket(url, events, (method) => {
-          if (method === "instance.list") return { instances: hub.instances }
+        const socket = fakeSocket(url, events, (method, params) => {
+          if (method === "instance.list") {
+            return { instances: isRecord(params) && params.removed ? hub.removed : hub.instances }
+          }
+          if (method === "instance.remove" && isRecord(params)) {
+            const removing = hub.instances.find(
+              (instance) => instance.instance_id === params.instance_id,
+            )
+            if (removing === undefined) return undefined
+            hub.instances = hub.instances.filter((instance) => instance !== removing)
+            hub.removed = [...hub.removed, { ...removing, intended_state: "removed" }]
+            return finished("remove", removing.instance_id)
+          }
+          if (method === "instance.restore" && isRecord(params)) {
+            const restoring = hub.removed.find(
+              (instance) => instance.instance_id === params.instance_id,
+            )
+            if (restoring === undefined) return undefined
+            hub.removed = hub.removed.filter((instance) => instance !== restoring)
+            hub.instances = [
+              ...hub.instances,
+              { ...restoring, intended_state: "stopped", process: "stopped" },
+            ]
+            return finished("restore", restoring.instance_id)
+          }
+          if (method === "operation.get" && isRecord(params)) {
+            return operations.get(String(params.operation_id))
+          }
           // Nothing left to set up. A page waits for this read before its empty state.
           if (method === "instance.status") {
             return {
@@ -244,7 +295,7 @@ export function fakeClock({ draw = 0.5 } = {}): FakeClock {
 function fakeSocket(
   url: string,
   events: SocketEvents,
-  answer: (method: unknown) => object | undefined,
+  answer: (method: unknown, params: unknown) => object | undefined,
 ): FakeSocket & { accept(): void } {
   let closed = false
   const close = () => {
@@ -262,7 +313,7 @@ function fakeSocket(
       const frame: unknown = JSON.parse(data)
       this.sent.push(frame)
       if (!isRecord(frame) || frame.type !== "call") return
-      const result = answer(frame.method)
+      const result = answer(frame.method, frame.params)
       if (result === undefined) return
       queueMicrotask(() => {
         if (!closed) receive({ type: "result", id: frame.id, result })

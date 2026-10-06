@@ -16,6 +16,7 @@ import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/comp
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useFollowing } from "@/hooks/use-following"
+import { packageName } from "@/lib/instances"
 import { followUpdate, type Updating } from "@/lib/update"
 import { CircleCheckIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react"
 
@@ -55,11 +56,7 @@ export function PackageSection({
         <Notice key={notice.code} notice={notice} />
       ))}
       <ItemGroup aria-label="Package and version">
-        <Fact label="Package">
-          {instance.package == null
-            ? "None, kinby's built-in defaults"
-            : `${instance.package.id} from ${instance.package.distribution}`}
-        </Fact>
+        <Fact label="Package">{packageName(instance.package)}</Fact>
         {instance.package != null && (
           <>
             <Fact label="Set up from">{older?.initialized_version ?? "The installed version"}</Fact>

@@ -83,6 +83,8 @@ function sidebar(
         instances={instances}
         selected={selected}
         creating={false}
+        anyRemoved={false}
+        removedOpen={false}
         threads={selected && <span>Ada's threads</span>}
       />
     </SidebarProvider>
