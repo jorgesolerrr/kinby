@@ -3,9 +3,10 @@ import type {
   Clock,
   InstanceStatusResult,
   InstanceSummary,
+  LifecycleOperationResult,
   LoginSetup,
 } from "@kinby/contract"
-import { useCallback, useEffect, useId, useState } from "react"
+import { type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { Secrets } from "@/components/secrets-section"
 import { SubscriptionLogins } from "@/components/subscription-logins"
@@ -21,6 +22,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -38,12 +40,18 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
 import { followStart, type Starting } from "@/lib/creation"
 import { instanceName, observedState } from "@/lib/instances"
-import { type Followed, followOperation } from "@/lib/operation"
-import { openConfig, openMemory, openStats } from "@/lib/selection"
+import { type Followed, followOperation, reason } from "@/lib/operation"
+import { openConfig, openHome, openMemory, openStats } from "@/lib/selection"
 import {
   BotIcon,
   BrainIcon,
@@ -51,6 +59,7 @@ import {
   CirclePauseIcon,
   CircleStopIcon,
   CircleXIcon,
+  EllipsisIcon,
   SlidersHorizontalIcon,
 } from "lucide-react"
 
@@ -59,9 +68,10 @@ import {
  * keeps it until it runs. Any other stopped one offers Start. A running one opens its config panel,
  * its memory, and its stats, offers Stop, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
  * all are.
- * `onChanged` hears a sign-in, a start or a stop end, so the instances are listed again, and must
- * keep its identity. The hub marks the instance stopped before it drains, so a stop asked here
- * keeps the running view, and its Force stop, until the stop succeeds.
+ * Running or stopped, its ⋯ menu offers Remove, and a removal that succeeds goes home.
+ * `onChanged` hears a sign-in, a start, a stop or a removal end, so the instances are listed again,
+ * and must keep its identity. The hub marks the instance stopped before it drains, so a stop asked
+ * here keeps the running view, and its Force stop, until the stop succeeds.
  */
 export function InstancePage({
   caller,
@@ -81,6 +91,10 @@ export function InstancePage({
     setStopping(false)
     onChanged()
   }, [onChanged])
+  const removed = useCallback(() => {
+    onChanged()
+    openHome()
+  }, [onChanged])
   const { status, waiting } = useStatus(caller, instance)
   const name = instanceName(instance)
   const intended = stopping ? "running" : instance.intended_state
@@ -89,7 +103,14 @@ export function InstancePage({
   if (onSetup) {
     if (status === undefined) return null
     return (
-      <SetupCard caller={caller} clock={clock} name={name} status={status} onChanged={onChanged} />
+      <SetupCard
+        caller={caller}
+        clock={clock}
+        name={name}
+        status={status}
+        onChanged={onChanged}
+        onRemoved={removed}
+      />
     )
   }
   if (intended === "stopped") {
@@ -100,6 +121,7 @@ export function InstancePage({
         instance={instance}
         name={name}
         onChanged={onChanged}
+        onRemoved={removed}
       />
     )
   }
@@ -109,7 +131,7 @@ export function InstancePage({
     const logins = status?.setup.logins ?? []
     return (
       <>
-        <div className="flex flex-wrap gap-2 px-6 pt-6">
+        <div className="flex flex-wrap items-center gap-2 px-6 pt-6">
           <Button variant="outline" onClick={() => openConfig(instance.instance_id)}>
             <SlidersHorizontalIcon data-icon="inline-start" />
             Configure
@@ -129,6 +151,13 @@ export function InstancePage({
             name={name}
             onStopping={() => setStopping(true)}
             onStopped={stopped}
+          />
+          <RemoveMenu
+            caller={caller}
+            clock={clock}
+            instanceId={instance.instance_id}
+            name={name}
+            onRemoved={removed}
           />
         </div>
         <ProcessAlert instance={instance} name={name} />
@@ -249,6 +278,139 @@ function StopButton({
   )
 }
 
+/** A removal asked for, or a force stop of the one that drains. */
+interface Removing {
+  begin: () => Promise<LifecycleOperationResult>
+  force: boolean
+}
+
+/**
+ * Remove, once confirmed, from the ⋯ menu, and Force stop while the removal drains. A refusal stays
+ * in the dialog with the hub's message. A force stop escalates the pending removal, and the hub
+ * answers with the removal's operation.
+ */
+function RemoveMenu({
+  caller,
+  clock,
+  instanceId,
+  name,
+  onRemoved,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  instanceId: string
+  name: string
+  onRemoved: () => void
+}) {
+  const [asking, setAsking] = useState(false)
+  const [refusal, setRefusal] = useState<string>()
+  // A new object for each request, so a force stop follows the operation the hub answers with.
+  const [request, setRequest] = useState<Removing>()
+  const follow = useCallback(
+    (asked: Removing, report: (followed: Followed) => void) =>
+      followOperation(
+        caller,
+        asked.begin,
+        (followed) => {
+          report(followed)
+          if (followed.state === "succeeded") onRemoved()
+        },
+        clock,
+      ),
+    [caller, clock, onRemoved],
+  )
+  const followed = useFollowing(request, follow)
+  const state = request === undefined ? undefined : (followed?.state ?? "running")
+  const remove = async () => {
+    try {
+      const removal = await caller.call("instance.remove", { instance_id: instanceId })
+      setAsking(false)
+      setRequest({ begin: () => Promise.resolve(removal), force: false })
+    } catch (error) {
+      setRefusal(reason(error))
+    }
+  }
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label="More actions"
+              disabled={state === "running" || state === "succeeded"}
+            />
+          }
+        >
+          <EllipsisIcon />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            onClick={() => {
+              setRefusal(undefined)
+              setAsking(true)
+            }}
+          >
+            Remove
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <AlertDialog open={asking} onOpenChange={setAsking}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove {name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {name} stops and leaves the sidebar. Its data stays, and you can restore it from
+              Removed instances.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {refusal !== undefined && (
+            <Alert variant="destructive">
+              <CircleXIcon />
+              <AlertTitle>The hub did not remove {name}</AlertTitle>
+              <AlertDescription>{refusal}</AlertDescription>
+            </Alert>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => void remove()}>
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      {state === "running" && (
+        <>
+          <Badge variant="secondary">
+            <Spinner data-icon="inline-start" />
+            Removing…
+          </Badge>
+          <Button
+            variant="destructive"
+            disabled={request?.force}
+            onClick={() =>
+              setRequest({
+                begin: () => caller.call("instance.stop", { instance_id: instanceId, force: true }),
+                force: true,
+              })
+            }
+          >
+            Force stop
+          </Button>
+        </>
+      )}
+      {followed?.state === "failed" && (
+        <Alert variant="destructive" className="max-w-2xl basis-full">
+          <CircleXIcon />
+          <AlertTitle>The removal failed</AlertTitle>
+          <AlertDescription>{followed.detail}</AlertDescription>
+        </Alert>
+      )}
+    </>
+  )
+}
+
 /** Says so when an instance meant to run is restarting in a loop or has failed. */
 function ProcessAlert({ instance, name }: { instance: InstanceSummary; name: string }) {
   const state = observedState(instance)
@@ -331,12 +493,14 @@ function SetupCard({
   name,
   status,
   onChanged,
+  onRemoved,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   name: string
   status: InstanceStatusResult
   onChanged: () => void
+  onRemoved: () => void
 }) {
   const titleId = useId()
   const { logins, secrets } = status.setup
@@ -384,7 +548,15 @@ function SetupCard({
             clock={clock}
             instanceId={status.instance_id}
             onStarted={onChanged}
-          />
+          >
+            <RemoveMenu
+              caller={caller}
+              clock={clock}
+              instanceId={status.instance_id}
+              name={name}
+              onRemoved={onRemoved}
+            />
+          </StartButton>
         </CardFooter>
       </Card>
     </section>
@@ -398,12 +570,14 @@ function Stopped({
   instance,
   name,
   onChanged,
+  onRemoved,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   instance: InstanceSummary
   name: string
   onChanged: () => void
+  onRemoved: () => void
 }) {
   const titleId = useId()
   return (
@@ -425,23 +599,34 @@ function Stopped({
             clock={clock}
             instanceId={instance.instance_id}
             onStarted={onChanged}
-          />
+          >
+            <RemoveMenu
+              caller={caller}
+              clock={clock}
+              instanceId={instance.instance_id}
+              name={name}
+              onRemoved={onRemoved}
+            />
+          </StartButton>
         </EmptyContent>
       </Empty>
     </section>
   )
 }
 
+/** Start, with `children` beside it. */
 function StartButton({
   caller,
   clock,
   instanceId,
   onStarted,
+  children,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   instanceId: string
   onStarted: () => void
+  children: ReactNode
 }) {
   const [request, setRequest] = useState<{ instanceId: string }>()
   const start = useCallback(
@@ -468,11 +653,12 @@ function StartButton({
           <AlertDescription>{starting.detail}</AlertDescription>
         </Alert>
       )}
-      <div>
+      <div className="flex flex-wrap items-center gap-2">
         <Button disabled={busy} onClick={() => setRequest({ instanceId })}>
           {busy && <Spinner data-icon="inline-start" />}
           Start
         </Button>
+        {children}
       </div>
     </div>
   )
