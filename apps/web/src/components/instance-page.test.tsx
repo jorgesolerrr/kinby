@@ -1,3 +1,4 @@
+import { CallError } from "@kinby/contract"
 import type {
   Client,
   InstanceSetup,
@@ -663,6 +664,230 @@ describe("stopping a running instance", () => {
     expect(onChanged).toHaveBeenCalledOnce()
   })
 })
+
+describe("removing an instance", () => {
+  const running = { ...stopped, intended_state: "running", process: "running" } as const
+  const complete = { ...stopped, setup_pending: false }
+
+  it.each([
+    ["running", running],
+    ["stopped", complete],
+    ["stopped with setup pending", stopped],
+  ] as const)("offers Remove in the ⋯ menu when it is %s", async (_state, instance) => {
+    const { user } = await openPage({}, instance)
+
+    await user.click(screen.getByRole("button", { name: "More actions" }))
+
+    expect(await screen.findByRole("menuitem", { name: "Remove" })).toBeDefined()
+  })
+
+  it("asks first, and makes no call when the removal is cancelled", async () => {
+    const { user, caller } = await openPage({}, running)
+
+    const dialog = await askToRemove(user)
+    expect(dialog.textContent).toContain(
+      "Ada stops and leaves the sidebar. Its data stays, and you can restore it from Removed instances.",
+    )
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+
+    expect(removals(caller)).toEqual([])
+  })
+
+  it("removes it once confirmed", async () => {
+    const { user, clock, caller } = await openPage(
+      {
+        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
+        "operation.get": () => operation({ kind: "remove", state: "running" }),
+      },
+      complete,
+    )
+
+    await confirmRemoval(user)
+    await act(() => clock.advance(0))
+
+    expect(removals(caller)).toEqual([{ instance_id: "instance-1" }])
+  })
+
+  it("lists the instances again once it is removed, and goes home", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1")
+    const polls = [
+      operation({ kind: "remove", state: "running" }),
+      operation({ kind: "remove", state: "succeeded" }),
+    ]
+    const { user, clock, onChanged } = await openPage(
+      {
+        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
+        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+      },
+      running,
+    )
+
+    await confirmRemoval(user)
+    await act(() => clock.advance(0))
+    expect(onChanged).not.toHaveBeenCalled()
+    expect(window.location.pathname).toBe("/instances/instance-1")
+    await act(() => clock.advance(1_000))
+
+    expect(onChanged).toHaveBeenCalledOnce()
+    expect(window.location.pathname).toBe("/")
+  })
+
+  it("says it is removing while the removal drains, and keeps following it once forced", async () => {
+    const polls = [
+      operation({ operation_id: "op-remove", kind: "remove", state: "running" }),
+      operation({ operation_id: "op-remove", kind: "remove", state: "succeeded" }),
+    ]
+    const { user, clock, caller, onChanged } = await openPage(
+      {
+        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
+        // A force stop escalates the pending removal, and the hub answers with its operation.
+        "instance.stop": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
+        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+      },
+      running,
+    )
+
+    expect(screen.queryByText("Removing…")).toBeNull()
+    await confirmRemoval(user)
+    await act(() => clock.advance(0))
+    expect(screen.getByText("Removing…")).toBeDefined()
+    expect(screen.getByRole("button", { name: "More actions" }).hasAttribute("disabled")).toBe(true)
+    await user.click(screen.getByRole("button", { name: "Force stop" }))
+    await act(() => clock.advance(0))
+    expect(screen.getByRole("button", { name: "Force stop" }).hasAttribute("disabled")).toBe(true)
+    expect(onChanged).not.toHaveBeenCalled()
+    await act(() => clock.advance(1_000))
+
+    expect(stops(caller)).toEqual([{ instance_id: "instance-1", force: true }])
+    const followed = caller.calls
+      .filter((call) => call.method === "operation.get")
+      .map((call) => (call.params as { operation_id: string }).operation_id)
+    expect(new Set(followed)).toEqual(new Set(["op-remove"]))
+    expect(onChanged).toHaveBeenCalledOnce()
+  })
+
+  it("goes home when the removal ends before its Force stop lands", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1")
+    const polls = [
+      operation({ operation_id: "op-remove", kind: "remove", state: "running" }),
+      operation({ operation_id: "op-remove", kind: "remove", state: "succeeded" }),
+    ]
+    const { user, clock, onChanged } = await openPage(
+      {
+        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
+        "instance.stop": () => {
+          throw new CallError({ code: "NOT_FOUND", message: "no such instance", retryable: false })
+        },
+        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+      },
+      running,
+    )
+
+    await confirmRemoval(user)
+    await act(() => clock.advance(0))
+    await user.click(screen.getByRole("button", { name: "Force stop" }))
+    await act(() => clock.advance(1_000))
+
+    expect(screen.queryByText("The removal failed")).toBeNull()
+    expect(onChanged).toHaveBeenCalledOnce()
+    expect(window.location.pathname).toBe("/")
+  })
+
+  it("reports a removal that failed before its Force stop landed, whatever the stop does", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1")
+    const detail = "The container could not be removed: permission denied."
+    const polls = [
+      operation({ operation_id: "op-remove", kind: "remove", state: "running" }),
+      operation({ operation_id: "op-remove", kind: "remove", state: "failed", detail }),
+    ]
+    const { user, clock, caller, onChanged } = await openPage(
+      {
+        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
+        // With the removal over, the hub starts a stop of its own.
+        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
+        "operation.get": (params) =>
+          (params as { operation_id: string }).operation_id === "op-stop"
+            ? operation({ operation_id: "op-stop", kind: "stop", state: "succeeded" })
+            : ((polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult),
+      },
+      running,
+    )
+
+    await confirmRemoval(user)
+    await act(() => clock.advance(0))
+    await user.click(screen.getByRole("button", { name: "Force stop" }))
+    await act(() => clock.advance(1_000))
+
+    expect(within(screen.getByRole("alert")).getByText(detail)).toBeDefined()
+    const followed = caller.calls
+      .filter((call) => call.method === "operation.get")
+      .map((call) => (call.params as { operation_id: string }).operation_id)
+    expect(new Set(followed)).toEqual(new Set(["op-remove"]))
+    expect(onChanged).not.toHaveBeenCalled()
+    expect(window.location.pathname).toBe("/instances/instance-1")
+  })
+
+  it("shows the hub's message in the dialog when the hub refuses the removal", async () => {
+    const refusal =
+      "The Codex sign-in is still running for this instance. Finish the sign-in or let its code expire first."
+    const { user, clock, onChanged } = await openPage(
+      {
+        "instance.remove": () => {
+          throw new CallError({ code: "INSTANCE_BUSY", message: refusal, retryable: false })
+        },
+      },
+      running,
+    )
+
+    const dialog = await askToRemove(user)
+    await user.click(within(dialog).getByRole("button", { name: "Remove" }))
+    await act(() => clock.advance(0))
+
+    expect(within(screen.getByRole("alertdialog")).getByText(refusal)).toBeDefined()
+    expect(screen.queryByText("Removing…")).toBeNull()
+    expect(onChanged).not.toHaveBeenCalled()
+  })
+
+  it("says why a removal failed, and offers Remove again", async () => {
+    const detail = "The container could not be removed: permission denied."
+    const { user, clock, onChanged } = await openPage(
+      {
+        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
+        "operation.get": () => operation({ kind: "remove", state: "failed", detail }),
+      },
+      complete,
+    )
+
+    await confirmRemoval(user)
+    await act(() => clock.advance(0))
+
+    const alert = within(screen.getByRole("alert"))
+    expect(alert.getByText("The removal failed")).toBeDefined()
+    expect(alert.getByText(detail)).toBeDefined()
+    expect(screen.queryByText("Removing…")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Force stop" })).toBeNull()
+    expect(screen.getByRole("button", { name: "More actions" }).hasAttribute("disabled")).toBe(
+      false,
+    )
+    expect(onChanged).not.toHaveBeenCalled()
+  })
+})
+
+async function askToRemove(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "More actions" }))
+  await user.click(await screen.findByRole("menuitem", { name: "Remove" }))
+  return screen.findByRole("alertdialog", { name: "Remove Ada?" })
+}
+
+async function confirmRemoval(user: ReturnType<typeof userEvent.setup>) {
+  const dialog = await askToRemove(user)
+  await user.click(within(dialog).getByRole("button", { name: "Remove" }))
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+}
+
+const removals = (caller: StubCaller) =>
+  caller.calls.filter((call) => call.method === "instance.remove").map((call) => call.params)
 
 async function confirmStop(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Stop" }))

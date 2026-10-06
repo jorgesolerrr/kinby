@@ -125,6 +125,11 @@ export function openStats(instanceId: string): void {
   navigate(statsPath(instanceId))
 }
 
+/** Go to the home route, where no instance is selected, the same way. */
+export function openHome(): void {
+  navigate("/")
+}
+
 /** Open the create wizard the same way. */
 export function openCreateWizard(): void {
   navigate(CREATE_PATH)
