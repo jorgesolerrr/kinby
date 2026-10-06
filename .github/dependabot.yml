@@ -1,0 +1,11 @@
+# Keeps the workflows' commit-pinned actions current. Dependency security updates are
+# turned on in the repository settings and need no entry here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
