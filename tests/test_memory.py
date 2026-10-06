@@ -217,6 +217,179 @@ def test_recall_caps_matching_nodes_at_twenty(tmp_path: Path) -> None:
     assert memories[-1].node == NodeId("2026-08-06-memory-note")
 
 
+def test_recall_returns_facts_over_newer_episodes(tmp_path: Path) -> None:
+    fact = NodeId("2026-08-20-deploys-use-the-staging-tag")
+    _write_node(
+        tmp_path,
+        node_id=fact,
+        node_date="2026-08-20",
+        description="Deploys use the staging tag",
+        subjects="kinby, deployment",
+        body="Tag the image staging before a deploy.",
+    )
+    _write_node(
+        tmp_path,
+        node_id="2026-08-31-checked-the-deployment",
+        node_date="2026-08-31",
+        description="Checked the deployment",
+        subjects="kinby, deployment",
+        tools="bash",
+        turn=_TURN_ID,
+        body="Ran the health check.",
+    )
+
+    memories = _graph_store(tmp_path).recall("deployment")
+
+    assert [memory.node for memory in memories] == [fact]
+
+
+def test_recall_returns_episodes_when_no_fact_matches(tmp_path: Path) -> None:
+    _write_node(
+        tmp_path,
+        node_id="2026-08-20-planned-memory",
+        node_date="2026-08-20",
+        description="Planned kinby memory",
+        subjects="kinby, memory",
+        body="The graph uses markdown nodes.",
+    )
+    for day in (25, 31):
+        _write_node(
+            tmp_path,
+            node_id=f"2026-08-{day}-checked-the-deployment",
+            node_date=f"2026-08-{day}",
+            description="Checked the deployment",
+            subjects="kinby, deployment",
+            tools="bash",
+            turn=_TURN_ID,
+            body="Ran the health check.",
+        )
+
+    memories = _graph_store(tmp_path).recall("deployment")
+
+    assert [memory.node for memory in memories] == [
+        NodeId("2026-08-31-checked-the-deployment"),
+        NodeId("2026-08-25-checked-the-deployment"),
+    ]
+
+
+def test_recall_returns_facts_and_episodes_within_a_date_bound(tmp_path: Path) -> None:
+    _write_node(
+        tmp_path,
+        node_id="2026-08-25-deploys-use-the-staging-tag",
+        node_date="2026-08-25",
+        description="Deploys use the staging tag",
+        subjects="kinby, deployment",
+        body="Tag the image staging before a deploy.",
+    )
+    _write_node(
+        tmp_path,
+        node_id="2026-08-26-checked-the-deployment",
+        node_date="2026-08-26",
+        description="Checked the deployment",
+        subjects="kinby, deployment",
+        tools="bash",
+        turn=_TURN_ID,
+        body="Ran the health check.",
+    )
+    _write_node(
+        tmp_path,
+        node_id="2026-08-31-rolled-back-the-deployment",
+        node_date="2026-08-31",
+        description="Rolled back the deployment",
+        subjects="kinby, deployment",
+        tools="bash",
+        turn=_TURN_ID,
+        body="Restored the previous image.",
+    )
+
+    memories = _graph_store(tmp_path).recall("deployment", after=date(2026, 8, 25))
+    before_the_rollback = _graph_store(tmp_path).recall("deployment", before=date(2026, 8, 30))
+
+    assert [memory.node for memory in memories] == [
+        NodeId("2026-08-31-rolled-back-the-deployment"),
+        NodeId("2026-08-26-checked-the-deployment"),
+        NodeId("2026-08-25-deploys-use-the-staging-tag"),
+    ]
+    assert [memory.node for memory in before_the_rollback] == [
+        NodeId("2026-08-26-checked-the-deployment"),
+        NodeId("2026-08-25-deploys-use-the-staging-tag"),
+    ]
+
+
+def test_recall_caps_matching_episodes_at_twenty(tmp_path: Path) -> None:
+    for day in range(1, 26):
+        _write_node(
+            tmp_path,
+            node_id=f"2026-08-{day:02d}-checked-memory",
+            node_date=f"2026-08-{day:02d}",
+            description=f"Checked memory {day}",
+            subjects="kinby, memory",
+            tools="bash",
+            turn=_TURN_ID,
+            body=f"Checked memory {day}.",
+        )
+
+    memories = _graph_store(tmp_path).recall("memory")
+
+    assert len(memories) == 20
+    assert memories[0].node == NodeId("2026-08-25-checked-memory")
+    assert memories[-1].node == NodeId("2026-08-06-checked-memory")
+
+
+def test_recall_caps_facts_and_episodes_within_a_date_bound_at_twenty(tmp_path: Path) -> None:
+    for day in range(1, 26):
+        episode = day % 2 == 0
+        _write_node(
+            tmp_path,
+            node_id=f"2026-08-{day:02d}-memory-{day}",
+            node_date=f"2026-08-{day:02d}",
+            description=f"Memory {day}",
+            subjects="kinby, memory",
+            tools="bash" if episode else None,
+            turn=_TURN_ID if episode else None,
+            body=f"Memory {day}.",
+        )
+
+    memories = _graph_store(tmp_path).recall("memory", after=date(2026, 8, 1))
+
+    assert len(memories) == 20
+    assert memories[0].node == NodeId("2026-08-25-memory-25")
+    assert memories[1].node == NodeId("2026-08-24-memory-24")
+    assert memories[-1].node == NodeId("2026-08-06-memory-6")
+
+
+def test_recall_falls_back_to_episodes_past_a_forgotten_fact(tmp_path: Path) -> None:
+    forgotten_fact = NodeId("2026-08-31-deploys-use-the-staging-tag")
+    _write_node(
+        tmp_path,
+        node_id=forgotten_fact,
+        node_date="2026-08-31",
+        description="Deploys use the staging tag",
+        subjects="kinby, deployment",
+        body="Tag the image staging before a deploy.",
+    )
+    forgotten_episode = NodeId("2026-08-26-rolled-back-the-deployment")
+    episode = NodeId("2026-08-25-checked-the-deployment")
+    for node, node_date in ((forgotten_episode, "2026-08-26"), (episode, "2026-08-25")):
+        _write_node(
+            tmp_path,
+            node_id=node,
+            node_date=node_date,
+            description="Worked on the deployment",
+            subjects="kinby, deployment",
+            tools="bash",
+            turn=_TURN_ID,
+            body="Ran the health check.",
+        )
+    memory = _graph_store(tmp_path)
+
+    memory.forget(forgotten_fact)
+    memory.forget(forgotten_episode)
+
+    assert [hit.node for hit in memory.recall("deployment")] == [episode]
+    assert [hit.node for hit in memory.recall("deployment", after=date(2026, 8, 1))] == [episode]
+
+
 def test_remember_writes_a_fact_that_later_recall_finds(tmp_path: Path) -> None:
     node = NodeId("2026-09-01-picked-markdown")
     fact = Fact(
