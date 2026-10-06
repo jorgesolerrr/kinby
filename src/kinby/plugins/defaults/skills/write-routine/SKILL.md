@@ -143,8 +143,8 @@ Its gate must allow execution under the routine's effective mode. Ask and deny f
 the turn with the gate rule. Model-requested tools keep their usual approval flow.
 
 Returning `None` completes a recorded no-work turn when the check finds nothing new.
-Both the main model and the recap model are skipped. Kinby preserves run history
-and the deterministic tool trace with zero model usage and cost. Every other result,
+Both the main model and the recap model are skipped. Kinby keeps the run in history
+at zero model usage and cost, and writes nothing to memory. Every other result,
 including an empty string, reaches the model as data. Daily-budget admission still
 applies before the firing starts.
 

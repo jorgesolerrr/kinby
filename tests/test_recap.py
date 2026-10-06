@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from kinby.contracts import (
     AcceptedResult,
+    CompletionOutcome,
     ErrorEnvelope,
     Event,
     EventType,
@@ -34,7 +35,15 @@ from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.turns import Emit, PreparedTurnRequest, TurnOutcome
 from kinby.instance import load_instance
-from kinby.memory import GraphStore, MemoryNode, NodeId, RecapDraft, RecapWriter
+from kinby.memory import (
+    Episode,
+    Fact,
+    GraphStore,
+    MemoryNode,
+    NodeId,
+    RecapDraft,
+    RecapWriter,
+)
 from tests.helpers import (
     cannot_restore,
     does_not_park,
@@ -907,6 +916,111 @@ def test_catch_up_recaps_a_closed_uncovered_turn(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_catch_up_deletes_no_work_traces_and_keeps_other_nodes(tmp_path: Path) -> None:
+    recorded_on = datetime(2026, 9, 10, 9, tzinfo=UTC)
+
+    async def close_turn(
+        event_log: EventLog,
+        turn_id: UUID,
+        outcome: CompletionOutcome,
+        marker: NodeId | None,
+        *,
+        recapped: bool = True,
+    ) -> None:
+        thread_id = uuid4()
+        for payload in (
+            TurnStarted(
+                message="Check for new issues",
+                model="test-model",
+                permission_mode=PermissionMode.READ_ONLY,
+            ),
+            ToolCall(call_id="fetch-1", name="fetch", arguments={}),
+            TurnCompleted(input_tokens=0, output_tokens=0, outcome=outcome),
+        ):
+            await event_log.append(thread_id, turn_id, payload)
+        if recapped:
+            await event_log.append(
+                thread_id,
+                turn_id,
+                MemoryRecapped(node=marker, input_tokens=0, output_tokens=0, model=None),
+            )
+
+    def trace(turn_id: UUID) -> NodeId:
+        return NodeId(f"2026-09-10-{turn_id.hex}-trace")
+
+    def episode(node: NodeId, turn_id: UUID, description: str) -> Episode:
+        return Episode(
+            node=node,
+            date=recorded_on.date(),
+            description=description,
+            subjects=(),
+            body="## Path taken\n1. fetch: {}",
+            thread=uuid4(),
+            turn=turn_id,
+            tools=("fetch",),
+        )
+
+    def graph_files() -> set[str]:
+        return {path.stem for path in (tmp_path / "memory" / "graph").glob("*.md")}
+
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state", clock=lambda: recorded_on)
+        graph = GraphStore(tmp_path)
+        no_work, already_gone, unmarked, work = uuid4(), uuid4(), uuid4(), uuid4()
+        await close_turn(event_log, no_work, CompletionOutcome.NO_WORK, trace(no_work))
+        graph.remember(episode(trace(no_work), no_work, "Check for new issues"))
+        await close_turn(event_log, already_gone, CompletionOutcome.NO_WORK, trace(already_gone))
+        # A turn whose trace was written before the process stopped, ahead of its marker.
+        await close_turn(event_log, unmarked, CompletionOutcome.NO_WORK, None, recapped=False)
+        graph.remember(episode(trace(unmarked), unmarked, "Check for new issues"))
+        await close_turn(event_log, work, CompletionOutcome.WORK, None)
+        kept = {
+            graph.remember(
+                episode(
+                    NodeId(f"2026-09-10-{uuid4().hex}-read-the-stack-trace"),
+                    work,
+                    "Read the stack trace",
+                )
+            ),
+            graph.remember(
+                episode(
+                    NodeId(f"2026-09-10-{uuid4().hex}-fixed-the-build"), work, "Fixed the build"
+                )
+            ),
+            graph.remember(
+                Fact(
+                    node=NodeId(f"2026-09-10-{uuid4().hex}-ci-runs-on-linux"),
+                    date=recorded_on.date(),
+                    description="CI runs on Linux",
+                    subjects=("CI",),
+                    body="The gate imports fcntl.",
+                    thread=None,
+                )
+            ),
+        }
+        before = list(event_log.all_events())
+        recap = _trace_only_writer(tmp_path, event_log, graph)
+
+        await recap.catch_up()
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        assert graph_files() == kept
+        after = list(event_log.all_events())
+        assert after[:-1] == before
+        assert after[-1].turn_id == unmarked
+        assert after[-1].payload == MemoryRecapped(
+            node=None, input_tokens=0, output_tokens=0, model=None
+        )
+
+        await recap.catch_up()
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        assert graph_files() == kept
+        assert list(event_log.all_events()) == after
+
+    asyncio.run(scenario())
+
+
 def test_catch_up_queues_oldest_turns_before_a_newly_closed_turn(tmp_path: Path) -> None:
     async def close_turn(event_log: EventLog, thread_id: UUID, turn_id: UUID) -> None:
         await event_log.append(
@@ -1114,6 +1228,61 @@ def test_tool_call_summary_is_one_bounded_line(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_trace_description_is_one_bounded_line_of_a_webhook_body(tmp_path: Path) -> None:
+    webhook_body = (
+        '{"action": "opened", "issue": {"title": "' + "x" * 300 + '"}}\n'
+        '{"sender": {"login": "jorge"}}\n'
+        '{"repository": {"name": "kinby"}}'
+    )
+
+    async def scenario() -> None:
+        state_dir = tmp_path / ".state"
+        event_log = EventLog(state_dir)
+        recap = _trace_only_writer(tmp_path, event_log, GraphStore(tmp_path))
+        dispatcher = build_dispatcher(
+            state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ToolRunner(),
+                recap,
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        accepted = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": webhook_body},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(accepted, AcceptedResult)
+        closing_events = (await event_log.subscribe(created.id, accepted.sequence)).items
+        for _ in range(7):
+            await anext(closing_events)
+        await closing_events.aclose()
+
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        marker = event_log.stored(created.id)[-1].payload
+        assert isinstance(marker, MemoryRecapped)
+        assert marker.node is not None
+        episode = GraphStore(tmp_path).open(marker.node)
+        assert episode.description.startswith('{"action": "opened", "issue": {"title": "xxx')
+        assert episode.description.endswith("...")
+        assert len(episode.description) == 200
+        assert "\n" not in episode.description
+        assert "jorge" not in episode.description
+        assert episode.body == (
+            "## Path taken\n"
+            '1. weather: {"city": "Quito"}\n'
+            '2. weather: {"city": "Cuenca"}\n'
+            '3. read: {"path": "notes.md"}'
+        )
+
+    asyncio.run(scenario())
+
+
 def test_failed_recap_appends_warning_without_marker(tmp_path: Path) -> None:
     async def scenario() -> None:
         state_dir = tmp_path / ".state"
@@ -1189,6 +1358,66 @@ def test_chat_only_turn_writes_marker_without_episode(tmp_path: Path) -> None:
             input_tokens=0,
             output_tokens=0,
             model="openai:main",
+        )
+        assert not (tmp_path / "memory" / "graph").exists()
+
+    asyncio.run(scenario())
+
+
+def test_no_work_turn_writes_marker_without_node(tmp_path: Path) -> None:
+    class NoWorkRunner:
+        async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+            await emit(ToolCall(call_id="fetch-1", name="fetch", arguments={"owner": "jorge"}))
+            await emit(ToolResult(call_id="fetch-1", name="fetch", output="null", error=False))
+            return TurnOutcome(outcome=CompletionOutcome.NO_WORK)
+
+        resume = does_not_park
+        restore = cannot_restore
+
+    def no_model(model: str) -> ScriptedRecapModel:
+        raise AssertionError(f"a no-work turn called the recap model {model}")
+
+    async def scenario() -> None:
+        state_dir = tmp_path / ".state"
+        event_log = EventLog(state_dir)
+        recap = RecapWriter(
+            event_log,
+            GraphStore(tmp_path),
+            _instance(tmp_path, policy="every-turn"),
+            model_factory=no_model,
+        )
+        dispatcher = build_dispatcher(
+            state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                NoWorkRunner(),
+                recap,
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        accepted = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Check for new issues"},
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(accepted, AcceptedResult)
+        closing_events = (await event_log.subscribe(created.id, accepted.sequence)).items
+        for _ in range(4):
+            await anext(closing_events)
+        await closing_events.aclose()
+
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        marker = event_log.stored(created.id)[-1]
+        assert marker.turn_id == accepted.turn_id
+        assert marker.payload == MemoryRecapped(
+            node=None,
+            input_tokens=0,
+            output_tokens=0,
+            model=None,
         )
         assert not (tmp_path / "memory" / "graph").exists()
 

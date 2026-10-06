@@ -54,7 +54,7 @@ from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ClosedTurnHook, Turns
 from kinby.core.usage import TimeRange, usage_totals
 from kinby.instance import Budgets, Instance, load_instance
-from kinby.memory import Episode, GraphStore, RecapWriter
+from kinby.memory import GraphStore, RecapWriter
 from kinby.memory.recap import RecapModel
 from kinby.plugins.routines import SharedCodeStep, SignalAuth, load_routines
 from tests.helpers import turn_config_stub
@@ -935,7 +935,7 @@ def unused_recap(model: str) -> RecapModel:
 
 
 @pytest.mark.parametrize("restart", [False, True])
-def test_no_work_has_deterministic_recap_and_zero_cost(tmp_path: Path, restart: bool) -> None:
+def test_no_work_is_recapped_without_a_node_at_zero_cost(tmp_path: Path, restart: bool) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)
         path = routine_file(instance, "description: News")
@@ -967,12 +967,8 @@ def fetch() -> None:
         marker = markers[0]
         assert marker.model is None
         assert marker.total == 0
-        assert marker.node is not None
-        episode = memory.open(marker.node)
-        assert isinstance(episode, Episode)
-        assert episode.tools == ("fetch",)
-        assert "fetch: {}" in episode.body
-        assert len(memory.recall("")) == 1
+        assert marker.node is None
+        assert memory.recall("") == ()
         metrics = turn_metrics(stored)
         assert metrics.unpriced_models_by_turn == {}
         assert metrics.records[0].cost == 0
@@ -1151,58 +1147,6 @@ def fetch() -> str:
             event.payload for event in log.stored(thread.id) if isinstance(event.payload, ToolCall)
         ]
         assert [call.name for call in calls] == ["fetch", "remember"]
-
-    asyncio.run(scenario())
-
-
-def test_no_work_trace_survives_failure_before_coverage_marker(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def scenario() -> None:
-        instance = instance_at(tmp_path)
-        path = routine_file(instance, "description: News")
-        (path.parent / "run.py").write_text('''from kinby.plugins import tool
-@tool(write=False)
-def fetch() -> None:
-    """Fetch news."""
-    return None
-''')
-        events = await fire(instance, RoutineModel())
-        log = EventLog(instance.manifest.state_dir)
-        memory = GraphStore(instance.path)
-        original_write = Path.write_text
-
-        def failed_write(path: Path, data: str, **kwargs: str | None) -> int:
-            result = original_write(path, data, **kwargs)
-            if path.parent.name == "graph":
-                raise OSError("Process stopped after writing the trace")
-            return result
-
-        monkeypatch.setattr(Path, "write_text", failed_write)
-        writer = RecapWriter(log, memory, instance, model_factory=unused_recap)
-        await writer.catch_up()
-        await writer.drain()
-        assert len(memory.recall("")) == 1
-        assert not any(
-            isinstance(event.payload, MemoryRecapped) for event in log.stored(events[0].thread_id)
-        )
-        monkeypatch.undo()
-        restarted = RecapWriter(
-            EventLog(instance.manifest.state_dir), memory, instance, model_factory=unused_recap
-        )
-        await restarted.catch_up()
-        await restarted.drain()
-        await restarted.catch_up()
-        await restarted.drain()
-        assert len(memory.recall("")) == 1
-        assert (
-            sum(
-                isinstance(event.payload, MemoryRecapped)
-                for event in log.stored(events[0].thread_id)
-            )
-            == 1
-        )
 
     asyncio.run(scenario())
 
