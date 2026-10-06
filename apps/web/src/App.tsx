@@ -8,6 +8,7 @@ import { CreateWizard } from "@/components/create-wizard"
 import { MainPanel } from "@/components/main-panel"
 import { NavThreads } from "@/components/nav-threads"
 import { PageBoundary } from "@/components/page-boundary"
+import { RemovedInstancesPage } from "@/components/removed-instances-page"
 import { SignIn } from "@/components/sign-in"
 import { UsagePage } from "@/components/usage-page"
 import { Badge } from "@/components/ui/badge"
@@ -20,6 +21,7 @@ import {
   useCreating,
   useMemoryOpen,
   usePath,
+  useRemovedOpen,
   useSelectedInstanceId,
   useSelectedThreadId,
   useStatsOpen,
@@ -36,13 +38,15 @@ export default function App({ client, clock = browserClock }: { client: Client; 
 }
 
 function Shell({ client, clock, connected }: { client: Client; clock: Clock; connected: boolean }) {
-  const [instances, listAgain] = useInstances(client, clock, connected)
+  const [listed, listAgain] = useInstances(client, clock, connected)
+  const instances = listed?.instances
   const selectedId = useSelectedInstanceId()
   const creating = useCreating()
   const configOpen = useConfigOpen()
   const memoryOpen = useMemoryOpen()
   const statsOpen = useStatsOpen()
   const usageOpen = useUsageOpen()
+  const removedOpen = useRemovedOpen()
   const threadsOpen = useThreadsOpen()
   const path = usePath()
   // An instance the hub does not have, or no longer has, selects nothing.
@@ -63,6 +67,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           instances={instances ?? []}
           selected={selected}
           creating={creating}
+          anyRemoved={(listed?.removed.length ?? 0) > 0}
+          removedOpen={removedOpen}
           usageOpen={usageOpen}
           threadsOpen={threadsOpen}
           client={client}
@@ -91,6 +97,13 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
               <CreateWizard caller={client} clock={clock} onPublished={listAgain} />
             ) : usageOpen ? (
               <UsagePage client={client} clock={clock} />
+            ) : removedOpen ? (
+              <RemovedInstancesPage
+                caller={client}
+                clock={clock}
+                removed={listed?.removed}
+                onRestored={listAgain}
+              />
             ) : (
               <MainPanel
                 caller={client}
@@ -116,17 +129,27 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
 /** How often the instances are listed again while the page is visible. */
 const LIST_INTERVAL_MS = 30_000
 
+interface Listed {
+  instances: InstanceSummary[]
+  removed: InstanceSummary[]
+}
+
 /**
- * The hub's instances, listed again as `usePolled` says. A caller that opens an instance waits for
- * the list it asks for, so the page reads the list that includes the change.
+ * The hub's instances and its removed ones, listed together again as `usePolled` says. A caller
+ * that opens an instance waits for the lists it asks for, so the page reads the lists that include
+ * the change.
  */
 function useInstances(
   client: Client,
   clock: Clock,
   connected: boolean,
-): [InstanceSummary[] | undefined, () => Promise<void>] {
+): [Listed | undefined, () => Promise<void>] {
   const list = useCallback(
-    () => client.call("instance.list", {}).then((listed) => listed.instances),
+    () =>
+      Promise.all([
+        client.call("instance.list", {}),
+        client.call("instance.list", { removed: true }),
+      ]).then(([listed, removed]) => ({ instances: listed.instances, removed: removed.instances })),
     [client],
   )
   return usePolled(list, clock, connected, LIST_INTERVAL_MS)

@@ -20,6 +20,8 @@ export function AppSidebar({
   instances,
   selected,
   creating,
+  anyRemoved,
+  removedOpen,
   usageOpen,
   threadsOpen,
   client,
@@ -31,6 +33,9 @@ export function AppSidebar({
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
   creating: boolean
+  /** Whether the hub has a removed instance, to link to the Removed instances page. */
+  anyRemoved: boolean
+  removedOpen: boolean
   usageOpen: boolean
   threadsOpen: boolean
   /** Reaches the instances that are not selected, to count their threads that need the user. */
@@ -62,6 +67,8 @@ export function AppSidebar({
           instances={instances}
           selected={selected}
           creating={creating}
+          anyRemoved={anyRemoved}
+          removedOpen={removedOpen}
           client={client}
           clock={clock}
           threads={threads}

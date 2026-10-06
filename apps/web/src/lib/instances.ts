@@ -1,8 +1,15 @@
-import type { InstanceSummary, ProcessState } from "@kinby/contract"
+import type { InstanceSummary, PackageSummary, ProcessState } from "@kinby/contract"
 
 /** The persona name the user gave the instance, or its manifest id when it has none. */
 export function instanceName(instance: InstanceSummary): string {
   return instance.persona_name ?? instance.manifest_id
+}
+
+/** The package an instance was created from, or that it has none. */
+export function packageName(summary: PackageSummary | null | undefined): string {
+  return summary == null
+    ? "None, kinby's built-in defaults"
+    : `${summary.id} from ${summary.distribution}`
 }
 
 /** What the runtime saw the instance doing when it was listed. A container in a restart loop reads as restarting. */

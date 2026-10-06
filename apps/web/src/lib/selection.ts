@@ -11,6 +11,7 @@ const MEMORY = "memory"
 const STATS = "stats"
 export const CREATE_PATH = "/new"
 export const USAGE_PATH = "/usage"
+export const REMOVED_PATH = "/removed"
 
 const listeners = new Set<() => void>()
 
@@ -140,6 +141,11 @@ export function openUsage(): void {
   navigate(USAGE_PATH)
 }
 
+/** Open the hub's Removed instances page the same way. */
+export function openRemoved(): void {
+  navigate(REMOVED_PATH)
+}
+
 /** The URL's path, which changes with every page, instance, and thread picked. */
 export function usePath(): string {
   return useSyncExternalStore(subscribe, () => window.location.pathname)
@@ -188,6 +194,11 @@ export function useCreating(): boolean {
 /** Whether the URL opens the hub's usage page. */
 export function useUsageOpen(): boolean {
   return useSyncExternalStore(subscribe, () => window.location.pathname === USAGE_PATH)
+}
+
+/** Whether the URL opens the hub's Removed instances page. */
+export function useRemovedOpen(): boolean {
+  return useSyncExternalStore(subscribe, () => window.location.pathname === REMOVED_PATH)
 }
 
 function navigate(path: string): void {
