@@ -30,15 +30,31 @@ The life wiki: entities, episodes, and time-stamped facts about the user's life 
 
 ### Episode
 
-One distilled record in the **knowledge graph** of a single **turn**: what happened, what was decided, what should have gone differently, and the tools and path the agent used. Written by the **recap** and lets later work reuse or improve that path.
+One distilled record in the **knowledge graph** of a single **turn**: what happened, what was decided, what should have gone differently, and the tools and path the agent used. Written by the **recap** and lets later work reuse or improve that path. Episodes are the raw material **dreaming** turns into **facts**: a search returns them only when it is bounded by date or no fact matches, and an old episode is **pruned** once it is **covered** and no fact cites it. A **turn** with **no work** writes none.
 
 ### Fact
 
-An atomic, timestamped statement in the **knowledge graph**, recorded when it is learned. Recency decides which fact is current: the latest fact about a subject wins. The agent remembers a fact in a **thread**; the user can add one from a client, and that fact belongs to no thread.
+An atomic, timestamped statement in the **knowledge graph**, recorded when it is learned. Recency decides which fact is current: the latest fact about a subject wins. The agent remembers a fact in a **thread**; the user can add one from a client, and that fact belongs to no thread. A fact **dreaming** writes cites its **source episodes**, the episodes it was learned from.
 
 ### Correction
 
 The user replacing a **fact** they judge wrong: a new fact, dated the day of the correction, plus a **tombstone** on the old one. Nothing in the graph is rewritten in place. An **episode** has no correction; it can only be forgotten.
+
+### Dreaming
+
+The consolidation that reviews uncovered **episodes** and writes a **fact** for a lesson or detail they repeat, citing them as its **source episodes**. It never rewrites, merges or tombstones an episode, and it never writes back a fact the user forgot.
+
+### Source episode
+
+An **episode** a **fact** cites as the evidence it was learned from. While a live fact cites it, an episode is never **pruned**.
+
+### Covered
+
+Said of an **episode** that **dreaming** has reviewed, whether or not it wrote a fact from it. Only a consolidation that finished its writes covers an episode; a failed one leaves its episodes uncovered for the next run.
+
+### Prune
+
+Deleting an **episode** that is older than three months, **covered**, and cited by no live **fact**. Distinct from forgetting: a prune leaves no **tombstone**, and the **turn** it came from keeps its recap record, so nothing re-derives it.
 
 ### Transcript store
 
