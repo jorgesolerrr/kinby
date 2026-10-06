@@ -6,8 +6,9 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 from uuid import UUID
 
@@ -38,6 +39,7 @@ from kinby.contracts import (
 from kinby.core.model_calls import completed_model_call
 from kinby.core.models import init_model
 from kinby.instance import Instance, RecapPolicy, reload_manifest
+from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR
 from kinby.instance.recap import load_recap_lens
 from kinby.memory.facade import Episode, Memory, new_node_id
 
@@ -47,6 +49,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _TOOL_CALL_SUMMARY_MAX_CHARS = 160
+_TRACE_DESCRIPTION_MAX_CHARS = 200
 _TOOL_RESULT_MAX_CHARS = 800
 
 
@@ -103,10 +106,6 @@ class _RecapRequest:
     turn_id: UUID
 
 
-class _NoWorkTrace:
-    pass
-
-
 class RecapWriter:
     """Queue and write one episode at a time after turns close."""
 
@@ -136,6 +135,11 @@ class RecapWriter:
     async def catch_up(self) -> None:
         """Queue every closed turn that has no recap marker."""
         events = await asyncio.to_thread(lambda: list(self._event_log.all_events()))
+        await asyncio.to_thread(
+            _delete_no_work_traces,
+            self._instance.path / MEMORY_DIR / GRAPH_DIR,
+            events,
+        )
         closed: list[_RecapRequest] = []
         covered: set[_RecapRequest] = set()
         for event in events:
@@ -182,14 +186,14 @@ class RecapWriter:
         )
         if self._is_recapped(events):
             return
-        calls = [event.payload for event in events if isinstance(event.payload, ToolCall)]
         if any(
             isinstance(event.payload, TurnCompleted)
             and event.payload.outcome is CompletionOutcome.NO_WORK
             for event in events
         ):
-            await self._write_trace_only(request, events, calls, _NoWorkTrace())
+            await self._finish(request, None, TokenTotals(input_tokens=0, output_tokens=0), None)
             return
+        calls = [event.payload for event in events if isinstance(event.payload, ToolCall)]
         manifest = reload_manifest(self._instance, model_override=self._model_override)
         if manifest.memory.recap is RecapPolicy.TRACE_ONLY:
             await self._write_trace_only(request, events, calls, manifest.models.recap)
@@ -222,33 +226,31 @@ class RecapWriter:
         request: _RecapRequest,
         events: list[Event],
         calls: list[ToolCall],
-        recap: str | _NoWorkTrace,
+        recap: str,
     ) -> None:
         episode: Episode | None = None
         if calls:
-            recorded_on = _recorded_on(events)
             started = next(
                 event.payload for event in events if isinstance(event.payload, TurnStarted)
             )
-            description = " ".join(started.message.split()) or "Turn used tools"
+            first_line = next(iter(started.message.strip().splitlines()), "")
+            description = _shorten(
+                " ".join(first_line.split()) or "Turn used tools",
+                _TRACE_DESCRIPTION_MAX_CHARS,
+            )
             episode = _episode(
                 request,
                 description=description,
                 subjects=(),
                 body=_path_taken(calls),
                 calls=calls,
-                recorded_on=recorded_on,
+                recorded_on=_recorded_on(events),
             )
-            if isinstance(recap, _NoWorkTrace):
-                episode = replace(
-                    episode,
-                    node=NodeId(f"{recorded_on.isoformat()}-{request.turn_id.hex}-trace"),
-                )
         await self._finish(
             request,
             episode,
             TokenTotals(input_tokens=0, output_tokens=0),
-            None if isinstance(recap, _NoWorkTrace) else recap,
+            recap,
         )
 
     async def _finish(
@@ -326,6 +328,21 @@ class RecapWriter:
     @staticmethod
     def _is_recapped(events: Iterable[Event]) -> bool:
         return any(isinstance(event.payload, MemoryRecapped) for event in events)
+
+
+# Temporary: remove once the deployed instances have started with it (#558).
+def _delete_no_work_traces(graph: Path, events: list[Event]) -> None:
+    """Delete the trace episodes ADR 0021 had no-work turns write, which ADR 0074 retired."""
+    no_work = {
+        (event.thread_id, event.turn_id)
+        for event in events
+        if isinstance(event.payload, TurnCompleted)
+        and event.payload.outcome is CompletionOutcome.NO_WORK
+    }
+    for event in events:
+        if isinstance(event.payload, TurnStarted) and (event.thread_id, event.turn_id) in no_work:
+            recorded_on = event.timestamp.date().isoformat()
+            (graph / f"{recorded_on}-{event.turn_id.hex}-trace.md").unlink(missing_ok=True)
 
 
 def _path_taken(calls: list[ToolCall]) -> str:
@@ -434,7 +451,10 @@ def _truncate_result(output: str) -> str:
 
 def _summarize_call(call: ToolCall) -> str:
     arguments = json.dumps(call.arguments, ensure_ascii=False, sort_keys=True)
-    summary = f"{call.name}: {arguments}"
-    if len(summary) <= _TOOL_CALL_SUMMARY_MAX_CHARS:
-        return summary
-    return f"{summary[: _TOOL_CALL_SUMMARY_MAX_CHARS - 3]}..."
+    return _shorten(f"{call.name}: {arguments}", _TOOL_CALL_SUMMARY_MAX_CHARS)
+
+
+def _shorten(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - 3]}..."
