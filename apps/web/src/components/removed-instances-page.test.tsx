@@ -294,6 +294,24 @@ describe("the Removed instances page", () => {
     expect(onChanged).toHaveBeenCalledOnce()
   })
 
+  it("keeps the dialog open while the deletion runs, and lists the instances again once it ends", async () => {
+    const { clock, onChanged, user } = openPage({
+      "instance.delete.preview": () => preview,
+      "instance.delete": () => ({ operation_id: "op-delete", instance_id: "hub-grace" }),
+      "operation.get": polled([deletion({ state: "running" }), deletion({ state: "succeeded" })]),
+    })
+
+    const dialog = await confirmDeletion(user, "Grace")
+    await act(() => clock.advance(0))
+    expect(dialog.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true)
+    await user.keyboard("{Escape}")
+    expect(screen.getByRole("alertdialog", { name: "Delete Grace permanently" })).toBeDefined()
+    await act(() => clock.advance(1_000))
+
+    expect(onChanged).toHaveBeenCalledOnce()
+    expect(dialog.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(false)
+  })
+
   it("previews again when the hub refuses because the targets changed, and clears the name", async () => {
     const moved = { ...preview, directories: ["/mnt/elsewhere/hub-grace"] }
     const previewed = [preview, moved]

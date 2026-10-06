@@ -171,6 +171,9 @@ function RemovedRow({
   )
   const followed = useFollowing(request, restore)
   const busy = request !== undefined && followed?.state !== "failed"
+  const [asking, setAsking] = useState(false)
+  // The dialog follows the deletion, so it stays open until the deletion ends.
+  const [deleting, setDeleting] = useState(false)
   return (
     <Item render={<li />} variant="outline">
       <ItemMedia>
@@ -192,16 +195,17 @@ function RemovedRow({
           {busy && <Spinner data-icon="inline-start" />}
           Restore
         </Button>
-        <AlertDialog>
+        <AlertDialog open={asking} onOpenChange={(open) => setAsking(open || deleting)}>
           <AlertDialogTrigger render={<Button variant="destructive" />}>
             Delete permanently
           </AlertDialogTrigger>
-          <AlertDialogContent className="sm:max-w-lg">
+          <AlertDialogContent className="max-h-dvh overflow-y-auto sm:max-w-lg">
             <Deletion
               caller={caller}
               clock={clock}
               instanceId={instance.instance_id}
               name={name}
+              onDeleting={setDeleting}
               onDeleted={onChanged}
             />
           </AlertDialogContent>
@@ -220,19 +224,21 @@ function RemovedRow({
 
 /**
  * The deletion dialog's body. It mounts each time the dialog opens, so every deletion starts from
- * a fresh preview.
+ * a fresh preview. `onDeleting` hears whether a deletion is running, and Cancel waits for it.
  */
 function Deletion({
   caller,
   clock,
   instanceId,
   name,
+  onDeleting,
   onDeleted,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   instanceId: string
   name: string
+  onDeleting: (deleting: boolean) => void
   onDeleted: () => Promise<void>
 }) {
   const typedId = useId()
@@ -248,6 +254,7 @@ function Deletion({
         command,
         (deleting) => {
           report(deleting)
+          if (deleting.state !== "deleting") onDeleting(false)
           if (deleting.state === "deleted") void onDeleted()
           if (deleting.state === "changed") {
             setPreview(deleting.preview)
@@ -258,9 +265,10 @@ function Deletion({
         },
         clock,
       ),
-    [caller, clock, onDeleted],
+    [caller, clock, onDeleting, onDeleted],
   )
   const deleting = useFollowing(request, follow)
+  const running = request !== undefined && (deleting === undefined || deleting.state === "deleting")
   useEffect(() => {
     let current = true
     caller.call("instance.delete.preview", { instance_id: instanceId }).then(
@@ -300,10 +308,10 @@ function Deletion({
         </Alert>
       )}
       {preview !== undefined && (
-        <>
+        <div className="flex max-h-64 flex-col gap-4 overflow-y-auto">
           <Targets label="Directories" targets={preview.directories} />
           <Targets label="Volumes" targets={preview.volumes} />
-        </>
+        </div>
       )}
       <Field>
         <FieldLabel htmlFor={typedId}>Type {name} to confirm</FieldLabel>
@@ -328,12 +336,13 @@ function Deletion({
         </Alert>
       )}
       <AlertDialogFooter>
-        <AlertDialogCancel>Cancel</AlertDialogCancel>
+        <AlertDialogCancel disabled={running}>Cancel</AlertDialogCancel>
         <AlertDialogAction
           variant="destructive"
           disabled={preview === undefined || typed !== name || request !== undefined}
           onClick={() => {
             setChanged(false)
+            onDeleting(true)
             setRequest(preview)
           }}
         >
