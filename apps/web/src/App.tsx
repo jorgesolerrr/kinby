@@ -102,7 +102,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
                 caller={client}
                 clock={clock}
                 removed={listed?.removed}
-                onRestored={listAgain}
+                onChanged={listAgain}
               />
             ) : (
               <MainPanel

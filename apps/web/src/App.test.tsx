@@ -556,6 +556,26 @@ describe("removed instances", () => {
     expect(removedLink()).toBeNull()
   })
 
+  it("deletes one permanently, drops its row, and drops the link once none is left", async () => {
+    window.history.replaceState(null, "", "/removed")
+    const { clock } = openApp({ signedIn: true, instances: [ada], removed: [grace] })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("button", { name: "Delete permanently" }))
+    const dialog = within(
+      await screen.findByRole("alertdialog", { name: "Delete Grace permanently" }),
+    )
+    await dialog.findByText("/srv/kinby/instances/hub-grace")
+    await user.type(dialog.getByRole("textbox", { name: "Type Grace to confirm" }), "Grace")
+    await user.click(dialog.getByRole("button", { name: "Delete permanently" }))
+    await act(() => clock.advance(0))
+
+    expect(await screen.findByText("No removed instances")).toBeDefined()
+    expect(screen.queryByText("Grace")).toBeNull()
+    expect(removedLink()).toBeNull()
+    expect(window.location.pathname).toBe("/removed")
+  })
+
   it("shows no link when nothing is removed", async () => {
     openApp({ signedIn: true, instances: [ada] })
 
