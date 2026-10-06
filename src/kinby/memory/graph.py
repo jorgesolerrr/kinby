@@ -76,10 +76,16 @@ class GraphStore:
         after: date | None = None,
         before: date | None = None,
     ) -> tuple[MemoryHit, ...]:
-        """Find matching graph nodes within inclusive date bounds."""
+        """Find matching graph nodes within inclusive date bounds.
+
+        Without a date bound only facts match, and episodes only when no fact does (ADR 0074).
+        """
+        matches = self.nodes(query, after=after, before=before)
+        if after is None and before is None:
+            matches = [memory for memory in matches if isinstance(memory, Fact)] or matches
         return tuple(
             MemoryHit(memory.node, memory.date, memory.description)
-            for memory in self.nodes(query, after=after, before=before)[:_RECALL_LIMIT]
+            for memory in matches[:_RECALL_LIMIT]
         )
 
     def nodes(
