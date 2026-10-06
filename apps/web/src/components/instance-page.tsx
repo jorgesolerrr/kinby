@@ -278,16 +278,10 @@ function StopButton({
   )
 }
 
-/** A removal asked for, or a force stop of the one that drains. */
-interface Removing {
-  begin: () => Promise<LifecycleOperationResult>
-  force: boolean
-}
-
 /**
  * Remove, once confirmed, from the ⋯ menu, and Force stop while the removal drains. A refusal stays
- * in the dialog with the hub's message. A force stop escalates the pending removal, and the hub
- * answers with the removal's operation.
+ * in the dialog with the hub's message. A force stop only escalates the drain: the removal's own
+ * operation still says how it ends, even when it ends before the escalation lands.
  */
 function RemoveMenu({
   caller,
@@ -304,13 +298,13 @@ function RemoveMenu({
 }) {
   const [asking, setAsking] = useState(false)
   const [refusal, setRefusal] = useState<string>()
-  // A new object for each request, so a force stop follows the operation the hub answers with.
-  const [request, setRequest] = useState<Removing>()
+  const [removal, setRemoval] = useState<LifecycleOperationResult>()
+  const [forcing, setForcing] = useState(false)
   const follow = useCallback(
-    (asked: Removing, report: (followed: Followed) => void) =>
+    (asked: LifecycleOperationResult, report: (followed: Followed) => void) =>
       followOperation(
         caller,
-        asked.begin,
+        () => Promise.resolve(asked),
         (followed) => {
           report(followed)
           if (followed.state === "succeeded") onRemoved()
@@ -319,16 +313,24 @@ function RemoveMenu({
       ),
     [caller, clock, onRemoved],
   )
-  const followed = useFollowing(request, follow)
-  const state = request === undefined ? undefined : (followed?.state ?? "running")
+  const followed = useFollowing(removal, follow)
+  const state = removal === undefined ? undefined : (followed?.state ?? "running")
   const remove = async () => {
     try {
-      const removal = await caller.call("instance.remove", { instance_id: instanceId })
+      const asked = await caller.call("instance.remove", { instance_id: instanceId })
       setAsking(false)
-      setRequest({ begin: () => Promise.resolve(removal), force: false })
+      setForcing(false)
+      setRemoval(asked)
     } catch (error) {
       setRefusal(reason(error))
     }
+  }
+  const force = () => {
+    setForcing(true)
+    // A refused escalation leaves the removal draining, so Force stop is offered again.
+    void caller
+      .call("instance.stop", { instance_id: instanceId, force: true })
+      .catch(() => setForcing(false))
   }
   return (
     <>
@@ -386,16 +388,7 @@ function RemoveMenu({
             <Spinner data-icon="inline-start" />
             Removing…
           </Badge>
-          <Button
-            variant="destructive"
-            disabled={request?.force}
-            onClick={() =>
-              setRequest({
-                begin: () => caller.call("instance.stop", { instance_id: instanceId, force: true }),
-                force: true,
-              })
-            }
-          >
+          <Button variant="destructive" disabled={forcing} onClick={force}>
             Force stop
           </Button>
         </>
