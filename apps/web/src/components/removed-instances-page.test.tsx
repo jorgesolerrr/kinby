@@ -32,15 +32,13 @@ function openPage(answers: Answers = {}, removed: InstanceSummary[] = [grace, un
   const caller = stubCaller(answers)
   const clock = fakeClock()
   const onRestored = vi.fn(() => Promise.resolve())
-  render(
-    <RemovedInstancesPage
-      caller={caller}
-      clock={clock}
-      removed={removed}
-      onRestored={onRestored}
-    />,
+  const page = (listed: InstanceSummary[]) => (
+    <RemovedInstancesPage caller={caller} clock={clock} removed={listed} onRestored={onRestored} />
   )
-  return { caller, clock, onRestored, user: userEvent.setup() }
+  const { rerender } = render(page(removed))
+  // What the page shows once the removed instances are listed again as `listed`.
+  const relist = (listed: InstanceSummary[]) => rerender(page(listed))
+  return { caller, clock, onRestored, relist, user: userEvent.setup() }
 }
 
 function restoration(fields: Partial<OperationGetResult>): OperationGetResult {
@@ -106,6 +104,25 @@ describe("the Removed instances page", () => {
     await act(() => clock.advance(1_000))
 
     expect(restores(caller)).toEqual([{ instance_id: "hub-grace" }])
+    expect(onRestored).toHaveBeenCalledOnce()
+    expect(window.location.pathname).toBe("/instances/hub-grace")
+  })
+
+  it("keeps a row being restored when the lists drop it first, and still opens it", async () => {
+    const { clock, onRestored, relist, user } = openPage({
+      "instance.restore": () => ({ operation_id: "op-restore", instance_id: "hub-grace" }),
+      "operation.get": polled([
+        restoration({ state: "running" }),
+        restoration({ state: "succeeded" }),
+      ]),
+    })
+
+    await user.click(within(rowOf("Grace")).getByRole("button", { name: "Restore" }))
+    await act(() => clock.advance(0))
+    relist([unnamed])
+    expect(within(rowOf("Grace")).getByRole("button", { name: /Restore/ })).toBeDefined()
+    await act(() => clock.advance(1_000))
+
     expect(onRestored).toHaveBeenCalledOnce()
     expect(window.location.pathname).toBe("/instances/hub-grace")
   })
