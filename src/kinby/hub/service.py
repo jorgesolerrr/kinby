@@ -1519,8 +1519,22 @@ class Hub:
         self.registry.set_intended_state(record.instance_id, IntendedState.REMOVED)
 
     async def restore(self, command: InstanceRestoreCommand) -> LifecycleOperationResult:
-        """Bring a removed instance back from its retained record, and leave it stopped."""
+        """Bring a removed instance back from its retained record, and leave it stopped.
+
+        A factory has one active instance of each name, so the factory removal reaches them all.
+        """
         record = self._claimed(self._removed_instance(command.instance_id))
+        member = record.factory
+        if member is not None and any(
+            other.factory is not None
+            and other.factory.name == member.name
+            and (other.active or self.registry.active_operation(other.instance_id) is not None)
+            for other in self.registry.factory_members(member.factory)
+        ):
+            raise FactoryInstalled(
+                f'Factory "{member.factory}" has an instance "{member.name}" already. '
+                "Remove it before restoring this one."
+            )
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id,

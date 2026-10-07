@@ -157,9 +157,15 @@ class FactoryStore:
             if problems:
                 raise FactoryCheckFailed(problems)
             destination = self._directory / command.name
+            replaced = Path(temporary) / "replaced"
             if destination.exists():
-                destination.rename(Path(temporary) / "replaced")
-            staged.rename(destination)
+                destination.rename(replaced)
+            try:
+                staged.rename(destination)
+            except Exception:
+                if replaced.exists():
+                    replaced.rename(destination)
+                raise
 
     def _folder(self, name: FactoryName) -> tuple[Path, FactorySource]:
         found = self._folders().get(name)
