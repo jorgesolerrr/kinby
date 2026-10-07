@@ -22,7 +22,7 @@ from kinby.core.contract_server import serve_contract
 from kinby.core.dispatcher import Dispatcher
 from kinby.hub.access import SESSION_COOKIE, HubAccess, SessionId
 from kinby.hub.models import InstanceEndpoint, InstanceRouting, InstanceUnreachable, Signal
-from kinby.hub.relay import forward_signal, relay_socket, unreachable
+from kinby.hub.relay import forward_signal, forwarded_headers, relay_socket, unreachable
 from kinby.instance import Serve
 
 _UNAUTHORIZED = "authentication failed"
@@ -153,13 +153,15 @@ class HubContractServer:
     async def _signal(self, request: web.Request, endpoint: InstanceEndpoint) -> web.Response:
         """Forward the signal, then hand it on when the instance accepted it as a new delivery.
 
-        The instance authenticates the signal, so one it rejects or has seen moves no run.
+        The instance authenticates the signal, so one it rejects or has seen moves no run. A wait
+        matches only the headers the instance received.
         """
         routine = RoutineName(request.match_info["routine"])
         answer = await forward_signal(request, endpoint, routine)
         if answer.status == web.HTTPAccepted.status_code:
             self._routing.signal_accepted(
-                endpoint.instance_id, Signal(routine, request.headers, await request.read())
+                endpoint.instance_id,
+                Signal(routine, forwarded_headers(request.headers), await request.read()),
             )
         return answer
 

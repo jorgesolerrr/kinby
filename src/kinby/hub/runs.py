@@ -195,7 +195,7 @@ class FactoryRuns:
         body = _json(signal.body)
         for run in self._registry.runs(member.factory, FactoryRunStatus.PARKED):
             step = _step(factory, run.step) if run.step is not None else None
-            held = run.work_item | self._results(run.run_id)
+            held = run.work_item | self._results(run.run_id, factory)
             if isinstance(step, WaitStep) and _matches(step, signal, body, held):
                 deadline = self._deadlines.pop(run.run_id, None)
                 if deadline is not None:
