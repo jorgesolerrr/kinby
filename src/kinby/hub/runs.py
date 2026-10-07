@@ -209,7 +209,7 @@ class FactoryRuns:
         body = _json(signal.body)
         for run in self._registry.runs(member.factory, FactoryRunStatus.PARKED):
             step = _step(factory, run.step) if run.step is not None else None
-            held = run.work_item | self._results(run.run_id)
+            held = run.work_item | self._results(run.run_id, factory)
             if isinstance(step, WaitStep) and _matches(step, signal, body, held):
                 deadline = self._deadlines.pop(run.run_id, None)
                 if deadline is not None:
@@ -333,7 +333,7 @@ class FactoryRuns:
         step = _step(factory, step_id) if factory is not None else None
         if factory is None or step is None:
             return _Refused(step_id, f'Factory "{run.factory}" has no step "{step_id}" any more.')
-        results = self._results(run.run_id)
+        results = self._results(run.run_id, factory, step.id)
         unmet = _unmet(factory, step, run.work_item | results)
         if unmet is not None:
             return unmet
@@ -349,7 +349,9 @@ class FactoryRuns:
                     return client_run
                 asked, hook = client_run, step.hook
             case CommandStep():
-                asked, hook = CommandStepRun(run=list(step.run)), step.hook
+                timeout = duration_seconds(step.timeout) if step.timeout is not None else None
+                asked = CommandStepRun(run=list(step.run), timeout_seconds=timeout)
+                hook = step.hook
             case CodeStep():
                 asked, hook = CodeStepRun(call=step.call), None
             case WaitStep() | ApproveStep():
@@ -421,13 +423,32 @@ class FactoryRuns:
             None,
         )
 
-    def _results(self, run_id: UUID) -> dict[ValueName, StepValue]:
-        """Every value the run's clean attempts recorded, a later one over an earlier one."""
-        results: dict[ValueName, StepValue] = {}
+    def _results(
+        self, run_id: UUID, factory: FactoryFile, starting: StepId | None = None
+    ) -> dict[ValueName, StepValue]:
+        """The values the run's clean attempts recorded on its latest pass through the steps.
+
+        A later value overrides an earlier one. An attempt at a step, like *starting* one, drops
+        what that step and every step after it recorded before, so a run sent back holds no value
+        from the pass it left.
+        """
+        order = {step.id: index for index, step in enumerate(factory.steps)}
+        recorded: dict[ValueName, tuple[int, StepValue]] = {}
+
+        def drop_from(step_id: StepId) -> None:
+            if step_id in order:
+                for name, (index, _) in list(recorded.items()):
+                    if index >= order[step_id]:
+                        del recorded[name]
+
         for attempt in self._registry.attempts(run_id):
+            drop_from(attempt.step)
             if attempt.ending is StepEnding.CLEAN:
-                results.update(attempt.values)
-        return results
+                index = order.get(attempt.step, -1)
+                recorded |= {name: (index, value) for name, value in attempt.values.items()}
+        if starting is not None:
+            drop_from(starting)
+        return {name: value for name, (_, value) in recorded.items()}
 
     async def _work(
         self, instance_id: UUID, queue: asyncio.Queue[_QueuedStep | _QueuedReport]
@@ -479,19 +500,22 @@ class FactoryRuns:
     def _settle(self, run_id: UUID, result: StepResult) -> FactoryRun:
         """End the run's open attempt with *result*, and move the run where the result sends it.
 
-        A clean step goes where its outcome sends it. A failed one is tried again while its retries
-        last, and leaves the run for a human after that.
+        A clean step goes where its outcome sends it, but fails when it records a value of
+        another type than it declares. A failed one is tried again while its retries last, and
+        leaves the run for a human after that.
         """
         run = self._registry.run(run_id)
         if run is None or run.step is None:
             raise FactoryRunNotFound(f'Factory run "{run_id}" has no step to settle.')
         factory = self._factory(run.factory)
         step = _step(factory, run.step) if factory is not None else None
+        if step is not None and result.ending is StepEnding.CLEAN:
+            result = _checked_types(step, result)
         if factory is None or step is None:
             self._registry.end_attempt(run_id, result)
             moved = self._registry.move_run(run_id, FactoryRunStatus.NEEDS_HUMAN, run.step)
         else:
-            held = run.work_item | self._results(run_id)
+            held = run.work_item | self._results(run_id, factory)
             tally = _tally(factory, self._registry.counted_attempts(run_id))
             result, status, to = _settled(factory, step, result, held, tally)
             self._registry.end_attempt(run_id, result)
@@ -502,10 +526,12 @@ class FactoryRuns:
             and factory is not None
             and factory.needs_human is not None
         ):
-            self._report(factory.needs_human, moved, result)
+            self._report(factory, factory.needs_human, moved, result)
         return moved
 
-    def _report(self, call: NeedsHumanCall, run: FactoryRun, stopped: StepResult) -> None:
+    def _report(
+        self, factory: FactoryFile, call: NeedsHumanCall, run: FactoryRun, stopped: StepResult
+    ) -> None:
         """Queue the factory's needs_human call for the run, which stopped with *stopped*."""
         instance_id = self._installed(run.factory, call.instance)
         if instance_id is None or run.step is None:
@@ -521,7 +547,7 @@ class FactoryRuns:
             step=CodeStepRun(call=call.call, summary=stopped.summary),
             origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=run.step),
             work_item=run.work_item,
-            results=self._results(run.run_id),
+            results=self._results(run.run_id, factory),
         )
         self._queue(instance_id).put_nowait(_QueuedReport(command))
 
@@ -723,6 +749,25 @@ def _noted(result: StepResult, reason: str, ending: StepEnding = StepEnding.FAIL
     """*result* ending as *ending*, with *reason* after its summary."""
     summary = f"{result.summary}\n{reason}" if result.summary else reason
     return result.model_copy(update={"ending": ending, "summary": summary})
+
+
+def _checked_types(step: Step, result: StepResult) -> StepResult:
+    """The step's clean result, failed when a value it records is not of the type declared."""
+    wrong = next(
+        (
+            (name, kind)
+            for name, kind in step.results.items()
+            if name in result.values and _value_type(result.values[name]) is not kind
+        ),
+        None,
+    )
+    if wrong is None:
+        return result
+    name, kind = wrong
+    recorded = _value_type(result.values[name]).value
+    return _noted(
+        result, f'Step "{step.id}" declares "{name}" as {kind.value}, but recorded a {recorded}.'
+    )
 
 
 def _lacking(held: Mapping[ValueName, StepValue], names: Iterable[ValueName]) -> ValueName | None:

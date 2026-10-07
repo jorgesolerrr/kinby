@@ -77,7 +77,7 @@ export function NavInstances({
               ) : !isSelected && instance.process === "running" ? (
                 <NeedsYouBadge client={client} clock={clock} instance={instance} />
               ) : (
-                <StateBadge instance={instance} />
+                <NeedsYou count={instance.needs_human} instance={instance} />
               )}
             </SidebarMenuItem>
           )
@@ -144,7 +144,9 @@ function NeedsYouBadge({
   instance: InstanceSummary
 }) {
   const instanceClient = useInstanceClient(client, instance.instance_id)
-  if (instanceClient === undefined) return <StateBadge instance={instance} />
+  if (instanceClient === undefined) {
+    return <NeedsYou count={instance.needs_human} instance={instance} />
+  }
   return <NeedsYouCount client={instanceClient} clock={clock} instance={instance} />
 }
 
@@ -166,12 +168,19 @@ function NeedsYouCount({
     [client],
   )
   const [threadsNeedingYou = 0] = usePolled(count, clock, connected, COUNT_INTERVAL_MS)
-  const needsYou = threadsNeedingYou + instance.needs_human
-  if (needsYou === 0) return <StateBadge instance={instance} />
+  return <NeedsYou count={threadsNeedingYou + instance.needs_human} instance={instance} />
+}
+
+/**
+ * The count of what needs the user in place of the instance's state, or its state when nothing
+ * does. A row that cannot count threads still counts the factory runs from the hub's summary.
+ */
+function NeedsYou({ count, instance }: { count: number; instance: InstanceSummary }) {
+  if (count === 0) return <StateBadge instance={instance} />
   return (
     <SidebarMenuBadge>
       <Badge>
-        <span className="sr-only">Threads that need you:</span> {needsYou}
+        <span className="sr-only">Threads that need you:</span> {count}
       </Badge>
     </SidebarMenuBadge>
   )

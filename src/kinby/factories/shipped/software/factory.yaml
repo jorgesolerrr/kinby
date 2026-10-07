@@ -55,7 +55,7 @@ instances:
           The email on the commits the coding clients make. Use one GitHub links to the
           token's account, so the commits show as its own.
         kind: secret
-        type: email
+        type: text
         required: true
     logins:
       - id: codex

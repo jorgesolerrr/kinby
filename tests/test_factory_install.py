@@ -8,6 +8,7 @@ from kinby.contracts import (
     FACTORY_INSTALL,
     FACTORY_REMOVE,
     INSTANCE_LIST,
+    INSTANCE_RESTORE,
     INSTANCE_STATUS,
     INSTANCE_UPDATE,
     ErrorCode,
@@ -21,6 +22,7 @@ from kinby.contracts import (
     FactoryRemoveResult,
     InstanceListCommand,
     InstanceListResult,
+    InstanceRestoreCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
     InstanceUpdateCommand,
@@ -385,5 +387,33 @@ def test_an_update_of_a_factory_instance_keeps_its_templates_image_recipe(tmp_pa
 
         assert (await finished_operation(client, update)).state is OperationState.SUCCEEDED
         assert images.selections[-1] == ImageSelection("v2", recipe="coder")
+
+    asyncio.run(scenario())
+
+
+def test_a_removed_factory_instance_is_not_restored_beside_one_of_the_same_name(tmp_path):
+    hub = install_hub(tmp_path)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        first = await installed(client)
+        removal = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="tickets"))
+        assert isinstance(removal, FactoryRemoveResult)
+        for removed in removal.instances.values():
+            await finished_operation(client, removed)
+        second = await installed(client)
+
+        refused = await client.call(
+            INSTANCE_RESTORE,
+            InstanceRestoreCommand(instance_id=first.instances["coder"].instance_id),
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert refused.message == (
+            'Factory "tickets" has an instance "coder" already. '
+            "Remove it before restoring this one."
+        )
+        assert await listed(client) == ids(second.instances)
 
     asyncio.run(scenario())
