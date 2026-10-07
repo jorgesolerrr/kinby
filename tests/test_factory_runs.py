@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from functools import partial
 from pathlib import Path
 from uuid import UUID
 
@@ -11,10 +12,14 @@ import pytest
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
     FACTORY_INSTALL,
+    FACTORY_RUN_CANCEL,
     FACTORY_RUN_GET,
     FACTORY_RUN_INTAKE,
     FACTORY_RUN_LIST,
+    FACTORY_RUN_RETRY,
+    FACTORY_RUN_SEND_BACK,
     FACTORY_RUN_SUBSCRIBE,
+    INSTANCE_LIST,
     INSTANCE_START,
     INTAKE_SCOPES,
     CodeStepRun,
@@ -25,13 +30,18 @@ from kinby.contracts import (
     FactoryInstallResult,
     FactoryInstanceSetup,
     FactoryRun,
+    FactoryRunCancelCommand,
     FactoryRunDetail,
     FactoryRunGetCommand,
     FactoryRunIntakeCommand,
     FactoryRunListCommand,
     FactoryRunListResult,
+    FactoryRunRetryCommand,
+    FactoryRunSendBackCommand,
     FactoryRunStatus,
     FactoryRunSubscribeCommand,
+    InstanceListCommand,
+    InstanceListResult,
     InstanceStartCommand,
     LifecycleOperationResult,
     OperationState,
@@ -93,20 +103,26 @@ def factory_hub(
 
 async def installed_coder(hub: Hub, runtime: FakeRuntime) -> UUID:
     """Install the factory and start its coder, which answers on its control endpoint."""
+    return (await installed(hub, runtime, "coder"))["coder"]
+
+
+async def installed(hub: Hub, runtime: FakeRuntime, *names: str) -> dict[str, UUID]:
+    """Install the factory and start each of its instances, by name."""
     client = hub_client(hub)
     accepted = await client.call(
-        FACTORY_INSTALL, FactoryInstallCommand(name="checks", instances={"coder": SETUP})
+        FACTORY_INSTALL,
+        FactoryInstallCommand(name="checks", instances=dict.fromkeys(names, SETUP)),
     )
     assert isinstance(accepted, FactoryInstallResult)
-    created = accepted.instances["coder"]
-    assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
-    started = await client.call(
-        INSTANCE_START, InstanceStartCommand(instance_id=created.instance_id)
-    )
-    assert isinstance(started, LifecycleOperationResult)
-    assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
-    runtime.addresses[str(created.instance_id)] = f"http://kinby-{created.instance_id}:8787"
-    return created.instance_id
+    for created in accepted.instances.values():
+        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+        started = await client.call(
+            INSTANCE_START, InstanceStartCommand(instance_id=created.instance_id)
+        )
+        assert isinstance(started, LifecycleOperationResult)
+        assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
+        runtime.addresses[str(created.instance_id)] = f"http://kinby-{created.instance_id}:8787"
+    return {name: created.instance_id for name, created in accepted.instances.items()}
 
 
 def intake_client(hub: Hub, instance_id: UUID) -> ContractClient:
@@ -615,5 +631,378 @@ def test_a_run_whose_done_requires_fails_does_not_finish_as_done(tmp_path):
         assert last.summary == (
             'Opened nothing.\nThe run\'s done_requires needs "pr", which no step recorded.'
         )
+
+    asyncio.run(scenario())
+
+
+REVIEW = """\
+name: checks
+instances:
+  coder: {}
+intake: { instance: coder, routine: scan }
+work_item: { issue: int }
+steps:
+  - id: fix
+    kind: command
+    in: coder
+    run: ["make fix"]
+  - id: review
+    kind: command
+    in: coder
+    run: ["make review"]
+    hook: read_verdict
+    outcomes: { clean: next, changes: { back: fix, max: 3 }, hopeless: stop, merged: done }
+  - id: publish
+    kind: command
+    in: coder
+    run: ["make publish"]
+"""
+VERDICT = '''\
+from kinby.plugins.hooks import hook
+
+
+@hook
+def read_verdict() -> None:
+    """Read the review's verdict from the workspace."""
+'''
+REVIEW_FILES = FILES | {"factory.yaml": REVIEW, "instances/coder/hooks/verdict.py": VERDICT}
+FIXED = StepResult(ending=StepEnding.CLEAN)
+
+
+def reviewed(outcome: str) -> StepResult:
+    return StepResult(ending=StepEnding.CLEAN, outcome=outcome)
+
+
+def test_review_sending_work_back_past_its_max_needs_a_human(tmp_path):
+    control = FakeControl()
+    control.step_results = [FIXED, reviewed("changes")] * 4
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert finished.run.step == "review"
+        assert [(a.step, a.attempt, a.outcome) for a in finished.attempts] == [
+            (step, number, outcome)
+            for number in range(1, 5)
+            for step, outcome in (("fix", None), ("review", "changes"))
+        ]
+        assert finished.attempts[-1].summary == (
+            'Step "review" sent the work back to "fix" 3 times, its max.'
+        )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("verdict", "status", "step", "attempted"),
+    [
+        ("hopeless", FactoryRunStatus.CANCELLED, "review", ["fix", "review"]),
+        ("merged", FactoryRunStatus.DONE, None, ["fix", "review"]),
+        ("clean", FactoryRunStatus.DONE, None, ["fix", "review", "publish"]),
+        (None, FactoryRunStatus.DONE, None, ["fix", "review", "publish"]),
+    ],
+)
+def test_a_steps_outcome_moves_the_run_on_finishes_it_or_cancels_it(
+    tmp_path, verdict, status, step, attempted
+):
+    control = FakeControl()
+    control.step_results = [FIXED, StepResult(ending=StepEnding.CLEAN, outcome=verdict)]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert (finished.run.status, finished.run.step) == (status, step)
+        assert [attempt.step for attempt in finished.attempts] == attempted
+
+    asyncio.run(scenario())
+
+
+def test_an_outcome_the_step_does_not_declare_fails_its_attempt(tmp_path):
+    control = FakeControl()
+    control.step_results = [FIXED, reviewed("lgtm"), reviewed("clean")]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert finished.run.step == "review"
+        last = finished.attempts[-1]
+        assert (last.step, last.ending, last.outcome) == ("review", StepEnding.FAILED, "lgtm")
+        assert last.summary == 'Step "review" has no outcome "lgtm".'
+
+    asyncio.run(scenario())
+
+
+def test_a_done_outcome_finishes_the_run_only_when_done_requires_holds(tmp_path):
+    control = FakeControl()
+    control.step_results = [FIXED, reviewed("merged")]
+    runtime = FakeRuntime()
+    factory = REVIEW + "    results: { pr: int }\ndone_requires: [pr]\n"
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert (finished.run.status, finished.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "review")
+        assert finished.attempts[-1].ending is StepEnding.FAILED
+        assert finished.attempts[-1].summary == (
+            'The run\'s done_requires needs "pr", which no step recorded.'
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_timed_out_attempt_is_never_tried_again(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.TIMED_OUT, summary="The step ran past its 60m timeout.")
+    ]
+    runtime = FakeRuntime()
+    factory = FACTORY + "    retry: 2\n"
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert [(a.attempt, a.ending) for a in finished.attempts] == [(1, StepEnding.TIMED_OUT)]
+        assert len(control.steps) == 1
+
+    asyncio.run(scenario())
+
+
+AGENT = """\
+name: checks
+instances:
+  coder: {}
+intake: { instance: coder, routine: scan }
+work_item: { issue: int }
+steps:
+  - id: implement
+    kind: agent
+    in: coder
+    prompt: prompts/implement.md
+    hook: record_branch
+"""
+
+
+@pytest.mark.parametrize(("retry", "attempts"), [("", 2), ("    retry: 0\n", 1)])
+def test_a_step_a_model_runs_is_tried_once_more_by_default(tmp_path, retry, attempts):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED)] * 2
+    runtime = FakeRuntime()
+    files = FILES | {"factory.yaml": AGENT + retry, "prompts/implement.md": "Implement it.\n"}
+    hub = factory_hub(tmp_path / "hub", control, runtime, files)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert [(a.step, a.ending) for a in finished.attempts] == [
+            ("implement", StepEnding.FAILED)
+        ] * attempts
+
+    asyncio.run(scenario())
+
+
+def test_retrying_a_run_that_needs_a_human_tries_its_step_again_with_its_retries_reset(tmp_path):
+    control = FakeControl()
+    failed = StepResult(ending=StepEnding.FAILED)
+    control.step_results = [failed, failed, failed, StepResult(ending=StepEnding.CLEAN)]
+    runtime = FakeRuntime()
+    factory = FACTORY + "    retry: 1\n"
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        stopped = await settled(hub, run.run_id)
+        async with run_events(hub) as events:
+            retried = await hub_client(hub).call(
+                FACTORY_RUN_RETRY, FactoryRunRetryCommand(run_id=run.run_id)
+            )
+            finished = await settled(hub, run.run_id)
+
+        assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert isinstance(retried, FactoryRun)
+        assert (retried.status, retried.step) == (FactoryRunStatus.QUEUED, "test")
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [(a.attempt, a.ending) for a in finished.attempts] == [
+            (1, StepEnding.FAILED),
+            (2, StepEnding.FAILED),
+            (3, StepEnding.FAILED),
+            (4, StepEnding.CLEAN),
+        ]
+        assert events[0] == retried
+
+    asyncio.run(scenario())
+
+
+def test_sending_a_run_that_needs_a_human_back_starts_its_send_backs_afresh(tmp_path):
+    control = FakeControl()
+    control.step_results = [FIXED, reviewed("changes")] * 4 + [
+        FIXED,
+        reviewed("changes"),
+        FIXED,
+        reviewed("clean"),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+        sent = await hub_client(hub).call(
+            FACTORY_RUN_SEND_BACK, FactoryRunSendBackCommand(run_id=run.run_id, step="fix")
+        )
+        finished = await settled(hub, run.run_id)
+
+        assert isinstance(sent, FactoryRun)
+        assert (sent.status, sent.step) == (FactoryRunStatus.QUEUED, "fix")
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [(a.step, a.attempt) for a in finished.attempts[8:]] == [
+            ("fix", 5),
+            ("review", 5),
+            ("fix", 6),
+            ("review", 6),
+            ("publish", 1),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_cancelling_a_run_that_needs_a_human_ends_it_where_it_stopped(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED)]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+        async with run_events(hub) as events:
+            cancelled = await hub_client(hub).call(
+                FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run.run_id)
+            )
+        found = await detail(hub, run.run_id)
+
+        assert isinstance(cancelled, FactoryRun)
+        assert (cancelled.status, cancelled.step) == (FactoryRunStatus.CANCELLED, "test")
+        assert found.run == cancelled
+        assert events == [cancelled]
+        assert len(found.attempts) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("method", "command"),
+    [
+        (FACTORY_RUN_RETRY, FactoryRunRetryCommand),
+        (FACTORY_RUN_SEND_BACK, partial(FactoryRunSendBackCommand, step="fix")),
+        (FACTORY_RUN_CANCEL, FactoryRunCancelCommand),
+    ],
+)
+def test_only_a_run_that_needs_a_human_is_retried_sent_back_or_cancelled(tmp_path, method, command):
+    control = FakeControl()
+    control.step_results = [FIXED, reviewed("clean")]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        done = await settled(hub, run.run_id)
+        refused = await hub_client(hub).call(method, command(run_id=run.run_id))
+        missing = await hub_client(hub).call(method, command(run_id=UUID(int=0)))
+
+        assert done.run.status is FactoryRunStatus.DONE
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert refused.message == f'Factory run "{run.run_id}" is done, so it needs no human.'
+        assert (await detail(hub, run.run_id)) == done
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("step", ["review", "publish", "deploy"])
+def test_a_run_is_only_sent_back_to_an_earlier_step(tmp_path, step):
+    control = FakeControl()
+    control.step_results = [FIXED, reviewed("changes")] * 4
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        stopped = await settled(hub, run.run_id)
+        refused = await hub_client(hub).call(
+            FACTORY_RUN_SEND_BACK, FactoryRunSendBackCommand(run_id=run.run_id, step=step)
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert refused.message == f'Step "{step}" is not a step before "review".'
+        assert (await detail(hub, run.run_id)) == stopped
+
+    asyncio.run(scenario())
+
+
+async def needing_human(hub: Hub) -> dict[UUID, int]:
+    """Each listed instance's count of the factory runs that need a human at one of its steps."""
+    listed = await hub_client(hub).call(INSTANCE_LIST, InstanceListCommand())
+    assert isinstance(listed, InstanceListResult)
+    return {instance.instance_id: instance.needs_human for instance in listed.instances}
+
+
+def test_a_run_that_needs_a_human_counts_toward_its_steps_instance_until_it_moves_on(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED)] * 2
+    runtime = FakeRuntime()
+    factory = FACTORY.replace("  coder: {}", "  coder: {}\n  checker: {}").replace(
+        "in: coder", "in: checker"
+    )
+    files = FILES | {"factory.yaml": factory, "instances/checker/AGENTS.md": "Check.\n"}
+    hub = factory_hub(tmp_path / "hub", control, runtime, files)
+
+    async def scenario() -> None:
+        instances = await installed(hub, runtime, "coder", "checker")
+        coder, checker = instances["coder"], instances["checker"]
+        before = await needing_human(hub)
+        first = await handed_in(hub, coder, 7)
+        second = await handed_in(hub, coder, 8)
+        await settled(hub, first.run_id)
+        await settled(hub, second.run_id)
+        stopped = await needing_human(hub)
+        await hub_client(hub).call(FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=first.run_id))
+        await hub_client(hub).call(FACTORY_RUN_RETRY, FactoryRunRetryCommand(run_id=second.run_id))
+        await settled(hub, second.run_id)
+
+        assert before == {coder: 0, checker: 0}
+        assert stopped == {coder: 0, checker: 2}
+        assert await needing_human(hub) == {coder: 0, checker: 0}
 
     asyncio.run(scenario())

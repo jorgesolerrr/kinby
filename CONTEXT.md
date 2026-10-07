@@ -628,7 +628,7 @@ What a **step** hands on: a short summary plus the named values the **factory** 
 
 ### Step attempt
 
-One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, or interrupted when the **hub** stopped while it ran. A failed or interrupted attempt is tried again under the step's retry; after that the run is **needs human**.
+One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or interrupted when the **hub** stopped while it ran. A failed or interrupted attempt is tried again under the step's retry; a timed-out one never is. After that the run is **needs human**.
 
 ### Hook
 

@@ -1093,6 +1093,8 @@ class InstanceSummary(ContractModel):
     setup_pending: bool
     #: What the user may want to act on, such as an update the hub offers.
     notices: list[InstanceNotice]
+    #: The factory runs stopped for the user at one of the instance's steps.
+    needs_human: int
     package: PackageSummary | None = None
     #: The factory the instance was installed from, if any.
     factory: FactoryName | None = None
@@ -2177,6 +2179,8 @@ class StepEnding(StrEnum):
     CLEAN = "clean"
     #: The step failed. The run tries it again under its ``retry``.
     FAILED = "failed"
+    #: The step ran past its ``timeout``. The run never tries it again.
+    TIMED_OUT = "timed-out"
     #: The hub stopped while the attempt ran, so it counts as failed.
     INTERRUPTED = "interrupted"
 
@@ -2274,6 +2278,25 @@ class FactoryRunListResult(ContractModel):
 
 
 class FactoryRunGetCommand(ContractModel):
+    run_id: UUID
+
+
+class FactoryRunRetryCommand(ContractModel):
+    """Try the step of a run that needs a human again, with the step's retries reset."""
+
+    run_id: UUID
+
+
+class FactoryRunSendBackCommand(ContractModel):
+    """Send a run that needs a human back to an earlier step, with its send-backs reset."""
+
+    run_id: UUID
+    step: StepId
+
+
+class FactoryRunCancelCommand(ContractModel):
+    """End a run that needs a human where it stopped, keeping everything it did."""
+
     run_id: UUID
 
 

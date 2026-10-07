@@ -1226,6 +1226,21 @@
       "title": "FactoryRun",
       "type": "object"
     },
+    "FactoryRunCancelCommand": {
+      "additionalProperties": false,
+      "description": "End a run that needs a human where it stopped, keeping everything it did.",
+      "properties": {
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "FactoryRunCancelCommand",
+      "type": "object"
+    },
     "FactoryRunDetail": {
       "additionalProperties": false,
       "properties": {
@@ -1322,6 +1337,40 @@
         "runs"
       ],
       "title": "FactoryRunListResult",
+      "type": "object"
+    },
+    "FactoryRunRetryCommand": {
+      "additionalProperties": false,
+      "description": "Try the step of a run that needs a human again, with the step's retries reset.",
+      "properties": {
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "FactoryRunRetryCommand",
+      "type": "object"
+    },
+    "FactoryRunSendBackCommand": {
+      "additionalProperties": false,
+      "description": "Send a run that needs a human back to an earlier step, with its send-backs reset.",
+      "properties": {
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "step": {
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "run_id",
+        "step"
+      ],
+      "title": "FactoryRunSendBackCommand",
       "type": "object"
     },
     "FactoryRunStatus": {
@@ -2136,6 +2185,9 @@
         "manifest_id": {
           "type": "string"
         },
+        "needs_human": {
+          "type": "integer"
+        },
         "notices": {
           "items": {
             "discriminator": {
@@ -2208,7 +2260,8 @@
         "storage",
         "avatar",
         "setup_pending",
-        "notices"
+        "notices",
+        "needs_human"
       ],
       "title": "InstanceSummary",
       "type": "object"
@@ -5448,6 +5501,7 @@
       "enum": [
         "clean",
         "failed",
+        "timed-out",
         "interrupted"
       ],
       "title": "StepEnding",
@@ -7336,6 +7390,22 @@
           ],
           "type": "object"
         },
+        "factory.run.cancel": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunCancelCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRun"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.run.get": {
           "additionalProperties": false,
           "properties": {
@@ -7376,6 +7446,38 @@
             },
             "result": {
               "$ref": "#/$defs/FactoryRunListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.run.retry": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunRetryCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRun"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.run.send_back": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunSendBackCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRun"
             }
           },
           "required": [
@@ -8569,6 +8671,9 @@
         "factory.run.intake",
         "factory.run.list",
         "factory.run.get",
+        "factory.run.retry",
+        "factory.run.send_back",
+        "factory.run.cancel",
         "stats.summary"
       ],
       "type": "object"

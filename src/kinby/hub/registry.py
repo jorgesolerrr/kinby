@@ -237,6 +237,13 @@ class HubRegistry:
             )
             self._add_columns(
                 connection,
+                "factory_runs",
+                # The last attempt before the user restarted the run. Later ones count toward
+                # retries and send-backs.
+                {"restarted_after": "INTEGER NOT NULL DEFAULT 0"},
+            )
+            self._add_columns(
+                connection,
                 "image_artifacts",
                 {"package_selection": "TEXT"},
             )
@@ -1505,6 +1512,20 @@ class HubRegistry:
             )
         return self._existing_run(run_id)
 
+    def restart_run(self, run_id: UUID, step: StepId | None) -> FactoryRun:
+        """Queue the run at *step* for the user, its retries and send-backs counted afresh."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE factory_runs SET status = ?, step = ?, updated_at = ?, restarted_after = (
+                    SELECT COALESCE(MAX(rowid), 0) FROM step_attempts WHERE run_id = ?
+                )
+                WHERE id = ?
+                """,
+                (FactoryRunStatus.QUEUED.value, step, _now(), str(run_id), str(run_id)),
+            )
+        return self._existing_run(run_id)
+
     def begin_attempt(self, run_id: UUID, step: StepId) -> FactoryRun:
         """Open the next attempt at *step*, and mark the run running it."""
         now = _now()
@@ -1546,13 +1567,24 @@ class HubRegistry:
 
     def attempts(self, run_id: UUID) -> list[StepAttempt]:
         """Every attempt of the run, in the order they started."""
+        return self._attempts_after(run_id, 0)
+
+    def counted_attempts(self, run_id: UUID) -> list[StepAttempt]:
+        """The attempts that count toward retries and send-backs: those since the user's restart."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT restarted_after FROM factory_runs WHERE id = ?", (str(run_id),)
+            ).fetchone()
+        return self._attempts_after(run_id, row[0] if row is not None else 0)
+
+    def _attempts_after(self, run_id: UUID, after: int) -> list[StepAttempt]:
         with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT step, attempt, ending, outcome, result_values, summary, started_at, ended_at
-                FROM step_attempts WHERE run_id = ? ORDER BY rowid
+                FROM step_attempts WHERE run_id = ? AND rowid > ? ORDER BY rowid
                 """,
-                (str(run_id),),
+                (str(run_id), after),
             ).fetchall()
         return [
             StepAttempt(

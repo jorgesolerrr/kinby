@@ -14,6 +14,8 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     InstanceDrainCommand,
+    RoutineListResult,
+    RoutineRunOutcome,
     StepEnding,
     StepResult,
     StepRunCommand,
@@ -356,5 +358,32 @@ def test_a_code_step_whose_tool_fails_or_is_missing_fails(tmp_path, tool, summar
         assert isinstance(result, StepResult)
         assert result.ending is StepEnding.FAILED
         assert result.summary.startswith(summary)
+
+    asyncio.run(scenario())
+
+
+def test_a_factory_runs_failed_steps_never_count_toward_its_intake_routines_failure_streak(
+    tmp_path,
+):
+    dispatcher, model = code_runtime(tmp_path)
+    instance = instance_at(tmp_path)
+    routine_file(instance, "description: Intake\nmode: full-access")
+
+    async def scenario() -> None:
+        await fire(instance, model)
+        failed = [
+            await run_code_step(dispatcher, "open_pull_request", {"branch": "broken"}),
+            await run_step(dispatcher, "sh -c 'exit 1'"),
+        ]
+        listed = await call(dispatcher, "routine.list")
+
+        assert {result.ending for result in failed if isinstance(result, StepResult)} == {
+            StepEnding.FAILED
+        }
+        assert isinstance(listed, RoutineListResult)
+        [intake] = listed.routines
+        assert (intake.failure_count, intake.enabled) == (0, True)
+        assert intake.last_run is not None
+        assert intake.last_run.outcome is RoutineRunOutcome.WORK
 
     asyncio.run(scenario())

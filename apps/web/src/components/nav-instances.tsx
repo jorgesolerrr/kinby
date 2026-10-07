@@ -130,8 +130,9 @@ const COUNT_INTERVAL_MS = 5_000
 const NEEDS_YOU: ReadonlySet<ThreadStatus> = new Set(["awaiting_approval", "failed"])
 
 /**
- * How many of a running instance's sidebar threads need the user, in place of its state. It reads
- * the instance on a connection of its own, open while the row shows the count.
+ * How many of a running instance's sidebar threads and factory runs need the user, in place of its
+ * state. It reads the threads on a connection of its own, open while the row shows the count, and
+ * the runs from the hub's summary of the instance.
  */
 function NeedsYouBadge({
   client,
@@ -164,7 +165,8 @@ function NeedsYouCount({
         .then(({ threads }) => threads.filter((thread) => NEEDS_YOU.has(thread.status)).length),
     [client],
   )
-  const [needsYou = 0] = usePolled(count, clock, connected, COUNT_INTERVAL_MS)
+  const [threadsNeedingYou = 0] = usePolled(count, clock, connected, COUNT_INTERVAL_MS)
+  const needsYou = threadsNeedingYou + instance.needs_human
   if (needsYou === 0) return <StateBadge instance={instance} />
   return (
     <SidebarMenuBadge>

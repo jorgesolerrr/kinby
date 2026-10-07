@@ -25,11 +25,14 @@ from kinby.contracts.models import (
     FactoryRemoveResult,
     FactoryResult,
     FactoryRun,
+    FactoryRunCancelCommand,
     FactoryRunDetail,
     FactoryRunGetCommand,
     FactoryRunIntakeCommand,
     FactoryRunListCommand,
     FactoryRunListResult,
+    FactoryRunRetryCommand,
+    FactoryRunSendBackCommand,
     FactoryRunSubscribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
@@ -363,6 +366,13 @@ FACTORY_RUN_LIST = Method(
     "factory.run.list", Scope.HUB_READ, FactoryRunListCommand, FactoryRunListResult
 )
 FACTORY_RUN_GET = Method("factory.run.get", Scope.HUB_READ, FactoryRunGetCommand, FactoryRunDetail)
+FACTORY_RUN_RETRY = Method("factory.run.retry", Scope.HUB_ADMIN, FactoryRunRetryCommand, FactoryRun)
+FACTORY_RUN_SEND_BACK = Method(
+    "factory.run.send_back", Scope.HUB_ADMIN, FactoryRunSendBackCommand, FactoryRun
+)
+FACTORY_RUN_CANCEL = Method(
+    "factory.run.cancel", Scope.HUB_ADMIN, FactoryRunCancelCommand, FactoryRun
+)
 FACTORY_RUN_SUBSCRIBE = Subscription(
     "factory.run.subscribe", Scope.HUB_READ, FactoryRunSubscribeCommand, FactoryRun
 )
@@ -449,6 +459,9 @@ METHODS = (
     FACTORY_RUN_INTAKE,
     FACTORY_RUN_LIST,
     FACTORY_RUN_GET,
+    FACTORY_RUN_RETRY,
+    FACTORY_RUN_SEND_BACK,
+    FACTORY_RUN_CANCEL,
     STATS_SUMMARY,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE)

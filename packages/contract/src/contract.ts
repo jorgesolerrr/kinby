@@ -27,15 +27,15 @@ export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "cho
  */
 export type FactorySource = "hub" | "shipped";
 /**
- * How one attempt at a step ended.
- */
-export type StepEnding = "clean" | "failed" | "interrupted";
-export type StepId = string;
-export type StepValue = boolean | number | string;
-/**
  * Where a factory run stands.
  */
 export type FactoryRunStatus = "running" | "queued" | "parked" | "needs-human" | "done" | "cancelled";
+export type StepId = string;
+export type StepValue = boolean | number | string;
+/**
+ * How one attempt at a step ended.
+ */
+export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted";
 export type CommitSha = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
@@ -197,6 +197,10 @@ export interface Contract {
       command: FactoryRemoveCommand;
       result: FactoryRemoveResult;
     };
+    "factory.run.cancel": {
+      command: FactoryRunCancelCommand;
+      result: FactoryRun;
+    };
     "factory.run.get": {
       command: FactoryRunGetCommand;
       result: FactoryRunDetail;
@@ -208,6 +212,14 @@ export interface Contract {
     "factory.run.list": {
       command: FactoryRunListCommand;
       result: FactoryRunListResult;
+    };
+    "factory.run.retry": {
+      command: FactoryRunRetryCommand;
+      result: FactoryRun;
+    };
+    "factory.run.send_back": {
+      command: FactoryRunSendBackCommand;
+      result: FactoryRun;
     };
     "image.prepare": {
       command: ImagePrepareCommand;
@@ -662,6 +674,26 @@ export interface FactoryRemoveResult {
     [k: string]: LifecycleOperationResult;
   };
 }
+/**
+ * End a run that needs a human where it stopped, keeping everything it did.
+ */
+export interface FactoryRunCancelCommand {
+  run_id: string;
+}
+/**
+ * One work item's trip through a factory's steps.
+ */
+export interface FactoryRun {
+  created_at: string;
+  factory: FactoryName;
+  run_id: string;
+  status: FactoryRunStatus;
+  step: StepId | null;
+  updated_at: string;
+  work_item: {
+    [k: string]: StepValue;
+  };
+}
 export interface FactoryRunGetCommand {
   run_id: string;
 }
@@ -685,20 +717,6 @@ export interface StepAttempt {
   };
 }
 /**
- * One work item's trip through a factory's steps.
- */
-export interface FactoryRun {
-  created_at: string;
-  factory: FactoryName;
-  run_id: string;
-  status: FactoryRunStatus;
-  step: StepId | null;
-  updated_at: string;
-  work_item: {
-    [k: string]: StepValue;
-  };
-}
-/**
  * Hand a work item to the factory whose intake is this instance and routine.
  *
  * A work item that matches an unfinished run of the factory returns that run instead.
@@ -715,6 +733,19 @@ export interface FactoryRunListCommand {
 }
 export interface FactoryRunListResult {
   runs: FactoryRun[];
+}
+/**
+ * Try the step of a run that needs a human again, with the step's retries reset.
+ */
+export interface FactoryRunRetryCommand {
+  run_id: string;
+}
+/**
+ * Send a run that needs a human back to an earlier step, with its send-backs reset.
+ */
+export interface FactoryRunSendBackCommand {
+  run_id: string;
+  step: StepId;
 }
 /**
  * Prepare a package selection's image. No package prepares kinby's base image.
@@ -861,6 +892,7 @@ export interface InstanceSummary {
   instance_id: string;
   intended_state: IntendedState;
   manifest_id: string;
+  needs_human: number;
   notices: (RevisionBehind | PackageTemplateOlder)[];
   package?: PackageSummary | null;
   persona_name: string | null;
