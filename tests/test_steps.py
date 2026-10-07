@@ -32,6 +32,7 @@ from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
 from kinby.core.events import EventLog
 from kinby.core.runtime import InstanceRuntime
 from kinby.hub import ControlEndpoint, HttpInstanceControl
+from kinby.instance.layout import PERMISSIONS_NAME
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_drain import WaitingRunner, booted, call, opened_thread
 from tests.test_gate import ScriptedModel
@@ -586,5 +587,23 @@ def test_an_agent_step_whose_turn_fails_still_runs_its_hook(tmp_path):
         assert result.ending is StepEnding.FAILED
         assert result.values == {"verdict": "changes", "ending": "failed", "issue": 7}
         assert result.summary == "The turn failed: The model turn failed unexpectedly."
+
+    asyncio.run(scenario())
+
+
+def test_an_agent_step_whose_turn_cannot_start_on_a_broken_instance_still_runs_its_hook(
+    tmp_path,
+):
+    dispatcher, _, workspace = agent_runtime(tmp_path, StepModel([]))
+    (workspace / "verdict").write_text("changes\n")
+    (tmp_path / PERMISSIONS_NAME).write_text("mode = [\n")
+
+    async def scenario() -> None:
+        result = await run_agent_step(dispatcher)
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert result.values == {"verdict": "changes", "ending": "failed", "issue": 7}
+        assert result.summary.startswith(f"The turn could not start: {PERMISSIONS_NAME}: ")
 
     asyncio.run(scenario())

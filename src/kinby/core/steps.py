@@ -25,7 +25,8 @@ from kinby.contracts import (
 from kinby.core.errors import CoreError
 from kinby.core.prompt import render_step_message
 from kinby.core.turns import Turns
-from kinby.instance import Instance
+from kinby.instance import Instance, ManifestError
+from kinby.instance.permissions import PermissionsError
 from kinby.packages import PackageConfigError, instance_package_config
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hooks import StepEnd, load_hooks
@@ -63,7 +64,7 @@ async def _run_agent_step(step: AgentStepRun, command: StepRunCommand, turns: Tu
     message = render_step_message(step.prompt, command.work_item, command.results)
     try:
         events = await turns.step_turn(title, message, command.origin)
-    except CoreError as exc:
+    except (CoreError, ManifestError, PermissionsError) as exc:
         return _failed(f"The turn could not start: {exc}")
     said = StepResult(ending=StepEnding.FAILED, summary=_last_message(events))
     match events[-1].payload:
