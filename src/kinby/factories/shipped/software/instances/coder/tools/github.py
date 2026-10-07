@@ -94,6 +94,7 @@ class Issue:
     parent: int | None
     #: Its author, when not the repository's owner, a member or a collaborator.
     untrusted_author: str | None
+    labels: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -235,7 +236,7 @@ def assess_pull_request(pr: int, context: ToolContext) -> HookResult:
             }
             for thread in answerable
         ]
-        return HookResult(values={"feedback": json.dumps(feedback)}, outcome="feedback")
+        return HookResult(values={"feedback": json.dumps(feedback), "pr": pr}, outcome="feedback")
     if actionable:
         untrusted = {
             comment.author
@@ -288,7 +289,8 @@ def _open_pull_request(
     coding client wrote.
 
     The body says so when no review step found the change clean. A sub-issue's pull request
-    joins the stack of its siblings' pull requests. The repository's maintainer reviews it.
+    joins the stack of its siblings' pull requests. The repository's maintainer reviews it. An
+    issue an earlier failure handed to a human loses its ready-for-human label.
     """
     body_file = workspace / PR_BODY
     written = body_file.read_text(encoding="utf-8").strip() if body_file.is_file() else ""
@@ -319,6 +321,8 @@ def _open_pull_request(
     number = int(url.strip().rsplit("/", 1)[1])
     if siblings:
         _stack(workspace, siblings, number)
+    if READY_FOR_HUMAN_LABEL in found.labels:
+        _gh(workspace, "issue", "edit", str(issue), "--remove-label", READY_FOR_HUMAN_LABEL)
     return {"pr": number}
 
 
@@ -484,6 +488,7 @@ def _parsed_issue(value: dict) -> Issue | None:
         title=value["title"],
         parent=_parent(value),
         untrusted_author=_untrusted_author(value),
+        labels=frozenset(label["name"] for label in value["labels"]),
     )
 
 
@@ -522,7 +527,10 @@ def _ready_issues(workspace: Path) -> list[Issue]:
 
 
 def _agent_pull_requests(workspace: Path) -> list[AgentPullRequest]:
-    """The open agent pull requests, newest first."""
+    """The open agent pull requests, newest first.
+
+    A fork's pull request is none, whatever its branch is called: anyone can open one.
+    """
     listed = _pages(
         workspace, "repos/{owner}/{repo}/pulls", "state=open", "sort=created", "direction=desc"
     )
@@ -537,6 +545,7 @@ def _agent_pull_requests(workspace: Path) -> list[AgentPullRequest]:
         )
         for value in listed
         if value["head"]["ref"].startswith(AGENT_BRANCH_PREFIX)
+        and (value["head"]["repo"] or {}).get("full_name") == value["base"]["repo"]["full_name"]
     ]
 
 

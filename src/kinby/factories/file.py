@@ -43,14 +43,9 @@ type RoutineName = Annotated[str, Field(pattern=_FOLDER_NAME)]
 type RecipeName = Annotated[str, Field(pattern=_FOLDER_NAME)]
 #: A whole number of seconds, minutes, hours or days, such as ``60m`` or ``7d``.
 type Duration = Annotated[str, Field(pattern=r"^[1-9][0-9]*[smhd]$")]
+_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3_600, "d": 86_400}
 #: A file in the factory's folder, by its path there.
 type FactoryPath = Annotated[str, Field(min_length=1)]
-
-_SECONDS_PER_UNIT = {"s": 1, "m": 60, "h": 60 * 60, "d": 24 * 60 * 60}
-
-
-def duration_seconds(duration: Duration) -> int:
-    return int(duration[:-1]) * _SECONDS_PER_UNIT[duration[-1]]
 
 
 class ValueType(StrEnum):
@@ -237,6 +232,11 @@ class FactoryFile:
 FACTORY_FILE_ADAPTER = TypeAdapter(FactoryFile)
 
 
+def duration_seconds(duration: Duration) -> int:
+    """The number of seconds a declared duration such as ``60m`` stands for."""
+    return int(duration[:-1]) * _UNIT_SECONDS[duration[-1]]
+
+
 class InvalidFactoryFile(ValueError):
     """The factory file is missing, is not YAML, or does not match its schema."""
 
@@ -257,7 +257,12 @@ def read_factory_file(folder: Path) -> FactoryFile:
     try:
         # Validated as the JSON the published schema describes, so "1" is never an integer.
         # YAML reads a date as a date, which JSON has no type for; it is checked as text.
-        return FACTORY_FILE_ADAPTER.validate_json(json.dumps(declared, default=str))
+        as_json = json.dumps(declared, default=str)
+    except ValueError as exc:
+        # A YAML alias can make a structure that contains itself, which JSON cannot hold.
+        raise InvalidFactoryFile((f"{FACTORY_FILE} is not a JSON document: {exc}",)) from exc
+    try:
+        return FACTORY_FILE_ADAPTER.validate_json(as_json)
     except ValidationError as exc:
         raise InvalidFactoryFile(
             tuple(

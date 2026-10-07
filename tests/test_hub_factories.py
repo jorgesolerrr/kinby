@@ -253,11 +253,59 @@ def test_the_check_fails_a_template_configuration_field_that_does_not_land_in_ki
     factory = FACTORY.replace("  coder: { image: coder }\n", fields)
 
     assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Instance "coder": Configuration field "style" names no target.',
         'Instance "coder" asks for "tone", which targets no key of kinby.toml, '
         "where a template's configuration lands.",
-        'Instance "coder" asks for "style", which targets no key of kinby.toml, '
-        "where a template's configuration lands.",
     ]
+
+
+def test_the_check_fails_setup_and_login_declarations_an_install_would_fail_on(tmp_path):
+    declarations = """\
+  coder:
+    image: coder
+    setup_fields:
+      - { name: TOKEN, label: Token, description: A token., kind: secret, type: text,
+          required: true, default: sk-shipped }
+      - { name: steps, label: Steps, description: A budget., kind: config, type: integer,
+          required: false, default: many, target: { file: kinby.toml, key: budgets.steps } }
+      - { name: steps, label: Steps, description: A budget., kind: config, type: integer,
+          required: false, target: { file: kinby.toml, key: budgets.steps } }
+    logins:
+      - { id: claude, label: Claude, description: Signs in., command: [claude, login],
+          volume: /root/.claude, prompt_pattern: '(?P<url>\\S+) (?P<code>\\S+)' }
+      - { id: claude, label: Claude, description: Signs in., command: [claude, login],
+          volume: /root/.claude, prompt_pattern: '(?P<url>\\S+) (?P<code>\\S+)' }
+      - { id: codex, label: Codex, description: Signs in., command: [codex, login],
+          volume: codex, prompt_pattern: '(?P<url>\\S+) (?P<code>\\S+)' }
+"""
+    factory = FACTORY.replace("  coder: { image: coder }\n", declarations)
+
+    found = problems(tmp_path, FILES | {"factory.yaml": factory})
+
+    assert found[:2] == [
+        'Instance "coder": Secret field "TOKEN" has a default. A secret never ships in a package.',
+        'Instance "coder": Setup field "steps" has a default that is not a whole number.',
+    ]
+    assert found[2:] == [
+        'Instance "coder": Setup field "steps" is declared more than once.',
+        'Instance "coder": Login "claude" is declared more than once.',
+        'Instance "coder": Login "codex" mounts its volume at "codex", '
+        "which is not an absolute path.",
+    ]
+
+
+def test_the_check_fails_a_template_that_does_not_initialize(tmp_path):
+    for case, (name, content, problem) in enumerate(
+        [
+            ("kinby.toml", "[models\n", "Expected ']' at the end of a table declaration"),
+            ("kinby.toml", 'id = "mine"\n', 'Template cannot set "id".'),
+            (".env", "TOKEN=sk-shipped\n", 'Template cannot copy ".env".'),
+        ]
+    ):
+        found = problems(tmp_path / str(case), FILES | {f"instances/coder/{name}": content})
+
+        assert len(found) == 1
+        assert found[0].startswith(f'Instance "coder": the template does not initialize: {problem}')
 
 
 def test_a_prompt_outside_the_factory_folder_does_not_resolve(tmp_path):
@@ -371,6 +419,35 @@ def test_the_check_fails_a_send_back_to_a_step_that_is_not_earlier(tmp_path):
     ]
 
 
+def test_the_check_fails_a_resume_that_is_not_an_earlier_client_step(tmp_path):
+    factory = FACTORY.replace(
+        "    hook: record_branch\n", "    hook: record_branch\n    resume: implement\n", 1
+    ).replace(
+        "  - id: checks\n",
+        "  - id: fix\n"
+        "    kind: client\n"
+        "    in: coder\n"
+        "    client: claude\n"
+        "    prompt: prompts/implement.md\n"
+        "    hook: record_branch\n"
+        "    resume: review\n"
+        "  - id: refix\n"
+        "    kind: client\n"
+        "    in: coder\n"
+        "    client: claude\n"
+        "    prompt: prompts/implement.md\n"
+        "    hook: record_branch\n"
+        "    resume: fix\n"
+        "  - id: checks\n",
+    )
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Step "implement" resumes "implement", which is not an earlier claude step in instance '
+        '"coder".',
+        'Step "fix" resumes "review", which is not an earlier claude step in instance "coder".',
+    ]
+
+
 def test_agent_and_client_steps_must_name_a_hook(tmp_path):
     factory = FACTORY.replace("    hook: record_branch\n", "").replace(
         "    hook: read_verdict\n", ""
@@ -389,6 +466,9 @@ def test_the_check_reports_a_factory_file_that_is_missing_or_not_yaml(tmp_path):
     found = problems(tmp_path / "broken", FILES | {"factory.yaml": "steps: [\n"})
     assert len(found) == 1
     assert found[0].startswith("factory.yaml is not YAML: ")
+    found = problems(tmp_path / "circular", FILES | {"factory.yaml": "x: &x [*x]\n"})
+    assert len(found) == 1
+    assert found[0].startswith("factory.yaml is not a JSON document: ")
 
 
 async def read(client, name: str = "tickets") -> FactoryResult:
@@ -533,6 +613,37 @@ def test_an_edit_cannot_write_outside_the_factorys_folder(tmp_path):
         assert isinstance(refused, ErrorEnvelope)
         assert refused.code is ErrorCode.INVALID_ARGUMENT
         assert not (tmp_path / "hub" / "factories" / "escaped.md").exists()
+        assert await read(client) == before
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_that_fails_to_swap_in_keeps_the_last_good_factory(tmp_path, monkeypatch):
+    hub = factory_hub(tmp_path)
+    write_factory(tmp_path / "hub" / "factories" / "tickets", FILES)
+    client = hub_client(hub)
+    destination = tmp_path / "hub" / "factories" / "tickets"
+    rename = Path.rename
+
+    def failing_rename(self: Path, target: Path) -> Path:
+        # Only the staged edit fails to move in; putting the old folder back still works.
+        if Path(target) == destination and self.name == "tickets":
+            raise OSError("disk full")
+        return rename(self, target)
+
+    async def scenario() -> None:
+        before = await read(client)
+        monkeypatch.setattr(Path, "rename", failing_rename)
+        failed = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(
+                name="tickets", files={"prompts/review.md": "Review it.\n"}, hash=before.hash
+            ),
+        )
+        monkeypatch.undo()
+
+        assert isinstance(failed, ErrorEnvelope)
+        assert failed.code is ErrorCode.INTERNAL
         assert await read(client) == before
 
     asyncio.run(scenario())

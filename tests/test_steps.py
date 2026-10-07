@@ -41,6 +41,7 @@ from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
 from kinby.core.events import EventLog
 from kinby.core.runtime import InstanceRuntime
 from kinby.hub import ControlEndpoint, HttpInstanceControl
+from kinby.instance.layout import PERMISSIONS_NAME
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_drain import WaitingRunner, booted, call, opened_thread
 from tests.test_gate import ScriptedModel
@@ -96,6 +97,26 @@ def test_a_command_step_fails_at_the_first_command_that_exits_with_another_code(
         assert result.ending is StepEnding.FAILED
         assert result.summary == "\"sh -c 'echo broken >&2; exit 3'\" exited with code 3.\nbroken"
         assert (workspace / "made").is_file()
+        assert not (workspace / "never").exists()
+
+    asyncio.run(scenario())
+
+
+def test_a_command_still_running_at_the_steps_timeout_is_killed_and_the_step_times_out(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+
+    async def scenario() -> None:
+        command = StepRunCommand(
+            step=CommandStepRun(run=["sleep 30", "touch never"], timeout_seconds=1),
+            origin=ORIGIN,
+            work_item={},
+        )
+        async with asyncio.timeout(10):
+            result = await call(runtime.dispatcher, "step.run", **command.model_dump(mode="json"))
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.TIMED_OUT
+        assert result.summary == "The commands ran past the step's timeout of 1s."
         assert not (workspace / "never").exists()
 
     asyncio.run(scenario())
@@ -642,6 +663,10 @@ CODEX_STREAM = [
 ]
 
 
+#: The API keys a client would bill over its subscription login, all set for every stub client.
+API_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY")
+
+
 def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then: str) -> Path:
     """Put an executable *name* first on PATH that records how it was called, then runs *then*.
 
@@ -655,13 +680,15 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
         "import json, os, sys, time\n"
         f"with open({str(calls)!r}, 'a') as calls:\n"
         "    json.dump({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'stdin': sys.stdin.read(),\n"
-        "               'api_key': 'ANTHROPIC_API_KEY' in os.environ}, calls)\n"
+        f"               'api_keys': [name for name in {API_KEYS!r} if name in os.environ]}},\n"
+        "              calls)\n"
         "    calls.write('\\n')\n"
         f"{then}\n"
     )
     executable.chmod(0o755)
     monkeypatch.setenv("PATH", f"{executable.parent}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    for variable in API_KEYS:
+        monkeypatch.setenv(variable, "sk-test")
     return calls
 
 
@@ -677,8 +704,8 @@ class ClientCall:
     argv: list[str]
     cwd: str
     stdin: str
-    #: Whether the client saw an Anthropic API key.
-    api_key: bool
+    #: The API keys the client saw.
+    api_keys: list[str]
 
 
 def recorded_calls(calls: Path) -> list[ClientCall]:
@@ -704,24 +731,26 @@ async def run_client_step(
 
 
 @pytest.mark.parametrize(
-    ("client", "stream", "session", "arguments"),
+    ("client", "stream", "session", "arguments", "kept"),
     [
         (
             "claude",
             CLAUDE_STREAM,
             "claude-1",
             ["-p", "--permission-mode", "acceptEdits"],
+            ["OPENAI_API_KEY", "CODEX_API_KEY"],
         ),
         (
             "codex",
             CODEX_STREAM,
             "codex-1",
             ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox"],
+            ["ANTHROPIC_API_KEY"],
         ),
     ],
 )
 def test_a_client_step_runs_the_client_in_the_workspace_with_the_prompt_and_keeps_its_session(
-    tmp_path, monkeypatch, client, stream, session, arguments
+    tmp_path, monkeypatch, client, stream, session, arguments, kept
 ):
     runtime, workspace = step_instance(tmp_path)
     calls = stub_client(tmp_path, monkeypatch, client, streaming(stream))
@@ -737,7 +766,7 @@ def test_a_client_step_runs_the_client_in_the_workspace_with_the_prompt_and_keep
         assert called.cwd == str(workspace)
         assert called.stdin.startswith("Implement the issue.\n")
         assert '{"work_item": {"issue": 7}, "results": {"branch": "agent/7"}}' in called.stdin
-        assert called.api_key is (client == "codex")
+        assert called.api_keys == kept
 
     asyncio.run(scenario())
 
@@ -893,5 +922,23 @@ def test_a_client_run_the_plan_refused_names_when_its_window_resets(tmp_path, mo
         assert stats.limits == [
             PlanLimit(usage_source=UsageSource.CLAUDE_SUBSCRIPTION, resets_at=resets_at)
         ]
+
+    asyncio.run(scenario())
+
+
+def test_an_agent_step_whose_turn_cannot_start_on_a_broken_instance_still_runs_its_hook(
+    tmp_path,
+):
+    dispatcher, _, workspace = agent_runtime(tmp_path, StepModel([]))
+    (workspace / "verdict").write_text("changes\n")
+    (tmp_path / PERMISSIONS_NAME).write_text("mode = [\n")
+
+    async def scenario() -> None:
+        result = await run_agent_step(dispatcher)
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert result.values == {"verdict": "changes", "ending": "failed", "issue": 7}
+        assert result.summary.startswith(f"The turn could not start: {PERMISSIONS_NAME}: ")
 
     asyncio.run(scenario())

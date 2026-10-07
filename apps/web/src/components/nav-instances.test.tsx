@@ -185,6 +185,13 @@ describe("the needs-you count on an instance that is not selected", () => {
     expect(needsYou(row)).toBe("Threads that need you: 3")
   })
 
+  it("counts its factory runs that need a human while it is not running", async () => {
+    const { row, hub } = adaRow({ process: "stopped", needs_human: 2 }, [])
+
+    expect(needsYou(row)).toBe("Threads that need you: 2")
+    expect(hub.opened).toEqual([])
+  })
+
   it("shows its state when no thread needs you", async () => {
     const { row, clock } = adaRow({ process: "running" }, [
       thread({ id: "t1", status: "idle" }),

@@ -56,7 +56,7 @@ instances:
           The email on the commits the coding clients make. Use one GitHub links to the
           token's account, so the commits show as its own.
         kind: secret
-        type: email
+        type: text
         required: true
     logins:
       - id: codex
@@ -157,7 +157,7 @@ steps:
     in: coder
     call: assess_pull_request
     requires: [pr]
-    results: { feedback: str, merge_ready: bool }
+    results: { feedback: str, pr: int, merge_ready: bool }
     outcomes:
       merge-ready: done
       feedback: { back: answer, max: 3 }

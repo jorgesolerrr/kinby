@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 import aiohttp
 from aiohttp import WSMsgType, web
+from multidict import CIMultiDict
 
 from kinby.core.contract_server import HEARTBEAT_SECONDS
 from kinby.hub.models import InstanceEndpoint, InstanceUnreachable
@@ -78,7 +79,7 @@ async def forward_signal(
                 # Quoted, so a routine name can never walk out of the instance's signal path.
                 f"{endpoint.url}/signals/{quote(routine, safe='')}",
                 data=body,
-                headers=_forwarded(request.headers),
+                headers=forwarded_headers(request.headers),
             ) as answered,
         ):
             return web.Response(
@@ -90,9 +91,11 @@ async def forward_signal(
         raise unreachable(InstanceUnreachable.UNAVAILABLE) from exc
 
 
-def _forwarded(headers: Mapping[str, str]) -> dict[str, str]:
+def forwarded_headers(headers: Mapping[str, str]) -> CIMultiDict[str]:
     """Keep every header the instance authenticates with, drop the ones this hop owns."""
-    return {name: value for name, value in headers.items() if name.lower() not in _NOT_FORWARDED}
+    return CIMultiDict(
+        (name, value) for name, value in headers.items() if name.lower() not in _NOT_FORWARDED
+    )
 
 
 async def _carry(

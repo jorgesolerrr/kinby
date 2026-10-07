@@ -29,7 +29,9 @@ from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
 from kinby.core.prompt import render_step_message
 from kinby.core.turns import Turns
-from kinby.instance import Instance
+from kinby.instance import Instance, ManifestError
+from kinby.instance.permissions import PermissionsError
+from kinby.packages import PackageConfigError, instance_package_config
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hooks import HookResult, StepEnd, load_hooks
 from kinby.plugins.registry import ToolRegistry
@@ -70,7 +72,7 @@ async def _run_agent_step(step: AgentStepRun, command: StepRunCommand, turns: Tu
     message = render_step_message(step.prompt, command.work_item, command.results)
     try:
         events = await turns.step_turn(title, message, command.origin)
-    except CoreError as exc:
+    except (CoreError, ManifestError, PermissionsError) as exc:
         return _failed(f"The turn could not start: {exc}")
     said = StepResult(ending=StepEnding.FAILED, summary=_last_message(events))
     match events[-1].payload:
@@ -124,26 +126,21 @@ def _last_message(events: Sequence[Event]) -> str:
 
 
 async def run_command_step(step: CommandStepRun, workspace: Path) -> StepResult:
-    """Run each command in *workspace* without a shell. The first that exits non-zero fails."""
-    for command in step.run:
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *shlex.split(command),
-                cwd=workspace,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-        except (OSError, ValueError) as exc:
-            return StepResult(
-                ending=StepEnding.FAILED, summary=f'"{command}" could not start: {exc}'
-            )
-        output, _ = await process.communicate()
-        if process.returncode != 0:
-            tail = output.decode(errors="replace").strip()[-_OUTPUT_TAIL:]
-            return StepResult(
-                ending=StepEnding.FAILED,
-                summary=f'"{command}" exited with code {process.returncode}.\n{tail}'.strip(),
-            )
+    """Run each command in *workspace* without a shell. The first that exits non-zero fails.
+
+    A command still running when the step's timeout passes is killed, and the step times out.
+    """
+    try:
+        async with asyncio.timeout(step.timeout_seconds):
+            for command in step.run:
+                failed = await _run_command(command, workspace)
+                if failed is not None:
+                    return failed
+    except TimeoutError:
+        return StepResult(
+            ending=StepEnding.TIMED_OUT,
+            summary=f"The commands ran past the step's timeout of {step.timeout_seconds}s.",
+        )
     return StepResult(ending=StepEnding.CLEAN, summary="Every command exited with code 0.")
 
 
@@ -164,8 +161,12 @@ async def _run_code_step(
         # The factory's needs_human call: the step the run stopped at, and how it ended.
         held |= {"step": command.origin.step, "summary": step.summary}
     arguments = {name: value for name, value in held.items() if name in tool.runnable.args}
+    try:
+        package_config = instance_package_config(instance)
+    except PackageConfigError as exc:
+        return _failed(f'Tool "{step.call}" could not read the package config: {exc}')
     # A code step runs on no thread, so its tool's context names one no turn opens.
-    context = ToolContext(instance=instance, thread_id=uuid4())
+    context = ToolContext(instance=instance, thread_id=uuid4(), package_config=package_config)
     try:
         returned = await tool.ainvoke_value(arguments, context)
         if isinstance(returned, HookResult):
@@ -215,3 +216,29 @@ def _failed(reason: str, ended: StepResult | None = None) -> StepResult:
     """A failed result that says why, after the summary of the step as it *ended*."""
     summary = reason if ended is None or not ended.summary else f"{ended.summary}\n{reason}"
     return StepResult(ending=StepEnding.FAILED, summary=summary)
+
+
+async def _run_command(command: str, workspace: Path) -> StepResult | None:
+    """Run one command to its end, and return the failed step result unless it exits with 0."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *shlex.split(command),
+            cwd=workspace,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except (OSError, ValueError) as exc:
+        return StepResult(ending=StepEnding.FAILED, summary=f'"{command}" could not start: {exc}')
+    try:
+        output, _ = await process.communicate()
+    except asyncio.CancelledError:
+        process.kill()
+        await process.wait()
+        raise
+    if process.returncode != 0:
+        tail = output.decode(errors="replace").strip()[-_OUTPUT_TAIL:]
+        return StepResult(
+            ending=StepEnding.FAILED,
+            summary=f'"{command}" exited with code {process.returncode}.\n{tail}'.strip(),
+        )
+    return None

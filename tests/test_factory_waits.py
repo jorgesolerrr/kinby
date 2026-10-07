@@ -115,6 +115,7 @@ async def signalled(
     routine: str = "github",
     event: str = "issue_comment",
     answer: int = 202,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, list[bytes]]:
     """Post one webhook to the coder's public signal path, and what its instance received."""
     received: list[bytes] = []
@@ -125,7 +126,7 @@ async def signalled(
             sender.post(
                 url(address, f"/instances/{coder}/signals/{routine}"),
                 data=body,
-                headers={"X-GitHub-Event": event},
+                headers={"X-GitHub-Event": event} | (headers or {}),
             ) as answered,
         ):
             return answered.status, received
@@ -239,6 +240,30 @@ def test_a_wait_with_several_filters_moves_on_when_a_signal_matches_any_one_of_t
         found = await settled(hub, run.run_id)
 
         assert found.run.status is (FactoryRunStatus.DONE if moves else FactoryRunStatus.PARKED)
+
+    asyncio.run(scenario())
+
+
+def test_a_wait_never_matches_a_header_the_hub_does_not_forward_to_the_instance(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    on_cookie = WAIT.replace(
+        "headers.X-GitHub-Event: issue_comment", "headers.Cookie: kinby_session=forged"
+    )
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": on_cookie})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await parked(hub, run.run_id)
+        status, _ = await signalled(
+            hub, runtime, coder, COMMENT, headers={"Cookie": "kinby_session=forged"}
+        )
+        await asyncio.sleep(0.05)
+        found = await detail(hub, run.run_id)
+
+        assert status == 202
+        assert (found.run.status, found.run.step) == (FactoryRunStatus.PARKED, "babysit")
 
     asyncio.run(scenario())
 
