@@ -41,6 +41,7 @@ from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
 from kinby.core.events import EventLog
 from kinby.core.runtime import InstanceRuntime
 from kinby.hub import ControlEndpoint, HttpInstanceControl
+from kinby.instance.layout import PERMISSIONS_NAME
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_drain import WaitingRunner, booted, call, opened_thread
 from tests.test_gate import ScriptedModel
@@ -96,6 +97,26 @@ def test_a_command_step_fails_at_the_first_command_that_exits_with_another_code(
         assert result.ending is StepEnding.FAILED
         assert result.summary == "\"sh -c 'echo broken >&2; exit 3'\" exited with code 3.\nbroken"
         assert (workspace / "made").is_file()
+        assert not (workspace / "never").exists()
+
+    asyncio.run(scenario())
+
+
+def test_a_command_still_running_at_the_steps_timeout_is_killed_and_the_step_times_out(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+
+    async def scenario() -> None:
+        command = StepRunCommand(
+            step=CommandStepRun(run=["sleep 30", "touch never"], timeout_seconds=1),
+            origin=ORIGIN,
+            work_item={},
+        )
+        async with asyncio.timeout(10):
+            result = await call(runtime.dispatcher, "step.run", **command.model_dump(mode="json"))
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.TIMED_OUT
+        assert result.summary == "The commands ran past the step's timeout of 1s."
         assert not (workspace / "never").exists()
 
     asyncio.run(scenario())
@@ -867,5 +888,23 @@ def test_a_client_run_the_plan_refused_names_when_its_window_resets(tmp_path, mo
         assert stats.limits == [
             PlanLimit(usage_source=UsageSource.CLAUDE_SUBSCRIPTION, resets_at=resets_at)
         ]
+
+    asyncio.run(scenario())
+
+
+def test_an_agent_step_whose_turn_cannot_start_on_a_broken_instance_still_runs_its_hook(
+    tmp_path,
+):
+    dispatcher, _, workspace = agent_runtime(tmp_path, StepModel([]))
+    (workspace / "verdict").write_text("changes\n")
+    (tmp_path / PERMISSIONS_NAME).write_text("mode = [\n")
+
+    async def scenario() -> None:
+        result = await run_agent_step(dispatcher)
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert result.values == {"verdict": "changes", "ending": "failed", "issue": 7}
+        assert result.summary.startswith(f"The turn could not start: {PERMISSIONS_NAME}: ")
 
     asyncio.run(scenario())

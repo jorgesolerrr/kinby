@@ -1707,6 +1707,7 @@ export interface CommandStepRun {
    * @minItems 1
    */
   run: [string, ...string[]];
+  timeout_seconds?: number | null;
 }
 /**
  * Call one of the instance's tools, with no model turn around it.
