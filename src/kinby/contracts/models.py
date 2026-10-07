@@ -2202,6 +2202,8 @@ class CommandStepRun(ContractModel):
 
     kind: Literal["command"] = "command"
     run: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+    #: How long the commands may run in all before the step fails. None lets them run.
+    timeout_seconds: int | None = Field(default=None, ge=1)
 
 
 class CodeStepRun(ContractModel):

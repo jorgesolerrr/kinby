@@ -78,6 +78,7 @@ steps:
     kind: command
     in: coder
     run: ["uv run pytest", "uv run ruff check ."]
+    timeout: 10m
 """
 FILES = {
     "factory.yaml": FACTORY,
@@ -200,7 +201,7 @@ def test_an_intake_hands_a_work_item_to_a_one_step_factory_that_runs_to_done(tmp
         assert attempt.ended_at is not None
         [(endpoint, command)] = control.steps
         assert command == StepRunCommand(
-            step=CommandStepRun(run=["uv run pytest", "uv run ruff check ."]),
+            step=CommandStepRun(run=["uv run pytest", "uv run ruff check ."], timeout_seconds=600),
             origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="test"),
             work_item={"issue": 7},
         )
@@ -705,6 +706,40 @@ def test_review_sending_work_back_past_its_max_needs_a_human(tmp_path):
     asyncio.run(scenario())
 
 
+def test_work_sent_back_holds_no_value_from_the_pass_it_left(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values={"committed": True}),
+        reviewed("changes"),
+        FIXED,
+    ]
+    runtime = FakeRuntime()
+    factory = REVIEW.replace(
+        '    run: ["make fix"]\n', '    run: ["make fix"]\n    results: { committed: bool }\n'
+    ).replace("    hook: read_verdict\n", "    hook: read_verdict\n    requires: [committed]\n")
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert finished.run.step == "fix"
+        assert [(a.step, a.ending) for a in finished.attempts] == [
+            ("fix", StepEnding.CLEAN),
+            ("review", StepEnding.CLEAN),
+            ("fix", StepEnding.CLEAN),
+            ("fix", StepEnding.FAILED),
+        ]
+        assert finished.attempts[-1].summary == (
+            'Step "review" requires "committed", which this step did not record.'
+        )
+        assert [command.results for _, command in control.steps] == [{}, {"committed": True}, {}]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("verdict", "status", "step", "attempted"),
     [
@@ -1034,5 +1069,28 @@ def test_a_run_that_needs_a_human_counts_toward_its_steps_instance_until_it_move
         assert before == {coder: 0, checker: 0}
         assert stopped == {coder: 0, checker: 2}
         assert await needing_human(hub) == {coder: 0, checker: 0}
+
+    asyncio.run(scenario())
+
+
+def test_a_value_of_another_type_than_its_step_declares_fails_the_step(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values=BRANCH),
+        StepResult(ending=StepEnding.CLEAN, values={"pr": "42"}),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, HANDOFF_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert finished.run.step == "open-pr"
+        last = finished.attempts[-1]
+        assert (last.step, last.ending) == ("open-pr", StepEnding.FAILED)
+        assert last.summary == 'Step "open-pr" declares "pr" as int, but recorded a str.'
 
     asyncio.run(scenario())
