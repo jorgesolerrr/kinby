@@ -1,9 +1,10 @@
 """The factory check: validate one factory folder as a whole before the hub takes it.
 
-It validates the factory file against its schema, resolves every instance template, image
-recipe, routine, prompt, tool and hook the file names, and checks that each step's inputs come
-from an earlier step or the work item. It runs each template's tool and hook files to learn
-their names, as an instance does.
+It validates the factory file against its schema and each instance's setup declarations,
+resolves every instance template, image recipe, routine, prompt, tool and hook the file names,
+and checks that each step's inputs come from an earlier step or the work item. It runs each
+template's tool and hook files to learn their names, as an instance does, and initializes an
+instance from each template with its defaults, as an install does.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from kinby.contracts import SetupFieldKind, TargetFile
 from kinby.factories import RECIPES_DIRECTORY
@@ -21,14 +23,22 @@ from kinby.factories.file import (
     ClientStep,
     CodeStep,
     FactoryFile,
+    InstanceDeclaration,
     InstanceName,
     InvalidFactoryFile,
     SendBack,
     WaitStep,
     read_factory_file,
 )
+from kinby.instance import (
+    PLACEHOLDER_MODEL,
+    InstanceExistsError,
+    init_from_template,
+    inspect_instance,
+)
 from kinby.instance.layout import ROUTINE_FILE, ROUTINES_DIR
-from kinby.packages import package_fields
+from kinby.packages import package_fields, readable_template_files
+from kinby.packages.check import field_declaration_problems, login_declaration_problems
 from kinby.plugins.hooks import load_hooks
 from kinby.plugins.registry import ToolRegistry
 
@@ -56,7 +66,7 @@ def check_factory(folder: Path) -> tuple[str, ...]:
     }
     return (
         *_name(factory, folder),
-        *_instances(factory, templates),
+        *_instances(factory, folder, templates),
         *(problem for template in templates.values() for problem in template.problems),
         *_intake(factory, folder),
         *_steps(factory, folder, templates),
@@ -88,22 +98,64 @@ def _name(factory: FactoryFile, folder: Path) -> Iterator[str]:
         )
 
 
-def _instances(factory: FactoryFile, templates: dict[InstanceName, _Template]) -> Iterator[str]:
+def _instances(
+    factory: FactoryFile,
+    folder: Path,
+    templates: dict[InstanceName, _Template],
+) -> Iterator[str]:
     for name, declared in factory.instances.items():
         if name not in templates:
             yield f'Instance "{name}" has no template: {TEMPLATES_DIR}/{name}/ is not a folder.'
         recipe = declared.image
         if recipe is not None and not (RECIPES_DIRECTORY / f"{recipe}.Dockerfile").is_file():
             yield f'Instance "{name}" names image recipe "{recipe}", which kinby does not ship.'
-        for field in package_fields(declared.setup_fields):
-            target = field.target
-            if field.kind is SetupFieldKind.CONFIG and (
-                target is None or target.file is not TargetFile.KINBY_TOML
-            ):
-                yield (
-                    f'Instance "{name}" asks for "{field.name}", which targets no key of '
-                    "kinby.toml, where a template's configuration lands."
+        declarations = list(_declarations(name, declared))
+        yield from declarations
+        # The defaults land only where the declarations hold, so one mistake is reported once.
+        if name in templates and not declarations:
+            yield from _initialization(name, declared, folder / TEMPLATES_DIR / name)
+
+
+def _declarations(name: InstanceName, declared: InstanceDeclaration) -> Iterator[str]:
+    for problem in (
+        *field_declaration_problems(declared.setup_fields),
+        *login_declaration_problems(declared.logins),
+    ):
+        yield f'Instance "{name}": {problem}'
+    for field in package_fields(declared.setup_fields):
+        target = field.target
+        if (
+            field.kind is SetupFieldKind.CONFIG
+            and target
+            and target.file is not TargetFile.KINBY_TOML
+        ):
+            yield (
+                f'Instance "{name}" asks for "{field.name}", which targets no key of '
+                "kinby.toml, where a template's configuration lands."
+            )
+
+
+def _initialization(
+    name: InstanceName, declared: InstanceDeclaration, template: Path
+) -> Iterator[str]:
+    """An instance written from the template with its defaults, as an install writes one."""
+    settings = {
+        field.target.key: field.default
+        for field in package_fields(declared.setup_fields)
+        if field.target is not None and field.default is not None
+    }
+    with TemporaryDirectory(prefix="kinby-factory-check-") as temporary:
+        try:
+            inspect_instance(
+                init_from_template(
+                    Path(temporary) / "instance",
+                    readable_template_files(template),
+                    model=PLACEHOLDER_MODEL,
+                    settings=settings,
                 )
+            )
+        except (InstanceExistsError, ValueError) as exc:
+            yield f'Instance "{name}": the template does not initialize: {exc}'
 
 
 def _intake(factory: FactoryFile, folder: Path) -> Iterator[str]:
