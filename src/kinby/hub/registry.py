@@ -1492,15 +1492,15 @@ class HubRegistry:
             ).fetchall()
         return [_factory_run(row) for row in rows]
 
-    def queued_runs(self) -> list[FactoryRun]:
-        """Every queued run of every factory, in the order it was queued."""
+    def runs_in(self, status: FactoryRunStatus) -> list[FactoryRun]:
+        """Every run of every factory in *status*, in the order it moved there."""
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
                 SELECT {_RUN_COLUMNS} FROM factory_runs WHERE status = ?
                 ORDER BY updated_at, rowid
                 """,
-                (FactoryRunStatus.QUEUED.value,),
+                (status.value,),
             ).fetchall()
         return [_factory_run(row) for row in rows]
 
@@ -1527,8 +1527,16 @@ class HubRegistry:
             )
         return self._existing_run(run_id)
 
-    def begin_attempt(self, run_id: UUID, step: StepId) -> FactoryRun:
-        """Open the next attempt at *step*, and mark the run running it."""
+    def begin_attempt(
+        self,
+        run_id: UUID,
+        step: StepId,
+        status: FactoryRunStatus = FactoryRunStatus.RUNNING,
+    ) -> FactoryRun:
+        """Open the next attempt at *step*, and put the run in *status* at it.
+
+        A run parked at a wait or an approval keeps its attempt open until it moves on.
+        """
         now = _now()
         with self._connect() as connection:
             connection.execute(
@@ -1543,7 +1551,7 @@ class HubRegistry:
             )
             connection.execute(
                 "UPDATE factory_runs SET status = ?, step = ?, updated_at = ? WHERE id = ?",
-                (FactoryRunStatus.RUNNING.value, step, now, str(run_id)),
+                (status.value, step, now, str(run_id)),
             )
         return self._existing_run(run_id)
 
@@ -1617,10 +1625,19 @@ class HubRegistry:
         ]
 
     def unfinished_attempts(self) -> list[UUID]:
-        """The runs with an attempt a previous process started and never ended."""
+        """The running runs with an attempt a previous process started and never ended.
+
+        A parked run's open attempt is not among them: it waits on no process.
+        """
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT run_id FROM step_attempts WHERE ended_at IS NULL ORDER BY rowid"
+                """
+                SELECT run_id FROM step_attempts
+                JOIN factory_runs ON factory_runs.id = step_attempts.run_id
+                WHERE ended_at IS NULL AND factory_runs.status = ?
+                ORDER BY step_attempts.rowid
+                """,
+                (FactoryRunStatus.RUNNING.value,),
             ).fetchall()
         return [UUID(row[0]) for row in rows]
 

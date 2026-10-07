@@ -27,6 +27,7 @@ from kinby.factories.file import (
     SendBack,
     WaitStep,
     read_factory_file,
+    run_value_name,
 )
 from kinby.instance.layout import ROUTINE_FILE, ROUTINES_DIR
 from kinby.packages import package_fields
@@ -157,7 +158,7 @@ def _steps(
 
 
 def _inputs(factory: FactoryFile) -> Iterator[str]:
-    """Each value a step requires is in the work item or an earlier step's results."""
+    """Each value a step requires or a wait names is held: by the work item or an earlier step."""
     held = set(factory.work_item)
     for step in factory.steps:
         for value in step.requires:
@@ -165,6 +166,13 @@ def _inputs(factory: FactoryFile) -> Iterator[str]:
                 yield (
                     f'Step "{step.id}" requires "{value}", which no earlier step declares in its '
                     "results and the work item does not carry."
+                )
+        for field, expected in step.signal.items() if isinstance(step, WaitStep) else ():
+            value = run_value_name(expected)
+            if value is not None and value not in held:
+                yield (
+                    f'Step "{step.id}" matches "{field}" against "{value}", which no earlier '
+                    "step declares in its results and the work item does not carry."
                 )
         held.update(step.results)
     for value in factory.done_requires:

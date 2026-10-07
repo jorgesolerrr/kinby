@@ -89,6 +89,12 @@ class RunNeedsNoHuman(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class RunAwaitsNoApproval(CoreError):
+    """Only a run parked at an approve step is approved."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class NotAnEarlierStep(CoreError):
     """A run is only ever sent back to a step before the one it stopped at."""
 

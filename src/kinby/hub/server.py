@@ -10,11 +10,18 @@ from uuid import UUID
 
 from aiohttp import web
 
-from kinby.contracts import CONTRACT_VERSION, HUB_SCOPES, INTAKE_SCOPES, AccessToken, Scope
+from kinby.contracts import (
+    CONTRACT_VERSION,
+    HUB_SCOPES,
+    INTAKE_SCOPES,
+    AccessToken,
+    RoutineName,
+    Scope,
+)
 from kinby.core.contract_server import serve_contract
 from kinby.core.dispatcher import Dispatcher
 from kinby.hub.access import SESSION_COOKIE, HubAccess, SessionId
-from kinby.hub.models import InstanceEndpoint, InstanceRouting, InstanceUnreachable
+from kinby.hub.models import InstanceEndpoint, InstanceRouting, InstanceUnreachable, Signal
 from kinby.hub.relay import forward_signal, relay_socket, unreachable
 from kinby.instance import Serve
 
@@ -124,11 +131,7 @@ class HubContractServer:
 
     async def _instance_signal(self, request: web.Request) -> web.Response:
         """Webhooks carry their own signature, so the hub authenticates none of them."""
-        return await forward_signal(
-            request,
-            await self._reach(request),
-            request.match_info["routine"],
-        )
+        return await self._signal(request, await self._reach(request))
 
     async def _intake_socket(self, request: web.Request) -> web.WebSocketResponse:
         """An instance calls the hub with the control token the hub gave it, and nothing else."""
@@ -145,11 +148,20 @@ class HubContractServer:
 
     async def _aliased_signal(self, request: web.Request) -> web.Response:
         """The path a webhook was registered with before the hub existed."""
-        return await forward_signal(
-            request,
-            _reached(await self._routing.signal_endpoint()),
-            request.match_info["routine"],
-        )
+        return await self._signal(request, _reached(await self._routing.signal_endpoint()))
+
+    async def _signal(self, request: web.Request, endpoint: InstanceEndpoint) -> web.Response:
+        """Forward the signal, then hand it on when the instance accepted it as a new delivery.
+
+        The instance authenticates the signal, so one it rejects or has seen moves no run.
+        """
+        routine = RoutineName(request.match_info["routine"])
+        answer = await forward_signal(request, endpoint, routine)
+        if answer.status == web.HTTPAccepted.status_code:
+            self._routing.signal_accepted(
+                endpoint.instance_id, Signal(routine, request.headers, await request.read())
+            )
+        return answer
 
     async def _reach(self, request: web.Request) -> InstanceEndpoint:
         try:

@@ -676,6 +676,10 @@
         }
       ]
     },
+    "SignalField": {
+      "pattern": "^(routine|headers\\.[A-Za-z0-9-]+|body(\\.[^.]+)+)$",
+      "type": "string"
+    },
     "Step": {
       "discriminator": {
         "mapping": {
@@ -784,7 +788,7 @@
     },
     "WaitStep": {
       "additionalProperties": false,
-      "description": "Park the run until a signal matches the filter, or the deadline passes.",
+      "description": "Park the run until a signal matches the filter, or the deadline passes.\n\nA signal matches when it carries every field of the filter, each of the same type and value.\nA field the signal lacks never matches.",
       "properties": {
         "deadline": {
           "anyOf": [
@@ -854,6 +858,10 @@
               }
             ]
           },
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/SignalField"
+          },
           "title": "Signal",
           "type": "object"
         },
@@ -870,9 +878,9 @@
         }
       },
       "required": [
+        "signal",
         "id",
-        "kind",
-        "signal"
+        "kind"
       ],
       "title": "WaitStep",
       "type": "object"

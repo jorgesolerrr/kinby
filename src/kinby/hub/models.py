@@ -16,6 +16,7 @@ from kinby.contracts import (
     ControlToken,
     PackageDescription,
     PackageSelection,
+    RoutineName,
     StorageItem,
 )
 from kinby.packages import InstalledPackage
@@ -55,6 +56,7 @@ class SetupSpec:
 class InstanceEndpoint:
     """Where the hub reaches one running instance, and the secret it presents there."""
 
+    instance_id: UUID
     url: str
     control_token: ControlToken
 
@@ -66,12 +68,26 @@ class InstanceUnreachable(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+@dataclass(frozen=True)
+class Signal:
+    """A signal the hub forwarded, as its instance's receiver got it."""
+
+    #: The routine the signal came in on.
+    routine: RoutineName
+    #: Read without regard to case, as HTTP headers are.
+    headers: Mapping[str, str]
+    body: bytes
+
+
 class InstanceRouting(Protocol):
     """How a public route finds the instance it carries traffic to."""
 
     async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable: ...
 
     async def signal_endpoint(self) -> InstanceEndpoint | InstanceUnreachable: ...
+
+    def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
+        """The instance authenticated the signal and recorded it as a new delivery."""
 
     def intake(self, instance_id: UUID) -> Dispatcher:
         """What the instance may call on the hub, once its control token checks out."""

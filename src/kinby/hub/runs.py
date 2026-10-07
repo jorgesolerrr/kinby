@@ -1,16 +1,21 @@
 """Factory runs: carry each work item through its factory's steps.
 
 The hub queues each step for the instance it runs in. An instance takes one step at a time,
-first in, first out, across every factory.
+first in, first out, across every factory. A wait or approve step parks its run, which holds no
+instance until a signal, its deadline or the user moves it on.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import Counter
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
+
+from pydantic import JsonValue
 
 from kinby.contracts import (
     AgentStepRun,
@@ -20,6 +25,7 @@ from kinby.contracts import (
     CommandStepRun,
     FactoryName,
     FactoryRun,
+    FactoryRunApproveCommand,
     FactoryRunCancelCommand,
     FactoryRunDetail,
     FactoryRunGetCommand,
@@ -46,10 +52,12 @@ from kinby.core.errors import (
     InvalidWorkItem,
     NotAnEarlierStep,
     NotAnIntake,
+    RunAwaitsNoApproval,
     RunNeedsNoHuman,
 )
 from kinby.factories.file import (
     AgentStep,
+    ApproveStep,
     ClientStep,
     CodeStep,
     CommandStep,
@@ -61,9 +69,12 @@ from kinby.factories.file import (
     SendBack,
     Step,
     ValueType,
+    WaitStep,
     duration_seconds,
+    run_value_name,
 )
 from kinby.hub.factories import FactoryStore
+from kinby.hub.models import Signal
 from kinby.hub.registry import FactoryMember, HubRegistry
 
 #: Run one step in the instance with this id, and return its result.
@@ -105,6 +116,8 @@ class FactoryRuns:
         #: The steps waiting for each instance, by instance id.
         self._queues: dict[UUID, asyncio.Queue[_QueuedStep]] = {}
         self._workers: set[asyncio.Task[None]] = set()
+        #: The deadline of each run parked at a wait that has one, by run id.
+        self._deadlines: dict[UUID, asyncio.Task[None]] = {}
         self._subscribers: set[asyncio.Queue[FactoryRun]] = set()
 
     async def intake(self, instance_id: UUID, command: FactoryRunIntakeCommand) -> FactoryRun:
@@ -112,9 +125,7 @@ class FactoryRuns:
 
         A work item that matches an unfinished run of the factory returns that run.
         """
-        record = self._registry.instance(instance_id)
-        member = record.factory if record is not None else None
-        factory = self._factory(member.factory) if member is not None else None
+        member, factory = self._membership(instance_id) or (None, None)
         if (
             member is None
             or factory is None
@@ -143,19 +154,58 @@ class FactoryRuns:
 
     async def retry(self, command: FactoryRunRetryCommand) -> FactoryRun:
         """Try the step the run stopped at again, with the step's retries reset."""
-        run = self._needing_human(command.run_id)
+        run = _needing_human(self._existing(command.run_id))
         return self._restart(run, run.step)
 
     async def send_back(self, command: FactoryRunSendBackCommand) -> FactoryRun:
-        """Send the run back to a step before the one it stopped at, with its send-backs reset."""
-        run = self._needing_human(command.run_id)
-        if command.step not in _earlier(self._factory(run.factory), run.step):
+        """Send the run back to a step before the one it stopped or awaits approval at.
+
+        Its retries and send-backs count afresh.
+        """
+        run = self._existing(command.run_id)
+        factory = self._factory(run.factory)
+        approving = _awaits_approval(factory, run)
+        if not approving:
+            _needing_human(run)
+        if command.step not in _earlier(factory, run.step):
             raise NotAnEarlierStep(f'Step "{command.step}" is not a step before "{run.step}".')
+        if approving:
+            summary = f'The user sent the run back to "{command.step}".'
+            self._registry.end_attempt(
+                run.run_id, StepResult(ending=StepEnding.CLEAN, summary=summary)
+            )
         return self._restart(run, command.step)
+
+    async def approve(self, command: FactoryRunApproveCommand) -> FactoryRun:
+        """Move a run that awaits the user's approval on, as its approve step's next outcome."""
+        run = self._existing(command.run_id)
+        if not _awaits_approval(self._factory(run.factory), run):
+            raise RunAwaitsNoApproval(
+                f'Factory run "{run.run_id}" is {run.status.value}, so it awaits no approval.'
+            )
+        approved = StepResult(ending=StepEnding.CLEAN, summary="The user approved it.")
+        return self._advance(run.run_id, approved)
+
+    def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
+        """Move on each run of the instance's factory whose parked wait the signal matches."""
+        membership = self._membership(instance_id)
+        if membership is None:
+            return
+        member, factory = membership
+        body = _json(signal.body)
+        for run in self._registry.runs(member.factory, FactoryRunStatus.PARKED):
+            step = _step(factory, run.step) if run.step is not None else None
+            held = run.work_item | self._results(run.run_id)
+            if isinstance(step, WaitStep) and _matches(step, signal, body, held):
+                deadline = self._deadlines.pop(run.run_id, None)
+                if deadline is not None:
+                    deadline.cancel()
+                summary = f'A signal on routine "{signal.routine}" matched.'
+                self._advance(run.run_id, StepResult(ending=StepEnding.CLEAN, summary=summary))
 
     async def cancel(self, command: FactoryRunCancelCommand) -> FactoryRun:
         """End the run at the step it stopped at. Nothing it did is undone."""
-        run = self._needing_human(command.run_id)
+        run = _needing_human(self._existing(command.run_id))
         moved = self._registry.move_run(run.run_id, FactoryRunStatus.CANCELLED, run.step)
         self._publish(moved)
         return moved
@@ -174,38 +224,52 @@ class FactoryRuns:
     def resume(self) -> None:
         """Pick the runs up where the previous process left them.
 
-        An attempt it left running counts as failed, and its run follows the step's retry.
+        An attempt it left running counts as failed, and its run follows the step's retry. A run
+        parked at a wait keeps its deadline, counted from when it parked.
         """
         for run_id in self._registry.unfinished_attempts():
             self._settle(run_id, _INTERRUPTED)
-        for run in self._registry.queued_runs():
+        for run in self._registry.runs_in(FactoryRunStatus.QUEUED):
             self._enqueue(run)
+        for run in self._registry.runs_in(FactoryRunStatus.PARKED):
+            factory = self._factory(run.factory)
+            step = (
+                _step(factory, run.step) if factory is not None and run.step is not None else None
+            )
+            if isinstance(step, WaitStep):
+                self._arm(run.run_id, step, self._registry.attempts(run.run_id)[-1].started_at)
 
     def needing_human(self, member: FactoryMember | None) -> int:
-        """How many runs of the member's factory stopped for the user at a step in that instance.
+        """How many runs of the member's factory need the user at a step in that instance.
 
-        A step that runs in no instance counts toward the instance of the factory's intake.
+        A run needs the user when it stopped for a human or awaits approval. A step that runs in
+        no instance counts toward the instance of the factory's intake.
         """
         factory = self._factory(member.factory) if member is not None else None
         if member is None or factory is None:
             return 0
         return sum(
             _instance_of(factory, run.step) == member.name
-            for run in self._registry.runs(member.factory, FactoryRunStatus.NEEDS_HUMAN)
+            for run in (
+                *self._registry.runs(member.factory, FactoryRunStatus.NEEDS_HUMAN),
+                *self._registry.runs(member.factory, FactoryRunStatus.PARKED),
+            )
+            if run.status is FactoryRunStatus.NEEDS_HUMAN or _awaits_approval(factory, run)
         )
+
+    def _membership(self, instance_id: UUID) -> tuple[FactoryMember, FactoryFile] | None:
+        """The instance's place in its factory, and that factory's file, if it has one."""
+        record = self._registry.instance(instance_id)
+        member = record.factory if record is not None else None
+        factory = self._factory(member.factory) if member is not None else None
+        if member is None or factory is None:
+            return None
+        return member, factory
 
     def _existing(self, run_id: UUID) -> FactoryRun:
         run = self._registry.run(run_id)
         if run is None:
             raise FactoryRunNotFound(f'Factory run "{run_id}" was not found.')
-        return run
-
-    def _needing_human(self, run_id: UUID) -> FactoryRun:
-        run = self._existing(run_id)
-        if run.status is not FactoryRunStatus.NEEDS_HUMAN:
-            raise RunNeedsNoHuman(
-                f'Factory run "{run_id}" is {run.status.value}, so it needs no human.'
-            )
         return run
 
     def _restart(self, run: FactoryRun, step: StepId | None) -> FactoryRun:
@@ -226,10 +290,10 @@ class FactoryRuns:
         placed = self._placed(run, run.step)
         if isinstance(placed, _Refused):
             self._publish(self._registry.begin_attempt(run.run_id, placed.step))
-            failed = StepResult(ending=StepEnding.FAILED, summary=placed.reason)
-            moved = self._settle(run.run_id, failed)
-            if moved.status is FactoryRunStatus.QUEUED:
-                self._enqueue(moved)
+            self._advance(run.run_id, StepResult(ending=StepEnding.FAILED, summary=placed.reason))
+            return
+        if isinstance(placed, WaitStep | ApproveStep):
+            self._park(run.run_id, placed)
             return
         instance_id, queued = placed
         queue = self._queues.get(instance_id)
@@ -240,8 +304,13 @@ class FactoryRuns:
             worker.add_done_callback(self._workers.discard)
         queue.put_nowait(queued)
 
-    def _placed(self, run: FactoryRun, step_id: StepId) -> tuple[UUID, _QueuedStep] | _Refused:
-        """The instance the run's step runs in and what it is asked, or why it cannot run."""
+    def _placed(
+        self, run: FactoryRun, step_id: StepId
+    ) -> tuple[UUID, _QueuedStep] | WaitStep | ApproveStep | _Refused:
+        """The instance the run's step runs in and what it is asked, or why it cannot run.
+
+        A wait or approve step runs in no instance: it is the step itself, which parks the run.
+        """
         factory = self._factory(run.factory)
         step = _step(factory, step_id) if factory is not None else None
         if factory is None or step is None:
@@ -265,8 +334,8 @@ class FactoryRuns:
                 asked, hook = CommandStepRun(run=list(step.run)), step.hook
             case CodeStep():
                 asked, hook = CodeStepRun(call=step.call), None
-            case _:
-                return _Refused(step.id, f'kinby does not run "{step.kind}" steps yet.')
+            case WaitStep() | ApproveStep():
+                return step
         instance_id = next(
             (
                 record.instance_id
@@ -345,9 +414,36 @@ class FactoryRuns:
         while True:
             queued = await queue.get()
             self._publish(self._registry.begin_attempt(queued.run_id, queued.step))
-            moved = self._settle(queued.run_id, await self._run_step(instance_id, queued.command))
-            if moved.status is FactoryRunStatus.QUEUED:
-                self._enqueue(moved)
+            self._advance(queued.run_id, await self._run_step(instance_id, queued.command))
+
+    def _park(self, run_id: UUID, step: WaitStep | ApproveStep) -> None:
+        """Open the step's attempt with the run parked at it, holding no instance."""
+        parked = self._registry.begin_attempt(run_id, step.id, FactoryRunStatus.PARKED)
+        self._publish(parked)
+        if isinstance(step, WaitStep):
+            self._arm(run_id, step, parked.updated_at)
+
+    def _arm(self, run_id: UUID, step: WaitStep, parked_at: datetime) -> None:
+        """Fail the wait's attempt once its deadline after *parked_at* passes with no signal."""
+        if step.deadline is None:
+            return
+        deadline = step.deadline
+        left = duration_seconds(deadline) - (datetime.now(UTC) - parked_at).total_seconds()
+
+        async def expire() -> None:
+            await asyncio.sleep(left)
+            del self._deadlines[run_id]
+            summary = f'No signal matched step "{step.id}" within its {deadline} deadline.'
+            self._advance(run_id, StepResult(ending=StepEnding.FAILED, summary=summary))
+
+        self._deadlines[run_id] = asyncio.create_task(expire())
+
+    def _advance(self, run_id: UUID, result: StepResult) -> FactoryRun:
+        """Settle the run's open attempt with *result*, and queue the step it moves the run to."""
+        moved = self._settle(run_id, result)
+        if moved.status is FactoryRunStatus.QUEUED:
+            self._enqueue(moved)
+        return moved
 
     def _settle(self, run_id: UUID, result: StepResult) -> FactoryRun:
         """End the run's open attempt with *result*, and move the run where the result sends it.
@@ -386,6 +482,60 @@ class FactoryRuns:
 
 def _step(factory: FactoryFile, step_id: StepId) -> Step | None:
     return next((step for step in factory.steps if step.id == step_id), None)
+
+
+def _needing_human(run: FactoryRun) -> FactoryRun:
+    if run.status is not FactoryRunStatus.NEEDS_HUMAN:
+        raise RunNeedsNoHuman(
+            f'Factory run "{run.run_id}" is {run.status.value}, so it needs no human.'
+        )
+    return run
+
+
+def _awaits_approval(factory: FactoryFile | None, run: FactoryRun) -> bool:
+    """Whether the run is parked at an approve step, for the user to approve or send back."""
+    step = _step(factory, run.step) if factory is not None and run.step is not None else None
+    return run.status is FactoryRunStatus.PARKED and isinstance(step, ApproveStep)
+
+
+def _json(body: bytes) -> JsonValue:
+    """The signal's body as JSON, or None when it is not JSON."""
+    try:
+        return json.loads(body)
+    except ValueError:
+        return None
+
+
+def _matches(
+    step: WaitStep, signal: Signal, body: JsonValue, held: Mapping[ValueName, StepValue]
+) -> bool:
+    """Whether the signal carries every field of the wait's filter, each of its type and value.
+
+    A field the signal lacks, or a ``{{name}}`` the run holds no value for, never matches.
+    """
+    for field, expected in step.signal.items():
+        name = run_value_name(expected)
+        wanted = held.get(name) if name is not None else expected
+        found = _signal_field(signal, body, field)
+        if wanted is None or type(found) is not type(wanted) or found != wanted:
+            return False
+    return True
+
+
+def _signal_field(signal: Signal, body: JsonValue, field: str) -> JsonValue:
+    """The signal's value at a filter field, or None when it has none there."""
+    where, _, path = field.partition(".")
+    match where:
+        case "routine":
+            return signal.routine
+        case "headers":
+            return signal.headers.get(path)
+    found = body
+    for key in path.split("."):
+        if not isinstance(found, dict):
+            return None
+        found = found.get(key)
+    return found
 
 
 def _instance_of(factory: FactoryFile, step_id: StepId | None) -> InstanceName:

@@ -57,7 +57,10 @@ steps:
     retry: 0
   - id: babysit
     kind: wait
-    signal: { github: pull_request_review, pr: "{{pr}}" }
+    signal:
+      routine: github
+      headers.X-GitHub-Event: pull_request_review
+      body.pull_request.number: "{{pr}}"
     deadline: 7d
   - id: merge
     kind: approve
@@ -266,6 +269,30 @@ def test_the_check_fails_a_step_whose_input_no_earlier_step_or_work_item_holds(t
         "and the work item does not carry.",
         'done_requires names "merged", which no step declares in its results '
         "and the work item does not carry.",
+    ]
+
+
+def test_the_check_fails_a_wait_filter_naming_a_value_no_earlier_step_or_work_item_holds(
+    tmp_path,
+):
+    factory = FACTORY.replace('"{{pr}}"', '"{{merged}}"\n      body.repository.name: "{{repo}}"')
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Step "babysit" matches "body.pull_request.number" against "merged", which no earlier '
+        "step declares in its results and the work item does not carry."
+    ]
+
+
+def test_a_wait_filter_reads_only_the_routine_a_header_or_the_body(tmp_path):
+    factory = FACTORY.replace("headers.X-GitHub-Event", "event").replace(
+        "body.pull_request.number", "body"
+    )
+
+    found = problems(tmp_path, FILES | {"factory.yaml": factory})
+
+    assert [problem.split(": ")[1] for problem in found] == [
+        "steps.4.wait.signal.event.[key]",
+        "steps.4.wait.signal.body.[key]",
     ]
 
 

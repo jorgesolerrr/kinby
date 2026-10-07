@@ -1106,7 +1106,7 @@ class InstanceSummary(ContractModel):
     setup_pending: bool
     #: What the user may want to act on, such as an update the hub offers.
     notices: list[InstanceNotice]
-    #: The factory runs stopped for the user at one of the instance's steps.
+    #: The factory runs stopped for the user, or awaiting approval, at one of the instance's steps.
     needs_human: int
     package: PackageSummary | None = None
     #: The factory the instance was installed from, if any.
@@ -2337,10 +2337,19 @@ class FactoryRunRetryCommand(ContractModel):
 
 
 class FactoryRunSendBackCommand(ContractModel):
-    """Send a run that needs a human back to an earlier step, with its send-backs reset."""
+    """Send a run that needs a human or awaits approval back to an earlier step.
+
+    Its retries and send-backs count afresh.
+    """
 
     run_id: UUID
     step: StepId
+
+
+class FactoryRunApproveCommand(ContractModel):
+    """Approve a run parked at an approve step, which moves it on as the step's next outcome."""
+
+    run_id: UUID
 
 
 class FactoryRunCancelCommand(ContractModel):
