@@ -1640,6 +1640,7 @@ export interface CommandStepRun {
    * @minItems 1
    */
   run: [string, ...string[]];
+  timeout_seconds?: number | null;
 }
 /**
  * What one attempt at a step hands back to the hub.

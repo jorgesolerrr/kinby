@@ -39,6 +39,7 @@ from kinby.factories.file import (
     InvalidFactoryFile,
     Step,
     ValueType,
+    duration_seconds,
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.registry import HubRegistry
@@ -175,8 +176,11 @@ class FactoryRuns:
         for attempt in self._registry.attempts(run.run_id):
             if attempt.ending is StepEnding.CLEAN:
                 results.update(attempt.values)
+        timeout = duration_seconds(step.timeout) if step.timeout is not None else None
         command = StepRunCommand(
-            step=CommandStepRun(run=list(step.run)), work_item=run.work_item, results=results
+            step=CommandStepRun(run=list(step.run), timeout_seconds=timeout),
+            work_item=run.work_item,
+            results=results,
         )
         return instance_id, _QueuedStep(run.run_id, step.id, command)
 
