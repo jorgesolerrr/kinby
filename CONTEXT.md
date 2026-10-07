@@ -136,7 +136,7 @@ _Avoid_: rebuild, restart, update
 
 ### Recreate reason
 
-A change that reaches a running **instance** only through **container recreation**: replaced **instance secrets**, or an edited **package config**. The user sees every pending reason together and applies them with one recreation. A stopped instance applies them when it starts.
+A change that reaches a running **instance** only through **container recreation**: replaced **instance secrets**, or an edited configuration file the container reads only at start. The user sees every pending reason together and applies them with one recreation. A stopped instance applies them when it starts.
 
 ### Config change
 
@@ -145,12 +145,12 @@ _Avoid_: config event, audit entry
 
 ### Instance update
 
-The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares, carrying the instance's **package** selection along, or moving it with a **package pin**. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path, keeps every storage the instance owns, and leaves the instance's own configuration alone. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
+The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path, keeps every storage the instance owns, and leaves the instance's own configuration alone. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
 _Avoid_: upgrade, rollout
 
 ### Instance notice
 
-Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, so an **instance update** is there, or its copied **instance template** came from another version of its **package** than the one installed.
+Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, so an **instance update** is there, or its copied **instance template** came from another version of its **factory** than the one installed.
 _Avoid_: warning, alert
 
 ### Instance removal
@@ -191,17 +191,17 @@ An immutable container image together with the resolved source revision, depende
 
 ### Image preparation
 
-The **lifecycle operation** that builds or reuses the **image artifact** for a **package** selection, or for a **vanilla instance**, before any instance exists. It then runs the **package check** inside the image and stores what the image declares, its card, version, and **setup fields**, with the artifact. Preparing a selection that is already being prepared returns the preparation that is running.
+The **lifecycle operation** that builds or reuses the **image artifact** for one of the image recipes kinby ships, before any instance exists, and stores what the image declares with the artifact. Preparing a selection that is already being prepared returns the preparation that is running.
 _Avoid_: image build, warm-up
 
 ### Setup field
 
-One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. Each has a type (text, multiline, boolean, integer, choice, email, or URL), may be required, and may have a default. An email is one address with a dot in its domain, and a URL has a scheme and a host. A secret never has one. The built-in fields come first. Every instance asks for its model and API key, and a **vanilla instance** also asks for an optional **behavior prompt**. kinby writes those itself. A package's own fields follow, and each of its configuration fields names its target: `kinby.toml` or `package.yaml` and a dotted key inside it. A package may give a built-in field another default, but it cannot remove the field. Defaults resolve built-in first, then package, then the user's value. A package's required secrets read as required secret text fields.
+One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. Each has a type (text, multiline, boolean, integer, choice, email, or URL), may be required, and may have a default. An email is one address with a dot in its domain, and a URL has a scheme and a host. A secret never has one. The built-in fields come first. Every instance asks for its model and API key, and a **vanilla instance** also asks for an optional **behavior prompt**. kinby writes those itself. An **instance template**'s own fields follow, and each of its configuration fields names its target: a file of the instance and a dotted key inside it. A template may give a built-in field another default, but it cannot remove the field. Defaults resolve built-in first, then template, then the user's value. A template's required secrets read as required secret text fields.
 _Avoid_: required input, form field
 
 ### Subscription login
 
-One sign-in a **package** declares for a command-line agent its **instances** run on a subscription: the command that signs in, where its credentials live, and how to find a URL and a one-time code in what the command prints. The **hub** runs it in a **setup container**, and the user finishes it in a browser. Each one keeps its credentials in a named volume the instance owns.
+One sign-in an **instance template** declares for a command-line agent its **instances** run on a subscription: the command that signs in, where its credentials live, and how to find a URL and a one-time code in what the command prints. The **hub** runs it in a **setup container**, and the user finishes it in a browser. Each one keeps its credentials in a named volume the instance owns.
 _Avoid_: login, device flow, auth
 
 ### Setup container
@@ -427,7 +427,6 @@ The check every **tool** call passes through before it runs. It reads the tool's
 
 The identifier for the policy condition that produced a **gate decision**, such as `mode.ask.write` or `bash.deny[0]`.
 
-
 ### Gate decision
 
 The **gate**'s final verdict on one **tool** call, recorded as an event: allow or deny, the rule that decided it, and whether policy or the user decided. An **approval** the user refuses is a deny decided by the user.
@@ -506,52 +505,25 @@ _Avoid_: CI token, deploy token
 
 The **hub**'s record of which managed **instance** answers the public **signal** path, so a webhook registered before the hub existed keeps its URL after adoption. At most one instance holds it.
 
-### Package
-
-A reusable starting configuration for an **instance**, together with the **plugins** and **routine** implementations that support it. An instance starts from at most one package and retains its own editable configuration when that package updates.
-
 ### Instance template
 
-The initial behavior and configuration a **package** supplies for a new **instance**. Once copied, that configuration belongs to the instance.
-
-### Package config
-
-The one editable settings file, `package.yaml`, that a **package** may declare for its **instances**. The instance owns its copy, and the package's validator checks it every time kinby reads it. It names **instance secrets** by their variables and never holds their values. A **vanilla instance** has none.
-_Avoid_: package settings, routine arguments (for package settings)
-
-### Package check
-
-kinby's own install path run against one installed **package**, reporting every problem it finds without running a **routine** or calling a model. The **hub** runs the same check on a candidate image before an **instance update** disturbs the running container.
-_Avoid_: package lint, package validation
-
-### Package pin
-
-The part of an **instance update** that moves the instance's **package** to another commit of the git repository it already comes from. It names the package it moves, which must be the instance's own. The **instance registry** records the new commit only once the replacement is up.
-_Avoid_: package upgrade
+The initial behavior, configuration and **setup fields** a **factory** supplies for each of its **instances**, naming one of the image recipes kinby ships. Once copied, that configuration belongs to the instance.
 
 ### Vanilla instance
 
-An **instance** created from kinby's built-in defaults with no **package** selected.
-
-### Curated list
-
-The selection of **packages** kinby recommends when creating an **instance**, with the information needed to present and prepare each choice. kinby ships it: one entry per package, with its card, a full commit of its repository, and its image recipe. A pin moves by editing the entry. The hub adds the entry's recipe when it prepares the entry's selection, so a client never sends it. A **vanilla instance** is not an entry.
+An **instance** created from kinby's built-in defaults, outside any **factory**, such as the home instance.
 
 ### Plugin
 
-Anything an **instance** loads beyond the core: a **tool** or a **skill**, from the instance directory or from an installed package. The workspace never supplies plugins.
+Anything an **instance** loads beyond the core: a **tool**, a **skill** or a **hook**, from the instance directory or from kinby's defaults. The workspace never supplies plugins.
 
 ### Tool
 
 A native Python capability the model can call during a **turn**. Every tool declares whether it writes (changes files, state, or the outside world); the **gate** reads that flag. Tools present at the start of a turn are the tools for that turn.
 
-### Tool package
-
-An installed **plugin** that supplies one or more tools to an **instance**.
-
 ### Default tools
 
-The **tool package** kinby supplies to every instance unless its **manifest** disables it: read, write, edit, grep, glob and bash.
+The **tools** kinby supplies to every instance unless its **manifest** disables them: read, write, edit, grep, glob and bash.
 
 ### Tool registry
 
@@ -567,7 +539,7 @@ A markdown instruction set the model reads on demand. Skills are listed to the m
 
 ### Skill tier
 
-Where a **skill** comes from: the **instance**, a **package**, or the **workspace**, in that order of precedence. A skill hides any skill of the same name in a lower tier. Customizing a skill copies it into the instance tier.
+Where a **skill** comes from: the **instance**, kinby itself, or the **workspace**, in that order of precedence. A skill hides any skill of the same name in a lower tier. Customizing a skill copies it into the instance tier.
 _Avoid_: skill level, skill source
 
 ### Skill tool
@@ -635,11 +607,49 @@ The issue-to-PR process that assigns implementation and review to **coding clien
 
 ### Factory
 
-The coding **instance** process that turns **eligible issues** into **agent PRs** through a **delegated pipeline**.
+A declared sequence of **steps** the **hub** runs to carry a **work item** from start to finish, handing it between **instances** and deciding what happens when a step fails. Its instances are ordinary instances, and a **routine** in one of them hands it new work.
+_Avoid_: workflow, package, pipeline (for the concept)
+
+### Step
+
+One stage of a **factory**: a task done by an **instance**'s turn, a **coding client** run inside an instance, or deterministic code. It ends with a **step result**.
+
+### Work item
+
+The unit of work a **factory** carries, such as one issue.
+
+### Factory run
+
+One **work item**'s trip through a **factory**'s **steps**. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
+
+### Step result
+
+What a **step** hands on: a short summary plus the named values the **factory** declares, recorded by the step's **hook** or produced by the step itself, never read from an agent's own report. The next step receives the **work item** with every result before it, and checks the values it requires before it starts; a missing one fails the step that should have produced it.
+
+### Hook
+
+Deterministic **instance** code, never offered to the model, that kinby runs when a **step** ends, however it ended, to record the **step result** from the world: the repository, an outside system, files the step wrote. kinby ships default hooks, and an instance can hold its own.
+_Avoid_: callback, evidence check
+
+### Intake
+
+The **routine** that starts **factory runs**: it finds new **work items** and hands each to its **factory**.
+
+### Needs human
+
+A **factory run** stopped for the user because a **step** ran out of retries or send-backs, or because the run's final check failed. Nothing it did is undone; the user retries the step, sends the run back, or cancels it.
+
+### Factory check
+
+kinby's validation of a **factory** as a whole, its file, its **instance templates**, and the **tools** and **hooks** they name, before anything changes. A broken factory keeps its last good version.
+
+### Software factory
+
+The **factory** kinby ships that turns **eligible issues** into **agent PRs**. A starting point the user may edit or delete.
 
 ### Scan
 
-The **factory**'s search for the oldest **eligible issue** after a **wake**. A **delivery** can determine that no scan is needed, but never selects the issue.
+The **software factory**'s search for the oldest **eligible issue** after a **wake**. A **delivery** can determine that no scan is needed, but never selects the issue.
 
 ### Review round
 
@@ -651,7 +661,7 @@ One **babysitting** pass that asks the **coding client** to address every **acti
 
 ### Babysitting
 
-The **factory** watching its **agent PRs** after they open, answering review feedback and stopping when each pull request is **merge-ready** or needs a human.
+The **software factory** watching its **agent PRs** after they open, answering review feedback and stopping when each pull request is **merge-ready** or needs a human.
 
 ### Review thread
 
@@ -663,11 +673,11 @@ The coding **instance**'s answer on a **review thread**. A reply records whether
 
 ### Actionable thread
 
-An unresolved **review thread** whose latest reply is not from the coding **instance**. The factory has feedback to handle there.
+An unresolved **review thread** whose latest reply is not from the coding **instance**. The **software factory** has feedback to handle there.
 
 ### Merge-ready
 
-An **agent PR** reviewed on its current head, with no **actionable threads** and no check still running. The label reports readiness; the factory never merges it.
+An **agent PR** reviewed on its current head, with no **actionable threads** and no check still running. The label reports readiness; the **software factory** never merges it.
 
 ### Agent PR
 
