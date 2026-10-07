@@ -694,6 +694,10 @@ class StorageItem(ContractModel):
 type CommitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 
 
+#: A factory's name, which is also its folder's name on the hub.
+type FactoryName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
+
+
 class PackageCommit(ContractModel):
     """One commit of a package's git repository, installed in place of an index version."""
 
@@ -767,7 +771,7 @@ class SetupTarget(ContractModel):
 
 
 class SetupField(ContractModel):
-    """One value a prepared image asks for before an instance is created from it."""
+    """One value a prepared image or an instance template asks for before an instance exists."""
 
     name: str
     label: str
@@ -784,7 +788,7 @@ class SetupField(ContractModel):
 
 
 class SubscriptionLogin(ContractModel):
-    """One sign-in a package declares, which the hub runs in a setup container (ADR 0065)."""
+    """One sign-in a package or a template declares, run in a setup container (ADR 0065)."""
 
     id: str
     label: str
@@ -797,19 +801,21 @@ class SubscriptionLogin(ContractModel):
     prompt_pattern: str
 
 
-class PackageDescription(ContractModel):
-    """What a prepared image declares: its card, its version, its setup fields, and its logins.
+class DeclaredSetup(ContractModel):
+    """The setup fields an instance asks for, the built-in fields first, and its logins."""
 
-    The built-in fields come first, then the package's own.
-    """
+    setup_fields: list[SetupField]
+    #: Descriptions stored before logins existed have none.
+    logins: list[SubscriptionLogin] = Field(default_factory=list)
+
+
+class PackageDescription(DeclaredSetup):
+    """What a prepared image declares: its card, its version, its setup fields, and its logins."""
 
     display_name: str
     description: str
     icon: str
     version: str
-    setup_fields: list[SetupField]
-    #: Descriptions stored before logins existed have none.
-    logins: list[SubscriptionLogin] = Field(default_factory=list)
 
 
 class ImagePrepareCommand(ContractModel):
@@ -1084,6 +1090,8 @@ class InstanceSummary(ContractModel):
     #: What the user may want to act on, such as an update the hub offers.
     notices: list[InstanceNotice]
     package: PackageSummary | None = None
+    #: The factory the instance was installed from, if any.
+    factory: FactoryName | None = None
     #: The runtime's word for the process, such as "restarting" beside `starting`.
     detail: str = ""
 
@@ -2022,10 +2030,6 @@ class ProfileResult(ContractModel):
     tokens: int
 
 
-#: A factory's name, which is also its folder's name on the hub.
-type FactoryName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
-
-
 class FactorySource(StrEnum):
     """Where the factory the hub serves under a name comes from."""
 
@@ -2082,3 +2086,55 @@ class FactoryEditCommand(ContractModel):
     files: dict[str, str]
     #: The hash the client read, or null to create a factory no source has yet.
     hash: FileHash | None
+
+
+class FactoryDescribeCommand(ContractModel):
+    name: FactoryName
+
+
+class FactoryDescription(ContractModel):
+    #: What each instance template asks for, by the instance's name in the factory.
+    instances: dict[str, DeclaredSetup]
+
+
+class FactoryInstanceSetup(ContractModel):
+    """The setup values for one of the factory's instances, checked against its template."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    #: The value of the built-in model field.
+    model: str
+    #: Values for the configuration fields the template declares, by field name.
+    config: dict[str, SetupValue] = Field(default_factory=dict)
+    #: Values for its secret fields, and any other variables the instance should hold.
+    secrets: dict[str, SecretStr] = Field(default_factory=dict)
+
+    @field_serializer("secrets", when_used="json")
+    def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
+        return {name: value.get_secret_value() for name, value in secrets.items()}
+
+
+class FactoryInstallCommand(ContractModel):
+    """Create each of the factory's instances from its template, once the factory check passes."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    name: FactoryName
+    #: The setup values of every instance the factory declares, by its name in the factory.
+    instances: dict[str, FactoryInstanceSetup]
+
+
+class FactoryInstallResult(ContractModel):
+    #: The creation of each instance, by its name in the factory.
+    instances: dict[str, LifecycleOperationResult]
+
+
+class FactoryRemoveCommand(ContractModel):
+    """Remove each of the factory's active instances. Their data and records stay behind."""
+
+    name: FactoryName
+
+
+class FactoryRemoveResult(ContractModel):
+    #: The removal of each instance, by its name in the factory.
+    instances: dict[str, LifecycleOperationResult]

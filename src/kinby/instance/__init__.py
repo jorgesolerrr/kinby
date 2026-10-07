@@ -18,7 +18,7 @@ from kinby.instance.dataclasses import (
 )
 from kinby.instance.discovery import discover_instance
 from kinby.instance.errors import InstanceExistsError, InstanceNotFoundError, ManifestError
-from kinby.instance.init import PLACEHOLDER_MODEL, init_instance
+from kinby.instance.init import PLACEHOLDER_MODEL, init_from_template, init_instance
 from kinby.instance.manifest import (
     ModelName,
     api_key_variable,
@@ -50,6 +50,7 @@ __all__ = [
     "Workspace",
     "api_key_variable",
     "discover_instance",
+    "init_from_template",
     "init_instance",
     "inspect_instance",
     "load_instance",

@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from kinby.contracts import SetupFieldKind, TargetFile
 from kinby.factories import RECIPES_DIRECTORY
 from kinby.factories.file import (
     TEMPLATES_DIR,
@@ -27,6 +28,7 @@ from kinby.factories.file import (
     read_factory_file,
 )
 from kinby.instance.layout import ROUTINE_FILE, ROUTINES_DIR
+from kinby.packages import package_fields
 from kinby.plugins.hooks import load_hooks
 from kinby.plugins.registry import ToolRegistry
 
@@ -93,6 +95,15 @@ def _instances(factory: FactoryFile, templates: dict[InstanceName, _Template]) -
         recipe = declared.image
         if recipe is not None and not (RECIPES_DIRECTORY / f"{recipe}.Dockerfile").is_file():
             yield f'Instance "{name}" names image recipe "{recipe}", which kinby does not ship.'
+        for field in package_fields(declared.setup_fields):
+            target = field.target
+            if field.kind is SetupFieldKind.CONFIG and (
+                target is None or target.file is not TargetFile.KINBY_TOML
+            ):
+                yield (
+                    f'Instance "{name}" asks for "{field.name}", which targets no key of '
+                    "kinby.toml, where a template's configuration lands."
+                )
 
 
 def _intake(factory: FactoryFile, folder: Path) -> Iterator[str]:

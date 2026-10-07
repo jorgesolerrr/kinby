@@ -38,7 +38,8 @@ from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage
 PLACEHOLDER_MODEL = "provider:model"
 README_NAME = "README.md"
 _PROTECTED_TEMPLATE_ROOTS = {STATE_DIR, WORKSPACE_DIR}
-_REFERENCED_TEMPLATE_ROOTS = {SKILLS_DIR, TOOLS_DIR}
+#: A package offers its skills and tools from its own install, so its template's copies stay out.
+_PACKAGE_REFERENCED_ROOTS = frozenset({SKILLS_DIR, TOOLS_DIR})
 _FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir", "package")
 
 
@@ -74,18 +75,22 @@ def _merge(base: dict[str, TomlValue], override: dict[str, TomlValue]) -> None:
 def _relative_template_path(name: str) -> Path:
     relative = Path(name)
     if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-        raise ValueError(f'Package template path is invalid: "{name}".')
+        raise ValueError(f'Template path is invalid: "{name}".')
     return relative
 
 
-def _copied_template_path(name: str) -> Path | None:
+def _copied_template_path(name: str, *, referenced: frozenset[str]) -> Path | None:
+    """Where a template file lands in the instance. None for one the instance does not copy.
+
+    *referenced* names the folders a package offers from its own install instead.
+    """
     relative = _relative_template_path(name)
-    if name == MANIFEST_NAME or relative.parts[0] in _REFERENCED_TEMPLATE_ROOTS:
+    if name == MANIFEST_NAME or relative.parts[0] in referenced:
         return None
     if relative.parts[0] in _PROTECTED_TEMPLATE_ROOTS or name == ENV_NAME:
-        raise ValueError(f'Package template cannot copy "{name}".')
+        raise ValueError(f'Template cannot copy "{name}".')
     if relative.parts[0] == MEMORY_DIR and name != f"{MEMORY_DIR}/{PROFILE_NAME}":
-        raise ValueError(f'Package template cannot copy "{name}".')
+        raise ValueError(f'Template cannot copy "{name}".')
     return relative
 
 
@@ -117,34 +122,64 @@ def _targeted(
     return landed
 
 
+def _template_manifest(body: str, settings: Mapping[str, SetupValue]) -> dict[str, TomlValue]:
+    """A template's kinby.toml with *settings* set at their dotted keys, checked for merging."""
+    template = cast(dict[str, TomlValue], tomllib.loads(body))
+    for key, value in settings.items():
+        _set_key(template, key, value)
+    forbidden = [key for key in _FORBIDDEN_TEMPLATE_MANIFEST_KEYS if key in template]
+    if forbidden:
+        raise ValueError(f'Template cannot set "{forbidden[0]}".')
+    models = template.get("models")
+    if models is not None and not isinstance(models, dict):
+        raise ValueError("Template [models] must be a table.")
+    try:
+        toml_document(template)
+    except TypeError as exc:
+        raise ValueError("Template manifest cannot be serialized.") from exc
+    return template
+
+
 def _package_template_manifest(
     package: InstalledPackage,
     config: Mapping[str, SetupValue],
 ) -> dict[str, TomlValue]:
-    template_body = package.files.get(MANIFEST_NAME, "")
-    template = cast(dict[str, TomlValue], tomllib.loads(template_body))
-    for key, value in _targeted(package, config, TargetFile.KINBY_TOML).items():
-        _set_key(template, key, value)
-    forbidden = [key for key in _FORBIDDEN_TEMPLATE_MANIFEST_KEYS if key in template]
-    if forbidden:
-        raise ValueError(f'Package template cannot set "{forbidden[0]}".')
-    models = template.get("models")
-    if models is not None and not isinstance(models, dict):
-        raise ValueError("Package template [models] must be a table.")
-    return template
+    return _template_manifest(
+        package.files.get(MANIFEST_NAME, ""),
+        _targeted(package, config, TargetFile.KINBY_TOML),
+    )
+
+
+def _validate_template(files: Mapping[str, str], *, referenced: frozenset[str]) -> None:
+    for name in files:
+        _copied_template_path(name, referenced=referenced)
 
 
 def _validate_package_template(
     package: InstalledPackage,
     config: Mapping[str, SetupValue],
 ) -> None:
-    for name in package.files:
-        _copied_template_path(name)
-    template = _package_template_manifest(package, config)
-    try:
-        toml_document(template)
-    except TypeError as exc:
-        raise ValueError("Package template manifest cannot be serialized.") from exc
+    _validate_template(package.files, referenced=_PACKAGE_REFERENCED_ROOTS)
+    _package_template_manifest(package, config)
+
+
+def _merged_manifest(
+    directory: Path,
+    template: dict[str, TomlValue],
+    *,
+    model: str,
+) -> dict[str, TomlValue]:
+    """The starter manifest in *directory* with the template's merged over it, and the model."""
+    base = cast(
+        dict[str, TomlValue],
+        tomllib.loads((directory / MANIFEST_NAME).read_text(encoding="utf-8")),
+    )
+    _merge(base, template)
+    models = base["models"]
+    if not isinstance(models, dict):
+        raise ValueError("Template [models] must be a table.")
+    models["main"] = model
+    return base
 
 
 def _package_manifest(
@@ -154,25 +189,24 @@ def _package_manifest(
     model: str,
     config: Mapping[str, SetupValue],
 ) -> None:
-    path = directory / MANIFEST_NAME
-    base = cast(dict[str, TomlValue], tomllib.loads(path.read_text(encoding="utf-8")))
-    _merge(base, _package_template_manifest(package, config))
-    models = base["models"]
-    if not isinstance(models, dict):
-        raise ValueError("Package template [models] must be a table.")
-    models["main"] = model
+    base = _merged_manifest(directory, _package_template_manifest(package, config), model=model)
     descriptor = package.descriptor
     base["package"] = {
         "id": descriptor.id,
         "distribution": descriptor.distribution,
         "version": descriptor.version,
     }
-    path.write_text(toml_document(base), encoding="utf-8")
+    (directory / MANIFEST_NAME).write_text(toml_document(base), encoding="utf-8")
 
 
-def _copy_package_template(directory: Path, package: InstalledPackage) -> None:
-    for name, body in package.files.items():
-        relative = _copied_template_path(name)
+def _copy_template(
+    directory: Path,
+    files: Mapping[str, str],
+    *,
+    referenced: frozenset[str],
+) -> None:
+    for name, body in files.items():
+        relative = _copied_template_path(name, referenced=referenced)
         if relative is None:
             continue
         destination = directory / relative
@@ -180,7 +214,7 @@ def _copy_package_template(directory: Path, package: InstalledPackage) -> None:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(body, encoding="utf-8")
         except IsADirectoryError, NotADirectoryError, FileExistsError:
-            raise ValueError(f'Package template cannot copy "{name}".') from None
+            raise ValueError(f'Template cannot copy "{name}".') from None
 
 
 def _package_config(
@@ -315,6 +349,31 @@ def _write_starter_tree(directory: Path, model: str) -> None:
     (directory / STATE_DIR).mkdir(exist_ok=True)
 
 
+def init_from_template(
+    directory: Path,
+    files: Mapping[str, str],
+    *,
+    model: str,
+    settings: Mapping[str, SetupValue],
+) -> Path:
+    """Write an instance at *directory*, which must not exist, from a factory's instance template.
+
+    Every file of the template lands over kinby's starter tree, and its kinby.toml merges into
+    the starter manifest. *settings* are values for kinby.toml, by the dotted key each lands at.
+    """
+    directory = Path(directory).resolve()
+    if directory.exists():
+        raise InstanceExistsError(f"instance directory already exists: {directory}")
+    _validate_template(files, referenced=frozenset())
+    template = _template_manifest(files.get(MANIFEST_NAME, ""), settings)
+    directory.mkdir(parents=True)
+    _write_starter_tree(directory, model)
+    _copy_template(directory, files, referenced=frozenset())
+    manifest = _merged_manifest(directory, template, model=model)
+    (directory / MANIFEST_NAME).write_text(toml_document(manifest), encoding="utf-8")
+    return directory
+
+
 def _publish_into_existing(source: Path, destination: Path) -> None:
     if any(destination.iterdir()):
         raise InstanceExistsError(f"instance directory is not empty: {destination}")
@@ -374,7 +433,7 @@ def init_instance(
         staging = Path(temporary) / directory.name
         staging.mkdir()
         _write_starter_tree(staging, model)
-        _copy_package_template(staging, package)
+        _copy_template(staging, package.files, referenced=_PACKAGE_REFERENCED_ROOTS)
         _package_config(staging, package, config)
         _package_manifest(staging, package, model=model, config=config)
         _publish_directory(staging, directory)

@@ -273,6 +273,30 @@ def test_pinned_package_is_installed_in_the_image_and_part_of_artifact_reuse(tmp
     asyncio.run(scenario())
 
 
+def test_a_template_recipe_is_built_into_the_image_without_a_package(tmp_path):
+    async def scenario() -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        _source_repo(source)
+        backend = FakeImageBackend()
+        preparer = ImagePreparer(source, HubRegistry(tmp_path / "hub"), backend)
+
+        first = await preparer.prepare(ImageSelection("HEAD", recipe="coder"))
+        again = await preparer.prepare(ImageSelection("HEAD", recipe="coder"))
+        base = await preparer.prepare(ImageSelection("HEAD"))
+
+        assert first == again
+        assert first.package is None
+        assert base.artifact.image_id != first.artifact.image_id
+        assert len(backend.builds) == 2
+        recipe = (RECIPES_DIRECTORY / "coder.Dockerfile").read_text(encoding="utf-8")
+        assert backend.dockerfiles[0].endswith(recipe)
+        assert '"uv", "pip", "install"' not in backend.dockerfiles[0]
+        assert recipe.rstrip() not in backend.dockerfiles[1]
+
+    asyncio.run(scenario())
+
+
 def test_an_instance_image_builds_the_first_stage_and_leaves_the_web_build_out(tmp_path):
     """The hub's builder would run every stage, and the context carries no web app sources."""
 

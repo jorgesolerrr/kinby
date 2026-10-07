@@ -449,6 +449,22 @@
             }
           ],
           "default": null
+        },
+        "logins": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SubscriptionLogin"
+          },
+          "title": "Logins",
+          "type": "array"
+        },
+        "setup_fields": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SetupField"
+          },
+          "title": "Setup Fields",
+          "type": "array"
         }
       },
       "title": "InstanceDeclaration",
@@ -519,6 +535,136 @@
       "title": "SendBack",
       "type": "object"
     },
+    "SetupField": {
+      "additionalProperties": false,
+      "description": "One value a prepared image or an instance template asks for before an instance exists.",
+      "properties": {
+        "choices": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Choices"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SetupValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SetupFieldKind"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SetupTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "$ref": "#/$defs/SetupFieldType"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "description",
+        "kind",
+        "type",
+        "required"
+      ],
+      "title": "SetupField",
+      "type": "object"
+    },
+    "SetupFieldKind": {
+      "description": "Where a setup field's value lands: the instance's configuration, or its secrets.",
+      "enum": [
+        "config",
+        "secret"
+      ],
+      "title": "SetupFieldKind",
+      "type": "string"
+    },
+    "SetupFieldType": {
+      "description": "How a client asks for a setup field's value, and so what the value is.",
+      "enum": [
+        "text",
+        "multiline",
+        "boolean",
+        "integer",
+        "choice",
+        "email",
+        "url"
+      ],
+      "title": "SetupFieldType",
+      "type": "string"
+    },
+    "SetupTarget": {
+      "additionalProperties": false,
+      "description": "Where a configuration value lands: a file, and a dotted key inside it.",
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/TargetFile"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "key"
+      ],
+      "title": "SetupTarget",
+      "type": "object"
+    },
+    "SetupValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
     "Step": {
       "discriminator": {
         "mapping": {
@@ -554,6 +700,58 @@
     },
     "StepId": {
       "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "type": "string"
+    },
+    "SubscriptionLogin": {
+      "additionalProperties": false,
+      "description": "One sign-in a package or a template declares, run in a setup container (ADR 0065).",
+      "properties": {
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Command",
+          "type": "array"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "prompt_pattern": {
+          "title": "Prompt Pattern",
+          "type": "string"
+        },
+        "volume": {
+          "title": "Volume",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "description",
+        "command",
+        "volume",
+        "prompt_pattern"
+      ],
+      "title": "SubscriptionLogin",
+      "type": "object"
+    },
+    "TargetFile": {
+      "description": "The instance file a package's configuration field lands in.",
+      "enum": [
+        "kinby.toml",
+        "package.yaml"
+      ],
+      "title": "TargetFile",
       "type": "string"
     },
     "ToolName": {

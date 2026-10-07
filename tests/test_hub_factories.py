@@ -201,6 +201,34 @@ def test_the_check_reports_a_tool_or_hook_file_that_does_not_load(tmp_path):
     )
 
 
+def test_the_check_fails_a_template_configuration_field_that_does_not_land_in_kinby_toml(
+    tmp_path,
+):
+    fields = """\
+  coder:
+    image: coder
+    setup_fields:
+      - { name: model, label: Model, description: Its model., kind: config, type: text,
+          required: true, default: "openai:gpt-5" }
+      - { name: TOKEN, label: Token, description: A token., kind: secret, type: text,
+          required: true }
+      - { name: steps, label: Steps, description: A budget., kind: config, type: integer,
+          required: false, target: { file: kinby.toml, key: budgets.steps } }
+      - { name: tone, label: Tone, description: How it writes., kind: config, type: text,
+          required: false, target: { file: package.yaml, key: tone } }
+      - { name: style, label: Style, description: How it looks., kind: config, type: text,
+          required: false }
+"""
+    factory = FACTORY.replace("  coder: { image: coder }\n", fields)
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Instance "coder" asks for "tone", which targets no key of kinby.toml, '
+        "where a template's configuration lands.",
+        'Instance "coder" asks for "style", which targets no key of kinby.toml, '
+        "where a template's configuration lands.",
+    ]
+
+
 def test_a_prompt_outside_the_factory_folder_does_not_resolve(tmp_path):
     (tmp_path / "secret.md").write_text("outside\n", encoding="utf-8")
     factory = FACTORY.replace("prompts/review.md", "../../../secret.md")

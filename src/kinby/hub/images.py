@@ -11,6 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from kinby.contracts import PackageCommit, PackageDescription, PackageSelection, StorageItem
+from kinby.factories import RECIPES_DIRECTORY
 from kinby.hub.models import (
     BuildResult,
     BuiltImage,
@@ -65,6 +66,11 @@ def _requirement(package: PackageSelection) -> str:
             return f"{package.distribution}=={version}"
 
 
+def _recipe(name: str) -> str:
+    """The steps of one of the image recipes kinby ships."""
+    return (RECIPES_DIRECTORY / f"{name}.Dockerfile").read_text(encoding="utf-8")
+
+
 class ImagePreparer:
     """Build an exact Git revision from a source-only context, or reuse its artifact."""
 
@@ -98,6 +104,8 @@ class ImagePreparer:
             context = Path(temporary)
             await asyncio.to_thread(self._export, resolved, context)
             self._keep_instance_stage(context / "Dockerfile")
+            if selection.recipe is not None:
+                self._append_recipe(context / "Dockerfile", selection.recipe)
             if selection.package is not None:
                 self._install_package(context / "Dockerfile", selection)
             dependency_id = self._dependency_id(context, selection)
@@ -144,6 +152,11 @@ class ImagePreparer:
         stages = [match.start() for match in _STAGE.finditer(body)]
         if len(stages) > 1:
             dockerfile.write_text(body[: stages[1]], encoding="utf-8")
+
+    @staticmethod
+    def _append_recipe(dockerfile: Path, recipe: str) -> None:
+        body = dockerfile.read_text(encoding="utf-8").rstrip() + "\n"
+        dockerfile.write_text(body + _recipe(recipe).rstrip() + "\n", encoding="utf-8")
 
     @staticmethod
     def _install_package(dockerfile: Path, selection: ImageSelection) -> None:
@@ -197,6 +210,8 @@ class ImagePreparer:
                 digest.update(path.read_bytes())
         if selection.package is not None:
             digest.update(selection.package.model_dump_json().encode())
+        if selection.recipe is not None:
+            digest.update(_recipe(selection.recipe).encode())
         return f"sha256:{digest.hexdigest()}"
 
     @staticmethod
