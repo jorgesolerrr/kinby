@@ -267,6 +267,34 @@ def test_the_check_fails_a_send_back_to_a_step_that_is_not_earlier(tmp_path):
     ]
 
 
+def test_the_check_fails_a_resume_that_is_not_an_earlier_client_step(tmp_path):
+    factory = FACTORY.replace(
+        "    hook: record_branch\n", "    hook: record_branch\n    resume: implement\n", 1
+    ).replace(
+        "  - id: checks\n",
+        "  - id: fix\n"
+        "    kind: client\n"
+        "    in: coder\n"
+        "    client: claude\n"
+        "    prompt: prompts/implement.md\n"
+        "    hook: record_branch\n"
+        "    resume: review\n"
+        "  - id: refix\n"
+        "    kind: client\n"
+        "    in: coder\n"
+        "    client: claude\n"
+        "    prompt: prompts/implement.md\n"
+        "    hook: record_branch\n"
+        "    resume: fix\n"
+        "  - id: checks\n",
+    )
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Step "implement" resumes "implement", which is not an earlier client step.',
+        'Step "fix" resumes "review", which is not an earlier client step.',
+    ]
+
+
 def test_agent_and_client_steps_must_name_a_hook(tmp_path):
     factory = FACTORY.replace("    hook: record_branch\n", "").replace(
         "    hook: read_verdict\n", ""
@@ -285,6 +313,9 @@ def test_the_check_reports_a_factory_file_that_is_missing_or_not_yaml(tmp_path):
     found = problems(tmp_path / "broken", FILES | {"factory.yaml": "steps: [\n"})
     assert len(found) == 1
     assert found[0].startswith("factory.yaml is not YAML: ")
+    found = problems(tmp_path / "circular", FILES | {"factory.yaml": "x: &x [*x]\n"})
+    assert len(found) == 1
+    assert found[0].startswith("factory.yaml is not a JSON document: ")
 
 
 async def read(client, name: str = "tickets") -> FactoryResult:
@@ -429,6 +460,37 @@ def test_an_edit_cannot_write_outside_the_factorys_folder(tmp_path):
         assert isinstance(refused, ErrorEnvelope)
         assert refused.code is ErrorCode.INVALID_ARGUMENT
         assert not (tmp_path / "hub" / "factories" / "escaped.md").exists()
+        assert await read(client) == before
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_that_fails_to_swap_in_keeps_the_last_good_factory(tmp_path, monkeypatch):
+    hub = factory_hub(tmp_path)
+    write_factory(tmp_path / "hub" / "factories" / "tickets", FILES)
+    client = hub_client(hub)
+    destination = tmp_path / "hub" / "factories" / "tickets"
+    rename = Path.rename
+
+    def failing_rename(self: Path, target: Path) -> Path:
+        # Only the staged edit fails to move in; putting the old folder back still works.
+        if Path(target) == destination and self.name == "tickets":
+            raise OSError("disk full")
+        return rename(self, target)
+
+    async def scenario() -> None:
+        before = await read(client)
+        monkeypatch.setattr(Path, "rename", failing_rename)
+        failed = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(
+                name="tickets", files={"prompts/review.md": "Review it.\n"}, hash=before.hash
+            ),
+        )
+        monkeypatch.undo()
+
+        assert isinstance(failed, ErrorEnvelope)
+        assert failed.code is ErrorCode.INTERNAL
         assert await read(client) == before
 
     asyncio.run(scenario())
