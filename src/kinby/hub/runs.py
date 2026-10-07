@@ -134,6 +134,8 @@ class FactoryRuns:
         self._workers: set[asyncio.Task[None]] = set()
         #: The deadline of each run parked at a wait that has one, by run id.
         self._deadlines: dict[UUID, asyncio.Task[None]] = {}
+        #: The waits a signal matched while the run was still on its way to them, by run id.
+        self._woken: dict[UUID, set[StepId]] = {}
         self._subscribers: set[asyncio.Queue[FactoryRun]] = set()
 
     async def intake(self, instance_id: UUID, command: FactoryRunIntakeCommand) -> FactoryRun:
@@ -203,12 +205,22 @@ class FactoryRuns:
         return self._advance(run.run_id, approved)
 
     def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
-        """Move on each run of the instance's factory whose parked wait the signal matches."""
+        """Move on each run of the instance's factory whose parked wait the signal matches.
+
+        A run still working toward a wait the signal matches moves on from it as soon as it
+        parks there, so a signal that lands between two steps is not lost.
+        """
         membership = self._membership(instance_id)
         if membership is None:
             return
         member, factory = membership
         body = _json(signal.body)
+        waits = [step for step in factory.steps if isinstance(step, WaitStep)]
+        # Read before any parked run moves on, so the signal wakes each run at most once.
+        working = (
+            *self._registry.runs(member.factory, FactoryRunStatus.QUEUED),
+            *self._registry.runs(member.factory, FactoryRunStatus.RUNNING),
+        )
         for run in self._registry.runs(member.factory, FactoryRunStatus.PARKED):
             step = _step(factory, run.step) if run.step is not None else None
             held = run.work_item | self._results(run.run_id, factory)
@@ -220,6 +232,11 @@ class FactoryRuns:
                     deadline.cancel()
                 summary = f'A signal on routine "{signal.routine}" matched.'
                 self._advance(run.run_id, StepResult(ending=StepEnding.CLEAN, summary=summary))
+        for run in working:
+            held = run.work_item | self._results(run.run_id, factory)
+            for wait in waits:
+                if any(_matches(fields, signal, body, held) for fields in wait.signal):
+                    self._woken.setdefault(run.run_id, set()).add(wait.id)
 
     async def cancel(self, command: FactoryRunCancelCommand) -> FactoryRun:
         """End the run at the step it stopped at. Nothing it did is undone."""
@@ -483,11 +500,23 @@ class FactoryRuns:
                         )
 
     def _park(self, run_id: UUID, step: WaitStep | ApproveStep) -> None:
-        """Open the step's attempt with the run parked at it, holding no instance."""
+        """Open the step's attempt with the run parked at it, holding no instance.
+
+        A wait a signal already matched on the run's way to it moves on at once.
+        """
         parked = self._registry.begin_attempt(run_id, step.id, FactoryRunStatus.PARKED)
         self._publish(parked)
-        if isinstance(step, WaitStep):
-            self._arm(run_id, step, parked.updated_at)
+        if not isinstance(step, WaitStep):
+            return
+        woken = self._woken.get(run_id, set())
+        if step.id in woken:
+            woken.discard(step.id)
+            if not woken:
+                del self._woken[run_id]
+            summary = "A signal matched while the run was on its way to this step."
+            self._advance(run_id, StepResult(ending=StepEnding.CLEAN, summary=summary))
+            return
+        self._arm(run_id, step, parked.updated_at)
 
     def _arm(self, run_id: UUID, step: WaitStep, parked_at: datetime) -> None:
         """Fail the wait's attempt once its deadline after *parked_at* passes with no signal."""

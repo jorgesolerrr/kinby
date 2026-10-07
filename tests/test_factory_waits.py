@@ -197,6 +197,35 @@ def test_a_signal_that_does_not_match_or_the_instance_did_not_accept_leaves_the_
     asyncio.run(scenario())
 
 
+def test_a_signal_that_lands_while_the_run_works_toward_its_wait_moves_it_on_once_it_parks(
+    tmp_path,
+):
+    control = FakeControl()
+    control.step_release.clear()
+    runtime = FakeRuntime()
+    build_first = WAIT.replace(
+        "  - id: babysit\n",
+        '  - id: build\n    kind: command\n    in: coder\n    run: ["make"]\n  - id: babysit\n',
+    )
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": build_first})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await signalled(hub, runtime, coder, COMMENT)
+        control.step_release.set()
+        found = await settled(hub, run.run_id)
+
+        assert found.run.status is FactoryRunStatus.DONE
+        assert [(a.step, a.ending) for a in found.attempts] == [
+            ("build", StepEnding.CLEAN),
+            ("babysit", StepEnding.CLEAN),
+            ("test", StepEnding.CLEAN),
+        ]
+
+    asyncio.run(scenario())
+
+
 REVIEW_OR_CHECKS = WAIT.replace(
     """\
       - routine: github

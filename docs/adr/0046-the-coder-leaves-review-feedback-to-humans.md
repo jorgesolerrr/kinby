@@ -1,5 +1,7 @@
 # The coder leaves review feedback to humans
 
+Superseded by [ADR 0078](0078-the-software-factory-babysits-its-pull-requests-until-merge-ready.md).
+
 The maintainer disabled babysitting as well as adversarial review. The coder opens
 pull requests after implementation and repository checks, then leaves review feedback
 to the maintainer and third-party reviewers. Its babysitting routine is disabled for

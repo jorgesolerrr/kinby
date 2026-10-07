@@ -336,6 +336,26 @@ def test_the_run_finishes_only_when_the_pull_request_is_merge_ready(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_reply_on_a_review_thread_wakes_the_babysitting_run(tmp_path):
+    control = FakeControl()
+    control.step_results = [PREPARED, IMPLEMENTED, NOTHING_TO_ANSWER, CHECKED, OPENED, MERGE_READY]
+    runtime = FakeRuntime()
+    hub = fresh_hub(tmp_path / "hub", control, runtime)
+    replied = json.dumps({"action": "created", "pull_request": {"number": 42}}).encode()
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await babysitting(hub, run.run_id)
+        await woken(hub, runtime, coder, replied, "pull_request_review_comment")
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [attempt.step for attempt in finished.attempts][-2:] == ["babysit", "assess"]
+
+    asyncio.run(scenario())
+
+
 def test_the_round_limit_stops_the_run_as_needs_human_and_reports_it_on_the_issue(tmp_path):
     control = FakeControl()
     control.step_results = [

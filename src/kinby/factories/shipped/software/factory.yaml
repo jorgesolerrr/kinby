@@ -138,12 +138,15 @@ steps:
     requires: [branch, base]
     results: { pr: int }
     retry: 0
-  # Babysitting. The run holds nothing while it waits for a review of its pull request or a
-  # check suite that finished on its branch. The repository's webhook must send both events.
+  # Babysitting. The run holds nothing while it waits for a review of its pull request, a reply
+  # on one of its review threads, or a check suite that finished on its branch. The repository's
+  # webhook must send all three events.
   - id: babysit
     kind: wait
     signal:
       - headers.X-GitHub-Event: pull_request_review
+        body.pull_request.number: "{{pr}}"
+      - headers.X-GitHub-Event: pull_request_review_comment
         body.pull_request.number: "{{pr}}"
       - headers.X-GitHub-Event: check_suite
         body.action: completed
