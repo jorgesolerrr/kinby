@@ -66,6 +66,7 @@ steps:
     kind: command
     in: coder
     run: ["uv run pytest", "uv run ruff check ."]
+    timeout: 10m
 """
 FILES = {
     "factory.yaml": FACTORY,
@@ -182,7 +183,7 @@ def test_an_intake_hands_a_work_item_to_a_one_step_factory_that_runs_to_done(tmp
         assert attempt.ended_at is not None
         [(endpoint, command)] = control.steps
         assert command == StepRunCommand(
-            step=CommandStepRun(run=["uv run pytest", "uv run ruff check ."]),
+            step=CommandStepRun(run=["uv run pytest", "uv run ruff check ."], timeout_seconds=600),
             work_item={"issue": 7},
         )
         assert endpoint.token == instance_environment(hub, coder)["KINBY_CONTROL_TOKEN"]

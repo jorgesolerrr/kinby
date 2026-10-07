@@ -73,6 +73,25 @@ def test_a_command_step_fails_at_the_first_command_that_exits_with_another_code(
     asyncio.run(scenario())
 
 
+def test_a_command_still_running_at_the_steps_timeout_is_killed_and_fails_the_step(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+
+    async def scenario() -> None:
+        command = StepRunCommand(
+            step=CommandStepRun(run=["sleep 30", "touch never"], timeout_seconds=1),
+            work_item={},
+        )
+        async with asyncio.timeout(10):
+            result = await call(runtime.dispatcher, "step.run", **command.model_dump(mode="json"))
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert result.summary == "The commands ran past the step's timeout of 1s."
+        assert not (workspace / "never").exists()
+
+    asyncio.run(scenario())
+
+
 def test_a_command_that_cannot_start_fails_the_step(tmp_path):
     runtime, _ = step_instance(tmp_path)
 

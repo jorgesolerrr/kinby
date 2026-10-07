@@ -41,6 +41,7 @@ from kinby.factories.file import (
     InvalidFactoryFile,
     Step,
     ValueType,
+    duration_seconds,
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.registry import HubRegistry
@@ -178,7 +179,9 @@ class FactoryRuns:
             return unmet
         match step:
             case CommandStep():
-                asked, hook = CommandStepRun(run=list(step.run)), step.hook
+                timeout = duration_seconds(step.timeout) if step.timeout is not None else None
+                asked = CommandStepRun(run=list(step.run), timeout_seconds=timeout)
+                hook = step.hook
             case CodeStep():
                 asked, hook = CodeStepRun(call=step.call), None
             case _:
