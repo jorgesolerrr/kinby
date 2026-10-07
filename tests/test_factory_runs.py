@@ -619,6 +619,63 @@ def test_a_value_is_never_read_from_a_step_results_summary(tmp_path):
     asyncio.run(scenario())
 
 
+SWITCH = HANDOFF.replace(
+    "  - id: open-pr\n    kind: code\n    in: coder\n    call: open_pull_request\n",
+    '  - id: open-pr\n    kind: command\n    in: coder\n    run: ["git switch {{branch}}", '
+    '"make publish ISSUE={{issue}}"]\n',
+).replace("    results: { pr: int }\ndone_requires: [pr]\n", "")
+
+
+def test_a_command_names_a_value_of_the_run_as_one_argument(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values={"branch": "agent/7 dark", "committed": True})
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": SWITCH})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+
+        _, publish = control.steps[-1]
+        assert publish.step == CommandStepRun(
+            run=["git switch 'agent/7 dark'", "make publish ISSUE=7"]
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_value_a_command_names_is_required_of_the_step_that_should_have_produced_it(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values={"committed": True}),
+        StepResult(ending=StepEnding.CLEAN, values=BRANCH),
+    ]
+    runtime = FakeRuntime()
+    factory = SWITCH.replace("    requires: [branch, committed]\n", "")
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [(a.step, a.ending) for a in finished.attempts] == [
+            ("implement", StepEnding.CLEAN),
+            ("implement", StepEnding.FAILED),
+            ("implement", StepEnding.CLEAN),
+            ("open-pr", StepEnding.CLEAN),
+        ]
+        assert finished.attempts[1].summary == (
+            'Step "open-pr" requires "branch", which this step did not record.'
+        )
+
+    asyncio.run(scenario())
+
+
 def test_a_run_whose_done_requires_fails_does_not_finish_as_done(tmp_path):
     control = FakeControl()
     control.step_results = [

@@ -58,9 +58,9 @@ steps:
   - id: babysit
     kind: wait
     signal:
-      routine: github
-      headers.X-GitHub-Event: pull_request_review
-      body.pull_request.number: "{{pr}}"
+      - routine: github
+        headers.X-GitHub-Event: pull_request_review
+        body.pull_request.number: "{{pr}}"
     deadline: 7d
   - id: merge
     kind: approve
@@ -289,11 +289,25 @@ def test_the_check_fails_a_step_whose_input_no_earlier_step_or_work_item_holds(t
 def test_the_check_fails_a_wait_filter_naming_a_value_no_earlier_step_or_work_item_holds(
     tmp_path,
 ):
-    factory = FACTORY.replace('"{{pr}}"', '"{{merged}}"\n      body.repository.name: "{{repo}}"')
+    another = '\n      - body.repository.name: "{{repo}}"\n        routine: "{{title}}"'
+    factory = FACTORY.replace('"{{pr}}"', '"{{merged}}"' + another)
 
     assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
         'Step "babysit" matches "body.pull_request.number" against "merged", which no earlier '
-        "step declares in its results and the work item does not carry."
+        "step declares in its results and the work item does not carry.",
+        'Step "babysit" matches "routine" against "title", which no earlier '
+        "step declares in its results and the work item does not carry.",
+    ]
+
+
+def test_the_check_fails_a_command_naming_a_value_no_earlier_step_or_work_item_holds(tmp_path):
+    factory = FACTORY.replace(
+        'run: ["uv run pytest"]', 'run: ["git switch {{branch}}", "make {{pr}}"]'
+    )
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Step "checks" names "pr" in a command, which no earlier step declares in its results '
+        "and the work item does not carry."
     ]
 
 
@@ -305,8 +319,10 @@ def test_a_wait_filter_reads_only_the_routine_a_header_or_the_body(tmp_path):
     found = problems(tmp_path, FILES | {"factory.yaml": factory})
 
     assert [problem.split(": ")[1] for problem in found] == [
-        "steps.4.wait.signal.event.[key]",
-        "steps.4.wait.signal.body.[key]",
+        "steps.4.wait.signal.0.event.[key]",
+        "steps.4.wait.signal.0.body.[key]",
+        # The filter that failed no longer counts toward the list's one filter at least.
+        "steps.4.wait.signal",
     ]
 
 

@@ -37,7 +37,10 @@ class StepEnd:
 
 @dataclass(frozen=True)
 class HookResult:
-    """What a hook records: the step result's values, and the declared outcome it names."""
+    """What a hook records: the step result's values, and the declared outcome it names.
+
+    A code step's tool returns one to name an outcome too.
+    """
 
     values: Mapping[ValueName, StepValue] = field(default_factory=dict)
     #: None takes the next step.

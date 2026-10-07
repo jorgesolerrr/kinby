@@ -661,7 +661,7 @@ One independent review of the current change against both the repository's stand
 
 ### Fix round
 
-One **babysitting** pass that asks the **coding client** to address every **actionable thread**, runs the repository checks, pushes the commit, and posts each **review reply**.
+One **babysitting** pass that asks the **coding client** to address every **actionable thread** trusted authors wrote, runs the repository checks, pushes the commit, and posts each **review reply**. A thread with any other author starts no fix round: it needs a human.
 
 ### Babysitting
 
@@ -681,7 +681,7 @@ An unresolved **review thread** whose latest reply is not from the coding **inst
 
 ### Merge-ready
 
-An **agent PR** reviewed on its current head, with no **actionable threads** and no check still running. The label reports readiness; the **software factory** never merges it.
+An **agent PR** a trusted reviewer reviewed on its current head, with no **actionable threads** and no check still running. The label reports readiness; the **software factory** never merges it.
 
 ### Agent PR
 

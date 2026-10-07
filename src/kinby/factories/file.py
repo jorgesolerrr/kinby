@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
+from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
@@ -22,6 +24,7 @@ from kinby.contracts import (
     HookName,
     SetupField,
     StepId,
+    StepValue,
     SubscriptionLogin,
     ToolName,
     ValueName,
@@ -126,7 +129,10 @@ class ClientStep(_Step):
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class CommandStep(_Step):
-    """Commands in the instance's workspace, each run without a shell. Exit code zero passes."""
+    """Commands in the instance's workspace, each run without a shell. Exit code zero passes.
+
+    A ``{{name}}`` in a command stands for the run's value of that name, as one argument.
+    """
 
     kind: Literal["command"]
     instance: InstanceName = Field(alias="in")
@@ -137,7 +143,10 @@ class CommandStep(_Step):
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class CodeStep(_Step):
-    """An instance tool the model never sees."""
+    """An instance tool the model never sees.
+
+    A mapping the tool returns is the step's values. A HookResult also names its outcome.
+    """
 
     kind: Literal["code"]
     instance: InstanceName = Field(alias="in")
@@ -149,20 +158,21 @@ class CodeStep(_Step):
 type SignalField = Annotated[
     str, Field(pattern=r"^(routine|headers\.[A-Za-z0-9-]+|body(\.[^.]+)+)$")
 ]
-#: A filter value ``{{name}}`` stands for the run's value of that name.
+type SignalFilter = Annotated[dict[SignalField, str | int], Field(min_length=1)]
+#: A filter value or a part of a command ``{{name}}`` stands for the run's value of that name.
 _RUN_VALUE = re.compile(r"\{\{([a-z_][a-z0-9_]*)\}\}")
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class WaitStep(_Step):
-    """Park the run until a signal matches the filter, or the deadline passes.
+    """Park the run until a signal matches one of the filters, or the deadline passes.
 
-    A signal matches when it carries every field of the filter, each of the same type and value.
-    A field the signal lacks never matches.
+    A signal matches a filter when it carries every field of the filter, each of the same type and
+    value. A field the signal lacks never matches.
     """
 
     kind: Literal["wait"]
-    signal: dict[SignalField, str | int] = Field(min_length=1)
+    signal: tuple[SignalFilter, ...] = Field(min_length=1)
     deadline: Duration | None = None
 
 
@@ -170,6 +180,16 @@ def run_value_name(expected: str | int) -> ValueName | None:
     """The run value a filter value names as ``{{name}}``, or None for a literal value."""
     named = _RUN_VALUE.fullmatch(expected) if isinstance(expected, str) else None
     return named[1] if named is not None else None
+
+
+def run_value_names(command: str) -> list[ValueName]:
+    """The run values a command names as ``{{name}}``."""
+    return _RUN_VALUE.findall(command)
+
+
+def with_run_values(command: str, held: Mapping[ValueName, StepValue]) -> str:
+    """The command with each ``{{name}}`` it names replaced by the run's value, as one argument."""
+    return _RUN_VALUE.sub(lambda named: shlex.quote(str(held[named[1]])), command)
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)

@@ -1,4 +1,5 @@
-# The software factory: it turns GitHub issues labeled ready-for-agent into agent pull requests.
+# The software factory: it turns GitHub issues labeled ready-for-agent into agent pull requests,
+# and answers their reviews until they are merge-ready.
 # kinby ships it as a starting point. Edit it on your hub to make it your own.
 name: software
 instances:
@@ -104,26 +105,64 @@ steps:
   #   results: { reviewed: bool }
   #   outcomes: { clean: next, changes: { back: fix, max: 2 } }
   #   timeout: 15m
-  # The checks of a Python repository on uv. Replace them with your repository's.
+  # A fix round: the coding client answers the review threads trusted authors left on the pull
+  # request, and commits its fixes. Work is only ever sent back, so it comes before the pull
+  # request opens, and finds no threads to answer the first time.
+  - id: answer
+    kind: client
+    in: coder
+    client: claude
+    prompt: prompts/answer.md
+    hook: check_answers
+    requires: [branch, base]
+    results: { replies: str }
+    timeout: 15m
+  # The checks of a Python repository on uv. Replace them with your repository's. Other runs'
+  # steps share the workspace, so the first command puts it back on this run's branch.
   - id: checks
     kind: command
     in: coder
     requires: [branch]
     run:
+      - git switch {{branch}}
       - uv run ruff check .
       - uv run ruff format --check .
       - uv run ty check
       - uv run pytest
-  # Pushes the branch and opens its pull request. Never retried, so a pull request is never
-  # opened twice.
-  - id: open-pr
+  # Pushes the branch. The first time, it opens the pull request; after a fix round, it replies
+  # on each thread the round answered. Never retried, so a pull request is never opened twice.
+  - id: publish
     kind: code
     in: coder
-    call: open_pull_request
+    call: publish_pull_request
     requires: [branch, base]
     results: { pr: int }
     retry: 0
-done_requires: [pr]
+  # Babysitting. The run holds nothing while it waits for a review of its pull request or a
+  # check suite that finished on its branch. The repository's webhook must send both events.
+  - id: babysit
+    kind: wait
+    signal:
+      - headers.X-GitHub-Event: pull_request_review
+        body.pull_request.number: "{{pr}}"
+      - headers.X-GitHub-Event: check_suite
+        body.action: completed
+        body.check_suite.head_branch: "{{branch}}"
+    deadline: 7d
+  # Reads the pull request. Merge-ready, it labels it merge-ready and asks the maintainer for a
+  # review, and the run is done; it never merges. Threads to answer start a fix round, at most 3
+  # before the run needs a human. Anything else waits for the next wake.
+  - id: assess
+    kind: code
+    in: coder
+    call: assess_pull_request
+    requires: [pr]
+    results: { feedback: str, merge_ready: bool }
+    outcomes:
+      merge-ready: done
+      feedback: { back: answer, max: 3 }
+      waiting: { back: babysit, max: 30 }
+done_requires: [merge_ready]
 # Labels the issue ready-for-human with the summary of the step the run stopped at. The branch
 # stays, with everything committed on it.
 needs_human: { in: coder, call: report_needs_human }

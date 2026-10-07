@@ -74,6 +74,8 @@ from kinby.factories.file import (
     WaitStep,
     duration_seconds,
     run_value_name,
+    run_value_names,
+    with_run_values,
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.models import Signal
@@ -210,7 +212,9 @@ class FactoryRuns:
         for run in self._registry.runs(member.factory, FactoryRunStatus.PARKED):
             step = _step(factory, run.step) if run.step is not None else None
             held = run.work_item | self._results(run.run_id)
-            if isinstance(step, WaitStep) and _matches(step, signal, body, held):
+            if isinstance(step, WaitStep) and any(
+                _matches(fields, signal, body, held) for fields in step.signal
+            ):
                 deadline = self._deadlines.pop(run.run_id, None)
                 if deadline is not None:
                     deadline.cancel()
@@ -334,7 +338,8 @@ class FactoryRuns:
         if factory is None or step is None:
             return _Refused(step_id, f'Factory "{run.factory}" has no step "{step_id}" any more.')
         results = self._results(run.run_id)
-        unmet = _unmet(factory, step, run.work_item | results)
+        held = run.work_item | results
+        unmet = _unmet(factory, step, held)
         if unmet is not None:
             return unmet
         match step:
@@ -349,7 +354,8 @@ class FactoryRuns:
                     return client_run
                 asked, hook = client_run, step.hook
             case CommandStep():
-                asked, hook = CommandStepRun(run=list(step.run)), step.hook
+                commands = [with_run_values(command, held) for command in step.run]
+                asked, hook = CommandStepRun(run=commands), step.hook
             case CodeStep():
                 asked, hook = CodeStepRun(call=step.call), None
             case WaitStep() | ApproveStep():
@@ -564,13 +570,16 @@ def _json(body: bytes) -> JsonValue:
 
 
 def _matches(
-    step: WaitStep, signal: Signal, body: JsonValue, held: Mapping[ValueName, StepValue]
+    fields: Mapping[str, str | int],
+    signal: Signal,
+    body: JsonValue,
+    held: Mapping[ValueName, StepValue],
 ) -> bool:
-    """Whether the signal carries every field of the wait's filter, each of its type and value.
+    """Whether the signal carries every field of a wait's filter, each of its type and value.
 
     A field the signal lacks, or a ``{{name}}`` the run holds no value for, never matches.
     """
-    for field, expected in step.signal.items():
+    for field, expected in fields.items():
         name = run_value_name(expected)
         wanted = held.get(name) if name is not None else expected
         found = _signal_field(signal, body, field)
@@ -615,11 +624,14 @@ def _unmet(
 ) -> _Refused | None:
     """Why *step* cannot start for lack of a value it requires, or None when the run holds them.
 
-    The lack is charged to the step that should have produced the value: the last earlier step
-    that declares it in its results. A false work item value has no such step, so the requiring
-    step itself fails.
+    A command step also requires each value its commands name. The lack is charged to the step
+    that should have produced the value: the last earlier step that declares it in its results. A
+    false work item value has no such step, so the requiring step itself fails.
     """
-    lacking = _lacking(held, step.requires)
+    named = step.run if isinstance(step, CommandStep) else ()
+    lacking = _lacking(
+        held, (*step.requires, *(name for command in named for name in run_value_names(command)))
+    )
     if lacking is None:
         return None
     earlier = factory.steps[: factory.steps.index(step)]

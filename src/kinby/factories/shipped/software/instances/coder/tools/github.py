@@ -1,4 +1,5 @@
-"""The software factory's work on GitHub: the scan, the agent branch, and the pull request.
+"""The software factory's work on GitHub: the scan, the agent branch, the pull request, and
+babysitting it through review.
 
 Every command runs in the workspace, the repository's clone. gh runs as the GH_TOKEN the
 instance holds.
@@ -13,11 +14,13 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from kinby.plugins.hooks import HookResult
 from kinby.plugins.intake import hand_over
 from kinby.plugins.tools import ToolContext, tool
 
 READY_LABEL = "ready-for-agent"
 READY_FOR_HUMAN_LABEL = "ready-for-human"
+MERGE_READY_LABEL = "merge-ready"
 #: Every agent pull request's branch starts with it.
 AGENT_BRANCH_PREFIX = "agent/"
 #: Where the coding client writes what the factory reads, kept out of every commit.
@@ -32,6 +35,38 @@ GITHUB_API_VERSION = "2026-03-10"
 _COMMAND_TIMEOUT = 900
 #: Who may write ticket text the coding client reads (ADR 0073), by GitHub's author_association.
 _TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+#: The review apps whose feedback babysitting answers, whatever their association (ADR 0031).
+_TRUSTED_APPS = frozenset({"greptile-apps", "greptile-apps[bot]"})
+_REVIEW_THREADS = """
+query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $endCursor) {
+        nodes {
+          id
+          isResolved
+          path
+          line
+          comments(last: 100) { nodes { author { login } authorAssociation body } }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+_REPLY = """
+mutation($thread: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $thread, body: $body}) {
+    comment { id }
+  }
+}
+"""
+_RESOLVE = """
+mutation($thread: ID!) {
+  resolveReviewThread(input: {threadId: $thread}) { thread { id } }
+}
+"""
 _CLOSES_ISSUE = re.compile(r"(?im)^Closes #(\d+)\s*$")
 _ISSUE_URL_NUMBER = re.compile(r"/issues/(\d+)$")
 
@@ -46,6 +81,10 @@ class MissingPullRequestBody(RuntimeError):
 
 class UntrustedTicket(RuntimeError):
     """Someone other than the repository's owner, a member or a collaborator wrote ticket text."""
+
+
+class UntrustedFeedback(RuntimeError):
+    """Review feedback left to answer has an author babysitting does not trust."""
 
 
 @dataclass(frozen=True)
@@ -66,6 +105,23 @@ class Repository:
 
 
 @dataclass(frozen=True)
+class ReviewComment:
+    author: str
+    body: str
+    #: Whether its author is the repository's owner, a member, a collaborator or a trusted app.
+    trusted: bool
+
+
+@dataclass(frozen=True)
+class ReviewThread:
+    id: str
+    resolved: bool
+    path: str
+    line: int | None
+    comments: tuple[ReviewComment, ...]
+
+
+@dataclass(frozen=True)
 class AgentPullRequest:
     number: int
     branch: str
@@ -82,7 +138,7 @@ async def scan_ready_issues(signal: dict[str, object], context: ToolContext) -> 
     An eligible issue is open and labeled ready-for-agent, has no agent pull request, and each
     open issue that blocks it has one in the same stack. The oldest stays eligible until its pull
     request opens or it goes to a human, and handing it again returns its run, so the factory
-    carries one issue at a time.
+    implements one issue at a time. Runs babysitting their pull requests go on meanwhile.
     """
     if context.routine is None:
         raise ValueError("Only the factory's intake routine scans for its work.")
@@ -121,8 +177,112 @@ def prepare_branch(issue: int, context: ToolContext) -> dict[str, str]:
 
 
 @tool(write=True)
-def open_pull_request(
-    issue: int, branch: str, base: str, context: ToolContext, *, reviewed: bool = False
+def publish_pull_request(
+    issue: int,
+    branch: str,
+    base: str,
+    context: ToolContext,
+    *,
+    reviewed: bool = False,
+    pr: int | None = None,
+    replies: str | None = None,
+) -> dict[str, int] | str:
+    """Push the branch. The first time, open its pull request; after a fix round, reply on each
+    review thread the round answered.
+    """
+    if pr is None:
+        return _open_pull_request(context.workspace, issue, branch, base, reviewed=reviewed)
+    return _push_fix_round(context.workspace, branch, json.loads(replies or "{}"))
+
+
+@tool(write=True)
+def assess_pull_request(pr: int, context: ToolContext) -> HookResult:
+    """Read the pull request after a wake, and say what babysitting does next.
+
+    Merge-ready, once a trusted reviewer reviewed its head with no thread left to answer and no
+    check still running: it gets the merge-ready label and a review request for the maintainer.
+    Threads only trusted authors wrote are feedback for a fix round. Another author's thread needs
+    a human. Anything else waits for the next wake. Nothing here ever merges.
+    """
+    workspace = context.workspace
+    pull = _api(workspace, f"repos/{{owner}}/{{repo}}/pulls/{pr}")
+    head = pull["head"]["sha"]
+    checks = _pages(
+        workspace, f"repos/{{owner}}/{{repo}}/commits/{head}/check-runs", key="check_runs"
+    )
+    if any(check["status"] != "completed" for check in checks):
+        return HookResult(outcome="waiting")
+    coder = _gh(workspace, "api", "user", "--jq", ".login").strip()
+    actionable = [
+        thread
+        for thread in _review_threads(workspace, pr)
+        if not thread.resolved and thread.comments and thread.comments[-1].author != coder
+    ]
+    answerable = [
+        thread
+        for thread in actionable
+        if all(comment.trusted or comment.author == coder for comment in thread.comments)
+    ]
+    if answerable:
+        feedback = [
+            {
+                "id": thread.id,
+                "path": thread.path,
+                "line": thread.line,
+                "comments": [
+                    {"author": comment.author, "body": comment.body} for comment in thread.comments
+                ],
+            }
+            for thread in answerable
+        ]
+        return HookResult(values={"feedback": json.dumps(feedback)}, outcome="feedback")
+    if actionable:
+        untrusted = {
+            comment.author
+            for thread in actionable
+            for comment in thread.comments
+            if not comment.trusted and comment.author != coder
+        }
+        raise UntrustedFeedback(
+            f"Review feedback from untrusted authors needs a human: {', '.join(sorted(untrusted))}."
+        )
+    reviews = _pages(workspace, f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews")
+    if not any(
+        review["commit_id"] == head
+        and review["user"]["login"] != coder
+        and _trusted(review["user"]["login"], review["author_association"])
+        for review in reviews
+    ):
+        return HookResult(outcome="waiting")
+    maintainer = _repository(workspace).maintainer
+    asked = () if maintainer in {None, pull["user"]["login"]} else ("--add-reviewer", maintainer)
+    _gh(workspace, "pr", "edit", str(pr), "--add-label", MERGE_READY_LABEL, *asked)
+    return HookResult(values={"merge_ready": True}, outcome="merge-ready")
+
+
+@tool(write=True)
+def report_needs_human(issue: int, step: str, summary: str, context: ToolContext) -> None:
+    """Hand the issue to a human: label it ready-for-human and comment why the run stopped.
+
+    The agent branch stays as it is, with everything committed on it.
+    """
+    workspace = context.workspace
+    _gh(
+        workspace,
+        "issue",
+        "edit",
+        str(issue),
+        "--remove-label",
+        READY_LABEL,
+        "--add-label",
+        READY_FOR_HUMAN_LABEL,
+    )
+    body = f"The software factory stopped at step `{step}` and needs a human.\n\n{summary}"
+    _gh(workspace, "issue", "comment", str(issue), "--body", body)
+
+
+def _open_pull_request(
+    workspace: Path, issue: int, branch: str, base: str, *, reviewed: bool
 ) -> dict[str, int]:
     """Push the branch and open its pull request, which closes the issue, with the body the
     coding client wrote.
@@ -130,7 +290,6 @@ def open_pull_request(
     The body says so when no review step found the change clean. A sub-issue's pull request
     joins the stack of its siblings' pull requests. The repository's maintainer reviews it.
     """
-    workspace = context.workspace
     body_file = workspace / PR_BODY
     written = body_file.read_text(encoding="utf-8").strip() if body_file.is_file() else ""
     if not written:
@@ -163,25 +322,71 @@ def open_pull_request(
     return {"pr": number}
 
 
-@tool(write=True)
-def report_needs_human(issue: int, step: str, summary: str, context: ToolContext) -> None:
-    """Hand the issue to a human: label it ready-for-human and comment why the run stopped.
+def _push_fix_round(workspace: Path, branch: str, replies: dict[str, dict]) -> str:
+    """Push the fix round's commits, then reply on each thread it answered and resolve each it
+    fixed. A fix's reply names the commit that holds it."""
+    _git(workspace, "push", "--force-with-lease", "-u", "origin", branch)
+    commit = _git(workspace, "rev-parse", branch).strip()
+    for thread, reply in replies.items():
+        body = f"{commit}: {reply['reply']}" if reply["fixed"] else reply["reply"]
+        _gh(
+            workspace,
+            "api",
+            "graphql",
+            "-f",
+            f"query={_REPLY}",
+            "-f",
+            f"thread={thread}",
+            "-f",
+            f"body={body}",
+        )
+        if reply["fixed"]:
+            _gh(workspace, "api", "graphql", "-f", f"query={_RESOLVE}", "-f", f"thread={thread}")
+    return f"Pushed {branch} and replied on {len(replies)} review threads."
 
-    The agent branch stays as it is, with everything committed on it.
-    """
-    workspace = context.workspace
-    _gh(
-        workspace,
-        "issue",
-        "edit",
-        str(issue),
-        "--remove-label",
-        READY_LABEL,
-        "--add-label",
-        READY_FOR_HUMAN_LABEL,
+
+def _review_threads(workspace: Path, pr: int) -> list[ReviewThread]:
+    """The pull request's review threads, each with its comments, oldest first."""
+    pages = json.loads(
+        _gh(
+            workspace,
+            "api",
+            "graphql",
+            "--paginate",
+            "--slurp",
+            "-F",
+            "owner={owner}",
+            "-F",
+            "name={repo}",
+            "-F",
+            f"number={pr}",
+            "-f",
+            f"query={_REVIEW_THREADS}",
+        )
     )
-    body = f"The software factory stopped at step `{step}` and needs a human.\n\n{summary}"
-    _gh(workspace, "issue", "comment", str(issue), "--body", body)
+    return [
+        ReviewThread(
+            id=node["id"],
+            resolved=node["isResolved"],
+            path=node["path"],
+            line=node["line"],
+            comments=tuple(_review_comment(comment) for comment in node["comments"]["nodes"]),
+        )
+        for page in pages
+        for node in page["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+    ]
+
+
+def _review_comment(node: dict) -> ReviewComment:
+    # A deleted account's comment has no author.
+    author = (node["author"] or {}).get("login", "ghost")
+    return ReviewComment(
+        author=author, body=node["body"], trusted=_trusted(author, node["authorAssociation"])
+    )
+
+
+def _trusted(login: str, association: str) -> bool:
+    return association in _TRUSTED or login in _TRUSTED_APPS
 
 
 def _can_change_eligibility(signal: dict[str, object]) -> bool:
@@ -189,7 +394,7 @@ def _can_change_eligibility(signal: dict[str, object]) -> bool:
     body = signal.get("body")
     if not isinstance(body, dict):
         return True
-    if "comment" in body:
+    if "comment" in body or "review" in body or "check_suite" in body:
         return False
     if body.get("action") in {"labeled", "unlabeled"}:
         return _names_ready_label(body)
@@ -403,13 +608,15 @@ def _api(workspace: Path, endpoint: str) -> dict:
     )
 
 
-def _pages(workspace: Path, endpoint: str, *fields: str) -> list[dict]:
-    """Every item of a listing, across its pages."""
+def _pages(workspace: Path, endpoint: str, *fields: str, key: str | None = None) -> list[dict]:
+    """Every item of a listing, across its pages. *key* names the list in a page that is an
+    object."""
     arguments = ["api", "--method", "GET", "-H", f"X-GitHub-Api-Version: {GITHUB_API_VERSION}"]
     arguments += ["--paginate", "--slurp", endpoint, "-f", "per_page=100"]
     for field in fields:
         arguments += ["-f", field]
-    return [item for page in json.loads(_gh(workspace, *arguments)) for item in page]
+    pages = json.loads(_gh(workspace, *arguments))
+    return [item for page in pages for item in (page if key is None else page[key])]
 
 
 def _gh(workspace: Path, *arguments: str) -> str:

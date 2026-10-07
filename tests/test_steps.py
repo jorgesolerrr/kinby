@@ -374,6 +374,32 @@ def test_a_code_step_calls_its_tool_with_the_runs_values_and_no_model(tmp_path):
     asyncio.run(scenario())
 
 
+REVIEW_TOOL = '''\
+from kinby.plugins.hooks import HookResult
+from kinby.plugins.tools import tool
+
+
+@tool(write=True)
+def read_review(issue: int) -> HookResult:
+    """Read the review of the issue's pull request."""
+    return HookResult(values={"reviewed": True}, outcome="changes")
+'''
+
+
+def test_a_code_steps_tool_names_an_outcome_by_returning_a_hook_result(tmp_path):
+    dispatcher, _ = code_runtime(tmp_path)
+    (tmp_path / "tools" / "review.py").write_text(REVIEW_TOOL)
+
+    async def scenario() -> None:
+        result = await run_code_step(dispatcher, "read_review", {})
+
+        assert result == StepResult(
+            ending=StepEnding.CLEAN, outcome="changes", values={"reviewed": True}
+        )
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("tool", "summary"),
     [
