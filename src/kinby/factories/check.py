@@ -162,8 +162,10 @@ def _inputs(factory: FactoryFile) -> Iterator[str]:
 
 
 def _order(factory: FactoryFile) -> Iterator[str]:
-    """Step ids are unique, and work is only ever sent back to an earlier step."""
+    """Step ids are unique, work is only ever sent back to an earlier step, and a client step
+    only resumes an earlier client step."""
     earlier: set[str] = set()
+    earlier_clients: set[str] = set()
     for step in factory.steps:
         if step.id in earlier:
             yield f'Step id "{step.id}" is used by more than one step.'
@@ -173,4 +175,11 @@ def _order(factory: FactoryFile) -> Iterator[str]:
                     f'Step "{step.id}" sends work back to "{outcome.back}", '
                     "which is not an earlier step."
                 )
+        if isinstance(step, ClientStep):
+            if step.resume is not None and step.resume not in earlier_clients:
+                yield (
+                    f'Step "{step.id}" resumes "{step.resume}", '
+                    "which is not an earlier client step."
+                )
+            earlier_clients.add(step.id)
         earlier.add(step.id)

@@ -192,7 +192,12 @@ def read_factory_file(folder: Path) -> FactoryFile:
     try:
         # Validated as the JSON the published schema describes, so "1" is never an integer.
         # YAML reads a date as a date, which JSON has no type for; it is checked as text.
-        return FACTORY_FILE_ADAPTER.validate_json(json.dumps(declared, default=str))
+        as_json = json.dumps(declared, default=str)
+    except ValueError as exc:
+        # A YAML alias can make a structure that contains itself, which JSON cannot hold.
+        raise InvalidFactoryFile((f"{FACTORY_FILE} is not a JSON document: {exc}",)) from exc
+    try:
+        return FACTORY_FILE_ADAPTER.validate_json(as_json)
     except ValidationError as exc:
         raise InvalidFactoryFile(
             tuple(
