@@ -4,18 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import shlex
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from uuid import uuid4
 
 from kinby.contracts import (
+    AgentStepRun,
     CodeStepRun,
     CommandStepRun,
+    Event,
     HookName,
+    MessageDelta,
     StepEnding,
     StepResult,
     StepRunCommand,
+    ToolCall,
+    TurnCompleted,
+    TurnFailed,
 )
+from kinby.core.errors import CoreError
+from kinby.core.prompt import render_step_message
+from kinby.core.turns import Turns
 from kinby.instance import Instance
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hooks import StepEnd, load_hooks
@@ -27,9 +36,11 @@ from kinby.plugins.tools import ToolContext
 _OUTPUT_TAIL = 2_000
 
 
-async def run_step(command: StepRunCommand, instance: Instance) -> StepResult:
+async def run_step(command: StepRunCommand, instance: Instance, turns: Turns) -> StepResult:
     """Run the step, then its hook however the step ended. The hook's values are the result's."""
     match command.step:
+        case AgentStepRun() as step:
+            result = await _run_agent_step(step, command, turns)
         case CommandStepRun() as step:
             result = await run_command_step(step, instance.manifest.workspace.path)
         case CodeStepRun() as step:
@@ -37,6 +48,42 @@ async def run_step(command: StepRunCommand, instance: Instance) -> StepResult:
     if command.hook is None:
         return result
     return await _recorded(command.hook, result, command, instance)
+
+
+async def _run_agent_step(step: AgentStepRun, command: StepRunCommand, turns: Turns) -> StepResult:
+    """Run the step's turn on a new thread. The agent's last message is only the summary."""
+    title = " · ".join(
+        (
+            command.origin.factory,
+            command.origin.step,
+            *(f"{name} {value}" for name, value in command.work_item.items()),
+        )
+    )
+    message = render_step_message(step.prompt, command.work_item, command.results)
+    try:
+        events = await turns.step_turn(title, message, command.origin)
+    except CoreError as exc:
+        return _failed(f"The turn could not start: {exc}")
+    said = StepResult(ending=StepEnding.FAILED, summary=_last_message(events))
+    match events[-1].payload:
+        case TurnCompleted():
+            return said.model_copy(update={"ending": StepEnding.CLEAN})
+        case TurnFailed(message=reason):
+            return _failed(f"The turn failed: {reason}", said)
+        case _:
+            return _failed("The turn was interrupted.", said)
+
+
+def _last_message(events: Sequence[Event]) -> str:
+    """What the agent said after its last tool call."""
+    text = ""
+    for event in events:
+        match event.payload:
+            case MessageDelta(text=delta):
+                text += delta
+            case ToolCall():
+                text = ""
+    return text.strip()
 
 
 async def run_command_step(step: CommandStepRun, workspace: Path) -> StepResult:

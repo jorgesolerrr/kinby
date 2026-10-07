@@ -478,7 +478,7 @@ def build_dispatcher(
 
         async def run_step_in_instance(command: StepRunCommand) -> StepResult:
             async with turn_service.step():
-                return await run_step(command, step_instance)
+                return await run_step(command, step_instance, turn_service)
 
         dispatcher.register(STEP_RUN, run_step_in_instance)
     if isinstance(turns, ScheduledTurnConfig):

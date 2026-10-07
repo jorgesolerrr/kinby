@@ -203,7 +203,16 @@ class RoutineOrigin(ContractModel):
     delivery_id: DeliveryId | None = None
 
 
-Origin = Annotated[UserOrigin | RoutineOrigin, Field(discriminator="kind")]
+class FactoryRunOrigin(ContractModel):
+    """A step of a factory run, which started the turn as its agent step."""
+
+    kind: Literal["factory-run"] = "factory-run"
+    factory: FactoryName
+    run_id: UUID
+    step: StepId
+
+
+Origin = Annotated[UserOrigin | RoutineOrigin | FactoryRunOrigin, Field(discriminator="kind")]
 
 
 class TurnStarted(ContractModel):
@@ -2206,10 +2215,20 @@ class CodeStepRun(ContractModel):
     call: ToolName
 
 
+class AgentStepRun(ContractModel):
+    """Run a turn on a new thread of the instance, with the prompt and the run's values."""
+
+    kind: Literal["agent"] = "agent"
+    #: The text of the step's prompt file.
+    prompt: str
+
+
 class StepRunCommand(ContractModel):
     """Run one step of a factory run in this instance, and return its result."""
 
-    step: Annotated[CommandStepRun | CodeStepRun, Field(discriminator="kind")]
+    step: Annotated[AgentStepRun | CommandStepRun | CodeStepRun, Field(discriminator="kind")]
+    #: The run and step this is. A turn the step runs records it as its origin.
+    origin: FactoryRunOrigin
     #: The hook that records the step result once the step ends, however it ended.
     hook: HookName | None = None
     work_item: dict[ValueName, StepValue]

@@ -28,6 +28,7 @@ from kinby.factories.check import check_factory
 from kinby.factories.file import (
     TEMPLATES_DIR,
     FactoryFile,
+    FactoryPath,
     InstanceName,
     RecipeName,
     read_factory_file,
@@ -89,6 +90,11 @@ class FactoryStore:
         """The factory's file as the hub keeps it: the last version that passed the check."""
         folder, _ = self._folder(name)
         return read_factory_file(folder)
+
+    def prompt(self, name: FactoryName, path: FactoryPath) -> str:
+        """The text of a prompt file, from the last version of the factory that passed the check."""
+        folder, _ = self._folder(name)
+        return (folder / path).read_text(encoding="utf-8")
 
     async def describe(self, command: FactoryDescribeCommand) -> FactoryDescription:
         return FactoryDescription(

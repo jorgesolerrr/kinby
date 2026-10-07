@@ -581,7 +581,7 @@ The start of a **turn** by anything other than the user typing. Every wake carri
 
 ### Origin
 
-What started a **turn**: the user or a **routine**. A routine turn also records its trigger: scheduled, manual, catch-up, or a **signal**'s delivery.
+What started a **turn**: the user, a **routine**, or a **step** of a **factory run**. A routine turn also records its trigger: scheduled, manual, catch-up, or a **signal**'s delivery. A step's turn records its factory, run and step.
 
 ### Routine
 

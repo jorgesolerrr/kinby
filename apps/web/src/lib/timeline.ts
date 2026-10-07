@@ -1,4 +1,11 @@
-import type { ErrorCode, Event, GateDecider, GateOutcome, JsonValue } from "@kinby/contract"
+import type {
+  ErrorCode,
+  Event,
+  GateDecider,
+  GateOutcome,
+  JsonValue,
+  TurnStarted,
+} from "@kinby/contract"
 
 type Payload = Event["payload"]
 
@@ -14,7 +21,10 @@ export const EMPTY_TIMELINE: Timeline = { sequence: 0, turns: [] }
 /** One turn: who started it and when, the request, then its steps in order. */
 export interface TurnBlock {
   turnId: string
-  startedBy: { kind: "user" } | { kind: "routine"; name: string }
+  startedBy:
+    | { kind: "user" }
+    | { kind: "routine"; name: string }
+    | { kind: "factory-run"; factory: string; step: string }
   startedAt: string
   request: string
   steps: Step[]
@@ -69,10 +79,7 @@ export function project(timeline: Timeline, event: Event): Timeline {
   if (payload.type === "turn.started") {
     const turn: TurnBlock = {
       turnId: event.turn_id,
-      startedBy:
-        payload.origin?.kind === "routine"
-          ? { kind: "routine", name: payload.origin.name }
-          : { kind: "user" },
+      startedBy: startedBy(payload.origin),
       startedAt: event.timestamp,
       request: payload.message,
       steps: [],
@@ -180,5 +187,16 @@ function updateTool(
     steps: turn.steps.map((step) =>
       step.kind === "tool" && step.callId === callId ? update(step) : step,
     ),
+  }
+}
+
+function startedBy(origin: TurnStarted["origin"]): TurnBlock["startedBy"] {
+  switch (origin?.kind) {
+    case "routine":
+      return { kind: "routine", name: origin.name }
+    case "factory-run":
+      return { kind: "factory-run", factory: origin.factory, step: origin.step }
+    default:
+      return { kind: "user" }
   }
 }

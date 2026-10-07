@@ -53,6 +53,7 @@ import {
   CheckIcon,
   CircleAlertIcon,
   CircleStopIcon,
+  FactoryIcon,
   MinusIcon,
   RepeatIcon,
   ShieldAlertIcon,
@@ -409,15 +410,31 @@ function LinkedTurn({ turns }: { turns: TurnBlock[] }) {
   return null
 }
 
+const STARTED_BY_ICONS: Record<TurnBlock["startedBy"]["kind"], ReactNode> = {
+  user: <UserIcon />,
+  routine: <RepeatIcon />,
+  "factory-run": <FactoryIcon />,
+}
+
+function starter(startedBy: TurnBlock["startedBy"]): string {
+  switch (startedBy.kind) {
+    case "user":
+      return "You"
+    case "routine":
+      return `Routine ${startedBy.name}`
+    case "factory-run":
+      return `Factory ${startedBy.factory} · ${startedBy.step}`
+  }
+}
+
 function Turn({ turn, instanceId, name }: { turn: TurnBlock; instanceId: string; name: string }) {
   const { startedBy } = turn
   return (
     <div className="flex flex-col gap-3 px-6">
       <Marker variant="border">
-        <MarkerIcon>{startedBy.kind === "routine" ? <RepeatIcon /> : <UserIcon />}</MarkerIcon>
+        <MarkerIcon>{STARTED_BY_ICONS[startedBy.kind]}</MarkerIcon>
         <MarkerContent>
-          {startedBy.kind === "routine" ? `Routine ${startedBy.name}` : "You"} ·{" "}
-          <time dateTime={turn.startedAt}>{startedAt(turn.startedAt)}</time>
+          {starter(startedBy)} · <time dateTime={turn.startedAt}>{startedAt(turn.startedAt)}</time>
         </MarkerContent>
       </Marker>
       <Message align="end">

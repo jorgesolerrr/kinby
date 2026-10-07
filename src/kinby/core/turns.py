@@ -18,6 +18,7 @@ from kinby.contracts import (
     CompletionOutcome,
     ErrorCode,
     Event,
+    FactoryRunOrigin,
     ModelCompleted,
     ModePinned,
     Origin,
@@ -312,6 +313,30 @@ class Turns:
             yield
         finally:
             self._release_claim(key, claim)
+
+    async def step_turn(self, title: str, message: str, origin: FactoryRunOrigin) -> list[Event]:
+        """Run an agent step's turn on a new thread, and wait for it to close.
+
+        Called while the step holds the instance, so this is the one turn that starts. It parks
+        on an approval like any other turn, and the wait lasts until the user answers. Returns
+        the turn's events, its closing event last.
+        """
+        self.require_admitting()
+        started = await self._wake(lambda: self._store.create(title).id, message, origin, uuid4())
+        while True:
+            # Clear before reading, so a turn that closes while reading is never missed.
+            self._changed.clear()
+            events = [
+                event
+                for event in self._log.stored(started.thread_id)
+                if event.turn_id == started.turn_id
+            ]
+            closing = next(
+                (at for at, event in enumerate(events) if is_turn_closing(event.payload)), None
+            )
+            if closing is not None:
+                return events[: closing + 1]
+            await self._changed.wait()
 
     async def wait_idle(self) -> None:
         """Wait until nothing holds the instance: no live turn, no parked approval, no claim."""

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from kinby.contracts import (
+    AgentStepRun,
     CodeStepRun,
     CommandStepRun,
     FactoryName,
@@ -23,6 +24,7 @@ from kinby.contracts import (
     FactoryRunIntakeCommand,
     FactoryRunListCommand,
     FactoryRunListResult,
+    FactoryRunOrigin,
     FactoryRunRetryCommand,
     FactoryRunSendBackCommand,
     FactoryRunStatus,
@@ -243,6 +245,12 @@ class FactoryRuns:
         if unmet is not None:
             return unmet
         match step:
+            case AgentStep():
+                try:
+                    prompt = self._factories.prompt(run.factory, step.prompt)
+                except (FactoryNotFound, OSError) as exc:
+                    return _Refused(step.id, f'Prompt "{step.prompt}" cannot be read: {exc}')
+                asked, hook = AgentStepRun(prompt=prompt), step.hook
             case CommandStep():
                 asked, hook = CommandStepRun(run=list(step.run)), step.hook
             case CodeStep():
@@ -263,7 +271,13 @@ class FactoryRuns:
             return _Refused(
                 step.id, f'Instance "{step.instance}" of factory "{run.factory}" is not installed.'
             )
-        command = StepRunCommand(step=asked, hook=hook, work_item=run.work_item, results=results)
+        command = StepRunCommand(
+            step=asked,
+            hook=hook,
+            origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=step.id),
+            work_item=run.work_item,
+            results=results,
+        )
         return instance_id, _QueuedStep(run.run_id, step.id, command)
 
     def _results(self, run_id: UUID) -> dict[ValueName, StepValue]:

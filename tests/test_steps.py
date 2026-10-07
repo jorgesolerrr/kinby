@@ -3,16 +3,22 @@
 import asyncio
 import os
 import subprocess
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
+from uuid import UUID
 
 import pytest
+from langchain_core.messages import AIMessageChunk, BaseMessage
 
 from kinby.contracts import (
+    AgentStepRun,
+    ApprovalRequested,
     CodeStepRun,
     CommandStepRun,
     ContractModel,
     ErrorCode,
     ErrorEnvelope,
+    FactoryRunOrigin,
     InstanceDrainCommand,
     RoutineListResult,
     RoutineRunOutcome,
@@ -20,13 +26,22 @@ from kinby.contracts import (
     StepResult,
     StepRunCommand,
     ThreadListResult,
+    ToolResult,
 )
 from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
+from kinby.core.events import EventLog
 from kinby.core.runtime import InstanceRuntime
 from kinby.hub import ControlEndpoint, HttpInstanceControl
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_drain import WaitingRunner, booted, call, opened_thread
+from tests.test_gate import ScriptedModel
 from tests.test_routines import RoutineModel, fire, instance_at, routine_file, signal_runtime
+
+#: The step each test runs, as the hub names it.
+ORIGIN = FactoryRunOrigin(
+    factory="checks", run_id=UUID("6f1c2a52-8d1e-4f3b-9a43-2b6f0e3d9c11"), step="test"
+)
+REVIEW = ORIGIN.model_copy(update={"step": "review"})
 
 
 def step_instance(
@@ -40,7 +55,9 @@ def step_instance(
 
 
 async def run_step(dispatcher: Dispatcher, *commands: str) -> ContractModel:
-    command = StepRunCommand(step=CommandStepRun(run=list(commands)), work_item={"issue": 7})
+    command = StepRunCommand(
+        step=CommandStepRun(run=list(commands)), origin=ORIGIN, work_item={"issue": 7}
+    )
     return await call(dispatcher, "step.run", **command.model_dump(mode="json"))
 
 
@@ -147,7 +164,9 @@ def test_the_hub_runs_a_step_over_the_instances_control_socket(tmp_path):
         async with served_dispatcher(runtime.dispatcher) as address:
             result = await HttpInstanceControl().run_step(
                 ControlEndpoint(f"http://{address.host}:{address.port}", TOKEN),
-                StepRunCommand(step=CommandStepRun(run=["touch made"]), work_item={}),
+                StepRunCommand(
+                    step=CommandStepRun(run=["touch made"]), origin=ORIGIN, work_item={}
+                ),
             )
 
         assert result.ending is StepEnding.CLEAN
@@ -190,7 +209,7 @@ def hooked_instance(tmp_path: Path) -> tuple[InstanceRuntime, Path]:
 
 async def run_hooked_step(dispatcher: Dispatcher, hook: str, *commands: str) -> ContractModel:
     command = StepRunCommand(
-        step=CommandStepRun(run=list(commands)), hook=hook, work_item={"issue": 7}
+        step=CommandStepRun(run=list(commands)), hook=hook, origin=ORIGIN, work_item={"issue": 7}
     )
     return await call(dispatcher, "step.run", **command.model_dump(mode="json"))
 
@@ -263,6 +282,7 @@ def test_kinbys_default_hooks_record_the_branch_and_find_its_pull_request(tmp_pa
         command = StepRunCommand(
             step=CommandStepRun(run=["true"]),
             hook="find_pull_request",
+            origin=ORIGIN,
             work_item={"issue": 7},
             results={"branch": "agent/7"},
         )
@@ -319,7 +339,10 @@ async def run_code_step(
     dispatcher: Dispatcher, tool: str, results: dict[str, str]
 ) -> ContractModel:
     command = StepRunCommand(
-        step=CodeStepRun(call=tool), work_item={"issue": 7, "repo": "kinby"}, results=results
+        step=CodeStepRun(call=tool),
+        origin=ORIGIN,
+        work_item={"issue": 7, "repo": "kinby"},
+        results=results,
     )
     return await call(dispatcher, "step.run", **command.model_dump(mode="json"))
 
@@ -385,5 +408,163 @@ def test_a_factory_runs_failed_steps_never_count_toward_its_intake_routines_fail
         assert (intake.failure_count, intake.enabled) == (0, True)
         assert intake.last_run is not None
         assert intake.last_run.outcome is RoutineRunOutcome.WORK
+
+    asyncio.run(scenario())
+
+
+class StepModel(ScriptedModel):
+    """A scripted model that keeps every message it was sent."""
+
+    def __init__(self, responses: Sequence[AIMessageChunk]) -> None:
+        super().__init__(responses)
+        self.messages: list[list[BaseMessage]] = []
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        self.messages.append(list(messages))
+        async for chunk in super().astream(messages):
+            yield chunk
+
+
+class BrokenModel(StepModel):
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        self.messages.append(list(messages))
+        raise RuntimeError("the provider is down")
+        yield AIMessageChunk(content="")
+
+
+def agent_runtime(tmp_path: Path, model: StepModel) -> tuple[ScheduledDispatcher, EventLog, Path]:
+    """An instance whose turns ask *model*, with the review hooks and the GitHub tool."""
+    instance = instance_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    workspace.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "hooks").mkdir()
+    (tmp_path / "hooks" / "review.py").write_text(VERDICT_HOOK)
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "github.py").write_text(GITHUB_TOOL)
+    dispatcher, log = signal_runtime(instance, model)
+    return dispatcher, log, workspace
+
+
+async def run_agent_step(dispatcher: Dispatcher) -> ContractModel:
+    command = StepRunCommand(
+        step=AgentStepRun(prompt="Review the branch."),
+        hook="read_verdict",
+        origin=REVIEW,
+        work_item={"issue": 7},
+        results={"branch": "agent/7"},
+    )
+    return await call(dispatcher, "step.run", **command.model_dump(mode="json"))
+
+
+def test_an_agent_step_runs_a_turn_with_the_prompt_and_the_runs_values_and_the_hooks_result(
+    tmp_path,
+):
+    model = StepModel([AIMessageChunk(content="The branch does what the issue asks.")])
+    dispatcher, _, workspace = agent_runtime(tmp_path, model)
+    (workspace / "verdict").write_text("clean\n")
+
+    async def scenario() -> None:
+        result = await run_agent_step(dispatcher)
+
+        assert result == StepResult(
+            ending=StepEnding.CLEAN,
+            outcome="clean",
+            values={"verdict": "clean", "ending": "clean", "issue": 7},
+            summary="The branch does what the issue asks.",
+        )
+        [messages] = model.messages
+        wake = str(messages[-1].content)
+        assert wake.startswith("[Factory checks, step review]\n")
+        assert "Review the branch." in wake
+        assert '{"work_item": {"issue": 7}, "results": {"branch": "agent/7"}}' in wake
+
+    asyncio.run(scenario())
+
+
+def test_an_agent_steps_thread_names_its_factory_run_and_step(tmp_path):
+    model = StepModel([AIMessageChunk(content="Reviewed.")])
+    dispatcher, _, workspace = agent_runtime(tmp_path, model)
+    (workspace / "verdict").write_text("clean\n")
+
+    async def scenario() -> None:
+        await run_agent_step(dispatcher)
+        threads = await call(dispatcher, "thread.list", filter="all")
+
+        assert isinstance(threads, ThreadListResult)
+        [thread] = threads.threads
+        assert thread.origin == REVIEW
+        assert thread.title == "checks · review · issue 7"
+
+    asyncio.run(scenario())
+
+
+def test_a_gated_tool_in_an_agent_steps_turn_waits_on_the_users_approval(tmp_path):
+    model = StepModel(
+        [
+            AIMessageChunk(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "open-1",
+                        "name": "open_pull_request",
+                        "args": {"branch": "agent/7", "issue": 7},
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessageChunk(content="Opened pull request 70."),
+        ]
+    )
+    dispatcher, log, workspace = agent_runtime(tmp_path, model)
+    (workspace / "verdict").write_text("clean\n")
+
+    async def scenario() -> None:
+        stepping = asyncio.create_task(run_agent_step(dispatcher))
+        async with asyncio.timeout(5):
+            while not (
+                requested := [
+                    event
+                    for event in log.all_events()
+                    if isinstance(event.payload, ApprovalRequested)
+                ]
+            ):
+                await asyncio.sleep(0.01)
+        [approval] = requested
+        assert isinstance(approval.payload, ApprovalRequested)
+        await asyncio.sleep(0.1)
+        waited = not stepping.done()
+        await call(
+            dispatcher,
+            "thread.approval.respond",
+            thread_id=str(approval.thread_id),
+            approval_id=str(approval.payload.approval_id),
+            decision="approve",
+        )
+        result = await asyncio.wait_for(stepping, timeout=5)
+
+        assert waited is True
+        assert isinstance(result, StepResult)
+        assert (result.ending, result.summary) == (StepEnding.CLEAN, "Opened pull request 70.")
+        [tool_result] = [
+            event.payload
+            for event in log.stored(approval.thread_id)
+            if isinstance(event.payload, ToolResult)
+        ]
+        assert (tool_result.output, tool_result.error) == ("{'pr': 70}", False)
+
+    asyncio.run(scenario())
+
+
+def test_an_agent_step_whose_turn_fails_still_runs_its_hook(tmp_path):
+    dispatcher, _, workspace = agent_runtime(tmp_path, BrokenModel([]))
+    (workspace / "verdict").write_text("changes\n")
+
+    async def scenario() -> None:
+        result = await run_agent_step(dispatcher)
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert result.values == {"verdict": "changes", "ending": "failed", "issue": 7}
+        assert result.summary == "The turn failed: The model turn failed unexpectedly."
 
     asyncio.run(scenario())

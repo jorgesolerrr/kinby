@@ -37,6 +37,7 @@ from kinby.contracts import (
     CompletionOutcome,
     Delivery,
     EventType,
+    FactoryRunOrigin,
     GateDecider,
     GateOutcome,
     MessageDelta,
@@ -132,6 +133,7 @@ _CHECKPOINT_SERIALIZER = JsonPlusSerializer(
         UserOrigin,
         RoutineOrigin,
         RoutineTrigger,
+        FactoryRunOrigin,
     )
 )
 

@@ -1530,7 +1530,7 @@ export interface TurnMetrics {
   memory_tokens: number;
   model: string | null;
   navigation?: Navigation;
-  origin: (UserOrigin | RoutineOrigin) | null;
+  origin: (UserOrigin | RoutineOrigin | FactoryRunOrigin) | null;
   outcome?: CompletionOutcome;
   output_tokens: number;
   prompt_version: string | null;
@@ -1588,6 +1588,15 @@ export interface RoutineOrigin {
   kind: "routine";
   name: string;
   trigger: RoutineTrigger;
+}
+/**
+ * A step of a factory run, which started the turn as its agent step.
+ */
+export interface FactoryRunOrigin {
+  factory: FactoryName;
+  kind: "factory-run";
+  run_id: string;
+  step: StepId;
 }
 export interface TurnRated {
   reason?: string | null;
@@ -1656,13 +1665,21 @@ export interface ApiUse {
  */
 export interface StepRunCommand {
   hook?: HookName | null;
+  origin: FactoryRunOrigin;
   results?: {
     [k: string]: StepValue;
   };
-  step: CommandStepRun | CodeStepRun;
+  step: AgentStepRun | CommandStepRun | CodeStepRun;
   work_item: {
     [k: string]: StepValue;
   };
+}
+/**
+ * Run a turn on a new thread of the instance, with the prompt and the run's values.
+ */
+export interface AgentStepRun {
+  kind: "agent";
+  prompt: string;
 }
 /**
  * Run each command in the instance's workspace without a shell, in order.
@@ -1713,7 +1730,7 @@ export interface ThreadSummary {
   last_activity_at: string;
   mode: PermissionMode;
   mode_pinned: boolean;
-  origin: UserOrigin | RoutineOrigin;
+  origin: UserOrigin | RoutineOrigin | FactoryRunOrigin;
   status: ThreadStatus;
   title: string | null;
 }
@@ -1929,7 +1946,7 @@ export interface ModePinned {
 export interface TurnStarted {
   message: string;
   model: string;
-  origin?: UserOrigin | RoutineOrigin;
+  origin?: UserOrigin | RoutineOrigin | FactoryRunOrigin;
   permission_mode?: PermissionMode | null;
   prompt_version?: string | null;
   snapshot?: string | null;
