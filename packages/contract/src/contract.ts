@@ -128,6 +128,8 @@ export type DelegatedRunOutcome = "completed" | "failed" | "limited";
 export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
 export type CompletionOutcome = "work" | "no-work";
 export type TurnVerdict = "good" | "bad";
+export type HookName = string;
+export type ToolName = string;
 export type ApprovalDecision = "approve" | "deny";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
 export type ThreadFilter = "sidebar" | "all" | "archived";
@@ -1621,10 +1623,11 @@ export interface ApiUse {
  * Run one step of a factory run in this instance, and return its result.
  */
 export interface StepRunCommand {
+  hook?: HookName | null;
   results?: {
     [k: string]: StepValue;
   };
-  step: CommandStepRun;
+  step: CommandStepRun | CodeStepRun;
   work_item: {
     [k: string]: StepValue;
   };
@@ -1640,6 +1643,16 @@ export interface CommandStepRun {
    * @minItems 1
    */
   run: [string, ...string[]];
+}
+/**
+ * Call one of the instance's tools, with no model turn around it.
+ *
+ * The tool's parameters named like a value of the run receive that value. A mapping the tool
+ * returns is the step result's values.
+ */
+export interface CodeStepRun {
+  call: ToolName;
+  kind: "code";
 }
 /**
  * What one attempt at a step hands back to the hub.

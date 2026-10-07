@@ -318,6 +318,26 @@
         }
       ]
     },
+    "CodeStepRun": {
+      "additionalProperties": false,
+      "description": "Call one of the instance's tools, with no model turn around it.\n\nThe tool's parameters named like a value of the run receive that value. A mapping the tool\nreturns is the step result's values.",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "kind": {
+          "const": "code",
+          "default": "code",
+          "type": "string"
+        }
+      },
+      "required": [
+        "call",
+        "kind"
+      ],
+      "title": "CodeStepRun",
+      "type": "object"
+    },
     "CommandStepRun": {
       "additionalProperties": false,
       "description": "Run each command in the instance's workspace without a shell, in order.\n\nThe step passes when every command exits with code zero, and stops at the first that does not.",
@@ -1410,6 +1430,10 @@
         "deny"
       ],
       "title": "GateOutcome",
+      "type": "string"
+    },
+    "HookName": {
+      "minLength": 1,
       "type": "string"
     },
     "ImagePrepareCommand": {
@@ -5475,6 +5499,17 @@
       "additionalProperties": false,
       "description": "Run one step of a factory run in this instance, and return its result.",
       "properties": {
+        "hook": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "results": {
           "additionalProperties": {
             "$ref": "#/$defs/StepValue"
@@ -5485,7 +5520,21 @@
           "type": "object"
         },
         "step": {
-          "$ref": "#/$defs/CommandStepRun"
+          "discriminator": {
+            "mapping": {
+              "code": "#/$defs/CodeStepRun",
+              "command": "#/$defs/CommandStepRun"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/CommandStepRun"
+            },
+            {
+              "$ref": "#/$defs/CodeStepRun"
+            }
+          ]
         },
         "work_item": {
           "additionalProperties": {
@@ -6416,6 +6465,10 @@
       ],
       "title": "ToolListResult",
       "type": "object"
+    },
+    "ToolName": {
+      "minLength": 1,
+      "type": "string"
     },
     "ToolResult": {
       "additionalProperties": false,

@@ -340,6 +340,17 @@
       "additionalProperties": false,
       "description": "Commands in the instance's workspace, each run without a shell. Exit code zero passes.",
       "properties": {
+        "hook": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "id": {
           "$ref": "#/$defs/StepId"
         },

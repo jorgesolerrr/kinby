@@ -15,7 +15,15 @@ import yaml
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
-from kinby.contracts import FactoryName, SetupField, StepId, SubscriptionLogin, ValueName
+from kinby.contracts import (
+    FactoryName,
+    HookName,
+    SetupField,
+    StepId,
+    SubscriptionLogin,
+    ToolName,
+    ValueName,
+)
 
 FACTORY_FILE = "factory.yaml"
 #: Where each instance template lives in the factory's folder, as ``instances/<name>/``.
@@ -32,8 +40,6 @@ type RecipeName = Annotated[str, Field(pattern=_FOLDER_NAME)]
 type Duration = Annotated[str, Field(pattern=r"^[1-9][0-9]*[smhd]$")]
 #: A file in the factory's folder, by its path there.
 type FactoryPath = Annotated[str, Field(min_length=1)]
-type ToolName = Annotated[str, Field(min_length=1)]
-type HookName = Annotated[str, Field(min_length=1)]
 
 
 class ValueType(StrEnum):
@@ -122,6 +128,8 @@ class CommandStep(_Step):
     kind: Literal["command"]
     instance: InstanceName = Field(alias="in")
     run: tuple[Annotated[str, Field(min_length=1)], ...] = Field(min_length=1)
+    #: Records the values the step declares, which commands alone hand on none of.
+    hook: HookName | None = None
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)

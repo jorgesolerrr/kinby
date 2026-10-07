@@ -20,6 +20,7 @@ from kinby.factories.file import (
     ApproveStep,
     ClientStep,
     CodeStep,
+    CommandStep,
     FactoryFile,
     InstanceName,
     InvalidFactoryFile,
@@ -141,11 +142,12 @@ def _steps(
                     f'Step "{step.id}" names prompt "{step.prompt}", '
                     "which is not a file in the factory."
                 )
-            if template is not None and step.hook not in template.hooks:
-                yield (
-                    f'Step "{step.id}" names hook "{step.hook}", '
-                    f'which instance "{step.instance}" does not have.'
-                )
+        hook = step.hook if isinstance(step, AgentStep | ClientStep | CommandStep) else None
+        if template is not None and hook is not None and hook not in template.hooks:
+            yield (
+                f'Step "{step.id}" names hook "{hook}", '
+                f'which instance "{step.instance}" does not have.'
+            )
         if isinstance(step, CodeStep) and template is not None and step.call not in template.tools:
             yield (
                 f'Step "{step.id}" calls tool "{step.call}", '

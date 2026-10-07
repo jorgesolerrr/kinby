@@ -17,6 +17,7 @@ from kinby.contracts import (
     FACTORY_RUN_SUBSCRIBE,
     INSTANCE_START,
     INTAKE_SCOPES,
+    CodeStepRun,
     CommandStepRun,
     ErrorCode,
     ErrorEnvelope,
@@ -434,3 +435,185 @@ def test_an_instance_the_hub_gave_no_intake_url_has_no_intake_tool(monkeypatch):
     monkeypatch.delenv("KINBY_INTAKE_URL", raising=False)
 
     assert intake_tools() == ()
+
+
+HANDOFF = """\
+name: checks
+instances:
+  coder: {}
+intake: { instance: coder, routine: scan }
+work_item: { issue: int }
+steps:
+  - id: implement
+    kind: command
+    in: coder
+    run: ["make implement"]
+    hook: record_branch
+    results: { branch: str, committed: bool }
+    retry: 1
+  - id: open-pr
+    kind: code
+    in: coder
+    call: open_pull_request
+    requires: [branch, committed]
+    results: { pr: int }
+done_requires: [pr]
+"""
+TOOLS = '''\
+from kinby.plugins.tools import tool
+
+
+@tool(write=True)
+def open_pull_request(branch: str) -> dict[str, int]:
+    """Open the pull request of the branch."""
+    return {"pr": 42}
+'''
+HANDOFF_FILES = FILES | {"factory.yaml": HANDOFF, "instances/coder/tools/github.py": TOOLS}
+BRANCH = {"branch": "agent/7", "committed": True}
+
+
+def test_the_hub_hands_each_step_its_hook_and_the_values_earlier_steps_recorded(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values=BRANCH),
+        StepResult(ending=StepEnding.CLEAN, values={"pr": 42}),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, HANDOFF_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [command for _, command in control.steps] == [
+            StepRunCommand(
+                step=CommandStepRun(run=["make implement"]),
+                hook="record_branch",
+                work_item={"issue": 7},
+            ),
+            StepRunCommand(
+                step=CodeStepRun(call="open_pull_request"), work_item={"issue": 7}, results=BRANCH
+            ),
+        ]
+        assert [attempt.values for attempt in finished.attempts] == [BRANCH, {"pr": 42}]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("recorded", "summary"),
+    [
+        (
+            {"committed": True},
+            'Step "open-pr" requires "branch", which this step did not record.',
+        ),
+        (
+            {"branch": "agent/7", "committed": False},
+            'Step "open-pr" requires "committed", which this step recorded as false.',
+        ),
+    ],
+)
+def test_a_failing_requires_check_fails_the_step_that_should_have_produced_the_value(
+    tmp_path, recorded, summary
+):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values=recorded),
+        StepResult(ending=StepEnding.CLEAN, values=BRANCH),
+        StepResult(ending=StepEnding.CLEAN, values={"pr": 42}),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, HANDOFF_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [(a.step, a.attempt, a.ending) for a in finished.attempts] == [
+            ("implement", 1, StepEnding.CLEAN),
+            ("implement", 2, StepEnding.FAILED),
+            ("implement", 3, StepEnding.CLEAN),
+            ("open-pr", 1, StepEnding.CLEAN),
+        ]
+        assert finished.attempts[1].summary == summary
+        assert [command.step.kind for _, command in control.steps] == [
+            "command",
+            "command",
+            "code",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_requires_check_that_fails_past_the_producing_steps_retry_needs_a_human(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.CLEAN)] * 2
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, HANDOFF_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert finished.run.step == "implement"
+        assert {attempt.step for attempt in finished.attempts} == {"implement"}
+        assert [command.step.kind for _, command in control.steps] == ["command", "command"]
+
+    asyncio.run(scenario())
+
+
+def test_a_value_is_never_read_from_a_step_results_summary(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(
+            ending=StepEnding.CLEAN,
+            summary='Pushed the branch.\n{"branch": "agent/7", "committed": true}',
+        )
+    ] * 2
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, HANDOFF_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert finished.attempts[0].summary.startswith("Pushed the branch.")
+        assert finished.attempts[0].values == {}
+        assert finished.attempts[1].summary == (
+            'Step "open-pr" requires "branch", which this step did not record.'
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_run_whose_done_requires_fails_does_not_finish_as_done(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values=BRANCH),
+        StepResult(ending=StepEnding.CLEAN, summary="Opened nothing."),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, HANDOFF_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert finished.run.step == "open-pr"
+        last = finished.attempts[-1]
+        assert (last.step, last.ending) == ("open-pr", StepEnding.FAILED)
+        assert last.summary == (
+            'Opened nothing.\nThe run\'s done_requires needs "pr", which no step recorded.'
+        )
+
+    asyncio.run(scenario())
