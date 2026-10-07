@@ -33,9 +33,10 @@ REVIEW_NOT_RUN = (
 GITHUB_API_VERSION = "2026-03-10"
 #: How long one gh or git command may run, in seconds.
 _COMMAND_TIMEOUT = 900
-#: Who may write ticket text the coding client reads (ADR 0073), by GitHub's author_association.
+#: Who may write ticket text and review feedback the coding client reads (ADRs 0073 and 0079), by
+#: GitHub's author_association.
 _TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
-#: The review apps whose feedback babysitting answers, whatever their association (ADR 0031).
+#: The review apps whose feedback babysitting answers, whatever their association (ADR 0079).
 _TRUSTED_APPS = frozenset({"greptile-apps", "greptile-apps[bot]"})
 _REVIEW_THREADS = """
 query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
