@@ -443,6 +443,7 @@ def issue(
     parent: int | None = None,
     author: str = "owner",
     association: str = "OWNER",
+    labels: Sequence[str] = ("ready-for-agent",),
 ) -> dict[str, object]:
     """An open issue labeled ready-for-agent, as GitHub's REST API answers with it."""
     return {
@@ -450,7 +451,7 @@ def issue(
         "title": title,
         "html_url": f"https://github.com/owner/project/issues/{number}",
         "state": "open",
-        "labels": [{"name": "ready-for-agent"}],
+        "labels": [{"name": label} for label in labels],
         "user": {"login": author},
         "author_association": association,
         "parent_issue_url": (
@@ -466,13 +467,26 @@ def comment(author: str, association: str) -> dict[str, object]:
 
 
 def pull_request(
-    number: int, branch: str, closes: int, stack: int | None = None
+    number: int,
+    branch: str,
+    closes: int,
+    stack: int | None = None,
+    *,
+    head_repository: str | None = "owner/project",
 ) -> dict[str, object]:
-    """An open agent pull request, as GitHub's REST API lists it."""
+    """An open agent pull request, as GitHub's REST API lists it.
+
+    A fork's has another *head_repository*, and one whose fork is gone has None.
+    """
     return {
         "number": number,
         "html_url": f"https://github.com/owner/project/pull/{number}",
-        "head": {"ref": branch, "sha": "abc123"},
+        "head": {
+            "ref": branch,
+            "sha": "abc123",
+            "repo": None if head_repository is None else {"full_name": head_repository},
+        },
+        "base": {"repo": {"full_name": "owner/project"}},
         "body": f"Closes #{closes}\n\nWhat changed.",
         "stack": None if stack is None else {"number": stack},
     }
@@ -710,6 +724,27 @@ def test_open_pr_stacks_a_sub_issues_pull_request_on_its_siblings(
     asyncio.run(scenario())
 
 
+def test_open_pr_takes_ready_for_human_off_an_issue_an_earlier_failure_handed_to_a_human(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    implemented(workspace, BRANCH["branch"], "Adds dark mode.\n")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(7, "Add dark mode", labels=["ready-for-human"]))
+    github.answer("repo", "view", output=REPOSITORY)
+    github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await opened(dispatcher, 7, BRANCH)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert github.calls[-1] == ["issue", "edit", "7", "--remove-label", "ready-for-human"]
+
+    asyncio.run(scenario())
+
+
 def test_open_pr_pushes_nothing_when_the_client_wrote_no_pull_request_body(tmp_path, monkeypatch):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
@@ -795,7 +830,14 @@ def test_the_scan_hands_the_oldest_eligible_issue_to_the_software_factory(tmp_pa
         ],
     )
     github.answer(
-        "repos/{owner}/{repo}/pulls", output=[[pull_request(30, "agent/3-has-a-pull-request", 3)]]
+        "repos/{owner}/{repo}/pulls",
+        output=[
+            [
+                pull_request(30, "agent/3-has-a-pull-request", 3),
+                pull_request(31, "agent/6-eligible", 6, head_repository="stranger/project"),
+                pull_request(32, "agent/6-eligible", 6, head_repository=None),
+            ]
+        ],
     )
     for number, blocking in ((4, blockers(9)), (6, blockers()), (8, blockers())):
         github.answer(ISSUE.format(number=number) + "/dependencies/blocked_by", output=blocking)
