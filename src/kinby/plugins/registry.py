@@ -132,7 +132,12 @@ def _directory_signature(tools_path: Path) -> FileSignature:
 
 
 def load_tool_file(path: Path) -> tuple[Tool, ...]:
-    module_name = f"_kinby_tool_{uuid4().hex}"
+    return _module_tools(load_plugin_module(path))
+
+
+def load_plugin_module(path: Path) -> ModuleType:
+    """Run one plugin file of an instance as a fresh module. Its errors propagate."""
+    module_name = f"_kinby_plugin_{uuid4().hex}"
     module = ModuleType(module_name)
     module.__file__ = str(path)
     # Decorators and annotation resolvers need the defining module during execution.
@@ -142,7 +147,7 @@ def load_tool_file(path: Path) -> tuple[Tool, ...]:
         exec(code, module.__dict__)
     finally:
         sys.modules.pop(module_name, None)
-    return _module_tools(module)
+    return module
 
 
 def _module_tools(module: ModuleType) -> tuple[Tool, ...]:

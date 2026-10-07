@@ -1,0 +1,406 @@
+import asyncio
+from pathlib import Path
+
+from kinby.contracts import (
+    FACTORY_CHECK,
+    FACTORY_EDIT,
+    FACTORY_GET,
+    FACTORY_LIST,
+    ErrorCode,
+    ErrorEnvelope,
+    FactoryCheckCommand,
+    FactoryCheckResult,
+    FactoryEditCommand,
+    FactoryGetCommand,
+    FactoryListCommand,
+    FactoryListResult,
+    FactoryResult,
+    FactorySource,
+    FactorySummary,
+)
+from kinby.hub import Hub
+from tests.test_hub import FakeImages, FakeRuntime, hub_client
+
+FACTORY = """\
+name: tickets
+instances:
+  coder: { image: coder }
+intake: { instance: coder, routine: scan }
+work_item: { issue: int, repo: str }
+steps:
+  - id: implement
+    kind: client
+    in: coder
+    client: claude
+    prompt: prompts/implement.md
+    hook: record_branch
+    results: { branch: str }
+    timeout: 60m
+  - id: review
+    kind: agent
+    in: coder
+    prompt: prompts/review.md
+    hook: read_verdict
+    requires: [branch]
+    outcomes: { clean: next, changes: { back: implement, max: 3 } }
+  - id: checks
+    kind: command
+    in: coder
+    run: ["uv run pytest"]
+    requires: [branch]
+  - id: open-pr
+    kind: code
+    in: coder
+    call: open_pull_request
+    requires: [branch, repo]
+    results: { pr: int }
+    retry: 0
+  - id: babysit
+    kind: wait
+    signal: { github: pull_request_review, pr: "{{pr}}" }
+    deadline: 7d
+  - id: merge
+    kind: approve
+    summary: Merge the pull request.
+done_requires: [pr]
+"""
+TOOLS = '''\
+from kinby.plugins.tools import tool
+
+
+@tool(write=True)
+def open_pull_request() -> str:
+    """Open the pull request."""
+    return "opened"
+'''
+HOOKS = """\
+from kinby.plugins.hooks import hook
+
+
+@hook
+def record_branch() -> None:
+    pass
+
+
+@hook
+def read_verdict() -> None:
+    pass
+"""
+FILES = {
+    "factory.yaml": FACTORY,
+    "prompts/implement.md": "Implement issue {{issue}}.\n",
+    "prompts/review.md": "Review the branch.\n",
+    "instances/coder/routines/scan/ROUTINE.md": "---\ndescription: Scan\n---\nScan.\n",
+    "instances/coder/tools/github.py": TOOLS,
+    "instances/coder/hooks/record.py": HOOKS,
+}
+
+
+def write_factory(directory: Path, files: dict[str, str]) -> None:
+    for name, content in files.items():
+        path = directory / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+
+def factory_hub(tmp_path: Path, *, shipped: dict[str, dict[str, str]] | None = None) -> Hub:
+    shipped_directory = tmp_path / "shipped"
+    shipped_directory.mkdir(parents=True)
+    for name, files in (shipped or {}).items():
+        write_factory(shipped_directory / name, files)
+    return Hub(
+        tmp_path / "hub",
+        runtime=FakeRuntime(),
+        images=FakeImages(),
+        shipped_factories=shipped_directory,
+    )
+
+
+def problems(tmp_path: Path, files: dict[str, str]) -> list[str]:
+    """What the factory check finds in a hub factory made of *files*."""
+    hub = factory_hub(tmp_path)
+    write_factory(tmp_path / "hub" / "factories" / "tickets", files)
+    client = hub_client(hub)
+
+    async def check() -> list[str]:
+        result = await client.call(FACTORY_CHECK, FactoryCheckCommand(name="tickets"))
+        assert isinstance(result, FactoryCheckResult)
+        return result.problems
+
+    return asyncio.run(check())
+
+
+def renamed(files: dict[str, str], name: str) -> dict[str, str]:
+    return files | {"factory.yaml": files["factory.yaml"].replace("name: tickets", f"name: {name}")}
+
+
+def test_list_and_get_serve_the_hubs_factories_and_the_shipped_ones(tmp_path):
+    hub = factory_hub(tmp_path, shipped={"software": renamed(FILES, "software")})
+    write_factory(tmp_path / "hub" / "factories" / "tickets", FILES)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        listed = await client.call(FACTORY_LIST, FactoryListCommand())
+        got = await client.call(FACTORY_GET, FactoryGetCommand(name="tickets"))
+        missing = await client.call(FACTORY_GET, FactoryGetCommand(name="absent"))
+
+        assert isinstance(listed, FactoryListResult)
+        assert listed.factories == [
+            FactorySummary(name="software", source=FactorySource.SHIPPED),
+            FactorySummary(name="tickets", source=FactorySource.HUB),
+        ]
+        assert isinstance(got, FactoryResult)
+        assert got.source is FactorySource.HUB
+        assert got.files == FILES
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
+
+    asyncio.run(scenario())
+
+
+def test_the_check_passes_a_factory_whose_names_all_resolve(tmp_path):
+    assert problems(tmp_path, FILES) == []
+
+
+def test_the_check_reports_every_name_that_does_not_resolve(tmp_path):
+    factory = (
+        FACTORY.replace("coder: { image: coder }", "coder: { image: rust }\n  reviewer: {}")
+        .replace("routine: scan", "routine: sweep")
+        .replace("prompts/review.md", "prompts/missing.md")
+        .replace("hook: record_branch", "hook: record_commits")
+        .replace("call: open_pull_request", "call: merge_pull_request")
+    )
+
+    found = problems(tmp_path, FILES | {"factory.yaml": factory})
+
+    assert found == [
+        'Instance "coder" names image recipe "rust", which kinby does not ship.',
+        'Instance "reviewer" has no template: instances/reviewer/ is not a folder.',
+        'The intake routine "sweep" is not in instance "coder".',
+        'Step "implement" names hook "record_commits", which instance "coder" does not have.',
+        'Step "review" names prompt "prompts/missing.md", which is not a file in the factory.',
+        'Step "open-pr" calls tool "merge_pull_request", which instance "coder" does not have.',
+    ]
+
+
+def test_the_check_reports_a_tool_or_hook_file_that_does_not_load(tmp_path):
+    broken = {
+        "instances/coder/tools/github.py": "raise RuntimeError('no token')\n",
+        "instances/coder/hooks/record.py": "import not_installed\n",
+    }
+
+    found = problems(tmp_path, FILES | broken)
+
+    assert found[:2] == [
+        "instances/coder/tools/github.py: RuntimeError: no token",
+        "instances/coder/hooks/record.py: ModuleNotFoundError: No module named 'not_installed'",
+    ]
+    assert (
+        'Step "open-pr" calls tool "open_pull_request", which instance "coder" does not have.'
+        in found
+    )
+
+
+def test_a_prompt_outside_the_factory_folder_does_not_resolve(tmp_path):
+    (tmp_path / "secret.md").write_text("outside\n", encoding="utf-8")
+    factory = FACTORY.replace("prompts/review.md", "../../../secret.md")
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Step "review" names prompt "../../../secret.md", which is not a file in the factory.'
+    ]
+
+
+def test_the_check_fails_a_step_whose_input_no_earlier_step_or_work_item_holds(tmp_path):
+    factory = (
+        FACTORY.replace("requires: [branch, repo]", "requires: [branch, pr, title]")
+        .replace("requires: [branch]\n    outcomes", "requires: [repo, issue]\n    outcomes")
+        .replace("done_requires: [pr]", "done_requires: [pr, merged]")
+    )
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Step "open-pr" requires "pr", which no earlier step declares in its results '
+        "and the work item does not carry.",
+        'Step "open-pr" requires "title", which no earlier step declares in its results '
+        "and the work item does not carry.",
+        'done_requires names "merged", which no step declares in its results '
+        "and the work item does not carry.",
+    ]
+
+
+def test_the_check_fails_a_send_back_to_a_step_that_is_not_earlier(tmp_path):
+    factory = FACTORY.replace(
+        "outcomes: { clean: next, changes: { back: implement, max: 3 } }",
+        "outcomes: { changes: { back: review, max: 3 }, later: { back: checks, max: 1 } }",
+    )
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Step "review" sends work back to "review", which is not an earlier step.',
+        'Step "review" sends work back to "checks", which is not an earlier step.',
+    ]
+
+
+def test_agent_and_client_steps_must_name_a_hook(tmp_path):
+    factory = FACTORY.replace("    hook: record_branch\n", "").replace(
+        "    hook: read_verdict\n", ""
+    )
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        "factory.yaml: steps.0.client.hook: Field required",
+        "factory.yaml: steps.1.agent.hook: Field required",
+    ]
+
+
+def test_the_check_reports_a_factory_file_that_is_missing_or_not_yaml(tmp_path):
+    assert problems(tmp_path / "missing", {"prompts/review.md": "Review.\n"}) == [
+        "The factory has no factory.yaml."
+    ]
+    found = problems(tmp_path / "broken", FILES | {"factory.yaml": "steps: [\n"})
+    assert len(found) == 1
+    assert found[0].startswith("factory.yaml is not YAML: ")
+
+
+async def read(client, name: str = "tickets") -> FactoryResult:
+    result = await client.call(FACTORY_GET, FactoryGetCommand(name=name))
+    assert isinstance(result, FactoryResult)
+    return result
+
+
+def test_an_edit_that_passes_the_check_replaces_the_factory(tmp_path):
+    hub = factory_hub(tmp_path)
+    write_factory(tmp_path / "hub" / "factories" / "tickets", FILES)
+    client = hub_client(hub)
+    changed = {
+        "factory.yaml": FACTORY.replace("prompts/review.md", "prompts/check.md"),
+        "prompts/check.md": "Check the branch.\n",
+    }
+
+    async def scenario() -> None:
+        before = await read(client)
+        edited = await client.call(
+            FACTORY_EDIT, FactoryEditCommand(name="tickets", files=changed, hash=before.hash)
+        )
+
+        assert isinstance(edited, FactoryResult)
+        assert edited.files == FILES | changed
+        assert edited.hash != before.hash
+        assert await read(client) == edited
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_that_fails_the_check_changes_nothing(tmp_path):
+    hub = factory_hub(tmp_path)
+    write_factory(tmp_path / "hub" / "factories" / "tickets", FILES)
+    client = hub_client(hub)
+    broken = {
+        "factory.yaml": FACTORY.replace("prompts/review.md", "prompts/check.md"),
+        "prompts/implement.md": "Implement it.\n",
+    }
+
+    async def scenario() -> None:
+        before = await read(client)
+        refused = await client.call(
+            FACTORY_EDIT, FactoryEditCommand(name="tickets", files=broken, hash=before.hash)
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert (
+            'Step "review" names prompt "prompts/check.md", which is not a file in the factory.'
+            in refused.message
+        )
+        assert await read(client) == before
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_from_a_stale_read_is_refused(tmp_path):
+    hub = factory_hub(tmp_path)
+    write_factory(tmp_path / "hub" / "factories" / "tickets", FILES)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        before = await read(client)
+        command = FactoryEditCommand(
+            name="tickets", files={"prompts/review.md": "Review it.\n"}, hash=before.hash
+        )
+        await client.call(FACTORY_EDIT, command)
+        stale = await client.call(
+            FACTORY_EDIT, command.model_copy(update={"files": {"prompts/review.md": "Mine.\n"}})
+        )
+
+        assert isinstance(stale, ErrorEnvelope)
+        assert stale.code is ErrorCode.STALE
+        assert (await read(client)).files["prompts/review.md"] == "Review it.\n"
+
+    asyncio.run(scenario())
+
+
+def test_editing_a_shipped_factory_copies_it_into_the_hubs_factories(tmp_path):
+    shipped = renamed(FILES, "software")
+    hub = factory_hub(tmp_path, shipped={"software": shipped})
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        before = await read(client, "software")
+        edited = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(
+                name="software", files={"prompts/review.md": "Review it.\n"}, hash=before.hash
+            ),
+        )
+        listed = await client.call(FACTORY_LIST, FactoryListCommand())
+
+        assert before.source is FactorySource.SHIPPED
+        assert isinstance(edited, FactoryResult)
+        assert edited.source is FactorySource.HUB
+        assert edited.files == shipped | {"prompts/review.md": "Review it.\n"}
+        assert await read(client, "software") == edited
+        assert isinstance(listed, FactoryListResult)
+        assert listed.factories == [FactorySummary(name="software", source=FactorySource.HUB)]
+        assert (tmp_path / "shipped" / "software" / "prompts" / "review.md").read_text(
+            encoding="utf-8"
+        ) == FILES["prompts/review.md"]
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_without_a_hash_creates_a_factory_only_when_none_has_its_name(tmp_path):
+    hub = factory_hub(tmp_path, shipped={"software": renamed(FILES, "software")})
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        created = await client.call(
+            FACTORY_EDIT, FactoryEditCommand(name="tickets", files=FILES, hash=None)
+        )
+        taken = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(name="software", files=renamed(FILES, "software"), hash=None),
+        )
+
+        assert isinstance(created, FactoryResult)
+        assert created.files == FILES
+        assert isinstance(taken, ErrorEnvelope)
+        assert taken.code is ErrorCode.STALE
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_cannot_write_outside_the_factorys_folder(tmp_path):
+    hub = factory_hub(tmp_path)
+    write_factory(tmp_path / "hub" / "factories" / "tickets", FILES)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        before = await read(client)
+        refused = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(name="tickets", files={"../escaped.md": "out\n"}, hash=before.hash),
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert not (tmp_path / "hub" / "factories" / "escaped.md").exists()
+        assert await read(client) == before
+
+    asyncio.run(scenario())

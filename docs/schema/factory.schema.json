@@ -1,0 +1,729 @@
+{
+  "$defs": {
+    "AgentStep": {
+      "additionalProperties": false,
+      "description": "A kinby turn on a new thread of the instance, with the prompt.",
+      "properties": {
+        "hook": {
+          "$ref": "#/$defs/HookName"
+        },
+        "id": {
+          "$ref": "#/$defs/StepId"
+        },
+        "in": {
+          "$ref": "#/$defs/InstanceName"
+        },
+        "kind": {
+          "const": "agent",
+          "title": "Kind",
+          "type": "string"
+        },
+        "outcomes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Outcome"
+          },
+          "title": "Outcomes",
+          "type": "object"
+        },
+        "prompt": {
+          "$ref": "#/$defs/FactoryPath"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "results": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ValueType"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Results",
+          "type": "object"
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "in",
+        "id",
+        "kind",
+        "prompt",
+        "hook"
+      ],
+      "title": "AgentStep",
+      "type": "object"
+    },
+    "ApproveStep": {
+      "additionalProperties": false,
+      "description": "Park the run until the user approves it or sends it back.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/StepId"
+        },
+        "kind": {
+          "const": "approve",
+          "title": "Kind",
+          "type": "string"
+        },
+        "outcomes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Outcome"
+          },
+          "title": "Outcomes",
+          "type": "object"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "results": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ValueType"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Results",
+          "type": "object"
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "summary"
+      ],
+      "title": "ApproveStep",
+      "type": "object"
+    },
+    "ClientStep": {
+      "additionalProperties": false,
+      "description": "A coding client run directly in the instance's container, with no kinby turn around it.",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/CodingClient"
+        },
+        "hook": {
+          "$ref": "#/$defs/HookName"
+        },
+        "id": {
+          "$ref": "#/$defs/StepId"
+        },
+        "in": {
+          "$ref": "#/$defs/InstanceName"
+        },
+        "kind": {
+          "const": "client",
+          "title": "Kind",
+          "type": "string"
+        },
+        "outcomes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Outcome"
+          },
+          "title": "Outcomes",
+          "type": "object"
+        },
+        "prompt": {
+          "$ref": "#/$defs/FactoryPath"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "results": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ValueType"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Results",
+          "type": "object"
+        },
+        "resume": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "in",
+        "id",
+        "kind",
+        "client",
+        "prompt",
+        "hook"
+      ],
+      "title": "ClientStep",
+      "type": "object"
+    },
+    "CodeStep": {
+      "additionalProperties": false,
+      "description": "An instance tool the model never sees.",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "id": {
+          "$ref": "#/$defs/StepId"
+        },
+        "in": {
+          "$ref": "#/$defs/InstanceName"
+        },
+        "kind": {
+          "const": "code",
+          "title": "Kind",
+          "type": "string"
+        },
+        "outcomes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Outcome"
+          },
+          "title": "Outcomes",
+          "type": "object"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "results": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ValueType"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Results",
+          "type": "object"
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "in",
+        "id",
+        "kind",
+        "call"
+      ],
+      "title": "CodeStep",
+      "type": "object"
+    },
+    "CodingClient": {
+      "enum": [
+        "claude",
+        "codex"
+      ],
+      "title": "CodingClient",
+      "type": "string"
+    },
+    "CommandStep": {
+      "additionalProperties": false,
+      "description": "Commands in the instance's workspace, each run without a shell. Exit code zero passes.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/StepId"
+        },
+        "in": {
+          "$ref": "#/$defs/InstanceName"
+        },
+        "kind": {
+          "const": "command",
+          "title": "Kind",
+          "type": "string"
+        },
+        "outcomes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Outcome"
+          },
+          "title": "Outcomes",
+          "type": "object"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "results": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ValueType"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Results",
+          "type": "object"
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry"
+        },
+        "run": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Run",
+          "type": "array"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "in",
+        "run",
+        "id",
+        "kind"
+      ],
+      "title": "CommandStep",
+      "type": "object"
+    },
+    "Duration": {
+      "pattern": "^[1-9][0-9]*[smhd]$",
+      "type": "string"
+    },
+    "FactoryName": {
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "type": "string"
+    },
+    "FactoryPath": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "HookName": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "InstanceDeclaration": {
+      "additionalProperties": false,
+      "description": "One instance the factory's steps run in. Its template is ``instances/<name>/``.",
+      "properties": {
+        "image": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecipeName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "InstanceDeclaration",
+      "type": "object"
+    },
+    "InstanceName": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "Intake": {
+      "additionalProperties": false,
+      "description": "The routine that hands the factory its work items, and the instance it runs in.",
+      "properties": {
+        "instance": {
+          "$ref": "#/$defs/InstanceName"
+        },
+        "routine": {
+          "$ref": "#/$defs/RoutineName"
+        }
+      },
+      "required": [
+        "instance",
+        "routine"
+      ],
+      "title": "Intake",
+      "type": "object"
+    },
+    "Outcome": {
+      "anyOf": [
+        {
+          "enum": [
+            "next",
+            "done",
+            "stop"
+          ],
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/SendBack"
+        }
+      ]
+    },
+    "RecipeName": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "RoutineName": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "SendBack": {
+      "additionalProperties": false,
+      "description": "Send the work back to an earlier step, at most ``max`` times along this edge.",
+      "properties": {
+        "back": {
+          "$ref": "#/$defs/StepId"
+        },
+        "max": {
+          "minimum": 1,
+          "title": "Max",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "back",
+        "max"
+      ],
+      "title": "SendBack",
+      "type": "object"
+    },
+    "Step": {
+      "discriminator": {
+        "mapping": {
+          "agent": "#/$defs/AgentStep",
+          "approve": "#/$defs/ApproveStep",
+          "client": "#/$defs/ClientStep",
+          "code": "#/$defs/CodeStep",
+          "command": "#/$defs/CommandStep",
+          "wait": "#/$defs/WaitStep"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AgentStep"
+        },
+        {
+          "$ref": "#/$defs/ClientStep"
+        },
+        {
+          "$ref": "#/$defs/CommandStep"
+        },
+        {
+          "$ref": "#/$defs/CodeStep"
+        },
+        {
+          "$ref": "#/$defs/WaitStep"
+        },
+        {
+          "$ref": "#/$defs/ApproveStep"
+        }
+      ]
+    },
+    "StepId": {
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "type": "string"
+    },
+    "ToolName": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "ValueName": {
+      "pattern": "^[a-z_][a-z0-9_]*$",
+      "type": "string"
+    },
+    "ValueType": {
+      "enum": [
+        "str",
+        "int",
+        "bool"
+      ],
+      "title": "ValueType",
+      "type": "string"
+    },
+    "WaitStep": {
+      "additionalProperties": false,
+      "description": "Park the run until a signal matches the filter, or the deadline passes.",
+      "properties": {
+        "deadline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "$ref": "#/$defs/StepId"
+        },
+        "kind": {
+          "const": "wait",
+          "title": "Kind",
+          "type": "string"
+        },
+        "outcomes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Outcome"
+          },
+          "title": "Outcomes",
+          "type": "object"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "results": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ValueType"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Results",
+          "type": "object"
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry"
+        },
+        "signal": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "title": "Signal",
+          "type": "object"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "signal"
+      ],
+      "title": "WaitStep",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A factory: the instances its steps run in, its intake, and its line of steps.",
+  "properties": {
+    "done_requires": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ValueName"
+      },
+      "title": "Done Requires",
+      "type": "array"
+    },
+    "instances": {
+      "additionalProperties": {
+        "$ref": "#/$defs/InstanceDeclaration"
+      },
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/InstanceName"
+      },
+      "title": "Instances",
+      "type": "object"
+    },
+    "intake": {
+      "$ref": "#/$defs/Intake"
+    },
+    "name": {
+      "$ref": "#/$defs/FactoryName"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/Step"
+      },
+      "minItems": 1,
+      "title": "Steps",
+      "type": "array"
+    },
+    "work_item": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ValueType"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/ValueName"
+      },
+      "title": "Work Item",
+      "type": "object"
+    }
+  },
+  "required": [
+    "instances",
+    "steps",
+    "name",
+    "intake",
+    "work_item"
+  ],
+  "title": "FactoryFile",
+  "type": "object"
+}

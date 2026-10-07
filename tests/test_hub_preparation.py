@@ -26,8 +26,8 @@ from kinby.contracts import (
     SetupFieldKind,
     SetupFieldType,
 )
+from kinby.factories import RECIPES_DIRECTORY
 from kinby.hub import BuiltImage, Hub, ImageSelection
-from kinby.hub.curated import CURATED_DIRECTORY
 from kinby.packages import InstalledPackage, PackageDescriptor
 from tests.test_hub import (
     FakeImages,
@@ -306,7 +306,7 @@ def test_a_curated_selection_is_prepared_described_and_created_with_its_entry_re
         assert isinstance(created, LifecycleOperationResult)
         await finished_operation(client, created)
 
-        recipe = (CURATED_DIRECTORY / "coder.Dockerfile").read_text(encoding="utf-8")
+        recipe = (RECIPES_DIRECTORY / "coder.Dockerfile").read_text(encoding="utf-8")
         with_recipe = coder.selection.model_copy(update={"image_recipe": recipe})
         assert outcome.state is OperationState.SUCCEEDED
         assert not isinstance(described, ErrorEnvelope)
