@@ -1729,6 +1729,7 @@ export interface CommandStepRun {
 export interface CodeStepRun {
   call: ToolName;
   kind: "code";
+  summary?: string | null;
 }
 /**
  * What one attempt at a step hands back to the hub.

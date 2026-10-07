@@ -2222,6 +2222,10 @@ class CodeStepRun(ContractModel):
 
     kind: Literal["code"] = "code"
     call: ToolName
+    #: Set when the hub calls the factory's needs_human tool: the summary of the last attempt of
+    #: the step the run stopped at. The tool's ``summary`` parameter receives it, and its
+    #: ``step`` parameter that step's id.
+    summary: str | None = None
 
 
 class AgentStepRun(ContractModel):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 
 import aiohttp
 
@@ -14,7 +15,9 @@ from kinby.contracts import (
     FactoryRunIntakeCommand,
     FrameId,
     ResultFrame,
+    RoutineName,
     StepValue,
+    ValueName,
     parse_server_frame,
 )
 from kinby.plugins.tools import Tool, ToolContext, tool
@@ -37,13 +40,22 @@ async def hand_to_factory(work_item: dict[str, StepValue], context: ToolContext)
     """
     if context.routine is None:
         raise ValueError("Only a factory's intake routine hands it work items.")
+    run = await hand_over(context.routine, work_item)
+    return f'Factory run {run.run_id} of "{run.factory}" is {run.status.value}.'
+
+
+async def hand_over(routine: RoutineName, work_item: Mapping[ValueName, StepValue]) -> FactoryRun:
+    """Hand a work item to the factory *routine* is the intake of, on this instance's intake route.
+
+    A work item that matches a run still open returns that run.
+    """
     # kinby.core imports the plugins, so the server's names load on first use.
     from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 
     call = CallFrame(
         id=FrameId("1"),
         method=FACTORY_RUN_INTAKE.name,
-        params=FactoryRunIntakeCommand(routine=context.routine, work_item=work_item).model_dump(
+        params=FactoryRunIntakeCommand(routine=routine, work_item=dict(work_item)).model_dump(
             mode="json"
         ),
     )
@@ -59,8 +71,7 @@ async def hand_to_factory(work_item: dict[str, StepValue], context: ToolContext)
         raise ConnectionError(f"The hub refused the intake: {exc}") from exc
     match parse_server_frame(answer):
         case ResultFrame(result=result):
-            run = FactoryRun.model_validate(result)
-            return f'Factory run {run.run_id} of "{run.factory}" is {run.status.value}.'
+            return FactoryRun.model_validate(result)
         case ErrorFrame(error=error):
             raise ValueError(f"The hub refused the intake: {error.message}")
         case other:

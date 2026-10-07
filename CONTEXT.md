@@ -641,7 +641,7 @@ The **routine** that starts **factory runs**: it finds new **work items** and ha
 
 ### Needs human
 
-A **factory run** stopped for the user because a **step** ran out of retries or send-backs, or because the run's final check failed. Nothing it did is undone; the user retries the step, sends the run back, or cancels it.
+A **factory run** stopped for the user because a **step** ran out of retries or send-backs, or because the run's final check failed. Nothing it did is undone. The **factory** can say so where the **work item** came from, as the **software factory** labels its issue `ready-for-human`. The user retries the step, sends the run back, or cancels it.
 
 ### Factory check
 
