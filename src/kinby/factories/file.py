@@ -15,7 +15,7 @@ import yaml
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
-from kinby.contracts import FactoryName, SetupField, SubscriptionLogin
+from kinby.contracts import FactoryName, SetupField, StepId, SubscriptionLogin, ValueName
 
 FACTORY_FILE = "factory.yaml"
 #: Where each instance template lives in the factory's folder, as ``instances/<name>/``.
@@ -28,9 +28,6 @@ _FOLDER_NAME = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
 type InstanceName = Annotated[str, Field(pattern=_FOLDER_NAME)]
 type RoutineName = Annotated[str, Field(pattern=_FOLDER_NAME)]
 type RecipeName = Annotated[str, Field(pattern=_FOLDER_NAME)]
-type StepId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
-#: The name of a value a work item carries or a step result declares, such as ``branch``.
-type ValueName = Annotated[str, Field(pattern=r"^[a-z_][a-z0-9_]*$")]
 #: A whole number of seconds, minutes, hours or days, such as ``60m`` or ``7d``.
 type Duration = Annotated[str, Field(pattern=r"^[1-9][0-9]*[smhd]$")]
 #: A file in the factory's folder, by its path there.

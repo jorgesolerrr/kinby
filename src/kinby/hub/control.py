@@ -12,6 +12,7 @@ from kinby.contracts import (
     INSTANCE_DRAIN,
     INSTANCE_PROBE,
     STATS_GET,
+    STEP_RUN,
     CallFrame,
     Capability,
     ContractModel,
@@ -29,6 +30,8 @@ from kinby.contracts import (
     ResultFrame,
     StatsGetCommand,
     StatsGetResult,
+    StepResult,
+    StepRunCommand,
     parse_server_frame,
 )
 
@@ -74,6 +77,8 @@ class InstanceControl(Protocol):
         self, endpoint: ControlEndpoint, command: StatsGetCommand
     ) -> StatsGetResult: ...
 
+    async def run_step(self, endpoint: ControlEndpoint, command: StepRunCommand) -> StepResult: ...
+
 
 class HttpInstanceControl:
     """Speak the contract to an instance over its own HTTP server, one connection per call."""
@@ -108,6 +113,10 @@ class HttpInstanceControl:
     async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
         """Read the instance's stats. The caller decides how long to wait."""
         return await _call(endpoint, STATS_GET, command, "the stats call")
+
+    async def run_step(self, endpoint: ControlEndpoint, command: StepRunCommand) -> StepResult:
+        """Run one factory step in the instance and wait for its result, however long it takes."""
+        return await _call(endpoint, STEP_RUN, command, "the step")
 
 
 async def _call[Command: ContractModel, Result: ContractModel](

@@ -435,6 +435,11 @@ class LangGraphRunner:
                                 instance=self._instance,
                                 thread_id=turn.thread_id,
                                 turn_id=turn.turn_id,
+                                routine=(
+                                    turn.origin.name
+                                    if isinstance(turn.origin, RoutineOrigin)
+                                    else None
+                                ),
                                 run_reporter=_run_reporter(emit),
                             ),
                             user_message=HumanMessage(
@@ -602,6 +607,7 @@ class LangGraphRunner:
                 context = ToolContext(
                     instance=self._instance,
                     thread_id=thread_id,
+                    routine=routine.name,
                     package_config=instance_package_config(self._instance),
                     run_reporter=_run_reporter(emit),
                 )

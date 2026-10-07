@@ -12,7 +12,7 @@ from uuid import UUID
 from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import JsonValue
 
-from kinby.contracts import DelegatedRun
+from kinby.contracts import DelegatedRun, RoutineName
 from kinby.instance import Instance
 from kinby.packages import PackageConfig
 
@@ -31,6 +31,8 @@ class ToolContext:
     thread_id: UUID
     #: The turn the tool runs in, which an instance tool's config change names.
     turn_id: UUID | None = None
+    #: The routine whose turn the tool runs in. None in a turn the user started.
+    routine: RoutineName | None = None
     package_config: PackageConfig | None = None
     run_reporter: RunReporter | None = field(default=None, repr=False)
 

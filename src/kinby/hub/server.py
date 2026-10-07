@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -9,7 +10,7 @@ from uuid import UUID
 
 from aiohttp import web
 
-from kinby.contracts import CONTRACT_VERSION, HUB_SCOPES, AccessToken, Scope
+from kinby.contracts import CONTRACT_VERSION, HUB_SCOPES, INTAKE_SCOPES, AccessToken, Scope
 from kinby.core.contract_server import serve_contract
 from kinby.core.dispatcher import Dispatcher
 from kinby.hub.access import SESSION_COOKIE, HubAccess, SessionId
@@ -70,6 +71,11 @@ class HubContractServer:
             "/instances/{instance_id}/signals/{routine}",
             self._instance_signal,
         )
+        application.router.add_get(
+            "/instances/{instance_id}/intake",
+            self._intake_socket,
+            allow_head=False,
+        )
         application.router.add_post("/signals/{routine}", self._aliased_signal)
         if self._web_app.is_dir():
             _add_web_app(application, self._web_app)
@@ -123,6 +129,19 @@ class HubContractServer:
             await self._reach(request),
             request.match_info["routine"],
         )
+
+    async def _intake_socket(self, request: web.Request) -> web.WebSocketResponse:
+        """An instance calls the hub with the control token the hub gave it, and nothing else."""
+        try:
+            instance_id = UUID(request.match_info["instance_id"])
+        except ValueError as exc:
+            raise web.HTTPUnauthorized(reason=_UNAUTHORIZED) from exc
+        endpoint = await self._routing.endpoint(instance_id)
+        if isinstance(endpoint, InstanceUnreachable) or not hmac.compare_digest(
+            request.headers.get("Authorization", ""), f"Bearer {endpoint.control_token}"
+        ):
+            raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
+        return await serve_contract(request, self._routing.intake(instance_id), INTAKE_SCOPES)
 
     async def _aliased_signal(self, request: web.Request) -> web.Response:
         """The path a webhook was registered with before the hub existed."""

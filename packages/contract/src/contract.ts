@@ -26,6 +26,16 @@ export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "cho
  * Where the factory the hub serves under a name comes from.
  */
 export type FactorySource = "hub" | "shipped";
+/**
+ * How one attempt at a step ended.
+ */
+export type StepEnding = "clean" | "failed" | "interrupted";
+export type StepId = string;
+export type StepValue = boolean | number | string;
+/**
+ * Where a factory run stands.
+ */
+export type FactoryRunStatus = "running" | "queued" | "parked" | "needs-human" | "done" | "cancelled";
 export type CommitSha = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
@@ -184,6 +194,18 @@ export interface Contract {
     "factory.remove": {
       command: FactoryRemoveCommand;
       result: FactoryRemoveResult;
+    };
+    "factory.run.get": {
+      command: FactoryRunGetCommand;
+      result: FactoryRunDetail;
+    };
+    "factory.run.intake": {
+      command: FactoryRunIntakeCommand;
+      result: FactoryRun;
+    };
+    "factory.run.list": {
+      command: FactoryRunListCommand;
+      result: FactoryRunListResult;
     };
     "image.prepare": {
       command: ImagePrepareCommand;
@@ -389,6 +411,10 @@ export interface Contract {
       command: StatsGetCommand;
       result: StatsSummaryResult;
     };
+    "step.run": {
+      command: StepRunCommand;
+      result: StepResult;
+    };
     "thread.approval.respond": {
       command: ThreadApprovalRespondCommand;
       result: AcceptedResult;
@@ -460,6 +486,10 @@ export interface Contract {
   };
   server_frame: ServerFrame;
   subscriptions: {
+    "factory.run.subscribe": {
+      command: FactoryRunSubscribeCommand;
+      item: FactoryRun;
+    };
     "thread.subscribe": {
       command: ThreadSubscribeCommand;
       item: Event;
@@ -629,6 +659,60 @@ export interface FactoryRemoveResult {
   instances: {
     [k: string]: LifecycleOperationResult;
   };
+}
+export interface FactoryRunGetCommand {
+  run_id: string;
+}
+export interface FactoryRunDetail {
+  attempts: StepAttempt[];
+  run: FactoryRun;
+}
+/**
+ * One attempt at one step of a factory run.
+ */
+export interface StepAttempt {
+  attempt: number;
+  ended_at: string | null;
+  ending: StepEnding | null;
+  outcome: string | null;
+  started_at: string;
+  step: StepId;
+  summary: string;
+  values: {
+    [k: string]: StepValue;
+  };
+}
+/**
+ * One work item's trip through a factory's steps.
+ */
+export interface FactoryRun {
+  created_at: string;
+  factory: FactoryName;
+  run_id: string;
+  status: FactoryRunStatus;
+  step: StepId | null;
+  updated_at: string;
+  work_item: {
+    [k: string]: StepValue;
+  };
+}
+/**
+ * Hand a work item to the factory whose intake is this instance and routine.
+ *
+ * A work item that matches an unfinished run of the factory returns that run instead.
+ */
+export interface FactoryRunIntakeCommand {
+  routine: string;
+  work_item: {
+    [k: string]: StepValue;
+  };
+}
+export interface FactoryRunListCommand {
+  factory: FactoryName;
+  status?: FactoryRunStatus | null;
+}
+export interface FactoryRunListResult {
+  runs: FactoryRun[];
 }
 /**
  * Prepare a package selection's image. No package prepares kinby's base image.
@@ -1533,6 +1617,41 @@ export interface ApiUse {
   input_tokens: number;
   output_tokens: number;
 }
+/**
+ * Run one step of a factory run in this instance, and return its result.
+ */
+export interface StepRunCommand {
+  results?: {
+    [k: string]: StepValue;
+  };
+  step: CommandStepRun;
+  work_item: {
+    [k: string]: StepValue;
+  };
+}
+/**
+ * Run each command in the instance's workspace without a shell, in order.
+ *
+ * The step passes when every command exits with code zero, and stops at the first that does not.
+ */
+export interface CommandStepRun {
+  kind: "command";
+  /**
+   * @minItems 1
+   */
+  run: [string, ...string[]];
+}
+/**
+ * What one attempt at a step hands back to the hub.
+ */
+export interface StepResult {
+  ending: StepEnding;
+  outcome?: string | null;
+  summary?: string;
+  values?: {
+    [k: string]: StepValue;
+  };
+}
 export interface ThreadApprovalRespondCommand {
   approval_id: string;
   decision: ApprovalDecision;
@@ -1725,6 +1844,10 @@ export interface EndFrame {
   id: string;
   type: "end";
 }
+/**
+ * Follow every factory run of the hub as its state changes. Nothing is replayed.
+ */
+export interface FactoryRunSubscribeCommand {}
 export interface ThreadSubscribeCommand {
   after_sequence?: number;
   thread_id: string;

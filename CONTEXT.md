@@ -626,6 +626,10 @@ One **work item**'s trip through a **factory**'s **steps**. The **hub** keeps it
 
 What a **step** hands on: a short summary plus the named values the **factory** declares, recorded by the step's **hook** or produced by the step itself, never read from an agent's own report. The next step receives the **work item** with every result before it, and checks the values it requires before it starts; a missing one fails the step that should have produced it.
 
+### Step attempt
+
+One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, or interrupted when the **hub** stopped while it ran. A failed or interrupted attempt is tried again under the step's retry; after that the run is **needs human**.
+
 ### Hook
 
 Deterministic **instance** code, never offered to the model, that kinby runs when a **step** ends, however it ended, to record the **step result** from the world: the repository, an outside system, files the step wrote. kinby ships default hooks, and an instance can hold its own.

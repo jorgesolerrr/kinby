@@ -25,7 +25,13 @@ from kinby.contracts import (
 )
 from kinby.core.errors import FactoryCheckFailed, FactoryNotFound, InvalidConfig, StaleWrite
 from kinby.factories.check import check_factory
-from kinby.factories.file import TEMPLATES_DIR, InstanceName, RecipeName, read_factory_file
+from kinby.factories.file import (
+    TEMPLATES_DIR,
+    FactoryFile,
+    InstanceName,
+    RecipeName,
+    read_factory_file,
+)
 from kinby.instance.config_changes import directory_hash
 from kinby.packages import readable_template_files, with_built_in_fields
 
@@ -78,6 +84,11 @@ class FactoryStore:
     async def check(self, command: FactoryCheckCommand) -> FactoryCheckResult:
         folder, _ = self._folder(command.name)
         return FactoryCheckResult(problems=list(await asyncio.to_thread(check_factory, folder)))
+
+    def file(self, name: FactoryName) -> FactoryFile:
+        """The factory's file as the hub keeps it: the last version that passed the check."""
+        folder, _ = self._folder(name)
+        return read_factory_file(folder)
 
     async def describe(self, command: FactoryDescribeCommand) -> FactoryDescription:
         return FactoryDescription(

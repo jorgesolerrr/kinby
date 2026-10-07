@@ -7,6 +7,7 @@ from kinby.core.clock import utc_today
 from kinby.instance import Instance
 from kinby.memory import GraphStore, memory_tools
 from kinby.plugins.instance_tools import instance_tools
+from kinby.plugins.intake import intake_tools
 from kinby.plugins.skills import Skill, skill_tool
 from kinby.plugins.tools import Tool
 
@@ -22,4 +23,5 @@ def core_tools(
         skill_tool(skills),
         *memory_tools(GraphStore(instance.path), today=today),
         *instance_tools(instance),
+        *intake_tools(),
     )

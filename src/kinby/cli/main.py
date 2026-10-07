@@ -519,6 +519,7 @@ async def _run_hub(
     network: str,
     listen: Serve,
     web_app: Path | None,
+    private_url: str,
 ) -> int:
     from docker.errors import DockerException
 
@@ -539,6 +540,7 @@ async def _run_hub(
                 source_directory,
                 docker_host_directory,
                 network=network,
+                private_url=private_url,
             )
         except (DockerException, HubAlreadyRunning) as exc:
             print(f"Unable to start the Docker-backed hub: {exc}", file=sys.stderr)
@@ -815,6 +817,11 @@ def main(
         help="host:port the hub's contract server listens on",
     )
     hub_parser.add_argument(
+        "--private-url",
+        default="http://hub:8080",
+        help="where the hub's instances reach it on the private network",
+    )
+    hub_parser.add_argument(
         "--web-app",
         type=Path,
         help="directory holding the built web app (default: the one the hub image carries)",
@@ -1017,6 +1024,7 @@ def main(
                 args.network,
                 listen,
                 args.web_app,
+                args.private_url,
             )
         )
     try:

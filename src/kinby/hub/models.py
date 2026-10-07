@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 from uuid import UUID
 
 from kinby.contracts import (
@@ -19,6 +19,9 @@ from kinby.contracts import (
     StorageItem,
 )
 from kinby.packages import InstalledPackage
+
+if TYPE_CHECKING:
+    from kinby.core.dispatcher import Dispatcher
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,9 @@ class InstanceRouting(Protocol):
     async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable: ...
 
     async def signal_endpoint(self) -> InstanceEndpoint | InstanceUnreachable: ...
+
+    def intake(self, instance_id: UUID) -> Dispatcher:
+        """What the instance may call on the hub, once its control token checks out."""
 
 
 type RuntimeState = Literal["absent", "created", "starting", "running", "stopped", "failed"]

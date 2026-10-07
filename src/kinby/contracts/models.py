@@ -41,6 +41,8 @@ class Scope(StrEnum):
     HUB_READ = "hub:read"
     HUB_ADMIN = "hub:admin"
     HUB_UPDATE = "hub:update"
+    #: Hand a factory a work item. Only an instance holds it, on its own intake route.
+    FACTORY_INTAKE = "factory:intake"
 
 
 #: What a client driving one instance holds. Lifecycle is granted by the control route alone.
@@ -56,8 +58,10 @@ INSTANCE_SCOPES = frozenset(
 )
 CONTROL_SCOPES = INSTANCE_SCOPES | {Scope.INSTANCE_LIFECYCLE}
 
+#: What an instance holds on the hub's intake route, with the control token the hub gave it.
+INTAKE_SCOPES = frozenset({Scope.FACTORY_INTAKE})
 #: What a client authenticated against the hub holds: a hub has one user.
-HUB_SCOPES = frozenset(Scope)
+HUB_SCOPES = frozenset(Scope) - INTAKE_SCOPES
 #: What the update token holds: run an instance update and follow its operation.
 UPDATE_SCOPES = frozenset({Scope.HUB_UPDATE})
 
@@ -2138,3 +2142,129 @@ class FactoryRemoveCommand(ContractModel):
 class FactoryRemoveResult(ContractModel):
     #: The removal of each instance, by its name in the factory.
     instances: dict[str, LifecycleOperationResult]
+
+
+type StepId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
+#: The name of a value a work item carries or a step result declares, such as ``branch``.
+type ValueName = Annotated[str, Field(pattern=r"^[a-z_][a-z0-9_]*$")]
+#: One value of a work item or of a step result.
+type StepValue = bool | int | str
+
+
+class FactoryRunStatus(StrEnum):
+    """Where a factory run stands."""
+
+    #: Its current step runs in the step's instance.
+    RUNNING = "running"
+    #: Its current step waits for the step's instance, which runs one step at a time.
+    QUEUED = "queued"
+    #: It waits on a signal or on the user's approval, and holds no instance.
+    PARKED = "parked"
+    #: It stopped for the user, keeping everything done so far.
+    NEEDS_HUMAN = "needs-human"
+    DONE = "done"
+    CANCELLED = "cancelled"
+
+
+class StepEnding(StrEnum):
+    """How one attempt at a step ended."""
+
+    #: The step did its work. The result's outcome says what the run does next.
+    CLEAN = "clean"
+    #: The step failed. The run tries it again under its ``retry``.
+    FAILED = "failed"
+    #: The hub stopped while the attempt ran, so it counts as failed.
+    INTERRUPTED = "interrupted"
+
+
+class CommandStepRun(ContractModel):
+    """Run each command in the instance's workspace without a shell, in order.
+
+    The step passes when every command exits with code zero, and stops at the first that does not.
+    """
+
+    kind: Literal["command"] = "command"
+    run: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+
+
+class StepRunCommand(ContractModel):
+    """Run one step of a factory run in this instance, and return its result."""
+
+    step: CommandStepRun
+    work_item: dict[ValueName, StepValue]
+    #: Every value the run's earlier steps recorded, by name.
+    results: dict[ValueName, StepValue] = Field(default_factory=dict)
+
+
+class StepResult(ContractModel):
+    """What one attempt at a step hands back to the hub."""
+
+    ending: StepEnding
+    #: The declared outcome the result names. None takes the next step.
+    outcome: str | None = None
+    values: dict[ValueName, StepValue] = Field(default_factory=dict)
+    #: What happened, for the user to read.
+    summary: str = ""
+
+
+class FactoryRun(ContractModel):
+    """One work item's trip through a factory's steps."""
+
+    run_id: UUID
+    factory: FactoryName
+    work_item: dict[ValueName, StepValue]
+    status: FactoryRunStatus
+    #: The step the run is at. None once it is done.
+    step: StepId | None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class StepAttempt(ContractModel):
+    """One attempt at one step of a factory run."""
+
+    step: StepId
+    #: Counted from 1 for each step of the run.
+    attempt: int
+    #: None while the attempt runs.
+    ending: StepEnding | None
+    outcome: str | None
+    values: dict[ValueName, StepValue]
+    summary: str
+    started_at: AwareDatetime
+    ended_at: AwareDatetime | None
+
+
+class FactoryRunIntakeCommand(ContractModel):
+    """Hand a work item to the factory whose intake is this instance and routine.
+
+    A work item that matches an unfinished run of the factory returns that run instead.
+    """
+
+    routine: RoutineName
+    work_item: dict[ValueName, StepValue]
+
+
+class FactoryRunListCommand(ContractModel):
+    factory: FactoryName
+    #: Only the runs in this status. None lists every run of the factory.
+    status: FactoryRunStatus | None = None
+
+
+class FactoryRunListResult(ContractModel):
+    #: Oldest first.
+    runs: list[FactoryRun]
+
+
+class FactoryRunGetCommand(ContractModel):
+    run_id: UUID
+
+
+class FactoryRunDetail(ContractModel):
+    run: FactoryRun
+    #: Every attempt at every step, in the order they started.
+    attempts: list[StepAttempt]
+
+
+class FactoryRunSubscribeCommand(ContractModel):
+    """Follow every factory run of the hub as its state changes. Nothing is replayed."""

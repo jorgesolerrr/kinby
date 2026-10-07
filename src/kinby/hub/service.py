@@ -10,6 +10,7 @@ import re
 import shutil
 from collections.abc import Collection, Coroutine, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import IO
 from uuid import UUID, uuid4
@@ -25,6 +26,10 @@ from kinby.contracts import (
     FACTORY_INSTALL,
     FACTORY_LIST,
     FACTORY_REMOVE,
+    FACTORY_RUN_GET,
+    FACTORY_RUN_INTAKE,
+    FACTORY_RUN_LIST,
+    FACTORY_RUN_SUBSCRIBE,
     IMAGE_PREPARE,
     INSTANCE_ADOPT,
     INSTANCE_ADOPT_PREVIEW,
@@ -108,6 +113,9 @@ from kinby.contracts import (
     StatsGetCommand,
     StatsGetResult,
     StatsSummaryResult,
+    StepEnding,
+    StepResult,
+    StepRunCommand,
     StorageItem,
     StorageKind,
     SubscriptionLogin,
@@ -153,6 +161,7 @@ from kinby.hub.models import (
 )
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
+from kinby.hub.runs import FactoryRuns
 from kinby.hub.setup import (
     ENVIRONMENT_NAME,
     configuration,
@@ -180,6 +189,7 @@ from kinby.packages import (
     InstalledPackage,
     package_description,
 )
+from kinby.plugins.intake import INTAKE_URL_VARIABLE
 
 _logger = logging.getLogger(__name__)
 
@@ -402,7 +412,9 @@ class Hub:
         control: InstanceControl | None = None,
         docker_host_directory: Path | None = None,
         shipped_factories: Path = SHIPPED_FACTORIES,
+        private_url: str | None = None,
     ) -> None:
+        """*private_url* is where the hub's instances reach it on their private network."""
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self._directory_lock = _acquire_directory(self.directory)
@@ -419,8 +431,10 @@ class Hub:
             self.access = HubAccess(self.registry)
             self._runtime = runtime
             self._images = images
+            self._private_url = private_url
             self._curated = curated_list()
             self.factories = FactoryStore(self.directory / "factories", shipped_factories)
+            self.runs = FactoryRuns(self.registry, self.factories, self._run_step)
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._stopping: dict[UUID, PendingStop] = {}
@@ -453,6 +467,9 @@ class Hub:
             self.dispatcher.register(FACTORY_DESCRIBE, self.factories.describe)
             self.dispatcher.register(FACTORY_INSTALL, self.install_factory)
             self.dispatcher.register(FACTORY_REMOVE, self.remove_factory)
+            self.dispatcher.register(FACTORY_RUN_LIST, self.runs.list)
+            self.dispatcher.register(FACTORY_RUN_GET, self.runs.get)
+            self.dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
         except BaseException:
             self._directory_lock.close()
@@ -461,6 +478,24 @@ class Hub:
     def close(self) -> None:
         """Release this directory so another process can own it."""
         self._directory_lock.close()
+
+    def intake(self, instance_id: UUID) -> Dispatcher:
+        """What one of the hub's instances may call on the hub: hand its factory a work item."""
+        dispatcher = Dispatcher()
+        dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
+        return dispatcher
+
+    async def _run_step(self, instance_id: UUID, command: StepRunCommand) -> StepResult:
+        """Run one factory step in the instance.
+
+        Anything that keeps the step from an answer fails the attempt, as it fails an operation,
+        so the instance's queue moves on.
+        """
+        try:
+            endpoint = await self._endpoint(self._active_instance(instance_id))
+            return await self._control.run_step(endpoint, command)
+        except Exception as exc:
+            return StepResult(ending=StepEnding.FAILED, summary=str(exc) or type(exc).__name__)
 
     def _schedule(self, work: Coroutine[object, object, None]) -> None:
         task = asyncio.create_task(work)
@@ -713,9 +748,17 @@ class Hub:
             settings=manifest_settings(template.setup, configured),
         )
         self._write_configuration(staging, record.manifest_id, record.persona_name)
-        self._write_secrets(staging / ".env", self._instance_secrets(model, secrets))
+        self._write_secrets(
+            staging / ".env", self._instance_secrets(model, secrets) | self._intake_url(record)
+        )
         inspect_instance(staging)
         return template.setup
+
+    def _intake_url(self, record: ManagedInstance) -> dict[str, str]:
+        """Where a factory's instance hands the hub its work items, when the hub has an address."""
+        if self._private_url is None:
+            return {}
+        return {INTAKE_URL_VARIABLE: f"{self._private_url}/instances/{record.instance_id}/intake"}
 
     async def _check_written_config(
         self,
@@ -1925,13 +1968,16 @@ class Hub:
             )
 
     async def recover(self) -> LifecycleRecovery:
-        """Reconcile every managed instance against what the container runtime still has.
+        """Reconcile every managed instance against what the container runtime still has, then
+        pick factory runs up where the previous process left them.
 
         Setup containers from a login the previous process did not finish go first, so
         they are not still holding a login volume when recovery looks at the instances.
         """
         await self._runtime.remove_setup_containers()
-        return await recover_lifecycle(self.registry, self._runtime, self._restore_start)
+        recovery = await recover_lifecycle(self.registry, self._runtime, self._restore_start)
+        self.runs.resume()
+        return recovery
 
     async def _restore_start(self, instance_id: UUID) -> OperationState:
         """Start one instance again under its own lifecycle operation, so the attempt is visible."""

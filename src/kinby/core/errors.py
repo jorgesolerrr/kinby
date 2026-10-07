@@ -79,6 +79,16 @@ class FactoryInstalled(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class FactoryRunNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
+class NotAnIntake(CoreError):
+    """No factory names this instance and routine as its intake, so no run started."""
+
+    code = ErrorCode.PERMISSION_DENIED
+
+
 class PackageConfigNotFound(CoreError):
     """The instance runs no package, or its package declares no config."""
 
@@ -172,6 +182,13 @@ class InvalidFact(InvalidValues):
     """Some of a fact's values are invalid, so nothing was written."""
 
     code = ErrorCode.INVALID_ARGUMENT
+
+
+class InvalidWorkItem(InvalidValues):
+    """The work item does not carry the values its factory declares, so no run started."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+    message = "The work item does not match what the factory declares."
 
 
 class LifecycleOperationNotFound(CoreError):

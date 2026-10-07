@@ -18,6 +18,7 @@ def build_docker_hub(
     docker_host_directory: Path,
     *,
     network: str,
+    private_url: str,
 ) -> Hub:
     directory = Path(directory).resolve()
     registry = HubRegistry(directory)
@@ -34,4 +35,5 @@ def build_docker_hub(
         images=images,
         control=HttpInstanceControl(),
         docker_host_directory=docker_host_directory,
+        private_url=private_url,
     )
