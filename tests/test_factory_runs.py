@@ -618,3 +618,26 @@ def test_a_run_whose_done_requires_fails_does_not_finish_as_done(tmp_path):
         )
 
     asyncio.run(scenario())
+
+
+def test_a_value_of_another_type_than_its_step_declares_fails_the_step(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values=BRANCH),
+        StepResult(ending=StepEnding.CLEAN, values={"pr": "42"}),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, HANDOFF_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert finished.run.step == "open-pr"
+        last = finished.attempts[-1]
+        assert (last.step, last.ending) == ("open-pr", StepEnding.FAILED)
+        assert last.summary == 'Step "open-pr" declares "pr" as int, but recorded a str.'
+
+    asyncio.run(scenario())

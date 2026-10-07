@@ -17,6 +17,7 @@ from kinby.contracts import (
     StepRunCommand,
 )
 from kinby.instance import Instance
+from kinby.packages import PackageConfigError, instance_package_config
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hooks import StepEnd, load_hooks
 from kinby.plugins.registry import ToolRegistry
@@ -69,8 +70,12 @@ async def _run_code_step(
         return _failed(f'Tool "{step.call}" is not one of this instance\'s tools.')
     held = {**command.work_item, **command.results}
     arguments = {name: value for name, value in held.items() if name in tool.runnable.args}
+    try:
+        package_config = instance_package_config(instance)
+    except PackageConfigError as exc:
+        return _failed(f'Tool "{step.call}" could not read the package config: {exc}')
     # A code step runs on no thread, so its tool's context names one no turn opens.
-    context = ToolContext(instance=instance, thread_id=uuid4())
+    context = ToolContext(instance=instance, thread_id=uuid4(), package_config=package_config)
     try:
         returned = await tool.ainvoke_value(arguments, context)
         if isinstance(returned, Mapping):
