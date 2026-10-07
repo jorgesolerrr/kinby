@@ -699,6 +699,40 @@ def test_review_sending_work_back_past_its_max_needs_a_human(tmp_path):
     asyncio.run(scenario())
 
 
+def test_work_sent_back_holds_no_value_from_the_pass_it_left(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values={"committed": True}),
+        reviewed("changes"),
+        FIXED,
+    ]
+    runtime = FakeRuntime()
+    factory = REVIEW.replace(
+        '    run: ["make fix"]\n', '    run: ["make fix"]\n    results: { committed: bool }\n'
+    ).replace("    hook: read_verdict\n", "    hook: read_verdict\n    requires: [committed]\n")
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert finished.run.step == "fix"
+        assert [(a.step, a.ending) for a in finished.attempts] == [
+            ("fix", StepEnding.CLEAN),
+            ("review", StepEnding.CLEAN),
+            ("fix", StepEnding.CLEAN),
+            ("fix", StepEnding.FAILED),
+        ]
+        assert finished.attempts[-1].summary == (
+            'Step "review" requires "committed", which this step did not record.'
+        )
+        assert [command.results for _, command in control.steps] == [{}, {"committed": True}, {}]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("verdict", "status", "step", "attempted"),
     [

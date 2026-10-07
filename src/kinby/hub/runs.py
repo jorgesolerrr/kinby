@@ -239,7 +239,7 @@ class FactoryRuns:
         step = _step(factory, step_id) if factory is not None else None
         if factory is None or step is None:
             return _Refused(step_id, f'Factory "{run.factory}" has no step "{step_id}" any more.')
-        results = self._results(run.run_id)
+        results = self._results(run.run_id, factory, step.id)
         unmet = _unmet(factory, step, run.work_item | results)
         if unmet is not None:
             return unmet
@@ -269,13 +269,32 @@ class FactoryRuns:
         command = StepRunCommand(step=asked, hook=hook, work_item=run.work_item, results=results)
         return instance_id, _QueuedStep(run.run_id, step.id, command)
 
-    def _results(self, run_id: UUID) -> dict[ValueName, StepValue]:
-        """Every value the run's clean attempts recorded, a later one over an earlier one."""
-        results: dict[ValueName, StepValue] = {}
+    def _results(
+        self, run_id: UUID, factory: FactoryFile, starting: StepId | None = None
+    ) -> dict[ValueName, StepValue]:
+        """The values the run's clean attempts recorded on its latest pass through the steps.
+
+        A later value overrides an earlier one. An attempt at a step, like *starting* one, drops
+        what that step and every step after it recorded before, so a run sent back holds no value
+        from the pass it left.
+        """
+        order = {step.id: index for index, step in enumerate(factory.steps)}
+        recorded: dict[ValueName, tuple[int, StepValue]] = {}
+
+        def drop_from(step_id: StepId) -> None:
+            if step_id in order:
+                for name, (index, _) in list(recorded.items()):
+                    if index >= order[step_id]:
+                        del recorded[name]
+
         for attempt in self._registry.attempts(run_id):
+            drop_from(attempt.step)
             if attempt.ending is StepEnding.CLEAN:
-                results.update(attempt.values)
-        return results
+                index = order.get(attempt.step, -1)
+                recorded |= {name: (index, value) for name, value in attempt.values.items()}
+        if starting is not None:
+            drop_from(starting)
+        return {name: value for name, (_, value) in recorded.items()}
 
     async def _work(self, instance_id: UUID, queue: asyncio.Queue[_QueuedStep]) -> None:
         """Run the instance's queued steps one at a time, in the order they were queued."""
@@ -304,7 +323,7 @@ class FactoryRuns:
             self._registry.end_attempt(run_id, result)
             moved = self._registry.move_run(run_id, FactoryRunStatus.NEEDS_HUMAN, run.step)
         else:
-            held = run.work_item | self._results(run_id)
+            held = run.work_item | self._results(run_id, factory)
             tally = _tally(factory, self._registry.counted_attempts(run_id))
             result, status, to = _settled(factory, step, result, held, tally)
             self._registry.end_attempt(run_id, result)
