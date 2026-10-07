@@ -63,6 +63,7 @@ def check_factory(folder: Path) -> tuple[str, ...]:
         *_steps(factory, folder, templates),
         *_inputs(factory),
         *_order(factory),
+        *_resumes(factory),
     )
 
 
@@ -187,3 +188,20 @@ def _order(factory: FactoryFile) -> Iterator[str]:
                     "which is not an earlier step."
                 )
         earlier.add(step.id)
+
+
+def _resumes(factory: FactoryFile) -> Iterator[str]:
+    """A client step only resumes the session of an earlier step of its instance and client."""
+    for at, step in enumerate(factory.steps):
+        if not isinstance(step, ClientStep) or step.resume is None:
+            continue
+        if not any(
+            isinstance(earlier, ClientStep)
+            and earlier.id == step.resume
+            and (earlier.instance, earlier.client) == (step.instance, step.client)
+            for earlier in factory.steps[:at]
+        ):
+            yield (
+                f'Step "{step.id}" resumes "{step.resume}", which is not an earlier '
+                f'{step.client} step in instance "{step.instance}".'
+            )

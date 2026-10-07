@@ -16,6 +16,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
 from kinby.contracts import (
+    CodingClient,
     FactoryName,
     HookName,
     SetupField,
@@ -41,16 +42,17 @@ type Duration = Annotated[str, Field(pattern=r"^[1-9][0-9]*[smhd]$")]
 #: A file in the factory's folder, by its path there.
 type FactoryPath = Annotated[str, Field(min_length=1)]
 
+_SECONDS_PER_UNIT = {"s": 1, "m": 60, "h": 60 * 60, "d": 24 * 60 * 60}
+
+
+def duration_seconds(duration: Duration) -> int:
+    return int(duration[:-1]) * _SECONDS_PER_UNIT[duration[-1]]
+
 
 class ValueType(StrEnum):
     STR = "str"
     INT = "int"
     BOOL = "bool"
-
-
-class CodingClient(StrEnum):
-    CLAUDE = "claude"
-    CODEX = "codex"
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)

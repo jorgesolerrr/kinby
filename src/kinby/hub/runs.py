@@ -14,7 +14,9 @@ from uuid import UUID
 
 from kinby.contracts import (
     AgentStepRun,
+    ClientStepRun,
     CodeStepRun,
+    CodingSessionId,
     CommandStepRun,
     FactoryName,
     FactoryRun,
@@ -51,6 +53,7 @@ from kinby.factories.file import (
     ClientStep,
     CodeStep,
     CommandStep,
+    Duration,
     FactoryFile,
     InstanceName,
     InvalidFactoryFile,
@@ -58,6 +61,7 @@ from kinby.factories.file import (
     SendBack,
     Step,
     ValueType,
+    duration_seconds,
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.registry import FactoryMember, HubRegistry
@@ -65,6 +69,8 @@ from kinby.hub.registry import FactoryMember, HubRegistry
 #: Run one step in the instance with this id, and return its result.
 type StepCaller = Callable[[UUID, StepRunCommand], Awaitable[StepResult]]
 
+#: How long a client step's coding client runs when the step declares no timeout.
+_CLIENT_TIMEOUT: Duration = "60m"
 _INTERRUPTED = StepResult(
     ending=StepEnding.INTERRUPTED, summary="The hub stopped while this attempt ran."
 )
@@ -246,11 +252,15 @@ class FactoryRuns:
             return unmet
         match step:
             case AgentStep():
-                try:
-                    prompt = self._factories.prompt(run.factory, step.prompt)
-                except (FactoryNotFound, OSError) as exc:
-                    return _Refused(step.id, f'Prompt "{step.prompt}" cannot be read: {exc}')
+                prompt = self._prompt(run, step)
+                if isinstance(prompt, _Refused):
+                    return prompt
                 asked, hook = AgentStepRun(prompt=prompt), step.hook
+            case ClientStep():
+                client_run = self._client_run(run, step)
+                if isinstance(client_run, _Refused):
+                    return client_run
+                asked, hook = client_run, step.hook
             case CommandStep():
                 asked, hook = CommandStepRun(run=list(step.run)), step.hook
             case CodeStep():
@@ -279,6 +289,48 @@ class FactoryRuns:
             results=results,
         )
         return instance_id, _QueuedStep(run.run_id, step.id, command)
+
+    def _prompt(self, run: FactoryRun, step: AgentStep | ClientStep) -> str | _Refused:
+        try:
+            return self._factories.prompt(run.factory, step.prompt)
+        except (FactoryNotFound, OSError) as exc:
+            return _Refused(step.id, f'Prompt "{step.prompt}" cannot be read: {exc}')
+
+    def _client_run(self, run: FactoryRun, step: ClientStep) -> ClientStepRun | _Refused:
+        """What the client step asks its instance to run.
+
+        When the step it resumes recorded no session, that step fails an attempt, as it would for
+        a value it should have produced.
+        """
+        prompt = self._prompt(run, step)
+        if isinstance(prompt, _Refused):
+            return prompt
+        session = None
+        if step.resume is not None:
+            session = self._session(run.run_id, step.resume)
+            if session is None:
+                return _Refused(
+                    step.resume,
+                    f'Step "{step.id}" resumes the session of "{step.resume}", '
+                    "which this step did not record.",
+                )
+        return ClientStepRun(
+            client=step.client,
+            prompt=prompt,
+            resume=session,
+            timeout_seconds=duration_seconds(step.timeout or _CLIENT_TIMEOUT),
+        )
+
+    def _session(self, run_id: UUID, step: StepId) -> CodingSessionId | None:
+        """The coding client session of the step's last attempt that recorded one."""
+        return next(
+            (
+                attempt.session
+                for attempt in reversed(self._registry.attempts(run_id))
+                if attempt.step == step and attempt.session is not None
+            ),
+            None,
+        )
 
     def _results(self, run_id: UUID) -> dict[ValueName, StepValue]:
         """Every value the run's clean attempts recorded, a later one over an earlier one."""

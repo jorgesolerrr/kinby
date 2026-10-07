@@ -129,6 +129,7 @@ export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
 export type CompletionOutcome = "work" | "no-work";
 export type TurnVerdict = "good" | "bad";
 export type HookName = string;
+export type CodingClient = "claude" | "codex";
 export type ToolName = string;
 export type ApprovalDecision = "approve" | "deny";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
@@ -709,6 +710,7 @@ export interface StepAttempt {
   ended_at: string | null;
   ending: StepEnding | null;
   outcome: string | null;
+  session?: string | null;
   started_at: string;
   step: StepId;
   summary: string;
@@ -1553,7 +1555,7 @@ export interface ReportedRun {
   timestamp: string;
 }
 /**
- * One run of an outside agent that a tool started, with that run's own tokens.
+ * One run of an outside agent that a tool or a client step started, with its own tokens.
  *
  * A client that reports a running total across resumes, like a Codex thread, needs its
  * previous reading subtracted. Only a limited run has ``resets_at``: when its plan window resets.
@@ -1569,6 +1571,7 @@ export interface DelegatedRun {
   outcome: DelegatedRunOutcome;
   output_tokens: number;
   resets_at?: string | null;
+  session?: string | null;
   usage_source: UsageSource;
 }
 export interface Navigation {
@@ -1669,7 +1672,7 @@ export interface StepRunCommand {
   results?: {
     [k: string]: StepValue;
   };
-  step: AgentStepRun | CommandStepRun | CodeStepRun;
+  step: AgentStepRun | ClientStepRun | CommandStepRun | CodeStepRun;
   work_item: {
     [k: string]: StepValue;
   };
@@ -1680,6 +1683,18 @@ export interface StepRunCommand {
 export interface AgentStepRun {
   kind: "agent";
   prompt: string;
+}
+/**
+ * Run a coding client in the instance's workspace, with the prompt and the run's values.
+ *
+ * No kinby turn runs around it. The client is killed once its timeout passes.
+ */
+export interface ClientStepRun {
+  client: CodingClient;
+  kind: "client";
+  prompt: string;
+  resume?: string | null;
+  timeout_seconds: number;
 }
 /**
  * Run each command in the instance's workspace without a shell, in order.
@@ -1709,6 +1724,7 @@ export interface CodeStepRun {
 export interface StepResult {
   ending: StepEnding;
   outcome?: string | null;
+  session?: string | null;
   summary?: string;
   values?: {
     [k: string]: StepValue;

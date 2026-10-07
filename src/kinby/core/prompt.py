@@ -170,7 +170,7 @@ def render_step_message(
     work_item: Mapping[ValueName, StepValue],
     results: Mapping[ValueName, StepValue],
 ) -> str:
-    """An agent step's message: its prompt, then the factory run's values as data."""
+    """A step's message to its agent or coding client: its prompt, then the run's values as data."""
     values = json.dumps({"work_item": work_item, "results": results})
     return (
         f"{prompt.strip()}\n\n"

@@ -338,6 +338,46 @@
         }
       ]
     },
+    "ClientStepRun": {
+      "additionalProperties": false,
+      "description": "Run a coding client in the instance's workspace, with the prompt and the run's values.\n\nNo kinby turn runs around it. The client is killed once its timeout passes.",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/CodingClient"
+        },
+        "kind": {
+          "const": "client",
+          "default": "client",
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "resume": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "timeout_seconds": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "client",
+        "prompt",
+        "timeout_seconds",
+        "kind"
+      ],
+      "title": "ClientStepRun",
+      "type": "object"
+    },
     "CodeStepRun": {
       "additionalProperties": false,
       "description": "Call one of the instance's tools, with no model turn around it.\n\nThe tool's parameters named like a value of the run receive that value. A mapping the tool\nreturns is the step result's values.",
@@ -357,6 +397,14 @@
       ],
       "title": "CodeStepRun",
       "type": "object"
+    },
+    "CodingClient": {
+      "enum": [
+        "claude",
+        "codex"
+      ],
+      "title": "CodingClient",
+      "type": "string"
     },
     "CommandStepRun": {
       "additionalProperties": false,
@@ -573,7 +621,7 @@
     },
     "DelegatedRun": {
       "additionalProperties": false,
-      "description": "One run of an outside agent that a tool started, with that run's own tokens.\n\nA client that reports a running total across resumes, like a Codex thread, needs its\nprevious reading subtracted. Only a limited run has ``resets_at``: when its plan window resets.",
+      "description": "One run of an outside agent that a tool or a client step started, with its own tokens.\n\nA client that reports a running total across resumes, like a Codex thread, needs its\nprevious reading subtracted. Only a limited run has ``resets_at``: when its plan window resets.",
       "properties": {
         "cache_creation_tokens": {
           "default": 0,
@@ -613,6 +661,17 @@
           "anyOf": [
             {
               "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "session": {
+          "anyOf": [
+            {
               "type": "string"
             },
             {
@@ -5512,6 +5571,17 @@
             }
           ]
         },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "started_at": {
           "format": "date-time",
           "type": "string"
@@ -5578,6 +5648,17 @@
           ],
           "default": null
         },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "summary": {
           "default": "",
           "type": "string"
@@ -5629,6 +5710,7 @@
           "discriminator": {
             "mapping": {
               "agent": "#/$defs/AgentStepRun",
+              "client": "#/$defs/ClientStepRun",
               "code": "#/$defs/CodeStepRun",
               "command": "#/$defs/CommandStepRun"
             },
@@ -5637,6 +5719,9 @@
           "oneOf": [
             {
               "$ref": "#/$defs/AgentStepRun"
+            },
+            {
+              "$ref": "#/$defs/ClientStepRun"
             },
             {
               "$ref": "#/$defs/CommandStepRun"

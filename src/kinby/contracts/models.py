@@ -180,6 +180,8 @@ PromptVersion = NewType("PromptVersion", str)
 SystemPrompt = NewType("SystemPrompt", str)
 # The forty-character hex id of a git tree: one workspace snapshot.
 TreeId = NewType("TreeId", str)
+#: A coding client's session, which a later run of the client can continue.
+CodingSessionId = NewType("CodingSessionId", str)
 
 
 class ChangeStatus(StrEnum):
@@ -341,7 +343,7 @@ class DelegatedRunOutcome(StrEnum):
 
 
 class DelegatedRun(TokenTotals):
-    """One run of an outside agent that a tool started, with that run's own tokens.
+    """One run of an outside agent that a tool or a client step started, with its own tokens.
 
     A client that reports a running total across resumes, like a Codex thread, needs its
     previous reading subtracted. Only a limited run has ``resets_at``: when its plan window resets.
@@ -354,6 +356,8 @@ class DelegatedRun(TokenTotals):
     client_turns: Annotated[int, Field(ge=0)]
     outcome: DelegatedRunOutcome
     resets_at: AwareDatetime | None = None
+    #: The client session whose running total the run's tokens continue, when it has one.
+    session: CodingSessionId | None = None
 
     @model_validator(mode="after")
     def _resets_at_only_when_limited(self) -> Self:
@@ -2166,6 +2170,11 @@ type ToolName = Annotated[str, Field(min_length=1)]
 type HookName = Annotated[str, Field(min_length=1)]
 
 
+class CodingClient(StrEnum):
+    CLAUDE = "claude"
+    CODEX = "codex"
+
+
 class FactoryRunStatus(StrEnum):
     """Where a factory run stands."""
 
@@ -2223,10 +2232,27 @@ class AgentStepRun(ContractModel):
     prompt: str
 
 
+class ClientStepRun(ContractModel):
+    """Run a coding client in the instance's workspace, with the prompt and the run's values.
+
+    No kinby turn runs around it. The client is killed once its timeout passes.
+    """
+
+    kind: Literal["client"] = "client"
+    client: CodingClient
+    #: The text of the step's prompt file.
+    prompt: str
+    #: The session to continue, an earlier step's. None starts a new one.
+    resume: CodingSessionId | None = None
+    timeout_seconds: Annotated[int, Field(ge=1)]
+
+
 class StepRunCommand(ContractModel):
     """Run one step of a factory run in this instance, and return its result."""
 
-    step: Annotated[AgentStepRun | CommandStepRun | CodeStepRun, Field(discriminator="kind")]
+    step: Annotated[
+        AgentStepRun | ClientStepRun | CommandStepRun | CodeStepRun, Field(discriminator="kind")
+    ]
     #: The run and step this is. A turn the step runs records it as its origin.
     origin: FactoryRunOrigin
     #: The hook that records the step result once the step ends, however it ended.
@@ -2245,6 +2271,8 @@ class StepResult(ContractModel):
     values: dict[ValueName, StepValue] = Field(default_factory=dict)
     #: What happened, for the user to read.
     summary: str = ""
+    #: The coding client session a client step ran in, for a later step to resume.
+    session: CodingSessionId | None = None
 
 
 class FactoryRun(ContractModel):
@@ -2271,6 +2299,8 @@ class StepAttempt(ContractModel):
     outcome: str | None
     values: dict[ValueName, StepValue]
     summary: str
+    #: The coding client session a client step ran in.
+    session: CodingSessionId | None = None
     started_at: AwareDatetime
     ended_at: AwareDatetime | None
 

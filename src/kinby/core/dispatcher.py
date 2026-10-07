@@ -380,6 +380,10 @@ def build_dispatcher(
             for record in metrics.records
             for reported in record.delegated_runs
             if time_range.includes(reported.timestamp)
+        ] + [
+            TurnRun(None, reported)
+            for reported in metrics.runs_outside_turns
+            if time_range.includes(reported.timestamp)
         ]
         selected_turns = {TurnKey(record.thread_id, record.turn_id) for record in records}
         return StatsGetResult(
@@ -478,7 +482,7 @@ def build_dispatcher(
 
         async def run_step_in_instance(command: StepRunCommand) -> StepResult:
             async with turn_service.step():
-                return await run_step(command, step_instance, turn_service)
+                return await run_step(command, step_instance, turn_service, event_log)
 
         dispatcher.register(STEP_RUN, run_step_in_instance)
     if isinstance(turns, ScheduledTurnConfig):

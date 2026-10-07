@@ -23,7 +23,9 @@ from kinby.contracts import (
     INSTANCE_START,
     INTAKE_SCOPES,
     AgentStepRun,
+    ClientStepRun,
     CodeStepRun,
+    CodingClient,
     CommandStepRun,
     ErrorCode,
     ErrorEnvelope,
@@ -829,6 +831,92 @@ def test_the_hub_sends_an_agent_step_its_prompt_and_names_its_run_and_step(tmp_p
             origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="implement"),
             work_item={"issue": 7},
         )
+
+    asyncio.run(scenario())
+
+
+CLIENT = """\
+name: checks
+instances:
+  coder: {}
+intake: { instance: coder, routine: scan }
+work_item: { issue: int }
+steps:
+  - id: implement
+    kind: client
+    in: coder
+    client: claude
+    prompt: prompts/implement.md
+    hook: record_branch
+    timeout: 30m
+  - id: fix
+    kind: client
+    in: coder
+    client: claude
+    prompt: prompts/fix.md
+    resume: implement
+    hook: record_branch
+"""
+CLIENT_FILES = FILES | {
+    "factory.yaml": CLIENT,
+    "prompts/implement.md": "Implement it.\n",
+    "prompts/fix.md": "Fix it.\n",
+}
+
+
+def test_the_hub_sends_a_client_step_its_prompt_and_timeout_and_the_session_it_resumes(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, session="claude-1"),
+        StepResult(ending=StepEnding.CLEAN, session="claude-1"),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, CLIENT_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [command.step for _, command in control.steps] == [
+            ClientStepRun(
+                client=CodingClient.CLAUDE, prompt="Implement it.\n", timeout_seconds=1800
+            ),
+            ClientStepRun(
+                client=CodingClient.CLAUDE,
+                prompt="Fix it.\n",
+                resume="claude-1",
+                timeout_seconds=3600,
+            ),
+        ]
+        assert [attempt.session for attempt in finished.attempts] == ["claude-1", "claude-1"]
+
+    asyncio.run(scenario())
+
+
+def test_a_client_step_whose_resumed_step_left_no_session_fails_that_step(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.CLEAN)] * 2
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, CLIENT_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert [(a.step, a.ending) for a in finished.attempts] == [
+            ("implement", StepEnding.CLEAN),
+            ("implement", StepEnding.FAILED),
+            ("implement", StepEnding.CLEAN),
+            ("implement", StepEnding.FAILED),
+        ]
+        assert finished.attempts[-1].summary == (
+            'Step "fix" resumes the session of "implement", which this step did not record.'
+        )
+        assert [command.origin.step for _, command in control.steps] == ["implement"] * 2
 
     asyncio.run(scenario())
 
