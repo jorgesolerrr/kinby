@@ -56,6 +56,7 @@ from kinby.factories.file import (
     SendBack,
     Step,
     ValueType,
+    duration_seconds,
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.registry import FactoryMember, HubRegistry
@@ -244,7 +245,9 @@ class FactoryRuns:
             return unmet
         match step:
             case CommandStep():
-                asked, hook = CommandStepRun(run=list(step.run)), step.hook
+                timeout = duration_seconds(step.timeout) if step.timeout is not None else None
+                asked = CommandStepRun(run=list(step.run), timeout_seconds=timeout)
+                hook = step.hook
             case CodeStep():
                 asked, hook = CodeStepRun(call=step.call), None
             case _:
@@ -286,14 +289,17 @@ class FactoryRuns:
     def _settle(self, run_id: UUID, result: StepResult) -> FactoryRun:
         """End the run's open attempt with *result*, and move the run where the result sends it.
 
-        A clean step goes where its outcome sends it. A failed one is tried again while its retries
-        last, and leaves the run for a human after that.
+        A clean step goes where its outcome sends it, but fails when it records a value of
+        another type than it declares. A failed one is tried again while its retries last, and
+        leaves the run for a human after that.
         """
         run = self._registry.run(run_id)
         if run is None or run.step is None:
             raise FactoryRunNotFound(f'Factory run "{run_id}" has no step to settle.')
         factory = self._factory(run.factory)
         step = _step(factory, run.step) if factory is not None else None
+        if step is not None and result.ending is StepEnding.CLEAN:
+            result = _checked_types(step, result)
         if factory is None or step is None:
             self._registry.end_attempt(run_id, result)
             moved = self._registry.move_run(run_id, FactoryRunStatus.NEEDS_HUMAN, run.step)
@@ -450,6 +456,25 @@ def _noted(result: StepResult, reason: str, ending: StepEnding = StepEnding.FAIL
     """*result* ending as *ending*, with *reason* after its summary."""
     summary = f"{result.summary}\n{reason}" if result.summary else reason
     return result.model_copy(update={"ending": ending, "summary": summary})
+
+
+def _checked_types(step: Step, result: StepResult) -> StepResult:
+    """The step's clean result, failed when a value it records is not of the type declared."""
+    wrong = next(
+        (
+            (name, kind)
+            for name, kind in step.results.items()
+            if name in result.values and _value_type(result.values[name]) is not kind
+        ),
+        None,
+    )
+    if wrong is None:
+        return result
+    name, kind = wrong
+    recorded = _value_type(result.values[name]).value
+    return _noted(
+        result, f'Step "{step.id}" declares "{name}" as {kind.value}, but recorded a {recorded}.'
+    )
 
 
 def _lacking(held: Mapping[ValueName, StepValue], names: Iterable[ValueName]) -> ValueName | None:

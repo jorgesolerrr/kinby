@@ -5,14 +5,18 @@ import pytest
 
 from kinby.cli import main
 from kinby.contracts import (
+    CodeStepRun,
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
+    StepEnding,
+    StepRunCommand,
     ToolResult,
     TurnFailed,
     is_turn_closing,
 )
 from kinby.core.events import EventLog
+from kinby.core.steps import run_step
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import Turns
@@ -186,3 +190,22 @@ def test_a_vanilla_instance_has_no_config_and_its_code_steps_receive_none(tmp_pa
     assert status == 0
     assert not (path / "package.yaml").exists()
     assert _seen(path) is None
+
+
+def test_a_factory_code_step_receives_the_validated_config(writer, tmp_path, capsys):
+    path = _packaged_instance(tmp_path, capsys)
+    (path / "tools").mkdir(exist_ok=True)
+    (path / "tools" / "record.py").write_text(
+        "import json\nfrom kinby.plugins import ToolContext, tool\n@tool(write=False)\n"
+        "def record(context: ToolContext) -> None:\n"
+        '    """Record the configuration."""\n'
+        "    seen = context.package_config.model_dump(mode='json')\n"
+        "    (context.workspace / 'seen.json').write_text(json.dumps(seen))\n",
+        encoding="utf-8",
+    )
+    command = StepRunCommand(step=CodeStepRun(call="record"), work_item={})
+
+    result = asyncio.run(run_step(command, load_instance(path)))
+
+    assert result.ending is StepEnding.CLEAN
+    assert _seen(path) == {"tone": "plain", "token": "EDITOR_TOKEN"}
