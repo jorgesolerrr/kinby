@@ -637,6 +637,10 @@ CODEX_STREAM = [
 ]
 
 
+#: The API keys a client would bill over its subscription login, all set for every stub client.
+API_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY")
+
+
 def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then: str) -> Path:
     """Put an executable *name* first on PATH that records how it was called, then runs *then*.
 
@@ -650,13 +654,15 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
         "import json, os, sys, time\n"
         f"with open({str(calls)!r}, 'a') as calls:\n"
         "    json.dump({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'stdin': sys.stdin.read(),\n"
-        "               'api_key': 'ANTHROPIC_API_KEY' in os.environ}, calls)\n"
+        f"               'api_keys': [name for name in {API_KEYS!r} if name in os.environ]}},\n"
+        "              calls)\n"
         "    calls.write('\\n')\n"
         f"{then}\n"
     )
     executable.chmod(0o755)
     monkeypatch.setenv("PATH", f"{executable.parent}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    for variable in API_KEYS:
+        monkeypatch.setenv(variable, "sk-test")
     return calls
 
 
@@ -672,8 +678,8 @@ class ClientCall:
     argv: list[str]
     cwd: str
     stdin: str
-    #: Whether the client saw an Anthropic API key.
-    api_key: bool
+    #: The API keys the client saw.
+    api_keys: list[str]
 
 
 def recorded_calls(calls: Path) -> list[ClientCall]:
@@ -699,24 +705,26 @@ async def run_client_step(
 
 
 @pytest.mark.parametrize(
-    ("client", "stream", "session", "arguments"),
+    ("client", "stream", "session", "arguments", "kept"),
     [
         (
             "claude",
             CLAUDE_STREAM,
             "claude-1",
             ["-p", "--permission-mode", "acceptEdits"],
+            ["OPENAI_API_KEY", "CODEX_API_KEY"],
         ),
         (
             "codex",
             CODEX_STREAM,
             "codex-1",
             ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox"],
+            ["ANTHROPIC_API_KEY"],
         ),
     ],
 )
 def test_a_client_step_runs_the_client_in_the_workspace_with_the_prompt_and_keeps_its_session(
-    tmp_path, monkeypatch, client, stream, session, arguments
+    tmp_path, monkeypatch, client, stream, session, arguments, kept
 ):
     runtime, workspace = step_instance(tmp_path)
     calls = stub_client(tmp_path, monkeypatch, client, streaming(stream))
@@ -732,7 +740,7 @@ def test_a_client_step_runs_the_client_in_the_workspace_with_the_prompt_and_keep
         assert called.cwd == str(workspace)
         assert called.stdin.startswith("Implement the issue.\n")
         assert '{"work_item": {"issue": 7}, "results": {"branch": "agent/7"}}' in called.stdin
-        assert called.api_key is (client == "codex")
+        assert called.api_keys == kept
 
     asyncio.run(scenario())
 

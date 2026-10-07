@@ -28,8 +28,11 @@ from kinby.contracts import (
     UsageSource,
 )
 
-#: Claude Code bills an API key over the subscription login when both are set.
-_API_KEY = "ANTHROPIC_API_KEY"
+#: The API keys each client bills over its subscription login when both are set.
+_API_KEYS = {
+    CodingClient.CLAUDE: frozenset({"ANTHROPIC_API_KEY"}),
+    CodingClient.CODEX: frozenset({"OPENAI_API_KEY", "CODEX_API_KEY"}),
+}
 #: How much of a failed client's error output the summary keeps, from the end.
 _ERROR_TAIL = 2_000
 #: Claude's names for its token counts, in the order _claude_tokens reads them.
@@ -166,11 +169,9 @@ def _command(
             return ("codex", "exec", "resume", *options, resume, "-")
 
 
-def _environment(client: CodingClient) -> Mapping[str, str] | None:
-    """Claude runs on its subscription login, never on an API key the instance holds."""
-    if client is CodingClient.CLAUDE:
-        return {name: value for name, value in os.environ.items() if name != _API_KEY}
-    return None
+def _environment(client: CodingClient) -> Mapping[str, str]:
+    """A client runs on its subscription login, never on an API key the instance holds."""
+    return {name: value for name, value in os.environ.items() if name not in _API_KEYS[client]}
 
 
 def _ended(ran: CodingRun, ending: StepEnding, reason: str) -> CodingRun:
