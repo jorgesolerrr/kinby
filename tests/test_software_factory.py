@@ -1409,6 +1409,26 @@ def test_assess_hands_a_fix_round_every_actionable_thread_trusted_authors_wrote(
     asyncio.run(scenario())
 
 
+def test_assess_answers_the_codex_review_app_like_a_trusted_reviewer(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(
+        github,
+        threads=[review_thread("T1", ("chatgpt-codex-connector", "NONE"))],
+        reviews=[submitted("chatgpt-codex-connector[bot]", "NONE")],
+    )
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.outcome == "feedback"
+        assert [thread["id"] for thread in json.loads(str(result.values["feedback"]))] == ["T1"]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "thread",
     [

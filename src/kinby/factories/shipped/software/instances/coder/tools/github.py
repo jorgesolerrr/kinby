@@ -37,7 +37,14 @@ _COMMAND_TIMEOUT = 900
 #: GitHub's author_association.
 _TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 #: The review apps whose feedback babysitting answers, whatever their association (ADR 0079).
-_TRUSTED_APPS = frozenset({"greptile-apps", "greptile-apps[bot]"})
+_TRUSTED_APPS = frozenset(
+    {
+        "greptile-apps",
+        "greptile-apps[bot]",
+        "chatgpt-codex-connector",
+        "chatgpt-codex-connector[bot]",
+    }
+)
 _REVIEW_THREADS = """
 query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
