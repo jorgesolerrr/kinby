@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from contextlib import suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Protocol
@@ -221,6 +221,11 @@ class InterruptedTurnClaim:
     pass
 
 
+@dataclass(frozen=True)
+class StepClaim:
+    """Held while a factory step runs in the instance."""
+
+
 class Turns:
     def __init__(
         self,
@@ -241,7 +246,7 @@ class Turns:
         self._snapshots = snapshots
         self._changed = asyncio.Event()
         self._running: dict[UUID, RunningTurn] = {}
-        self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim | RevertClaim] = {}
+        self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim | RevertClaim | StepClaim] = {}
         self._admitting = True
 
     def close(self) -> None:
@@ -275,12 +280,38 @@ class Turns:
         self.require_admitting()
         if any(isinstance(claim, RevertClaim) for claim in self._claims.values()):
             raise InstanceBusy("A revert is running. Wait for it to finish before starting a turn.")
+        if any(isinstance(claim, StepClaim) for claim in self._claims.values()):
+            raise InstanceBusy(
+                "A factory step is running. Wait for it to finish before starting a turn."
+            )
         running = self.running().values()
         routine = next((item for item in running if isinstance(item, RoutineOrigin)), None)
         if routine is not None:
             raise InstanceBusy(f'Routine "{routine.name}" is running. Waiting for it to finish.')
         if running and isinstance(origin, RoutineOrigin):
             raise InstanceBusy(f'Routine "{origin.name}" is waiting for the running user turn.')
+
+    @asynccontextmanager
+    async def step(self) -> AsyncIterator[None]:
+        """Hold the instance for one factory step, the way a routine's turn holds it.
+
+        The step waits for every live turn, parked approval and claim to finish, and no turn
+        starts while it runs. A draining instance takes no step.
+        """
+        while True:
+            # Clear before reading, so a change made while reading is never missed.
+            self._changed.clear()
+            self.require_admitting()
+            if not self.running() and not self._claims:
+                break
+            await self._changed.wait()
+        key = uuid4()
+        claim = StepClaim()
+        self._claims[key] = claim
+        try:
+            yield
+        finally:
+            self._release_claim(key, claim)
 
     async def wait_idle(self) -> None:
         """Wait until nothing holds the instance: no live turn, no parked approval, no claim."""
@@ -682,7 +713,7 @@ class Turns:
     def _release_claim(
         self,
         thread_id: UUID,
-        claim: TurnClaim | InterruptedTurnClaim | RevertClaim,
+        claim: TurnClaim | InterruptedTurnClaim | RevertClaim | StepClaim,
     ) -> None:
         if self._claims.get(thread_id) is claim:
             del self._claims[thread_id]

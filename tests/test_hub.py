@@ -67,6 +67,9 @@ from kinby.contracts import (
     SetupFieldType,
     StatsGetCommand,
     StatsGetResult,
+    StepEnding,
+    StepResult,
+    StepRunCommand,
     StorageItem,
     StorageKind,
 )
@@ -380,6 +383,15 @@ class FakeControl:
         self.release = asyncio.Event()
         if not holds:
             self.release.set()
+        #: Each step the hub ran, and the endpoint it ran it on.
+        self.steps: list[tuple[ControlEndpoint, StepRunCommand]] = []
+        #: What the next steps return, or raise, in order. A step past them passes.
+        self.step_results: list[StepResult | Exception] = []
+        #: A step answers once this is set. Clear it to hold every step.
+        self.step_release = asyncio.Event()
+        self.step_release.set()
+        self.steps_running = 0
+        self.most_steps_running = 0
 
     async def probe(self, endpoint: ControlEndpoint) -> InstanceProbeResult:
         self.endpoints.append(endpoint)
@@ -411,6 +423,22 @@ class FakeControl:
         if not self.reachable:
             raise ControlUnreachable("Cannot connect to host kinby-instance:8787")
         return self.reasons
+
+    async def run_step(self, endpoint: ControlEndpoint, command: StepRunCommand) -> StepResult:
+        self.steps.append((endpoint, command))
+        self.steps_running += 1
+        self.most_steps_running = max(self.most_steps_running, self.steps_running)
+        try:
+            await self.step_release.wait()
+            # Another step the hub let in at the same time gets to run here.
+            await asyncio.sleep(0.001)
+        finally:
+            self.steps_running -= 1
+        passed = StepResult(ending=StepEnding.CLEAN)
+        answer = self.step_results.pop(0) if self.step_results else passed
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
     async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
         self.stats_asked.append(command)

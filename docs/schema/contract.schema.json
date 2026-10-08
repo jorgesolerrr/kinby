@@ -318,6 +318,43 @@
         }
       ]
     },
+    "CommandStepRun": {
+      "additionalProperties": false,
+      "description": "Run each command in the instance's workspace without a shell, in order.\n\nThe step passes when every command exits with code zero, and stops at the first that does not.",
+      "properties": {
+        "kind": {
+          "const": "command",
+          "default": "command",
+          "type": "string"
+        },
+        "run": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "run",
+        "kind"
+      ],
+      "title": "CommandStepRun",
+      "type": "object"
+    },
     "CommitSha": {
       "pattern": "^[0-9a-f]{40}$",
       "type": "string"
@@ -1125,6 +1162,178 @@
         "hash"
       ],
       "title": "FactoryResult",
+      "type": "object"
+    },
+    "FactoryRun": {
+      "additionalProperties": false,
+      "description": "One work item's trip through a factory's steps.",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "factory": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/FactoryRunStatus"
+        },
+        "step": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "work_item": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StepValue"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "run_id",
+        "factory",
+        "work_item",
+        "status",
+        "step",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "FactoryRun",
+      "type": "object"
+    },
+    "FactoryRunDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/StepAttempt"
+          },
+          "type": "array"
+        },
+        "run": {
+          "$ref": "#/$defs/FactoryRun"
+        }
+      },
+      "required": [
+        "run",
+        "attempts"
+      ],
+      "title": "FactoryRunDetail",
+      "type": "object"
+    },
+    "FactoryRunGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "FactoryRunGetCommand",
+      "type": "object"
+    },
+    "FactoryRunIntakeCommand": {
+      "additionalProperties": false,
+      "description": "Hand a work item to the factory whose intake is this instance and routine.\n\nA work item that matches an unfinished run of the factory returns that run instead.",
+      "properties": {
+        "routine": {
+          "type": "string"
+        },
+        "work_item": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StepValue"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "routine",
+        "work_item"
+      ],
+      "title": "FactoryRunIntakeCommand",
+      "type": "object"
+    },
+    "FactoryRunListCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "factory": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FactoryRunStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "factory"
+      ],
+      "title": "FactoryRunListCommand",
+      "type": "object"
+    },
+    "FactoryRunListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/FactoryRun"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "runs"
+      ],
+      "title": "FactoryRunListResult",
+      "type": "object"
+    },
+    "FactoryRunStatus": {
+      "description": "Where a factory run stands.",
+      "enum": [
+        "running",
+        "queued",
+        "parked",
+        "needs-human",
+        "done",
+        "cancelled"
+      ],
+      "title": "FactoryRunStatus",
+      "type": "string"
+    },
+    "FactoryRunSubscribeCommand": {
+      "additionalProperties": false,
+      "description": "Follow every factory run of the hub as its state changes. Nothing is replayed.",
+      "properties": {},
+      "title": "FactoryRunSubscribeCommand",
       "type": "object"
     },
     "FactorySource": {
@@ -5151,6 +5360,175 @@
       "title": "StatsSummaryResult",
       "type": "object"
     },
+    "StepAttempt": {
+      "additionalProperties": false,
+      "description": "One attempt at one step of a factory run.",
+      "properties": {
+        "attempt": {
+          "type": "integer"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ending": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepEnding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "step": {
+          "$ref": "#/$defs/StepId"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StepValue"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "step",
+        "attempt",
+        "ending",
+        "outcome",
+        "values",
+        "summary",
+        "started_at",
+        "ended_at"
+      ],
+      "title": "StepAttempt",
+      "type": "object"
+    },
+    "StepEnding": {
+      "description": "How one attempt at a step ended.",
+      "enum": [
+        "clean",
+        "failed",
+        "interrupted"
+      ],
+      "title": "StepEnding",
+      "type": "string"
+    },
+    "StepId": {
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "type": "string"
+    },
+    "StepResult": {
+      "additionalProperties": false,
+      "description": "What one attempt at a step hands back to the hub.",
+      "properties": {
+        "ending": {
+          "$ref": "#/$defs/StepEnding"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "summary": {
+          "default": "",
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StepValue"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "ending"
+      ],
+      "title": "StepResult",
+      "type": "object"
+    },
+    "StepRunCommand": {
+      "additionalProperties": false,
+      "description": "Run one step of a factory run in this instance, and return its result.",
+      "properties": {
+        "results": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StepValue"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "type": "object"
+        },
+        "step": {
+          "$ref": "#/$defs/CommandStepRun"
+        },
+        "work_item": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StepValue"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "step",
+        "work_item"
+      ],
+      "title": "StepRunCommand",
+      "type": "object"
+    },
+    "StepValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
     "StorageItem": {
       "additionalProperties": false,
       "properties": {
@@ -6720,6 +7098,10 @@
       "title": "UserOrigin",
       "type": "object"
     },
+    "ValueName": {
+      "pattern": "^[a-z_][a-z0-9_]*$",
+      "type": "string"
+    },
     "Warning": {
       "additionalProperties": false,
       "properties": {
@@ -6905,6 +7287,54 @@
             },
             "result": {
               "$ref": "#/$defs/FactoryRemoveResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.run.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRunDetail"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.run.intake": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunIntakeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRun"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.run.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRunListResult"
             }
           },
           "required": [
@@ -7729,6 +8159,22 @@
           ],
           "type": "object"
         },
+        "step.run": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/StepRunCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/StepResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "thread.approval.respond": {
           "additionalProperties": false,
           "properties": {
@@ -8022,6 +8468,7 @@
         "stats.get",
         "instance.probe",
         "instance.drain",
+        "step.run",
         "routine.list",
         "routine.run",
         "routine.read",
@@ -8078,6 +8525,9 @@
         "factory.describe",
         "factory.install",
         "factory.remove",
+        "factory.run.intake",
+        "factory.run.list",
+        "factory.run.get",
         "stats.summary"
       ],
       "type": "object"
@@ -8088,6 +8538,22 @@
     "subscriptions": {
       "additionalProperties": false,
       "properties": {
+        "factory.run.subscribe": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunSubscribeCommand"
+            },
+            "item": {
+              "$ref": "#/$defs/FactoryRun"
+            }
+          },
+          "required": [
+            "command",
+            "item"
+          ],
+          "type": "object"
+        },
         "thread.subscribe": {
           "additionalProperties": false,
           "properties": {
@@ -8106,7 +8572,8 @@
         }
       },
       "required": [
-        "thread.subscribe"
+        "thread.subscribe",
+        "factory.run.subscribe"
       ],
       "type": "object"
     }

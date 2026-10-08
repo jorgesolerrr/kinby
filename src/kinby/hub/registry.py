@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +19,8 @@ from kinby.contracts import (
     AvatarShape,
     DeclaredSetup,
     FactoryName,
+    FactoryRun,
+    FactoryRunStatus,
     IntendedState,
     LoginPrompt,
     LoginState,
@@ -29,8 +31,14 @@ from kinby.contracts import (
     PackageCommit,
     PackageDescription,
     PackageSelection,
+    StepAttempt,
+    StepEnding,
+    StepId,
+    StepResult,
+    StepValue,
     StorageItem,
     StorageKind,
+    ValueName,
 )
 from kinby.factories.file import InstanceName, RecipeName
 from kinby.hub.models import ImageArtifact
@@ -189,6 +197,27 @@ class HubRegistry:
                     name TEXT NOT NULL,
                     recipe TEXT,
                     setup TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS factory_runs (
+                    id TEXT PRIMARY KEY,
+                    factory TEXT NOT NULL,
+                    work_item TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    step TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS step_attempts (
+                    run_id TEXT NOT NULL REFERENCES factory_runs(id),
+                    step TEXT NOT NULL,
+                    attempt INTEGER NOT NULL,
+                    ending TEXT,
+                    outcome TEXT,
+                    result_values TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    PRIMARY KEY (run_id, step, attempt)
                 );
                 """
             )
@@ -1404,12 +1433,182 @@ class HubRegistry:
             ]
         return [artifact for key in keys if (artifact := self.image_artifact(key)) is not None]
 
+    def open_run(
+        self,
+        factory: FactoryName,
+        work_item: Mapping[ValueName, StepValue],
+        step: StepId,
+    ) -> tuple[FactoryRun, bool]:
+        """Queue a new run at its first step, or find the unfinished run of the same work item.
 
+        True when the run is new.
+        """
+        key = _work_item_key(work_item)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            open_run = connection.execute(
+                f"""
+                SELECT {_RUN_COLUMNS} FROM factory_runs
+                WHERE factory = ? AND work_item = ? AND status NOT IN (?, ?)
+                ORDER BY rowid LIMIT 1
+                """,
+                (factory, key, *_FINISHED),
+            ).fetchone()
+            if open_run is not None:
+                return _factory_run(open_run), False
+            now = _now()
+            row = (str(uuid4()), factory, key, FactoryRunStatus.QUEUED.value, step, now, now)
+            connection.execute(
+                f"INSERT INTO factory_runs ({_RUN_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)", row
+            )
+        return _factory_run(row), True
+
+    def run(self, run_id: UUID) -> FactoryRun | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT {_RUN_COLUMNS} FROM factory_runs WHERE id = ?", (str(run_id),)
+            ).fetchone()
+        return _factory_run(row) if row is not None else None
+
+    def runs(self, factory: FactoryName, status: FactoryRunStatus | None) -> list[FactoryRun]:
+        """The factory's runs, oldest first, in one status or in any."""
+        wanted = status.value if status is not None else None
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT {_RUN_COLUMNS} FROM factory_runs
+                WHERE factory = ? AND (? IS NULL OR status = ?)
+                ORDER BY rowid
+                """,
+                (factory, wanted, wanted),
+            ).fetchall()
+        return [_factory_run(row) for row in rows]
+
+    def queued_runs(self) -> list[FactoryRun]:
+        """Every queued run of every factory, in the order it was queued."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT {_RUN_COLUMNS} FROM factory_runs WHERE status = ?
+                ORDER BY updated_at, rowid
+                """,
+                (FactoryRunStatus.QUEUED.value,),
+            ).fetchall()
+        return [_factory_run(row) for row in rows]
+
+    def move_run(self, run_id: UUID, status: FactoryRunStatus, step: StepId | None) -> FactoryRun:
+        """Put the run in *status* at *step*."""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE factory_runs SET status = ?, step = ?, updated_at = ? WHERE id = ?",
+                (status.value, step, _now(), str(run_id)),
+            )
+        return self._existing_run(run_id)
+
+    def begin_attempt(self, run_id: UUID, step: StepId) -> FactoryRun:
+        """Open the next attempt at *step*, and mark the run running it."""
+        now = _now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO step_attempts (
+                    run_id, step, attempt, result_values, summary, started_at
+                )
+                SELECT ?, ?, COUNT(*) + 1, '{}', '', ? FROM step_attempts
+                WHERE run_id = ? AND step = ?
+                """,
+                (str(run_id), step, now, str(run_id), step),
+            )
+            connection.execute(
+                "UPDATE factory_runs SET status = ?, step = ?, updated_at = ? WHERE id = ?",
+                (FactoryRunStatus.RUNNING.value, step, now, str(run_id)),
+            )
+        return self._existing_run(run_id)
+
+    def end_attempt(self, run_id: UUID, result: StepResult) -> None:
+        """Record how the run's open attempt ended. Its result is never written again."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE step_attempts
+                SET ending = ?, outcome = ?, result_values = ?, summary = ?, ended_at = ?
+                WHERE run_id = ? AND ended_at IS NULL
+                """,
+                (
+                    result.ending.value,
+                    result.outcome,
+                    json.dumps(result.values),
+                    result.summary,
+                    _now(),
+                    str(run_id),
+                ),
+            )
+
+    def attempts(self, run_id: UUID) -> list[StepAttempt]:
+        """Every attempt of the run, in the order they started."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT step, attempt, ending, outcome, result_values, summary, started_at, ended_at
+                FROM step_attempts WHERE run_id = ? ORDER BY rowid
+                """,
+                (str(run_id),),
+            ).fetchall()
+        return [
+            StepAttempt(
+                step=step,
+                attempt=attempt,
+                ending=StepEnding(ending) if ending is not None else None,
+                outcome=outcome,
+                values=json.loads(values),
+                summary=summary,
+                started_at=datetime.fromisoformat(started_at),
+                ended_at=datetime.fromisoformat(ended_at) if ended_at is not None else None,
+            )
+            for step, attempt, ending, outcome, values, summary, started_at, ended_at in rows
+        ]
+
+    def unfinished_attempts(self) -> list[UUID]:
+        """The runs with an attempt a previous process started and never ended."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT run_id FROM step_attempts WHERE ended_at IS NULL ORDER BY rowid"
+            ).fetchall()
+        return [UUID(row[0]) for row in rows]
+
+    def _existing_run(self, run_id: UUID) -> FactoryRun:
+        run = self.run(run_id)
+        if run is None:
+            raise ValueError(f'Factory run "{run_id}" was not found.')
+        return run
+
+
+_RUN_COLUMNS = "id, factory, work_item, status, step, created_at, updated_at"
+#: The statuses a run never leaves.
+_FINISHED = (FactoryRunStatus.DONE.value, FactoryRunStatus.CANCELLED.value)
 _SELECTION = TypeAdapter(PackageSelection | None)
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _work_item_key(work_item: Mapping[ValueName, StepValue]) -> str:
+    """One work item as one string, whatever order its values came in."""
+    return json.dumps(work_item, sort_keys=True)
+
+
+def _factory_run(row: tuple[str, ...]) -> FactoryRun:
+    run_id, factory, work_item, status, step, created_at, updated_at = row
+    return FactoryRun(
+        run_id=UUID(run_id),
+        factory=factory,
+        work_item=json.loads(work_item),
+        status=FactoryRunStatus(status),
+        step=step,
+        created_at=datetime.fromisoformat(created_at),
+        updated_at=datetime.fromisoformat(updated_at),
+    )
 
 
 def _selection_key(package: PackageSelection | None) -> str:

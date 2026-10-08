@@ -45,6 +45,7 @@ from kinby.contracts import (
     SKILL_READ,
     SKILL_WRITE,
     STATS_GET,
+    STEP_RUN,
     THREAD_APPROVAL_RESPOND,
     THREAD_ARCHIVE,
     THREAD_CREATE,
@@ -77,6 +78,8 @@ from kinby.contracts import (
     Scope,
     StatsGetCommand,
     StatsGetResult,
+    StepResult,
+    StepRunCommand,
     Stream,
     Subscription,
     ThreadArchiveCommand,
@@ -105,6 +108,7 @@ from kinby.core.pricing import price_map
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
 from kinby.core.stats import TurnRun, active_limits, plan_use, stats_buckets, stats_summary
+from kinby.core.steps import run_command_step
 from kinby.core.threads import ThreadRecord, ThreadStore, thread_list, thread_summary
 from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
@@ -469,6 +473,14 @@ def build_dispatcher(
         dispatcher.register(ROUTINE_SET_ENABLED, config.set_routine_enabled)
         dispatcher.register(ROUTINE_DELETE, config.delete_routine)
         dispatcher.register(ROUTINE_RENAME, config.rename_routine)
+    if isinstance(turns, ScheduledTurnConfig) and turn_service is not None:
+        workspace = turns.scheduler.instance.manifest.workspace.path
+
+        async def run_step(command: StepRunCommand) -> StepResult:
+            async with turn_service.step():
+                return await run_command_step(command.step, workspace)
+
+        dispatcher.register(STEP_RUN, run_step)
     if isinstance(turns, ScheduledTurnConfig):
         memory = InstanceMemory(GraphStore(turns.scheduler.instance.path), turns.scheduler.clock)
         dispatcher.register(MEMORY_LIST, memory.list)

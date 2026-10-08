@@ -24,6 +24,13 @@ from kinby.contracts.models import (
     FactoryRemoveCommand,
     FactoryRemoveResult,
     FactoryResult,
+    FactoryRun,
+    FactoryRunDetail,
+    FactoryRunGetCommand,
+    FactoryRunIntakeCommand,
+    FactoryRunListCommand,
+    FactoryRunListResult,
+    FactoryRunSubscribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
     InstanceAdoptCommand,
@@ -103,6 +110,8 @@ from kinby.contracts.models import (
     StatsGetCommand,
     StatsGetResult,
     StatsSummaryResult,
+    StepResult,
+    StepRunCommand,
     ThreadApprovalRespondCommand,
     ThreadArchiveCommand,
     ThreadCreateCommand,
@@ -218,6 +227,8 @@ INSTANCE_PROBE = Method(
 INSTANCE_DRAIN = Method(
     "instance.drain", Scope.INSTANCE_LIFECYCLE, InstanceDrainCommand, InstanceDrainResult
 )
+#: The hub runs one step of a factory run in the instance, as it would run a turn.
+STEP_RUN = Method("step.run", Scope.INSTANCE_LIFECYCLE, StepRunCommand, StepResult)
 
 ROUTINE_LIST = Method("routine.list", Scope.INSTANCE_READ, RoutineListCommand, RoutineListResult)
 ROUTINE_RUN = Method("routine.run", Scope.INSTANCE_ADMIN, RoutineRunCommand, AcceptedResult)
@@ -345,6 +356,16 @@ FACTORY_INSTALL = Method(
 FACTORY_REMOVE = Method(
     "factory.remove", Scope.HUB_ADMIN, FactoryRemoveCommand, FactoryRemoveResult
 )
+FACTORY_RUN_INTAKE = Method(
+    "factory.run.intake", Scope.FACTORY_INTAKE, FactoryRunIntakeCommand, FactoryRun
+)
+FACTORY_RUN_LIST = Method(
+    "factory.run.list", Scope.HUB_READ, FactoryRunListCommand, FactoryRunListResult
+)
+FACTORY_RUN_GET = Method("factory.run.get", Scope.HUB_READ, FactoryRunGetCommand, FactoryRunDetail)
+FACTORY_RUN_SUBSCRIBE = Subscription(
+    "factory.run.subscribe", Scope.HUB_READ, FactoryRunSubscribeCommand, FactoryRun
+)
 #: The same time range and bucket size as stats.get, asked of every running instance.
 STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
 
@@ -368,6 +389,7 @@ METHODS = (
     STATS_GET,
     INSTANCE_PROBE,
     INSTANCE_DRAIN,
+    STEP_RUN,
     ROUTINE_LIST,
     ROUTINE_RUN,
     ROUTINE_READ,
@@ -424,9 +446,12 @@ METHODS = (
     FACTORY_DESCRIBE,
     FACTORY_INSTALL,
     FACTORY_REMOVE,
+    FACTORY_RUN_INTAKE,
+    FACTORY_RUN_LIST,
+    FACTORY_RUN_GET,
     STATS_SUMMARY,
 )
-SUBSCRIPTIONS = (THREAD_SUBSCRIBE,)
+SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE)
 
 #: What a result or an item arrives as, by wire name, so a client off the socket parses it once.
 RESULT_MODELS: Mapping[str, type[ContractModel]] = {
