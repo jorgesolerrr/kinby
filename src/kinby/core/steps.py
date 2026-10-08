@@ -10,11 +10,13 @@ from uuid import uuid4
 
 from kinby.contracts import (
     AgentStepRun,
+    ClientStepRun,
     CodeStepRun,
     CommandStepRun,
     Event,
     HookName,
     MessageDelta,
+    RunDelegated,
     StepEnding,
     StepResult,
     StepRunCommand,
@@ -22,7 +24,9 @@ from kinby.contracts import (
     TurnCompleted,
     TurnFailed,
 )
+from kinby.core.coding_clients import own_tokens, run_coding_client
 from kinby.core.errors import CoreError
+from kinby.core.events import EventLog
 from kinby.core.prompt import render_step_message
 from kinby.core.turns import Turns
 from kinby.instance import Instance, ManifestError
@@ -38,11 +42,15 @@ from kinby.plugins.tools import ToolContext
 _OUTPUT_TAIL = 2_000
 
 
-async def run_step(command: StepRunCommand, instance: Instance, turns: Turns) -> StepResult:
+async def run_step(
+    command: StepRunCommand, instance: Instance, turns: Turns, log: EventLog
+) -> StepResult:
     """Run the step, then its hook however the step ended. The hook's values are the result's."""
     match command.step:
         case AgentStepRun() as step:
             result = await _run_agent_step(step, command, turns)
+        case ClientStepRun() as step:
+            result = await _run_client_step(step, command, instance, log)
         case CommandStepRun() as step:
             result = await run_command_step(step, instance.manifest.workspace.path)
         case CodeStepRun() as step:
@@ -74,6 +82,35 @@ async def _run_agent_step(step: AgentStepRun, command: StepRunCommand, turns: Tu
             return _failed(f"The turn failed: {reason}", said)
         case _:
             return _failed("The turn was interrupted.", said)
+
+
+async def _run_client_step(
+    step: ClientStepRun, command: StepRunCommand, instance: Instance, log: EventLog
+) -> StepResult:
+    """Run the coding client in the workspace, and record its delegated run.
+
+    What the client said last is only the summary.
+    """
+    ran = await run_coding_client(
+        step.client,
+        render_step_message(step.prompt, command.work_item, command.results),
+        instance.manifest.workspace.path,
+        resume=step.resume,
+        timeout_seconds=step.timeout_seconds,
+    )
+    if ran.reported is not None:
+        earlier = (
+            event.payload.run
+            for event in log.all_events()
+            if isinstance(event.payload, RunDelegated)
+        )
+        # The run belongs to no thread or turn. Its events go under the factory run's id.
+        await log.append(
+            command.origin.run_id,
+            uuid4(),
+            RunDelegated(run=own_tokens(ran.reported, earlier)),
+        )
+    return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session)
 
 
 def _last_message(events: Sequence[Event]) -> str:
@@ -157,11 +194,8 @@ async def _recorded(
         recorded = await found.record(end)
         if recorded is None:
             return result
-        return StepResult(
-            ending=result.ending,
-            outcome=recorded.outcome,
-            values=dict(recorded.values),
-            summary=result.summary,
+        return result.model_copy(
+            update={"outcome": recorded.outcome, "values": dict(recorded.values)}
         )
     except Exception as exc:
         # Hooks are user code. Whatever goes wrong fails the step, and says why.

@@ -46,7 +46,7 @@ PLAN_WINDOWS = tuple(
 
 @dataclass(frozen=True)
 class TurnRun:
-    """A delegated run and the origin of the turn it ran in."""
+    """A delegated run and the origin of the turn it ran in, None when it ran in no turn."""
 
     origin: Origin | None
     reported: ReportedRun

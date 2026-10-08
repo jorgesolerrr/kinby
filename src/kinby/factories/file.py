@@ -16,6 +16,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
 from kinby.contracts import (
+    CodingClient,
     FactoryName,
     HookName,
     SetupField,
@@ -47,11 +48,6 @@ class ValueType(StrEnum):
     STR = "str"
     INT = "int"
     BOOL = "bool"
-
-
-class CodingClient(StrEnum):
-    CLAUDE = "claude"
-    CODEX = "codex"
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)

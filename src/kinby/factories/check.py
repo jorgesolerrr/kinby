@@ -73,6 +73,7 @@ def check_factory(folder: Path) -> tuple[str, ...]:
         *_steps(factory, folder, templates),
         *_inputs(factory),
         *_order(factory),
+        *_resumes(factory),
     )
 
 
@@ -227,10 +228,8 @@ def _inputs(factory: FactoryFile) -> Iterator[str]:
 
 
 def _order(factory: FactoryFile) -> Iterator[str]:
-    """Step ids are unique, work is only ever sent back to an earlier step, and a client step
-    only resumes an earlier client step."""
+    """Step ids are unique, and work is only ever sent back to an earlier step."""
     earlier: set[str] = set()
-    earlier_clients: set[str] = set()
     for step in factory.steps:
         if step.id in earlier:
             yield f'Step id "{step.id}" is used by more than one step.'
@@ -240,11 +239,21 @@ def _order(factory: FactoryFile) -> Iterator[str]:
                     f'Step "{step.id}" sends work back to "{outcome.back}", '
                     "which is not an earlier step."
                 )
-        if isinstance(step, ClientStep):
-            if step.resume is not None and step.resume not in earlier_clients:
-                yield (
-                    f'Step "{step.id}" resumes "{step.resume}", '
-                    "which is not an earlier client step."
-                )
-            earlier_clients.add(step.id)
         earlier.add(step.id)
+
+
+def _resumes(factory: FactoryFile) -> Iterator[str]:
+    """A client step only resumes the session of an earlier step of its instance and client."""
+    for at, step in enumerate(factory.steps):
+        if not isinstance(step, ClientStep) or step.resume is None:
+            continue
+        if not any(
+            isinstance(earlier, ClientStep)
+            and earlier.id == step.resume
+            and (earlier.instance, earlier.client) == (step.instance, step.client)
+            for earlier in factory.steps[:at]
+        ):
+            yield (
+                f'Step "{step.id}" resumes "{step.resume}", which is not an earlier '
+                f'{step.client} step in instance "{step.instance}".'
+            )

@@ -102,6 +102,8 @@ class TurnMetricsResult:
     records: list[TurnMetrics]
     unpriced_models_by_turn: Mapping[TurnKey, frozenset[UnpricedModel]]
     warnings: list[ModelCallMismatch]
+    #: Delegated runs no turn reported: a factory step's coding client runs.
+    runs_outside_turns: list[ReportedRun]
 
 
 def turn_metrics(
@@ -115,6 +117,7 @@ def turn_metrics(
     records: list[TurnMetrics] = []
     unpriced_models_by_turn: dict[TurnKey, set[UnpricedModel]] = {}
     mismatches: list[ModelCallMismatch] = []
+    runs_outside_turns: list[ReportedRun] = []
 
     for event in events:
         key = TurnKey(event.thread_id, event.turn_id)
@@ -166,8 +169,11 @@ def turn_metrics(
                 turn.approvals_requested += 1
             continue
         if isinstance(payload, RunDelegated):
+            reported = ReportedRun(timestamp=event.timestamp, run=payload.run)
             if turn is not None:
-                turn.delegated_runs.append(ReportedRun(timestamp=event.timestamp, run=payload.run))
+                turn.delegated_runs.append(reported)
+            else:
+                runs_outside_turns.append(reported)
             continue
         if isinstance(payload, TurnCompleted | TurnFailed | TurnInterrupted):
             turn = open_turns.pop(key, None)
@@ -266,6 +272,7 @@ def turn_metrics(
         records,
         {key: frozenset(models) for key, models in unpriced_models_by_turn.items()},
         mismatches,
+        runs_outside_turns,
     )
 
 

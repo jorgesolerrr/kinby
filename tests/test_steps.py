@@ -1,9 +1,13 @@
 """Factory steps in the instance: step.run through the instance's dispatcher and control socket."""
 
 import asyncio
+import json
 import os
 import subprocess
-from collections.abc import AsyncIterator, Sequence
+import sys
+from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -13,20 +17,25 @@ from langchain_core.messages import AIMessageChunk, BaseMessage
 from kinby.contracts import (
     AgentStepRun,
     ApprovalRequested,
+    ClientStepRun,
     CodeStepRun,
+    CodingClient,
     CommandStepRun,
     ContractModel,
     ErrorCode,
     ErrorEnvelope,
     FactoryRunOrigin,
     InstanceDrainCommand,
+    PlanLimit,
     RoutineListResult,
     RoutineRunOutcome,
+    StatsGetResult,
     StepEnding,
     StepResult,
     StepRunCommand,
     ThreadListResult,
     ToolResult,
+    UsageSource,
 )
 from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
 from kinby.core.events import EventLog
@@ -587,6 +596,306 @@ def test_an_agent_step_whose_turn_fails_still_runs_its_hook(tmp_path):
         assert result.ending is StepEnding.FAILED
         assert result.values == {"verdict": "changes", "ending": "failed", "issue": 7}
         assert result.summary == "The turn failed: The model turn failed unexpectedly."
+
+    asyncio.run(scenario())
+
+
+#: What Claude Code streams for a run that implemented the issue in session claude-1.
+CLAUDE_STREAM = [
+    {"type": "system", "subtype": "init", "session_id": "claude-1"},
+    {"type": "assistant", "message": {"id": "m1", "model": "claude-opus-5-5", "usage": {}}},
+    {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "session_id": "claude-1",
+        "result": "Implemented issue 7.",
+        "num_turns": 3,
+        "modelUsage": {
+            "claude-opus-5-5": {
+                "inputTokens": 100,
+                "outputTokens": 20,
+                "cacheReadInputTokens": 50,
+                "cacheCreationInputTokens": 10,
+            }
+        },
+    },
+]
+#: What Codex streams for the same run, in thread codex-1.
+CODEX_STREAM = [
+    {"type": "thread.started", "thread_id": "codex-1"},
+    {"type": "turn.started"},
+    {"type": "item.completed", "item": {"id": "i1", "type": "agent_message", "text": "Done."}},
+    {
+        "type": "item.completed",
+        "item": {"id": "i2", "type": "agent_message", "text": "Implemented issue 7."},
+    },
+    {
+        "type": "turn.completed",
+        "usage": {"input_tokens": 160, "cached_input_tokens": 50, "output_tokens": 20},
+    },
+]
+
+
+#: The API keys a client would bill over its subscription login, all set for every stub client.
+API_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY")
+
+
+def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then: str) -> Path:
+    """Put an executable *name* first on PATH that records how it was called, then runs *then*.
+
+    Returns the file each call is recorded in, one JSON object per line.
+    """
+    calls = tmp_path / f"{name}.calls"
+    executable = tmp_path / "bin" / name
+    executable.parent.mkdir(exist_ok=True)
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys, time\n"
+        f"with open({str(calls)!r}, 'a') as calls:\n"
+        "    json.dump({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'stdin': sys.stdin.read(),\n"
+        f"               'api_keys': [name for name in {API_KEYS!r} if name in os.environ]}},\n"
+        "              calls)\n"
+        "    calls.write('\\n')\n"
+        f"{then}\n"
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{executable.parent}{os.pathsep}{os.environ['PATH']}")
+    for variable in API_KEYS:
+        monkeypatch.setenv(variable, "sk-test")
+    return calls
+
+
+def streaming(events: Sequence[Mapping[str, object]]) -> str:
+    """The stub's body that streams *events* as JSON lines and exits with code zero."""
+    return "".join(f"print({json.dumps(json.dumps(event))})\n" for event in events)
+
+
+@dataclass(frozen=True)
+class ClientCall:
+    """How the stub client was called."""
+
+    argv: list[str]
+    cwd: str
+    stdin: str
+    #: The API keys the client saw.
+    api_keys: list[str]
+
+
+def recorded_calls(calls: Path) -> list[ClientCall]:
+    return [ClientCall(**json.loads(line)) for line in calls.read_text().splitlines()]
+
+
+async def run_client_step(
+    dispatcher: Dispatcher, client: str, *, resume: str | None = None, hook: str | None = None
+) -> ContractModel:
+    command = StepRunCommand(
+        step=ClientStepRun(
+            client=CodingClient(client),
+            prompt="Implement the issue.",
+            resume=resume,
+            timeout_seconds=1,
+        ),
+        hook=hook,
+        origin=ORIGIN,
+        work_item={"issue": 7},
+        results={"branch": "agent/7"},
+    )
+    return await call(dispatcher, "step.run", **command.model_dump(mode="json"))
+
+
+@pytest.mark.parametrize(
+    ("client", "stream", "session", "arguments", "kept"),
+    [
+        (
+            "claude",
+            CLAUDE_STREAM,
+            "claude-1",
+            ["-p", "--permission-mode", "acceptEdits"],
+            ["OPENAI_API_KEY", "CODEX_API_KEY"],
+        ),
+        (
+            "codex",
+            CODEX_STREAM,
+            "codex-1",
+            ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox"],
+            ["ANTHROPIC_API_KEY"],
+        ),
+    ],
+)
+def test_a_client_step_runs_the_client_in_the_workspace_with_the_prompt_and_keeps_its_session(
+    tmp_path, monkeypatch, client, stream, session, arguments, kept
+):
+    runtime, workspace = step_instance(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, client, streaming(stream))
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, client)
+
+        assert result == StepResult(
+            ending=StepEnding.CLEAN, summary="Implemented issue 7.", session=session
+        )
+        [called] = recorded_calls(calls)
+        assert called.argv[: len(arguments)] == arguments
+        assert called.cwd == str(workspace)
+        assert called.stdin.startswith("Implement the issue.\n")
+        assert '{"work_item": {"issue": 7}, "results": {"branch": "agent/7"}}' in called.stdin
+        assert called.api_keys == kept
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("then", "ending", "session"),
+    [
+        (streaming(CLAUDE_STREAM), StepEnding.CLEAN, "claude-1"),
+        ('print(\'{"type": "result", "subtype": "succ\')', StepEnding.CLEAN, None),
+        (streaming(CLAUDE_STREAM[:2]) + "time.sleep(10)", StepEnding.TIMED_OUT, None),
+        (
+            streaming(CLAUDE_STREAM[:2]) + "sys.stdout.flush()\nos.kill(os.getpid(), 9)",
+            StepEnding.FAILED,
+            None,
+        ),
+    ],
+    ids=["clean", "malformed", "timeout", "kill"],
+)
+def test_a_client_steps_hook_records_its_result_however_the_client_ended(
+    tmp_path, monkeypatch, then, ending, session
+):
+    runtime, workspace = hooked_instance(tmp_path)
+    (workspace / "verdict").write_text("changes\n")
+    stub_client(tmp_path, monkeypatch, "claude", then)
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, "claude", hook="read_verdict")
+
+        assert isinstance(result, StepResult)
+        assert result.ending is ending
+        assert result.outcome == "changes"
+        assert result.values == {"verdict": "changes", "ending": ending.value, "issue": 7}
+        assert result.session == session
+
+    asyncio.run(scenario())
+
+
+def test_a_client_that_runs_past_its_timeout_is_killed_and_ends_the_attempt_as_a_timeout(
+    tmp_path, monkeypatch
+):
+    runtime, workspace = step_instance(tmp_path)
+    stub_client(tmp_path, monkeypatch, "codex", "time.sleep(1.5)\nopen('late', 'w').close()")
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, "codex")
+        await asyncio.sleep(1)
+
+        assert result == StepResult(
+            ending=StepEnding.TIMED_OUT,
+            summary="codex ran past its 1-second timeout and was killed.",
+        )
+        assert not (workspace / "late").exists()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("client", "stream", "session", "arguments"),
+    [
+        ("claude", CLAUDE_STREAM, "claude-1", ["--resume", "claude-1"]),
+        ("codex", CODEX_STREAM, "codex-1", ["exec", "resume", "codex-1", "-"]),
+    ],
+)
+def test_a_client_step_that_resumes_continues_the_earlier_steps_session(
+    tmp_path, monkeypatch, client, stream, session, arguments
+):
+    runtime, _ = step_instance(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, client, streaming(stream))
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, client, resume=session)
+
+        assert isinstance(result, StepResult)
+        assert (result.ending, result.session) == (StepEnding.CLEAN, session)
+        [called] = recorded_calls(calls)
+        assert [argument for argument in called.argv if argument in arguments] == arguments
+
+    asyncio.run(scenario())
+
+
+def subscription_use(stats: ContractModel, source: UsageSource) -> tuple[int, int, int, int, int]:
+    """The runs and tokens stats.get counts for *source*: runs, input, output, read, created."""
+    assert isinstance(stats, StatsGetResult)
+    [use] = [use for use in stats.total.subscriptions if use.usage_source is source]
+    return (
+        use.runs,
+        use.input_tokens,
+        use.output_tokens,
+        use.cache_read_tokens,
+        use.cache_creation_tokens,
+    )
+
+
+def test_each_client_run_is_a_delegated_run_of_the_instance(tmp_path, monkeypatch):
+    runtime, _ = step_instance(tmp_path)
+    stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    async def scenario() -> None:
+        await run_client_step(runtime.dispatcher, "claude")
+        stats = await call(runtime.dispatcher, "stats.get")
+
+        assert subscription_use(stats, UsageSource.CLAUDE_SUBSCRIPTION) == (1, 160, 20, 50, 10)
+        assert isinstance(stats, StatsGetResult)
+        assert [use.runs for use in stats.plan_use] == [1, 1, 0, 0]
+        assert stats.limits == []
+
+    asyncio.run(scenario())
+
+
+def test_a_resumed_codex_thread_reports_its_own_tokens_not_the_threads_running_total(
+    tmp_path, monkeypatch
+):
+    runtime, _ = step_instance(tmp_path)
+    resumed = [
+        *CODEX_STREAM[:-1],
+        {
+            "type": "turn.completed",
+            "usage": {"input_tokens": 260, "cached_input_tokens": 80, "output_tokens": 50},
+        },
+    ]
+
+    async def scenario() -> None:
+        stub_client(tmp_path, monkeypatch, "codex", streaming(CODEX_STREAM))
+        await run_client_step(runtime.dispatcher, "codex")
+        stub_client(tmp_path, monkeypatch, "codex", streaming(resumed))
+        await run_client_step(runtime.dispatcher, "codex", resume="codex-1")
+        stats = await call(runtime.dispatcher, "stats.get")
+
+        assert subscription_use(stats, UsageSource.CHATGPT_SUBSCRIPTION) == (2, 260, 50, 80, 0)
+
+    asyncio.run(scenario())
+
+
+def test_a_client_run_the_plan_refused_names_when_its_window_resets(tmp_path, monkeypatch):
+    runtime, _ = step_instance(tmp_path)
+    resets_at = datetime(2030, 1, 1, 12, tzinfo=UTC)
+    refused = [
+        {
+            "type": "rate_limit_event",
+            "rate_limit_info": {"status": "rejected", "resetsAt": int(resets_at.timestamp())},
+        },
+        {"type": "result", "subtype": "error", "is_error": True, "session_id": "claude-2"},
+    ]
+    stub_client(tmp_path, monkeypatch, "claude", streaming(refused) + "sys.exit(1)")
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, "claude")
+        stats = await call(runtime.dispatcher, "stats.get")
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert isinstance(stats, StatsGetResult)
+        assert stats.limits == [
+            PlanLimit(usage_source=UsageSource.CLAUDE_SUBSCRIPTION, resets_at=resets_at)
+        ]
 
     asyncio.run(scenario())
 

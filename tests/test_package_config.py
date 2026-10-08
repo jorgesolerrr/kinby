@@ -217,8 +217,9 @@ def test_a_factory_code_step_receives_the_validated_config(writer, tmp_path, cap
         work_item={},
     )
     instance = load_instance(path)
+    turns, _, log = _wired(instance)
 
-    result = asyncio.run(run_step(command, instance, _wired(instance)[0]))
+    result = asyncio.run(run_step(command, instance, turns, log))
 
     assert result.ending is StepEnding.CLEAN
     assert _seen(path) == {"tone": "plain", "token": "EDITOR_TOKEN"}

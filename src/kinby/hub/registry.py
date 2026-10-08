@@ -242,6 +242,7 @@ class HubRegistry:
                 # retries and send-backs.
                 {"restarted_after": "INTEGER NOT NULL DEFAULT 0"},
             )
+            self._add_columns(connection, "step_attempts", {"session": "TEXT"})
             self._add_columns(
                 connection,
                 "image_artifacts",
@@ -1552,7 +1553,8 @@ class HubRegistry:
             connection.execute(
                 """
                 UPDATE step_attempts
-                SET ending = ?, outcome = ?, result_values = ?, summary = ?, ended_at = ?
+                SET ending = ?, outcome = ?, result_values = ?, summary = ?, session = ?,
+                    ended_at = ?
                 WHERE run_id = ? AND ended_at IS NULL
                 """,
                 (
@@ -1560,6 +1562,7 @@ class HubRegistry:
                     result.outcome,
                     json.dumps(result.values),
                     result.summary,
+                    result.session,
                     _now(),
                     str(run_id),
                 ),
@@ -1581,7 +1584,9 @@ class HubRegistry:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT step, attempt, ending, outcome, result_values, summary, started_at, ended_at
+                SELECT
+                    step, attempt, ending, outcome, result_values, summary, session, started_at,
+                    ended_at
                 FROM step_attempts WHERE run_id = ? AND rowid > ? ORDER BY rowid
                 """,
                 (str(run_id), after),
@@ -1594,10 +1599,21 @@ class HubRegistry:
                 outcome=outcome,
                 values=json.loads(values),
                 summary=summary,
+                session=session,
                 started_at=datetime.fromisoformat(started_at),
                 ended_at=datetime.fromisoformat(ended_at) if ended_at is not None else None,
             )
-            for step, attempt, ending, outcome, values, summary, started_at, ended_at in rows
+            for (
+                step,
+                attempt,
+                ending,
+                outcome,
+                values,
+                summary,
+                session,
+                started_at,
+                ended_at,
+            ) in rows
         ]
 
     def unfinished_attempts(self) -> list[UUID]:

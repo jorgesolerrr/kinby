@@ -348,7 +348,7 @@ The rolling period over which a subscription limits use, such as five hours or o
 
 ### Delegated run
 
-One run of an outside agent that a **tool** starts on a subscription **usage source** during a **turn**. It is reported with its tokens, duration, and outcome, and sits beside the turn's **token usage**, never inside it. A run stopped by the subscription's limit is limited, and records when its **plan window** resets.
+One run of an outside agent on a subscription **usage source**: started by a **tool** during a **turn**, or by a **step** that runs a **coding client**. It is reported with its tokens, duration, and outcome. A tool's run sits beside its turn's **token usage**, never inside it; a step's run belongs to no turn. A run stopped by the subscription's limit is limited, and records when its **plan window** resets.
 _Avoid_: subagent, model call
 
 ### Daily cost

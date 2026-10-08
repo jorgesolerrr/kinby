@@ -317,6 +317,39 @@ def test_the_check_fails_a_step_whose_input_no_earlier_step_or_work_item_holds(t
     ]
 
 
+def test_the_check_fails_a_resume_of_anything_but_an_earlier_step_of_the_same_client(tmp_path):
+    resumes = """\
+  - id: fix
+    kind: client
+    in: coder
+    client: codex
+    prompt: prompts/implement.md
+    hook: record_branch
+    resume: implement
+  - id: redo
+    kind: client
+    in: coder
+    client: claude
+    prompt: prompts/implement.md
+    hook: record_branch
+    resume: review
+  - id: again
+    kind: client
+    in: coder
+    client: claude
+    prompt: prompts/implement.md
+    hook: record_branch
+    resume: later
+"""
+    factory = FACTORY.replace("  - id: checks\n", resumes + "  - id: checks\n")
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Step "fix" resumes "implement", which is not an earlier codex step in instance "coder".',
+        'Step "redo" resumes "review", which is not an earlier claude step in instance "coder".',
+        'Step "again" resumes "later", which is not an earlier claude step in instance "coder".',
+    ]
+
+
 def test_the_check_fails_a_send_back_to_a_step_that_is_not_earlier(tmp_path):
     factory = FACTORY.replace(
         "outcomes: { clean: next, changes: { back: implement, max: 3 } }",
@@ -352,8 +385,9 @@ def test_the_check_fails_a_resume_that_is_not_an_earlier_client_step(tmp_path):
     )
 
     assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
-        'Step "implement" resumes "implement", which is not an earlier client step.',
-        'Step "fix" resumes "review", which is not an earlier client step.',
+        'Step "implement" resumes "implement", which is not an earlier claude step in instance '
+        '"coder".',
+        'Step "fix" resumes "review", which is not an earlier claude step in instance "coder".',
     ]
 
 
