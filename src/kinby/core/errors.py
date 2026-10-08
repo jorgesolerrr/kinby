@@ -84,6 +84,18 @@ class FactoryRunNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class RunNeedsNoHuman(CoreError):
+    """The factory run has not stopped for the user, so the hub moves it on its own."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
+class NotAnEarlierStep(CoreError):
+    """A run is only ever sent back to a step before the one it stopped at."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class NotAnIntake(CoreError):
     """No factory names this instance and routine as its intake, so no run started."""
 

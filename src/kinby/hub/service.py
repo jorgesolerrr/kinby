@@ -26,9 +26,12 @@ from kinby.contracts import (
     FACTORY_INSTALL,
     FACTORY_LIST,
     FACTORY_REMOVE,
+    FACTORY_RUN_CANCEL,
     FACTORY_RUN_GET,
     FACTORY_RUN_INTAKE,
     FACTORY_RUN_LIST,
+    FACTORY_RUN_RETRY,
+    FACTORY_RUN_SEND_BACK,
     FACTORY_RUN_SUBSCRIBE,
     IMAGE_PREPARE,
     INSTANCE_ADOPT,
@@ -469,6 +472,9 @@ class Hub:
             self.dispatcher.register(FACTORY_REMOVE, self.remove_factory)
             self.dispatcher.register(FACTORY_RUN_LIST, self.runs.list)
             self.dispatcher.register(FACTORY_RUN_GET, self.runs.get)
+            self.dispatcher.register(FACTORY_RUN_RETRY, self.runs.retry)
+            self.dispatcher.register(FACTORY_RUN_SEND_BACK, self.runs.send_back)
+            self.dispatcher.register(FACTORY_RUN_CANCEL, self.runs.cancel)
             self.dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
         except BaseException:
@@ -2040,6 +2046,7 @@ class Hub:
             ),
             factory=record.factory.factory if record.factory is not None else None,
             notices=_notices(record, hub_revision, self.registry.description(record.package)),
+            needs_human=self.runs.needing_human(record.factory),
         )
 
     async def status(self, command: InstanceStatusCommand) -> InstanceStatusResult:

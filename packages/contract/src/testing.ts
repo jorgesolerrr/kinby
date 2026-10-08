@@ -261,6 +261,7 @@ export function instanceSummary(
     image_id: "sha256:image",
     intended_state: "running",
     manifest_id: fields.instance_id,
+    needs_human: 0,
     notices: [],
     persona_name: null,
     process: "running",

@@ -43,7 +43,7 @@ async def run_step(command: StepRunCommand, instance: Instance) -> StepResult:
 async def run_command_step(step: CommandStepRun, workspace: Path) -> StepResult:
     """Run each command in *workspace* without a shell. The first that exits non-zero fails.
 
-    A command still running when the step's timeout passes is killed, and the step fails.
+    A command still running when the step's timeout passes is killed, and the step times out.
     """
     try:
         async with asyncio.timeout(step.timeout_seconds):
@@ -53,7 +53,7 @@ async def run_command_step(step: CommandStepRun, workspace: Path) -> StepResult:
                     return failed
     except TimeoutError:
         return StepResult(
-            ending=StepEnding.FAILED,
+            ending=StepEnding.TIMED_OUT,
             summary=f"The commands ran past the step's timeout of {step.timeout_seconds}s.",
         )
     return StepResult(ending=StepEnding.CLEAN, summary="Every command exited with code 0.")
