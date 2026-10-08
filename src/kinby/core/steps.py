@@ -33,7 +33,7 @@ from kinby.instance import Instance, ManifestError
 from kinby.instance.permissions import PermissionsError
 from kinby.packages import PackageConfigError, instance_package_config
 from kinby.plugins.errors import exception_message
-from kinby.plugins.hooks import StepEnd, load_hooks
+from kinby.plugins.hooks import HookResult, StepEnd, load_hooks
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.routines import SharedCodeStep, resolve_code_step
 from kinby.plugins.tools import ToolContext
@@ -147,7 +147,10 @@ async def run_command_step(step: CommandStepRun, workspace: Path) -> StepResult:
 async def _run_code_step(
     step: CodeStepRun, command: StepRunCommand, instance: Instance
 ) -> StepResult:
-    """Call the step's tool as a routine's code step is called, with the run's values."""
+    """Call the step's tool as a routine's code step is called, with the run's values.
+
+    A mapping the tool returns is the result's values. A HookResult also names its outcome.
+    """
     tools, _ = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults).refresh()
     try:
         tool = resolve_code_step(SharedCodeStep(step.call), tools)
@@ -166,6 +169,10 @@ async def _run_code_step(
     context = ToolContext(instance=instance, thread_id=uuid4(), package_config=package_config)
     try:
         returned = await tool.ainvoke_value(arguments, context)
+        if isinstance(returned, HookResult):
+            return StepResult(
+                ending=StepEnding.CLEAN, outcome=returned.outcome, values=dict(returned.values)
+            )
         if isinstance(returned, Mapping):
             return StepResult(ending=StepEnding.CLEAN, values=dict(returned))
     except Exception as exc:

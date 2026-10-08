@@ -32,6 +32,7 @@ from kinby.factories.file import (
     WaitStep,
     read_factory_file,
     run_value_name,
+    run_value_names,
 )
 from kinby.instance import (
     PLACEHOLDER_MODEL,
@@ -228,7 +229,8 @@ def _needs_human(factory: FactoryFile, templates: dict[InstanceName, _Template])
 
 
 def _inputs(factory: FactoryFile) -> Iterator[str]:
-    """Each value a step requires or a wait names is held: by the work item or an earlier step."""
+    """Each value a step requires, a wait or a command names is held: by the work item or an
+    earlier step."""
     held = set(factory.work_item)
     for step in factory.steps:
         for value in step.requires:
@@ -237,12 +239,20 @@ def _inputs(factory: FactoryFile) -> Iterator[str]:
                     f'Step "{step.id}" requires "{value}", which no earlier step declares in its '
                     "results and the work item does not carry."
                 )
-        for field, expected in step.signal.items() if isinstance(step, WaitStep) else ():
+        filters = step.signal if isinstance(step, WaitStep) else ()
+        for field, expected in (item for fields in filters for item in fields.items()):
             value = run_value_name(expected)
             if value is not None and value not in held:
                 yield (
                     f'Step "{step.id}" matches "{field}" against "{value}", which no earlier '
                     "step declares in its results and the work item does not carry."
+                )
+        commands = step.run if isinstance(step, CommandStep) else ()
+        for value in (value for command in commands for value in run_value_names(command)):
+            if value not in held:
+                yield (
+                    f'Step "{step.id}" names "{value}" in a command, which no earlier step '
+                    "declares in its results and the work item does not carry."
                 )
         held.update(step.results)
     for value in factory.done_requires:

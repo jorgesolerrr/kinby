@@ -1,5 +1,7 @@
 # Babysitting accepts feedback from trusted authors
 
+Superseded by [ADR 0079](0079-babysitting-trusts-reviewers-by-author-association.md).
+
 The coding client can run commands in the factory container. Public review comments must not grant that access to arbitrary contributors.
 
 The babysitter accepts automatic fix requests only from the repository maintainer and the production Greptile app. Other authors require a human. The check runs before the coding client starts and covers every comment included in its prompt.

@@ -46,9 +46,9 @@ steps:
   - id: babysit
     kind: wait
     signal:
-      routine: github
-      headers.X-GitHub-Event: issue_comment
-      body.issue.number: "{{issue}}"
+      - routine: github
+        headers.X-GitHub-Event: issue_comment
+        body.issue.number: "{{issue}}"
     deadline: 7d
   - id: test
     kind: command
@@ -193,6 +193,82 @@ def test_a_signal_that_does_not_match_or_the_instance_did_not_accept_leaves_the_
         assert (found.run.status, found.run.step) == (FactoryRunStatus.PARKED, "babysit")
         assert [(a.step, a.ending) for a in found.attempts] == [("babysit", None)]
         assert control.steps == []
+
+    asyncio.run(scenario())
+
+
+def test_a_signal_that_lands_while_the_run_works_toward_its_wait_moves_it_on_once_it_parks(
+    tmp_path,
+):
+    control = FakeControl()
+    control.step_release.clear()
+    runtime = FakeRuntime()
+    build_first = WAIT.replace(
+        "  - id: babysit\n",
+        '  - id: build\n    kind: command\n    in: coder\n    run: ["make"]\n  - id: babysit\n',
+    )
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": build_first})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await signalled(hub, runtime, coder, COMMENT)
+        control.step_release.set()
+        found = await settled(hub, run.run_id)
+
+        assert found.run.status is FactoryRunStatus.DONE
+        assert [(a.step, a.ending) for a in found.attempts] == [
+            ("build", StepEnding.CLEAN),
+            ("babysit", StepEnding.CLEAN),
+            ("test", StepEnding.CLEAN),
+        ]
+
+    asyncio.run(scenario())
+
+
+REVIEW_OR_CHECKS = WAIT.replace(
+    """\
+      - routine: github
+        headers.X-GitHub-Event: issue_comment
+        body.issue.number: "{{issue}}"
+""",
+    """\
+      - headers.X-GitHub-Event: pull_request_review
+        body.pull_request.number: "{{issue}}"
+      - headers.X-GitHub-Event: check_suite
+        body.check_suite.head_branch: agent/7
+""",
+)
+
+
+@pytest.mark.parametrize(
+    ("body", "event", "moves"),
+    [
+        (b'{"pull_request": {"number": 7}}', "pull_request_review", True),
+        (b'{"check_suite": {"head_branch": "agent/7"}}', "check_suite", True),
+        (b'{"check_suite": {"head_branch": "agent/7"}}', "pull_request_review", False),
+        (b'{"pull_request": {"number": 7}}', "check_suite", False),
+    ],
+    ids=["first", "second", "first-header-second-body", "second-header-first-body"],
+)
+def test_a_wait_with_several_filters_moves_on_when_a_signal_matches_any_one_of_them(
+    tmp_path, body, event, moves
+):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    hub = factory_hub(
+        tmp_path / "hub", control, runtime, FILES | {"factory.yaml": REVIEW_OR_CHECKS}
+    )
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await parked(hub, run.run_id)
+        await signalled(hub, runtime, coder, body, event=event)
+        await asyncio.sleep(0.05)
+        found = await settled(hub, run.run_id)
+
+        assert found.run.status is (FactoryRunStatus.DONE if moves else FactoryRunStatus.PARKED)
 
     asyncio.run(scenario())
 

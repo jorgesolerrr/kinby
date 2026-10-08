@@ -74,6 +74,8 @@ from kinby.factories.file import (
     WaitStep,
     duration_seconds,
     run_value_name,
+    run_value_names,
+    with_run_values,
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.models import Signal
@@ -132,6 +134,8 @@ class FactoryRuns:
         self._workers: set[asyncio.Task[None]] = set()
         #: The deadline of each run parked at a wait that has one, by run id.
         self._deadlines: dict[UUID, asyncio.Task[None]] = {}
+        #: The waits a signal matched while the run was still on its way to them, by run id.
+        self._woken: dict[UUID, set[StepId]] = {}
         self._subscribers: set[asyncio.Queue[FactoryRun]] = set()
 
     async def intake(self, instance_id: UUID, command: FactoryRunIntakeCommand) -> FactoryRun:
@@ -201,21 +205,38 @@ class FactoryRuns:
         return self._advance(run.run_id, approved)
 
     def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
-        """Move on each run of the instance's factory whose parked wait the signal matches."""
+        """Move on each run of the instance's factory whose parked wait the signal matches.
+
+        A run still working toward a wait the signal matches moves on from it as soon as it
+        parks there, so a signal that lands between two steps is not lost.
+        """
         membership = self._membership(instance_id)
         if membership is None:
             return
         member, factory = membership
         body = _json(signal.body)
+        waits = [step for step in factory.steps if isinstance(step, WaitStep)]
+        # Read before any parked run moves on, so the signal wakes each run at most once.
+        working = (
+            *self._registry.runs(member.factory, FactoryRunStatus.QUEUED),
+            *self._registry.runs(member.factory, FactoryRunStatus.RUNNING),
+        )
         for run in self._registry.runs(member.factory, FactoryRunStatus.PARKED):
             step = _step(factory, run.step) if run.step is not None else None
             held = run.work_item | self._results(run.run_id, factory)
-            if isinstance(step, WaitStep) and _matches(step, signal, body, held):
+            if isinstance(step, WaitStep) and any(
+                _matches(fields, signal, body, held) for fields in step.signal
+            ):
                 deadline = self._deadlines.pop(run.run_id, None)
                 if deadline is not None:
                     deadline.cancel()
                 summary = f'A signal on routine "{signal.routine}" matched.'
                 self._advance(run.run_id, StepResult(ending=StepEnding.CLEAN, summary=summary))
+        for run in working:
+            held = run.work_item | self._results(run.run_id, factory)
+            for wait in waits:
+                if any(_matches(fields, signal, body, held) for fields in wait.signal):
+                    self._woken.setdefault(run.run_id, set()).add(wait.id)
 
     async def cancel(self, command: FactoryRunCancelCommand) -> FactoryRun:
         """End the run at the step it stopped at. Nothing it did is undone."""
@@ -334,7 +355,8 @@ class FactoryRuns:
         if factory is None or step is None:
             return _Refused(step_id, f'Factory "{run.factory}" has no step "{step_id}" any more.')
         results = self._results(run.run_id, factory, step.id)
-        unmet = _unmet(factory, step, run.work_item | results)
+        held = run.work_item | results
+        unmet = _unmet(factory, step, held)
         if unmet is not None:
             return unmet
         match step:
@@ -349,8 +371,9 @@ class FactoryRuns:
                     return client_run
                 asked, hook = client_run, step.hook
             case CommandStep():
+                commands = [with_run_values(command, held) for command in step.run]
                 timeout = duration_seconds(step.timeout) if step.timeout is not None else None
-                asked = CommandStepRun(run=list(step.run), timeout_seconds=timeout)
+                asked = CommandStepRun(run=commands, timeout_seconds=timeout)
                 hook = step.hook
             case CodeStep():
                 asked, hook = CodeStepRun(call=step.call), None
@@ -430,24 +453,32 @@ class FactoryRuns:
 
         A later value overrides an earlier one. An attempt at a step, like *starting* one, drops
         what that step and every step after it recorded before, so a run sent back holds no value
-        from the pass it left.
+        from the pass it left, save what the step that sent it back recorded: those values go
+        with the work to the step it went back to, as if that step's pass held them.
         """
         order = {step.id: index for index, step in enumerate(factory.steps)}
         recorded: dict[ValueName, tuple[int, StepValue]] = {}
+        last: tuple[int, Mapping[ValueName, StepValue]] | None = None
 
-        def drop_from(step_id: StepId) -> None:
-            if step_id in order:
-                for name, (index, _) in list(recorded.items()):
-                    if index >= order[step_id]:
-                        del recorded[name]
+        def start(step_id: StepId) -> None:
+            if step_id not in order:
+                return
+            at = order[step_id]
+            for name, (index, _) in list(recorded.items()):
+                if index >= at:
+                    del recorded[name]
+            if last is not None and last[0] > at:
+                recorded.update((name, (at, value)) for name, value in last[1].items())
 
         for attempt in self._registry.attempts(run_id):
-            drop_from(attempt.step)
+            start(attempt.step)
+            last = None
             if attempt.ending is StepEnding.CLEAN:
                 index = order.get(attempt.step, -1)
                 recorded |= {name: (index, value) for name, value in attempt.values.items()}
+                last = (index, attempt.values)
         if starting is not None:
-            drop_from(starting)
+            start(starting)
         return {name: value for name, (_, value) in recorded.items()}
 
     async def _work(
@@ -469,11 +500,23 @@ class FactoryRuns:
                         )
 
     def _park(self, run_id: UUID, step: WaitStep | ApproveStep) -> None:
-        """Open the step's attempt with the run parked at it, holding no instance."""
+        """Open the step's attempt with the run parked at it, holding no instance.
+
+        A wait a signal already matched on the run's way to it moves on at once.
+        """
         parked = self._registry.begin_attempt(run_id, step.id, FactoryRunStatus.PARKED)
         self._publish(parked)
-        if isinstance(step, WaitStep):
-            self._arm(run_id, step, parked.updated_at)
+        if not isinstance(step, WaitStep):
+            return
+        woken = self._woken.get(run_id, set())
+        if step.id in woken:
+            woken.discard(step.id)
+            if not woken:
+                del self._woken[run_id]
+            summary = "A signal matched while the run was on its way to this step."
+            self._advance(run_id, StepResult(ending=StepEnding.CLEAN, summary=summary))
+            return
+        self._arm(run_id, step, parked.updated_at)
 
     def _arm(self, run_id: UUID, step: WaitStep, parked_at: datetime) -> None:
         """Fail the wait's attempt once its deadline after *parked_at* passes with no signal."""
@@ -590,13 +633,16 @@ def _json(body: bytes) -> JsonValue:
 
 
 def _matches(
-    step: WaitStep, signal: Signal, body: JsonValue, held: Mapping[ValueName, StepValue]
+    fields: Mapping[str, str | int],
+    signal: Signal,
+    body: JsonValue,
+    held: Mapping[ValueName, StepValue],
 ) -> bool:
-    """Whether the signal carries every field of the wait's filter, each of its type and value.
+    """Whether the signal carries every field of a wait's filter, each of its type and value.
 
     A field the signal lacks, or a ``{{name}}`` the run holds no value for, never matches.
     """
-    for field, expected in step.signal.items():
+    for field, expected in fields.items():
         name = run_value_name(expected)
         wanted = held.get(name) if name is not None else expected
         found = _signal_field(signal, body, field)
@@ -641,11 +687,14 @@ def _unmet(
 ) -> _Refused | None:
     """Why *step* cannot start for lack of a value it requires, or None when the run holds them.
 
-    The lack is charged to the step that should have produced the value: the last earlier step
-    that declares it in its results. A false work item value has no such step, so the requiring
-    step itself fails.
+    A command step also requires each value its commands name. The lack is charged to the step
+    that should have produced the value: the last earlier step that declares it in its results. A
+    false work item value has no such step, so the requiring step itself fails.
     """
-    lacking = _lacking(held, step.requires)
+    named = step.run if isinstance(step, CommandStep) else ()
+    lacking = _lacking(
+        held, (*step.requires, *(name for command in named for name in run_value_names(command)))
+    )
     if lacking is None:
         return None
     earlier = factory.steps[: factory.steps.index(step)]
