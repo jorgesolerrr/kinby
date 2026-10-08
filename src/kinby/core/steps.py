@@ -187,7 +187,7 @@ async def _recorded(
     """The step's result with the values and outcome its hook records.
 
     A hook that records nothing leaves the result as the step ended. One that fails, or that
-    the instance does not have, fails the step.
+    the instance does not have, fails a step that ended clean and keeps any other ending.
     """
     hooks, warnings = load_hooks(instance.path)
     found = next((hook for hook in hooks if hook.name == name), None)
@@ -213,9 +213,14 @@ async def _recorded(
 
 
 def _failed(reason: str, ended: StepResult | None = None) -> StepResult:
-    """A failed result that says why, after the summary of the step as it *ended*."""
+    """A failed result that says why, after the summary of the step as it *ended*.
+
+    A step that ended otherwise than clean keeps its ending, so a timeout is never tried again.
+    """
     summary = reason if ended is None or not ended.summary else f"{ended.summary}\n{reason}"
-    return StepResult(ending=StepEnding.FAILED, summary=summary)
+    if ended is None or ended.ending is StepEnding.CLEAN:
+        return StepResult(ending=StepEnding.FAILED, summary=summary)
+    return StepResult(ending=ended.ending, summary=summary)
 
 
 async def _run_command(command: str, workspace: Path) -> StepResult | None:

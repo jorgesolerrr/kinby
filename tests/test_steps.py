@@ -296,6 +296,33 @@ def test_a_hook_that_fails_or_is_missing_fails_the_step(tmp_path, hook, summary)
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("hook", "summary"),
+    [
+        ("broken", 'Hook "broken" failed: RuntimeError: the repository is gone'),
+        ("read_review", 'Hook "read_review" is not one of this instance\'s hooks.'),
+    ],
+)
+def test_a_timed_out_step_whose_hook_fails_still_times_out(tmp_path, hook, summary):
+    runtime, _ = hooked_instance(tmp_path)
+    command = StepRunCommand(
+        step=CommandStepRun(run=["sleep 30"], timeout_seconds=1),
+        hook=hook,
+        origin=ORIGIN,
+        work_item={},
+    )
+
+    async def scenario() -> None:
+        async with asyncio.timeout(10):
+            result = await call(runtime.dispatcher, "step.run", **command.model_dump(mode="json"))
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.TIMED_OUT
+        assert result.summary == f"The commands ran past the step's timeout of 1s.\n{summary}"
+
+    asyncio.run(scenario())
+
+
 def test_kinbys_default_hooks_record_the_branch_and_find_its_pull_request(tmp_path, monkeypatch):
     runtime, workspace = step_instance(tmp_path)
     git = ("git", "-C", str(workspace))
