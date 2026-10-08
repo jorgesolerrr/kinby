@@ -799,6 +799,45 @@ def test_work_sent_back_holds_no_value_from_the_pass_it_left(tmp_path):
     asyncio.run(scenario())
 
 
+def test_every_attempt_at_the_step_work_went_back_to_holds_the_values_sent_with_it(tmp_path):
+    control = FakeControl()
+    failed = StepResult(ending=StepEnding.FAILED)
+    control.step_results = [
+        FIXED,
+        StepResult(ending=StepEnding.CLEAN, outcome="changes", values={"feedback": "Rename it."}),
+        failed,
+        failed,
+        FIXED,
+    ]
+    runtime = FakeRuntime()
+    factory = REVIEW.replace('run: ["make fix"]\n', 'run: ["make fix"]\n    retry: 1\n').replace(
+        "hook: read_verdict\n", "hook: read_verdict\n    results: { feedback: str }\n"
+    )
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        stopped = await settled(hub, run.run_id)
+        await hub_client(hub).call(FACTORY_RUN_RETRY, FactoryRunRetryCommand(run_id=run.run_id))
+        finished = await settled(hub, run.run_id)
+
+        assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "fix")
+        assert finished.run.status is FactoryRunStatus.DONE
+        sent = {"feedback": "Rename it."}
+        assert [(command.origin.step, command.results) for _, command in control.steps] == [
+            ("fix", {}),
+            ("review", {}),
+            ("fix", sent),
+            ("fix", sent),
+            ("fix", sent),
+            ("review", sent),
+            ("publish", sent),
+        ]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("verdict", "status", "step", "attempted"),
     [

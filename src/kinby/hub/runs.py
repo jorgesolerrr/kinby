@@ -454,14 +454,17 @@ class FactoryRuns:
         A later value overrides an earlier one. An attempt at a step, like *starting* one, drops
         what that step and every step after it recorded before, so a run sent back holds no value
         from the pass it left, save what the step that sent it back recorded: those values go
-        with the work to the step it went back to, as if that step's pass held them.
+        with the work to the step it went back to, as if that step's pass held them. Trying a
+        step again after an attempt at it that did not end clean drops nothing, since that
+        attempt recorded nothing, so a retry holds what the attempt before it held.
         """
         order = {step.id: index for index, step in enumerate(factory.steps)}
         recorded: dict[ValueName, tuple[int, StepValue]] = {}
         last: tuple[int, Mapping[ValueName, StepValue]] | None = None
+        retrying: StepId | None = None
 
         def start(step_id: StepId) -> None:
-            if step_id not in order:
+            if step_id not in order or step_id == retrying:
                 return
             at = order[step_id]
             for name, (index, _) in list(recorded.items()):
@@ -472,11 +475,11 @@ class FactoryRuns:
 
         for attempt in self._registry.attempts(run_id):
             start(attempt.step)
-            last = None
+            last, retrying = None, attempt.step
             if attempt.ending is StepEnding.CLEAN:
                 index = order.get(attempt.step, -1)
                 recorded |= {name: (index, value) for name, value in attempt.values.items()}
-                last = (index, attempt.values)
+                last, retrying = (index, attempt.values), None
         if starting is not None:
             start(starting)
         return {name: value for name, (_, value) in recorded.items()}
