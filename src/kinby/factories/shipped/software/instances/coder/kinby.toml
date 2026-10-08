@@ -1,0 +1,12 @@
+# The software factory's coder. Secrets live in .env, never here.
+
+[workspace]
+# The repository the factory clones on first start and works in. Installing the factory sets it.
+# source = "https://github.com/<owner>/<repository>.git"
+
+[workspace.conventions]
+enabled = true
+
+[feedback]
+# The factory's turns have nobody to answer.
+ask = "off"

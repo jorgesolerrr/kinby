@@ -1,0 +1,129 @@
+# The software factory: it turns GitHub issues labeled ready-for-agent into agent pull requests.
+# kinby ships it as a starting point. Edit it on your hub to make it your own.
+name: software
+instances:
+  coder:
+    image: coder
+    setup_fields:
+      - name: repository
+        label: Repository
+        description: >-
+          The git URL of the repository the factory clones and works in, like
+          https://github.com/<owner>/<repository>.git.
+        kind: config
+        type: url
+        required: true
+        target: { file: kinby.toml, key: workspace.source }
+      - name: model
+        label: Model
+        description: The model the instance calls, as provider:model.
+        kind: config
+        type: text
+        required: true
+        default: anthropic:claude-sonnet-5
+      - name: GH_TOKEN
+        label: GitHub token
+        description: A token with repo scope. gh, git push, issues and pull requests run as it.
+        kind: secret
+        type: text
+        required: true
+      - name: GITHUB_WEBHOOK_SECRET
+        label: Webhook secret
+        description: >-
+          The shared secret of the repository webhook that signs each delivery. Generate one
+          with `openssl rand -hex 32`.
+        kind: secret
+        type: text
+        required: true
+      - name: CLAUDE_CODE_OAUTH_TOKEN
+        label: Claude Code token
+        description: >-
+          Claude Code's subscription token. Run `claude setup-token` on your own machine and
+          paste the token it prints.
+        kind: secret
+        type: text
+        required: true
+      - name: GIT_USER_NAME
+        label: Commit author name
+        description: The name on the commits the coding clients make.
+        kind: secret
+        type: text
+        required: true
+      - name: GIT_USER_EMAIL
+        label: Commit author email
+        description: >-
+          The email on the commits the coding clients make. Use one GitHub links to the
+          token's account, so the commits show as its own.
+        kind: secret
+        type: text
+        required: true
+    logins:
+      - id: codex
+        label: Codex
+        description: Sign in with your ChatGPT subscription, for steps that run Codex.
+        command: [codex, login, --device-auth]
+        volume: /root/.codex
+        # The URL and the code each sit on the line after their step's instruction.
+        prompt_pattern: 'Open this link[^\n]*\n\s*(?P<url>https://\S+)[\s\S]*?one-time code[^\n]*\n\s*(?P<code>\S+)'
+intake: { instance: coder, routine: scan }
+work_item: { issue: int }
+steps:
+  # Checks who wrote the ticket (ADR 0073), then checks out a fresh agent branch from its base.
+  - id: prepare
+    kind: code
+    in: coder
+    call: prepare_branch
+    results: { branch: str, base: str }
+  - id: implement
+    kind: client
+    in: coder
+    client: claude
+    prompt: prompts/implement.md
+    hook: check_implementation
+    requires: [branch, base]
+    timeout: 60m
+  # Adversarial review before the pull request opens is off by default (ADR 0044): reviewers
+  # on the pull request take its place. To turn it on, uncomment fix and review. Work is only
+  # ever sent back, so fix comes first, and finds nothing to fix before the first review.
+  # - id: fix
+  #   kind: client
+  #   in: coder
+  #   client: claude
+  #   resume: implement
+  #   prompt: prompts/fix.md
+  #   hook: check_implementation
+  #   requires: [branch, base]
+  #   timeout: 15m
+  # - id: review
+  #   kind: client
+  #   in: coder
+  #   client: claude
+  #   prompt: prompts/review.md
+  #   hook: read_review_verdict
+  #   requires: [branch, base]
+  #   results: { reviewed: bool }
+  #   outcomes: { clean: next, changes: { back: fix, max: 2 } }
+  #   timeout: 15m
+  # The checks of a Python repository on uv. Replace them with your repository's.
+  - id: checks
+    kind: command
+    in: coder
+    requires: [branch]
+    run:
+      - uv run ruff check .
+      - uv run ruff format --check .
+      - uv run ty check
+      - uv run pytest
+  # Pushes the branch and opens its pull request. Never retried, so a pull request is never
+  # opened twice.
+  - id: open-pr
+    kind: code
+    in: coder
+    call: open_pull_request
+    requires: [branch, base]
+    results: { pr: int }
+    retry: 0
+done_requires: [pr]
+# Labels the issue ready-for-human with the summary of the step the run stopped at. The branch
+# stays, with everything committed on it.
+needs_human: { in: coder, call: report_needs_human }

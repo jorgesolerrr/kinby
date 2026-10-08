@@ -503,6 +503,24 @@
       "title": "Intake",
       "type": "object"
     },
+    "NeedsHumanCall": {
+      "additionalProperties": false,
+      "description": "An instance tool the hub calls each time a run stops as needs human.\n\nThe tool's parameters named like a value of the run receive that value, ``step`` the step\nthe run stopped at, and ``summary`` the summary of that step's last attempt.",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "in": {
+          "$ref": "#/$defs/InstanceName"
+        }
+      },
+      "required": [
+        "in",
+        "call"
+      ],
+      "title": "NeedsHumanCall",
+      "type": "object"
+    },
     "Outcome": {
       "anyOf": [
         {
@@ -914,6 +932,17 @@
     },
     "name": {
       "$ref": "#/$defs/FactoryName"
+    },
+    "needs_human": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NeedsHumanCall"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "steps": {
       "items": {

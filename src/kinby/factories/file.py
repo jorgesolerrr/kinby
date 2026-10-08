@@ -183,6 +183,18 @@ type Step = Annotated[
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class NeedsHumanCall:
+    """An instance tool the hub calls each time a run stops as needs human.
+
+    The tool's parameters named like a value of the run receive that value, ``step`` the step
+    the run stopped at, and ``summary`` the summary of that step's last attempt.
+    """
+
+    instance: InstanceName = Field(alias="in")
+    call: ToolName
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class FactoryFile:
     """A factory: the instances its steps run in, its intake, and its line of steps."""
 
@@ -194,6 +206,7 @@ class FactoryFile:
     steps: tuple[Step, ...] = Field(min_length=1)
     #: Values the run must hold once its last step's hook has run.
     done_requires: tuple[ValueName, ...] = ()
+    needs_human: NeedsHumanCall | None = None
 
 
 FACTORY_FILE_ADAPTER = TypeAdapter(FactoryFile)

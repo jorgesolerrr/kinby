@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections import Counter
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -65,6 +66,7 @@ from kinby.factories.file import (
     FactoryFile,
     InstanceName,
     InvalidFactoryFile,
+    NeedsHumanCall,
     Outcome,
     SendBack,
     Step,
@@ -79,6 +81,8 @@ from kinby.hub.registry import FactoryMember, HubRegistry
 
 #: Run one step in the instance with this id, and return its result.
 type StepCaller = Callable[[UUID, StepRunCommand], Awaitable[StepResult]]
+
+_logger = logging.getLogger(__name__)
 
 #: How long a client step's coding client runs when the step declares no timeout.
 _CLIENT_TIMEOUT: Duration = "60m"
@@ -104,6 +108,16 @@ class _QueuedStep:
     command: StepRunCommand
 
 
+@dataclass(frozen=True)
+class _QueuedReport:
+    """The factory's needs_human call for a run that stopped, waiting for its instance.
+
+    It is no step of the run, so it records no attempt.
+    """
+
+    command: StepRunCommand
+
+
 class FactoryRuns:
     """Start runs from intake, queue their steps per instance, and record every attempt."""
 
@@ -113,8 +127,8 @@ class FactoryRuns:
         self._registry = registry
         self._factories = factories
         self._run_step = run_step
-        #: The steps waiting for each instance, by instance id.
-        self._queues: dict[UUID, asyncio.Queue[_QueuedStep]] = {}
+        #: The steps and needs_human calls waiting for each instance, by instance id.
+        self._queues: dict[UUID, asyncio.Queue[_QueuedStep | _QueuedReport]] = {}
         self._workers: set[asyncio.Task[None]] = set()
         #: The deadline of each run parked at a wait that has one, by run id.
         self._deadlines: dict[UUID, asyncio.Task[None]] = {}
@@ -296,13 +310,17 @@ class FactoryRuns:
             self._park(run.run_id, placed)
             return
         instance_id, queued = placed
+        self._queue(instance_id).put_nowait(queued)
+
+    def _queue(self, instance_id: UUID) -> asyncio.Queue[_QueuedStep | _QueuedReport]:
+        """The instance's queue, with the worker that empties it."""
         queue = self._queues.get(instance_id)
         if queue is None:
             queue = self._queues[instance_id] = asyncio.Queue()
             worker = asyncio.create_task(self._work(instance_id, queue))
             self._workers.add(worker)
             worker.add_done_callback(self._workers.discard)
-        queue.put_nowait(queued)
+        return queue
 
     def _placed(
         self, run: FactoryRun, step_id: StepId
@@ -338,16 +356,7 @@ class FactoryRuns:
                 asked, hook = CodeStepRun(call=step.call), None
             case WaitStep() | ApproveStep():
                 return step
-        instance_id = next(
-            (
-                record.instance_id
-                for record in self._registry.factory_members(run.factory)
-                if record.active
-                and record.factory is not None
-                and record.factory.name == step.instance
-            ),
-            None,
-        )
+        instance_id = self._installed(run.factory, step.instance)
         if instance_id is None:
             return _Refused(
                 step.id, f'Instance "{step.instance}" of factory "{run.factory}" is not installed.'
@@ -360,6 +369,17 @@ class FactoryRuns:
             results=results,
         )
         return instance_id, _QueuedStep(run.run_id, step.id, command)
+
+    def _installed(self, factory: FactoryName, instance: InstanceName) -> UUID | None:
+        """The id of the factory's instance by that name, or None when it is not installed."""
+        return next(
+            (
+                record.instance_id
+                for record in self._registry.factory_members(factory)
+                if record.active and record.factory is not None and record.factory.name == instance
+            ),
+            None,
+        )
 
     def _prompt(self, run: FactoryRun, step: AgentStep | ClientStep) -> str | _Refused:
         try:
@@ -430,12 +450,23 @@ class FactoryRuns:
             drop_from(starting)
         return {name: value for name, (_, value) in recorded.items()}
 
-    async def _work(self, instance_id: UUID, queue: asyncio.Queue[_QueuedStep]) -> None:
-        """Run the instance's queued steps one at a time, in the order they were queued."""
+    async def _work(
+        self, instance_id: UUID, queue: asyncio.Queue[_QueuedStep | _QueuedReport]
+    ) -> None:
+        """Run the instance's queued work one at a time, in the order it was queued."""
         while True:
-            queued = await queue.get()
-            self._publish(self._registry.begin_attempt(queued.run_id, queued.step))
-            self._advance(queued.run_id, await self._run_step(instance_id, queued.command))
+            match await queue.get():
+                case _QueuedStep(run_id=run_id, step=step, command=command):
+                    self._publish(self._registry.begin_attempt(run_id, step))
+                    self._advance(run_id, await self._run_step(instance_id, command))
+                case _QueuedReport(command=command):
+                    reported = await self._run_step(instance_id, command)
+                    if reported.ending is not StepEnding.CLEAN:
+                        _logger.warning(
+                            "The needs_human call for factory run %s failed: %s",
+                            command.origin.run_id,
+                            reported.summary,
+                        )
 
     def _park(self, run_id: UUID, step: WaitStep | ApproveStep) -> None:
         """Open the step's attempt with the run parked at it, holding no instance."""
@@ -490,7 +521,35 @@ class FactoryRuns:
             self._registry.end_attempt(run_id, result)
             moved = self._registry.move_run(run_id, status, to)
         self._publish(moved)
+        if (
+            moved.status is FactoryRunStatus.NEEDS_HUMAN
+            and factory is not None
+            and factory.needs_human is not None
+        ):
+            self._report(factory, factory.needs_human, moved, result)
         return moved
+
+    def _report(
+        self, factory: FactoryFile, call: NeedsHumanCall, run: FactoryRun, stopped: StepResult
+    ) -> None:
+        """Queue the factory's needs_human call for the run, which stopped with *stopped*."""
+        instance_id = self._installed(run.factory, call.instance)
+        if instance_id is None or run.step is None:
+            _logger.warning(
+                "Factory run %s needs a human, and instance %s of factory %s is not installed "
+                "to report it.",
+                run.run_id,
+                call.instance,
+                run.factory,
+            )
+            return
+        command = StepRunCommand(
+            step=CodeStepRun(call=call.call, summary=stopped.summary),
+            origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=run.step),
+            work_item=run.work_item,
+            results=self._results(run.run_id, factory),
+        )
+        self._queue(instance_id).put_nowait(_QueuedReport(command))
 
     def _factory(self, name: FactoryName) -> FactoryFile | None:
         """The factory's file as the hub keeps it, or None once the factory is gone."""
