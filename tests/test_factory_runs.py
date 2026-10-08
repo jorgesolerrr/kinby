@@ -407,6 +407,82 @@ def test_an_attempt_running_when_the_hub_stopped_counts_as_failed_and_follows_it
     asyncio.run(after_the_restart())
 
 
+NEEDS_HUMAN_TOOL = '''\
+from kinby.plugins.tools import tool
+
+
+@tool(write=True)
+def notify_human() -> dict[str, int]:
+    """Record that this run needs a human."""
+    return {}
+'''
+NEEDS_HUMAN_FILES = FILES | {
+    "factory.yaml": FACTORY + "needs_human: { in: coder, call: notify_human }\n",
+    "instances/coder/tools/notify.py": NEEDS_HUMAN_TOOL,
+}
+
+
+def test_a_needs_human_report_queued_but_not_delivered_is_sent_after_a_restart(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED)]
+    control.step_release.clear()
+    runtime = FakeRuntime()
+    directory = tmp_path / "hub"
+    hub = factory_hub(directory, control, runtime, NEEDS_HUMAN_FILES)
+
+    def new_hub() -> Hub:
+        return Hub(
+            directory,
+            runtime=runtime,
+            images=FakeImages(),
+            control=control,
+            shipped_factories=directory / "shipped",
+        )
+
+    async def before_the_restart() -> UUID:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        async with asyncio.timeout(5):
+            while len(control.steps) < 1:
+                await asyncio.sleep(0.01)
+            # Let the failed test step through, and hold the report it queues right behind it.
+            control.step_release.set()
+            control.step_release.clear()
+            while len(control.steps) < 2:
+                await asyncio.sleep(0.01)
+        stopped = await detail(hub, run.run_id)
+        assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
+        return run.run_id
+
+    run_id = asyncio.run(before_the_restart())
+    hub.close()
+    control.step_release.set()
+    restarted = new_hub()
+
+    async def after_the_restart() -> None:
+        await restarted.recover()
+        async with asyncio.timeout(5):
+            while len(control.steps) < 3:
+                await asyncio.sleep(0.01)
+
+        _, report = control.steps[-1]
+        assert report.step == CodeStepRun(call="notify_human", summary="")
+        assert (report.origin.run_id, report.origin.step) == (run_id, "test")
+        restarted.close()
+
+    asyncio.run(after_the_restart())
+
+    again = new_hub()
+
+    async def after_the_second_restart() -> None:
+        await again.recover()
+        await asyncio.sleep(0.05)
+        assert len(control.steps) == 3
+        again.close()
+
+    asyncio.run(after_the_second_restart())
+
+
 def test_the_intake_routines_tool_hands_its_work_item_to_the_hub_over_its_own_route(
     tmp_path, monkeypatch
 ):

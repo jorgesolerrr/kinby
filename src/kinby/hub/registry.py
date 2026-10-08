@@ -240,7 +240,12 @@ class HubRegistry:
                 "factory_runs",
                 # The last attempt before the user restarted the run. Later ones count toward
                 # retries and send-backs.
-                {"restarted_after": "INTEGER NOT NULL DEFAULT 0"},
+                {
+                    "restarted_after": "INTEGER NOT NULL DEFAULT 0",
+                    # Whether the run's needs_human report was delivered. Reset each time the
+                    # run moves to needs_human, so a restart resends only an undelivered report.
+                    "reported": "INTEGER NOT NULL DEFAULT 0",
+                },
             )
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
             self._add_columns(
@@ -1505,13 +1510,43 @@ class HubRegistry:
         return [_factory_run(row) for row in rows]
 
     def move_run(self, run_id: UUID, status: FactoryRunStatus, step: StepId | None) -> FactoryRun:
-        """Put the run in *status* at *step*."""
+        """Put the run in *status* at *step*.
+
+        Moving into needs_human resets its reported flag, so this fresh stop gets its own report.
+        """
         with self._connect() as connection:
-            connection.execute(
-                "UPDATE factory_runs SET status = ?, step = ?, updated_at = ? WHERE id = ?",
-                (status.value, step, _now(), str(run_id)),
-            )
+            if status is FactoryRunStatus.NEEDS_HUMAN:
+                connection.execute(
+                    """
+                    UPDATE factory_runs SET status = ?, step = ?, updated_at = ?, reported = 0
+                    WHERE id = ?
+                    """,
+                    (status.value, step, _now(), str(run_id)),
+                )
+            else:
+                connection.execute(
+                    "UPDATE factory_runs SET status = ?, step = ?, updated_at = ? WHERE id = ?",
+                    (status.value, step, _now(), str(run_id)),
+                )
         return self._existing_run(run_id)
+
+    def mark_reported(self, run_id: UUID) -> None:
+        """Record that the run's needs_human report was delivered, so a restart won't resend it."""
+        with self._connect() as connection:
+            connection.execute("UPDATE factory_runs SET reported = 1 WHERE id = ?", (str(run_id),))
+
+    def unreported_runs(self) -> list[FactoryRun]:
+        """The needs_human runs whose report was not yet delivered, in the order they stopped."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT {_RUN_COLUMNS} FROM factory_runs
+                WHERE status = ? AND reported = 0
+                ORDER BY updated_at, rowid
+                """,
+                (FactoryRunStatus.NEEDS_HUMAN.value,),
+            ).fetchall()
+        return [_factory_run(row) for row in rows]
 
     def restart_run(self, run_id: UUID, step: StepId | None) -> FactoryRun:
         """Queue the run at *step* for the user, its retries and send-backs counted afresh."""
