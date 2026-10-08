@@ -1,4 +1,7 @@
-"""Tools and skills available unless the instance disables defaults."""
+"""Tools and skills available unless the instance disables defaults.
+
+kinby's default hooks live in ``kinby.plugins.defaults.hooks``, and every instance has them.
+"""
 
 from pathlib import Path
 

@@ -183,6 +183,20 @@ def test_the_check_reports_every_name_that_does_not_resolve(tmp_path):
     ]
 
 
+def test_a_step_may_name_one_of_kinbys_default_hooks_and_a_command_step_a_hook(tmp_path):
+    factory = FACTORY.replace("hook: read_verdict", "hook: find_pull_request").replace(
+        '    run: ["uv run pytest"]\n', '    run: ["uv run pytest"]\n    hook: record_branch\n'
+    )
+    misnamed = factory.replace(
+        "hook: record_branch\n    requires", "hook: record_check\n    requires"
+    )
+
+    assert problems(tmp_path / "default", FILES | {"factory.yaml": factory}) == []
+    assert problems(tmp_path / "misnamed", FILES | {"factory.yaml": misnamed}) == [
+        'Step "checks" names hook "record_check", which instance "coder" does not have.'
+    ]
+
+
 def test_the_check_reports_a_tool_or_hook_file_that_does_not_load(tmp_path):
     broken = {
         "instances/coder/tools/github.py": "raise RuntimeError('no token')\n",

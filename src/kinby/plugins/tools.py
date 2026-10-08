@@ -74,11 +74,19 @@ class Tool:
         context: ToolContext,
     ) -> str | None:
         """Preserve a code step's None result before rendering tool output."""
+        result = await self.ainvoke_value(arguments, context)
+        return None if result is None else str(result)
+
+    async def ainvoke_value(
+        self,
+        arguments: Mapping[str, JsonValue],
+        context: ToolContext,
+    ) -> object:
+        """What the tool returns, as it returns it, for a factory code step to read."""
         invocation = self.resolve_paths(arguments, context.workspace)
         if self.context_parameter is not None:
             invocation[self.context_parameter] = context
-        result = await self.runnable.ainvoke(invocation)
-        return None if result is None else str(result)
+        return await self.runnable.ainvoke(invocation)
 
     def resolve_paths(
         self,

@@ -7,11 +7,12 @@ first in, first out, across every factory.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from uuid import UUID
 
 from kinby.contracts import (
+    CodeStepRun,
     CommandStepRun,
     FactoryName,
     FactoryRun,
@@ -34,6 +35,7 @@ from kinby.core.errors import FactoryNotFound, FactoryRunNotFound, InvalidWorkIt
 from kinby.factories.file import (
     AgentStep,
     ClientStep,
+    CodeStep,
     CommandStep,
     FactoryFile,
     InvalidFactoryFile,
@@ -50,6 +52,14 @@ type StepCaller = Callable[[UUID, StepRunCommand], Awaitable[StepResult]]
 _INTERRUPTED = StepResult(
     ending=StepEnding.INTERRUPTED, summary="The hub stopped while this attempt ran."
 )
+
+
+@dataclass(frozen=True)
+class _Refused:
+    """Why a step cannot start, and the step whose attempt that fails."""
+
+    step: StepId
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -133,13 +143,18 @@ class FactoryRuns:
             self._enqueue(run)
 
     def _enqueue(self, run: FactoryRun) -> None:
-        """Queue the run's step for its instance. A step no instance can take fails right away."""
+        """Queue the run's step for its instance.
+
+        A step that cannot start fails an attempt right away: its own, or that of the step that
+        should have produced a value it requires.
+        """
         if run.step is None:
             raise ValueError(f'Factory run "{run.run_id}" is at no step to queue.')
         placed = self._placed(run, run.step)
-        if isinstance(placed, str):
-            self._publish(self._registry.begin_attempt(run.run_id, run.step))
-            moved = self._settle(run.run_id, StepResult(ending=StepEnding.FAILED, summary=placed))
+        if isinstance(placed, _Refused):
+            self._publish(self._registry.begin_attempt(run.run_id, placed.step))
+            failed = StepResult(ending=StepEnding.FAILED, summary=placed.reason)
+            moved = self._settle(run.run_id, failed)
             if moved.status is FactoryRunStatus.QUEUED:
                 self._enqueue(moved)
             return
@@ -152,14 +167,25 @@ class FactoryRuns:
             worker.add_done_callback(self._workers.discard)
         queue.put_nowait(queued)
 
-    def _placed(self, run: FactoryRun, step_id: StepId) -> tuple[UUID, _QueuedStep] | str:
+    def _placed(self, run: FactoryRun, step_id: StepId) -> tuple[UUID, _QueuedStep] | _Refused:
         """The instance the run's step runs in and what it is asked, or why it cannot run."""
         factory = self._factory(run.factory)
         step = _step(factory, step_id) if factory is not None else None
-        if step is None:
-            return f'Factory "{run.factory}" has no step "{step_id}" any more.'
-        if not isinstance(step, CommandStep):
-            return f'kinby does not run "{step.kind}" steps yet.'
+        if factory is None or step is None:
+            return _Refused(step_id, f'Factory "{run.factory}" has no step "{step_id}" any more.')
+        results = self._results(run.run_id)
+        unmet = _unmet(factory, step, run.work_item | results)
+        if unmet is not None:
+            return unmet
+        match step:
+            case CommandStep():
+                timeout = duration_seconds(step.timeout) if step.timeout is not None else None
+                asked = CommandStepRun(run=list(step.run), timeout_seconds=timeout)
+                hook = step.hook
+            case CodeStep():
+                asked, hook = CodeStepRun(call=step.call), None
+            case _:
+                return _Refused(step.id, f'kinby does not run "{step.kind}" steps yet.')
         instance_id = next(
             (
                 record.instance_id
@@ -171,18 +197,19 @@ class FactoryRuns:
             None,
         )
         if instance_id is None:
-            return f'Instance "{step.instance}" of factory "{run.factory}" is not installed.'
+            return _Refused(
+                step.id, f'Instance "{step.instance}" of factory "{run.factory}" is not installed.'
+            )
+        command = StepRunCommand(step=asked, hook=hook, work_item=run.work_item, results=results)
+        return instance_id, _QueuedStep(run.run_id, step.id, command)
+
+    def _results(self, run_id: UUID) -> dict[ValueName, StepValue]:
+        """Every value the run's clean attempts recorded, a later one over an earlier one."""
         results: dict[ValueName, StepValue] = {}
-        for attempt in self._registry.attempts(run.run_id):
+        for attempt in self._registry.attempts(run_id):
             if attempt.ending is StepEnding.CLEAN:
                 results.update(attempt.values)
-        timeout = duration_seconds(step.timeout) if step.timeout is not None else None
-        command = StepRunCommand(
-            step=CommandStepRun(run=list(step.run), timeout_seconds=timeout),
-            work_item=run.work_item,
-            results=results,
-        )
-        return instance_id, _QueuedStep(run.run_id, step.id, command)
+        return results
 
     async def _work(self, instance_id: UUID, queue: asyncio.Queue[_QueuedStep]) -> None:
         """Run the instance's queued steps one at a time, in the order they were queued."""
@@ -196,15 +223,21 @@ class FactoryRuns:
     def _settle(self, run_id: UUID, result: StepResult) -> FactoryRun:
         """End the run's open attempt with *result*, and move the run where the result sends it.
 
-        A clean step moves the run to its next step, or finishes it after the last. A failed one
-        is tried again while its retries last, and leaves the run for a human after that.
+        A clean step moves the run to its next step, or finishes it after the last when the run
+        holds what the factory's ``done_requires`` names. A failed one is tried again while its
+        retries last, and leaves the run for a human after that. A clean step that records a
+        value of another type than it declares has failed.
         """
-        self._registry.end_attempt(run_id, result)
         run = self._registry.run(run_id)
         if run is None or run.step is None:
             raise FactoryRunNotFound(f'Factory run "{run_id}" has no step to settle.')
         factory = self._factory(run.factory)
         step = _step(factory, run.step) if factory is not None else None
+        if step is not None and result.ending is StepEnding.CLEAN:
+            result = _checked_types(step, result)
+        if factory is not None and step is factory.steps[-1] and result.ending is StepEnding.CLEAN:
+            result = _checked_done(factory, run.work_item | self._results(run_id), result)
+        self._registry.end_attempt(run_id, result)
         if factory is None or step is None:
             moved = self._registry.move_run(run_id, FactoryRunStatus.NEEDS_HUMAN, run.step)
         elif result.ending is StepEnding.CLEAN:
@@ -242,6 +275,79 @@ class FactoryRuns:
 
 def _step(factory: FactoryFile, step_id: StepId) -> Step | None:
     return next((step for step in factory.steps if step.id == step_id), None)
+
+
+def _unmet(
+    factory: FactoryFile, step: Step, held: Mapping[ValueName, StepValue]
+) -> _Refused | None:
+    """Why *step* cannot start for lack of a value it requires, or None when the run holds them.
+
+    The lack is charged to the step that should have produced the value: the last earlier step
+    that declares it in its results. A false work item value has no such step, so the requiring
+    step itself fails.
+    """
+    lacking = _lacking(held, step.requires)
+    if lacking is None:
+        return None
+    earlier = factory.steps[: factory.steps.index(step)]
+    producer = next((before for before in reversed(earlier) if lacking in before.results), None)
+    if producer is None:
+        return _Refused(
+            step.id, f'Step "{step.id}" requires "{lacking}", which the work item carries as false.'
+        )
+    recorded = "did not record" if lacking not in held else "recorded as false"
+    return _Refused(
+        producer.id, f'Step "{step.id}" requires "{lacking}", which this step {recorded}.'
+    )
+
+
+def _checked_done(
+    factory: FactoryFile, held: Mapping[ValueName, StepValue], last: StepResult
+) -> StepResult:
+    """The last step's clean result, failed when the run lacks a value ``done_requires`` names.
+
+    The values of that result count, so its hook's values are in.
+    """
+    values = {**held, **last.values}
+    lacking = _lacking(values, factory.done_requires)
+    if lacking is None:
+        return last
+    recorded = "no step recorded" if lacking not in values else "a step recorded as false"
+    return _failed_after(last, f'The run\'s done_requires needs "{lacking}", which {recorded}.')
+
+
+def _checked_types(step: Step, result: StepResult) -> StepResult:
+    """The step's clean result, failed when a value it records is not of the type declared."""
+    wrong = next(
+        (
+            (name, kind)
+            for name, kind in step.results.items()
+            if name in result.values and _value_type(result.values[name]) is not kind
+        ),
+        None,
+    )
+    if wrong is None:
+        return result
+    name, kind = wrong
+    recorded = _value_type(result.values[name]).value
+    return _failed_after(
+        result, f'Step "{step.id}" declares "{name}" as {kind.value}, but recorded a {recorded}.'
+    )
+
+
+def _failed_after(ended: StepResult, reason: str) -> StepResult:
+    """*ended* as a failed result, its summary followed by *reason*."""
+    return StepResult(
+        ending=StepEnding.FAILED,
+        outcome=ended.outcome,
+        values=ended.values,
+        summary=f"{ended.summary}\n{reason}" if ended.summary else reason,
+    )
+
+
+def _lacking(held: Mapping[ValueName, StepValue], names: Iterable[ValueName]) -> ValueName | None:
+    """The first of *names* the run does not hold, or holds as false."""
+    return next((name for name in names if held.get(name, False) is False), None)
 
 
 def _retries(step: Step) -> int:
