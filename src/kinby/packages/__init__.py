@@ -273,23 +273,27 @@ def package_description(package: InstalledPackage) -> PackageDescription:
     one lends that field its default, and the field stays kinby's.
     """
     descriptor = package.descriptor
-    overrides = {
-        field.name: field.default for field in descriptor.setup_fields if field.default is not None
-    }
+    return PackageDescription(
+        display_name=descriptor.display_name,
+        description=descriptor.description,
+        icon=descriptor.icon,
+        version=descriptor.version,
+        setup_fields=with_built_in_fields(descriptor.setup_fields),
+        logins=list(descriptor.logins),
+    )
+
+
+def with_built_in_fields(own: Iterable[SetupField]) -> list[SetupField]:
+    """The built-in fields, with the defaults *own* gives them, then *own*'s other fields."""
+    own = tuple(own)
+    overrides = {field.name: field.default for field in own if field.default is not None}
     built_in = [
         field.model_copy(update={"default": overrides[field.name]})
         if field.name in overrides
         else field
         for field in BUILT_IN_FIELDS
     ]
-    return PackageDescription(
-        display_name=descriptor.display_name,
-        description=descriptor.description,
-        icon=descriptor.icon,
-        version=descriptor.version,
-        setup_fields=[*built_in, *package_fields(descriptor.setup_fields)],
-        logins=list(descriptor.logins),
-    )
+    return [*built_in, *package_fields(own)]
 
 
 def package_fields(fields: Iterable[SetupField]) -> list[SetupField]:
@@ -446,4 +450,5 @@ __all__ = [
     "validate_package_config",
     "value_problem",
     "vanilla_description",
+    "with_built_in_fields",
 ]

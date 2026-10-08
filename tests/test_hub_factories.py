@@ -201,6 +201,82 @@ def test_the_check_reports_a_tool_or_hook_file_that_does_not_load(tmp_path):
     )
 
 
+def test_the_check_fails_a_template_configuration_field_that_does_not_land_in_kinby_toml(
+    tmp_path,
+):
+    fields = """\
+  coder:
+    image: coder
+    setup_fields:
+      - { name: model, label: Model, description: Its model., kind: config, type: text,
+          required: true, default: "openai:gpt-5" }
+      - { name: TOKEN, label: Token, description: A token., kind: secret, type: text,
+          required: true }
+      - { name: steps, label: Steps, description: A budget., kind: config, type: integer,
+          required: false, target: { file: kinby.toml, key: budgets.steps } }
+      - { name: tone, label: Tone, description: How it writes., kind: config, type: text,
+          required: false, target: { file: package.yaml, key: tone } }
+      - { name: style, label: Style, description: How it looks., kind: config, type: text,
+          required: false }
+"""
+    factory = FACTORY.replace("  coder: { image: coder }\n", fields)
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Instance "coder": Configuration field "style" names no target.',
+        'Instance "coder" asks for "tone", which targets no key of kinby.toml, '
+        "where a template's configuration lands.",
+    ]
+
+
+def test_the_check_fails_setup_and_login_declarations_an_install_would_fail_on(tmp_path):
+    declarations = """\
+  coder:
+    image: coder
+    setup_fields:
+      - { name: TOKEN, label: Token, description: A token., kind: secret, type: text,
+          required: true, default: sk-shipped }
+      - { name: steps, label: Steps, description: A budget., kind: config, type: integer,
+          required: false, default: many, target: { file: kinby.toml, key: budgets.steps } }
+      - { name: steps, label: Steps, description: A budget., kind: config, type: integer,
+          required: false, target: { file: kinby.toml, key: budgets.steps } }
+    logins:
+      - { id: claude, label: Claude, description: Signs in., command: [claude, login],
+          volume: /root/.claude, prompt_pattern: '(?P<url>\\S+) (?P<code>\\S+)' }
+      - { id: claude, label: Claude, description: Signs in., command: [claude, login],
+          volume: /root/.claude, prompt_pattern: '(?P<url>\\S+) (?P<code>\\S+)' }
+      - { id: codex, label: Codex, description: Signs in., command: [codex, login],
+          volume: codex, prompt_pattern: '(?P<url>\\S+) (?P<code>\\S+)' }
+"""
+    factory = FACTORY.replace("  coder: { image: coder }\n", declarations)
+
+    found = problems(tmp_path, FILES | {"factory.yaml": factory})
+
+    assert found[:2] == [
+        'Instance "coder": Secret field "TOKEN" has a default. A secret never ships in a package.',
+        'Instance "coder": Setup field "steps" has a default that is not a whole number.',
+    ]
+    assert found[2:] == [
+        'Instance "coder": Setup field "steps" is declared more than once.',
+        'Instance "coder": Login "claude" is declared more than once.',
+        'Instance "coder": Login "codex" mounts its volume at "codex", '
+        "which is not an absolute path.",
+    ]
+
+
+def test_the_check_fails_a_template_that_does_not_initialize(tmp_path):
+    for case, (name, content, problem) in enumerate(
+        [
+            ("kinby.toml", "[models\n", "Expected ']' at the end of a table declaration"),
+            ("kinby.toml", 'id = "mine"\n', 'Template cannot set "id".'),
+            (".env", "TOKEN=sk-shipped\n", 'Template cannot copy ".env".'),
+        ]
+    ):
+        found = problems(tmp_path / str(case), FILES | {f"instances/coder/{name}": content})
+
+        assert len(found) == 1
+        assert found[0].startswith(f'Instance "coder": the template does not initialize: {problem}')
+
+
 def test_a_prompt_outside_the_factory_folder_does_not_resolve(tmp_path):
     (tmp_path / "secret.md").write_text("outside\n", encoding="utf-8")
     factory = FACTORY.replace("prompts/review.md", "../../../secret.md")

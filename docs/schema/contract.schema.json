@@ -483,6 +483,29 @@
       "title": "CuratedPackage",
       "type": "object"
     },
+    "DeclaredSetup": {
+      "additionalProperties": false,
+      "description": "The setup fields an instance asks for, the built-in fields first, and its logins.",
+      "properties": {
+        "logins": {
+          "items": {
+            "$ref": "#/$defs/SubscriptionLogin"
+          },
+          "type": "array"
+        },
+        "setup_fields": {
+          "items": {
+            "$ref": "#/$defs/SetupField"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "setup_fields"
+      ],
+      "title": "DeclaredSetup",
+      "type": "object"
+    },
     "DelegatedRun": {
       "additionalProperties": false,
       "description": "One run of an outside agent that a tool started, with that run's own tokens.\n\nA client that reports a running total across resumes, like a Codex thread, needs its\nprevious reading subtracted. Only a limited run has ``resets_at``: when its plan window resets.",
@@ -881,6 +904,35 @@
       "title": "FactoryCheckResult",
       "type": "object"
     },
+    "FactoryDescribeCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "FactoryDescribeCommand",
+      "type": "object"
+    },
+    "FactoryDescription": {
+      "additionalProperties": false,
+      "properties": {
+        "instances": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DeclaredSetup"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "instances"
+      ],
+      "title": "FactoryDescription",
+      "type": "object"
+    },
     "FactoryEditCommand": {
       "additionalProperties": false,
       "description": "Write files of a factory's folder at once. The hub keeps them only if the check passes.\n\nA shipped factory is never written: the edit lands on its copy in the hub's factories.",
@@ -926,6 +978,71 @@
       "title": "FactoryGetCommand",
       "type": "object"
     },
+    "FactoryInstallCommand": {
+      "additionalProperties": false,
+      "description": "Create each of the factory's instances from its template, once the factory check passes.",
+      "properties": {
+        "instances": {
+          "additionalProperties": {
+            "$ref": "#/$defs/FactoryInstanceSetup"
+          },
+          "type": "object"
+        },
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        }
+      },
+      "required": [
+        "name",
+        "instances"
+      ],
+      "title": "FactoryInstallCommand",
+      "type": "object"
+    },
+    "FactoryInstallResult": {
+      "additionalProperties": false,
+      "properties": {
+        "instances": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LifecycleOperationResult"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "instances"
+      ],
+      "title": "FactoryInstallResult",
+      "type": "object"
+    },
+    "FactoryInstanceSetup": {
+      "additionalProperties": false,
+      "description": "The setup values for one of the factory's instances, checked against its template.",
+      "properties": {
+        "config": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SetupValue"
+          },
+          "type": "object"
+        },
+        "model": {
+          "type": "string"
+        },
+        "secrets": {
+          "additionalProperties": {
+            "format": "password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "FactoryInstanceSetup",
+      "type": "object"
+    },
     "FactoryListCommand": {
       "additionalProperties": false,
       "properties": {},
@@ -951,6 +1068,36 @@
     "FactoryName": {
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "type": "string"
+    },
+    "FactoryRemoveCommand": {
+      "additionalProperties": false,
+      "description": "Remove each of the factory's active instances. Their data and records stay behind.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "FactoryRemoveCommand",
+      "type": "object"
+    },
+    "FactoryRemoveResult": {
+      "additionalProperties": false,
+      "properties": {
+        "instances": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LifecycleOperationResult"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "instances"
+      ],
+      "title": "FactoryRemoveResult",
+      "type": "object"
     },
     "FactoryResult": {
       "additionalProperties": false,
@@ -1743,6 +1890,17 @@
         "detail": {
           "default": "",
           "type": "string"
+        },
+        "factory": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FactoryName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "image_id": {
           "type": "string"
@@ -3158,7 +3316,7 @@
     },
     "PackageDescription": {
       "additionalProperties": false,
-      "description": "What a prepared image declares: its card, its version, its setup fields, and its logins.\n\nThe built-in fields come first, then the package's own.",
+      "description": "What a prepared image declares: its card, its version, its setup fields, and its logins.",
       "properties": {
         "description": {
           "type": "string"
@@ -3186,11 +3344,11 @@
         }
       },
       "required": [
+        "setup_fields",
         "display_name",
         "description",
         "icon",
-        "version",
-        "setup_fields"
+        "version"
       ],
       "title": "PackageDescription",
       "type": "object"
@@ -4221,7 +4379,7 @@
     },
     "SetupField": {
       "additionalProperties": false,
-      "description": "One value a prepared image asks for before an instance is created from it.",
+      "description": "One value a prepared image or an instance template asks for before an instance exists.",
       "properties": {
         "choices": {
           "anyOf": [
@@ -5081,7 +5239,7 @@
     },
     "SubscriptionLogin": {
       "additionalProperties": false,
-      "description": "One sign-in a package declares, which the hub runs in a setup container (ADR 0065).",
+      "description": "One sign-in a package or a template declares, run in a setup container (ADR 0065).",
       "properties": {
         "command": {
           "items": {
@@ -6659,6 +6817,22 @@
           ],
           "type": "object"
         },
+        "factory.describe": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryDescribeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryDescription"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.edit": {
           "additionalProperties": false,
           "properties": {
@@ -6691,6 +6865,22 @@
           ],
           "type": "object"
         },
+        "factory.install": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryInstallCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryInstallResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.list": {
           "additionalProperties": false,
           "properties": {
@@ -6699,6 +6889,22 @@
             },
             "result": {
               "$ref": "#/$defs/FactoryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.remove": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRemoveCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRemoveResult"
             }
           },
           "required": [
@@ -7869,6 +8075,9 @@
         "factory.get",
         "factory.check",
         "factory.edit",
+        "factory.describe",
+        "factory.install",
+        "factory.remove",
         "stats.summary"
       ],
       "type": "object"

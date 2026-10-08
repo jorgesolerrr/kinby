@@ -199,6 +199,8 @@ class ImageArtifact:
 class ImageSelection:
     revision: str
     package: PackageSelection | None = None
+    #: One of the image recipes kinby ships, by name, as a factory's instance template names it.
+    recipe: str | None = None
 
 
 @dataclass(frozen=True)

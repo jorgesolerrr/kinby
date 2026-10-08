@@ -10,14 +10,15 @@ from uuid import UUID
 from pydantic import TypeAdapter, ValidationError
 
 from kinby.contracts import (
+    DeclaredSetup,
     InstanceSetup,
     LoginSetup,
     LoginState,
-    PackageDescription,
     SecretSetup,
     SetupField,
     SetupFieldKind,
     SetupValue,
+    TargetFile,
 )
 from kinby.instance import ModelName, api_key_variable
 from kinby.packages import (
@@ -33,7 +34,7 @@ _MODEL_NAME = TypeAdapter(ModelName)
 
 
 def setup_errors(
-    description: PackageDescription,
+    description: DeclaredSetup,
     *,
     model: str,
     config: Mapping[str, SetupValue],
@@ -78,7 +79,7 @@ def setup_errors(
 
 
 def configuration(
-    description: PackageDescription,
+    description: DeclaredSetup,
     *,
     model: str,
     config: Mapping[str, SetupValue],
@@ -89,7 +90,7 @@ def configuration(
 
 
 def targeted(
-    description: PackageDescription,
+    description: DeclaredSetup,
     configured: Mapping[str, SetupValue],
 ) -> dict[str, SetupValue]:
     """The values of the package's own fields, which initialization writes at their targets."""
@@ -97,6 +98,20 @@ def targeted(
         field.name: configured[field.name]
         for field in package_fields(description.setup_fields)
         if field.target is not None and field.name in configured
+    }
+
+
+def manifest_settings(
+    setup: DeclaredSetup,
+    configured: Mapping[str, SetupValue],
+) -> dict[str, SetupValue]:
+    """The values of a template's own fields, by the dotted key of kinby.toml each lands at."""
+    return {
+        field.target.key: configured[field.name]
+        for field in package_fields(setup.setup_fields)
+        if field.target is not None
+        and field.target.file is TargetFile.KINBY_TOML
+        and field.name in configured
     }
 
 
@@ -110,7 +125,7 @@ def held_secrets(model: ModelName, secrets: Mapping[str, str]) -> dict[str, str]
 
 
 def instance_setup(
-    description: PackageDescription | None,
+    description: DeclaredSetup | None,
     *,
     logins: Mapping[str, LoginState],
     running: Mapping[str, UUID],

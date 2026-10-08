@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 from kinby.contracts import (
+    DeclaredSetup,
     FactoryCheckCommand,
     FactoryCheckResult,
+    FactoryDescribeCommand,
+    FactoryDescription,
     FactoryEditCommand,
     FactoryGetCommand,
     FactoryListCommand,
@@ -21,7 +25,21 @@ from kinby.contracts import (
 )
 from kinby.core.errors import FactoryCheckFailed, FactoryNotFound, InvalidConfig, StaleWrite
 from kinby.factories.check import check_factory
+from kinby.factories.file import TEMPLATES_DIR, InstanceName, RecipeName, read_factory_file
 from kinby.instance.config_changes import directory_hash
+from kinby.packages import readable_template_files, with_built_in_fields
+
+
+@dataclass(frozen=True)
+class InstanceTemplate:
+    """One instance template of a factory that passed the check, read whole."""
+
+    #: The instance's name in the factory file.
+    name: InstanceName
+    recipe: RecipeName | None
+    setup: DeclaredSetup
+    #: Every file of the template's folder, by its path there.
+    files: dict[str, str]
 
 
 class FactoryStore:
@@ -60,6 +78,36 @@ class FactoryStore:
     async def check(self, command: FactoryCheckCommand) -> FactoryCheckResult:
         folder, _ = self._folder(command.name)
         return FactoryCheckResult(problems=list(await asyncio.to_thread(check_factory, folder)))
+
+    async def describe(self, command: FactoryDescribeCommand) -> FactoryDescription:
+        return FactoryDescription(
+            instances={
+                template.name: template.setup for template in await self.templates(command.name)
+            }
+        )
+
+    async def templates(self, name: FactoryName) -> tuple[InstanceTemplate, ...]:
+        """Each instance template of the factory, read in the same pass as the check passes it."""
+        async with self._edit_lock:
+            return await asyncio.to_thread(self._templates, name)
+
+    def _templates(self, name: FactoryName) -> tuple[InstanceTemplate, ...]:
+        folder, _ = self._folder(name)
+        problems = check_factory(folder)
+        if problems:
+            raise FactoryCheckFailed(problems)
+        return tuple(
+            InstanceTemplate(
+                name=instance,
+                recipe=declared.image,
+                setup=DeclaredSetup(
+                    setup_fields=with_built_in_fields(declared.setup_fields),
+                    logins=list(declared.logins),
+                ),
+                files=readable_template_files(folder / TEMPLATES_DIR / instance),
+            )
+            for instance, declared in read_factory_file(folder).instances.items()
+        )
 
     async def edit(self, command: FactoryEditCommand) -> FactoryResult:
         """Write the files over the factory the client read, and keep them if the check passes."""

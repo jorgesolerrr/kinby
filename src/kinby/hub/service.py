@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import shutil
-from collections.abc import Collection, Coroutine
+from collections.abc import Collection, Coroutine, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
@@ -17,10 +17,14 @@ from uuid import UUID, uuid4
 from dotenv import dotenv_values
 
 from kinby.contracts import (
+    DEFAULT_AVATAR,
     FACTORY_CHECK,
+    FACTORY_DESCRIBE,
     FACTORY_EDIT,
     FACTORY_GET,
+    FACTORY_INSTALL,
     FACTORY_LIST,
+    FACTORY_REMOVE,
     IMAGE_PREPARE,
     INSTANCE_ADOPT,
     INSTANCE_ADOPT_PREVIEW,
@@ -42,10 +46,17 @@ from kinby.contracts import (
     PACKAGE_DESCRIBE,
     PACKAGE_LIST,
     STATS_SUMMARY,
+    Avatar,
     Capability,
     ContainerOwner,
     ControlToken,
+    DeclaredSetup,
     DrainState,
+    FactoryInstallCommand,
+    FactoryInstallResult,
+    FactoryInstanceSetup,
+    FactoryRemoveCommand,
+    FactoryRemoveResult,
     ImagePrepareCommand,
     ImagePrepareResult,
     InstanceAdoptCommand,
@@ -93,6 +104,7 @@ from kinby.contracts import (
     RecreateReason,
     RevisionBehind,
     SetupFieldKind,
+    SetupValue,
     StatsGetCommand,
     StatsGetResult,
     StatsSummaryResult,
@@ -104,6 +116,7 @@ from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import (
     AdoptionBlocked,
+    FactoryInstalled,
     InvalidSetup,
     LifecycleOperationInFlight,
     LifecycleOperationNotFound,
@@ -124,7 +137,7 @@ from kinby.hub.control import (
     InstanceControl,
 )
 from kinby.hub.curated import curated_list, with_recipe
-from kinby.hub.factories import FactoryStore
+from kinby.hub.factories import FactoryStore, InstanceTemplate
 from kinby.hub.models import (
     ContainerRuntime,
     ImagePreparation,
@@ -139,12 +152,13 @@ from kinby.hub.models import (
     secrets_digest,
 )
 from kinby.hub.recovery import recover_lifecycle
-from kinby.hub.registry import HubRegistry, ManagedInstance
+from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
 from kinby.hub.setup import (
     ENVIRONMENT_NAME,
     configuration,
     held_secrets,
     instance_setup,
+    manifest_settings,
     setup_errors,
     targeted,
 )
@@ -153,6 +167,7 @@ from kinby.instance import (
     Instance,
     ManifestError,
     PackageProvenance,
+    init_from_template,
     init_instance,
     inspect_instance,
 )
@@ -296,6 +311,40 @@ def _template(record: ManagedInstance) -> PackageProvenance | None:
         return None
 
 
+def _selection(
+    record: ManagedInstance, revision: str, package: PackageSelection | None
+) -> ImageSelection:
+    """The image an instance runs on: the revision, its package, and its template's recipe."""
+    recipe = record.factory.recipe if record.factory is not None else None
+    return ImageSelection(revision, package, recipe)
+
+
+def _install_errors(
+    templates: tuple[InstanceTemplate, ...],
+    instances: Mapping[str, FactoryInstanceSetup],
+) -> dict[str, str]:
+    """What is wrong with the setup values of each instance, as `<instance>.<field>`."""
+    declared = {template.name for template in templates}
+    errors = {
+        name: "The factory declares no instance by this name."
+        for name in instances
+        if name not in declared
+    }
+    for template in templates:
+        values = instances.get(template.name)
+        if values is None:
+            errors[template.name] = "Send this instance's setup values."
+            continue
+        found = setup_errors(
+            template.setup,
+            model=values.model,
+            config=values.config,
+            secrets={name: value.get_secret_value() for name, value in values.secrets.items()},
+        )
+        errors.update({f"{template.name}.{name}": message for name, message in found.items()})
+    return errors
+
+
 def _delete_directory(directory: Path) -> None:
     """A retry finds a directory an interrupted attempt already deleted, and that is done."""
     try:
@@ -401,6 +450,9 @@ class Hub:
             self.dispatcher.register(FACTORY_GET, self.factories.get)
             self.dispatcher.register(FACTORY_CHECK, self.factories.check)
             self.dispatcher.register(FACTORY_EDIT, self.factories.edit)
+            self.dispatcher.register(FACTORY_DESCRIBE, self.factories.describe)
+            self.dispatcher.register(FACTORY_INSTALL, self.install_factory)
+            self.dispatcher.register(FACTORY_REMOVE, self.remove_factory)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
         except BaseException:
             self._directory_lock.close()
@@ -426,78 +478,135 @@ class Hub:
         )
         if errors:
             raise InvalidSetup(errors)
-        instance_id = uuid4()
-        operation_id = uuid4()
-        instance_path = self.instances_directory / str(instance_id)
-        record = ManagedInstance(
-            instance_id=instance_id,
-            path=instance_path,
-            manifest_id=command.manifest_id,
+        record = self._new_record(
+            command.manifest_id,
             persona_name=command.persona_name,
-            requested_revision=command.revision,
+            revision=command.revision,
+            package=with_recipe(command.package, self._curated),
+            avatar=command.avatar,
+        )
+        return self._begin_create(record, command.model, command.config, secrets)
+
+    async def install_factory(self, command: FactoryInstallCommand) -> FactoryInstallResult:
+        """Create each of the factory's instances from its template, once the check passes.
+
+        The setup values of every instance check out before any of them is created.
+        """
+        templates = await self.factories.templates(command.name)
+        errors = _install_errors(templates, command.instances)
+        if errors:
+            raise InvalidSetup(errors)
+        if any(
+            record.active or self.registry.active_operation(record.instance_id) is not None
+            for record in self.registry.factory_members(command.name)
+        ):
+            raise FactoryInstalled(
+                f'Factory "{command.name}" is installed already. Remove it before installing it.'
+            )
+        creations: dict[str, LifecycleOperationResult] = {}
+        for template in templates:
+            values = command.instances[template.name]
+            record = self._new_record(
+                f"{command.name}-{template.name}",
+                factory=FactoryMember(
+                    factory=command.name,
+                    name=template.name,
+                    recipe=template.recipe,
+                    setup=template.setup,
+                ),
+            )
+            creations[template.name] = self._begin_create(
+                record,
+                values.model,
+                values.config,
+                {name: value.get_secret_value() for name, value in values.secrets.items()},
+                template,
+            )
+        return FactoryInstallResult(instances=creations)
+
+    async def remove_factory(self, command: FactoryRemoveCommand) -> FactoryRemoveResult:
+        """Remove each of the factory's active instances the way an instance removal does.
+
+        Every one of them is free to go before the first removal starts.
+        """
+        members = {
+            record.factory.name: record
+            for record in self.registry.factory_members(command.name)
+            if record.factory is not None and record.active
+        }
+        for record in members.values():
+            self._not_signing_in(self._claimed(record))
+        return FactoryRemoveResult(
+            instances={
+                name: await self.remove(InstanceRemoveCommand(instance_id=record.instance_id))
+                for name, record in members.items()
+            }
+        )
+
+    def _new_record(
+        self,
+        manifest_id: str,
+        *,
+        persona_name: str | None = None,
+        revision: str = _PREPARED_REVISION,
+        package: PackageSelection | None = None,
+        avatar: Avatar = DEFAULT_AVATAR,
+        factory: FactoryMember | None = None,
+    ) -> ManagedInstance:
+        instance_id = uuid4()
+        return ManagedInstance(
+            instance_id=instance_id,
+            path=self.instances_directory / str(instance_id),
+            manifest_id=manifest_id,
+            persona_name=persona_name,
+            requested_revision=revision,
             source_revision=None,
             image_id=None,
             intended_state=IntendedState.STOPPED,
             runtime_id=str(instance_id),
             prepared=False,
             storage=(),
-            package=with_recipe(command.package, self._curated),
-            avatar=command.avatar,
+            package=package,
+            avatar=avatar,
+            factory=factory,
         )
+
+    def _begin_create(
+        self,
+        record: ManagedInstance,
+        model: str,
+        config: Mapping[str, SetupValue],
+        secrets: dict[str, str],
+        template: InstanceTemplate | None = None,
+    ) -> LifecycleOperationResult:
+        operation_id = uuid4()
         self.registry.begin_create(record, operation_id)
-        self._schedule(self._create(operation_id, record, command, secrets))
-        return LifecycleOperationResult(operation_id=operation_id, instance_id=instance_id)
+        self._schedule(self._create(operation_id, record, model, config, secrets, template))
+        return LifecycleOperationResult(operation_id=operation_id, instance_id=record.instance_id)
 
     async def _create(
         self,
         operation_id: UUID,
         record: ManagedInstance,
-        command: InstanceCreateCommand,
+        model: str,
+        config: Mapping[str, SetupValue],
         secrets: dict[str, str],
+        template: InstanceTemplate | None,
     ) -> None:
+        """Prepare the image, write the instance from its template or its image, and publish it."""
         staging = record.path.with_name(f"{record.path.name}.creating")
         try:
             self._record(operation_id, "image", "Preparing the selected image.")
-            selection = ImageSelection(revision=record.requested_revision, package=record.package)
+            selection = _selection(record, record.requested_revision, record.package)
             prepared = await self._images.prepare(selection)
-            package = self._package(prepared, selection)
-            self._record(
-                operation_id,
-                "validate",
-                "Checking the setup values against what the image declares.",
-            )
-            description = await self._declared(selection, prepared)
-            errors = setup_errors(
-                description,
-                model=command.model,
-                config=command.config,
-                secrets=secrets,
-            )
-            if errors:
-                raise ValueError(
-                    "The image asks for other setup values now. "
-                    + " ".join(f"{name}: {message}" for name, message in errors.items())
+            if template is None:
+                declared = await self._initialize_from_image(
+                    operation_id, record, staging, selection, prepared, model, config, secrets
                 )
-            self._record(
-                operation_id,
-                "initialize",
-                "Writing the instance's configuration and secrets.",
-            )
-            configured = configuration(description, model=command.model, config=command.config)
-            model = str(configured[MODEL_FIELD.name])
-            init_instance(
-                staging,
-                model=model,
-                package=package,
-                config=targeted(description, configured),
-            )
-            self._write_configuration(staging, record.manifest_id, record.persona_name)
-            behavior_prompt = configured.get(BEHAVIOR_PROMPT_FIELD.name)
-            if package is None and isinstance(behavior_prompt, str):
-                (staging / SYSTEM_NAME).write_text(behavior_prompt, encoding="utf-8")
-            self._write_secrets(staging / ".env", self._instance_secrets(model, secrets))
-            inspect_instance(staging)
-            await self._check_written_config(selection, package, staging)
+            else:
+                declared = self._initialize_from_template(
+                    operation_id, record, staging, template, model, config, secrets
+                )
             self._record(
                 operation_id, "publish", "Creating the container and listing the instance."
             )
@@ -505,7 +614,7 @@ class Hub:
             if record.path.exists():
                 raise FileExistsError(f"Instance directory already exists: {record.path}")
             staging.replace(record.path)
-            storage = self._storage(record.instance_id, record.path, description.logins)
+            storage = self._storage(record.instance_id, record.path, declared.logins)
             self.registry.record_preparation(record.instance_id, artifact, storage)
             await self._runtime.create(
                 InstanceSpec(
@@ -516,9 +625,7 @@ class Hub:
                     port=_INSTANCE_PORT,
                 )
             )
-            self.registry.seed_logins(
-                record.instance_id, [login.id for login in description.logins]
-            )
+            self.registry.seed_logins(record.instance_id, [login.id for login in declared.logins])
             self.registry.mark_prepared(record.instance_id)
             self.registry.finish_operation(
                 operation_id,
@@ -533,6 +640,82 @@ class Hub:
                 OperationState.FAILED,
                 self._redact(str(exc) or type(exc).__name__, secrets.values()),
             )
+
+    async def _initialize_from_image(
+        self,
+        operation_id: UUID,
+        record: ManagedInstance,
+        staging: Path,
+        selection: ImageSelection,
+        prepared: PreparedImage,
+        model: str,
+        config: Mapping[str, SetupValue],
+        secrets: dict[str, str],
+    ) -> PackageDescription:
+        """Write a vanilla or package instance, from what the image just prepared declares."""
+        package = self._package(prepared, selection)
+        self._record(
+            operation_id,
+            "validate",
+            "Checking the setup values against what the image declares.",
+        )
+        description = await self._declared(selection, prepared)
+        errors = setup_errors(description, model=model, config=config, secrets=secrets)
+        if errors:
+            raise ValueError(
+                "The image asks for other setup values now. "
+                + " ".join(f"{name}: {message}" for name, message in errors.items())
+            )
+        self._record(
+            operation_id,
+            "initialize",
+            "Writing the instance's configuration and secrets.",
+        )
+        configured = configuration(description, model=model, config=config)
+        model = str(configured[MODEL_FIELD.name])
+        init_instance(
+            staging,
+            model=model,
+            package=package,
+            config=targeted(description, configured),
+        )
+        self._write_configuration(staging, record.manifest_id, record.persona_name)
+        behavior_prompt = configured.get(BEHAVIOR_PROMPT_FIELD.name)
+        if package is None and isinstance(behavior_prompt, str):
+            (staging / SYSTEM_NAME).write_text(behavior_prompt, encoding="utf-8")
+        self._write_secrets(staging / ".env", self._instance_secrets(model, secrets))
+        inspect_instance(staging)
+        await self._check_written_config(selection, package, staging)
+        return description
+
+    def _initialize_from_template(
+        self,
+        operation_id: UUID,
+        record: ManagedInstance,
+        staging: Path,
+        template: InstanceTemplate,
+        model: str,
+        config: Mapping[str, SetupValue],
+        secrets: dict[str, str],
+    ) -> DeclaredSetup:
+        """Write a factory's instance from its template, whose setup the install checked."""
+        self._record(
+            operation_id,
+            "initialize",
+            f'Writing the instance from template "{template.name}", with its secrets.',
+        )
+        configured = configuration(template.setup, model=model, config=config)
+        model = str(configured[MODEL_FIELD.name])
+        init_from_template(
+            staging,
+            template.files,
+            model=model,
+            settings=manifest_settings(template.setup, configured),
+        )
+        self._write_configuration(staging, record.manifest_id, record.persona_name)
+        self._write_secrets(staging / ".env", self._instance_secrets(model, secrets))
+        inspect_instance(staging)
+        return template.setup
 
     async def _check_written_config(
         self,
@@ -726,7 +909,7 @@ class Hub:
         return LifecycleOperationResult(operation_id=opened, instance_id=record.instance_id)
 
     def _login(self, record: ManagedInstance, login_id: str) -> SubscriptionLogin:
-        description = self.registry.description(record.package)
+        description = self._declared_setup(record)
         logins = description.logins if description is not None else []
         for login in logins:
             if login.id == login_id:
@@ -1058,7 +1241,7 @@ class Hub:
         running = self.registry.running_login(record.instance_id)
         if running is not None:
             _, login_id = running
-            description = self.registry.description(record.package)
+            description = self._declared_setup(record)
             logins = description.logins if description is not None else []
             label = next((login.label for login in logins if login.id == login_id), login_id)
             raise LifecycleOperationInFlight(
@@ -1142,7 +1325,7 @@ class Hub:
     async def update(self, command: InstanceUpdateCommand) -> LifecycleOperationResult:
         """Move this instance onto the image a selected revision prepares."""
         record = self._claimed(self._active_instance(command.instance_id))
-        selection = ImageSelection(command.revision, _pinned_package(record, command.package))
+        selection = _selection(record, command.revision, _pinned_package(record, command.package))
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id,
@@ -1284,8 +1467,22 @@ class Hub:
         self.registry.set_intended_state(record.instance_id, IntendedState.REMOVED)
 
     async def restore(self, command: InstanceRestoreCommand) -> LifecycleOperationResult:
-        """Bring a removed instance back from its retained record, and leave it stopped."""
+        """Bring a removed instance back from its retained record, and leave it stopped.
+
+        A factory has one active instance of each name, so the factory removal reaches them all.
+        """
         record = self._claimed(self._removed_instance(command.instance_id))
+        member = record.factory
+        if member is not None and any(
+            other.factory is not None
+            and other.factory.name == member.name
+            and (other.active or self.registry.active_operation(other.instance_id) is not None)
+            for other in self.registry.factory_members(member.factory)
+        ):
+            raise FactoryInstalled(
+                f'Factory "{member.factory}" has an instance "{member.name}" already. '
+                "Remove it before restoring this one."
+            )
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id,
@@ -1795,6 +1992,7 @@ class Hub:
                 if record.package is not None
                 else None
             ),
+            factory=record.factory.factory if record.factory is not None else None,
             notices=_notices(record, hub_revision, self.registry.description(record.package)),
         )
 
@@ -1848,13 +2046,19 @@ class Hub:
         process, readiness = self._status(status)
         return ObservedProcess(process, readiness, self._redact(status.detail, secrets))
 
+    def _declared_setup(self, record: ManagedInstance) -> DeclaredSetup | None:
+        """What the instance asks for: its template's as installed, or its image's."""
+        if record.factory is not None:
+            return record.factory.setup
+        return self.registry.description(record.package)
+
     def _setup(self, record: ManagedInstance) -> InstanceSetup:
         """The logins and secrets the instance's stored descriptor declares, and how they stand."""
         try:
             model = inspect_instance(record.path).manifest.models.main
         except ManifestError:
             model = None
-        description = self.registry.description(record.package)
+        description = self._declared_setup(record)
         declared = description.logins if description is not None else []
         running = {
             login.id: running[0]

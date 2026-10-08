@@ -15,7 +15,7 @@ import yaml
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
-from kinby.contracts import FactoryName
+from kinby.contracts import FactoryName, SetupField, SubscriptionLogin
 
 FACTORY_FILE = "factory.yaml"
 #: Where each instance template lives in the factory's folder, as ``instances/<name>/``.
@@ -56,6 +56,11 @@ class InstanceDeclaration:
 
     #: One of the image recipes kinby ships. None builds kinby's base image.
     image: RecipeName | None = None
+    #: What the instance asks for at install, after kinby's built-in fields. A field named like
+    #: a built-in one gives it another default. Each other configuration field targets a key of
+    #: kinby.toml.
+    setup_fields: tuple[SetupField, ...] = ()
+    logins: tuple[SubscriptionLogin, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)

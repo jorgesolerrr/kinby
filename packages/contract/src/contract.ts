@@ -9,6 +9,19 @@ export type ClientFrame = CallFrame | SubscribeFrame | CancelFrame;
 export type JsonValue = unknown;
 export type ConfigActor = "app" | "agent" | "failure_policy";
 export type FactoryName = string;
+export type SetupValue = boolean | number | string;
+/**
+ * Where a setup field's value lands: the instance's configuration, or its secrets.
+ */
+export type SetupFieldKind = "config" | "secret";
+/**
+ * The instance file a package's configuration field lands in.
+ */
+export type TargetFile = "kinby.toml" | "package.yaml";
+/**
+ * How a client asks for a setup field's value, and so what the value is.
+ */
+export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "choice" | "email" | "url";
 /**
  * Where the factory the hub serves under a name comes from.
  */
@@ -42,7 +55,6 @@ export type StorageKind = "bind" | "volume";
  */
 export type AvatarColor = "blue" | "violet" | "green" | "amber" | "red" | "gray";
 export type AvatarShape = "circle" | "squircle" | "square";
-export type SetupValue = boolean | number | string;
 /**
  * How an instance's accepted work ended when it drained.
  */
@@ -86,18 +98,6 @@ export type OperationKind =
   | "prepare"
   | "login";
 export type OperationState = "pending" | "running" | "succeeded" | "failed";
-/**
- * Where a setup field's value lands: the instance's configuration, or its secrets.
- */
-export type SetupFieldKind = "config" | "secret";
-/**
- * The instance file a package's configuration field lands in.
- */
-export type TargetFile = "kinby.toml" | "package.yaml";
-/**
- * How a client asks for a setup field's value, and so what the value is.
- */
-export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "choice" | "email" | "url";
 export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
 /**
  * What the gate answers for a tool call, and the rule a tool can be given in its place.
@@ -161,6 +161,10 @@ export interface Contract {
       command: FactoryCheckCommand;
       result: FactoryCheckResult;
     };
+    "factory.describe": {
+      command: FactoryDescribeCommand;
+      result: FactoryDescription;
+    };
     "factory.edit": {
       command: FactoryEditCommand;
       result: FactoryResult;
@@ -169,9 +173,17 @@ export interface Contract {
       command: FactoryGetCommand;
       result: FactoryResult;
     };
+    "factory.install": {
+      command: FactoryInstallCommand;
+      result: FactoryInstallResult;
+    };
     "factory.list": {
       command: FactoryListCommand;
       result: FactoryListResult;
+    };
+    "factory.remove": {
+      command: FactoryRemoveCommand;
+      result: FactoryRemoveResult;
     };
     "image.prepare": {
       command: ImagePrepareCommand;
@@ -499,6 +511,53 @@ export interface FactoryCheckCommand {
 export interface FactoryCheckResult {
   problems: string[];
 }
+export interface FactoryDescribeCommand {
+  name: FactoryName;
+}
+export interface FactoryDescription {
+  instances: {
+    [k: string]: DeclaredSetup;
+  };
+}
+/**
+ * The setup fields an instance asks for, the built-in fields first, and its logins.
+ */
+export interface DeclaredSetup {
+  logins?: SubscriptionLogin[];
+  setup_fields: SetupField[];
+}
+/**
+ * One sign-in a package or a template declares, run in a setup container (ADR 0065).
+ */
+export interface SubscriptionLogin {
+  command: string[];
+  description: string;
+  id: string;
+  label: string;
+  prompt_pattern: string;
+  volume: string;
+}
+/**
+ * One value a prepared image or an instance template asks for before an instance exists.
+ */
+export interface SetupField {
+  choices?: string[] | null;
+  default?: SetupValue | null;
+  description: string;
+  kind: SetupFieldKind;
+  label: string;
+  name: string;
+  required: boolean;
+  target?: SetupTarget | null;
+  type: SetupFieldType;
+}
+/**
+ * Where a configuration value lands: a file, and a dotted key inside it.
+ */
+export interface SetupTarget {
+  file: TargetFile;
+  key: string;
+}
 /**
  * Write files of a factory's folder at once. The hub keeps them only if the check passes.
  *
@@ -522,6 +581,36 @@ export interface FactoryResult {
 export interface FactoryGetCommand {
   name: FactoryName;
 }
+/**
+ * Create each of the factory's instances from its template, once the factory check passes.
+ */
+export interface FactoryInstallCommand {
+  instances: {
+    [k: string]: FactoryInstanceSetup;
+  };
+  name: FactoryName;
+}
+/**
+ * The setup values for one of the factory's instances, checked against its template.
+ */
+export interface FactoryInstanceSetup {
+  config?: {
+    [k: string]: SetupValue;
+  };
+  model: string;
+  secrets?: {
+    [k: string]: string;
+  };
+}
+export interface FactoryInstallResult {
+  instances: {
+    [k: string]: LifecycleOperationResult;
+  };
+}
+export interface LifecycleOperationResult {
+  instance_id: string;
+  operation_id: string;
+}
 export interface FactoryListCommand {}
 export interface FactoryListResult {
   factories: FactorySummary[];
@@ -529,6 +618,17 @@ export interface FactoryListResult {
 export interface FactorySummary {
   name: FactoryName;
   source: FactorySource;
+}
+/**
+ * Remove each of the factory's active instances. Their data and records stay behind.
+ */
+export interface FactoryRemoveCommand {
+  name: FactoryName;
+}
+export interface FactoryRemoveResult {
+  instances: {
+    [k: string]: LifecycleOperationResult;
+  };
 }
 /**
  * Prepare a package selection's image. No package prepares kinby's base image.
@@ -562,10 +662,6 @@ export interface InstanceAdoptCommand {
   path: string;
   relinquished?: boolean;
   runtime_id: string;
-}
-export interface LifecycleOperationResult {
-  instance_id: string;
-  operation_id: string;
 }
 /**
  * Preview an adoption. It reads the instance and its container and changes neither.
@@ -674,6 +770,7 @@ export interface InstanceListResult {
 export interface InstanceSummary {
   avatar: Avatar;
   detail?: string;
+  factory?: FactoryName | null;
   image_id: string;
   instance_id: string;
   intended_state: IntendedState;
@@ -987,8 +1084,6 @@ export interface PackageDescribeCommand {
 }
 /**
  * What a prepared image declares: its card, its version, its setup fields, and its logins.
- *
- * The built-in fields come first, then the package's own.
  */
 export interface PackageDescription {
   description: string;
@@ -997,38 +1092,6 @@ export interface PackageDescription {
   logins?: SubscriptionLogin[];
   setup_fields: SetupField[];
   version: string;
-}
-/**
- * One sign-in a package declares, which the hub runs in a setup container (ADR 0065).
- */
-export interface SubscriptionLogin {
-  command: string[];
-  description: string;
-  id: string;
-  label: string;
-  prompt_pattern: string;
-  volume: string;
-}
-/**
- * One value a prepared image asks for before an instance is created from it.
- */
-export interface SetupField {
-  choices?: string[] | null;
-  default?: SetupValue | null;
-  description: string;
-  kind: SetupFieldKind;
-  label: string;
-  name: string;
-  required: boolean;
-  target?: SetupTarget | null;
-  type: SetupFieldType;
-}
-/**
- * Where a configuration value lands: a file, and a dotted key inside it.
- */
-export interface SetupTarget {
-  file: TargetFile;
-  key: string;
 }
 export interface PackageListCommand {}
 export interface PackageListResult {

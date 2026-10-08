@@ -73,6 +73,13 @@ class FactoryCheckFailed(CoreError):
         )
 
 
+class FactoryInstalled(CoreError):
+    """The factory has instances already, so installing it again, or restoring one of its
+    removed instances, would make a second of the same name."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class PackageConfigNotFound(CoreError):
     """The instance runs no package, or its package declares no config."""
 

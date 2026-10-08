@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from importlib.metadata import entry_points
 from pathlib import Path, PurePosixPath
@@ -20,6 +20,7 @@ from kinby.contracts import (
     SetupFieldKind,
     SetupFieldType,
     SetupValue,
+    SubscriptionLogin,
     TargetFile,
     Warning,
 )
@@ -64,12 +65,15 @@ def check_package(package_id: str, instance: Path | None = None) -> tuple[str, .
         return (str(exc),)
     package = loaded.package
     template = Path(package.template).resolve()
-    declarations = list(_field_declarations(package))
+    declarations = [
+        *field_declaration_problems(package.setup_fields),
+        *_package_yaml_targets(package),
+    ]
     if not template.is_dir():
         return (
             f"Template is not a directory: {template}",
             *declarations,
-            *_login_declarations(package),
+            *login_declaration_problems(package.logins),
             *_missing_executables(package),
         )
     template_config = list(_config_failures(package, template))
@@ -79,7 +83,7 @@ def check_package(package_id: str, instance: Path | None = None) -> tuple[str, .
     failures = [
         *_unshipped_template_files(loaded, template),
         *declarations,
-        *_login_declarations(package),
+        *login_declaration_problems(package.logins),
         *_secret_values(package, template),
         *_missing_executables(package),
         *_template_validation(package, template),
@@ -103,23 +107,24 @@ def _unshipped_template_files(loaded: LoadedPackage, template: Path) -> list[str
     ]
 
 
-def _field_declarations(package: Package) -> Iterator[str]:
+def field_declaration_problems(fields: Iterable[SetupField]) -> Iterator[str]:
+    """What is wrong with setup field declarations, whether a package or a factory makes them."""
     built_in = {field.name: field for field in BUILT_IN_FIELDS}
     seen: set[str] = set()
-    for field in package.setup_fields:
+    for field in fields:
         if field.name in seen:
             yield f'Setup field "{field.name}" is declared more than once.'
             continue
         seen.add(field.name)
-        yield from _field_failures(package, field)
+        yield from _field_failures(field)
         overridden = built_in.get(field.name)
         if overridden is None:
-            yield from _target_failures(package, field)
+            yield from _target_failures(field)
         else:
             yield from _override_failures(field, overridden)
 
 
-def _field_failures(package: Package, field: SetupField) -> Iterator[str]:
+def _field_failures(field: SetupField) -> Iterator[str]:
     name = field.name
     secret = field.kind is SetupFieldKind.SECRET
     if secret and _ENVIRONMENT_NAME.fullmatch(name) is None:
@@ -142,18 +147,29 @@ def _field_failures(package: Package, field: SetupField) -> Iterator[str]:
         yield f'Setup field "{name}" has a default that {problem}.'
 
 
-def _target_failures(package: Package, field: SetupField) -> Iterator[str]:
+def _target_failures(field: SetupField) -> Iterator[str]:
     name = field.name
     if field.kind is SetupFieldKind.SECRET:
         if field.target is not None:
             yield f'Secret field "{name}" has a target. A secret lands in the instance secrets.'
     elif field.target is None:
         yield f'Configuration field "{name}" names no target.'
-    elif field.target.file is TargetFile.PACKAGE_YAML and package.config is None:
-        yield (
-            f'Setup field "{name}" lands in package.yaml, '
-            "but the package declares no config validator."
-        )
+
+
+def _package_yaml_targets(package: Package) -> Iterator[str]:
+    if package.config is not None:
+        return
+    for field in package_fields(package.setup_fields):
+        target = field.target
+        if (
+            field.kind is SetupFieldKind.CONFIG
+            and target
+            and target.file is TargetFile.PACKAGE_YAML
+        ):
+            yield (
+                f'Setup field "{field.name}" lands in package.yaml, '
+                "but the package declares no config validator."
+            )
 
 
 def _override_failures(field: SetupField, built_in: SetupField) -> Iterator[str]:
@@ -174,9 +190,10 @@ def _defaults_at_targets(package: Package) -> dict[str, SetupValue]:
     return resolved_values(targeted, {})
 
 
-def _login_declarations(package: Package) -> Iterator[str]:
+def login_declaration_problems(logins: Iterable[SubscriptionLogin]) -> Iterator[str]:
+    """What is wrong with subscription login declarations, from a package or a factory."""
     seen: set[str] = set()
-    for login in package.logins:
+    for login in logins:
         if login.id in seen:
             yield f'Login "{login.id}" is declared more than once.'
             continue

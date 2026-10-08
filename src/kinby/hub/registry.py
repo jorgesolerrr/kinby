@@ -17,6 +17,8 @@ from kinby.contracts import (
     Avatar,
     AvatarColor,
     AvatarShape,
+    DeclaredSetup,
+    FactoryName,
     IntendedState,
     LoginPrompt,
     LoginState,
@@ -30,6 +32,7 @@ from kinby.contracts import (
     StorageItem,
     StorageKind,
 )
+from kinby.factories.file import InstanceName, RecipeName
 from kinby.hub.models import ImageArtifact
 
 
@@ -39,6 +42,19 @@ class StorageConflict:
 
     item: StorageItem
     owner: UUID
+
+
+@dataclass(frozen=True)
+class FactoryMember:
+    """The factory an instance was installed from, and what its instance template declared."""
+
+    factory: FactoryName
+    #: The instance's name in the factory file.
+    name: InstanceName
+    #: The image recipe its template names. None is kinby's base image.
+    recipe: RecipeName | None
+    #: Kept as installed, so a later edit of the factory leaves the instance's setup alone.
+    setup: DeclaredSetup
 
 
 @dataclass(frozen=True)
@@ -56,6 +72,7 @@ class ManagedInstance:
     storage: tuple[StorageItem, ...]
     package: PackageSelection | None = None
     avatar: Avatar = DEFAULT_AVATAR
+    factory: FactoryMember | None = None
 
     @property
     def active(self) -> bool:
@@ -165,6 +182,13 @@ class HubRegistry:
                 );
                 CREATE TABLE IF NOT EXISTS sessions (
                     token_hash TEXT PRIMARY KEY
+                );
+                CREATE TABLE IF NOT EXISTS factory_members (
+                    instance_id TEXT PRIMARY KEY REFERENCES instances(id),
+                    factory TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    recipe TEXT,
+                    setup TEXT NOT NULL
                 );
                 """
             )
@@ -383,6 +407,21 @@ class HubRegistry:
                     instance.avatar.color.value,
                 ),
             )
+            member = instance.factory
+            if member is not None:
+                connection.execute(
+                    """
+                    INSERT INTO factory_members (instance_id, factory, name, recipe, setup)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(instance.instance_id),
+                        member.factory,
+                        member.name,
+                        member.recipe,
+                        member.setup.model_dump_json(),
+                    ),
+                )
             self._insert_operation(
                 connection,
                 operation_id,
@@ -1175,6 +1214,10 @@ class HubRegistry:
                 """,
                 (str(instance_id),),
             ).fetchall()
+            member = connection.execute(
+                "SELECT factory, name, recipe, setup FROM factory_members WHERE instance_id = ?",
+                (str(instance_id),),
+            ).fetchone()
         if row is None:
             return None
         return ManagedInstance(
@@ -1214,6 +1257,16 @@ class HubRegistry:
                 Avatar(shape=AvatarShape(row[16]), color=AvatarColor(row[17]))
                 if row[16] is not None
                 else DEFAULT_AVATAR
+            ),
+            factory=(
+                FactoryMember(
+                    factory=member[0],
+                    name=member[1],
+                    recipe=member[2],
+                    setup=DeclaredSetup.model_validate_json(member[3]),
+                )
+                if member is not None
+                else None
             ),
         )
 
@@ -1267,6 +1320,22 @@ class HubRegistry:
                 ),
             ).fetchone()
         return self.operation(UUID(row[0])) if row is not None else None
+
+    def factory_members(self, factory: FactoryName) -> list[ManagedInstance]:
+        """The instances installed from this factory and not deleted, in creation order."""
+        with self._connect() as connection:
+            ids = [
+                UUID(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT instance_id FROM factory_members
+                    JOIN instances ON instances.id = factory_members.instance_id
+                    WHERE factory = ? AND intended_state != ? ORDER BY instances.rowid
+                    """,
+                    (factory, IntendedState.DELETED.value),
+                ).fetchall()
+            ]
+        return [record for instance_id in ids if (record := self.instance(instance_id)) is not None]
 
     def listed_instances(self, *, removed: bool = False) -> list[ManagedInstance]:
         """The active instances, or the removed ones whose records and storage the hub retains."""
