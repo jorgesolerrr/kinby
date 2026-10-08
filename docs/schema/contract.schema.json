@@ -87,6 +87,26 @@
       "title": "AdoptionHandoff",
       "type": "object"
     },
+    "AgentStepRun": {
+      "additionalProperties": false,
+      "description": "Run a turn on a new thread of the instance, with the prompt and the run's values.",
+      "properties": {
+        "kind": {
+          "const": "agent",
+          "default": "agent",
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt",
+        "kind"
+      ],
+      "title": "AgentStepRun",
+      "type": "object"
+    },
     "ApiUse": {
       "additionalProperties": false,
       "description": "The model calls the API usage source paid for, priced where the model is known.",
@@ -1349,6 +1369,35 @@
         "runs"
       ],
       "title": "FactoryRunListResult",
+      "type": "object"
+    },
+    "FactoryRunOrigin": {
+      "additionalProperties": false,
+      "description": "A step of a factory run, which started the turn as its agent step.",
+      "properties": {
+        "factory": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "kind": {
+          "const": "factory-run",
+          "default": "factory-run",
+          "type": "string"
+        },
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "step": {
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "factory",
+        "run_id",
+        "step",
+        "kind"
+      ],
+      "title": "FactoryRunOrigin",
       "type": "object"
     },
     "FactoryRunRetryCommand": {
@@ -5576,6 +5625,9 @@
           ],
           "default": null
         },
+        "origin": {
+          "$ref": "#/$defs/FactoryRunOrigin"
+        },
         "results": {
           "additionalProperties": {
             "$ref": "#/$defs/StepValue"
@@ -5588,12 +5640,16 @@
         "step": {
           "discriminator": {
             "mapping": {
+              "agent": "#/$defs/AgentStepRun",
               "code": "#/$defs/CodeStepRun",
               "command": "#/$defs/CommandStepRun"
             },
             "propertyName": "kind"
           },
           "oneOf": [
+            {
+              "$ref": "#/$defs/AgentStepRun"
+            },
             {
               "$ref": "#/$defs/CommandStepRun"
             },
@@ -5614,6 +5670,7 @@
       },
       "required": [
         "step",
+        "origin",
         "work_item"
       ],
       "title": "StepRunCommand",
@@ -6085,6 +6142,7 @@
         "origin": {
           "discriminator": {
             "mapping": {
+              "factory-run": "#/$defs/FactoryRunOrigin",
               "routine": "#/$defs/RoutineOrigin",
               "user": "#/$defs/UserOrigin"
             },
@@ -6096,6 +6154,9 @@
             },
             {
               "$ref": "#/$defs/RoutineOrigin"
+            },
+            {
+              "$ref": "#/$defs/FactoryRunOrigin"
             }
           ]
         },
@@ -6856,6 +6917,7 @@
             {
               "discriminator": {
                 "mapping": {
+                  "factory-run": "#/$defs/FactoryRunOrigin",
                   "routine": "#/$defs/RoutineOrigin",
                   "user": "#/$defs/UserOrigin"
                 },
@@ -6867,6 +6929,9 @@
                 },
                 {
                   "$ref": "#/$defs/RoutineOrigin"
+                },
+                {
+                  "$ref": "#/$defs/FactoryRunOrigin"
                 }
               ]
             },
@@ -7002,6 +7067,7 @@
         "origin": {
           "discriminator": {
             "mapping": {
+              "factory-run": "#/$defs/FactoryRunOrigin",
               "routine": "#/$defs/RoutineOrigin",
               "user": "#/$defs/UserOrigin"
             },
@@ -7013,6 +7079,9 @@
             },
             {
               "$ref": "#/$defs/RoutineOrigin"
+            },
+            {
+              "$ref": "#/$defs/FactoryRunOrigin"
             }
           ]
         },

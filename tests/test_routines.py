@@ -50,7 +50,7 @@ from kinby.core.pricing import price_map
 from kinby.core.scheduler import SchedulerConfig
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_metrics import turn_metrics
-from kinby.core.turn_runner import LangGraphRunner
+from kinby.core.turn_runner import ChatModel, LangGraphRunner
 from kinby.core.turns import ClosedTurnHook, Turns
 from kinby.core.usage import TimeRange, usage_totals
 from kinby.instance import Budgets, Instance, load_instance
@@ -344,7 +344,7 @@ class RoutineModel:
         )
 
 
-def signal_runtime(instance: Instance, model: RoutineModel) -> tuple[ScheduledDispatcher, EventLog]:
+def signal_runtime(instance: Instance, model: ChatModel) -> tuple[ScheduledDispatcher, EventLog]:
     log = EventLog(instance.manifest.state_dir)
     runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
     dispatcher = build_dispatcher(

@@ -129,6 +129,20 @@ describe("a thread's timeline", () => {
     expect(turn?.request).toBe("Summarize the night's email")
   })
 
+  it("names the factory and step that started a turn", () => {
+    const [turn] = replay([
+      "turn-1",
+      {
+        type: "turn.started",
+        message: "Review the branch.",
+        model: "claude",
+        origin: { kind: "factory-run", factory: "software", run_id: "run-1", step: "review" },
+      },
+    ]).turns
+
+    expect(turn?.startedBy).toEqual({ kind: "factory-run", factory: "software", step: "review" })
+  })
+
   describe("a turn's recap", () => {
     const completed: Payload = { type: "turn.completed", input_tokens: 90, output_tokens: 10 }
     const recapped = (node: string | null): Payload => ({

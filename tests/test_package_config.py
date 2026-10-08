@@ -1,11 +1,13 @@
 import asyncio
 import json
+from uuid import uuid4
 
 import pytest
 
 from kinby.cli import main
 from kinby.contracts import (
     CodeStepRun,
+    FactoryRunOrigin,
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
@@ -122,11 +124,17 @@ def test_an_invalid_value_fails_that_run_with_the_validator_message_and_path(
     assert not (path / "workspace" / "seen.json").exists()
 
 
-async def _fire_draft(instance):
+def _wired(instance) -> tuple[Turns, ThreadStore, EventLog]:
+    """The instance's turns over a model that is never called, with their store and log."""
     log = EventLog(instance.manifest.state_dir)
     store = ThreadStore(instance.manifest.state_dir)
     runner = LangGraphRunner(instance, event_log=log, model_factory=_no_model)
     turns = Turns(store, log, runner, runner.prepare_for_turn, runner.permission_ceiling, _no_recap)
+    return turns, store, log
+
+
+async def _fire_draft(instance):
+    turns, store, log = _wired(instance)
     thread = store.create(None)
     await turns.wake(
         thread.id,
@@ -203,9 +211,14 @@ def test_a_factory_code_step_receives_the_validated_config(writer, tmp_path, cap
         "    (context.workspace / 'seen.json').write_text(json.dumps(seen))\n",
         encoding="utf-8",
     )
-    command = StepRunCommand(step=CodeStepRun(call="record"), work_item={})
+    command = StepRunCommand(
+        step=CodeStepRun(call="record"),
+        origin=FactoryRunOrigin(factory="checks", run_id=uuid4(), step="record"),
+        work_item={},
+    )
+    instance = load_instance(path)
 
-    result = asyncio.run(run_step(command, load_instance(path)))
+    result = asyncio.run(run_step(command, instance, _wired(instance)[0]))
 
     assert result.ending is StepEnding.CLEAN
     assert _seen(path) == {"tone": "plain", "token": "EDITOR_TOKEN"}

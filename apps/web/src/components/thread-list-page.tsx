@@ -306,5 +306,12 @@ function ThreadTable({
 }
 
 function originName(origin: ThreadSummary["origin"]): string {
-  return origin.kind === "user" ? "You" : origin.name
+  switch (origin.kind) {
+    case "user":
+      return "You"
+    case "routine":
+      return origin.name
+    case "factory-run":
+      return `${origin.factory} · ${origin.step}`
+  }
 }

@@ -22,6 +22,7 @@ from kinby.contracts import (
     INSTANCE_LIST,
     INSTANCE_START,
     INTAKE_SCOPES,
+    AgentStepRun,
     CodeStepRun,
     CommandStepRun,
     ErrorCode,
@@ -36,6 +37,7 @@ from kinby.contracts import (
     FactoryRunIntakeCommand,
     FactoryRunListCommand,
     FactoryRunListResult,
+    FactoryRunOrigin,
     FactoryRunRetryCommand,
     FactoryRunSendBackCommand,
     FactoryRunStatus,
@@ -200,6 +202,7 @@ def test_an_intake_hands_a_work_item_to_a_one_step_factory_that_runs_to_done(tmp
         [(endpoint, command)] = control.steps
         assert command == StepRunCommand(
             step=CommandStepRun(run=["uv run pytest", "uv run ruff check ."], timeout_seconds=600),
+            origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="test"),
             work_item={"issue": 7},
         )
         assert endpoint.token == instance_environment(hub, coder)["KINBY_CONTROL_TOKEN"]
@@ -508,10 +511,14 @@ def test_the_hub_hands_each_step_its_hook_and_the_values_earlier_steps_recorded(
             StepRunCommand(
                 step=CommandStepRun(run=["make implement"]),
                 hook="record_branch",
+                origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="implement"),
                 work_item={"issue": 7},
             ),
             StepRunCommand(
-                step=CodeStepRun(call="open_pull_request"), work_item={"issue": 7}, results=BRANCH
+                step=CodeStepRun(call="open_pull_request"),
+                origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="open-pr"),
+                work_item={"issue": 7},
+                results=BRANCH,
             ),
         ]
         assert [attempt.values for attempt in finished.attempts] == [BRANCH, {"pr": 42}]
@@ -836,6 +843,29 @@ steps:
     prompt: prompts/implement.md
     hook: record_branch
 """
+
+
+def test_the_hub_sends_an_agent_step_its_prompt_and_names_its_run_and_step(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    files = FILES | {"factory.yaml": AGENT, "prompts/implement.md": "Implement it.\n"}
+    hub = factory_hub(tmp_path / "hub", control, runtime, files)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        [(_, command)] = control.steps
+        assert command == StepRunCommand(
+            step=AgentStepRun(prompt="Implement it.\n"),
+            hook="record_branch",
+            origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="implement"),
+            work_item={"issue": 7},
+        )
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(("retry", "attempts"), [("", 2), ("    retry: 0\n", 1)])
