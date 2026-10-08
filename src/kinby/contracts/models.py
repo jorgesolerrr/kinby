@@ -2020,3 +2020,65 @@ class ProfileResult(ContractModel):
     hash: FileHash
     #: About how many tokens the text takes in a prompt: a quarter of its characters, rounded up.
     tokens: int
+
+
+#: A factory's name, which is also its folder's name on the hub.
+type FactoryName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
+
+
+class FactorySource(StrEnum):
+    """Where the factory the hub serves under a name comes from."""
+
+    #: The hub's own factories directory: one written over the contract, or a customized copy.
+    HUB = "hub"
+    #: kinby's source. Read-only on the hub; an edit copies it into the hub's factories.
+    SHIPPED = "shipped"
+
+
+class FactoryListCommand(ContractModel):
+    pass
+
+
+class FactorySummary(ContractModel):
+    name: FactoryName
+    source: FactorySource
+
+
+class FactoryListResult(ContractModel):
+    #: By name. A hub factory hides the shipped factory it customizes.
+    factories: list[FactorySummary]
+
+
+class FactoryGetCommand(ContractModel):
+    name: FactoryName
+
+
+class FactoryResult(ContractModel):
+    name: FactoryName
+    source: FactorySource
+    #: Every file of the factory's folder, by its path in the folder.
+    files: dict[str, str]
+    #: The hash of the factory's folder: every file's path and bytes.
+    hash: FileHash
+
+
+class FactoryCheckCommand(ContractModel):
+    name: FactoryName
+
+
+class FactoryCheckResult(ContractModel):
+    #: One message per problem the factory check found. Empty when the factory passes.
+    problems: list[str]
+
+
+class FactoryEditCommand(ContractModel):
+    """Write files of a factory's folder at once. The hub keeps them only if the check passes.
+
+    A shipped factory is never written: the edit lands on its copy in the hub's factories.
+    """
+
+    name: FactoryName
+    #: The content of each file to write, by its path in the factory's folder.
+    files: dict[str, str]
+    #: The hash the client read, or null to create a factory no source has yet.
+    hash: FileHash | None

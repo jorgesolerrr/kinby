@@ -8,6 +8,11 @@
 export type ClientFrame = CallFrame | SubscribeFrame | CancelFrame;
 export type JsonValue = unknown;
 export type ConfigActor = "app" | "agent" | "failure_policy";
+export type FactoryName = string;
+/**
+ * Where the factory the hub serves under a name comes from.
+ */
+export type FactorySource = "hub" | "shipped";
 export type CommitSha = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
@@ -151,6 +156,22 @@ export interface Contract {
     "config.history": {
       command: ConfigHistoryCommand;
       result: ConfigHistoryResult;
+    };
+    "factory.check": {
+      command: FactoryCheckCommand;
+      result: FactoryCheckResult;
+    };
+    "factory.edit": {
+      command: FactoryEditCommand;
+      result: FactoryResult;
+    };
+    "factory.get": {
+      command: FactoryGetCommand;
+      result: FactoryResult;
+    };
+    "factory.list": {
+      command: FactoryListCommand;
+      result: FactoryListResult;
     };
     "image.prepare": {
       command: ImagePrepareCommand;
@@ -471,6 +492,43 @@ export interface ConfigChange {
   hash?: string | null;
   thread_id?: string | null;
   turn_id?: string | null;
+}
+export interface FactoryCheckCommand {
+  name: FactoryName;
+}
+export interface FactoryCheckResult {
+  problems: string[];
+}
+/**
+ * Write files of a factory's folder at once. The hub keeps them only if the check passes.
+ *
+ * A shipped factory is never written: the edit lands on its copy in the hub's factories.
+ */
+export interface FactoryEditCommand {
+  files: {
+    [k: string]: string;
+  };
+  hash: string | null;
+  name: FactoryName;
+}
+export interface FactoryResult {
+  files: {
+    [k: string]: string;
+  };
+  hash: string;
+  name: FactoryName;
+  source: FactorySource;
+}
+export interface FactoryGetCommand {
+  name: FactoryName;
+}
+export interface FactoryListCommand {}
+export interface FactoryListResult {
+  factories: FactorySummary[];
+}
+export interface FactorySummary {
+  name: FactoryName;
+  source: FactorySource;
 }
 /**
  * Prepare a package selection's image. No package prepares kinby's base image.

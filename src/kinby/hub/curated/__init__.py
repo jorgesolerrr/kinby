@@ -1,8 +1,8 @@
 """The curated list: the packages kinby offers when creating an instance.
 
-Each entry is a `<name>.toml` file here, next to its image recipe `<name>.Dockerfile`. The entry
-pins one full commit of the package's repository, so a pin moves by editing the entry, and the
-hub never fetches from that repository (ADR 0061).
+Each entry is a `<name>.toml` file here, and its image recipe is the shipped recipe
+`<name>.Dockerfile`. The entry pins one full commit of the package's repository, so a pin moves
+by editing the entry, and the hub never fetches from that repository (ADR 0061).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
 from kinby.contracts import CuratedPackage, PackageCommit, PackageSelection
+from kinby.factories import RECIPES_DIRECTORY
 
 CURATED_DIRECTORY = Path(__file__).parent
 
@@ -39,9 +40,12 @@ class CuratedEntry:
     recipe: str
 
 
-def curated_list(directory: Path = CURATED_DIRECTORY) -> tuple[CuratedEntry, ...]:
+def curated_list(
+    directory: Path = CURATED_DIRECTORY,
+    recipes: Path = RECIPES_DIRECTORY,
+) -> tuple[CuratedEntry, ...]:
     """Every entry in the directory, in file name order. A malformed entry raises."""
-    return tuple(_entry(path) for path in sorted(directory.glob("*.toml")))
+    return tuple(_entry(path, recipes) for path in sorted(directory.glob("*.toml")))
 
 
 def with_recipe(
@@ -55,7 +59,7 @@ def with_recipe(
     return package
 
 
-def _entry(path: Path) -> CuratedEntry:
+def _entry(path: Path, recipes: Path) -> CuratedEntry:
     try:
         declared = _ENTRY_FILE.validate_python(tomllib.loads(path.read_text(encoding="utf-8")))
     except (tomllib.TOMLDecodeError, ValidationError) as exc:
@@ -72,7 +76,7 @@ def _entry(path: Path) -> CuratedEntry:
                 version=declared.source,
             ),
         ),
-        recipe=path.with_suffix(".Dockerfile").read_text(encoding="utf-8"),
+        recipe=(recipes / f"{path.stem}.Dockerfile").read_text(encoding="utf-8"),
     )
 
 

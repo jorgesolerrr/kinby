@@ -57,6 +57,22 @@ class StaleWrite(CoreError):
     code = ErrorCode.STALE
 
 
+class FactoryNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
+class FactoryCheckFailed(CoreError):
+    """An edit failed the factory check, so the hub kept the factory it had."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+    def __init__(self, problems: tuple[str, ...]) -> None:
+        super().__init__(
+            "The factory check failed, so nothing changed:\n"
+            + "\n".join(f"- {problem}" for problem in problems)
+        )
+
+
 class PackageConfigNotFound(CoreError):
     """The instance runs no package, or its package declares no config."""
 

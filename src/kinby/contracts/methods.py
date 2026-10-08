@@ -11,6 +11,13 @@ from kinby.contracts.models import (
     ConfigHistoryResult,
     ContractModel,
     Event,
+    FactoryCheckCommand,
+    FactoryCheckResult,
+    FactoryEditCommand,
+    FactoryGetCommand,
+    FactoryListCommand,
+    FactoryListResult,
+    FactoryResult,
     ImagePrepareCommand,
     ImagePrepareResult,
     InstanceAdoptCommand,
@@ -319,6 +326,10 @@ PACKAGE_DESCRIBE = Method(
     "package.describe", Scope.HUB_READ, PackageDescribeCommand, PackageDescription
 )
 PACKAGE_LIST = Method("package.list", Scope.HUB_READ, PackageListCommand, PackageListResult)
+FACTORY_LIST = Method("factory.list", Scope.HUB_READ, FactoryListCommand, FactoryListResult)
+FACTORY_GET = Method("factory.get", Scope.HUB_READ, FactoryGetCommand, FactoryResult)
+FACTORY_EDIT = Method("factory.edit", Scope.HUB_ADMIN, FactoryEditCommand, FactoryResult)
+FACTORY_CHECK = Method("factory.check", Scope.HUB_READ, FactoryCheckCommand, FactoryCheckResult)
 #: The same time range and bucket size as stats.get, asked of every running instance.
 STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
 
@@ -391,6 +402,10 @@ METHODS = (
     IMAGE_PREPARE,
     PACKAGE_DESCRIBE,
     PACKAGE_LIST,
+    FACTORY_LIST,
+    FACTORY_GET,
+    FACTORY_CHECK,
+    FACTORY_EDIT,
     STATS_SUMMARY,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE,)

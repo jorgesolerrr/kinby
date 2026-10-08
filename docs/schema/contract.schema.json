@@ -852,6 +852,160 @@
       "title": "Event",
       "type": "object"
     },
+    "FactoryCheckCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "FactoryCheckCommand",
+      "type": "object"
+    },
+    "FactoryCheckResult": {
+      "additionalProperties": false,
+      "properties": {
+        "problems": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "problems"
+      ],
+      "title": "FactoryCheckResult",
+      "type": "object"
+    },
+    "FactoryEditCommand": {
+      "additionalProperties": false,
+      "description": "Write files of a factory's folder at once. The hub keeps them only if the check passes.\n\nA shipped factory is never written: the edit lands on its copy in the hub's factories.",
+      "properties": {
+        "files": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        }
+      },
+      "required": [
+        "name",
+        "files",
+        "hash"
+      ],
+      "title": "FactoryEditCommand",
+      "type": "object"
+    },
+    "FactoryGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "FactoryGetCommand",
+      "type": "object"
+    },
+    "FactoryListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "FactoryListCommand",
+      "type": "object"
+    },
+    "FactoryListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "factories": {
+          "items": {
+            "$ref": "#/$defs/FactorySummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "factories"
+      ],
+      "title": "FactoryListResult",
+      "type": "object"
+    },
+    "FactoryName": {
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "type": "string"
+    },
+    "FactoryResult": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "source": {
+          "$ref": "#/$defs/FactorySource"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "files",
+        "hash"
+      ],
+      "title": "FactoryResult",
+      "type": "object"
+    },
+    "FactorySource": {
+      "description": "Where the factory the hub serves under a name comes from.",
+      "enum": [
+        "hub",
+        "shipped"
+      ],
+      "title": "FactorySource",
+      "type": "string"
+    },
+    "FactorySummary": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "source": {
+          "$ref": "#/$defs/FactorySource"
+        }
+      },
+      "required": [
+        "name",
+        "source"
+      ],
+      "title": "FactorySummary",
+      "type": "object"
+    },
     "FeedbackPolicy": {
       "description": "When kinby asks the user to rate a completed turn.",
       "enum": [
@@ -6489,6 +6643,70 @@
           ],
           "type": "object"
         },
+        "factory.check": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryCheckCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryCheckResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.edit": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryEditCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "image.prepare": {
           "additionalProperties": false,
           "properties": {
@@ -7647,6 +7865,10 @@
         "image.prepare",
         "package.describe",
         "package.list",
+        "factory.list",
+        "factory.get",
+        "factory.check",
+        "factory.edit",
         "stats.summary"
       ],
       "type": "object"

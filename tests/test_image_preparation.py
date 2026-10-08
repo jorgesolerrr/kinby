@@ -20,8 +20,8 @@ from kinby.contracts import (
     StorageItem,
     StorageKind,
 )
+from kinby.factories import RECIPES_DIRECTORY
 from kinby.hub import BuildResult, Hub, HubRegistry, ImagePreparer, ImageSelection
-from kinby.hub.curated import CURATED_DIRECTORY
 from kinby.hub.images import GitFailed, RevisionNotFound
 from kinby.packages import InstalledPackage, PackageDescriptor, vanilla_description
 from tests.test_hub import FakeRuntime, hub_client
@@ -552,7 +552,7 @@ def test_a_curated_selection_builds_with_its_entry_recipe_once_and_reuses_it(tmp
 
         assert (first.state, again.state) == (OperationState.SUCCEEDED, OperationState.SUCCEEDED)
         assert len(backend.builds) == 1
-        recipe = (CURATED_DIRECTORY / "coder.Dockerfile").read_text(encoding="utf-8")
+        recipe = (RECIPES_DIRECTORY / "coder.Dockerfile").read_text(encoding="utf-8")
         assert isinstance(coder.selection.version, PackageCommit)
         install = f"git+{coder.selection.version.url}@{coder.selection.version.sha}"
         dockerfile = backend.dockerfiles[0]

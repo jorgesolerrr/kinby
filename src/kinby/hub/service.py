@@ -17,6 +17,10 @@ from uuid import UUID, uuid4
 from dotenv import dotenv_values
 
 from kinby.contracts import (
+    FACTORY_CHECK,
+    FACTORY_EDIT,
+    FACTORY_GET,
+    FACTORY_LIST,
     IMAGE_PREPARE,
     INSTANCE_ADOPT,
     INSTANCE_ADOPT_PREVIEW,
@@ -108,6 +112,7 @@ from kinby.core.errors import (
     PackagePinRefused,
     SelectionNotPrepared,
 )
+from kinby.factories import SHIPPED_FACTORIES
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
 from kinby.hub.control import (
@@ -119,6 +124,7 @@ from kinby.hub.control import (
     InstanceControl,
 )
 from kinby.hub.curated import curated_list, with_recipe
+from kinby.hub.factories import FactoryStore
 from kinby.hub.models import (
     ContainerRuntime,
     ImagePreparation,
@@ -346,6 +352,7 @@ class Hub:
         images: ImagePreparation,
         control: InstanceControl | None = None,
         docker_host_directory: Path | None = None,
+        shipped_factories: Path = SHIPPED_FACTORIES,
     ) -> None:
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -364,6 +371,7 @@ class Hub:
             self._runtime = runtime
             self._images = images
             self._curated = curated_list()
+            self.factories = FactoryStore(self.directory / "factories", shipped_factories)
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._stopping: dict[UUID, PendingStop] = {}
@@ -389,6 +397,10 @@ class Hub:
             self.dispatcher.register(IMAGE_PREPARE, self.prepare_image)
             self.dispatcher.register(PACKAGE_DESCRIBE, self.describe_package)
             self.dispatcher.register(PACKAGE_LIST, self.list_packages)
+            self.dispatcher.register(FACTORY_LIST, self.factories.list)
+            self.dispatcher.register(FACTORY_GET, self.factories.get)
+            self.dispatcher.register(FACTORY_CHECK, self.factories.check)
+            self.dispatcher.register(FACTORY_EDIT, self.factories.edit)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
         except BaseException:
             self._directory_lock.close()
