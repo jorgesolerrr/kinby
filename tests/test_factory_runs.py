@@ -56,6 +56,7 @@ from kinby.contracts import (
     TurnFailed,
 )
 from kinby.hub import Hub
+from kinby.hub.registry import HubRegistry
 from kinby.plugins.intake import intake_tools
 from tests.test_hub import (
     FakeControl,
@@ -481,6 +482,81 @@ def test_a_needs_human_report_queued_but_not_delivered_is_sent_after_a_restart(t
         again.close()
 
     asyncio.run(after_the_second_restart())
+
+
+def test_an_attempt_that_needs_a_human_once_settled_on_resume_is_reported_only_once(tmp_path):
+    """Recovery already queues the report for a run its own settling sends to needs_human.
+
+    The pass over runs left unreported from before the restart must not queue a second one for
+    that same run: resume() has to collect that pass before it settles any unfinished attempt.
+    """
+    control = FakeControl()
+    control.step_release.clear()
+    runtime = FakeRuntime()
+    directory = tmp_path / "hub"
+    hub = factory_hub(directory, control, runtime, NEEDS_HUMAN_FILES)
+
+    async def before_the_restart() -> UUID:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        async with asyncio.timeout(5):
+            while not control.steps:
+                await asyncio.sleep(0.01)
+        return run.run_id
+
+    run_id = asyncio.run(before_the_restart())
+    hub.close()
+    control.step_release.set()
+    restarted = Hub(
+        directory,
+        runtime=runtime,
+        images=FakeImages(),
+        control=control,
+        shipped_factories=directory / "shipped",
+    )
+
+    async def after_the_restart() -> None:
+        await restarted.recover()
+        stopped = await settled(restarted, run_id)
+        assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
+        await asyncio.sleep(0.05)
+        reports = [
+            command
+            for _, command in control.steps
+            if isinstance(command.step, CodeStepRun) and command.step.call == "notify_human"
+        ]
+        assert len(reports) == 1
+        restarted.close()
+
+    asyncio.run(after_the_restart())
+
+
+def test_a_reports_delivery_only_marks_reported_its_own_stop(tmp_path):
+    """A report that completes late never marks a fresher, still-undelivered stop as reported.
+
+    The user can retry while a run's needs_human report is still in flight. If that retry fails
+    again before the report completes, the late report must not clear the new stop's flag.
+    """
+    registry = HubRegistry(tmp_path / "hub")
+    run, _ = registry.open_run("checks", {"issue": 7}, "test")
+
+    registry.begin_attempt(run.run_id, "test")
+    registry.end_attempt(run.run_id, StepResult(ending=StepEnding.FAILED, summary="first failure"))
+    registry.move_run(run.run_id, FactoryRunStatus.NEEDS_HUMAN, "test")
+    stale_generation = registry.stop_generation(run.run_id)
+    assert registry.unreported_runs() == [registry.run(run.run_id)]
+
+    registry.restart_run(run.run_id, "test")
+    registry.begin_attempt(run.run_id, "test")
+    registry.end_attempt(run.run_id, StepResult(ending=StepEnding.FAILED, summary="second failure"))
+    registry.move_run(run.run_id, FactoryRunStatus.NEEDS_HUMAN, "test")
+
+    # The first report, for the stop the retry already left behind, finally completes.
+    registry.mark_reported(run.run_id, stale_generation)
+    assert registry.unreported_runs() == [registry.run(run.run_id)]
+
+    registry.mark_reported(run.run_id, registry.stop_generation(run.run_id))
+    assert registry.unreported_runs() == []
 
 
 def test_the_intake_routines_tool_hands_its_work_item_to_the_hub_over_its_own_route(

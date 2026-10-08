@@ -114,11 +114,13 @@ class _QueuedStep:
 class _QueuedReport:
     """The factory's needs_human call for a run that stopped, waiting for its instance.
 
-    It is no step of the run, so it records no attempt.
+    It is no step of the run, so it records no attempt. *generation* ties it to the stop that
+    queued it, so delivering it marks only that stop reported, not a later one.
     """
 
     run_id: UUID
     command: StepRunCommand
+    generation: int
 
 
 class FactoryRuns:
@@ -263,7 +265,12 @@ class FactoryRuns:
         An attempt it left running counts as failed, and its run follows the step's retry. A run
         parked at a wait keeps its deadline, counted from when it parked. A needs_human report
         queued but not delivered before the hub stopped is queued again.
+
+        The runs still unreported from before this pass are collected first, so settling an
+        unfinished attempt into needs_human below, which queues that fresh stop's own report,
+        never queues a second one for the same stop.
         """
+        pending = self._registry.unreported_runs()
         for run_id in self._registry.unfinished_attempts():
             self._settle(run_id, _INTERRUPTED)
         for run in self._registry.runs_in(FactoryRunStatus.QUEUED):
@@ -275,7 +282,7 @@ class FactoryRuns:
             )
             if isinstance(step, WaitStep):
                 self._arm(run.run_id, step, self._registry.attempts(run.run_id)[-1].started_at)
-        for run in self._registry.unreported_runs():
+        for run in pending:
             factory = self._factory(run.factory)
             if factory is not None and factory.needs_human is not None:
                 attempts = self._registry.attempts(run.run_id)
@@ -498,10 +505,10 @@ class FactoryRuns:
                 case _QueuedStep(run_id=run_id, step=step, command=command):
                     self._publish(self._registry.begin_attempt(run_id, step))
                     self._advance(run_id, await self._run_step(instance_id, command))
-                case _QueuedReport(run_id=run_id, command=command):
+                case _QueuedReport(run_id=run_id, command=command, generation=generation):
                     reported = await self._run_step(instance_id, command)
                     if reported.ending is StepEnding.CLEAN:
-                        self._registry.mark_reported(run_id)
+                        self._registry.mark_reported(run_id, generation)
                     else:
                         _logger.warning(
                             "The needs_human call for factory run %s failed: %s",
@@ -602,7 +609,8 @@ class FactoryRuns:
             work_item=run.work_item,
             results=self._results(run.run_id, factory),
         )
-        self._queue(instance_id).put_nowait(_QueuedReport(run.run_id, command))
+        generation = self._registry.stop_generation(run.run_id)
+        self._queue(instance_id).put_nowait(_QueuedReport(run.run_id, command, generation))
 
     def _factory(self, name: FactoryName) -> FactoryFile | None:
         """The factory's file as the hub keeps it, or None once the factory is gone."""

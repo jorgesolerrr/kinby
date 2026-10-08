@@ -245,6 +245,9 @@ class HubRegistry:
                     # Whether the run's needs_human report was delivered. Reset each time the
                     # run moves to needs_human, so a restart resends only an undelivered report.
                     "reported": "INTEGER NOT NULL DEFAULT 0",
+                    # Bumped each time the run moves to needs_human, so a report still in
+                    # flight for an earlier stop can never mark a later stop as reported.
+                    "stop_generation": "INTEGER NOT NULL DEFAULT 0",
                 },
             )
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
@@ -1512,13 +1515,16 @@ class HubRegistry:
     def move_run(self, run_id: UUID, status: FactoryRunStatus, step: StepId | None) -> FactoryRun:
         """Put the run in *status* at *step*.
 
-        Moving into needs_human resets its reported flag, so this fresh stop gets its own report.
+        Moving into needs_human resets its reported flag and bumps its stop generation, so this
+        fresh stop gets its own report and an earlier stop's report can no longer claim it.
         """
         with self._connect() as connection:
             if status is FactoryRunStatus.NEEDS_HUMAN:
                 connection.execute(
                     """
-                    UPDATE factory_runs SET status = ?, step = ?, updated_at = ?, reported = 0
+                    UPDATE factory_runs
+                    SET status = ?, step = ?, updated_at = ?, reported = 0,
+                        stop_generation = stop_generation + 1
                     WHERE id = ?
                     """,
                     (status.value, step, _now(), str(run_id)),
@@ -1530,10 +1536,25 @@ class HubRegistry:
                 )
         return self._existing_run(run_id)
 
-    def mark_reported(self, run_id: UUID) -> None:
-        """Record that the run's needs_human report was delivered, so a restart won't resend it."""
+    def stop_generation(self, run_id: UUID) -> int:
+        """How many times the run has moved to needs_human, to tie a report to that stop."""
         with self._connect() as connection:
-            connection.execute("UPDATE factory_runs SET reported = 1 WHERE id = ?", (str(run_id),))
+            row = connection.execute(
+                "SELECT stop_generation FROM factory_runs WHERE id = ?", (str(run_id),)
+            ).fetchone()
+        return row[0] if row is not None else 0
+
+    def mark_reported(self, run_id: UUID, generation: int) -> None:
+        """Record that the run's needs_human report for *generation* was delivered.
+
+        A later stop already bumped the generation past it, so this leaves that fresher stop's
+        reported flag untouched: a report still in flight for an earlier stop can't claim it.
+        """
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE factory_runs SET reported = 1 WHERE id = ? AND stop_generation = ?",
+                (str(run_id), generation),
+            )
 
     def unreported_runs(self) -> list[FactoryRun]:
         """The needs_human runs whose report was not yet delivered, in the order they stopped."""
