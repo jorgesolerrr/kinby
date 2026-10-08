@@ -235,7 +235,7 @@ def test_the_software_factory_carries_an_issue_from_intake_to_a_pull_request_it_
         assert answer.step == ClientStepRun(
             client=CodingClient.CLAUDE,
             prompt=(SHIPPED_FACTORIES / "software" / "prompts" / "answer.md").read_text(),
-            timeout_seconds=15 * 60,
+            timeout_seconds=60 * 60,
         )
         assert answer.hook == "check_answers"
         assert isinstance(checks.step, CommandStepRun)

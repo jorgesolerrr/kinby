@@ -116,7 +116,7 @@ steps:
     hook: check_answers
     requires: [branch, base]
     results: { replies: str }
-    timeout: 15m
+    timeout: 60m
   # The checks of a Python repository on uv. Replace them with your repository's. Other runs'
   # steps share the workspace, so the first command puts it back on this run's branch.
   - id: checks
