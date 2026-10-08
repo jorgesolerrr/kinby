@@ -612,7 +612,7 @@ _Avoid_: workflow, package, pipeline (for the concept)
 
 ### Step
 
-One stage of a **factory**: a task done by an **instance**'s turn, a **coding client** run inside an instance, or deterministic code. It ends with a **step result**.
+One stage of a **factory**: a task done by an **instance**'s turn, a **coding client** run inside an instance, or deterministic code, or a wait on a **signal** or on the user's approval. A wait or an approval parks the run, which holds no instance until the signal, a deadline or the user moves it on. It ends with a **step result**.
 
 ### Work item
 

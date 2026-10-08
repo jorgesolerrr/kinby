@@ -198,6 +198,10 @@ export interface Contract {
       command: FactoryRemoveCommand;
       result: FactoryRemoveResult;
     };
+    "factory.run.approve": {
+      command: FactoryRunApproveCommand;
+      result: FactoryRun;
+    };
     "factory.run.cancel": {
       command: FactoryRunCancelCommand;
       result: FactoryRun;
@@ -676,9 +680,9 @@ export interface FactoryRemoveResult {
   };
 }
 /**
- * End a run that needs a human where it stopped, keeping everything it did.
+ * Approve a run parked at an approve step, which moves it on as the step's next outcome.
  */
-export interface FactoryRunCancelCommand {
+export interface FactoryRunApproveCommand {
   run_id: string;
 }
 /**
@@ -694,6 +698,12 @@ export interface FactoryRun {
   work_item: {
     [k: string]: StepValue;
   };
+}
+/**
+ * End a run that needs a human where it stopped, keeping everything it did.
+ */
+export interface FactoryRunCancelCommand {
+  run_id: string;
 }
 export interface FactoryRunGetCommand {
   run_id: string;
@@ -743,7 +753,9 @@ export interface FactoryRunRetryCommand {
   run_id: string;
 }
 /**
- * Send a run that needs a human back to an earlier step, with its send-backs reset.
+ * Send a run that needs a human or awaits approval back to an earlier step.
+ *
+ * Its retries and send-backs count afresh.
  */
 export interface FactoryRunSendBackCommand {
   run_id: string;

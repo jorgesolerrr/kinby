@@ -1317,6 +1317,21 @@
       "title": "FactoryRun",
       "type": "object"
     },
+    "FactoryRunApproveCommand": {
+      "additionalProperties": false,
+      "description": "Approve a run parked at an approve step, which moves it on as the step's next outcome.",
+      "properties": {
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "FactoryRunApproveCommand",
+      "type": "object"
+    },
     "FactoryRunCancelCommand": {
       "additionalProperties": false,
       "description": "End a run that needs a human where it stopped, keeping everything it did.",
@@ -1476,7 +1491,7 @@
     },
     "FactoryRunSendBackCommand": {
       "additionalProperties": false,
-      "description": "Send a run that needs a human back to an earlier step, with its send-backs reset.",
+      "description": "Send a run that needs a human or awaits approval back to an earlier step.\n\nIts retries and send-backs count afresh.",
       "properties": {
         "run_id": {
           "format": "uuid",
@@ -7556,6 +7571,22 @@
           ],
           "type": "object"
         },
+        "factory.run.approve": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunApproveCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRun"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.run.cancel": {
           "additionalProperties": false,
           "properties": {
@@ -8839,6 +8870,7 @@
         "factory.run.get",
         "factory.run.retry",
         "factory.run.send_back",
+        "factory.run.approve",
         "factory.run.cancel",
         "stats.summary"
       ],

@@ -26,6 +26,7 @@ from kinby.contracts import (
     FACTORY_INSTALL,
     FACTORY_LIST,
     FACTORY_REMOVE,
+    FACTORY_RUN_APPROVE,
     FACTORY_RUN_CANCEL,
     FACTORY_RUN_GET,
     FACTORY_RUN_INTAKE,
@@ -160,6 +161,7 @@ from kinby.hub.models import (
     PreparedImage,
     RuntimeStatus,
     SetupSpec,
+    Signal,
     secrets_digest,
 )
 from kinby.hub.recovery import recover_lifecycle
@@ -474,6 +476,7 @@ class Hub:
             self.dispatcher.register(FACTORY_RUN_GET, self.runs.get)
             self.dispatcher.register(FACTORY_RUN_RETRY, self.runs.retry)
             self.dispatcher.register(FACTORY_RUN_SEND_BACK, self.runs.send_back)
+            self.dispatcher.register(FACTORY_RUN_APPROVE, self.runs.approve)
             self.dispatcher.register(FACTORY_RUN_CANCEL, self.runs.cancel)
             self.dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
@@ -2154,7 +2157,9 @@ class Hub:
         token = self._environment(record.path).get(CONTROL_TOKEN_VARIABLE)
         if address is None or not token:
             return InstanceUnreachable.UNAVAILABLE
-        return InstanceEndpoint(url=address, control_token=ControlToken(token))
+        return InstanceEndpoint(
+            instance_id=instance_id, url=address, control_token=ControlToken(token)
+        )
 
     async def signal_endpoint(self) -> InstanceEndpoint | InstanceUnreachable:
         """Reach the instance that kept the public webhook URL it was registered with."""
@@ -2162,6 +2167,10 @@ class Hub:
         if alias is None:
             return InstanceUnreachable.MISSING
         return await self.endpoint(alias)
+
+    def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
+        """Wake the parked waits of the instance's factory that the signal matches."""
+        self.runs.signal_accepted(instance_id, signal)
 
     async def stats_summary(self, command: StatsGetCommand) -> StatsSummaryResult:
         """Ask every instance at once, and keep none of the answers (ADR 0063)."""

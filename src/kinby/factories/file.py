@@ -7,6 +7,7 @@ These declarations are the factory file's JSON Schema, published as
 from __future__ import annotations
 
 import json
+import re
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
@@ -138,13 +139,32 @@ class CodeStep(_Step):
     call: ToolName
 
 
+#: Where a wait's filter reads a signal: ``routine``, the routine it came in on; ``headers.<Name>``,
+#: one of its headers; or ``body.<key>.<key>...``, a value of its JSON body.
+type SignalField = Annotated[
+    str, Field(pattern=r"^(routine|headers\.[A-Za-z0-9-]+|body(\.[^.]+)+)$")
+]
+#: A filter value ``{{name}}`` stands for the run's value of that name.
+_RUN_VALUE = re.compile(r"\{\{([a-z_][a-z0-9_]*)\}\}")
+
+
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class WaitStep(_Step):
-    """Park the run until a signal matches the filter, or the deadline passes."""
+    """Park the run until a signal matches the filter, or the deadline passes.
+
+    A signal matches when it carries every field of the filter, each of the same type and value.
+    A field the signal lacks never matches.
+    """
 
     kind: Literal["wait"]
-    signal: dict[str, str | int]
+    signal: dict[SignalField, str | int] = Field(min_length=1)
     deadline: Duration | None = None
+
+
+def run_value_name(expected: str | int) -> ValueName | None:
+    """The run value a filter value names as ``{{name}}``, or None for a literal value."""
+    named = _RUN_VALUE.fullmatch(expected) if isinstance(expected, str) else None
+    return named[1] if named is not None else None
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)

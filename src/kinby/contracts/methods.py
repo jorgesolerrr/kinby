@@ -25,6 +25,7 @@ from kinby.contracts.models import (
     FactoryRemoveResult,
     FactoryResult,
     FactoryRun,
+    FactoryRunApproveCommand,
     FactoryRunCancelCommand,
     FactoryRunDetail,
     FactoryRunGetCommand,
@@ -370,6 +371,9 @@ FACTORY_RUN_RETRY = Method("factory.run.retry", Scope.HUB_ADMIN, FactoryRunRetry
 FACTORY_RUN_SEND_BACK = Method(
     "factory.run.send_back", Scope.HUB_ADMIN, FactoryRunSendBackCommand, FactoryRun
 )
+FACTORY_RUN_APPROVE = Method(
+    "factory.run.approve", Scope.HUB_ADMIN, FactoryRunApproveCommand, FactoryRun
+)
 FACTORY_RUN_CANCEL = Method(
     "factory.run.cancel", Scope.HUB_ADMIN, FactoryRunCancelCommand, FactoryRun
 )
@@ -461,6 +465,7 @@ METHODS = (
     FACTORY_RUN_GET,
     FACTORY_RUN_RETRY,
     FACTORY_RUN_SEND_BACK,
+    FACTORY_RUN_APPROVE,
     FACTORY_RUN_CANCEL,
     STATS_SUMMARY,
 )
