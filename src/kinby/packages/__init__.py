@@ -404,12 +404,17 @@ def package_json(package: InstalledPackage) -> str:
 
 
 def readable_template_files(template: Path) -> dict[str, str]:
-    """Read the text files in an installed package template."""
+    """Read the text files in an installed package template.
+
+    Bytecode Python left beside a template's tools and hooks is not part of it.
+    """
     root = Path(template).resolve()
     return {
         path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
         for path in sorted(root.rglob("*"))
-        if path.is_file() and not path.is_symlink()
+        if path.is_file()
+        and not path.is_symlink()
+        and "__pycache__" not in path.relative_to(root).parts
     }
 
 

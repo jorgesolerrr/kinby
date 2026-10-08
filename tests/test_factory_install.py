@@ -197,6 +197,23 @@ def test_installing_a_factory_creates_each_instance_from_its_template(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_template_installs_past_the_bytecode_python_left_in_it(tmp_path):
+    hub = install_hub(tmp_path)
+    cache = tmp_path / "hub" / "factories" / "tickets" / "instances" / "coder" / "hooks"
+    (cache / "__pycache__").mkdir()
+    (cache / "__pycache__" / "record.cpython-314.pyc").write_bytes(b"\xcb\r\r\n\x00\xe7\xff")
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        accepted = await installed(client)
+
+        coder = hub.instances_directory / str(accepted.instances["coder"].instance_id)
+        assert (coder / "hooks" / "record.py").read_text() == HOOKS
+        assert not (coder / "hooks" / "__pycache__").exists()
+
+    asyncio.run(scenario())
+
+
 def test_each_template_asks_for_the_built_in_fields_first_then_its_own_and_its_logins(tmp_path):
     hub = install_hub(tmp_path, WITH_SETUP)
     client = hub_client(hub)
