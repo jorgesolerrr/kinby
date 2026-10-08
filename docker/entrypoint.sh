@@ -53,6 +53,7 @@ codex_home="${CODEX_HOME:-/root/.codex}"
 if [ -n "${workspace_path:-}" ] && command -v codex >/dev/null 2>&1; then
     python - "$workspace_path" "$codex_home" <<'PY'
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -82,6 +83,25 @@ codex_skills = workspace / ".agents" / "skills"
 if not codex_skills.exists() and not codex_skills.is_symlink():
     codex_skills.parent.mkdir(parents=True, exist_ok=True)
     codex_skills.symlink_to(Path("../.claude/skills"), target_is_directory=True)
+
+# The link is the container's, not the repository's: hide it from git status so the clone
+# stays clean, without touching the repository's own .gitignore.
+git_path = subprocess.run(
+    ["git", "rev-parse", "--git-path", "info/exclude"],
+    cwd=workspace,
+    capture_output=True,
+    text=True,
+    check=False,
+)
+if codex_skills.is_symlink() and git_path.returncode == 0:
+    exclude = workspace / git_path.stdout.strip()
+    pattern = "/.agents/skills"
+    text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    if pattern not in text.splitlines():
+        separator = "\n" if text and not text.endswith("\n") else ""
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with exclude.open("a", encoding="utf-8") as file:
+            file.write(f"{separator}{pattern}\n")
 PY
 fi
 

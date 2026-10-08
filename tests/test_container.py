@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -224,6 +225,56 @@ def test_entrypoint_clones_the_workspace_source_only_into_an_empty_workspace(
     finally:
         _allow_temp_mount_cleanup(image, mounts, "/instance")
         _docker("image", "rm", "--force", image, check=False)
+
+
+def test_entrypoint_shares_claude_skills_with_codex_without_dirtying_the_workspace(
+    tmp_path: Path,
+) -> None:
+    git = ["git", "-c", "user.name=seed", "-c", "user.email=seed@example.com"]
+    instance = tmp_path / "instance"
+    workspace = instance / "workspace"
+    skill = workspace / ".claude" / "skills" / "tdd" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("# tdd\n", encoding="utf-8")
+    subprocess.run([*git, "init", "--quiet", "--initial-branch=main"], cwd=workspace, check=True)
+    subprocess.run([*git, "add", "."], cwd=workspace, check=True)
+    subprocess.run([*git, "commit", "--quiet", "--message", "seed"], cwd=workspace, check=True)
+    (instance / "kinby.toml").write_text(
+        'id = "coder"\n[models]\nmain = "openai:gpt-5"\n', encoding="utf-8"
+    )
+    # Stand-ins for the image's Codex and kinby, so the entrypoint runs outside a container.
+    programs = tmp_path / "bin"
+    programs.mkdir()
+    for program in ("codex", "kinby"):
+        (programs / program).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (programs / program).chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": os.pathsep.join(
+            [str(programs), str(Path(sys.executable).parent), os.environ["PATH"]]
+        ),
+        "HOME": str(tmp_path / "home"),
+        "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
+        "KINBY_INSTANCE": str(instance),
+        "CODEX_HOME": str(tmp_path / "codex"),
+    }
+    entrypoint = ["sh", str(PROJECT_ROOT / "docker" / "entrypoint.sh")]
+
+    for _ in range(2):
+        subprocess.run(entrypoint, env=env, check=True, capture_output=True)
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    exclude = (workspace / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert (workspace / ".agents" / "skills" / "tdd" / "SKILL.md").is_file()
+    assert status.stdout == ""
+    assert exclude.splitlines().count("/.agents/skills") == 1
 
 
 def _compose(name: str) -> dict[str, object]:
