@@ -628,7 +628,7 @@ What a **step** hands on: a short summary plus the named values the **factory** 
 
 ### Step attempt
 
-One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or interrupted when the **hub** stopped while it ran. A failed or interrupted attempt is tried again under the step's retry; a timed-out one never is. After that the run is **needs human**.
+One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or interrupted when the **hub** stopped while it ran. A failed or interrupted attempt is tried again under the step's retry; a timed-out one never is. A step that declares where its failures go sends a failed attempt back there instead, with what failed. After that the run is **needs human**.
 
 ### Hook
 
@@ -662,6 +662,11 @@ One independent review of the current change against both the repository's stand
 ### Fix round
 
 One **babysitting** pass that asks the **coding client** to address every **actionable thread** trusted authors wrote, runs the repository checks, pushes the commit, and posts each **review reply**. A thread with any other author starts no fix round: it needs a human.
+
+### Check repair
+
+The **coding client**, resumed in the session that implemented the change, fixing what a failed repository check reported. The **software factory** sends a failed check back for repair a few times before the run is **needs human**.
+_Avoid_: fix round (that answers review threads)
 
 ### Babysitting
 
