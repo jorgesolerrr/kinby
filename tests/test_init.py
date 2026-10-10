@@ -128,6 +128,30 @@ def test_init_refuses_a_nonempty_directory_without_overwriting_it(tmp_path, caps
     assert {path.name: path.read_text(encoding="utf-8") for path in target.iterdir()} == existing
 
 
+def test_init_does_not_overwrite_a_destination_that_fills_during_writing(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    target = tmp_path / "alice"
+    target.mkdir()
+    marker = target / "SYSTEM.md"
+    write_starter = init_module._write_starter_tree
+
+    def contaminate(directory, model):
+        marker.write_text("keep this\n", encoding="utf-8")
+        write_starter(directory, model)
+
+    monkeypatch.setattr(init_module, "_write_starter_tree", contaminate)
+
+    exit_code = main(["init", str(target)])
+
+    assert exit_code == 1
+    assert marker.read_text(encoding="utf-8") == "keep this\n"
+    assert sorted(path.name for path in target.iterdir()) == ["SYSTEM.md"]
+    assert "not empty" in capsys.readouterr().err
+
+
 def test_init_writes_into_an_existing_empty_directory(tmp_path):
     target = tmp_path / "alice"
     target.mkdir()

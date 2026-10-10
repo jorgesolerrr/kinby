@@ -421,20 +421,17 @@ def init_instance(
         raise InstanceExistsError(f"instance already exists: {manifest}")
     if directory.is_dir() and any(directory.iterdir()):
         raise InstanceExistsError(f"instance directory is not empty: {directory}")
-    if package is None:
-        directory.mkdir(parents=True, exist_ok=True)
-        _write_starter_tree(directory, model)
-        return directory.resolve()
-
-    _validate_package_template(package, config)
+    if package is not None:
+        _validate_package_template(package, config)
     parent = directory.parent
     parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=parent, prefix=f".{directory.name}.creating-") as temporary:
         staging = Path(temporary) / directory.name
         staging.mkdir()
         _write_starter_tree(staging, model)
-        _copy_template(staging, package.files, referenced=_PACKAGE_REFERENCED_ROOTS)
-        _package_config(staging, package, config)
-        _package_manifest(staging, package, model=model, config=config)
+        if package is not None:
+            _copy_template(staging, package.files, referenced=_PACKAGE_REFERENCED_ROOTS)
+            _package_config(staging, package, config)
+            _package_manifest(staging, package, model=model, config=config)
         _publish_directory(staging, directory)
     return directory.resolve()
