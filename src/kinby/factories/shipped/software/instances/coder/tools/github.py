@@ -283,8 +283,8 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
         for check in checks
     ) or any(
         review["commit_id"] == head
-        and review["user"]["login"] != coder
-        and _trusted(review["user"]["login"], review["author_association"])
+        and (login := (review["user"] or {}).get("login", "ghost")) != coder
+        and _trusted(login, review["author_association"])
         for review in reviews
     )
     if not reviewed:
