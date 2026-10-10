@@ -1416,9 +1416,12 @@ def review_thread(
         "comments": {
             "nodes": [
                 {
-                    "author": {"login": author},
+                    "author": {
+                        "__typename": "Bot" if author.endswith("[bot]") else "User",
+                        "login": (login := author.removesuffix("[bot]")),
+                    },
                     "authorAssociation": association,
-                    "body": f"{author} says.",
+                    "body": f"{login} says.",
                 }
                 for author, association in comments
             ]
@@ -1428,7 +1431,12 @@ def review_thread(
 
 def submitted(author: str, association: str, commit: str = "head2") -> dict[str, object]:
     """A review as GitHub's REST API lists it."""
-    return {"user": {"login": author}, "author_association": association, "commit_id": commit}
+    kind = "Bot" if author.endswith("[bot]") else "User"
+    return {
+        "user": {"login": author, "type": kind},
+        "author_association": association,
+        "commit_id": commit,
+    }
 
 
 def check_run(status: str, app: str = "github-actions", conclusion: str = "success") -> dict:
@@ -1515,8 +1523,16 @@ def test_assess_labels_a_pull_request_a_trusted_reviewer_reviewed_on_its_head_me
         (("completed",), [submitted("stranger", "NONE")]),
         (("completed",), [submitted("coder", "OWNER")]),
         (("completed",), [{"user": None, "author_association": "NONE", "commit_id": "head2"}]),
+        (("completed",), [submitted("greptile-apps", "NONE")]),
     ],
-    ids=["check-running", "earlier-head", "untrusted-reviewer", "own-replies", "deleted-reviewer"],
+    ids=[
+        "check-running",
+        "earlier-head",
+        "untrusted-reviewer",
+        "own-replies",
+        "deleted-reviewer",
+        "user-named-as-an-app",
+    ],
 )
 def test_assess_waits_until_a_trusted_reviewer_reviews_the_head_and_no_check_runs(
     tmp_path, monkeypatch, checks, reviews
@@ -1624,7 +1640,7 @@ def test_assess_hands_a_fix_round_every_actionable_thread_trusted_authors_wrote(
         github,
         threads=[
             review_thread("T1", ("owner", "OWNER"), ("coder", "OWNER"), ("owner", "OWNER")),
-            review_thread("T2", ("greptile-apps", "NONE")),
+            review_thread("T2", ("greptile-apps[bot]", "NONE")),
             review_thread("T3", ("helper", "COLLABORATOR"), ("coder", "OWNER")),
             review_thread("T4", ("owner", "OWNER"), resolved=True),
             review_thread("T5", ("stranger", "NONE")),
@@ -1667,7 +1683,7 @@ def test_assess_answers_the_codex_review_app_like_a_trusted_reviewer(tmp_path, m
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(
         github,
-        threads=[review_thread("T1", ("chatgpt-codex-connector", "NONE"))],
+        threads=[review_thread("T1", ("chatgpt-codex-connector[bot]", "NONE"))],
         reviews=[submitted("chatgpt-codex-connector[bot]", "NONE")],
     )
     dispatcher, _ = signal_runtime(instance, RoutineModel())
@@ -1683,15 +1699,21 @@ def test_assess_answers_the_codex_review_app_like_a_trusted_reviewer(tmp_path, m
 
 
 @pytest.mark.parametrize(
-    "thread",
+    ("thread", "author"),
     [
-        review_thread("T5", ("stranger", "NONE")),
-        review_thread("T6", ("owner", "OWNER"), ("stranger", "CONTRIBUTOR"), ("owner", "OWNER")),
+        (review_thread("T5", ("stranger", "NONE")), "stranger"),
+        (
+            review_thread(
+                "T6", ("owner", "OWNER"), ("stranger", "CONTRIBUTOR"), ("owner", "OWNER")
+            ),
+            "stranger",
+        ),
+        (review_thread("T7", ("greptile-apps", "NONE")), "greptile-apps"),
     ],
-    ids=["wrote-it", "joined-it"],
+    ids=["wrote-it", "joined-it", "user-named-as-an-app"],
 )
 def test_feedback_from_an_untrusted_author_starts_no_fix_round_and_needs_a_human(
-    tmp_path, monkeypatch, thread
+    tmp_path, monkeypatch, thread, author
 ):
     instance = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
@@ -1704,7 +1726,7 @@ def test_feedback_from_an_untrusted_author_starts_no_fix_round_and_needs_a_human
         assert result.ending is StepEnding.FAILED
         assert result.summary == (
             'Tool "assess_pull_request" failed: UntrustedFeedback: '
-            "Review feedback from untrusted authors needs a human: stranger."
+            f"Review feedback from untrusted authors needs a human: {author}."
         )
         assert result.values == {}
         assert labelled(github) == []
