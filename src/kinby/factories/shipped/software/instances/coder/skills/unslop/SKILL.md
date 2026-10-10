@@ -1,6 +1,6 @@
 ---
 name: unslop
-description: Cut AI tells from any writing. Must always apply.
+description: Cut AI tells from prose a human will read. Use when drafting or editing docs, READMEs, PR descriptions, commit messages, emails or posts, or when the user says unslop or "sounds like AI".
 ---
 
 # Unslop
@@ -12,9 +12,11 @@ Edit text to remove AI patterns and add human voice.
 1. Scan for the patterns below.
 2. Rewrite. Preserve meaning, match intended tone.
 3. Add soul (see next section).
-4. Self-audit: "What makes this obviously AI generated?" Fix remaining tells.
+4. Re-scan against every pattern; done when a full pass finds none.
 
 ## Adding soul
+
+Only where the genre allows a voice (posts, essays, explanations); reference, how-to, commit messages and client emails stay dry.
 
 Removing patterns is half the job. Sterile, voiceless writing is just as obvious.
 
@@ -47,9 +49,9 @@ Removing patterns is half the job. Sterile, voiceless writing is just as obvious
 
 ### Style
 
-13. **Em dash overuse.** Avoid em dashes entirely. Use periods or commas only (no parentheses, no en dashes, no hyphen-as-dash substitutes). Em dashes are an AI tell, and reaching for parentheses instead just trades one tell for another. If a thought needs separation, end the sentence or use a comma.
+13. **Em dashes.** Replace every em dash with a period, a comma, or a colon before a list. Em dashes are an AI tell, and parentheses, en dashes or hyphen-as-dash substitutes just trade one tell for another.
 14. **Colon overuse.** Colons are fine before a list or example. Not as mid-sentence connectors. "If you're coming from traditional automation: instead of registering event handlers, you describe conditions" adds nothing with the colon. Rewrite to let the point stand on its own without comparison framing. "Describing when the scheduler should fire works best as plain English." Same meaning, no crutch punctuation.
-15. **Boldface overuse.** Don't bold every proper noun or acronym.
+15. **Boldface overuse.** Bold only the one term the reader must not miss.
 16. **Inline-header lists.** The tell is a bold label and colon that restates the line: "**Performance:** Performance improved...". Convert those to prose. A bold lead-in that ends in a period, names the item, and is followed by genuinely new detail ("**Schema in TypeScript.** Tables live in one file.") is fine, not a tell.
 17. **Title case headings.** Use sentence case.
 18. **Decorative emojis.** Remove from headings and bullets.

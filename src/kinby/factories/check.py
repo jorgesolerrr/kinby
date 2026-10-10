@@ -264,17 +264,23 @@ def _inputs(factory: FactoryFile) -> Iterator[str]:
 
 
 def _order(factory: FactoryFile) -> Iterator[str]:
-    """Step ids are unique, and work is only ever sent back to an earlier step."""
+    """Step ids are unique, work is only ever sent back to an earlier step, and a step whose
+    failures are sent back declares no retry."""
     earlier: set[str] = set()
     for step in factory.steps:
         if step.id in earlier:
             yield f'Step id "{step.id}" is used by more than one step.'
-        for outcome in step.outcomes.values():
+        for outcome in (*step.outcomes.values(), step.failed):
             if isinstance(outcome, SendBack) and outcome.back not in earlier:
                 yield (
                     f'Step "{step.id}" sends work back to "{outcome.back}", '
                     "which is not an earlier step."
                 )
+        if step.failed is not None and step.retry is not None:
+            yield (
+                f'Step "{step.id}" declares both retry and failed, but a failed attempt is sent '
+                "back, never tried again."
+            )
         earlier.add(step.id)
 
 

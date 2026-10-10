@@ -57,6 +57,7 @@ from kinby.core.errors import (
     RunNeedsNoHuman,
 )
 from kinby.factories.file import (
+    FAILURE,
     AgentStep,
     ApproveStep,
     ClientStep,
@@ -448,6 +449,8 @@ class FactoryRuns:
             prompt=prompt,
             resume=session,
             timeout_seconds=duration_seconds(step.timeout or _CLIENT_TIMEOUT),
+            model=step.model,
+            effort=step.effort,
         )
 
     def _session(self, run_id: UUID, step: StepId) -> CodingSessionId | None:
@@ -464,14 +467,15 @@ class FactoryRuns:
     def _results(
         self, run_id: UUID, factory: FactoryFile, starting: StepId | None = None
     ) -> dict[ValueName, StepValue]:
-        """The values the run's clean attempts recorded on its latest pass through the steps.
+        """The values the run's clean attempts, and its failures sent back, recorded on its latest
+        pass through the steps.
 
         A later value overrides an earlier one. An attempt at a step, like *starting* one, drops
         what that step and every step after it recorded before, so a run sent back holds no value
         from the pass it left, save what the step that sent it back recorded: those values go
         with the work to the step it went back to, as if that step's pass held them. Trying a
-        step again after an attempt at it that did not end clean drops nothing, since that
-        attempt recorded nothing, so a retry holds what the attempt before it held.
+        step again after an attempt at it that recorded nothing drops nothing, so a retry holds
+        what the attempt before it held.
         """
         order = {step.id: index for index, step in enumerate(factory.steps)}
         recorded: dict[ValueName, tuple[int, StepValue]] = {}
@@ -491,7 +495,7 @@ class FactoryRuns:
         for attempt in self._registry.attempts(run_id):
             start(attempt.step)
             last, retrying = None, attempt.step
-            if attempt.ending is StepEnding.CLEAN:
+            if attempt.ending is StepEnding.CLEAN or _failed_to(factory, attempt) is not None:
                 index = order.get(attempt.step, -1)
                 recorded |= {name: (index, value) for name, value in attempt.values.items()}
                 last, retrying = (index, attempt.values), None
@@ -564,8 +568,8 @@ class FactoryRuns:
         """End the run's open attempt with *result*, and move the run where the result sends it.
 
         A clean step goes where its outcome sends it, but fails when it records a value of
-        another type than it declares. A failed one is tried again while its retries last, and
-        leaves the run for a human after that.
+        another type than it declares. A failed one goes where the step sends its failures, or is
+        tried again while its retries last, and leaves the run for a human after that.
         """
         run = self._registry.run(run_id)
         if run is None or run.step is None:
@@ -741,8 +745,9 @@ def _settled(
 
     A clean result goes where its outcome sends it, and leaves the run for a human when it would
     send the work back along an edge more than that edge's max. One that names an outcome the
-    step does not declare fails. A failed result is tried again while the step's retries last,
-    and a timed-out one never is.
+    step does not declare fails. A failed result at a step that declares where its failures go
+    records what failed as ``failure`` and goes there, up to that edge's max. Any other failed
+    result is tried again while the step's retries last, and a timed-out one never is.
     """
     if result.ending is StepEnding.CLEAN:
         match _outcome(step, result.outcome):
@@ -762,6 +767,13 @@ def _settled(
                 result = _checked_done(factory, held, result)
                 if result.ending is StepEnding.CLEAN:
                     return result, FactoryRunStatus.DONE, None
+    if result.ending is StepEnding.FAILED and step.failed is not None:
+        result = result.model_copy(update={"values": {**result.values, FAILURE: result.summary}})
+        back, most = step.failed.back, step.failed.max
+        if tally.sent_back[step.id, back] >= most:
+            reason = f'Step "{step.id}" sent its failures back to "{back}" {most} times, its max.'
+            return _noted(result, reason), FactoryRunStatus.NEEDS_HUMAN, step.id
+        return result, FactoryRunStatus.QUEUED, back
     if result.ending is StepEnding.TIMED_OUT or tally.failures[step.id] >= _retries(step):
         return result, FactoryRunStatus.NEEDS_HUMAN, step.id
     return result, FactoryRunStatus.QUEUED, step.id
@@ -795,9 +807,17 @@ def _tally(factory: FactoryFile, attempts: Iterable[StepAttempt]) -> _Tally:
             outcome = _outcome(step, attempt.outcome) if step is not None else None
             if isinstance(outcome, SendBack):
                 tally.sent_back[attempt.step, outcome.back] += 1
+        elif (failed_to := _failed_to(factory, attempt)) is not None:
+            tally.sent_back[attempt.step, failed_to.back] += 1
         elif attempt.ending is not None:
             tally.failures[attempt.step] += 1
     return tally
+
+
+def _failed_to(factory: FactoryFile, attempt: StepAttempt) -> SendBack | None:
+    """Where a failed attempt sends the work, when its step declares where its failures go."""
+    step = _step(factory, attempt.step)
+    return step.failed if step is not None and attempt.ending is StepEnding.FAILED else None
 
 
 def _checked_done(

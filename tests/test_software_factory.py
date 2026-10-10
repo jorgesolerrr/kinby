@@ -45,6 +45,7 @@ from kinby.contracts import (
     InstanceStartCommand,
     LifecycleOperationResult,
     OperationState,
+    ReasoningEffort,
     Scope,
     StepEnding,
     StepResult,
@@ -155,6 +156,11 @@ IMPLEMENTED = StepResult(ending=StepEnding.CLEAN, summary="Added dark mode.", se
 #: The answer step before the pull request opens, with no review threads to answer yet.
 NOTHING_TO_ANSWER = StepResult(ending=StepEnding.CLEAN, summary="No review threads yet.")
 CHECKED = StepResult(ending=StepEnding.CLEAN, summary="Every command exited with code 0.")
+SET_UP = CHECKED
+#: The fix step when no check failed: it changes nothing.
+NOTHING_TO_FIX = StepResult(ending=StepEnding.CLEAN, summary="Nothing failed.", session="claude-1")
+#: Every step up to the pull request, the checks passing at the first try.
+CHECKED_CHANGE = [PREPARED, SET_UP, IMPLEMENTED, NOTHING_TO_ANSWER, NOTHING_TO_FIX, CHECKED]
 OPENED = StepResult(ending=StepEnding.CLEAN, values={"pr": 42})
 #: A fix round: the trusted review threads on the pull request, then their answers, pushed.
 THREADS = json.dumps(
@@ -173,7 +179,7 @@ FEEDBACK = StepResult(
 REPLIES = json.dumps({"T1": {"fixed": True, "reply": "Renamed it."}})
 ANSWERED = StepResult(ending=StepEnding.CLEAN, summary="Renamed it.", values={"replies": REPLIES})
 REPLIED = StepResult(ending=StepEnding.CLEAN, summary="Replied on 1 review thread.")
-FIX_ROUND = [FEEDBACK, ANSWERED, CHECKED, REPLIED]
+FIX_ROUND = [FEEDBACK, ANSWERED, NOTHING_TO_FIX, CHECKED, REPLIED]
 WAITING = StepResult(ending=StepEnding.CLEAN, outcome="waiting")
 MERGE_READY = StepResult(
     ending=StepEnding.CLEAN, outcome="merge-ready", values={"merge_ready": True}
@@ -202,11 +208,23 @@ async def woken(hub: Hub, runtime: FakeRuntime, coder: UUID, body: bytes, event:
     assert status == 202
 
 
+def coding(step: str, minutes: int, resume: str | None = None) -> ClientStepRun:
+    """What the hub asks the coder to run for one of the factory's client steps."""
+    return ClientStepRun(
+        client=CodingClient.CLAUDE,
+        prompt=(SHIPPED_FACTORIES / "software" / "prompts" / f"{step}.md").read_text(),
+        resume=resume,
+        timeout_seconds=minutes * 60,
+        model="claude-opus-5-5",
+        effort=ReasoningEffort.HIGH,
+    )
+
+
 def test_the_software_factory_carries_an_issue_from_intake_to_a_pull_request_it_babysits(
     tmp_path,
 ):
     control = FakeControl()
-    control.step_results = [PREPARED, IMPLEMENTED, NOTHING_TO_ANSWER, CHECKED, OPENED]
+    control.step_results = [*CHECKED_CHANGE, OPENED]
     runtime = FakeRuntime()
     hub = fresh_hub(tmp_path / "hub", control, runtime)
 
@@ -217,29 +235,32 @@ def test_the_software_factory_carries_an_issue_from_intake_to_a_pull_request_it_
 
         assert [(attempt.step, attempt.ending) for attempt in waiting.attempts] == [
             ("prepare", StepEnding.CLEAN),
+            ("setup", StepEnding.CLEAN),
             ("implement", StepEnding.CLEAN),
             ("answer", StepEnding.CLEAN),
+            ("fix", StepEnding.CLEAN),
             ("checks", StepEnding.CLEAN),
             ("publish", StepEnding.CLEAN),
             ("babysit", None),
         ]
-        prepare, implement, answer, checks, publish = (command for _, command in control.steps)
-        assert prepare.step == CodeStepRun(call="prepare_branch")
-        assert implement.step == ClientStepRun(
-            client=CodingClient.CLAUDE,
-            prompt=(SHIPPED_FACTORIES / "software" / "prompts" / "implement.md").read_text(),
-            timeout_seconds=60 * 60,
+        prepare, setup, implement, answer, fix, checks, publish = (
+            command for _, command in control.steps
         )
+        assert prepare.step == CodeStepRun(call="prepare_branch")
+        installs = [
+            "git switch agent/7-add-dark-mode",
+            "uv sync --frozen",
+            "bun install --frozen-lockfile",
+        ]
+        assert setup.step == CommandStepRun(run=installs)
+        assert implement.step == coding("implement", 60)
         assert implement.hook == "check_implementation"
         assert implement.results == PREPARED.values
-        assert answer.step == ClientStepRun(
-            client=CodingClient.CLAUDE,
-            prompt=(SHIPPED_FACTORIES / "software" / "prompts" / "answer.md").read_text(),
-            timeout_seconds=60 * 60,
-        )
+        assert answer.step == coding("answer", 60, resume="claude-1")
         assert answer.hook == "check_answers"
-        assert isinstance(checks.step, CommandStepRun)
-        assert checks.step.run[0] == "git switch agent/7-add-dark-mode"
+        assert fix.step == coding("fix", 30, resume="claude-1")
+        assert fix.hook == "check_implementation"
+        assert checks.step == CommandStepRun(run=[*installs, "bun run check"])
         assert publish.step == CodeStepRun(call="publish_pull_request")
         assert publish.work_item == {"issue": 7}
         assert publish.results == PREPARED.values
@@ -253,10 +274,7 @@ def test_a_review_wakes_the_run_for_a_fix_round_and_it_finishes_once_merge_ready
 ):
     control = FakeControl()
     control.step_results = [
-        PREPARED,
-        IMPLEMENTED,
-        NOTHING_TO_ANSWER,
-        CHECKED,
+        *CHECKED_CHANGE,
         OPENED,
         *FIX_ROUND,
         MERGE_READY,
@@ -276,13 +294,16 @@ def test_a_review_wakes_the_run_for_a_fix_round_and_it_finishes_once_merge_ready
         assert finished.run.status is FactoryRunStatus.DONE
         assert [attempt.step for attempt in finished.attempts] == [
             "prepare",
+            "setup",
             "implement",
             "answer",
+            "fix",
             "checks",
             "publish",
             "babysit",
             "assess",
             "answer",
+            "fix",
             "checks",
             "publish",
             "babysit",
@@ -303,14 +324,54 @@ def test_a_review_wakes_the_run_for_a_fix_round_and_it_finishes_once_merge_ready
     asyncio.run(scenario())
 
 
+def test_a_check_repair_in_a_fix_round_keeps_its_replies_and_the_pull_request(tmp_path):
+    control = FakeControl()
+    failure = '"bun run check" exited with code 1.\nruff: F401 `os` imported but unused'
+    control.step_results = [
+        *CHECKED_CHANGE,
+        OPENED,
+        FEEDBACK,
+        ANSWERED,
+        NOTHING_TO_FIX,
+        StepResult(ending=StepEnding.FAILED, summary=failure),
+        StepResult(ending=StepEnding.CLEAN, summary="Removed the import.", session="claude-1"),
+        CHECKED,
+        REPLIED,
+    ]
+    runtime = FakeRuntime()
+    hub = fresh_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await babysitting(hub, run.run_id)
+        await woken(hub, runtime, coder, REVIEWED, "pull_request_review")
+        waiting = await babysitting(hub, run.run_id, times=2)
+
+        assert [attempt.step for attempt in waiting.attempts][-7:] == [
+            "answer",
+            "fix",
+            "checks",
+            "fix",
+            "checks",
+            "publish",
+            "babysit",
+        ]
+        fixes = [command for _, command in control.steps if command.origin.step == "fix"]
+        assert fixes[-1].step == coding("fix", 30, resume="claude-1")
+        assert fixes[-1].results["failure"] == failure
+        _, publish = control.steps[-1]
+        assert publish.step == CodeStepRun(call="publish_pull_request")
+        assert (publish.results["replies"], publish.results["pr"]) == (REPLIES, 42)
+
+    asyncio.run(scenario())
+
+
 def test_the_run_finishes_only_when_the_pull_request_is_merge_ready(tmp_path):
     control = FakeControl()
     unrecorded = StepResult(ending=StepEnding.CLEAN, outcome="merge-ready")
     control.step_results = [
-        PREPARED,
-        IMPLEMENTED,
-        NOTHING_TO_ANSWER,
-        CHECKED,
+        *CHECKED_CHANGE,
         OPENED,
         WAITING,
         unrecorded,
@@ -338,7 +399,7 @@ def test_the_run_finishes_only_when_the_pull_request_is_merge_ready(tmp_path):
 
 def test_a_reply_on_a_review_thread_wakes_the_babysitting_run(tmp_path):
     control = FakeControl()
-    control.step_results = [PREPARED, IMPLEMENTED, NOTHING_TO_ANSWER, CHECKED, OPENED, MERGE_READY]
+    control.step_results = [*CHECKED_CHANGE, OPENED, MERGE_READY]
     runtime = FakeRuntime()
     hub = fresh_hub(tmp_path / "hub", control, runtime)
     replied = json.dumps({"action": "created", "pull_request": {"number": 42}}).encode()
@@ -359,10 +420,7 @@ def test_a_reply_on_a_review_thread_wakes_the_babysitting_run(tmp_path):
 def test_the_round_limit_stops_the_run_as_needs_human_and_reports_it_on_the_issue(tmp_path):
     control = FakeControl()
     control.step_results = [
-        PREPARED,
-        IMPLEMENTED,
-        NOTHING_TO_ANSWER,
-        CHECKED,
+        *CHECKED_CHANGE,
         OPENED,
         *FIX_ROUND * 3,
         FEEDBACK,
@@ -380,9 +438,9 @@ def test_the_round_limit_stops_the_run_as_needs_human_and_reports_it_on_the_issu
         await woken(hub, runtime, coder, REVIEWED, "pull_request_review")
         stopped = await settled(hub, run.run_id)
         async with asyncio.timeout(5):
-            # Five steps to the pull request, three fix rounds of four, the last assess, and
+            # Seven steps to the pull request, three fix rounds of five, the last assess, and
             # the needs_human call.
-            while len(control.steps) < 5 + 3 * 4 + 1 + 1:
+            while len(control.steps) < 7 + 3 * 5 + 1 + 1:
                 await asyncio.sleep(0.01)
 
         assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "assess")
@@ -406,7 +464,7 @@ def test_opening_the_pull_request_is_never_retried_and_needs_human_reports_on_th
         ending=StepEnding.FAILED,
         summary='Tool "publish_pull_request" failed: gh exited with code 1: GitHub is down.',
     )
-    control.step_results = [PREPARED, IMPLEMENTED, NOTHING_TO_ANSWER, CHECKED, refused]
+    control.step_results = [*CHECKED_CHANGE, refused]
     runtime = FakeRuntime()
     hub = fresh_hub(tmp_path / "hub", control, runtime)
 
@@ -415,7 +473,7 @@ def test_opening_the_pull_request_is_never_retried_and_needs_human_reports_on_th
         run = await handed_in(hub, coder, 7)
         stopped = await settled(hub, run.run_id)
         async with asyncio.timeout(5):
-            while len(control.steps) < 6:
+            while len(control.steps) < 8:
                 await asyncio.sleep(0.01)
 
         assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "publish")
@@ -530,6 +588,10 @@ def origin(step: str) -> FactoryRunOrigin:
 
 
 BRANCH = {"branch": "agent/7-add-dark-mode", "base": "main"}
+#: What a pull request's body ends with when no adversarial review ran before it opened.
+REVIEW_NOT_RUN = (
+    "\n\n## Review status\n\nAdversarial review was not run. Review happens on this pull request."
+)
 
 
 def test_needs_human_labels_the_issue_with_the_failing_steps_summary_and_keeps_the_branch(
@@ -843,14 +905,7 @@ def created_pull_request(github: FakeGitHub) -> list[str]:
 
 @pytest.mark.parametrize(
     ("reviewed", "review_status"),
-    [
-        (
-            {},
-            "\n\n## Review status\n\n"
-            "Adversarial review was not run. Review happens on this pull request.",
-        ),
-        ({"reviewed": True}, ""),
-    ],
+    [({}, REVIEW_NOT_RUN), ({"reviewed": True}, "")],
     ids=["review-off", "reviewed"],
 )
 def test_publish_pushes_the_branch_and_opens_its_pull_request_closing_the_issue(
@@ -951,6 +1006,28 @@ def test_publish_takes_ready_for_human_off_an_issue_an_earlier_failure_handed_to
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert github.calls[-1] == ["issue", "edit", "7", "--remove-label", "ready-for-human"]
+
+    asyncio.run(scenario())
+
+
+def test_publish_titles_the_pull_request_with_the_title_the_session_wrote(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    implemented(workspace, BRANCH["branch"], "Adds dark mode.\n")
+    (workspace / ".scratch" / "pr-title.txt").write_text("Add a dark mode toggle\n")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(7, "Add dark mode"))
+    github.answer("repo", "view", output=REPOSITORY)
+    github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await opened(dispatcher, 7, BRANCH)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        created = created_pull_request(github)
+        assert created[created.index("--title") + 1] == "Add a dark mode toggle"
+        assert list((workspace / ".scratch").iterdir()) == []
 
     asyncio.run(scenario())
 
@@ -1137,12 +1214,13 @@ def test_turning_review_on_sends_changes_back_to_a_fix_that_resumes_the_implemen
     clean = StepResult(ending=StepEnding.CLEAN, outcome="clean", values={"reviewed": True})
     control.step_results = [
         PREPARED,
+        SET_UP,
         IMPLEMENTED,
+        NOTHING_TO_ANSWER,
         idle,
         changes,
         fixed,
         clean,
-        NOTHING_TO_ANSWER,
         CHECKED,
         OPENED,
     ]
@@ -1168,22 +1246,18 @@ def test_turning_review_on_sends_changes_back_to_a_fix_that_resumes_the_implemen
 
         assert [attempt.step for attempt in waiting.attempts] == [
             "prepare",
+            "setup",
             "implement",
-            "fix",
-            "review",
-            "fix",
-            "review",
             "answer",
+            "fix",
+            "review",
+            "fix",
+            "review",
             "checks",
             "publish",
             "babysit",
         ]
-        fix = ClientStepRun(
-            client=CodingClient.CLAUDE,
-            prompt=(SHIPPED_FACTORIES / "software" / "prompts" / "fix.md").read_text(),
-            resume="claude-1",
-            timeout_seconds=15 * 60,
-        )
+        fix = coding("fix", 30, resume="claude-1")
         fixes = [command.step for _, command in control.steps if command.origin.step == "fix"]
         assert fixes == [fix, fix]
         _, publish = control.steps[-1]
@@ -1597,6 +1671,42 @@ def test_publish_after_a_fix_round_pushes_it_and_replies_on_each_thread_it_answe
             (True, "T1", None),
             (False, "T2", "DARK is the house style."),
         ]
-        assert not any(arguments[:2] == ["pr", "create"] for arguments in github.calls)
+        assert not any(
+            arguments[:2] in (["pr", "create"], ["pr", "edit"]) for arguments in github.calls
+        )
+
+    asyncio.run(scenario())
+
+
+def test_publish_after_a_fix_round_applies_the_title_and_body_the_session_rewrote_once(
+    tmp_path, monkeypatch
+):
+    instance = pushed_branch(tmp_path)
+    workspace = instance.manifest.workspace.path
+    commit(workspace, "theme.py", "DARK_MODE = True\n")
+    (workspace / ".scratch").mkdir()
+    (workspace / ".scratch" / "pr-title.txt").write_text("Add a dark mode named DARK_MODE\n")
+    (workspace / ".scratch" / "pr-body.md").write_text("Closes #7\n\nAdds DARK_MODE.\n")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    fix_round = BRANCH | {"pr": 42, "replies": json.dumps(FIXED_T1)}
+
+    async def scenario() -> None:
+        first = await opened(dispatcher, 7, fix_round)
+        second = await opened(dispatcher, 7, fix_round)
+
+        assert (first.ending, second.ending) == (StepEnding.CLEAN, StepEnding.CLEAN)
+        edits = [arguments for arguments in github.calls if arguments[:2] == ["pr", "edit"]]
+        assert edits == [
+            [
+                "pr",
+                "edit",
+                "42",
+                "--title",
+                "Add a dark mode named DARK_MODE",
+                "--body",
+                f"Closes #7\n\nAdds DARK_MODE.{REVIEW_NOT_RUN}",
+            ]
+        ]
 
     asyncio.run(scenario())

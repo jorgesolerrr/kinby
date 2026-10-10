@@ -345,10 +345,32 @@
         "client": {
           "$ref": "#/$defs/CodingClient"
         },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "kind": {
           "const": "client",
           "default": "client",
           "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodingModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "prompt": {
           "type": "string"
@@ -415,6 +437,10 @@
         "codex"
       ],
       "title": "CodingClient",
+      "type": "string"
+    },
+    "CodingModel": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]*$",
       "type": "string"
     },
     "CommandStepRun": {
@@ -4174,6 +4200,18 @@
         "unknown"
       ],
       "title": "Readiness",
+      "type": "string"
+    },
+    "ReasoningEffort": {
+      "description": "How hard a coding client reasons. Codex has no ``max``.",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "title": "ReasoningEffort",
       "type": "string"
     },
     "RecapPolicy": {

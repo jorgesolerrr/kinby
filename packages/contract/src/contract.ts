@@ -130,6 +130,11 @@ export type CompletionOutcome = "work" | "no-work";
 export type TurnVerdict = "good" | "bad";
 export type HookName = string;
 export type CodingClient = "claude" | "codex";
+/**
+ * How hard a coding client reasons. Codex has no ``max``.
+ */
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type CodingModel = string;
 export type ToolName = string;
 export type ApprovalDecision = "approve" | "deny";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
@@ -1703,7 +1708,9 @@ export interface AgentStepRun {
  */
 export interface ClientStepRun {
   client: CodingClient;
+  effort?: ReasoningEffort | null;
   kind: "client";
+  model?: CodingModel | null;
   prompt: string;
   resume?: string | null;
   timeout_seconds: number;

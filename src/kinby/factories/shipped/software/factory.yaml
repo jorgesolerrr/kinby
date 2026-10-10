@@ -58,14 +58,6 @@ instances:
         kind: secret
         type: text
         required: true
-    logins:
-      - id: codex
-        label: Codex
-        description: Sign in with your ChatGPT subscription, for steps that run Codex.
-        command: [codex, login, --device-auth]
-        volume: /root/.codex
-        # The URL and the code each sit on the line after their step's instruction.
-        prompt_pattern: 'Open this link[^\n]*\n\s*(?P<url>https://\S+)[\s\S]*?one-time code[^\n]*\n\s*(?P<code>\S+)'
 intake: { instance: coder, routine: scan }
 work_item: { issue: int }
 steps:
@@ -75,62 +67,90 @@ steps:
     in: coder
     call: prepare_branch
     results: { branch: str, base: str }
+  # Installs the dependencies of a repository on uv and bun, as kinby is. Replace the installs
+  # with your repository's.
+  - id: setup
+    kind: command
+    in: coder
+    requires: [branch]
+    run:
+      - git switch {{branch}}
+      - uv sync --frozen
+      - bun install --frozen-lockfile
+  # Every client step continues implement's session, so one coding session per issue writes the
+  # change, answers its reviews and repairs its checks. It writes the pull request's title, body
+  # and replies; publish applies them (ADR 0081).
   - id: implement
     kind: client
     in: coder
     client: claude
+    model: claude-opus-5-5
+    effort: high
     prompt: prompts/implement.md
     hook: check_implementation
     requires: [branch, base]
     timeout: 60m
+  # A fix round: the coding client answers the review threads trusted authors left on the pull
+  # request, commits its fixes, and rewrites the title and body where the round changed them.
+  # Work is only ever sent back, so it comes before the pull request opens, and finds no threads
+  # to answer the first time.
+  - id: answer
+    kind: client
+    in: coder
+    client: claude
+    model: claude-opus-5-5
+    effort: high
+    resume: implement
+    prompt: prompts/answer.md
+    hook: check_answers
+    requires: [branch, base]
+    results: { replies: str }
+    timeout: 60m
+  # A check repair (ADR 0080): the coding client fixes what the failed checks sent back as
+  # results.failure, and changes nothing when nothing failed. It comes after answer, so a repair
+  # during babysitting keeps the round's replies, its feedback and the pull request.
+  - id: fix
+    kind: client
+    in: coder
+    client: claude
+    model: claude-opus-5-5
+    effort: high
+    resume: implement
+    prompt: prompts/fix.md
+    hook: check_implementation
+    requires: [branch, base]
+    timeout: 30m
   # Adversarial review before the pull request opens is off by default (ADR 0044): reviewers
-  # on the pull request take its place. To turn it on, uncomment fix and review. Work is only
-  # ever sent back, so fix comes first, and finds nothing to fix before the first review.
-  # - id: fix
-  #   kind: client
-  #   in: coder
-  #   client: claude
-  #   resume: implement
-  #   prompt: prompts/fix.md
-  #   hook: check_implementation
-  #   requires: [branch, base]
-  #   timeout: 15m
+  # on the pull request take its place. To turn it on, uncomment review. It sends changes back
+  # to fix, which then reads its .scratch/review.md.
   # - id: review
   #   kind: client
   #   in: coder
   #   client: claude
+  #   model: claude-opus-5-5
+  #   effort: high
   #   prompt: prompts/review.md
   #   hook: read_review_verdict
   #   requires: [branch, base]
   #   results: { reviewed: bool }
   #   outcomes: { clean: next, changes: { back: fix, max: 2 } }
   #   timeout: 15m
-  # A fix round: the coding client answers the review threads trusted authors left on the pull
-  # request, and commits its fixes. Work is only ever sent back, so it comes before the pull
-  # request opens, and finds no threads to answer the first time.
-  - id: answer
-    kind: client
-    in: coder
-    client: claude
-    prompt: prompts/answer.md
-    hook: check_answers
-    requires: [branch, base]
-    results: { replies: str }
-    timeout: 60m
-  # The checks of a Python repository on uv. Replace them with your repository's. Other runs'
-  # steps share the workspace, so the first command puts it back on this run's branch.
+  # kinby's checks. Replace the installs and `bun run check` with your repository's. Other runs'
+  # steps share the workspace, so the first command puts it back on this run's branch. A failure
+  # goes back to fix with the failing command and the tail of its output, at most twice.
   - id: checks
     kind: command
     in: coder
     requires: [branch]
     run:
       - git switch {{branch}}
-      - uv run ruff check .
-      - uv run ruff format --check .
-      - uv run ty check
-      - uv run pytest
-  # Pushes the branch. The first time, it opens the pull request; after a fix round, it replies
-  # on each thread the round answered. Never retried, so a pull request is never opened twice.
+      - uv sync --frozen
+      - bun install --frozen-lockfile
+      - bun run check
+    failed: { back: fix, max: 2 }
+  # Pushes the branch. The first time, it opens the pull request; after a fix round, it applies
+  # the title and body the session rewrote, and replies on each thread the round answered. Never
+  # retried, so a pull request is never opened twice.
   - id: publish
     kind: code
     in: coder

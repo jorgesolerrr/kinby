@@ -2175,6 +2175,21 @@ class CodingClient(StrEnum):
     CODEX = "codex"
 
 
+#: A model a coding client runs, by a name or alias the client accepts, such as
+#: ``claude-opus-5-5``.
+type CodingModel = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]*$")]
+
+
+class ReasoningEffort(StrEnum):
+    """How hard a coding client reasons. Codex has no ``max``."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
+
+
 class FactoryRunStatus(StrEnum):
     """Where a factory run stands."""
 
@@ -2251,6 +2266,9 @@ class ClientStepRun(ContractModel):
     #: The session to continue, an earlier step's. None starts a new one.
     resume: CodingSessionId | None = None
     timeout_seconds: Annotated[int, Field(ge=1)]
+    #: The model and reasoning effort the client runs with. None leaves the client's default.
+    model: CodingModel | None = None
+    effort: ReasoningEffort | None = None
 
 
 class StepRunCommand(ContractModel):

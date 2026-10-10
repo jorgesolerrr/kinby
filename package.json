@@ -10,7 +10,8 @@
     "check": "uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest && bun run check:web",
     "check:web": "bun run --workspaces --sequential check && knip",
     "check:linux": "docker info > /dev/null || (echo 'check:linux needs a running Docker daemon: docker info failed. Start Docker Desktop and retry.' && exit 1) && docker build --file docker/check.Dockerfile --tag kinby-check . && docker run --rm --volume .:/kinby --volume /kinby/node_modules --volume /kinby/apps/web/node_modules --volume /kinby/packages/contract/node_modules kinby-check",
-    "skills:sync": "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=false bun x skills@1.7.0 add jorgesolerrr/skills -a claude-code --copy -y -s adversarial-review domain-modeling implement-ticket tdd unslop writing-for-agents"
+    "skills:sync": "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=false bun x skills@1.7.0 add jorgesolerrr/skills -a claude-code --copy -y -s adversarial-review domain-modeling implement-ticket tdd unslop writing-for-agents && bun run skills:sync:coder",
+    "skills:sync:coder": "cd src/kinby/factories/shipped/software/instances/coder && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=false bun x skills@1.7.0 add jorgesolerrr/skills -a openclaw --copy -y -s adversarial-review api-and-interface-design codebase-design no-comments ponytail pr tdd unslop && cd ../../../../../../.. && mv src/kinby/factories/shipped/software/instances/coder/skills-lock.json skills-lock.coder.json"
   },
   "devDependencies": {
     "knip": "6.38.0"

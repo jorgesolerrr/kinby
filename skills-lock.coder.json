@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": {
+    "adversarial-review": {
+      "source": "jorgesolerrr/skills",
+      "sourceType": "github",
+      "skillPath": "skills/mine/adversarial-review/SKILL.md",
+      "computedHash": "b70ff8bc1da8d546ea6be87055e80e1a70a0565631ab3530b6298eca47bb9625"
+    },
+    "codebase-design": {
+      "source": "jorgesolerrr/skills",
+      "sourceType": "github",
+      "skillPath": "skills/mattpocock/codebase-design/SKILL.md",
+      "computedHash": "93b6cbc768402126aa105eb4f5f59b65edb1f32d56b4e607e093075bcab2aeab"
+    },
+    "pr": {
+      "source": "jorgesolerrr/skills",
+      "sourceType": "github",
+      "skillPath": "skills/mattpocock/pr/SKILL.md",
+      "computedHash": "22a15d4d469344b38e03eb0e95772478393975836289393b1bad3c0febcdc679"
+    },
+    "tdd": {
+      "source": "jorgesolerrr/skills",
+      "sourceType": "github",
+      "skillPath": "skills/mattpocock/tdd/SKILL.md",
+      "computedHash": "1a08af82ebfa299e90295a4763416c89395c6eed140a75c31a8ca34c7c7c9ed0"
+    },
+    "unslop": {
+      "source": "jorgesolerrr/skills",
+      "sourceType": "github",
+      "skillPath": "skills/pstack/unslop/SKILL.md",
+      "computedHash": "1b034485ef26285010207427c8e5ed52d7a8bd7f377ec043e27409ceceaab246"
+    }
+  }
+}

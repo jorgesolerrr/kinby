@@ -25,6 +25,7 @@ MERGE_READY_LABEL = "merge-ready"
 AGENT_BRANCH_PREFIX = "agent/"
 #: Where the coding client writes what the factory reads, kept out of every commit.
 SCRATCH = ".scratch"
+PR_TITLE = f"{SCRATCH}/pr-title.txt"
 PR_BODY = f"{SCRATCH}/pr-body.md"
 #: What a pull request says when no adversarial review ran before it opened (ADR 0044).
 REVIEW_NOT_RUN = (
@@ -196,12 +197,20 @@ def publish_pull_request(
     pr: int | None = None,
     replies: str | None = None,
 ) -> dict[str, int] | str:
-    """Push the branch. The first time, open its pull request; after a fix round, reply on each
-    review thread the round answered.
+    """Push the branch. The first time, open its pull request; after a fix round, apply the title
+    and body the session rewrote, and reply on each review thread the round answered.
+
+    Each title and body the session wrote is applied once, so a round applies only its own.
     """
+    workspace = context.workspace
     if pr is None:
-        return _open_pull_request(context.workspace, issue, branch, base, reviewed=reviewed)
-    return _push_fix_round(context.workspace, branch, json.loads(replies or "{}"))
+        published = _open_pull_request(workspace, issue, branch, base, reviewed=reviewed)
+    else:
+        answered = json.loads(replies or "{}")
+        published = _push_fix_round(workspace, issue, branch, pr, answered, reviewed=reviewed)
+    for path in (PR_TITLE, PR_BODY):
+        (workspace / path).unlink(missing_ok=True)
+    return published
 
 
 @tool(write=True)
@@ -293,21 +302,16 @@ def report_needs_human(issue: int, step: str, summary: str, context: ToolContext
 def _open_pull_request(
     workspace: Path, issue: int, branch: str, base: str, *, reviewed: bool
 ) -> dict[str, int]:
-    """Push the branch and open its pull request, which closes the issue, with the body the
-    coding client wrote.
+    """Push the branch and open its pull request, which closes the issue, with the title and body
+    the coding client wrote. With no title written, it takes the issue's.
 
-    The body says so when no review step found the change clean. A sub-issue's pull request
-    joins the stack of its siblings' pull requests. The repository's maintainer reviews it. An
-    issue an earlier failure handed to a human loses its ready-for-human label.
+    A sub-issue's pull request joins the stack of its siblings' pull requests. The repository's
+    maintainer reviews it. An issue an earlier failure handed to a human loses its
+    ready-for-human label.
     """
-    body_file = workspace / PR_BODY
-    written = body_file.read_text(encoding="utf-8").strip() if body_file.is_file() else ""
+    written = _written(workspace, PR_BODY)
     if not written:
         raise MissingPullRequestBody(f"The coding client wrote no pull request body to {PR_BODY}.")
-    first, _, rest = written.partition("\n")
-    if (closes := _CLOSES_ISSUE.fullmatch(first)) is not None and int(closes[1]) == issue:
-        written = rest.strip()
-    review_status = "" if reviewed else REVIEW_NOT_RUN
     found = _issue(workspace, issue)
     siblings = _sibling_pull_requests(workspace, found)
     maintainer = _repository(workspace).maintainer
@@ -321,9 +325,9 @@ def _open_pull_request(
         "--base",
         base,
         "--title",
-        found.title,
+        _written(workspace, PR_TITLE) or found.title,
         "--body",
-        f"Closes #{issue}\n\n{written}{review_status}",
+        _body(issue, written, reviewed=reviewed),
         *(() if maintainer is None else ("--reviewer", maintainer)),
     )
     number = int(url.strip().rsplit("/", 1)[1])
@@ -334,10 +338,26 @@ def _open_pull_request(
     return {"pr": number}
 
 
-def _push_fix_round(workspace: Path, branch: str, replies: dict[str, dict]) -> str:
-    """Push the fix round's commits, then reply on each thread it answered and resolve each it
-    fixed. A fix's reply names the commit that holds it."""
+def _push_fix_round(
+    workspace: Path,
+    issue: int,
+    branch: str,
+    pr: int,
+    replies: dict[str, dict],
+    *,
+    reviewed: bool,
+) -> str:
+    """Push the fix round's commits and apply the title and body the coding client rewrote, then
+    reply on each thread it answered and resolve each it fixed. A fix's reply names the commit
+    that holds it."""
     _git(workspace, "push", "--force-with-lease", "-u", "origin", branch)
+    title, body = _written(workspace, PR_TITLE), _written(workspace, PR_BODY)
+    edits = [
+        *(("--title", title) if title else ()),
+        *(("--body", _body(issue, body, reviewed=reviewed)) if body else ()),
+    ]
+    if edits:
+        _gh(workspace, "pr", "edit", str(pr), *edits)
     commit = _git(workspace, "rev-parse", branch).strip()
     for thread, reply in replies.items():
         body = f"{commit}: {reply['reply']}" if reply["fixed"] else reply["reply"]
@@ -355,6 +375,21 @@ def _push_fix_round(workspace: Path, branch: str, replies: dict[str, dict]) -> s
         if reply["fixed"]:
             _gh(workspace, "api", "graphql", "-f", f"query={_RESOLVE}", "-f", f"thread={thread}")
     return f"Pushed {branch} and replied on {len(replies)} review threads."
+
+
+def _written(workspace: Path, path: str) -> str:
+    """What the coding client wrote to the scratch file at *path*, or "" when it wrote nothing."""
+    file = workspace / path
+    return file.read_text(encoding="utf-8").strip() if file.is_file() else ""
+
+
+def _body(issue: int, written: str, *, reviewed: bool) -> str:
+    """The pull request's body: it closes the issue, then holds what the coding client wrote, and
+    says so when no review step found the change clean."""
+    first, _, rest = written.partition("\n")
+    if (closes := _CLOSES_ISSUE.fullmatch(first)) is not None and int(closes[1]) == issue:
+        written = rest.strip()
+    return f"Closes #{issue}\n\n{written}{'' if reviewed else REVIEW_NOT_RUN}"
 
 
 def _review_threads(workspace: Path, pr: int) -> list[ReviewThread]:

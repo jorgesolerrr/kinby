@@ -27,6 +27,7 @@ from kinby.contracts import (
     FactoryRunOrigin,
     InstanceDrainCommand,
     PlanLimit,
+    ReasoningEffort,
     RoutineListResult,
     RoutineRunOutcome,
     StatsGetResult,
@@ -870,6 +871,48 @@ def test_a_client_step_that_resumes_continues_the_earlier_steps_session(
         assert (result.ending, result.session) == (StepEnding.CLEAN, session)
         [called] = recorded_calls(calls)
         assert [argument for argument in called.argv if argument in arguments] == arguments
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("client", "stream", "flags"),
+    [
+        ("claude", CLAUDE_STREAM, [["--model", "claude-opus-5-5"], ["--effort", "high"]]),
+        (
+            "codex",
+            CODEX_STREAM,
+            [["--model", "gpt-5.5-codex"], ["--config", "model_reasoning_effort=high"]],
+        ),
+    ],
+)
+def test_a_client_step_runs_the_client_with_the_steps_model_and_effort(
+    tmp_path, monkeypatch, client, stream, flags
+):
+    runtime, _ = step_instance(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, client, streaming(stream))
+    model = flags[0][1]
+    command = StepRunCommand(
+        step=ClientStepRun(
+            client=CodingClient(client),
+            prompt="Implement the issue.",
+            timeout_seconds=1,
+            model=model,
+            effort=ReasoningEffort.HIGH,
+        ),
+        origin=ORIGIN,
+        work_item={"issue": 7},
+    )
+
+    async def scenario() -> None:
+        result = await call(runtime.dispatcher, "step.run", **command.model_dump(mode="json"))
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.CLEAN, result.summary
+        [called] = recorded_calls(calls)
+        for flag in flags:
+            at = called.argv.index(flag[0])
+            assert called.argv[at : at + 2] == flag
 
     asyncio.run(scenario())
 
