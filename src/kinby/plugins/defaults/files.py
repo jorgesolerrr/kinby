@@ -45,10 +45,11 @@ def grep(pattern: str, path: str, context: ToolContext) -> str:
     expression = re.compile(pattern)
     matches: list[str] = []
     for file in files:
-        for line_number, line in enumerate(
-            file.read_text(encoding="utf-8").splitlines(),
-            start=1,
-        ):
+        try:
+            text = _workspace_path(context.workspace, file).read_text(encoding="utf-8")
+        except ValueError, UnicodeDecodeError:
+            continue
+        for line_number, line in enumerate(text.splitlines(), start=1):
             if expression.search(line):
                 relative = _relative_path(context.workspace, file)
                 matches.append(f"{relative}:{line_number}:{line}")
