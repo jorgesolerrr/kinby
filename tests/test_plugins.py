@@ -33,6 +33,7 @@ from kinby.contracts import (
 from kinby.core import Dispatcher, LangGraphRunner, TurnConfig, build_dispatcher
 from kinby.instance import Instance, load_instance
 from kinby.plugins import Tool, ToolContext, tool
+from kinby.plugins.defaults.files import grep
 from kinby.plugins.defaults.shell import bash
 from tests.helpers import GRAPH_EVENT_TIMEOUT, thread_events
 
@@ -722,6 +723,43 @@ def test_default_grep_and_glob_resolve_paths_from_the_workspace(tmp_path: Path) 
             ),
             ("glob", "docs/first.txt\ndocs/second.txt", False),
         ]
+
+    asyncio.run(scenario())
+
+
+def test_default_grep_skips_a_link_that_resolves_outside_the_workspace(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        (instance.path / ".env").write_text("GH_TOKEN=secret\n", encoding="utf-8")
+        docs = instance.manifest.workspace.path / "docs"
+        docs.mkdir()
+        (docs / "notes.txt").write_text("kept\n", encoding="utf-8")
+        (docs / "x").symlink_to("../../.env")
+
+        output = await grep.ainvoke(
+            {"pattern": ".", "path": "docs"},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert output == "docs/notes.txt:1:kept"
+
+    asyncio.run(scenario())
+
+
+def test_default_grep_skips_a_binary_file(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        workspace = instance.manifest.workspace.path
+        (workspace / ".git").mkdir()
+        (workspace / ".git" / "index").write_bytes(b"DIRC\xff\xfeTODO")
+        (workspace / "plan.txt").write_text("TODO: ship\n", encoding="utf-8")
+
+        output = await grep.ainvoke(
+            {"pattern": "TODO", "path": "."},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert output == "plan.txt:1:TODO: ship"
 
     asyncio.run(scenario())
 
