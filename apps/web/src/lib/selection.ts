@@ -212,13 +212,13 @@ function changed(): void {
 
 function selectedInstanceId(): string | undefined {
   const [, section, instanceId] = window.location.pathname.split("/")
-  return section === SECTION && instanceId ? decodeURIComponent(instanceId) : undefined
+  return section === SECTION && instanceId ? decoded(instanceId) : undefined
 }
 
 function selectedThreadId(): string | undefined {
   const [, section, instanceId, threads, threadId] = window.location.pathname.split("/")
   return section === SECTION && instanceId && threads === THREADS && threadId
-    ? decodeURIComponent(threadId)
+    ? decoded(threadId)
     : undefined
 }
 
@@ -229,9 +229,7 @@ function threadsOpen(): boolean {
 
 function selectedTurnId(): string | undefined {
   const [, , , , , turns, turnId] = window.location.pathname.split("/")
-  return selectedThreadId() !== undefined && turns === TURNS && turnId
-    ? decodeURIComponent(turnId)
-    : undefined
+  return selectedThreadId() !== undefined && turns === TURNS && turnId ? decoded(turnId) : undefined
 }
 
 function configOpen(): boolean {
@@ -243,7 +241,7 @@ function configOpen(): boolean {
 export function linkedRoutine(): string | undefined {
   const [, section, instanceId, config, routines, name] = window.location.pathname.split("/")
   return section === SECTION && instanceId && config === CONFIG && routines === ROUTINES && name
-    ? decodeURIComponent(name)
+    ? decoded(name)
     : undefined
 }
 
@@ -261,14 +259,20 @@ function memoryOpen(): boolean {
 /** The node the URL opens on its instance's memory page, if it names one. */
 export function linkedNode(): string | undefined {
   const [, section, instanceId, memory, node] = window.location.pathname.split("/")
-  return section === SECTION && instanceId && memory === MEMORY && node
-    ? decodeURIComponent(node)
-    : undefined
+  return section === SECTION && instanceId && memory === MEMORY && node ? decoded(node) : undefined
 }
 
 function statsOpen(): boolean {
   const [, section, instanceId, stats] = window.location.pathname.split("/")
   return section === SECTION && Boolean(instanceId) && stats === STATS
+}
+
+function decoded(part: string): string | undefined {
+  try {
+    return decodeURIComponent(part)
+  } catch {
+    return undefined
+  }
 }
 
 // Back and forward change the URL too.
