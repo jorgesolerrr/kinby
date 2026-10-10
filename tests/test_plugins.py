@@ -1,12 +1,18 @@
 import asyncio
-import subprocess
+import os
+import signal
 from collections.abc import AsyncIterator, Sequence
+from contextlib import suppress
 from dataclasses import asdict, replace
 from importlib import import_module
 from importlib.metadata import entry_points as installed_entry_points
-from io import BytesIO
+from itertools import count
 from pathlib import Path
+from select import PIPE_BUF
+from threading import Thread
+from time import monotonic, sleep
 from types import SimpleNamespace
+from typing import BinaryIO
 from uuid import UUID, uuid4
 
 import pytest
@@ -69,22 +75,30 @@ class _BashProcess:
         return_code: int = 0,
         times_out: bool = False,
     ) -> None:
-        self.stdout = BytesIO(stdout)
-        self.stderr = BytesIO(stderr)
-        self.return_code = return_code
+        self.stdout = _written_pipe(stdout)
+        self.stderr = _written_pipe(stderr)
+        self.returncode = return_code
         self.times_out = times_out
-        self.killed = False
-        self.wait_timeouts: list[float | None] = []
+        self.pid = 4_242
 
-    def wait(self, timeout: float | None = None) -> int:
-        self.wait_timeouts.append(timeout)
-        if self.times_out and not self.killed:
-            assert timeout is not None
-            raise subprocess.TimeoutExpired(("bash", "-c"), timeout)
-        return self.return_code
+    def poll(self) -> int | None:
+        return None if self.times_out else self.returncode
 
-    def kill(self) -> None:
-        self.killed = True
+    def wait(self) -> int:
+        return self.returncode
+
+
+def _written_pipe(data: bytes) -> BinaryIO:
+    read, write = os.pipe()
+    # A pipe always holds PIPE_BUF bytes; the rest must not wait for the reader.
+    os.write(write, data[:PIPE_BUF])
+    Thread(target=_fill, args=(write, data[PIPE_BUF:]), daemon=True).start()
+    return open(read, "rb")
+
+
+def _fill(write: int, data: bytes) -> None:
+    with open(write, "wb") as pipe:
+        pipe.write(data)
 
 
 def test_tool_decorator_attaches_the_declaration_record() -> None:
@@ -764,7 +778,7 @@ def test_default_grep_skips_a_binary_file(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_default_bash_uses_the_workspace_timeout_and_output_cap(
+def test_default_bash_uses_the_workspace_and_output_cap(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -778,8 +792,6 @@ def test_default_bash_uses_the_workspace_timeout_and_output_cap(
             **options: object,
         ) -> _BashProcess:
             calls.append((tuple(command), Path(str(options["cwd"]))))
-            assert options["stdout"] is subprocess.PIPE
-            assert options["stderr"] is subprocess.PIPE
             return process
 
         monkeypatch.setattr("kinby.plugins.defaults.shell.subprocess.Popen", popen)
@@ -804,7 +816,6 @@ def test_default_bash_uses_the_workspace_timeout_and_output_cap(
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert calls == [(("bash", "-c", "status"), instance.manifest.workspace.path)]
-        assert process.wait_timeouts == [120.0]
         assert result.output == "x" * 30_000
         assert not result.error
 
@@ -822,6 +833,84 @@ def test_default_bash_times_out_at_the_manifest_timeout(tmp_path: Path) -> None:
             )
 
     asyncio.run(scenario())
+
+
+def test_default_bash_returns_while_a_background_child_holds_its_output(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, bash_timeout_seconds=60)
+        descriptors = _open_descriptors()
+        started = monotonic()
+
+        output = await bash.ainvoke(
+            {"command": "sleep 30 & echo hi $!"},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert monotonic() - started < 10
+        assert _open_descriptors() == descriptors
+        greeting, child = output.split()
+        os.kill(int(child), signal.SIGKILL)
+        assert greeting == "hi"
+
+    asyncio.run(scenario())
+
+
+def test_default_bash_stops_capturing_a_background_writer(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, bash_timeout_seconds=60)
+
+        output = await bash.ainvoke(
+            {"command": "yes >&2 & echo $!"},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        writer = int(output.split()[0])
+        try:
+            assert _ends(writer)
+        finally:
+            with suppress(ProcessLookupError):
+                os.kill(writer, signal.SIGKILL)
+
+    asyncio.run(scenario())
+
+
+def test_default_bash_timeout_kills_the_whole_process_group(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, bash_timeout_seconds=1)
+        started = monotonic()
+
+        with pytest.raises(TimeoutError) as raised:
+            await bash.ainvoke(
+                {"command": "bash -c 'sleep 30 & echo $!; wait'"},
+                ToolContext(instance=instance, thread_id=uuid4()),
+            )
+
+        assert monotonic() - started < 10
+        grandchild = int(str(raised.value).splitlines()[-1])
+        assert _ends(grandchild)
+
+    asyncio.run(scenario())
+
+
+def _open_descriptors() -> int:
+    return len(os.listdir("/proc/self/fd"))
+
+
+def _ends(pid: int) -> bool:
+    deadline = monotonic() + 5
+    while _running(pid):
+        if monotonic() > deadline:
+            return False
+        sleep(0.05)
+    return True
+
+
+def _running(pid: int) -> bool:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return False
+    return stat.rsplit(")", 1)[1].split()[0] != "Z"
 
 
 def test_default_bash_reports_a_nonzero_exit_code(tmp_path: Path, monkeypatch) -> None:
@@ -866,13 +955,14 @@ def test_default_bash_reports_a_nonzero_exit_code(tmp_path: Path, monkeypatch) -
     asyncio.run(scenario())
 
 
-def test_default_bash_kills_a_timed_out_process_and_returns_partial_output(
+def test_default_bash_times_out_when_the_group_already_exited(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     async def scenario() -> None:
         instance = _instance(tmp_path, defaults=True)
         process = _BashProcess(stdout=b"partial output", times_out=True)
+        kills: list[tuple[int, int]] = []
 
         def popen(
             command: Sequence[str],
@@ -880,7 +970,14 @@ def test_default_bash_kills_a_timed_out_process_and_returns_partial_output(
         ) -> _BashProcess:
             return process
 
+        def killpg(group: int, signal_number: int) -> None:
+            kills.append((group, signal_number))
+            raise ProcessLookupError
+
         monkeypatch.setattr("kinby.plugins.defaults.shell.subprocess.Popen", popen)
+        monkeypatch.setattr("kinby.plugins.defaults.shell.os.killpg", killpg)
+        clock = count(step=60)
+        monkeypatch.setattr("kinby.plugins.defaults.shell.monotonic", lambda: next(clock))
         model = ScriptedModel(
             [
                 AIMessageChunk(
@@ -901,8 +998,7 @@ def test_default_bash_kills_a_timed_out_process_and_returns_partial_output(
         events = await _start_turn(instance, model, approvals=("approve",))
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
-        assert process.killed
-        assert process.wait_timeouts == [120.0, None]
+        assert kills == [(4_242, signal.SIGKILL)]
         assert _without_duration(result) == ToolResult(
             call_id="bash-1",
             name="bash",
