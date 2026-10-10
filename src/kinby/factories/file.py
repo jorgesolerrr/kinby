@@ -20,8 +20,10 @@ from pydantic.dataclasses import dataclass
 
 from kinby.contracts import (
     CodingClient,
+    CodingModel,
     FactoryName,
     HookName,
+    ReasoningEffort,
     SetupField,
     StepId,
     StepValue,
@@ -84,6 +86,8 @@ class SendBack:
 
 
 type Outcome = Literal["next", "done", "stop"] | SendBack
+#: What a failed attempt records at a step that declares where its failures go: its summary.
+FAILURE: ValueName = "failure"
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
@@ -96,6 +100,9 @@ class _Step:
     #: What each outcome of the step's result does next.
     outcomes: dict[str, Outcome] = Field(default_factory=dict)
     retry: Annotated[int, Field(ge=0)] | None = None
+    #: Where a failed attempt sends the work instead of trying the step again, with what failed
+    #: as the value ``failure``.
+    failed: SendBack | None = None
     timeout: Duration | None = None
 
 
@@ -120,6 +127,9 @@ class ClientStep(_Step):
     hook: HookName
     #: An earlier client step whose session this one continues.
     resume: StepId | None = None
+    #: None leaves the client's default.
+    model: CodingModel | None = None
+    effort: ReasoningEffort | None = None
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)

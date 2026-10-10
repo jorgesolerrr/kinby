@@ -11,6 +11,11 @@ import pytest
 REPOSITORY = Path(__file__).parents[1]
 SKILLS = REPOSITORY / ".claude" / "skills"
 LOCK = json.loads((REPOSITORY / "skills-lock.json").read_text(encoding="utf-8"))["skills"]
+#: The software factory's coder carries registry skills too, locked apart from the repository's.
+CODER_SKILLS = REPOSITORY / "src/kinby/factories/shipped/software/instances/coder/skills"
+CODER_LOCK = json.loads((REPOSITORY / "skills-lock.coder.json").read_text(encoding="utf-8"))[
+    "skills"
+]
 REGISTRY = "jorgesolerrr/skills"
 # The order JavaScript's localeCompare puts these characters in. The `skills` CLI sorts a
 # skill's files with it before hashing them into `computedHash`.
@@ -65,10 +70,24 @@ def test_every_vendored_skill_is_locked_except_the_repository_own_skills() -> No
     assert vendored - LOCK.keys() == {"open-pr", "e2e-pass"}
 
 
+def test_every_coder_skill_is_locked_except_the_factorys_own_implement_ticket() -> None:
+    vendored = {folder.name for folder in CODER_SKILLS.iterdir() if folder.is_dir()}
+
+    assert vendored - CODER_LOCK.keys() == {"implement-ticket"}
+
+
 @pytest.mark.parametrize(
-    "name", [name for name, entry in LOCK.items() if entry["source"] == REGISTRY]
+    ("skills", "name", "locked"),
+    [
+        (folder, name, entry["computedHash"])
+        for folder, lock in ((SKILLS, LOCK), (CODER_SKILLS, CODER_LOCK))
+        for name, entry in lock.items()
+        if entry["source"] == REGISTRY
+    ],
 )
-def test_vendored_registry_skill_matches_its_locked_hash(name: str) -> None:
-    assert _folder_hash(SKILLS / name) == LOCK[name]["computedHash"], (
+def test_vendored_registry_skill_matches_its_locked_hash(
+    skills: Path, name: str, locked: str
+) -> None:
+    assert _folder_hash(skills / name) == locked, (
         f"{name} was edited in place. Edit it in {REGISTRY}, then run `bun run skills:sync`."
     )

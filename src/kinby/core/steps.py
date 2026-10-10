@@ -97,6 +97,8 @@ async def _run_client_step(
         instance.manifest.workspace.path,
         resume=step.resume,
         timeout_seconds=step.timeout_seconds,
+        model=step.model,
+        effort=step.effort,
     )
     if ran.reported is not None:
         earlier = (

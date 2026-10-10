@@ -4,6 +4,17 @@
       "additionalProperties": false,
       "description": "A kinby turn on a new thread of the instance, with the prompt.",
       "properties": {
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendBack"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "hook": {
           "$ref": "#/$defs/HookName"
         },
@@ -85,6 +96,17 @@
       "additionalProperties": false,
       "description": "Park the run until the user approves it or sends it back.",
       "properties": {
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendBack"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "id": {
           "$ref": "#/$defs/StepId"
         },
@@ -162,6 +184,28 @@
         "client": {
           "$ref": "#/$defs/CodingClient"
         },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendBack"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "hook": {
           "$ref": "#/$defs/HookName"
         },
@@ -175,6 +219,17 @@
           "const": "client",
           "title": "Kind",
           "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodingModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "outcomes": {
           "additionalProperties": {
@@ -258,6 +313,17 @@
         "call": {
           "$ref": "#/$defs/ToolName"
         },
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendBack"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "id": {
           "$ref": "#/$defs/StepId"
         },
@@ -336,10 +402,25 @@
       "title": "CodingClient",
       "type": "string"
     },
+    "CodingModel": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]*$",
+      "type": "string"
+    },
     "CommandStep": {
       "additionalProperties": false,
       "description": "Commands in the instance's workspace, each run without a shell. Exit code zero passes.\n\nA ``{{name}}`` in a command stands for the run's value of that name, as one argument.",
       "properties": {
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendBack"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "hook": {
           "anyOf": [
             {
@@ -535,6 +616,18 @@
           "$ref": "#/$defs/SendBack"
         }
       ]
+    },
+    "ReasoningEffort": {
+      "description": "How hard a coding client reasons. Codex has no ``max``.",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "title": "ReasoningEffort",
+      "type": "string"
     },
     "RecipeName": {
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
@@ -829,6 +922,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendBack"
             },
             {
               "type": "null"

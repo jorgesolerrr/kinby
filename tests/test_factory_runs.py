@@ -49,6 +49,7 @@ from kinby.contracts import (
     InstanceStartCommand,
     LifecycleOperationResult,
     OperationState,
+    ReasoningEffort,
     StepEnding,
     StepResult,
     StepRunCommand,
@@ -990,6 +991,79 @@ def test_every_attempt_at_the_step_work_went_back_to_holds_the_values_sent_with_
     asyncio.run(scenario())
 
 
+REPAIR = REVIEW.replace(
+    "    hook: read_verdict\n"
+    "    outcomes: { clean: next, changes: { back: fix, max: 3 }, hopeless: stop, merged: done }\n",
+    "    failed: { back: fix, max: 2 }\n",
+)
+REPAIR_FILES = FILES | {"factory.yaml": REPAIR}
+
+
+def failing(summary: str) -> StepResult:
+    return StepResult(ending=StepEnding.FAILED, summary=summary)
+
+
+def test_a_failure_goes_back_where_its_step_sends_it_with_what_failed_up_to_its_max(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        FIXED,
+        failing('"ruff check ." exited with code 1.'),
+        FIXED,
+        failing('"pytest" exited with code 1.'),
+        FIXED,
+        failing('"pytest" exited with code 1.'),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, REPAIR_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        stopped = await settled(hub, run.run_id)
+
+        assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "review")
+        assert [
+            command.results for _, command in control.steps if command.origin.step == "fix"
+        ] == [
+            {},
+            {"failure": '"ruff check ." exited with code 1.'},
+            {"failure": '"pytest" exited with code 1.'},
+        ]
+        assert stopped.attempts[-1].summary == (
+            '"pytest" exited with code 1.\n'
+            'Step "review" sent its failures back to "fix" 2 times, its max.'
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_failure_sent_back_reaches_every_attempt_at_its_step_and_a_pass_moves_on(tmp_path):
+    control = FakeControl()
+    failure = '"pytest" exited with code 1.'
+    control.step_results = [FIXED, failing(failure), failing("Fix failed."), FIXED, FIXED, FIXED]
+    runtime = FakeRuntime()
+    factory = REPAIR.replace('run: ["make fix"]\n', 'run: ["make fix"]\n    retry: 1\n')
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [command.origin.step for _, command in control.steps] == [
+            "fix",
+            "review",
+            "fix",
+            "fix",
+            "review",
+            "publish",
+        ]
+        assert [command.results for _, command in control.steps][2:4] == [{"failure": failure}] * 2
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("verdict", "status", "step", "attempted"),
     [
@@ -1139,6 +1213,8 @@ steps:
     prompt: prompts/fix.md
     resume: implement
     hook: record_branch
+    model: claude-opus-5-5
+    effort: high
 """
 CLIENT_FILES = FILES | {
     "factory.yaml": CLIENT,
@@ -1147,7 +1223,9 @@ CLIENT_FILES = FILES | {
 }
 
 
-def test_the_hub_sends_a_client_step_its_prompt_and_timeout_and_the_session_it_resumes(tmp_path):
+def test_the_hub_sends_a_client_step_its_prompt_timeout_model_and_the_session_it_resumes(
+    tmp_path,
+):
     control = FakeControl()
     control.step_results = [
         StepResult(ending=StepEnding.CLEAN, session="claude-1"),
@@ -1171,6 +1249,8 @@ def test_the_hub_sends_a_client_step_its_prompt_and_timeout_and_the_session_it_r
                 prompt="Fix it.\n",
                 resume="claude-1",
                 timeout_seconds=3600,
+                model="claude-opus-5-5",
+                effort=ReasoningEffort.HIGH,
             ),
         ]
         assert [attempt.session for attempt in finished.attempts] == ["claude-1", "claude-1"]

@@ -20,9 +20,11 @@ from time import monotonic
 
 from kinby.contracts import (
     CodingClient,
+    CodingModel,
     CodingSessionId,
     DelegatedRun,
     DelegatedRunOutcome,
+    ReasoningEffort,
     StepEnding,
     TokenTotals,
     UsageSource,
@@ -70,8 +72,13 @@ async def run_coding_client(
     *,
     resume: CodingSessionId | None,
     timeout_seconds: int,
+    model: CodingModel | None,
+    effort: ReasoningEffort | None,
 ) -> CodingRun:
-    """Run *client* in *workspace* with *prompt* on its input, continuing *resume* if given."""
+    """Run *client* in *workspace* with *prompt* on its input, continuing *resume* if given.
+
+    A *model* or *effort* of None leaves the client's default.
+    """
     # Files rather than pipes: a task the client leaves running can hold a pipe open, and what
     # a killed client wrote survives it.
     with TemporaryFile() as stdin, TemporaryFile() as stdout, TemporaryFile() as stderr:
@@ -79,7 +86,7 @@ async def run_coding_client(
         stdin.seek(0)
         try:
             process = await asyncio.create_subprocess_exec(
-                *_command(client, workspace, resume),
+                *_command(client, workspace, resume, model, effort),
                 cwd=workspace,
                 env=_environment(client),
                 stdin=stdin,
@@ -143,7 +150,11 @@ def own_tokens(run: DelegatedRun, earlier: Iterable[DelegatedRun]) -> DelegatedR
 
 
 def _command(
-    client: CodingClient, workspace: Path, resume: CodingSessionId | None
+    client: CodingClient,
+    workspace: Path,
+    resume: CodingSessionId | None,
+    model: CodingModel | None,
+    effort: ReasoningEffort | None,
 ) -> tuple[str, ...]:
     """The client's non-interactive command line. The prompt goes on its input."""
     match client:
@@ -160,10 +171,17 @@ def _command(
                 "--output-format",
                 "stream-json",
                 "--verbose",
+                *(() if model is None else ("--model", model)),
+                *(() if effort is None else ("--effort", effort)),
             )
             return command if resume is None else (*command, "--resume", resume)
         case CodingClient.CODEX:
-            options = ("--json", "--dangerously-bypass-approvals-and-sandbox")
+            options = (
+                "--json",
+                "--dangerously-bypass-approvals-and-sandbox",
+                *(() if model is None else ("--model", model)),
+                *(() if effort is None else ("--config", f"model_reasoning_effort={effort}")),
+            )
             if resume is None:
                 return ("codex", "exec", *options, "--cd", str(workspace), "-")
             return ("codex", "exec", "resume", *options, resume, "-")

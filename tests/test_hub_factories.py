@@ -419,6 +419,19 @@ def test_the_check_fails_a_send_back_to_a_step_that_is_not_earlier(tmp_path):
     ]
 
 
+def test_the_check_fails_a_failure_send_back_that_is_not_earlier_or_that_also_retries(tmp_path):
+    factory = FACTORY.replace(
+        '    run: ["uv run pytest"]\n',
+        '    run: ["uv run pytest"]\n    failed: { back: open-pr, max: 2 }\n',
+    ).replace("    retry: 0\n", "    retry: 0\n    failed: { back: implement, max: 1 }\n")
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'Step "checks" sends work back to "open-pr", which is not an earlier step.',
+        'Step "open-pr" declares both retry and failed, but a failed attempt is sent back, '
+        "never tried again.",
+    ]
+
+
 def test_the_check_fails_a_resume_that_is_not_an_earlier_client_step(tmp_path):
     factory = FACTORY.replace(
         "    hook: record_branch\n", "    hook: record_branch\n    resume: implement\n", 1
