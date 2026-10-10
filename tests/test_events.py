@@ -185,6 +185,30 @@ def test_appends_parse_the_event_log_once(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_a_failed_write_does_not_consume_a_sequence(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        await event_log.append(thread_id, turn_id, STARTED)
+        events = tmp_path / "events.jsonl"
+        written = events.read_text(encoding="utf-8")
+        events.unlink()
+        events.mkdir()
+
+        with pytest.raises(IsADirectoryError):
+            await event_log.append(thread_id, turn_id, MessageDelta(text="lost"))
+
+        events.rmdir()
+        events.write_text(written, encoding="utf-8")
+        retried = await event_log.append(thread_id, turn_id, MessageDelta(text="kept"))
+
+        assert retried.sequence == 2
+        assert [event.sequence for event in event_log.stored(thread_id)] == [1, 2]
+
+    asyncio.run(scenario())
+
+
 def test_interleaved_threads_each_keep_a_gap_free_sequence(tmp_path: Path) -> None:
     async def scenario() -> None:
         first_thread = uuid4()
