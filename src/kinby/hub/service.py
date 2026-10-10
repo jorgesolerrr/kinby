@@ -639,6 +639,7 @@ class Hub:
     ) -> None:
         """Prepare the image, write the instance from its template or its image, and publish it."""
         staging = record.path.with_name(f"{record.path.name}.creating")
+        unmounted: tuple[StorageItem, ...] = ()
         try:
             self._record(operation_id, "image", "Preparing the selected image.")
             selection = _selection(record, record.requested_revision, record.package)
@@ -655,10 +656,11 @@ class Hub:
                 operation_id, "publish", "Creating the container and listing the instance."
             )
             artifact = prepared.artifact
+            storage = self._storage(record.instance_id, record.path, declared.logins)
             if record.path.exists():
                 raise FileExistsError(f"Instance directory already exists: {record.path}")
             staging.replace(record.path)
-            storage = self._storage(record.instance_id, record.path, declared.logins)
+            unmounted = storage
             self.registry.record_preparation(record.instance_id, artifact, storage)
             await self._runtime.create(
                 InstanceSpec(
@@ -669,6 +671,7 @@ class Hub:
                     port=_INSTANCE_PORT,
                 )
             )
+            unmounted = ()
             self.registry.seed_logins(record.instance_id, [login.id for login in declared.logins])
             self.registry.mark_prepared(record.instance_id)
             self.registry.finish_operation(
@@ -679,6 +682,9 @@ class Hub:
         except Exception as exc:
             if staging.exists():
                 shutil.rmtree(staging)
+            if unmounted:
+                shutil.rmtree(record.path)
+                self.registry.release_storage(record.instance_id, list(unmounted))
             self.registry.finish_operation(
                 operation_id,
                 OperationState.FAILED,
