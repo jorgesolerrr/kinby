@@ -145,12 +145,12 @@ _Avoid_: config event, audit entry
 
 ### Instance update
 
-The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path, keeps every storage the instance owns, and leaves the instance's own configuration alone. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
+The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path and keeps every storage the instance owns. For a **factory**'s instance it also syncs the files its **instance template** supplied: it writes the ones the factory changed, removes the ones the factory dropped, and keeps and lists any the instance changed since. It never touches the **manifest**, the **instance secrets**, memory, **threads**, or a file the template did not supply. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
 _Avoid_: upgrade, rollout
 
 ### Instance notice
 
-Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, so an **instance update** is there, or its copied **instance template** came from another version of its **factory** than the one installed.
+Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, or the **instance template** its **factory** serves now differs from the files the **hub** recorded when it copied them. An **instance update** answers both.
 _Avoid_: warning, alert
 
 ### Instance removal
@@ -507,7 +507,7 @@ The **hub**'s record of which managed **instance** answers the public **signal**
 
 ### Instance template
 
-The initial behavior, configuration and **setup fields** a **factory** supplies for each of its **instances**, naming one of the image recipes kinby ships. Once copied, that configuration belongs to the instance.
+The initial behavior, configuration and **setup fields** a **factory** supplies for each of its **instances**, naming one of the image recipes kinby ships. The **hub** copies its files into the instance and records what it copied. The **manifest** it merges belongs to the instance from then on. An **instance update** brings the other files up to the factory's, except any the instance changed.
 
 ### Vanilla instance
 
