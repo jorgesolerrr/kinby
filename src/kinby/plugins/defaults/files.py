@@ -46,8 +46,7 @@ def grep(pattern: str, path: str, context: ToolContext) -> str:
     matches: list[str] = []
     for file in files:
         try:
-            _workspace_path(context.workspace, file)
-            text = file.read_text(encoding="utf-8")
+            text = _workspace_path(context.workspace, file).read_text(encoding="utf-8")
         except ValueError, UnicodeDecodeError:
             continue
         for line_number, line in enumerate(text.splitlines(), start=1):
