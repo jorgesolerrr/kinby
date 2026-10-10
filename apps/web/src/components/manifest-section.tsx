@@ -55,7 +55,7 @@ import {
   saveManifest,
   valuesOf,
 } from "@/lib/manifest"
-import { retried } from "@/lib/operation"
+import { type Pace, pace, retried } from "@/lib/operation"
 import { CircleXIcon, PlusIcon } from "lucide-react"
 
 type Caller = Pick<InstanceClient, "call">
@@ -110,7 +110,7 @@ export function ManifestSection({ client, clock }: { client: Caller; clock: Cloc
     setRefused({})
   }, [])
   const load = useCallback(
-    () =>
+    (pacing: Pace) =>
       retried(() => openManifest(client), pacing).then(
         (read) => {
           show(read)
@@ -119,11 +119,13 @@ export function ManifestSection({ client, clock }: { client: Caller; clock: Cloc
         },
         (error: unknown) => setFailure(error),
       ),
-    [client, pacing, show],
+    [client, show],
   )
   useEffect(() => {
-    void load()
-  }, [load])
+    const pacing = pace(clock)
+    void load(pacing)
+    return pacing.stop
+  }, [clock, load])
 
   if (opened === undefined || draft === undefined) {
     return failure === undefined ? (
@@ -161,7 +163,7 @@ export function ManifestSection({ client, clock }: { client: Caller; clock: Cloc
 
   return (
     <div className="flex flex-col gap-6">
-      {notice === "stale" && <StaleAlert file={MANIFEST_FILE} onLoad={() => void load()} />}
+      {notice === "stale" && <StaleAlert file={MANIFEST_FILE} onLoad={() => void load(pacing)} />}
       {failure !== undefined && <Failure error={failure} />}
       {unnamed.length > 0 && (
         <Alert variant="destructive">

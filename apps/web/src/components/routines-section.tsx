@@ -42,7 +42,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { usePace } from "@/hooks/use-pace"
 import { lastChanged } from "@/lib/config-changes"
-import { retried } from "@/lib/operation"
+import { type Pace, pace, retried } from "@/lib/operation"
 import {
   deleteRoutine,
   failuresInARow,
@@ -83,7 +83,7 @@ export function RoutinesSection({
   const [editing, setEditing] = useState<string | null | undefined>(opened)
 
   const load = useCallback(
-    () =>
+    (pacing: Pace) =>
       retried(() => listRoutines(client), pacing).then(
         (listed) => {
           setRoutines(listed)
@@ -91,14 +91,19 @@ export function RoutinesSection({
         },
         (error: unknown) => setFailure(error),
       ),
-    [client, pacing],
+    [client],
   )
   useEffect(() => {
-    void load()
-  }, [load])
+    const pacing = pace(clock)
+    void load(pacing)
+    return pacing.stop
+  }, [clock, load])
 
   const act = (action: () => Promise<unknown>) =>
-    action().then(load, (error: unknown) => setFailure(error))
+    action().then(
+      () => load(pacing),
+      (error: unknown) => setFailure(error),
+    )
   const toggle = (name: string, enabled: boolean) =>
     act(() => client.call("routine.set_enabled", { name, enabled }))
   const run = (name: string) =>
@@ -109,7 +114,7 @@ export function RoutinesSection({
   // The list reads again either way: the new name, or the hash a retry needs after a refusal.
   // The rename settles only once it has, so the dialog offers no retry over the old hash.
   const rename = (name: string, newName: string, hash: string) =>
-    client.call("routine.rename", { name, new_name: newName, hash }).finally(load)
+    client.call("routine.rename", { name, new_name: newName, hash }).finally(() => load(pacing))
 
   if (editing !== undefined) {
     return (
@@ -119,7 +124,7 @@ export function RoutinesSection({
         name={editing}
         onClose={() => {
           setEditing(undefined)
-          void load()
+          void load(pacing)
         }}
       />
     )
@@ -327,7 +332,7 @@ function RoutineEditor({
     setDraft(read.content)
   }
   const load = useCallback(
-    (target: string) =>
+    (target: string, pacing: Pace) =>
       retried(() => client.call("routine.read", { name: target }), pacing).then(
         (read) => {
           setOpened(read)
@@ -337,11 +342,14 @@ function RoutineEditor({
         },
         (error: unknown) => setFailure(error),
       ),
-    [client, pacing],
+    [client],
   )
   useEffect(() => {
-    if (name !== null) void load(name)
-  }, [load, name])
+    if (name === null) return
+    const pacing = pace(clock)
+    void load(name, pacing)
+    return pacing.stop
+  }, [clock, load, name])
 
   const save = async () => {
     setSaving(true)
@@ -382,7 +390,7 @@ function RoutineEditor({
         </Button>
       </div>
       {notice === "stale" && (
-        <StaleAlert file={`routines/${routine}`} onLoad={() => void load(routine)} />
+        <StaleAlert file={`routines/${routine}`} onLoad={() => void load(routine, pacing)} />
       )}
       {failure !== undefined && <Failure error={failure} />}
       {opened === undefined && !creating ? (

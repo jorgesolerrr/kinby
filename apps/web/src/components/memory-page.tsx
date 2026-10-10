@@ -45,7 +45,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { usePace } from "@/hooks/use-pace"
-import { type Pace, retried } from "@/lib/operation"
+import { type Pace, pace, retried } from "@/lib/operation"
 import { leaveNode, linkedNode, selectThread } from "@/lib/selection"
 import { threadList, threadTitle } from "@/lib/thread-list"
 import {
@@ -142,21 +142,19 @@ function KnowledgeGraph({
   const [gone, setGone] = useState(false)
 
   useEffect(() => {
-    let current = true
+    const pacing = pace(clock)
     retried(() => client.call("memory.list", command(filters)), pacing).then(
       (page) => {
-        if (!current) return
+        if (pacing.stopped) return
         setListed(page)
         setFailure(undefined)
       },
       (error: unknown) => {
-        if (current) setFailure(error)
+        if (!pacing.stopped) setFailure(error)
       },
     )
-    return () => {
-      current = false
-    }
-  }, [client, pacing, filters, reads])
+    return pacing.stop
+  }, [client, clock, filters, reads])
 
   const narrow = (changed: Partial<Filters>) => setFilters({ ...filters, ...changed })
   // Once the user moves off a linked node, a reload no longer opens it.
