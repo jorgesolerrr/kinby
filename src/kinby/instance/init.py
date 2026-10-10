@@ -385,21 +385,10 @@ def _publish_into_existing(source: Path, destination: Path) -> None:
 
 
 def _publish_directory(source: Path, destination: Path) -> None:
-    if not destination.exists():
-        source.replace(destination)
-        return
-    try:
-        working = Path.cwd().resolve()
-    except OSError:
-        working = None
-    if working is not None and destination == working:
+    if destination.exists():
         _publish_into_existing(source, destination)
-        return
-    try:
-        destination.rmdir()
-    except OSError:
-        raise InstanceExistsError(f"instance directory is not empty: {destination}") from None
-    source.replace(destination)
+    else:
+        source.replace(destination)
 
 
 def init_instance(

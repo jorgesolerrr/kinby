@@ -162,6 +162,20 @@ def test_init_writes_into_an_existing_empty_directory(tmp_path):
     assert (target / "kinby.toml").is_file()
 
 
+def test_init_keeps_an_existing_directory_and_its_permissions(tmp_path):
+    target = tmp_path / "shared"
+    target.mkdir()
+    target.chmod(0o770)
+    inode = target.stat().st_ino
+
+    exit_code = main(["init", str(target)])
+
+    assert exit_code == 0
+    assert target.stat().st_ino == inode
+    assert target.stat().st_mode & 0o777 == 0o770
+    assert (target / "kinby.toml").is_file()
+
+
 def test_init_writes_id_as_the_slug_of_the_directory_name(tmp_path):
     target = tmp_path / "My Agent"
 
