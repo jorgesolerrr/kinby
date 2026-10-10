@@ -916,7 +916,7 @@
     },
     "WaitStep": {
       "additionalProperties": false,
-      "description": "Park the run until a signal matches one of the filters, or the deadline passes.\n\nA signal matches a filter when it carries every field of the filter, each of the same type and\nvalue. A field the signal lacks never matches.",
+      "description": "Park the run until a signal matches one of the filters, or its quiet time or its deadline\npasses, whichever comes first.\n\nA signal matches a filter when it carries every field of the filter, each of the same type and\nvalue. A field the signal lacks never matches.",
       "properties": {
         "deadline": {
           "anyOf": [
@@ -954,6 +954,17 @@
           },
           "title": "Outcomes",
           "type": "object"
+        },
+        "quiet": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "requires": {
           "default": [],

@@ -159,8 +159,9 @@ steps:
     results: { pr: int }
     retry: 0
   # Babysitting. The run holds nothing while it waits for a review of its pull request, a reply
-  # on one of its review threads, or a check suite that finished on its branch. The repository's
-  # webhook must send all three events.
+  # on one of its review threads, a check suite that finished on its branch, or the pull request
+  # closing. The repository's webhook must send all four events. After 20 quiet minutes with none
+  # of them, the wait moves on by itself and assess stops waiting for a reviewer.
   - id: babysit
     kind: wait
     signal:
@@ -171,10 +172,15 @@ steps:
       - headers.X-GitHub-Event: check_suite
         body.action: completed
         body.check_suite.head_branch: "{{branch}}"
-    deadline: 7d
+      - headers.X-GitHub-Event: pull_request
+        body.action: closed
+        body.pull_request.number: "{{pr}}"
+    quiet: 20m
+    results: { quiet: bool }
   # Reads the pull request. Merge-ready, it labels it merge-ready and asks the maintainer for a
-  # review, and the run is done; it never merges. Threads to answer start a fix round, at most 3
-  # before the run needs a human. Anything else waits for the next wake.
+  # review, and the run is done; it never merges. Merged by someone, the run is done too; closed
+  # without a merge, it stops. Threads to answer start a fix round, at most 3 before the run
+  # needs a human. Anything else waits for the next wake.
   - id: assess
     kind: code
     in: coder
@@ -183,6 +189,8 @@ steps:
     results: { feedback: str, pr: int, merge_ready: bool }
     outcomes:
       merge-ready: done
+      merged: done
+      closed: stop
       feedback: { back: answer, max: 3 }
       waiting: { back: babysit, max: 30 }
 done_requires: [merge_ready]

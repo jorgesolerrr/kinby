@@ -2,7 +2,7 @@
 
 The hub queues each step for the instance it runs in. An instance takes one step at a time,
 first in, first out, across every factory. A wait or approve step parks its run, which holds no
-instance until a signal, its deadline or the user moves it on.
+instance until a signal, its quiet time, its deadline or the user moves it on.
 """
 
 from __future__ import annotations
@@ -58,6 +58,7 @@ from kinby.core.errors import (
 )
 from kinby.factories.file import (
     FAILURE,
+    QUIET,
     AgentStep,
     ApproveStep,
     ClientStep,
@@ -136,7 +137,7 @@ class FactoryRuns:
         #: The steps and needs_human calls waiting for each instance, by instance id.
         self._queues: dict[UUID, asyncio.Queue[_QueuedStep | _QueuedReport]] = {}
         self._workers: set[asyncio.Task[None]] = set()
-        #: The deadline of each run parked at a wait that has one, by run id.
+        #: The quiet time or deadline of each run parked at a wait that has one, by run id.
         self._deadlines: dict[UUID, asyncio.Task[None]] = {}
         #: The waits a signal matched while the run was still on its way to them, by run id.
         self._woken: dict[UUID, set[StepId]] = {}
@@ -231,9 +232,7 @@ class FactoryRuns:
             if isinstance(step, WaitStep) and any(
                 _matches(fields, signal, body, held) for fields in step.signal
             ):
-                deadline = self._deadlines.pop(run.run_id, None)
-                if deadline is not None:
-                    deadline.cancel()
+                self._disarm(run.run_id)
                 summary = f'A signal on routine "{signal.routine}" matched.'
                 self._advance(run.run_id, StepResult(ending=StepEnding.CLEAN, summary=summary))
         for run in working:
@@ -243,8 +242,14 @@ class FactoryRuns:
                     self._woken.setdefault(run.run_id, set()).add(wait.id)
 
     async def cancel(self, command: FactoryRunCancelCommand) -> FactoryRun:
-        """End the run at the step it stopped at. Nothing it did is undone."""
-        run = _needing_human(self._existing(command.run_id))
+        """End the run at the step it stopped or is parked at. Nothing it did is undone."""
+        run = self._existing(command.run_id)
+        if run.status is FactoryRunStatus.PARKED:
+            self._disarm(run.run_id)
+            cancelled = StepResult(ending=StepEnding.CLEAN, summary="The user cancelled the run.")
+            self._registry.end_attempt(run.run_id, cancelled)
+        else:
+            _needing_human(run)
         moved = self._registry.move_run(run.run_id, FactoryRunStatus.CANCELLED, run.step)
         self._publish(moved)
         return moved
@@ -543,19 +548,34 @@ class FactoryRuns:
         self._arm(run_id, step, parked.updated_at)
 
     def _arm(self, run_id: UUID, step: WaitStep, parked_at: datetime) -> None:
-        """Fail the wait's attempt once its deadline after *parked_at* passes with no signal."""
-        if step.deadline is None:
+        """Move the wait on once its quiet time after *parked_at* passes with no signal, or fail
+        its attempt once its deadline does, whichever comes first."""
+        ends: list[tuple[int, StepResult]] = []
+        if step.quiet is not None:
+            summary = f'No signal matched step "{step.id}" within its {step.quiet} quiet time.'
+            moved_on = StepResult(ending=StepEnding.CLEAN, summary=summary, values={QUIET: True})
+            ends.append((duration_seconds(step.quiet), moved_on))
+        if step.deadline is not None:
+            summary = f'No signal matched step "{step.id}" within its {step.deadline} deadline.'
+            failed = StepResult(ending=StepEnding.FAILED, summary=summary)
+            ends.append((duration_seconds(step.deadline), failed))
+        if not ends:
             return
-        deadline = step.deadline
-        left = duration_seconds(deadline) - (datetime.now(UTC) - parked_at).total_seconds()
+        after, result = min(ends, key=lambda end: end[0])
+        left = after - (datetime.now(UTC) - parked_at).total_seconds()
 
         async def expire() -> None:
             await asyncio.sleep(left)
             del self._deadlines[run_id]
-            summary = f'No signal matched step "{step.id}" within its {deadline} deadline.'
-            self._advance(run_id, StepResult(ending=StepEnding.FAILED, summary=summary))
+            self._advance(run_id, result)
 
         self._deadlines[run_id] = asyncio.create_task(expire())
+
+    def _disarm(self, run_id: UUID) -> None:
+        """Drop the quiet time or deadline of a run that leaves its wait."""
+        armed = self._deadlines.pop(run_id, None)
+        if armed is not None:
+            armed.cancel()
 
     def _advance(self, run_id: UUID, result: StepResult) -> FactoryRun:
         """Settle the run's open attempt with *result*, and queue the step it moves the run to."""

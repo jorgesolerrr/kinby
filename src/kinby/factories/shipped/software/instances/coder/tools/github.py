@@ -32,12 +32,18 @@ REVIEW_NOT_RUN = (
     "\n\n## Review status\n\nAdversarial review was not run. Review happens on this pull request."
 )
 GITHUB_API_VERSION = "2026-03-10"
+#: What a pull request is told when it is labeled merge-ready with no review of its head.
+NO_REVIEW = (
+    "No reviewer answered on this head within babysitting's quiet time, so it is labeled "
+    "merge-ready without a review of it."
+)
 #: How long one gh or git command may run, in seconds.
 _COMMAND_TIMEOUT = 900
 #: Who may write ticket text and review feedback the coding client reads (ADRs 0073 and 0079), by
 #: GitHub's author_association.
 _TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 #: The review apps whose feedback babysitting answers, whatever their association (ADR 0079).
+#: Each is named as the bot that comments and as the app whose check run reports a clean review.
 _TRUSTED_APPS = frozenset(
     {
         "greptile-apps",
@@ -214,16 +220,23 @@ def publish_pull_request(
 
 
 @tool(write=True)
-def assess_pull_request(pr: int, context: ToolContext) -> HookResult:
+def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -> HookResult:
     """Read the pull request after a wake, and say what babysitting does next.
 
-    Merge-ready, once a trusted reviewer reviewed its head with no thread left to answer and no
-    check still running: it gets the merge-ready label and a review request for the maintainer.
-    Threads only trusted authors wrote are feedback for a fix round. Another author's thread needs
-    a human. Anything else waits for the next wake. Nothing here ever merges.
+    Merged, the run is done; closed without a merge, it stops. Merge-ready, once a trusted
+    reviewer reviewed its head with no thread left to answer and no check still running: it gets
+    the merge-ready label and a review request for the maintainer. A trusted review app's
+    successful check run on the head is a review of it. After a *quiet* wait, one no reviewer
+    reviewed is merge-ready too, and a comment says so. Threads only trusted authors wrote are
+    feedback for a fix round. Another author's thread needs a human. Anything else waits for the
+    next wake. Nothing here ever merges.
     """
     workspace = context.workspace
     pull = _api(workspace, f"repos/{{owner}}/{{repo}}/pulls/{pr}")
+    if pull["state"] == "closed":
+        if pull["merged"]:
+            return HookResult(values={"merge_ready": True}, outcome="merged")
+        return HookResult(outcome="closed")
     head = pull["head"]["sha"]
     checks = _pages(
         workspace, f"repos/{{owner}}/{{repo}}/commits/{head}/check-runs", key="check_runs"
@@ -265,13 +278,19 @@ def assess_pull_request(pr: int, context: ToolContext) -> HookResult:
             f"Review feedback from untrusted authors needs a human: {', '.join(sorted(untrusted))}."
         )
     reviews = _pages(workspace, f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews")
-    if not any(
+    reviewed = any(
+        check["conclusion"] == "success" and (check["app"] or {}).get("slug") in _TRUSTED_APPS
+        for check in checks
+    ) or any(
         review["commit_id"] == head
         and review["user"]["login"] != coder
         and _trusted(review["user"]["login"], review["author_association"])
         for review in reviews
-    ):
-        return HookResult(outcome="waiting")
+    )
+    if not reviewed:
+        if not quiet:
+            return HookResult(outcome="waiting")
+        _gh(workspace, "pr", "comment", str(pr), "--body", NO_REVIEW)
     maintainer = _repository(workspace).maintainer
     asked = () if maintainer in {None, pull["user"]["login"]} else ("--add-reviewer", maintainer)
     _gh(workspace, "pr", "edit", str(pr), "--add-label", MERGE_READY_LABEL, *asked)

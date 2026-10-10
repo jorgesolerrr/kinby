@@ -9,7 +9,7 @@ Run each pass issue the user names against the playground hub at `kinby.jorgesol
 Run every command from the repository root in Git Bash. The helpers sit next to this file:
 
 - `deploy.sh` pulls main on the box, rebuilds the hub, and runs an instance update on its instances.
-- `hub.sh` runs `hub.py` inside the hub container, signed in with the hub's access token: `instances`, `update`, `secrets`.
+- `hub.sh` runs `hub.py` inside the hub container, signed in with the hub's access token: `instances`, `update`, `secrets`, `cancel`.
 - `browser.py` drives Playwright's bundled Chromium with the stored browser session.
 
 ## Steps

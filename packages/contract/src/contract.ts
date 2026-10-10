@@ -705,7 +705,7 @@ export interface FactoryRun {
   };
 }
 /**
- * End a run that needs a human where it stopped, keeping everything it did.
+ * End a run that needs a human or is parked, where it is, keeping everything it did.
  */
 export interface FactoryRunCancelCommand {
   run_id: string;

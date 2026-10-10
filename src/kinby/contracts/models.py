@@ -2377,7 +2377,7 @@ class FactoryRunApproveCommand(ContractModel):
 
 
 class FactoryRunCancelCommand(ContractModel):
-    """End a run that needs a human where it stopped, keeping everything it did."""
+    """End a run that needs a human or is parked, where it is, keeping everything it did."""
 
     run_id: UUID
 

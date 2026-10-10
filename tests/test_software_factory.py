@@ -417,6 +417,39 @@ def test_a_reply_on_a_review_thread_wakes_the_babysitting_run(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("assessment", "status"),
+    [
+        (
+            StepResult(ending=StepEnding.CLEAN, outcome="merged", values={"merge_ready": True}),
+            FactoryRunStatus.DONE,
+        ),
+        (StepResult(ending=StepEnding.CLEAN, outcome="closed"), FactoryRunStatus.CANCELLED),
+    ],
+    ids=["merged", "closed"],
+)
+def test_closing_the_pull_request_wakes_the_run_which_ends_done_once_merged_or_else_cancelled(
+    tmp_path, assessment, status
+):
+    control = FakeControl()
+    control.step_results = [*CHECKED_CHANGE, OPENED, assessment]
+    runtime = FakeRuntime()
+    hub = fresh_hub(tmp_path / "hub", control, runtime)
+    closed = json.dumps({"action": "closed", "pull_request": {"number": 42}}).encode()
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await babysitting(hub, run.run_id)
+        await woken(hub, runtime, coder, closed, "pull_request")
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is status
+        assert [attempt.step for attempt in finished.attempts][-2:] == ["babysit", "assess"]
+
+    asyncio.run(scenario())
+
+
 def test_the_round_limit_stops_the_run_as_needs_human_and_reports_it_on_the_issue(tmp_path):
     control = FakeControl()
     control.step_results = [
@@ -1310,7 +1343,12 @@ def test_the_review_hook_reads_the_verdict_the_reviewer_wrote_never_what_it_said
     asyncio.run(scenario())
 
 
-PULL = {"number": 42, "head": {"ref": BRANCH["branch"], "sha": "head2"}, "user": {"login": "coder"}}
+PULL = {
+    "number": 42,
+    "state": "open",
+    "head": {"ref": BRANCH["branch"], "sha": "head2"},
+    "user": {"login": "coder"},
+}
 
 
 def review_thread(
@@ -1341,20 +1379,28 @@ def submitted(author: str, association: str, commit: str = "head2") -> dict[str,
     return {"user": {"login": author}, "author_association": association, "commit_id": commit}
 
 
+def check_run(status: str, app: str = "github-actions", conclusion: str = "success") -> dict:
+    """A check run as GitHub's REST API lists it."""
+    return {"status": status, "conclusion": conclusion, "app": {"slug": app}}
+
+
 def answer_pull_request(
     github: FakeGitHub,
     *,
+    pull: Mapping[str, object] = PULL,
     checks: Sequence[str] = ("completed",),
+    app_checks: Sequence[dict] = (),
     threads: Sequence[dict[str, object]] = (),
     reviews: Sequence[dict[str, object]] = (),
 ) -> None:
     """Answer what assess reads of pull request 42 as the coder: its check runs, review threads
     and reviews."""
+    runs = [*(check_run(status) for status in checks), *app_checks]
     github.answer("repos/{owner}/{repo}/pulls/42/reviews", output=[list(reviews)])
-    github.answer("repos/{owner}/{repo}/pulls/42", output=PULL)
+    github.answer("repos/{owner}/{repo}/pulls/42", output=pull)
     github.answer(
         "repos/{owner}/{repo}/commits/head2/check-runs",
-        output=[{"total_count": len(checks), "check_runs": [{"status": s} for s in checks]}],
+        output=[{"total_count": len(runs), "check_runs": runs}],
     )
     github.answer(
         "graphql",
@@ -1364,14 +1410,15 @@ def answer_pull_request(
     github.answer("repo", "view", output=REPOSITORY)
 
 
-async def assessed(dispatcher: ScheduledDispatcher) -> StepResult:
+async def assessed(dispatcher: ScheduledDispatcher, *, quiet: bool = False) -> StepResult:
+    """What assess answers, after a wait that moved on by itself when *quiet*."""
     return await run_in(
         dispatcher,
         StepRunCommand(
             step=CodeStepRun(call="assess_pull_request"),
             origin=origin("assess"),
             work_item={"issue": 7},
-            results=BRANCH | {"pr": 42},
+            results=BRANCH | {"pr": 42} | ({"quiet": True} if quiet else {}),
         ),
     )
 
@@ -1431,6 +1478,85 @@ def test_assess_waits_until_a_trusted_reviewer_reviews_the_head_and_no_check_run
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert (result.outcome, result.values) == ("waiting", {})
+        assert labelled(github) == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("app", "conclusion", "outcome"),
+    [
+        ("greptile-apps", "success", "merge-ready"),
+        ("greptile-apps", "failure", "waiting"),
+        ("cursor", "success", "waiting"),
+    ],
+    ids=["clean", "findings", "untrusted-app"],
+)
+def test_assess_takes_a_trusted_review_apps_successful_check_run_on_the_head_as_a_review(
+    tmp_path, monkeypatch, app, conclusion, outcome
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(github, app_checks=[check_run("completed", app, conclusion)])
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.outcome == outcome
+        assert len(labelled(github)) == (outcome == "merge-ready")
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("checks", "outcome"),
+    [(("completed",), "merge-ready"), (("completed", "in_progress"), "waiting")],
+    ids=["checks-finished", "check-running"],
+)
+def test_assess_after_a_quiet_wait_stops_waiting_for_a_reviewer_once_no_check_runs(
+    tmp_path, monkeypatch, checks, outcome
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(github, checks=checks)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher, quiet=True)
+        commented = [arguments for arguments in github.calls if arguments[:2] == ["pr", "comment"]]
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.outcome == outcome
+        if outcome == "waiting":
+            assert (commented, labelled(github)) == ([], [])
+            return
+        assert result.values == {"merge_ready": True}
+        [(*_, said)] = commented
+        assert said.startswith("No reviewer answered on this head")
+        assert len(labelled(github)) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("merged", "outcome", "values"),
+    [(True, "merged", {"merge_ready": True}), (False, "closed", {})],
+)
+def test_assess_ends_the_run_of_a_pull_request_that_was_merged_or_closed(
+    tmp_path, monkeypatch, merged, outcome, values
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(github, pull=PULL | {"state": "closed", "merged": merged})
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert (result.outcome, result.values) == (outcome, values)
         assert labelled(github) == []
 
     asyncio.run(scenario())

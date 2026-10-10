@@ -1371,7 +1371,7 @@
     },
     "FactoryRunCancelCommand": {
       "additionalProperties": false,
-      "description": "End a run that needs a human where it stopped, keeping everything it did.",
+      "description": "End a run that needs a human or is parked, where it is, keeping everything it did.",
       "properties": {
         "run_id": {
           "format": "uuid",

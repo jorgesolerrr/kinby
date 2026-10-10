@@ -3,6 +3,7 @@
     hub.py instances                           list the active instances
     hub.py update <revision> [<instance-id>]   update instances not yet on that revision
     hub.py secrets <instance-id>               NAME=value lines on stdin, then recreate
+    hub.py cancel <run-id>                     end a factory run that is parked or needs a human
 
 It talks to the hub on loopback with the access token in KINBY_TOKEN, and never prints
 a secret value.
@@ -22,6 +23,7 @@ from kinby.cli.client import ContractClient, format_error
 from kinby.cli.contract_socket import TOKEN_VARIABLE, contract_client
 from kinby.cli.hub_update import follow_operation
 from kinby.contracts import (
+    FACTORY_RUN_CANCEL,
     INSTANCE_LIST,
     INSTANCE_RECREATE,
     INSTANCE_SECRETS_SET,
@@ -29,6 +31,7 @@ from kinby.contracts import (
     AccessToken,
     ContractModel,
     ErrorEnvelope,
+    FactoryRunCancelCommand,
     InstanceListCommand,
     InstanceRecreateCommand,
     InstanceSecretsSetCommand,
@@ -120,6 +123,15 @@ async def seed_secrets(client: ContractClient, instance_id: UUID) -> int:
     return await _operate(client, INSTANCE_RECREATE, recreate)
 
 
+async def cancel(client: ContractClient, run_id: UUID) -> int:
+    cancelled = await client.call(FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run_id))
+    if isinstance(cancelled, ErrorEnvelope):
+        print(format_error(cancelled), file=sys.stderr)
+        return 1
+    print(cancelled.run_id, cancelled.status.value, cancelled.step)
+    return 0
+
+
 async def _main(args: argparse.Namespace, token: AccessToken) -> int:
     async with contract_client(HUB_URL, token) as client:
         match args.command:
@@ -127,6 +139,8 @@ async def _main(args: argparse.Namespace, token: AccessToken) -> int:
                 return await show_instances(client)
             case "update":
                 return await update(client, args.revision, args.instance_ids)
+            case "cancel":
+                return await cancel(client, args.run_id)
             case _:
                 return await seed_secrets(client, args.instance_id)
 
@@ -140,6 +154,8 @@ def main() -> int:
     update_parser.add_argument("instance_ids", type=UUID, nargs="*", help="default: all")
     secrets_parser = commands.add_parser("secrets", help="seed secrets from stdin")
     secrets_parser.add_argument("instance_id", type=UUID)
+    cancel_parser = commands.add_parser("cancel", help="end a parked or stopped factory run")
+    cancel_parser.add_argument("run_id", type=UUID)
     args = parser.parse_args()
     token = os.environ.get(TOKEN_VARIABLE)
     if not token:

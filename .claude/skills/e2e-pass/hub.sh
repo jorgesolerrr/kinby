@@ -3,6 +3,7 @@
 #   hub.sh instances
 #   hub.sh update <revision> [<instance-id> ...]
 #   hub.sh secrets <instance-id>    < NAME=value lines
+#   hub.sh cancel <run-id>
 # The token is read from /hub/access-token inside the container and never leaves the box.
 # stdin passes through, so secret values travel over ssh and never sit on a command line.
 set -euo pipefail

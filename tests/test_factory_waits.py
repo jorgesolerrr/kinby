@@ -11,11 +11,13 @@ from aiohttp import web
 
 from kinby.contracts import (
     FACTORY_RUN_APPROVE,
+    FACTORY_RUN_CANCEL,
     FACTORY_RUN_SEND_BACK,
     ErrorCode,
     ErrorEnvelope,
     FactoryRun,
     FactoryRunApproveCommand,
+    FactoryRunCancelCommand,
     FactoryRunDetail,
     FactoryRunSendBackCommand,
     FactoryRunStatus,
@@ -323,6 +325,56 @@ def test_a_wait_whose_deadline_passes_fails_under_its_retry_then_needs_a_human(
             'No signal matched step "babysit" within its 1s deadline.'
         )
         assert control.steps == []
+
+    asyncio.run(scenario())
+
+
+def test_a_wait_whose_quiet_time_passes_moves_on_and_records_it(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    factory = WAIT.replace("deadline: 7d\n", "quiet: 1s\n    deadline: 7d\n")
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await parked(hub, run.run_id)
+        finished = await stopped(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [(a.step, a.ending) for a in finished.attempts] == [
+            ("babysit", StepEnding.CLEAN),
+            ("test", StepEnding.CLEAN),
+        ]
+        assert finished.attempts[0].summary == (
+            'No signal matched step "babysit" within its 1s quiet time.'
+        )
+        [(_, tested)] = control.steps
+        assert tested.results == {"quiet": True}
+
+    asyncio.run(scenario())
+
+
+def test_cancelling_a_run_parked_at_a_wait_ends_it_and_drops_its_deadline(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    factory = WAIT.replace("deadline: 7d", "deadline: 1s")
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await parked(hub, run.run_id)
+        cancelled = await hub_client(hub).call(
+            FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run.run_id)
+        )
+        await asyncio.sleep(1.2)
+        found = await detail(hub, run.run_id)
+
+        assert isinstance(cancelled, FactoryRun)
+        assert (cancelled.status, cancelled.step) == (FactoryRunStatus.CANCELLED, "babysit")
+        assert found.run == cancelled
+        assert [(a.step, a.ending) for a in found.attempts] == [("babysit", StepEnding.CLEAN)]
 
     asyncio.run(scenario())
 

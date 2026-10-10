@@ -88,6 +88,8 @@ class SendBack:
 type Outcome = Literal["next", "done", "stop"] | SendBack
 #: What a failed attempt records at a step that declares where its failures go: its summary.
 FAILURE: ValueName = "failure"
+#: What a wait records as true when it moves on with no signal, its quiet time passed.
+QUIET: ValueName = "quiet"
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
@@ -170,7 +172,8 @@ _RUN_VALUE = re.compile(r"\{\{([a-z_][a-z0-9_]*)\}\}")
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class WaitStep(_Step):
-    """Park the run until a signal matches one of the filters, or the deadline passes.
+    """Park the run until a signal matches one of the filters, or its quiet time or its deadline
+    passes, whichever comes first.
 
     A signal matches a filter when it carries every field of the filter, each of the same type and
     value. A field the signal lacks never matches.
@@ -178,6 +181,9 @@ class WaitStep(_Step):
 
     kind: Literal["wait"]
     signal: tuple[SignalFilter, ...] = Field(min_length=1)
+    #: With no signal for this long the wait moves on by itself, with ``quiet`` recorded as true.
+    quiet: Duration | None = None
+    #: With no signal for this long the wait fails.
     deadline: Duration | None = None
 
 
