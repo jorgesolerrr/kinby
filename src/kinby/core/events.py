@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from collections.abc import AsyncGenerator, Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,7 @@ class EventLog:
         self._clock = clock
         self._lock = asyncio.Lock()
         self._subscribers: dict[UUID, set[asyncio.Queue[Event]]] = {}
+        self._heads: Counter[UUID] | None = None
 
     async def append(
         self,
@@ -36,8 +38,9 @@ class EventLog:
             timestamp = self._clock()
             if timestamp.utcoffset() is None:
                 raise ValueError("Event clock must return a timezone-aware timestamp")
+            heads = self._thread_heads()
             event = Event(
-                sequence=len(self.stored(thread_id)) + 1,
+                sequence=heads[thread_id] + 1,
                 thread_id=thread_id,
                 turn_id=turn_id,
                 payload=payload,
@@ -46,9 +49,15 @@ class EventLog:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8") as records:
                 records.write(f"{event.model_dump_json()}\n")
+            heads[thread_id] = event.sequence
             for subscriber in self._subscribers.get(thread_id, set()):
                 subscriber.put_nowait(event)
         return event
+
+    def _thread_heads(self) -> Counter[UUID]:
+        if self._heads is None:
+            self._heads = Counter(event.thread_id for event in self.all_events())
+        return self._heads
 
     async def subscribe(
         self,
