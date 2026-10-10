@@ -6,7 +6,7 @@ import logging
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
@@ -155,9 +155,12 @@ class GraphStore:
 
 def _write_node(path: Path, document: str) -> None:
     """Replace a node file, staging beside it so no reader sees half a file."""
-    staging = path.with_name(f".{path.name}.staging")
-    staging.write_text(document, encoding="utf-8", newline="\n")
-    staging.replace(path)
+    staging = path.with_name(f".{path.name}.{uuid4().hex}.staging")
+    try:
+        staging.write_text(document, encoding="utf-8", newline="\n")
+        staging.replace(path)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def _render_node(memory: MemoryNode) -> str:
@@ -188,7 +191,7 @@ def _read_node(path: Path) -> MemoryNode | None:
     try:
         values, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         frontmatter = _FRONTMATTER.validate_python(values)
-    except (FrontmatterError, ValidationError) as exc:
+    except (UnicodeDecodeError, FrontmatterError, ValidationError) as exc:
         raise MemoryNodeError(f'Graph node "{path}" has invalid frontmatter.') from exc
     if frontmatter.tombstone:
         return None

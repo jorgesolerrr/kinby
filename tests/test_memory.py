@@ -616,3 +616,54 @@ def test_remember_and_forget_leave_no_staging_file(tmp_path: Path) -> None:
 
     assert after_remember == [f"{node}.md"]
     assert sorted(path.name for path in graph_path.iterdir()) == [f"{node}.md"]
+
+
+def test_a_node_with_invalid_utf8_is_skipped_and_refuses_to_open(tmp_path: Path) -> None:
+    _write_node(
+        tmp_path,
+        node_id="2026-09-01-picked-markdown",
+        node_date="2026-09-01",
+        description="Picked markdown for memory",
+        subjects="memory backend, kinby",
+        body="The memory backend uses markdown until evals justify a database.",
+    )
+    broken = NodeId("2026-09-02-cut-mid-character")
+    (tmp_path / "memory" / "graph" / f"{broken}.md").write_bytes(
+        b"---\ndate: 2026-09-02\ndescription: Caf" + "é".encode()[:1]
+    )
+    memory = GraphStore(tmp_path)
+
+    assert [node.node for node in memory.nodes()] == [NodeId("2026-09-01-picked-markdown")]
+    with pytest.raises(MemoryNodeError, match="invalid frontmatter"):
+        memory.open(broken)
+
+
+def test_a_failed_remember_keeps_the_node_and_leaves_no_staging_file(tmp_path: Path) -> None:
+    node = NodeId("2026-09-01-picked-markdown")
+    fact = Fact(
+        node=node,
+        date=date(2026, 9, 1),
+        thread=_THREAD_ID,
+        description="Picked markdown for memory",
+        subjects=("memory backend",),
+        body="The memory backend uses markdown.",
+    )
+    memory = _graph_store(tmp_path)
+    memory.remember(fact)
+    node_path = tmp_path / "memory" / "graph" / f"{node}.md"
+    before = node_path.read_bytes()
+
+    with pytest.raises(UnicodeEncodeError):
+        memory.remember(
+            Fact(
+                node=node,
+                date=date(2026, 9, 1),
+                thread=_THREAD_ID,
+                description="Picked markdown for memory",
+                subjects=("memory backend",),
+                body="A lone surrogate \ud800 cannot be written.",
+            )
+        )
+
+    assert [path.name for path in node_path.parent.iterdir()] == [f"{node}.md"]
+    assert node_path.read_bytes() == before
