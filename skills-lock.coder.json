@@ -7,11 +7,29 @@
       "skillPath": "skills/mine/adversarial-review/SKILL.md",
       "computedHash": "b70ff8bc1da8d546ea6be87055e80e1a70a0565631ab3530b6298eca47bb9625"
     },
+    "api-and-interface-design": {
+      "source": "jorgesolerrr/skills",
+      "sourceType": "github",
+      "skillPath": "skills/addyosmani/api-and-interface-design/SKILL.md",
+      "computedHash": "b44b8479f2bb7fbd9f6e7b226d435ca66524f4c1c3663bae212b9ee4df9a49cd"
+    },
     "codebase-design": {
       "source": "jorgesolerrr/skills",
       "sourceType": "github",
       "skillPath": "skills/mattpocock/codebase-design/SKILL.md",
       "computedHash": "93b6cbc768402126aa105eb4f5f59b65edb1f32d56b4e607e093075bcab2aeab"
+    },
+    "no-comments": {
+      "source": "jorgesolerrr/skills",
+      "sourceType": "github",
+      "skillPath": "skills/pstack/no-comments/SKILL.md",
+      "computedHash": "f880399843f96d13ff15dbe1019a50b438916f52da05be194b1db9c740a8d658"
+    },
+    "ponytail": {
+      "source": "jorgesolerrr/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ponytail/ponytail/SKILL.md",
+      "computedHash": "740906c102310efd3af305eac867d05053e5d2aa5a024ddb0f37d9267df3eafb"
     },
     "pr": {
       "source": "jorgesolerrr/skills",
