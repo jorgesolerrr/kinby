@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 from pathlib import Path
 from uuid import UUID
@@ -559,3 +560,59 @@ def test_episode_frontmatter_requires_a_thread(tmp_path: Path) -> None:
 def test_open_refuses_an_id_that_was_never_written(tmp_path: Path) -> None:
     with pytest.raises(NodeNotFound, match="was not found"):
         _graph_store(tmp_path).open(NodeId("2026-09-01-never-written"))
+
+
+def test_a_broken_node_is_skipped_with_a_warning_and_still_refuses_to_open(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write_node(
+        tmp_path,
+        node_id="2026-09-01-picked-markdown",
+        node_date="2026-09-01",
+        description="Picked markdown for memory",
+        subjects="memory backend, kinby",
+        body="The memory backend uses markdown until evals justify a database.",
+    )
+    broken = NodeId("2026-09-02-truncated")
+    broken_path = tmp_path / "memory" / "graph" / f"{broken}.md"
+    broken_path.write_text("---\ndate: 2026-09-02\ndescrip", encoding="utf-8")
+    memory = GraphStore(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger="kinby.memory.graph"):
+        nodes = memory.nodes()
+    [nodes_warning] = caplog.records
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="kinby.memory.graph"):
+        hits = memory.recall("memory")
+    [recall_warning] = caplog.records
+
+    assert [node.node for node in nodes] == [NodeId("2026-09-01-picked-markdown")]
+    assert [hit.node for hit in hits] == [NodeId("2026-09-01-picked-markdown")]
+    assert str(broken_path) in nodes_warning.getMessage()
+    assert str(broken_path) in recall_warning.getMessage()
+    with pytest.raises(MemoryNodeError, match="invalid frontmatter"):
+        memory.open(broken)
+    with pytest.raises(MemoryNodeError, match="invalid frontmatter"):
+        memory.forget(broken)
+
+
+def test_remember_and_forget_leave_no_staging_file(tmp_path: Path) -> None:
+    node = NodeId("2026-09-01-picked-markdown")
+    memory = _graph_store(tmp_path)
+    graph_path = tmp_path / "memory" / "graph"
+
+    memory.remember(
+        Fact(
+            node=node,
+            date=date(2026, 9, 1),
+            thread=_THREAD_ID,
+            description="Picked markdown for memory",
+            subjects=("memory backend",),
+            body="The memory backend uses markdown.",
+        )
+    )
+    after_remember = sorted(path.name for path in graph_path.iterdir())
+    memory.forget(node)
+
+    assert after_remember == [f"{node}.md"]
+    assert sorted(path.name for path in graph_path.iterdir()) == [f"{node}.md"]

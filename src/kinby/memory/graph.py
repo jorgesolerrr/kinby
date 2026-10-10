@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
@@ -18,6 +19,8 @@ from kinby.frontmatter import (
 )
 from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR
 from kinby.memory.facade import Episode, Fact, MemoryHit, MemoryNode
+
+_logger = logging.getLogger(__name__)
 
 #: How many nodes recall returns, newest first. A model reads them all.
 _RECALL_LIMIT = 20
@@ -104,7 +107,11 @@ class GraphStore:
         terms = query.casefold().split()
         matches: list[MemoryNode] = []
         for path in self._path.glob("*.md"):
-            memory = _read_node(path)
+            try:
+                memory = _read_node(path)
+            except MemoryNodeError:
+                _logger.warning('Skipped graph node "%s": it has invalid frontmatter.', path)
+                continue
             if memory is None:
                 continue
             if after is not None and memory.date < after:
@@ -127,11 +134,7 @@ class GraphStore:
 
     def remember(self, memory: MemoryNode) -> NodeId:
         self._path.mkdir(parents=True, exist_ok=True)
-        self._node_path(memory.node).write_text(
-            _render_node(memory),
-            encoding="utf-8",
-            newline="\n",
-        )
+        _write_node(self._node_path(memory.node), _render_node(memory))
         return memory.node
 
     def forget(self, node: NodeId) -> None:
@@ -141,13 +144,20 @@ class GraphStore:
         lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
         closing = next(index for index, line in enumerate(lines[1:], 1) if line.strip() == "---")
         lines.insert(closing, "tombstone: true\n")
-        path.write_text("".join(lines), encoding="utf-8", newline="\n")
+        _write_node(path, "".join(lines))
 
     def _node_path(self, node: NodeId) -> Path:
         relative = Path(f"{node}.md")
         if relative.parent != Path():
             raise InvalidNodeId(f'Invalid graph node id "{node}".')
         return self._path / relative
+
+
+def _write_node(path: Path, document: str) -> None:
+    """Replace a node file, staging beside it so no reader sees half a file."""
+    staging = path.with_name(f".{path.name}.staging")
+    staging.write_text(document, encoding="utf-8", newline="\n")
+    staging.replace(path)
 
 
 def _render_node(memory: MemoryNode) -> str:
