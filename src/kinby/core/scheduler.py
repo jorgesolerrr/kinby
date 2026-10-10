@@ -256,7 +256,6 @@ class Scheduler:
                 ),
                 RoutineTrigger.MANUAL,
             )
-            await self.tick()
             return receipt.accepted
         return await self._fire(routine, RoutineTrigger.MANUAL)
 

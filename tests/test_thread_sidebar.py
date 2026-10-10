@@ -74,6 +74,7 @@ async def _deliver(dispatcher: ScheduledDispatcher, name: str, body: str) -> UUI
         set(Scope),
     )
     assert isinstance(accepted, AcceptedResult)
+    await dispatcher.scheduler.tick()
     await dispatcher.scheduler.drain()
     return accepted.thread_id
 
