@@ -334,6 +334,14 @@ class UnavailableRuntime(FakeRuntime):
         raise ConnectionError("Docker daemon unavailable")
 
 
+class LostAnswerRuntime(FakeRuntime):
+    """Create the container, then lose Docker's answer, as a timed-out request does."""
+
+    async def create(self, spec: InstanceSpec) -> None:
+        await super().create(spec)
+        raise TimeoutError("Read timed out.")
+
+
 class HeldRuntime(FakeRuntime):
     """Hold a start until the test releases it, so an operation stays in flight."""
 
@@ -920,6 +928,40 @@ def test_a_create_leaves_a_directory_already_at_its_path_untouched(tmp_path):
         assert outcome.detail.startswith("Instance directory already exists")
         assert (existing / "kept").read_text(encoding="utf-8") == "someone else's"
         assert runtime.created == []
+
+    asyncio.run(scenario())
+
+
+def test_a_create_that_raises_after_docker_made_the_container_keeps_its_directory(tmp_path):
+    async def scenario() -> None:
+        runtime = LostAnswerRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == "Read timed out."
+        assert (tmp_path / "hub" / "instances" / str(accepted.instance_id)).is_dir()
+        record = hub.registry.instance(accepted.instance_id)
+        assert record is not None
+        assert record.storage != ()
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_create_the_runtime_cannot_answer_for_keeps_its_directory_and_fails(tmp_path):
+    async def scenario() -> None:
+        runtime = UnavailableRuntime()
+        runtime.create_failure = RuntimeError("Docker daemon unavailable")
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == "Docker daemon unavailable"
+        assert (tmp_path / "hub" / "instances" / str(accepted.instance_id)).is_dir()
 
     asyncio.run(scenario())
 

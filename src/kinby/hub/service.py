@@ -680,16 +680,32 @@ class Hub:
                 "Instance prepared and stopped.",
             )
         except Exception as exc:
-            if staging.exists():
-                shutil.rmtree(staging)
-            if unmounted:
-                shutil.rmtree(record.path)
-                self.registry.release_storage(record.instance_id, list(unmounted))
+            try:
+                await self._discard_failed_create(record, staging, unmounted)
+            except Exception:
+                _logger.exception("Could not clean up the failed create of %s", record.instance_id)
             self.registry.finish_operation(
                 operation_id,
                 OperationState.FAILED,
                 self._redact(str(exc) or type(exc).__name__, secrets.values()),
             )
+
+    async def _discard_failed_create(
+        self,
+        record: ManagedInstance,
+        staging: Path,
+        unmounted: tuple[StorageItem, ...],
+    ) -> None:
+        """Remove what a failed create wrote and no container mounts.
+
+        A create can raise after Docker made the container, so the published directory goes
+        only once the runtime reports no container there.
+        """
+        if staging.exists():
+            shutil.rmtree(staging)
+        if unmounted and (await self._runtime.status(record.runtime_id)).state == "absent":
+            shutil.rmtree(record.path)
+            self.registry.release_storage(record.instance_id, list(unmounted))
 
     async def _initialize_from_image(
         self,
