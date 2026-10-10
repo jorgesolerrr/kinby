@@ -6,10 +6,10 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import asdict, replace
 from importlib import import_module
 from importlib.metadata import entry_points as installed_entry_points
-from io import BytesIO
 from pathlib import Path
-from time import monotonic
+from time import monotonic, sleep
 from types import SimpleNamespace
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -72,12 +72,19 @@ class _BashProcess:
         return_code: int = 0,
         times_out: bool = False,
     ) -> None:
-        self.stdout = BytesIO(stdout)
-        self.stderr = BytesIO(stderr)
+        self.output = stdout
+        self.errors = stderr
         self.return_code = return_code
         self.times_out = times_out
         self.pid = 4_242
         self.wait_timeouts: list[float | None] = []
+
+    def started(self, options: dict[str, Any]) -> _BashProcess:
+        options["stdout"].write(self.output)
+        options["stderr"].write(self.errors)
+        options["stdout"].flush()
+        options["stderr"].flush()
+        return self
 
     def wait(self, timeout: float | None = None) -> int:
         self.wait_timeouts.append(timeout)
@@ -774,12 +781,10 @@ def test_default_bash_uses_the_workspace_timeout_and_output_cap(
 
         def popen(
             command: Sequence[str],
-            **options: object,
+            **options: Any,
         ) -> _BashProcess:
             calls.append((tuple(command), Path(str(options["cwd"]))))
-            assert options["stdout"] is subprocess.PIPE
-            assert options["stderr"] is subprocess.PIPE
-            return process
+            return process.started(options)
 
         monkeypatch.setattr("kinby.plugins.defaults.shell.subprocess.Popen", popen)
         model = ScriptedModel(
@@ -826,6 +831,7 @@ def test_default_bash_times_out_at_the_manifest_timeout(tmp_path: Path) -> None:
 def test_default_bash_returns_while_a_background_child_holds_its_output(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = _instance(tmp_path, bash_timeout_seconds=60)
+        descriptors = _open_descriptors()
         started = monotonic()
 
         output = await bash.ainvoke(
@@ -834,6 +840,7 @@ def test_default_bash_returns_while_a_background_child_holds_its_output(tmp_path
         )
 
         assert monotonic() - started < 10
+        assert _open_descriptors() == descriptors
         greeting, child = output.split()
         os.kill(int(child), signal.SIGKILL)
         assert greeting == "hi"
@@ -854,9 +861,22 @@ def test_default_bash_timeout_kills_the_whole_process_group(tmp_path: Path) -> N
 
         assert monotonic() - started < 10
         grandchild = int(str(raised.value).splitlines()[-1])
-        assert not _running(grandchild)
+        assert _ends(grandchild)
 
     asyncio.run(scenario())
+
+
+def _open_descriptors() -> int:
+    return len(os.listdir("/proc/self/fd"))
+
+
+def _ends(pid: int) -> bool:
+    deadline = monotonic() + 5
+    while _running(pid):
+        if monotonic() > deadline:
+            return False
+        sleep(0.05)
+    return True
 
 
 def _running(pid: int) -> bool:
@@ -874,9 +894,9 @@ def test_default_bash_reports_a_nonzero_exit_code(tmp_path: Path, monkeypatch) -
 
         def popen(
             command: Sequence[str],
-            **options: object,
+            **options: Any,
         ) -> _BashProcess:
-            return process
+            return process.started(options)
 
         monkeypatch.setattr("kinby.plugins.defaults.shell.subprocess.Popen", popen)
         model = ScriptedModel(
@@ -920,9 +940,9 @@ def test_default_bash_times_out_when_the_group_already_exited(
 
         def popen(
             command: Sequence[str],
-            **options: object,
+            **options: Any,
         ) -> _BashProcess:
-            return process
+            return process.started(options)
 
         def killpg(group: int, signal_number: int) -> None:
             kills.append((group, signal_number))
