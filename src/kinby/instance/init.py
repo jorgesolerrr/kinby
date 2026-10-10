@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import os
 import re
 import tomllib
 import unicodedata
@@ -379,27 +381,23 @@ def _publish_into_existing(source: Path, destination: Path) -> None:
         raise InstanceExistsError(f"instance directory is not empty: {destination}")
     for child in source.iterdir():
         target = destination / child.name
-        if target.exists():
-            raise InstanceExistsError(f"instance directory is not empty: {destination}")
-        child.replace(target)
+        try:
+            if child.is_dir():
+                child.rename(target)
+            else:
+                # A hard link refuses a name that is taken; a rename would replace the file there.
+                os.link(child, target)
+        except OSError as exc:
+            if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY, errno.ENOTDIR):
+                raise
+            raise InstanceExistsError(f"instance directory is not empty: {destination}") from None
 
 
 def _publish_directory(source: Path, destination: Path) -> None:
-    if not destination.exists():
-        source.replace(destination)
-        return
-    try:
-        working = Path.cwd().resolve()
-    except OSError:
-        working = None
-    if working is not None and destination == working:
+    if destination.exists():
         _publish_into_existing(source, destination)
-        return
-    try:
-        destination.rmdir()
-    except OSError:
-        raise InstanceExistsError(f"instance directory is not empty: {destination}") from None
-    source.replace(destination)
+    else:
+        source.replace(destination)
 
 
 def init_instance(
@@ -416,25 +414,22 @@ def init_instance(
     """
     config = config or {}
     directory = Path(directory).resolve()
-    if package is not None and directory.is_dir() and any(directory.iterdir()):
-        raise InstanceExistsError(f"instance directory is not empty: {directory}")
     manifest = directory / MANIFEST_NAME
     if manifest.is_file():
         raise InstanceExistsError(f"instance already exists: {manifest}")
-    if package is None:
-        directory.mkdir(parents=True, exist_ok=True)
-        _write_starter_tree(directory, model)
-        return directory.resolve()
-
-    _validate_package_template(package, config)
+    if directory.is_dir() and any(directory.iterdir()):
+        raise InstanceExistsError(f"instance directory is not empty: {directory}")
+    if package is not None:
+        _validate_package_template(package, config)
     parent = directory.parent
     parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=parent, prefix=f".{directory.name}.creating-") as temporary:
         staging = Path(temporary) / directory.name
         staging.mkdir()
         _write_starter_tree(staging, model)
-        _copy_template(staging, package.files, referenced=_PACKAGE_REFERENCED_ROOTS)
-        _package_config(staging, package, config)
-        _package_manifest(staging, package, model=model, config=config)
+        if package is not None:
+            _copy_template(staging, package.files, referenced=_PACKAGE_REFERENCED_ROOTS)
+            _package_config(staging, package, config)
+            _package_manifest(staging, package, model=model, config=config)
         _publish_directory(staging, directory)
     return directory.resolve()
