@@ -107,7 +107,35 @@ def test_init_refuses_an_existing_instance_and_changes_nothing(tmp_path, capsys)
     assert (target / "kinby.toml").read_text(encoding="utf-8") == 'id = "keep-me"\n'
     assert (target / "marker.txt").read_text(encoding="utf-8") == "untouched\n"
     assert not (target / "SYSTEM.md").exists()
-    assert captured.err
+    assert "instance already exists" in captured.err
+
+
+def test_init_refuses_a_nonempty_directory_without_overwriting_it(tmp_path, capsys):
+    target = tmp_path / "repo"
+    target.mkdir()
+    existing = {
+        ".gitignore": "node_modules/\n",
+        "SYSTEM.md": "My own system prompt.\n",
+        "README.md": "# My repo\n",
+    }
+    for name, text in existing.items():
+        (target / name).write_text(text, encoding="utf-8")
+
+    exit_code = main(["init", str(target)])
+
+    assert exit_code == 1
+    assert "not empty" in capsys.readouterr().err
+    assert {path.name: path.read_text(encoding="utf-8") for path in target.iterdir()} == existing
+
+
+def test_init_writes_into_an_existing_empty_directory(tmp_path):
+    target = tmp_path / "alice"
+    target.mkdir()
+
+    exit_code = main(["init", str(target)])
+
+    assert exit_code == 0
+    assert (target / "kinby.toml").is_file()
 
 
 def test_init_writes_id_as_the_slug_of_the_directory_name(tmp_path):

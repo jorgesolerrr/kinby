@@ -416,11 +416,11 @@ def init_instance(
     """
     config = config or {}
     directory = Path(directory).resolve()
-    if package is not None and directory.is_dir() and any(directory.iterdir()):
-        raise InstanceExistsError(f"instance directory is not empty: {directory}")
     manifest = directory / MANIFEST_NAME
     if manifest.is_file():
         raise InstanceExistsError(f"instance already exists: {manifest}")
+    if directory.is_dir() and any(directory.iterdir()):
+        raise InstanceExistsError(f"instance directory is not empty: {directory}")
     if package is None:
         directory.mkdir(parents=True, exist_ok=True)
         _write_starter_tree(directory, model)
