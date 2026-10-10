@@ -1462,8 +1462,9 @@ def test_assess_labels_a_pull_request_a_trusted_reviewer_reviewed_on_its_head_me
         (("completed",), [submitted("owner", "OWNER", commit="head1")]),
         (("completed",), [submitted("stranger", "NONE")]),
         (("completed",), [submitted("coder", "OWNER")]),
+        (("completed",), [{"user": None, "author_association": "NONE", "commit_id": "head2"}]),
     ],
-    ids=["check-running", "earlier-head", "untrusted-reviewer", "own-replies"],
+    ids=["check-running", "earlier-head", "untrusted-reviewer", "own-replies", "deleted-reviewer"],
 )
 def test_assess_waits_until_a_trusted_reviewer_reviews_the_head_and_no_check_runs(
     tmp_path, monkeypatch, checks, reviews
