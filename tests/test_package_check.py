@@ -1,14 +1,10 @@
-import json
 import os
-import subprocess
-import sys
 
 import pytest
 
 from kinby.cli import main
-from kinby.contracts import PackageDescription, SetupFieldKind, SetupFieldType, SubscriptionLogin
-from kinby.packages import installed_package_from_json, package_description
-from kinby.packages.__main__ import main as candidate_check
+from kinby.contracts import DeclaredSetup, SetupFieldKind, SetupFieldType
+from kinby.packages.__main__ import main as describe_image
 from tests.fake_package import (
     EDITOR_LOGIN,
     TONE_FIELD,
@@ -398,39 +394,10 @@ def test_an_unknown_package_fails_the_check(capsys):
     assert capsys.readouterr().err == 'Package "no-such-package" is not installed.\n'
 
 
-def test_the_candidate_check_prints_the_package_only_when_it_passes(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    _install(tmp_path, monkeypatch)
+def test_the_image_description_is_a_vanilla_instance(capsys):
+    assert describe_image() == 0
 
-    assert candidate_check(["writer"]) == 0
-    printed = json.loads(capsys.readouterr().out)
-    assert printed["descriptor"]["id"] == "writer"
-    assert printed["files"]["package.yaml"] == "tone: plain\ntoken: EDITOR_TOKEN\n"
-
-
-def test_the_candidate_check_describes_the_logins_a_package_declares(tmp_path, monkeypatch, capsys):
-    _install(tmp_path, monkeypatch)
-
-    assert candidate_check(["writer"]) == 0
-    installed = installed_package_from_json(capsys.readouterr().out)
-
-    assert package_description(installed).logins == [
-        SubscriptionLogin(
-            id="editor",
-            label="Editor account",
-            description="Signs the editor in with your subscription.",
-            command=["editor", "login", "--device"],
-            volume="/root/.editor",
-            prompt_pattern=r"Open (?P<url>https://\S+) and enter (?P<code>[A-Z0-9-]+)",
-        )
-    ]
-
-
-def test_the_candidate_check_without_a_package_describes_a_vanilla_instance(capsys):
-    assert candidate_check([]) == 0
-
-    printed = PackageDescription.model_validate_json(capsys.readouterr().out)
-    assert (printed.display_name, printed.icon) == ("Vanilla", "sparkles")
+    printed = DeclaredSetup.model_validate_json(capsys.readouterr().out)
     assert [
         (field.name, field.label, field.kind, field.type, field.required)
         for field in printed.setup_fields
@@ -445,42 +412,3 @@ def test_the_candidate_check_without_a_package_describes_a_vanilla_instance(caps
             False,
         ),
     ]
-
-
-def test_the_candidate_check_validates_an_existing_instance_config(tmp_path, monkeypatch, capsys):
-    _install(tmp_path, monkeypatch)
-    instance = tmp_path / "instance"
-    assert main(["init", str(instance), "--package", "writer"]) == 0
-    (instance / "package.yaml").write_text("tone: plain\n", encoding="utf-8")
-    capsys.readouterr()
-
-    status = candidate_check(["writer", str(instance)])
-
-    output = capsys.readouterr()
-    assert status == 1
-    assert output.out == ""
-    assert output.err == f"{instance / 'package.yaml'}: token: Field required\n"
-
-
-@pytest.mark.parametrize("passing", [True, False])
-def test_the_candidate_check_runs_as_the_hub_calls_it(tmp_path, passing):
-    package = install_fake_package(tmp_path / "site", executables=("kinby-fake-editor",))
-    if passing:
-        _executable(tmp_path / "bin", "kinby-fake-editor")
-    environment = {
-        **os.environ,
-        "PATH": f"{tmp_path / 'bin'}:{os.path.dirname(sys.executable)}",
-        "PYTHONPATH": str(package.site),
-    }
-
-    result = subprocess.run(
-        [sys.executable, "-m", "kinby.packages", "writer"],
-        capture_output=True,
-        text=True,
-        env=environment,
-        check=False,
-    )
-
-    assert (result.returncode == 0) is passing
-    if not passing:
-        assert result.stderr == 'Executable "kinby-fake-editor" is not on PATH.\n'

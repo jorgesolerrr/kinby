@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from importlib.metadata import Distribution, entry_points, version
+from importlib.metadata import Distribution, entry_points
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 from urllib.parse import urlsplit
@@ -21,7 +20,7 @@ from pydantic import (
 )
 
 from kinby.contracts import (
-    PackageDescription,
+    DeclaredSetup,
     SetupField,
     SetupFieldKind,
     SetupFieldType,
@@ -255,32 +254,9 @@ def _validation_message(exc: ValidationError) -> str:
     )
 
 
-def vanilla_description() -> PackageDescription:
-    """What kinby's base image declares: the kinby installed in it, and the built-in fields."""
-    return PackageDescription(
-        display_name="Vanilla",
-        description="kinby's built-in defaults, with no package.",
-        icon="sparkles",
-        version=version("kinby"),
-        setup_fields=[*BUILT_IN_FIELDS, BEHAVIOR_PROMPT_FIELD],
-    )
-
-
-def package_description(package: InstalledPackage) -> PackageDescription:
-    """A package's card, version, and logins, with the built-in fields before the package's own.
-
-    Defaults resolve built-in first, then package: a package field named like a built-in
-    one lends that field its default, and the field stays kinby's.
-    """
-    descriptor = package.descriptor
-    return PackageDescription(
-        display_name=descriptor.display_name,
-        description=descriptor.description,
-        icon=descriptor.icon,
-        version=descriptor.version,
-        setup_fields=with_built_in_fields(descriptor.setup_fields),
-        logins=list(descriptor.logins),
-    )
+def vanilla_description() -> DeclaredSetup:
+    """What kinby's base image declares: the built-in fields and the behavior prompt."""
+    return DeclaredSetup(setup_fields=[*BUILT_IN_FIELDS, BEHAVIOR_PROMPT_FIELD])
 
 
 def with_built_in_fields(own: Iterable[SetupField]) -> list[SetupField]:
@@ -355,54 +331,6 @@ def resolved_values(
     return resolved
 
 
-def installed_package_from_json(body: str) -> InstalledPackage:
-    """Parse package inspection output at the Docker boundary."""
-    raw = json.loads(body)
-    descriptor = raw["descriptor"]
-    return InstalledPackage(
-        descriptor=PackageDescriptor(
-            id=descriptor["id"],
-            display_name=descriptor["display_name"],
-            description=descriptor["description"],
-            icon=descriptor["icon"],
-            distribution=descriptor["distribution"],
-            version=descriptor["version"],
-            setup_fields=tuple(
-                SetupField.model_validate(field) for field in descriptor.get("setup_fields", [])
-            ),
-            logins=tuple(
-                SubscriptionLogin.model_validate(login) for login in descriptor.get("logins", [])
-            ),
-        ),
-        files=dict(raw["files"]),
-    )
-
-
-def package_json(package: InstalledPackage) -> str:
-    """Serialize package inspection output for a management process."""
-    descriptor = package.descriptor
-    return json.dumps(
-        {
-            "descriptor": {
-                "id": descriptor.id,
-                "display_name": descriptor.display_name,
-                "description": descriptor.description,
-                "icon": descriptor.icon,
-                "distribution": descriptor.distribution,
-                "version": descriptor.version,
-                "setup_fields": [
-                    field.model_dump(mode="json", exclude_none=True)
-                    for field in descriptor.setup_fields
-                ],
-                "logins": [login.model_dump(mode="json") for login in descriptor.logins],
-            },
-            "files": package.files,
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-
-
 def readable_template_files(template: Path) -> dict[str, str]:
     """Read the text files in an installed package template.
 
@@ -441,13 +369,10 @@ __all__ = [
     "config_field_errors",
     "inspect_installed_package",
     "installed_package",
-    "installed_package_from_json",
     "instance_package_config",
     "load_package",
     "package_config_yaml",
-    "package_description",
     "package_fields",
-    "package_json",
     "read_package_config",
     "readable_template_files",
     "resolved_values",

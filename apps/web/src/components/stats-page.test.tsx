@@ -502,16 +502,16 @@ describe("an older core", () => {
     total: { ...summary(), origins: undefined },
   } as unknown as StatsGetResult
 
-  it("says its answer needs an update, shows nothing from it, and opens Package and version", async () => {
+  it("says its answer needs an update, shows nothing from it, and opens Core version", async () => {
     openStats({ "stats.get": () => older })
     const user = userEvent.setup()
 
     const alert = await screen.findByRole("alert")
     expect(alert.textContent).toContain("This instance runs an older core")
     expect(screen.queryByRole("region", { name: "Turns" })).toBeNull()
-    await user.click(within(alert).getByRole("button", { name: "Open Package and version" }))
+    await user.click(within(alert).getByRole("button", { name: "Open Core version" }))
 
-    expect(window.location.pathname).toBe("/instances/hub-ada/config/package")
+    expect(window.location.pathname).toBe("/instances/hub-ada/config/core")
   })
 
   it("says the same when its core has no stats.get", async () => {

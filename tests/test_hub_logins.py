@@ -2,7 +2,6 @@ import asyncio
 from uuid import UUID
 
 from kinby.contracts import (
-    IMAGE_PREPARE,
     INSTANCE_CREATE,
     INSTANCE_DELETE,
     INSTANCE_DELETE_PREVIEW,
@@ -13,10 +12,9 @@ from kinby.contracts import (
     INSTANCE_STATUS,
     INSTANCE_STOP,
     OPERATION_GET,
+    DeclaredSetup,
     ErrorCode,
     ErrorEnvelope,
-    ImagePrepareCommand,
-    ImagePrepareResult,
     InstanceCreateCommand,
     InstanceDeleteCommand,
     InstanceDeletePreviewCommand,
@@ -34,15 +32,14 @@ from kinby.contracts import (
     OperationGetResult,
     OperationKind,
     OperationState,
-    PackageSelection,
     Scope,
+    SetupField,
     StorageItem,
     StorageKind,
     SubscriptionLogin,
 )
 from kinby.hub import Hub, SetupSpec
-from kinby.hub.curated import curated_list
-from kinby.packages import InstalledPackage, PackageDescriptor
+from kinby.packages import with_built_in_fields
 from tests.test_hub import (
     FakeControl,
     FakeImages,
@@ -50,9 +47,9 @@ from tests.test_hub import (
     finished_operation,
     hub_at,
     hub_client,
+    prepared,
 )
 
-WRITER = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
 EDITOR = SubscriptionLogin(
     id="editor",
     label="Editor account",
@@ -71,46 +68,16 @@ CODEX = SubscriptionLogin(
 )
 
 
-def coder_package(*logins: SubscriptionLogin) -> InstalledPackage:
-    return InstalledPackage(
-        descriptor=PackageDescriptor(
-            id="coder",
-            display_name="Software factory",
-            description="Implements issues.",
-            icon="code",
-            distribution="kinby-code-factory",
-            version="1.0.0",
-            logins=logins,
-        ),
-        files={"SYSTEM.md": "Write clearly.\n"},
-    )
-
-
-def coder_selection() -> PackageSelection:
-    [coder] = [entry.package for entry in curated_list() if entry.package.id == "coder"]
-    return coder.selection
-
-
-def writer_package(*logins: SubscriptionLogin) -> InstalledPackage:
-    return InstalledPackage(
-        descriptor=PackageDescriptor(
-            id="writer",
-            display_name="Writing teammate",
-            description="Drafts articles.",
-            icon="pen",
-            distribution="kinby-writer",
-            version="1.4.2",
-            logins=logins,
-        ),
-        files={"SYSTEM.md": "Write clearly.\n"},
-    )
+def writer(*logins: SubscriptionLogin, fields: tuple[SetupField, ...] = ()) -> DeclaredSetup:
+    """What the writer's image declares: kinby's built-in fields, then *fields*, and *logins*."""
+    return DeclaredSetup(setup_fields=with_built_in_fields(fields), logins=list(logins))
 
 
 def writer_hub(
     tmp_path, *logins: SubscriptionLogin, runtime: FakeRuntime | None = None
 ) -> tuple[Hub, FakeRuntime]:
     runtime = runtime or FakeRuntime()
-    images = FakeImages(package=writer_package(*(logins or (EDITOR,))))
+    images = FakeImages(declared=writer(*(logins or (EDITOR,))))
     hub = hub_at(tmp_path / "hub", runtime=runtime, images=images, control=FakeControl())
     return hub, runtime
 
@@ -120,15 +87,12 @@ async def created_writer(
 ) -> LifecycleOperationResult:
     """Prepare the writer, create one instance from it, and wait until it is published."""
     client = hub_client(hub)
-    accepted = await client.call(IMAGE_PREPARE, ImagePrepareCommand(package=WRITER))
-    assert isinstance(accepted, ImagePrepareResult)
-    assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
+    assert (await prepared(client)).state is OperationState.SUCCEEDED
     created = await client.call(
         INSTANCE_CREATE,
         InstanceCreateCommand(
             manifest_id="writer",
             model=model,
-            package=WRITER,
             secrets={"api_key": "sk-private", **(secrets or {})},
         ),
     )
@@ -161,61 +125,20 @@ def test_each_declared_login_gets_a_named_volume_the_instance_owns_and_mounts(tm
     asyncio.run(scenario())
 
 
-async def created_coder(hub: Hub) -> LifecycleOperationResult:
-    """Prepare the pinned coder and create one instance from it."""
-    client = hub_client(hub)
-    selection = coder_selection()
-    accepted = await client.call(IMAGE_PREPARE, ImagePrepareCommand(package=selection))
-    assert isinstance(accepted, ImagePrepareResult)
-    assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
-    created = await client.call(
-        INSTANCE_CREATE,
-        InstanceCreateCommand(
-            manifest_id="coder",
-            model="openai:gpt-5",
-            package=selection,
-            secrets={"api_key": "sk-private"},
-        ),
-    )
-    assert isinstance(created, LifecycleOperationResult)
-    assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
-    return created
-
-
-def test_a_coder_whose_package_declares_no_login_gets_no_codex_volume(tmp_path):
+def test_an_image_that_declares_no_login_gets_no_login_volume(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
         hub = hub_at(
             tmp_path / "hub",
             runtime=runtime,
-            images=FakeImages(package=coder_package()),
+            images=FakeImages(declared=writer()),
             control=FakeControl(),
         )
 
-        instance_id = (await created_coder(hub)).instance_id
+        instance_id = (await created_writer(hub)).instance_id
 
         assert volumes(runtime.created[0].storage) == {
             (f"kinby-{instance_id}-workspace", "/instance/workspace"),
-        }
-
-    asyncio.run(scenario())
-
-
-def test_a_coder_that_declares_its_codex_login_gets_that_volume_once(tmp_path):
-    async def scenario() -> None:
-        runtime = FakeRuntime()
-        hub = hub_at(
-            tmp_path / "hub",
-            runtime=runtime,
-            images=FakeImages(package=coder_package(CODEX)),
-            control=FakeControl(),
-        )
-
-        instance_id = (await created_coder(hub)).instance_id
-
-        assert volumes(runtime.created[0].storage) == {
-            (f"kinby-{instance_id}-workspace", "/instance/workspace"),
-            (f"kinby-{instance_id}-codex", "/root/.codex"),
         }
 
     asyncio.run(scenario())
@@ -400,7 +323,7 @@ def test_starting_a_login_that_runs_returns_it_with_the_same_code(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_login_the_package_does_not_declare_is_not_found_and_runs_nothing(tmp_path):
+def test_a_login_the_image_does_not_declare_is_not_found_and_runs_nothing(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
         hub, _ = writer_hub(tmp_path, runtime=runtime)

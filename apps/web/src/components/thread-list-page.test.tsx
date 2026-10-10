@@ -218,9 +218,9 @@ describe("the thread list page", () => {
 
     const alert = await screen.findByRole("alert")
     expect(alert.textContent).toContain("This instance runs an older core")
-    await user.click(within(alert).getByRole("button", { name: "Open Package and version" }))
+    await user.click(within(alert).getByRole("button", { name: "Open Core version" }))
 
-    expect(window.location.pathname).toBe("/instances/hub-ada/config/package")
+    expect(window.location.pathname).toBe("/instances/hub-ada/config/core")
   })
 
   it("searches the loaded threads by title without asking the instance", async () => {

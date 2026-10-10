@@ -27,18 +27,18 @@ export function Failure({ error }: { error: unknown }) {
   )
 }
 
-/** What the page needs is newer than the instance's core. The button opens Package and version. */
+/** What the page needs is newer than the instance's core. The button opens Core version. */
 export function OlderCoreAlert({ onOpenUpdate }: { onOpenUpdate: () => void }) {
   return (
     <Alert>
       <TriangleAlertIcon />
       <AlertTitle>This instance runs an older core</AlertTitle>
       <AlertDescription>
-        Its core does not have this yet. Update it from Package and version.
+        Its core does not have this yet. Update it from Core version.
       </AlertDescription>
       <AlertAction>
         <Button size="sm" variant="outline" onClick={onOpenUpdate}>
-          Open Package and version
+          Open Core version
         </Button>
       </AlertAction>
     </Alert>

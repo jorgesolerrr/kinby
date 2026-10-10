@@ -847,7 +847,7 @@
     },
     "SubscriptionLogin": {
       "additionalProperties": false,
-      "description": "One sign-in a package or a template declares, run in a setup container (ADR 0065).",
+      "description": "One sign-in a template declares, run in a setup container (ADR 0065).",
       "properties": {
         "command": {
           "items": {

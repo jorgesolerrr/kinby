@@ -4,32 +4,19 @@ import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
-import { PackageSection } from "@/components/package-section"
+import { CoreSection } from "@/components/core-section"
 
 const HUB = "b".repeat(40)
 
-const writer = instanceSummary({
+const behind = instanceSummary({
   instance_id: "hub-ada",
   source_revision: "a".repeat(40),
-  package: {
-    id: "writer",
-    distribution: "kinby-writer",
-    version: { url: "https://github.com/example/kinby-writer", sha: "2".repeat(40) },
-  },
   notices: [
     {
       code: "revision_behind",
       message: "The instance runs kinby aaaaaaa, and the hub is at bbbbbbb.",
       instance_revision: "a".repeat(40),
       hub_revision: HUB,
-    },
-    {
-      code: "package_template_older",
-      message:
-        "The instance's configuration was copied from writer 1.4.2, and 1.5.0 is installed. " +
-        "An update never copies it again.",
-      initialized_version: "1.4.2",
-      installed_version: "1.5.0",
     },
   ],
 })
@@ -55,44 +42,34 @@ function openSection(instance: InstanceSummary, answers: Answers = {}) {
   })
   const clock = fakeClock()
   const onChanged = vi.fn()
-  render(<PackageSection caller={caller} clock={clock} instance={instance} onChanged={onChanged} />)
+  render(<CoreSection caller={caller} clock={clock} instance={instance} onChanged={onChanged} />)
   return { caller, clock, onChanged, user: userEvent.setup() }
 }
 
 const updates = (caller: ReturnType<typeof openSection>["caller"]) =>
   caller.calls.filter((call) => call.method === "instance.update").map((call) => call.params)
 
-describe("PackageSection", () => {
-  it("shows the package, the versions, and each notice", () => {
-    openSection(writer)
+describe("CoreSection", () => {
+  it("shows the kinby revision and the notice that the hub is ahead", () => {
+    openSection(behind)
 
-    const facts = screen.getByRole("list", { name: "Package and version" })
-    const fact = (name: string) => within(facts).getByRole("listitem", { name }).textContent
-    expect(fact("Package")).toBe("Packagewriter from kinby-writer")
-    expect(fact("Set up from")).toBe("Set up from1.4.2")
-    expect(fact("Installed")).toBe("Installed1.5.0, commit 2222222")
-    expect(fact("kinby")).toBe("kinbyaaaaaaa")
+    const facts = screen.getByRole("list", { name: "Core version" })
+    expect(within(facts).getByRole("listitem", { name: "kinby" }).textContent).toBe("kinbyaaaaaaa")
     expect(screen.getByText("Behind the hub")).toBeDefined()
     expect(
       screen.getByText("The instance runs kinby aaaaaaa, and the hub is at bbbbbbb."),
     ).toBeDefined()
-    expect(screen.getByText("The template is older")).toBeDefined()
   })
 
-  it("shows a vanilla instance with no package, no template, and no notice", () => {
+  it("shows no notice for an instance on the hub's revision", () => {
     openSection(instanceSummary({ instance_id: "hub-ada", source_revision: "c".repeat(40) }))
 
-    const facts = screen.getByRole("list", { name: "Package and version" })
-    expect(within(facts).getByRole("listitem", { name: "Package" }).textContent).toBe(
-      "PackageNone, kinby's built-in defaults",
-    )
-    expect(within(facts).queryByRole("listitem", { name: "Set up from" })).toBeNull()
     expect(screen.queryByRole("alert")).toBeNull()
   })
 
   it("updates core to the hub's revision and shows the operation's steps", async () => {
     let finishedYet = false
-    const { caller, clock, onChanged, user } = openSection(writer, {
+    const { caller, clock, onChanged, user } = openSection(behind, {
       "operation.get": () =>
         finishedYet
           ? operation("succeeded", [step("image", "succeeded"), step("ready", "succeeded")])
@@ -113,7 +90,7 @@ describe("PackageSection", () => {
   })
 
   it("updates core to a ref the user types", async () => {
-    const { caller, user } = openSection(writer, {
+    const { caller, user } = openSection(behind, {
       "operation.get": () => operation("succeeded", [step("ready", "succeeded")]),
     })
 
@@ -127,10 +104,9 @@ describe("PackageSection", () => {
 
   it("lists what the preflight found, and says the instance keeps running", async () => {
     const found =
-      'Package "writer" failed its check in image sha256:candidate.\n' +
-      'Executable "kinby-fake-editor" is not on PATH.\n' +
-      "package.yaml: tonne: Extra inputs are not permitted"
-    const { onChanged, user } = openSection(writer, {
+      "The command '/bin/sh -c uv sync --frozen' returned a non-zero code: 1\n" +
+      "error: The lockfile at `uv.lock` needs to be updated"
+    const { onChanged, user } = openSection(behind, {
       "operation.get": () =>
         operation("failed", [step("validate", "succeeded"), step("image", "failed", found)], found),
     })
@@ -144,9 +120,8 @@ describe("PackageSection", () => {
         .getAllByRole("listitem")
         .map((item) => item.textContent),
     ).toEqual([
-      'Package "writer" failed its check in image sha256:candidate.',
-      'Executable "kinby-fake-editor" is not on PATH.',
-      "package.yaml: tonne: Extra inputs are not permitted",
+      "The command '/bin/sh -c uv sync --frozen' returned a non-zero code: 1",
+      "error: The lockfile at `uv.lock` needs to be updated",
     ])
     expect(onChanged).not.toHaveBeenCalled()
   })
