@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
 
+import tomlkit
 import yaml
 
 from kinby.contracts import SetupValue, TargetFile
@@ -34,7 +35,6 @@ from kinby.instance.layout import (
     WORKSPACE_DIR,
 )
 from kinby.instance.recap import DEFAULT_RECAP_LENS
-from kinby.instance.toml import TomlValue, toml_document
 from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage
 
 PLACEHOLDER_MODEL = "provider:model"
@@ -44,6 +44,8 @@ _PROTECTED_TEMPLATE_ROOTS = {STATE_DIR, WORKSPACE_DIR}
 _PACKAGE_REFERENCED_ROOTS = frozenset({SKILLS_DIR, TOOLS_DIR})
 _FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir", "package")
 
+type TomlValue = str | int | float | bool | list["TomlValue"] | dict[str, "TomlValue"]
+
 
 def _slugify(name: str) -> str:
     text = unicodedata.normalize("NFKD", name)
@@ -52,9 +54,12 @@ def _slugify(name: str) -> str:
     return text.strip("-") or "instance"
 
 
-def _toml_string(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+def _is_toml_value(value: object) -> bool:
+    if isinstance(value, dict):
+        return all(_is_toml_value(item) for item in value.values())
+    if isinstance(value, list):
+        return all(not isinstance(item, dict) and _is_toml_value(item) for item in value)
+    return isinstance(value, str | int | float)
 
 
 def _write_readme(directory: Path, explanation: str) -> None:
@@ -135,10 +140,8 @@ def _template_manifest(body: str, settings: Mapping[str, SetupValue]) -> dict[st
     models = template.get("models")
     if models is not None and not isinstance(models, dict):
         raise ValueError("Template [models] must be a table.")
-    try:
-        toml_document(template)
-    except TypeError as exc:
-        raise ValueError("Template manifest cannot be serialized.") from exc
+    if not _is_toml_value(template):
+        raise ValueError("Template manifest cannot hold an array of tables or a date.")
     return template
 
 
@@ -198,7 +201,7 @@ def _package_manifest(
         "distribution": descriptor.distribution,
         "version": descriptor.version,
     }
-    (directory / MANIFEST_NAME).write_text(toml_document(base), encoding="utf-8")
+    (directory / MANIFEST_NAME).write_text(tomlkit.dumps(base), encoding="utf-8")
 
 
 def _copy_template(
@@ -253,16 +256,16 @@ def _write_starter_tree(directory: Path, model: str) -> None:
             "# id stays the same if you move the directory. "
             "[models].main is the only required setting.\n"
             "\n"
-            f"id = {_toml_string(instance_id)}\n"
+            f"id = {tomlkit.string(instance_id).as_string()}\n"
             "\n"
             "[models]\n"
-            f"main = {_toml_string(model)}\n"
+            f"main = {tomlkit.string(model).as_string()}\n"
             "\n"
             "[memory]\n"
-            f"recap = {_toml_string(RecapPolicy.EVERY_TURN)}\n"
+            f"recap = {tomlkit.string(RecapPolicy.EVERY_TURN).as_string()}\n"
             "\n"
             "[feedback]\n"
-            f"ask = {_toml_string(FeedbackPolicy.EVERY_TURN)}\n"
+            f"ask = {tomlkit.string(FeedbackPolicy.EVERY_TURN).as_string()}\n"
             "\n"
             "# [budgets]\n"
             "# One step is one node execution.\n"
@@ -372,7 +375,7 @@ def init_from_template(
     _write_starter_tree(directory, model)
     _copy_template(directory, files, referenced=frozenset())
     manifest = _merged_manifest(directory, template, model=model)
-    (directory / MANIFEST_NAME).write_text(toml_document(manifest), encoding="utf-8")
+    (directory / MANIFEST_NAME).write_text(tomlkit.dumps(manifest), encoding="utf-8")
     return directory
 
 
