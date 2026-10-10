@@ -152,6 +152,28 @@ def test_init_does_not_overwrite_a_destination_that_fills_during_writing(
     assert "not empty" in capsys.readouterr().err
 
 
+def test_init_does_not_overwrite_a_file_that_appears_after_every_check(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    target = tmp_path / "alice"
+    target.mkdir()
+    competing = target / "SYSTEM.md"
+    competing.write_text("keep this\n", encoding="utf-8")
+    iterdir, exists = Path.iterdir, Path.exists
+    monkeypatch.setattr(Path, "iterdir", lambda path: iter(()) if path == target else iterdir(path))
+    monkeypatch.setattr(
+        Path, "exists", lambda path, **kwargs: path != competing and exists(path, **kwargs)
+    )
+
+    exit_code = main(["init", str(target)])
+
+    assert exit_code == 1
+    assert competing.read_text(encoding="utf-8") == "keep this\n"
+    assert "not empty" in capsys.readouterr().err
+
+
 def test_init_writes_into_an_existing_empty_directory(tmp_path):
     target = tmp_path / "alice"
     target.mkdir()

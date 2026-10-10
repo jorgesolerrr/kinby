@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import os
 import re
 import tomllib
 import unicodedata
@@ -379,9 +381,16 @@ def _publish_into_existing(source: Path, destination: Path) -> None:
         raise InstanceExistsError(f"instance directory is not empty: {destination}")
     for child in source.iterdir():
         target = destination / child.name
-        if target.exists():
-            raise InstanceExistsError(f"instance directory is not empty: {destination}")
-        child.replace(target)
+        try:
+            if child.is_dir():
+                child.rename(target)
+            else:
+                # A hard link refuses a name that is taken; a rename would replace the file there.
+                os.link(child, target)
+        except OSError as exc:
+            if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY, errno.ENOTDIR):
+                raise
+            raise InstanceExistsError(f"instance directory is not empty: {destination}") from None
 
 
 def _publish_directory(source: Path, destination: Path) -> None:
