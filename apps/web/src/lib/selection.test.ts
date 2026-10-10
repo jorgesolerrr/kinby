@@ -2,6 +2,8 @@ import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
 import {
+  linkedNode,
+  linkedRoutine,
   selectThread,
   selectTurn,
   turnPath,
@@ -47,5 +49,41 @@ describe("the selected turn", () => {
     act(() => selectThread("hub-ada", "t1"))
 
     expect(selected.current).toEqual({ instanceId: "hub-ada", threadId: "t1", turnId: undefined })
+  })
+})
+
+describe("a malformed URL", () => {
+  it("selects no instance", () => {
+    window.history.replaceState(null, "", "/instances/50%")
+
+    expect(selection().current.instanceId).toBeUndefined()
+  })
+
+  it("selects no thread", () => {
+    window.history.replaceState(null, "", "/instances/a/threads/%zz")
+
+    expect(selection().current).toEqual({
+      instanceId: "a",
+      threadId: undefined,
+      turnId: undefined,
+    })
+  })
+
+  it("selects no turn", () => {
+    window.history.replaceState(null, "", "/instances/a/threads/t1/turns/%E0%A4%A")
+
+    expect(selection().current).toEqual({ instanceId: "a", threadId: "t1", turnId: undefined })
+  })
+
+  it("links no routine", () => {
+    window.history.replaceState(null, "", "/instances/a/config/routines/50%")
+
+    expect(linkedRoutine()).toBeUndefined()
+  })
+
+  it("links no memory node", () => {
+    window.history.replaceState(null, "", "/instances/a/memory/%zz")
+
+    expect(linkedNode()).toBeUndefined()
   })
 })
