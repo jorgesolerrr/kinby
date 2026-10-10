@@ -79,7 +79,8 @@ steps:
       - bun install --frozen-lockfile
   # Every client step continues implement's session, so one coding session per issue writes the
   # change, answers its reviews and repairs its checks. It writes the pull request's title, body
-  # and replies; publish applies them (ADR 0081).
+  # and replies. Each step's hook records them as the run's values, and publish applies them
+  # (ADRs 0081 and 0083).
   - id: implement
     kind: client
     in: coder
@@ -89,6 +90,7 @@ steps:
     prompt: prompts/implement.md
     hook: check_implementation
     requires: [branch, base]
+    results: { title: str, body: str }
     timeout: 60m
   # A fix round: the coding client answers the review threads trusted authors left on the pull
   # request, commits its fixes, and rewrites the title and body where the round changed them.
@@ -104,7 +106,7 @@ steps:
     prompt: prompts/answer.md
     hook: check_answers
     requires: [branch, base]
-    results: { replies: str }
+    results: { replies: str, title: str, body: str }
     timeout: 60m
   # A check repair (ADR 0080): the coding client fixes what the failed checks sent back as
   # results.failure, and changes nothing when nothing failed. It comes after answer, so a repair
@@ -119,6 +121,7 @@ steps:
     prompt: prompts/fix.md
     hook: check_implementation
     requires: [branch, base]
+    results: { title: str, body: str }
     timeout: 30m
   # Adversarial review before the pull request opens is off by default (ADR 0044): reviewers
   # on the pull request take its place. To turn it on, uncomment review. It sends changes back

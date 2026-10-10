@@ -273,10 +273,21 @@ def test_a_review_wakes_the_run_for_a_fix_round_and_it_finishes_once_merge_ready
     tmp_path,
 ):
     control = FakeControl()
+    wrote = {"title": "Add dark mode", "body": "Adds dark mode."}
+    rewrote = {"title": "", "body": "Adds DARK_MODE."}
     control.step_results = [
-        *CHECKED_CHANGE,
+        PREPARED,
+        SET_UP,
+        IMPLEMENTED.model_copy(update={"values": wrote}),
+        NOTHING_TO_ANSWER,
+        NOTHING_TO_FIX,
+        CHECKED,
         OPENED,
-        *FIX_ROUND,
+        FEEDBACK,
+        ANSWERED.model_copy(update={"values": ANSWERED.values | rewrote}),
+        NOTHING_TO_FIX,
+        CHECKED,
+        REPLIED,
         MERGE_READY,
     ]
     runtime = FakeRuntime()
@@ -319,6 +330,11 @@ def test_a_review_wakes_the_run_for_a_fix_round_and_it_finishes_once_merge_ready
         assert asked["answer"][1].results["feedback"] == THREADS
         assert asked["publish"][1].results["replies"] == REPLIES
         assert asked["publish"][1].results["pr"] == 42
+        first, second = (
+            {name: command.results[name] for name in ("title", "body")}
+            for command in asked["publish"]
+        )
+        assert (first, second) == (wrote, rewrote)
         assert finished.attempts[-1].values == {"merge_ready": True}
 
     asyncio.run(scenario())
@@ -679,29 +695,53 @@ COMMITS = (
     "subprocess.run(['git', 'commit', '-m', 'Add dark mode'], check=True, capture_output=True)\n"
 )
 LEAVES_CHANGES = "open('notes.md', 'w').write('Half done.\\n')\n"
+#: What the stub client runs to write its pull request's title and body.
+WRITES_WORDS = (
+    "import os\n"
+    "os.makedirs('.scratch', exist_ok=True)\n"
+    "open('.scratch/pr-title.txt', 'w').write('Add a dark mode toggle\\n')\n"
+    "open('.scratch/pr-body.md', 'w').write('Adds dark mode.\\n')\n"
+)
+WORDS = {"title": "Add a dark mode toggle", "body": "Adds dark mode."}
 MALFORMED = 'print(\'{"type": "result", "subt\')\n'
 
 
 @pytest.mark.parametrize(
-    ("then", "ending", "reason"),
+    ("then", "ending", "reason", "words"),
     [
-        (COMMITS + streaming(CLAUDE_STREAM), StepEnding.CLEAN, None),
-        (COMMITS + MALFORMED, StepEnding.CLEAN, None),
+        (COMMITS + streaming(CLAUDE_STREAM), StepEnding.CLEAN, None, {}),
+        (COMMITS + MALFORMED, StepEnding.CLEAN, None, {}),
+        (COMMITS + WRITES_WORDS + streaming(CLAUDE_STREAM), StepEnding.CLEAN, None, WORDS),
         (
             streaming(CLAUDE_STREAM),
             StepEnding.FAILED,
             "Branch agent/7-add-dark-mode has no commits ahead of main.",
+            {},
+        ),
+        (
+            WRITES_WORDS + streaming(CLAUDE_STREAM),
+            StepEnding.FAILED,
+            "Branch agent/7-add-dark-mode has no commits ahead of main.",
+            {},
         ),
         (
             COMMITS + LEAVES_CHANGES + streaming(CLAUDE_STREAM),
             StepEnding.FAILED,
             "The workspace has changes no commit on agent/7-add-dark-mode holds:\n?? notes.md",
+            {},
         ),
     ],
-    ids=["committed", "committed-malformed-stream", "no-commits", "dirty-tree"],
+    ids=[
+        "committed",
+        "committed-malformed-stream",
+        "committed-with-words",
+        "no-commits",
+        "words-but-no-commits",
+        "dirty-tree",
+    ],
 )
-def test_the_implement_hook_passes_only_work_committed_on_the_branch_however_the_client_spoke(
-    tmp_path, monkeypatch, then, ending, reason
+def test_the_implement_hook_passes_only_committed_work_and_records_the_words_the_client_wrote(
+    tmp_path, monkeypatch, then, ending, reason, words
 ):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
@@ -724,6 +764,9 @@ def test_the_implement_hook_passes_only_work_committed_on_the_branch_however_the
         )
 
         assert result.ending is ending, result.summary
+        assert result.values == words
+        # Another run's step must never find them, even when this step failed.
+        assert not any((workspace / ".scratch").glob("pr-*"))
         if reason is not None:
             assert result.summary.endswith(
                 f'Hook "check_implementation" failed: UncommittedWork: {reason}'
@@ -907,14 +950,14 @@ def test_prepare_stacks_a_sub_issue_on_its_newest_siblings_agent_branch(tmp_path
     asyncio.run(scenario())
 
 
-def implemented(workspace: Path, branch: str, body: str | None) -> None:
-    """The workspace as the implement step leaves it: a commit on the branch, and the body the
-    client wrote for its pull request."""
+def implemented(workspace: Path, branch: str) -> None:
+    """The workspace as the implement step leaves it: a commit on the branch."""
     git(workspace, "switch", "-c", branch, "origin/main")
     commit(workspace, "theme.py", "DARK = True\n")
-    if body is not None:
-        (workspace / ".scratch").mkdir()
-        (workspace / ".scratch" / "pr-body.md").write_text(body)
+
+
+#: The body the implement step recorded for its pull request.
+BODY = {"body": "Adds dark mode."}
 
 
 async def opened(
@@ -946,7 +989,7 @@ def test_publish_pushes_the_branch_and_opens_its_pull_request_closing_the_issue(
 ):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"], "Closes #7\n\nAdds dark mode.\n")
+    implemented(workspace, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repo", "view", output=REPOSITORY)
@@ -954,7 +997,8 @@ def test_publish_pushes_the_branch_and_opens_its_pull_request_closing_the_issue(
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
-        result = await opened(dispatcher, 7, BRANCH | reviewed)
+        closing = {"body": "Closes #7\n\nAdds dark mode."}
+        result = await opened(dispatcher, 7, BRANCH | closing | reviewed)
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert result.values == {"pr": 43}
@@ -990,7 +1034,7 @@ def test_publish_stacks_a_sub_issues_pull_request_on_its_siblings(
 ):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    implemented(workspace, "agent/8-dark-theme", "Adds the dark theme.\n")
+    implemented(workspace, "agent/8-dark-theme")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(8, "Dark theme", parent=5))
     github.answer(
@@ -1007,7 +1051,13 @@ def test_publish_stacks_a_sub_issues_pull_request_on_its_siblings(
 
     async def scenario() -> None:
         result = await opened(
-            dispatcher, 8, {"branch": "agent/8-dark-theme", "base": "agent/7-light-theme"}
+            dispatcher,
+            8,
+            {
+                "branch": "agent/8-dark-theme",
+                "base": "agent/7-light-theme",
+                "body": "Adds the dark theme.",
+            },
         )
 
         assert result.ending is StepEnding.CLEAN, result.summary
@@ -1027,7 +1077,7 @@ def test_publish_takes_ready_for_human_off_an_issue_an_earlier_failure_handed_to
 ):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"], "Adds dark mode.\n")
+    implemented(workspace, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode", labels=["ready-for-human"]))
     github.answer("repo", "view", output=REPOSITORY)
@@ -1035,7 +1085,7 @@ def test_publish_takes_ready_for_human_off_an_issue_an_earlier_failure_handed_to
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
-        result = await opened(dispatcher, 7, BRANCH)
+        result = await opened(dispatcher, 7, BRANCH | BODY)
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert github.calls[-1] == ["issue", "edit", "7", "--remove-label", "ready-for-human"]
@@ -1046,8 +1096,7 @@ def test_publish_takes_ready_for_human_off_an_issue_an_earlier_failure_handed_to
 def test_publish_titles_the_pull_request_with_the_title_the_session_wrote(tmp_path, monkeypatch):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"], "Adds dark mode.\n")
-    (workspace / ".scratch" / "pr-title.txt").write_text("Add a dark mode toggle\n")
+    implemented(workspace, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repo", "view", output=REPOSITORY)
@@ -1055,20 +1104,22 @@ def test_publish_titles_the_pull_request_with_the_title_the_session_wrote(tmp_pa
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
-        result = await opened(dispatcher, 7, BRANCH)
+        result = await opened(dispatcher, 7, BRANCH | WORDS)
 
         assert result.ending is StepEnding.CLEAN, result.summary
         created = created_pull_request(github)
         assert created[created.index("--title") + 1] == "Add a dark mode toggle"
-        assert list((workspace / ".scratch").iterdir()) == []
 
     asyncio.run(scenario())
 
 
-def test_publish_pushes_nothing_when_the_client_wrote_no_pull_request_body(tmp_path, monkeypatch):
+def test_publish_pushes_nothing_when_the_session_wrote_no_pull_request_body(tmp_path, monkeypatch):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"], None)
+    implemented(workspace, BRANCH["branch"])
+    # Another run's body, left in the workspace the runs share.
+    (workspace / ".scratch").mkdir()
+    (workspace / ".scratch" / "pr-body.md").write_text("Adds a light mode.\n")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repo", "view", output=REPOSITORY)
@@ -1080,7 +1131,7 @@ def test_publish_pushes_nothing_when_the_client_wrote_no_pull_request_body(tmp_p
         assert result.ending is StepEnding.FAILED
         assert result.summary == (
             'Tool "publish_pull_request" failed: MissingPullRequestBody: '
-            "The coding client wrote no pull request body to .scratch/pr-body.md."
+            "The coding session wrote no pull request body."
         )
         assert not any(arguments[:2] == ["pr", "create"] for arguments in github.calls)
         assert git(tmp_path / "origin.git", "branch", "--list", BRANCH["branch"]) == ""
@@ -1314,7 +1365,8 @@ def test_the_review_hook_reads_the_verdict_the_reviewer_wrote_never_what_it_said
 ):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"], "Adds dark mode.\n")
+    implemented(workspace, BRANCH["branch"])
+    (workspace / ".scratch").mkdir()
     writes = "" if verdict is None else f"open('.scratch/review.md', 'w').write({verdict!r})\n"
     stub_client(tmp_path, monkeypatch, "claude", writes + streaming(CLAUDE_STREAM))
     dispatcher, _ = signal_runtime(instance, RoutineModel())
@@ -1665,7 +1717,7 @@ def pushed_branch(tmp_path: Path) -> Instance:
     excluded as the prepare step leaves them."""
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"], None)
+    implemented(workspace, BRANCH["branch"])
     git(workspace, "push", "-u", "origin", BRANCH["branch"])
     (workspace / ".git" / "info" / "exclude").write_text(".scratch/\n")
     return instance
@@ -1692,6 +1744,12 @@ FIXED_T1 = {"T1": {"fixed": True, "reply": "Renamed it."}}
     ("then", "results", "ending", "reason"),
     [
         (FIXES + writes_replies(FIXED_T1), {"feedback": THREADS}, StepEnding.CLEAN, None),
+        (
+            FIXES + writes_replies(FIXED_T1) + WRITES_WORDS,
+            {"feedback": THREADS},
+            StepEnding.CLEAN,
+            None,
+        ),
         (
             writes_replies({"T1": {"fixed": False, "reply": "DARK is the house style."}}),
             {"feedback": THREADS},
@@ -1722,6 +1780,7 @@ FIXED_T1 = {"T1": {"fixed": True, "reply": "Renamed it."}}
     ],
     ids=[
         "fixed",
+        "fixed-and-rewritten",
         "explained",
         "no-feedback-yet",
         "fix-not-committed",
@@ -1756,8 +1815,11 @@ def test_the_answer_hook_records_a_reply_for_every_thread_once_its_fixes_are_com
         if reason is not None:
             assert f'Hook "check_answers" failed: {reason}' in result.summary
         elif "feedback" in results:
-            replies = json.loads(str(result.values["replies"]))
+            replies = json.loads(str(result.values.pop("replies")))
             assert set(replies) == {"T1"}
+            # An unwritten title or body is recorded as empty, over an earlier round's.
+            assert result.values == (WORDS if WRITES_WORDS in then else {"title": "", "body": ""})
+            assert not any((workspace / ".scratch").glob("pr-*"))
         else:
             assert result.values == {}
 
@@ -1805,22 +1867,24 @@ def test_publish_after_a_fix_round_pushes_it_and_replies_on_each_thread_it_answe
     asyncio.run(scenario())
 
 
-def test_publish_after_a_fix_round_applies_the_title_and_body_the_session_rewrote_once(
+def test_publish_after_a_fix_round_applies_only_the_title_and_body_the_round_recorded(
     tmp_path, monkeypatch
 ):
     instance = pushed_branch(tmp_path)
     workspace = instance.manifest.workspace.path
     commit(workspace, "theme.py", "DARK_MODE = True\n")
+    # Another run's words, left in the workspace the runs share.
     (workspace / ".scratch").mkdir()
-    (workspace / ".scratch" / "pr-title.txt").write_text("Add a dark mode named DARK_MODE\n")
-    (workspace / ".scratch" / "pr-body.md").write_text("Closes #7\n\nAdds DARK_MODE.\n")
+    (workspace / ".scratch" / "pr-title.txt").write_text("Add a light mode\n")
+    (workspace / ".scratch" / "pr-body.md").write_text("Adds a light mode.\n")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     dispatcher, _ = signal_runtime(instance, RoutineModel())
     fix_round = BRANCH | {"pr": 42, "replies": json.dumps(FIXED_T1)}
+    rewrote = {"title": "Add a dark mode named DARK_MODE", "body": "Closes #7\n\nAdds DARK_MODE."}
 
     async def scenario() -> None:
-        first = await opened(dispatcher, 7, fix_round)
-        second = await opened(dispatcher, 7, fix_round)
+        first = await opened(dispatcher, 7, fix_round | rewrote)
+        second = await opened(dispatcher, 7, fix_round | {"title": "", "body": ""})
 
         assert (first.ending, second.ending) == (StepEnding.CLEAN, StepEnding.CLEAN)
         edits = [arguments for arguments in github.calls if arguments[:2] == ["pr", "edit"]]

@@ -1078,9 +1078,12 @@ def main(
                 return asyncio.run(_list_threads(client, args.filter, args.routine))
             case "routine" if args.routine_command in {"list", "run"}:
                 instance = _load_selected_instance(args)
-                if args.routine_command == "run":
-                    return asyncio.run(_run_routine(instance, RoutineName(args.name), args.payload))
-                return asyncio.run(_list_routines(instance))
+                with runtime_lock(instance.manifest.state_dir):
+                    if args.routine_command == "run":
+                        return asyncio.run(
+                            _run_routine(instance, RoutineName(args.name), args.payload)
+                        )
+                    return asyncio.run(_list_routines(instance))
             case "usage":
                 command = _range_command(lambda: _usage_command(args))
                 if command is None:

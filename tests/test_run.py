@@ -322,3 +322,22 @@ def test_the_repl_refuses_to_start_beside_a_live_server(
     assert refused == 1
     assert str(os.getpid()) in refusal
     assert main(["repl", str(instance_path)]) == 0
+
+
+@pytest.mark.parametrize("routine_command", [["run", "news"], ["list"]])
+def test_routine_commands_refuse_to_start_beside_a_live_server(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    routine_command: list[str],
+) -> None:
+    instance_path = tmp_path / "alice"
+    init_instance(instance_path)
+    state_dir = load_instance(instance_path).manifest.state_dir
+
+    with runtime_lock(state_dir):
+        refused = main(["routine", *routine_command, "--instance", str(instance_path)])
+    refusal = capsys.readouterr().err
+
+    assert refused == 1
+    assert str(os.getpid()) in refusal
+    assert list(EventLog(state_dir).all_events()) == []

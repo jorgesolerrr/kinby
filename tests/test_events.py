@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -155,6 +156,73 @@ def test_sequence_stays_gap_free_after_event_log_restart(tmp_path: Path) -> None
 
         assert (first.sequence, second.sequence) == (1, 2)
         assert other_thread.sequence == 1
+
+    asyncio.run(scenario())
+
+
+def test_appends_parse_the_event_log_once(tmp_path: Path) -> None:
+    class CountingEventLog(EventLog):
+        scans = 0
+
+        def all_events(self) -> Iterator[Event]:
+            self.scans += 1
+            yield from super().all_events()
+
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        await EventLog(tmp_path).append(thread_id, turn_id, STARTED)
+        event_log = CountingEventLog(tmp_path)
+
+        appended = [
+            await event_log.append(thread_id, turn_id, MessageDelta(text=f"chunk {chunk}"))
+            for chunk in range(5)
+        ]
+
+        assert event_log.scans == 1
+        assert [event.sequence for event in appended] == [2, 3, 4, 5, 6]
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_write_does_not_consume_a_sequence(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        await event_log.append(thread_id, turn_id, STARTED)
+        events = tmp_path / "events.jsonl"
+        written = events.read_text(encoding="utf-8")
+        events.unlink()
+        events.mkdir()
+
+        with pytest.raises(IsADirectoryError):
+            await event_log.append(thread_id, turn_id, MessageDelta(text="lost"))
+
+        events.rmdir()
+        events.write_text(written, encoding="utf-8")
+        retried = await event_log.append(thread_id, turn_id, MessageDelta(text="kept"))
+
+        assert retried.sequence == 2
+        assert [event.sequence for event in event_log.stored(thread_id)] == [1, 2]
+
+    asyncio.run(scenario())
+
+
+def test_interleaved_threads_each_keep_a_gap_free_sequence(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        first_thread = uuid4()
+        second_thread = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+
+        for _ in range(3):
+            await event_log.append(first_thread, turn_id, MessageDelta(text="first"))
+            await event_log.append(second_thread, turn_id, MessageDelta(text="second"))
+        await event_log.append(first_thread, turn_id, MessageDelta(text="first"))
+
+        assert [event.sequence for event in event_log.stored(first_thread)] == [1, 2, 3, 4]
+        assert [event.sequence for event in event_log.stored(second_thread)] == [1, 2, 3]
 
     asyncio.run(scenario())
 
