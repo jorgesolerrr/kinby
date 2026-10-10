@@ -8,6 +8,7 @@ from importlib import import_module
 from importlib.metadata import entry_points as installed_entry_points
 from itertools import count
 from pathlib import Path
+from select import PIPE_BUF
 from threading import Thread
 from time import monotonic, sleep
 from types import SimpleNamespace
@@ -89,8 +90,9 @@ class _BashProcess:
 
 def _written_pipe(data: bytes) -> BinaryIO:
     read, write = os.pipe()
-    # A pipe can hold less than the data, so the write must not wait for the reader.
-    Thread(target=_fill, args=(write, data), daemon=True).start()
+    # A pipe always holds PIPE_BUF bytes; the rest must not wait for the reader.
+    os.write(write, data[:PIPE_BUF])
+    Thread(target=_fill, args=(write, data[PIPE_BUF:]), daemon=True).start()
     return open(read, "rb")
 
 
