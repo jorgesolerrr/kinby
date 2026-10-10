@@ -8,6 +8,7 @@ from importlib import import_module
 from importlib.metadata import entry_points as installed_entry_points
 from itertools import count
 from pathlib import Path
+from threading import Thread
 from time import monotonic, sleep
 from types import SimpleNamespace
 from typing import BinaryIO
@@ -88,9 +89,14 @@ class _BashProcess:
 
 def _written_pipe(data: bytes) -> BinaryIO:
     read, write = os.pipe()
-    os.write(write, data)
-    os.close(write)
+    # A pipe can hold less than the data, so the write must not wait for the reader.
+    Thread(target=_fill, args=(write, data), daemon=True).start()
     return open(read, "rb")
+
+
+def _fill(write: int, data: bytes) -> None:
+    with open(write, "wb") as pipe:
+        pipe.write(data)
 
 
 def test_tool_decorator_attaches_the_declaration_record() -> None:
