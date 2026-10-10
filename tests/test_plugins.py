@@ -1,4 +1,6 @@
 import asyncio
+import os
+import signal
 import subprocess
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import asdict, replace
@@ -6,6 +8,7 @@ from importlib import import_module
 from importlib.metadata import entry_points as installed_entry_points
 from io import BytesIO
 from pathlib import Path
+from time import monotonic
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -73,18 +76,14 @@ class _BashProcess:
         self.stderr = BytesIO(stderr)
         self.return_code = return_code
         self.times_out = times_out
-        self.killed = False
+        self.pid = 4_242
         self.wait_timeouts: list[float | None] = []
 
     def wait(self, timeout: float | None = None) -> int:
         self.wait_timeouts.append(timeout)
-        if self.times_out and not self.killed:
-            assert timeout is not None
+        if self.times_out and timeout is not None:
             raise subprocess.TimeoutExpired(("bash", "-c"), timeout)
         return self.return_code
-
-    def kill(self) -> None:
-        self.killed = True
 
 
 def test_tool_decorator_attaches_the_declaration_record() -> None:
@@ -824,6 +823,50 @@ def test_default_bash_times_out_at_the_manifest_timeout(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_default_bash_returns_while_a_background_child_holds_its_output(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, bash_timeout_seconds=60)
+        started = monotonic()
+
+        output = await bash.ainvoke(
+            {"command": "sleep 30 & echo hi $!"},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert monotonic() - started < 10
+        greeting, child = output.split()
+        os.kill(int(child), signal.SIGKILL)
+        assert greeting == "hi"
+
+    asyncio.run(scenario())
+
+
+def test_default_bash_timeout_kills_the_whole_process_group(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, bash_timeout_seconds=1)
+        started = monotonic()
+
+        with pytest.raises(TimeoutError) as raised:
+            await bash.ainvoke(
+                {"command": "bash -c 'sleep 30 & echo $!; wait'"},
+                ToolContext(instance=instance, thread_id=uuid4()),
+            )
+
+        assert monotonic() - started < 10
+        grandchild = int(str(raised.value).splitlines()[-1])
+        assert not _running(grandchild)
+
+    asyncio.run(scenario())
+
+
+def _running(pid: int) -> bool:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return False
+    return stat.rsplit(")", 1)[1].split()[0] != "Z"
+
+
 def test_default_bash_reports_a_nonzero_exit_code(tmp_path: Path, monkeypatch) -> None:
     async def scenario() -> None:
         instance = _instance(tmp_path, defaults=True)
@@ -866,13 +909,14 @@ def test_default_bash_reports_a_nonzero_exit_code(tmp_path: Path, monkeypatch) -
     asyncio.run(scenario())
 
 
-def test_default_bash_kills_a_timed_out_process_and_returns_partial_output(
+def test_default_bash_times_out_when_the_group_already_exited(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     async def scenario() -> None:
         instance = _instance(tmp_path, defaults=True)
         process = _BashProcess(stdout=b"partial output", times_out=True)
+        kills: list[tuple[int, int]] = []
 
         def popen(
             command: Sequence[str],
@@ -880,7 +924,12 @@ def test_default_bash_kills_a_timed_out_process_and_returns_partial_output(
         ) -> _BashProcess:
             return process
 
+        def killpg(group: int, signal_number: int) -> None:
+            kills.append((group, signal_number))
+            raise ProcessLookupError
+
         monkeypatch.setattr("kinby.plugins.defaults.shell.subprocess.Popen", popen)
+        monkeypatch.setattr("kinby.plugins.defaults.shell.os.killpg", killpg)
         model = ScriptedModel(
             [
                 AIMessageChunk(
@@ -901,7 +950,7 @@ def test_default_bash_kills_a_timed_out_process_and_returns_partial_output(
         events = await _start_turn(instance, model, approvals=("approve",))
 
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
-        assert process.killed
+        assert kills == [(4_242, signal.SIGKILL)]
         assert process.wait_timeouts == [120.0, None]
         assert _without_duration(result) == ToolResult(
             call_id="bash-1",
