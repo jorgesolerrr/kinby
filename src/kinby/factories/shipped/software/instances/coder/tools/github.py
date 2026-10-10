@@ -41,15 +41,7 @@ _COMMAND_TIMEOUT = 900
 #: GitHub's author_association.
 _TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 #: The review apps whose feedback babysitting answers, whatever their association (ADR 0079).
-#: Each is named as the bot that comments and as the app whose check run reports a clean review.
-_TRUSTED_APPS = frozenset(
-    {
-        "greptile-apps",
-        "greptile-apps[bot]",
-        "chatgpt-codex-connector",
-        "chatgpt-codex-connector[bot]",
-    }
-)
+_TRUSTED_APPS = frozenset({"greptile-apps", "chatgpt-codex-connector"})
 _REVIEW_THREADS = """
 query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
@@ -60,7 +52,7 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
           isResolved
           path
           line
-          comments(last: 100) { nodes { author { login } authorAssociation body } }
+          comments(last: 100) { nodes { author { __typename login } authorAssociation body } }
         }
         pageInfo { hasNextPage endCursor }
       }
@@ -280,8 +272,8 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
         for check in checks
     ) or any(
         review["commit_id"] == head
-        and (login := (review["user"] or {}).get("login", "ghost")) != coder
-        and _trusted(login, review["author_association"])
+        and (user := review["user"] or {"login": "ghost", "type": "User"})["login"] != coder
+        and _trusted(review["author_association"], _bot_app(user["login"], user["type"]))
         for review in reviews
     )
     if not reviewed:
@@ -436,14 +428,20 @@ def _review_threads(workspace: Path, pr: int) -> list[ReviewThread]:
 
 def _review_comment(node: dict) -> ReviewComment:
     # A deleted account's comment has no author.
-    author = (node["author"] or {}).get("login", "ghost")
+    author = node["author"] or {"__typename": "User", "login": "ghost"}
+    app = _bot_app(author["login"], author["__typename"])
     return ReviewComment(
-        author=author, body=node["body"], trusted=_trusted(author, node["authorAssociation"])
+        author=author["login"], body=node["body"], trusted=_trusted(node["authorAssociation"], app)
     )
 
 
-def _trusted(login: str, association: str) -> bool:
-    return association in _TRUSTED or login in _TRUSTED_APPS
+def _trusted(association: str, app: str | None) -> bool:
+    return association in _TRUSTED or app in _TRUSTED_APPS
+
+
+def _bot_app(login: str, kind: str) -> str | None:
+    """REST gives a bot's login with a `[bot]` suffix, GraphQL without."""
+    return login.removesuffix("[bot]") if kind == "Bot" else None
 
 
 def _can_change_eligibility(signal: dict[str, object]) -> bool:
