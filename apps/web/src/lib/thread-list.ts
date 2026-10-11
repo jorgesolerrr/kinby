@@ -4,22 +4,26 @@ import type { InstanceClient, ThreadFilter, ThreadListResult, ThreadSummary } fr
 type Lister = Pick<InstanceClient, "call">
 
 /**
- * An instance's threads in one set as it last listed them. The sidebar reads the `sidebar` set, and
- * the open thread and the memory page look a thread up in `all`, so an archived one still resolves.
+ * An instance's threads in one set as it last listed them. The sidebar and the open thread read the
+ * `sidebar` set. The open thread looks a thread outside it up in `all`, as the memory page does, so
+ * an archived one still resolves.
  */
 export interface ThreadList {
   view: () => ThreadListResult | undefined
   onChange: (listener: () => void) => () => void
+  /** List this set again. The promise settles once the list is stored. */
+  list: () => Promise<void>
   /**
    * List the threads again in every set kept for the instance, so a change shows in the sidebar and
-   * the open thread at once. The promise settles once the lists are stored.
+   * the open thread at once. They are stored together once all are read, so a thread an archive
+   * takes out of the sidebar set never shows as missing from both.
    */
-  list: () => Promise<void>
+  listKept: () => Promise<void>
 }
 
 interface KeptList extends ThreadList {
-  /** List this set alone again. */
-  listOwn: () => Promise<void>
+  /** Read this set again, and return what stores it unless a newer read came since. */
+  read: () => Promise<() => void>
 }
 
 // The lists live as long as the connection they read, like the thread stores beside them.
@@ -50,21 +54,29 @@ function createThreadList(
   // A newer read retires the one already in flight.
   let generation = 0
 
+  const read = async () => {
+    const mine = ++generation
+    const next = await listThreads(client, filter)
+    return () => {
+      if (mine !== generation) return
+      listed = next
+      for (const listener of listeners) listener()
+    }
+  }
   return {
     view: () => listed,
     onChange(listener) {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
+    read,
     async list() {
-      await Promise.all([...kept.values()].map((list) => list.listOwn()))
+      const store = await read()
+      store()
     },
-    async listOwn() {
-      const mine = ++generation
-      const next = await listThreads(client, filter)
-      if (mine !== generation) return
-      listed = next
-      for (const listener of listeners) listener()
+    async listKept() {
+      const stores = await Promise.all([...kept.values()].map((list) => list.read()))
+      for (const store of stores) store()
     },
   }
 }

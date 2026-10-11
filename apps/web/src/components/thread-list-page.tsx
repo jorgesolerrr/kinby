@@ -140,7 +140,7 @@ export function ThreadListPage({
           },
       )
       setFailure(undefined)
-      await threadList(client, "sidebar").list()
+      await threadList(client, "sidebar").listKept()
     } catch (error) {
       setFailure(error)
     }

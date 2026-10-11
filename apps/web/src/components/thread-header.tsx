@@ -28,8 +28,9 @@ const MODES: { mode: PermissionMode; label: string; hint: string }[] = [
 
 /**
  * The thread's title, which a click renames, the mode it runs in, and archive or unarchive. They
- * come from the instance's full thread list, so an archived thread keeps its header, and the lists
- * are read again after each change so the sidebar shows it too.
+ * come from the sidebar's thread list, or from the instance's full list for a thread outside it, so
+ * an archived thread keeps its header. Every kept list is read again after each change so the
+ * sidebar shows it too.
  */
 export function ThreadHeader({
   client,
@@ -39,8 +40,13 @@ export function ThreadHeader({
   threadId: string
 }) {
   const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
-  const threads = threadList(client, "all")
-  const listed = useSyncExternalStore(threads.onChange, threads.view)
+  const sidebar = threadList(client, "sidebar")
+  const all = threadList(client, "all")
+  const inSidebar = useSyncExternalStore(sidebar.onChange, sidebar.view)
+  const inAll = useSyncExternalStore(all.onChange, all.view)
+  const outside =
+    inSidebar !== undefined && !inSidebar.threads.some((summary) => summary.id === threadId)
+  const [threads, listed] = outside ? [all, inAll] : [sidebar, inSidebar]
   const thread = listed?.threads.find((summary) => summary.id === threadId)
   const missing = thread === undefined
   const [failure, setFailure] = useState<string>()
@@ -56,7 +62,7 @@ export function ThreadHeader({
   const change = async (call: () => Promise<unknown>) => {
     try {
       await call()
-      await threads.list()
+      await threads.listKept()
       setFailure(undefined)
       return true
     } catch (error) {

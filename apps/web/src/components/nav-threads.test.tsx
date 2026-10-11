@@ -214,7 +214,7 @@ describe("an instance's threads", () => {
     await threadLinks()
 
     title = "Release plan"
-    await act(() => threadList(client, "all").list())
+    await act(() => threadList(client, "all").listKept())
 
     expect((await threadLinks()).map((link) => link.textContent)).toEqual(["Release plan"])
   })
