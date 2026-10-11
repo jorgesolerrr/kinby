@@ -915,6 +915,25 @@ def test_a_claude_step_whose_session_was_lost_runs_once_more_in_a_new_session(
     asyncio.run(scenario())
 
 
+def test_a_claude_step_whose_session_was_lost_runs_again_only_until_the_steps_timeout(
+    tmp_path, monkeypatch
+):
+    runtime, _ = step_instance(tmp_path)
+    error = "No conversation found with session ID: claude-0\n"
+    stub_client(tmp_path, monkeypatch, "claude", "time.sleep(0.6)\n" + resume_failing(error))
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, "claude", resume="claude-0")
+
+        assert result == StepResult(
+            ending=StepEnding.TIMED_OUT,
+            summary="claude ran past its 1-second timeout and was killed.\n"
+            "Session claude-0 was lost, so claude ran in a new one.",
+        )
+
+    asyncio.run(scenario())
+
+
 def test_a_resumed_claude_step_that_fails_otherwise_runs_only_once(tmp_path, monkeypatch):
     runtime, _ = step_instance(tmp_path)
     calls = stub_client(tmp_path, monkeypatch, "claude", resume_failing("Credit balance low\n"))

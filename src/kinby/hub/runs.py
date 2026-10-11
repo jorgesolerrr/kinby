@@ -461,15 +461,21 @@ class FactoryRuns:
         )
 
     def _session(self, run_id: UUID, factory: FactoryFile, step: StepId) -> CodingSessionId | None:
-        """The newest coding client session recorded by the step or by a step that resumes it.
+        """The newest coding client session recorded by any step that shares the step's session.
 
-        A step that resumes a lost session runs in a new one, which the steps after it continue.
+        Steps share a session when their resumes lead back to the same step. A step that resumes
+        a lost session runs in a new one, which the steps after it continue.
         """
-        sharing = {step} | {
-            other.id
-            for other in factory.steps
-            if isinstance(other, ClientStep) and other.resume == step
+        resumes = {
+            other.id: other.resume for other in factory.steps if isinstance(other, ClientStep)
         }
+
+        def first(step_id: StepId) -> StepId:
+            while (resumed := resumes.get(step_id)) is not None:
+                step_id = resumed
+            return step_id
+
+        sharing = {step} | {other for other in resumes if first(other) == first(step)}
         return next(
             (
                 attempt.session

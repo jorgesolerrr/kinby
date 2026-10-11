@@ -5,8 +5,8 @@ Claude Code wrote its sessions under `/root/.claude`, in the container's writabl
 ## Decision
 
 - **The instance runs Claude with `CLAUDE_CONFIG_DIR` set to `claude` in its state folder.** The instance directory is a bind mount every instance already has, so its sessions survive an update, a restart and a recreate with no change to the instance's storage. The software factory signs Claude in with `CLAUDE_CODE_OAUTH_TOKEN`, so it needs nothing from `/root/.claude`.
-- **A step whose Claude session is lost starts a new one.** When a resumed run exits with that error, the instance runs the same prompt once more without `--resume`. The step ends as that run ends, and its summary says the session was lost. No other failure gets a second run.
-- **Later steps continue the newest session.** A client step resumes the newest session recorded by the step it names or by any step that resumes that step.
+- **A step whose Claude session is lost starts a new one.** When a resumed run exits with that error, the instance runs the same prompt once more without `--resume`, in the time left of the step's timeout. The step ends as that run ends, and its summary says the session was lost. No other failure gets a second run.
+- **Later steps continue the newest session.** Steps share a session when their resumes lead back to the same step. A client step resumes the newest session any step sharing it recorded.
 
 ## Considered options
 

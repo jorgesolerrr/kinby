@@ -1258,18 +1258,22 @@ def test_the_hub_sends_a_client_step_its_prompt_timeout_model_and_the_session_it
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("answered", ["claude-1", "claude-2"], ids=["same", "new"])
-def test_a_client_step_resumes_the_newest_session_of_its_step_or_a_step_resuming_it(
-    tmp_path, answered
+@pytest.mark.parametrize(
+    ("recorded", "resumed"),
+    [
+        (["claude-1"] * 4, ["claude-1"] * 3),
+        (["claude-1", "claude-2", "claude-2", "claude-2"], ["claude-1", "claude-2", "claude-2"]),
+        (["claude-1", "claude-1", "claude-2", "claude-2"], ["claude-1", "claude-1", "claude-2"]),
+    ],
+    ids=["same", "answer-new", "check-new"],
+)
+def test_a_client_step_resumes_the_newest_session_of_any_step_sharing_it(
+    tmp_path, recorded, resumed
 ):
     control = FakeControl()
-    control.step_results = [
-        StepResult(ending=StepEnding.CLEAN, session="claude-1"),
-        StepResult(ending=StepEnding.CLEAN, session=answered),
-        StepResult(ending=StepEnding.CLEAN, session=answered),
-    ]
+    control.step_results = [StepResult(ending=StepEnding.CLEAN, session=s) for s in recorded]
     runtime = FakeRuntime()
-    answer = """\
+    resuming = """\
   - id: answer
     kind: client
     in: coder
@@ -1277,8 +1281,15 @@ def test_a_client_step_resumes_the_newest_session_of_its_step_or_a_step_resuming
     prompt: prompts/fix.md
     resume: implement
     hook: record_branch
+  - id: check
+    kind: client
+    in: coder
+    client: claude
+    prompt: prompts/fix.md
+    resume: answer
+    hook: record_branch
 """
-    factory = CLIENT.replace("  - id: fix\n", answer + "  - id: fix\n")
+    factory = CLIENT.replace("  - id: fix\n", resuming + "  - id: fix\n")
     hub = factory_hub(tmp_path / "hub", control, runtime, CLIENT_FILES | {"factory.yaml": factory})
 
     async def scenario() -> None:
@@ -1291,7 +1302,7 @@ def test_a_client_step_resumes_the_newest_session_of_its_step_or_a_step_resuming
             (command.origin.step, command.step.resume)
             for _, command in control.steps
             if isinstance(command.step, ClientStepRun)
-        ] == [("implement", None), ("answer", "claude-1"), ("fix", answered)]
+        ] == list(zip(["implement", "answer", "check", "fix"], [None, *resumed], strict=True))
 
     asyncio.run(scenario())
 
