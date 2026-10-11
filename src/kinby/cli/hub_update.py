@@ -30,8 +30,8 @@ from kinby.contracts import (
 
 #: How often the command reads the operation. An update builds an image, so it takes minutes.
 POLL_SECONDS = 1.0
-#: How long a call waits for a connection to the hub before the command gives up.
-CONNECT_SECONDS = 60.0
+#: How long a call waits for the hub's answer, the connection included, before it gives up.
+ANSWER_SECONDS = 60.0
 #: How long the command follows an operation with no poll reaching the hub.
 LOSS_SECONDS = 600.0
 
@@ -99,7 +99,7 @@ def update_on_hub(argv: list[str]) -> int:
 
 
 async def _update(url: str, token: UpdateToken, command: InstanceUpdateCommand) -> int:
-    async with contract_client(url, token, connect_within=CONNECT_SECONDS) as client:
+    async with contract_client(url, token, answer_within=ANSWER_SECONDS) as client:
         accepted = await client.call(INSTANCE_UPDATE, command)
         if isinstance(accepted, ErrorEnvelope):
             print(format_error(accepted), file=sys.stderr)

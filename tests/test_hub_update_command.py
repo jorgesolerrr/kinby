@@ -191,25 +191,25 @@ def test_hub_update_stops_when_the_hub_rejects_the_poll(
 
 @asynccontextmanager
 async def _drop_one_poll(
-    url: str, token: UpdateToken, *, connect_within: float
+    url: str, token: UpdateToken, *, answer_within: float
 ) -> AsyncIterator[_LoseOnePoll]:
-    async with contract_client(url, token, connect_within=connect_within) as client:
+    async with contract_client(url, token, answer_within=answer_within) as client:
         yield _LoseOnePoll(client)
 
 
 @asynccontextmanager
 async def _lose_every_poll(
-    url: str, token: UpdateToken, *, connect_within: float
+    url: str, token: UpdateToken, *, answer_within: float
 ) -> AsyncIterator[_LoseEveryPoll]:
-    async with contract_client(url, token, connect_within=connect_within) as client:
+    async with contract_client(url, token, answer_within=answer_within) as client:
         yield _LoseEveryPoll(client)
 
 
 @asynccontextmanager
 async def _refuse_poll(
-    url: str, token: UpdateToken, *, connect_within: float
+    url: str, token: UpdateToken, *, answer_within: float
 ) -> AsyncIterator[_RefusePoll]:
-    async with contract_client(url, token, connect_within=connect_within) as client:
+    async with contract_client(url, token, answer_within=answer_within) as client:
         yield _RefusePoll(client)
 
 
@@ -332,7 +332,7 @@ def test_hub_update_gives_up_when_no_connection_comes_up(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv(TOKEN_VARIABLE, "token")
-    monkeypatch.setattr("kinby.cli.hub_update.CONNECT_SECONDS", 1)
+    monkeypatch.setattr("kinby.cli.hub_update.ANSWER_SECONDS", 1)
 
     exit_code = main(
         ["hub", "update", "--connect", f"{closed_url()}/ws", str(uuid4()), "--revision", "v0.2.0"]
@@ -393,7 +393,7 @@ def test_hub_update_stops_at_the_first_answer_that_is_no_socket(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv(TOKEN_VARIABLE, "token")
-    monkeypatch.setattr("kinby.cli.hub_update.CONNECT_SECONDS", 5)
+    monkeypatch.setattr("kinby.cli.hub_update.ANSWER_SECONDS", 5)
 
     requests = _update_answered(status, "/")
 
@@ -408,12 +408,58 @@ def test_hub_update_retries_a_hub_that_is_unavailable(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv(TOKEN_VARIABLE, "token")
-    monkeypatch.setattr("kinby.cli.hub_update.CONNECT_SECONDS", 2)
+    monkeypatch.setattr("kinby.cli.hub_update.ANSWER_SECONDS", 2)
 
     requests = _update_answered(503, "/ws")
 
     assert len(requests) > 1
     assert "did not answer" in capsys.readouterr().err
+
+
+@asynccontextmanager
+async def _silent() -> AsyncIterator[tuple[str, list[str]]]:
+    """A server that opens the socket, reads every frame, and never answers one."""
+    frames: list[str] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        async for message in socket:
+            frames.append(message.data)
+        return socket
+
+    application = web.Application()
+    application.router.add_get("/ws", handler)
+    runner = web.AppRunner(application, shutdown_timeout=0.1)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    try:
+        yield f"http://127.0.0.1:{site.port}/ws", frames
+    finally:
+        await runner.cleanup()
+
+
+def test_hub_update_gives_up_on_a_hub_that_opens_the_socket_and_never_answers(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(TOKEN_VARIABLE, "token")
+    monkeypatch.setattr("kinby.cli.hub_update.ANSWER_SECONDS", 1)
+
+    async def scenario() -> tuple[int, list[str]]:
+        async with _silent() as (address, frames):
+            exit_code = await asyncio.to_thread(
+                main,
+                ["hub", "update", "--connect", address, str(uuid4()), "--revision", "v0.2.0"],
+            )
+            return exit_code, frames
+
+    exit_code, frames = asyncio.run(scenario())
+
+    assert exit_code == 1
+    assert len(frames) == 1
+    assert "may have run" in capsys.readouterr().err
 
 
 def closed_url() -> str:

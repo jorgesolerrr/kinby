@@ -79,7 +79,7 @@ def test_hub_adopt_gives_up_when_no_connection_comes_up(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv(TOKEN_VARIABLE, "token")
-    monkeypatch.setattr("kinby.cli.hub_adopt.CONNECT_SECONDS", 1)
+    monkeypatch.setattr("kinby.cli.hub_adopt.ANSWER_SECONDS", 1)
 
     exit_code = main(["hub", "adopt", "--connect", f"{closed_url()}/ws", "/instance", "coder"])
 

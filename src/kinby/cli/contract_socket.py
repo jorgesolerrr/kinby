@@ -68,6 +68,12 @@ UNANSWERED = ErrorEnvelope(
     message="The contract server did not answer before the client gave up waiting.",
     retryable=False,
 )
+UNANSWERED_CALL = ErrorEnvelope(
+    code=ErrorCode.CONNECTION_LOST,
+    message="The call went out and the contract server did not answer before the client gave up "
+    "waiting. The call may have run all the same.",
+    retryable=False,
+)
 UNREADABLE = ErrorEnvelope(
     code=ErrorCode.INTERNAL,
     message="The contract server answered with something this client could not read.",
@@ -135,11 +141,11 @@ class ContractSocket:
         self,
         session: aiohttp.ClientSession,
         url: str,
-        connect_within: float | None = None,
+        answer_within: float | None = None,
     ) -> None:
         self._session = session
         self._url = url
-        self._connect_within = connect_within
+        self._answer_within = answer_within
         self._socket: aiohttp.ClientWebSocketResponse | None = None
         self._live = asyncio.Event()
         self._stopped: ErrorEnvelope | None = None
@@ -166,7 +172,8 @@ class ContractSocket:
     ) -> ContractModel:
         """Scopes ride on the token: the contract server decides what this connection holds."""
         del scopes
-        unreachable = await self._unreachable()
+        deadline = self._deadline()
+        unreachable = await self._unreachable(deadline)
         if unreachable is not None:
             return unreachable
         frame_id = self._next_id()
@@ -176,7 +183,12 @@ class ContractSocket:
             sent = await self._send(
                 CallFrame.model_validate({"id": frame_id, "method": method, "params": params})
             )
-            return await answer if sent else CONNECTION_LOST
+            if not sent:
+                return CONNECTION_LOST
+            async with asyncio.timeout_at(deadline):
+                return await answer
+        except TimeoutError:
+            return UNANSWERED_CALL
         finally:
             del self._calls[frame_id]
 
@@ -187,7 +199,7 @@ class ContractSocket:
         scopes: Collection[Scope],
     ) -> Stream[ContractModel] | ErrorEnvelope:
         del scopes
-        unreachable = await self._unreachable()
+        unreachable = await self._unreachable(self._deadline())
         if unreachable is not None:
             return unreachable
         frame_id = self._next_id()
@@ -206,10 +218,16 @@ class ContractSocket:
             return head_sequence
         return Stream(head_sequence, self._items(subscription))
 
-    async def _unreachable(self) -> ErrorEnvelope | None:
+    def _deadline(self) -> float | None:
+        """The loop time by which a call starting now is answered, or None to wait without end."""
+        if self._answer_within is None:
+            return None
+        return asyncio.get_running_loop().time() + self._answer_within
+
+    async def _unreachable(self, deadline: float | None) -> ErrorEnvelope | None:
         """Wait for a live connection, and say why a call cannot go out without one."""
         try:
-            async with asyncio.timeout(self._connect_within):
+            async with asyncio.timeout_at(deadline):
                 await self._live.wait()
         except TimeoutError:
             return UNANSWERED
@@ -342,17 +360,19 @@ async def contract_client(
     url: str,
     token: ControlToken | AccessToken | UpdateToken,
     *,
-    connect_within: float | None = None,
+    answer_within: float | None = None,
 ) -> AsyncIterator[ContractClient]:
     """Open a client on an instance's or a hub's contract server, with a bearer token.
 
-    With ``connect_within`` seconds, a call that finds no live connection for that long
-    answers `UNANSWERED`. Without it, a call waits for the socket to come back.
+    With ``answer_within`` seconds, a call gives up that long after it started: it answers
+    `UNANSWERED` when no connection came up, and `UNANSWERED_CALL` when it went out and no
+    reply came back. A subscription waits that long for a connection. Without it, both wait
+    for the socket to come back.
     """
     protected = protected_contract_url(url)
     headers = {"Authorization": f"Bearer {token}"}
     async with aiohttp.ClientSession(headers=headers) as session:
-        contract = ContractSocket(session, protected, connect_within)
+        contract = ContractSocket(session, protected, answer_within)
         async with contract.connected():
             yield ContractClient(contract.dispatch, contract.subscribe, INSTANCE_SCOPES)
 
