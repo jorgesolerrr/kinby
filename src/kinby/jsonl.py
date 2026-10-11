@@ -1,15 +1,18 @@
 """Read and append the records of a JSONL log, where a record counts once its newline is written.
 
 A write cut short leaves a torn tail: the bytes after the last newline. Only the process that
-owns the log may append, because the append cuts that tail off before writing.
+owns the log may append, because the append cuts that tail off before writing. Its threads append
+one at a time for the same reason.
 """
 
 import logging
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from threading import Lock
 
 _logger = logging.getLogger(__name__)
+_appending = Lock()
 
 
 def whole_lines(path: Path) -> Iterator[str]:
@@ -27,7 +30,7 @@ def whole_lines(path: Path) -> Iterator[str]:
 def append_line(path: Path, line: str) -> None:
     """Write *line* as the last record of *path*, dropping a torn tail first."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+b") as records:
+    with _appending, path.open("a+b") as records:
         end = records.seek(0, os.SEEK_END)
         records.seek(max(end - 1, 0))
         if records.read(1) not in (b"", b"\n"):

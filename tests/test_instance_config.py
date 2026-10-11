@@ -1,9 +1,11 @@
 import asyncio
 import hashlib
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Barrier
 from uuid import uuid4
 
 import pytest
@@ -233,6 +235,35 @@ def test_config_history_skips_a_torn_last_change_and_the_next_append_drops_it(
     log.append(change("second"))
 
     assert ConfigChangeLog(tmp_path).history(None, 10) == [change("second"), change("first")]
+
+
+def test_config_changes_appended_at_once_over_a_torn_tail_are_all_kept(tmp_path: Path) -> None:
+    writers = 8
+
+    def change(diff: str) -> ConfigChange:
+        return ConfigChange(
+            at=datetime(2026, 10, 11, tzinfo=UTC),
+            file=ConfigFile("SYSTEM.md"),
+            actor=ConfigActor.APP,
+            diff=diff,
+        )
+
+    for attempt in range(20):
+        log = ConfigChangeLog(tmp_path / str(attempt))
+        log.append(change("whole"))
+        with (tmp_path / str(attempt) / "config-changes.jsonl").open("a") as changes:
+            changes.write('{"at": "2026-10-')
+        start = Barrier(writers)
+
+        def append(writer: int, log: ConfigChangeLog = log, start: Barrier = start) -> None:
+            start.wait()
+            log.append(change(str(writer)))
+
+        with ThreadPoolExecutor(writers) as pool:
+            list(pool.map(append, range(writers)))
+
+        kept = {kept.diff for kept in log.history(None, writers + 1)}
+        assert kept == {"whole", *map(str, range(writers))}
 
 
 def test_an_agent_write_in_a_turn_records_its_thread_and_turn(tmp_path: Path) -> None:
