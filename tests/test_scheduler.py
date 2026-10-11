@@ -119,7 +119,7 @@ class ScriptedRunner:
     resume = does_not_park
 
     async def run(self, turn, context):
-        await context(MessageDelta(text="News today\nMore details"))
+        await context.emit(MessageDelta(text="News today\nMore details"))
         return TurnOutcome()
 
 
@@ -1451,9 +1451,11 @@ def test_final_text_head_excludes_text_before_a_tool_call(tmp_path):
 
     class ToolRunner(ScriptedRunner):
         async def run(self, turn, context):
-            await context(MessageDelta(text="I'll fetch the news."))
-            await context(ToolCall(call_id="fetch-1", name="fetch", arguments={}))
-            await context(ToolResult(call_id="fetch-1", name="fetch", output="News", error=False))
+            await context.emit(MessageDelta(text="I'll fetch the news."))
+            await context.emit(ToolCall(call_id="fetch-1", name="fetch", arguments={}))
+            await context.emit(
+                ToolResult(call_id="fetch-1", name="fetch", output="News", error=False)
+            )
             return await super().run(turn, context)
 
     async def scenario():

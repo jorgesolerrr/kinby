@@ -160,10 +160,6 @@ class TurnContext:
     budgets: Budgets
     emit: Emit
 
-    # Keep existing TurnRunner implementations that accept Emit protocol-compatible.
-    async def __call__(self, payload: Payload) -> Event:
-        return await self.emit(payload)
-
 
 class TurnRunner(Protocol):
     async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None: ...

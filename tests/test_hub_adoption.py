@@ -236,7 +236,7 @@ def test_the_handoff_drains_the_previous_runtime_before_it_starts_the_replacemen
         # The drain went through the instance's own control token, over its own endpoint.
         assert control.endpoints[-1].token == OLD_CONTROL_TOKEN
         assert runtime.stopped == [STOP_GRACE_SECONDS]
-        assert runtime.removed == [(CODER_CONTAINER, False)]
+        assert runtime.removed == [CODER_CONTAINER]
         # One replacement, never a second runtime beside the instance it took over.
         assert len(runtime.created) == 1
         spec = runtime.created[0]
@@ -616,7 +616,7 @@ def test_a_handoff_interrupted_before_ownership_moved_names_the_owner_of_the_dat
         assert not isinstance(listed, ErrorEnvelope)
         assert listed.instances == []
         assert adopted_again == interrupted.instance_id
-        assert runtime.removed == [(CODER_CONTAINER, False)]
+        assert runtime.removed == [CODER_CONTAINER]
 
     asyncio.run(scenario())
 

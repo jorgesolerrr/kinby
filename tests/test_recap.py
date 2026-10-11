@@ -33,7 +33,7 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
-from kinby.core.turns import Emit, PreparedTurnRequest, TurnOutcome
+from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
 from kinby.instance import load_instance
 from kinby.memory import (
     Episode,
@@ -268,17 +268,17 @@ def test_kept_draft_writes_narrative_episode_and_token_marker(tmp_path: Path) ->
 
 def test_recap_model_receives_the_turn_frame_as_a_user_message(tmp_path: Path) -> None:
     class FrameRunner:
-        async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
-            await emit(MessageDelta(text="Compared "))
-            await emit(MessageDelta(text="both cities."))
-            await emit(
+        async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
+            await context.emit(MessageDelta(text="Compared "))
+            await context.emit(MessageDelta(text="both cities."))
+            await context.emit(
                 ToolCall(
                     call_id="weather-1",
                     name="weather",
                     arguments={"city": "Quito"},
                 )
             )
-            await emit(
+            await context.emit(
                 ToolResult(
                     call_id="weather-1",
                     name="weather",
@@ -763,14 +763,14 @@ def test_recap_lens_reloads_for_each_turn(tmp_path: Path) -> None:
 
 
 class ToolRunner:
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         for call_id, name, arguments, output in (
             ("weather-1", "weather", {"city": "Quito"}, "18 C"),
             ("weather-2", "weather", {"city": "Cuenca"}, "16 C"),
             ("read-1", "read", {"path": "notes.md"}, "Trip notes"),
         ):
-            await emit(ToolCall(call_id=call_id, name=name, arguments=arguments))
-            await emit(
+            await context.emit(ToolCall(call_id=call_id, name=name, arguments=arguments))
+            await context.emit(
                 ToolResult(
                     call_id=call_id,
                     name=name,
@@ -788,10 +788,10 @@ class ClosingRunner:
     def __init__(self) -> None:
         self.interruptible_started = asyncio.Event()
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         if turn.message == "Chat only":
             return TurnOutcome()
-        await emit(
+        await context.emit(
             ToolCall(
                 call_id=f"{turn.message}-call",
                 name="bash",
@@ -1178,8 +1178,8 @@ def test_completed_tool_turn_writes_trace_episode_and_marker(tmp_path: Path) -> 
 
 def test_tool_call_summary_is_one_bounded_line(tmp_path: Path) -> None:
     class LongArgumentRunner:
-        async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
-            await emit(
+        async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
+            await context.emit(
                 ToolCall(
                     call_id="write-1",
                     name="write",
@@ -1366,9 +1366,13 @@ def test_chat_only_turn_writes_marker_without_episode(tmp_path: Path) -> None:
 
 def test_no_work_turn_writes_marker_without_node(tmp_path: Path) -> None:
     class NoWorkRunner:
-        async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
-            await emit(ToolCall(call_id="fetch-1", name="fetch", arguments={"owner": "jorge"}))
-            await emit(ToolResult(call_id="fetch-1", name="fetch", output="null", error=False))
+        async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
+            await context.emit(
+                ToolCall(call_id="fetch-1", name="fetch", arguments={"owner": "jorge"})
+            )
+            await context.emit(
+                ToolResult(call_id="fetch-1", name="fetch", output="null", error=False)
+            )
             return TurnOutcome(outcome=CompletionOutcome.NO_WORK)
 
         resume = does_not_park

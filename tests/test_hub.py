@@ -192,7 +192,7 @@ class FakeRuntime:
         self.created: list[InstanceSpec] = []
         self.started: list[str] = []
         self.stopped: list[int] = []
-        self.removed: list[tuple[str, bool]] = []
+        self.removed: list[str] = []
         self.states: dict[str, RuntimeStatus] = {}
         self.addresses: dict[str, str] = {}
         self.descriptions: dict[str, ContainerDescription] = {}
@@ -233,8 +233,8 @@ class FakeRuntime:
         self.stopped.append(grace_seconds)
         self.states[instance_id] = RuntimeStatus("stopped", None)
 
-    async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
-        self.removed.append((instance_id, delete_data))
+    async def remove(self, instance_id: str) -> None:
+        self.removed.append(instance_id)
         self.states.pop(instance_id, None)
         self.descriptions.pop(instance_id, None)
 
@@ -248,22 +248,8 @@ class FakeRuntime:
             return None
         return self.addresses.get(instance_id)
 
-    async def logs(
-        self,
-        instance_id: str,
-        *,
-        tail: int | None = None,
-        follow: bool = False,
-    ) -> AsyncIterator[bytes]:
+    async def logs(self, instance_id: str, *, tail: int | None = None) -> AsyncIterator[bytes]:
         yield self.log_output
-
-    async def exec(
-        self,
-        instance_id: str,
-        command: Sequence[str],
-    ) -> AsyncIterator[bytes]:
-        if False:
-            yield b""
 
     async def list(self) -> Sequence[str]:
         return tuple(self.states)

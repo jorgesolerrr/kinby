@@ -44,7 +44,13 @@ from kinby.core import turns
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.snapshots import WorkspaceDiff
-from kinby.core.turns import ApprovalAnswer, Emit, ParkedTurn, PreparedTurnRequest, TurnOutcome
+from kinby.core.turns import (
+    ApprovalAnswer,
+    ParkedTurn,
+    PreparedTurnRequest,
+    TurnContext,
+    TurnOutcome,
+)
 from kinby.instance import FeedbackPolicy, load_instance
 from kinby.memory import GraphStore, RecapWriter
 from tests.helpers import (
@@ -528,11 +534,11 @@ class ReplRunner:
     def __init__(self) -> None:
         self.modes: list[PermissionMode] = []
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         self.modes.append(turn.permission_mode)
-        await emit(MessageDelta(text="Hi"))
-        await emit(MessageDelta(text=" there"))
-        await emit(
+        await context.emit(MessageDelta(text="Hi"))
+        await context.emit(MessageDelta(text=" there"))
+        await context.emit(
             ModelCompleted(
                 model="openai:gpt-5",
                 input_tokens=1,
@@ -551,12 +557,12 @@ class InterruptibleReplRunner:
         self.first_turn_started = asyncio.Event()
         self.turn_count = 0
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         self.turn_count += 1
         if self.turn_count == 1:
             self.first_turn_started.set()
             await asyncio.Event().wait()
-        await emit(MessageDelta(text="Done"))
+        await context.emit(MessageDelta(text="Done"))
         return TurnOutcome()
 
     resume = does_not_park
@@ -564,15 +570,15 @@ class InterruptibleReplRunner:
 
 
 class ToolEventRunner:
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
-        await emit(
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
+        await context.emit(
             ToolCall(
                 call_id="call-1",
                 name="weather",
                 arguments={"city": "Quito"},
             )
         )
-        await emit(
+        await context.emit(
             ToolResult(
                 call_id="call-1",
                 name="weather",
@@ -580,7 +586,7 @@ class ToolEventRunner:
                 error=False,
             )
         )
-        await emit(Warning(sources=("tools/weather.py",), message="Using cached tool set."))
+        await context.emit(Warning(sources=("tools/weather.py",), message="Using cached tool set."))
         return TurnOutcome()
 
     resume = does_not_park
@@ -588,9 +594,9 @@ class ToolEventRunner:
 
 
 class DeniedToolEventRunner:
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
-        await emit(ToolCall(call_id="bash-1", name="bash", arguments={}, write=True))
-        await emit(
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
+        await context.emit(ToolCall(call_id="bash-1", name="bash", arguments={}, write=True))
+        await context.emit(
             ToolGated(
                 call_id="bash-1",
                 name="bash",
@@ -599,7 +605,7 @@ class DeniedToolEventRunner:
                 decided_by=GateDecider.POLICY,
             )
         )
-        await emit(
+        await context.emit(
             ToolResult(
                 call_id="bash-1",
                 name="bash",
@@ -614,7 +620,7 @@ class DeniedToolEventRunner:
 
 
 class FailingReplRunner:
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         raise RuntimeError("provider unavailable")
 
     resume = does_not_park
@@ -637,9 +643,9 @@ class ApprovalReplRunner:
             return self.parked_turn
         return None
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> ParkedTurn:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> ParkedTurn:
         self.parked_turn = turn
-        await emit(
+        await context.emit(
             ApprovalRequested(
                 approval_id=UUID("11111111-1111-1111-1111-111111111111"),
                 name="write_note",
@@ -654,11 +660,11 @@ class ApprovalReplRunner:
         self,
         turn: PreparedTurnRequest,
         answer: ApprovalAnswer,
-        emit: Emit,
+        context: TurnContext,
     ) -> TurnOutcome:
         self.answers.append(answer)
         if answer.decision is ApprovalDecision.DENY:
-            await emit(
+            await context.emit(
                 ToolGated(
                     call_id="write-1",
                     name="write_note",
@@ -668,7 +674,7 @@ class ApprovalReplRunner:
                     reason=answer.reason,
                 )
             )
-            await emit(
+            await context.emit(
                 ToolResult(
                     call_id="write-1",
                     name="write_note",
@@ -677,14 +683,14 @@ class ApprovalReplRunner:
                 )
             )
             return TurnOutcome()
-        await emit(
+        await context.emit(
             ToolCall(
                 call_id="write-1",
                 name="write_note",
                 arguments=self.arguments,
             )
         )
-        await emit(
+        await context.emit(
             ToolResult(
                 call_id="write-1",
                 name="write_note",
@@ -692,7 +698,7 @@ class ApprovalReplRunner:
                 error=False,
             )
         )
-        await emit(MessageDelta(text="Done"))
+        await context.emit(MessageDelta(text="Done"))
         return TurnOutcome()
 
 

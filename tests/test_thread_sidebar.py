@@ -24,7 +24,7 @@ from kinby.core.dispatcher import (
     build_dispatcher,
 )
 from kinby.core.scheduler import SchedulerConfig
-from kinby.core.turns import Emit, ParkedTurn, PreparedTurnRequest, TurnOutcome
+from kinby.core.turns import ParkedTurn, PreparedTurnRequest, TurnContext, TurnOutcome
 from tests.helpers import fixed_permission_ceiling, fixed_turn_preparation
 from tests.test_routines import instance_at, routine_file
 from tests.test_scheduler import FakeClock
@@ -34,10 +34,12 @@ from tests.test_thread_status import ScriptedRunner
 class RoutineRunner(ScriptedRunner):
     """Run each turn as its message says, and find no work in a message of "nothing new"."""
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome | ParkedTurn:
+    async def run(
+        self, turn: PreparedTurnRequest, context: TurnContext
+    ) -> TurnOutcome | ParkedTurn:
         if turn.message == "nothing new":
             return TurnOutcome(outcome=CompletionOutcome.NO_WORK)
-        return await super().run(turn, emit)
+        return await super().run(turn, context)
 
 
 async def _setup(tmp_path: Path, *routines: str) -> tuple[ScheduledDispatcher, FakeClock]:

@@ -2131,14 +2131,7 @@ class Hub:
 
     async def logs(self, command: InstanceLogsCommand) -> InstanceLogsResult:
         record = self._active_instance(command.instance_id)
-        chunks = [
-            chunk
-            async for chunk in self._runtime.logs(
-                record.runtime_id,
-                tail=command.tail,
-                follow=False,
-            )
-        ]
+        chunks = [chunk async for chunk in self._runtime.logs(record.runtime_id, tail=command.tail)]
         text = b"".join(chunks).decode(errors="replace")
         return InstanceLogsResult(
             instance_id=record.instance_id,

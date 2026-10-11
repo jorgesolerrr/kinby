@@ -140,7 +140,7 @@ def test_an_update_drains_the_instance_and_replaces_it_with_the_prepared_image(t
             "v0.2.0",
         ]
         assert control.forces == [False]
-        assert runtime.removed == [(str(created.instance_id), False)]
+        assert runtime.removed == [str(created.instance_id)]
         assert len(runtime.created) == 2
         assert runtime.created[1].image == "sha256:v0.2.0-image"
         assert runtime.created[1].storage == runtime.created[0].storage

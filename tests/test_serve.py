@@ -48,13 +48,13 @@ from tests.test_scheduler import FakeClock, ScriptedRunner
 
 class EventRunner(ScriptedRunner):
     async def run(self, turn, context):
-        await context(MessageDelta(text="Checking\n"))
-        await context(ToolCall(call_id="fetch-1", name="fetch", arguments={"topic": "news"}))
-        await context(
+        await context.emit(MessageDelta(text="Checking\n"))
+        await context.emit(ToolCall(call_id="fetch-1", name="fetch", arguments={"topic": "news"}))
+        await context.emit(
             ToolResult(call_id="fetch-1", name="fetch", output="Two stories", error=False)
         )
-        await context(Warning(sources=("tools/fetch.py",), message="Using cached results."))
-        await context(MessageDelta(text="Done"))
+        await context.emit(Warning(sources=("tools/fetch.py",), message="Using cached results."))
+        await context.emit(MessageDelta(text="Done"))
         return TurnOutcome()
 
 
