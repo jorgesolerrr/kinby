@@ -36,6 +36,8 @@ from kinby.contracts import (
 PROBE_SECONDS = 10
 _FRAME_ID = FrameId("1")
 _HEARTBEAT_SECONDS = 30
+#: The largest answer frame the hub reads. A larger one closes the control socket.
+_FRAME_BYTES = 4 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -129,6 +131,7 @@ async def _call[Command: ContractModel, Result: ContractModel](
             session.ws_connect(
                 f"{endpoint.address}/control",
                 heartbeat=_HEARTBEAT_SECONDS,
+                max_msg_size=_FRAME_BYTES,
             ) as socket,
         ):
             await socket.send_str(call.model_dump_json())
@@ -147,11 +150,21 @@ async def _finished(socket: aiohttp.ClientWebSocketResponse) -> str:
 
 async def _answer(socket: aiohttp.ClientWebSocketResponse) -> str:
     message = await socket.receive()
-    if message.type is not aiohttp.WSMsgType.TEXT:
-        raise ControlConnectionLost(
-            f"The control socket closed before it answered ({message.type})."
-        )
-    return str(message.data)
+    match message.type, message.data:
+        case aiohttp.WSMsgType.TEXT, answer:
+            return str(answer)
+        case aiohttp.WSMsgType.ERROR, aiohttp.WebSocketError(
+            code=aiohttp.WSCloseCode.MESSAGE_TOO_BIG
+        ):
+            raise ControlConnectionLost(
+                f"The answer was larger than the control socket's {_FRAME_BYTES:,}-byte limit."
+            )
+        case aiohttp.WSMsgType.ERROR, error:
+            raise ControlConnectionLost(f"The control socket failed before it answered: {error}")
+        case _:
+            raise ControlConnectionLost(
+                f"The control socket closed before it answered ({message.type})."
+            )
 
 
 def _probed(body: object) -> InstanceProbeResult:

@@ -39,6 +39,10 @@ from kinby.plugins.tools import ToolContext
 
 #: How much of a failed command's output its step's summary keeps, from the end.
 _OUTPUT_TAIL = 2_000
+#: The longest summary a step result keeps.
+_SUMMARY_CHARACTERS = 16_000
+#: The largest step result the instance sends, serialized. Far under the hub's frame limit.
+_RESULT_BYTES = 1024 * 1024
 
 
 async def run_step(
@@ -54,9 +58,25 @@ async def run_step(
             result = await run_command_step(step, instance.manifest.workspace.path)
         case CodeStepRun() as step:
             result = await _run_code_step(step, command, instance)
-    if command.hook is None:
-        return result
-    return await _recorded(command.hook, result, command, instance)
+    if command.hook is not None:
+        result = await _recorded(command.hook, result, command, instance)
+    return _bounded(result)
+
+
+def _bounded(result: StepResult) -> StepResult:
+    """The result with a long summary cut to its start and its end. One still too large to
+    send fails the step, and says how large it is."""
+    if len(result.summary) > _SUMMARY_CHARACTERS:
+        kept = _SUMMARY_CHARACTERS // 2
+        cut = len(result.summary) - 2 * kept
+        summary = f"{result.summary[:kept]}\n[{cut:,} characters cut]\n{result.summary[-kept:]}"
+        result = result.model_copy(update={"summary": summary})
+    size = len(result.model_dump_json().encode())
+    if size > _RESULT_BYTES:
+        return _failed(
+            f"The step's result is {size:,} bytes, over the {_RESULT_BYTES:,}-byte limit.", result
+        )
+    return result
 
 
 async def _run_agent_step(step: AgentStepRun, command: StepRunCommand, turns: Turns) -> StepResult:

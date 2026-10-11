@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -227,6 +228,16 @@ async def record_nothing(end: StepEnd) -> None:
 @hook
 def broken(end: StepEnd) -> HookResult:
     raise RuntimeError("the repository is gone")
+
+
+@hook
+def long_winded(end: StepEnd) -> HookResult:
+    raise RuntimeError("first words " + "x" * 5_000_000 + " last words")
+
+
+@hook
+def heavy(end: StepEnd) -> HookResult:
+    return HookResult(values={"diff": "x" * 2_000_000})
 """
 
 
@@ -320,6 +331,64 @@ def test_a_timed_out_step_whose_hook_fails_still_times_out(tmp_path, hook, summa
         assert isinstance(result, StepResult)
         assert result.ending is StepEnding.TIMED_OUT
         assert result.summary == f"The commands ran past the step's timeout of 1s.\n{summary}"
+
+    asyncio.run(scenario())
+
+
+def test_a_long_summary_keeps_its_start_and_its_end_and_says_how_much_was_cut(tmp_path):
+    runtime, _ = hooked_instance(tmp_path)
+
+    async def scenario() -> None:
+        result = await run_hooked_step(runtime.dispatcher, "long_winded", "touch made")
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert len(result.summary) < 16_100
+        assert result.summary.startswith(
+            'Every command exited with code 0.\nHook "long_winded" failed: RuntimeError: first '
+        )
+        assert result.summary.endswith("x last words")
+        assert re.search(r"\n\[4,98\d,\d{3} characters cut\]\n", result.summary)
+
+    asyncio.run(scenario())
+
+
+def test_the_hub_reads_a_step_whose_hook_failed_with_megabytes_of_message(tmp_path):
+    runtime, _ = hooked_instance(tmp_path)
+
+    async def scenario() -> None:
+        async with served_dispatcher(runtime.dispatcher) as address:
+            result = await HttpInstanceControl().run_step(
+                ControlEndpoint(f"http://{address.host}:{address.port}", TOKEN),
+                StepRunCommand(
+                    step=CommandStepRun(run=["touch made"]),
+                    hook="long_winded",
+                    origin=ORIGIN,
+                    work_item={},
+                ),
+            )
+
+        assert result.ending is StepEnding.FAILED
+        assert 'Hook "long_winded" failed: RuntimeError: first words' in result.summary
+        assert result.summary.endswith("x last words")
+
+    asyncio.run(scenario())
+
+
+def test_a_result_too_large_to_send_fails_the_step_and_names_its_size(tmp_path):
+    runtime, _ = hooked_instance(tmp_path)
+
+    async def scenario() -> None:
+        result = await run_hooked_step(runtime.dispatcher, "heavy", "touch made")
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert result.values == {}
+        assert re.fullmatch(
+            r"Every command exited with code 0\.\n"
+            r"The step's result is 2,000,\d{3} bytes, over the 1,048,576-byte limit\.",
+            result.summary,
+        )
 
     asyncio.run(scenario())
 
