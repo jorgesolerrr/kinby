@@ -93,6 +93,16 @@ const behind = instanceSummary({
   ],
 })
 
+const templateBehind = instanceSummary({
+  instance_id: "instance-1",
+  notices: [
+    {
+      code: "template_behind",
+      message: 'Factory "software" changed template "coder" since the hub copied it.',
+    },
+  ],
+})
+
 const methodNotFound = (method: string): never => {
   throw new CallError({
     code: "NOT_FOUND",
@@ -210,6 +220,14 @@ describe("ConfigPanel", () => {
     await user.click(section())
     expect(await screen.findByRole("heading", { name: "Core version" })).toBeDefined()
     expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
+  })
+
+  it("says the core section is behind the factory in place of its hint", () => {
+    openPanel({}, templateBehind)
+
+    const section = screen.getByRole("button", { name: "Core version" })
+    expect(section.textContent).toContain("behind the factory")
+    expect(section.textContent).not.toContain("the kinby it runs, update")
   })
 
   it("reads the first section again once the socket connects, with no error in between", async () => {

@@ -22,6 +22,7 @@ from kinby.contracts import (
     FactoryResult,
     FactorySource,
     FactorySummary,
+    FileHash,
 )
 from kinby.core.errors import FactoryCheckFailed, FactoryNotFound, InvalidConfig, StaleWrite
 from kinby.factories.check import check_factory
@@ -33,7 +34,8 @@ from kinby.factories.file import (
     RecipeName,
     read_factory_file,
 )
-from kinby.instance.config_changes import files_hash
+from kinby.instance.config_changes import file_hash, files_hash
+from kinby.instance.layout import MANIFEST_NAME
 from kinby.setup import readable_template_files, with_built_in_fields
 
 
@@ -47,6 +49,15 @@ class InstanceTemplate:
     setup: DeclaredSetup
     #: Every file of the template's folder, by its path there.
     files: dict[str, str]
+
+    @property
+    def baseline(self) -> dict[str, FileHash]:
+        """The hash of each file the template supplies but its manifest, which the instance owns."""
+        return {
+            path: file_hash(content.encode())
+            for path, content in self.files.items()
+            if path != MANIFEST_NAME
+        }
 
 
 class FactoryStore:

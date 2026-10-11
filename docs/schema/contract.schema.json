@@ -2292,7 +2292,21 @@
         },
         "notices": {
           "items": {
-            "$ref": "#/$defs/RevisionBehind"
+            "discriminator": {
+              "mapping": {
+                "revision_behind": "#/$defs/RevisionBehind",
+                "template_behind": "#/$defs/TemplateBehind"
+              },
+              "propertyName": "code"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/RevisionBehind"
+              },
+              {
+                "$ref": "#/$defs/TemplateBehind"
+              }
+            ]
           },
           "type": "array"
         },
@@ -5639,6 +5653,26 @@
       ],
       "title": "TargetFile",
       "type": "string"
+    },
+    "TemplateBehind": {
+      "additionalProperties": false,
+      "description": "The template the instance's factory serves differs from the files the hub copied, or the\nhub kept no record of them, so an update is there.",
+      "properties": {
+        "code": {
+          "const": "template_behind",
+          "default": "template_behind",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "code"
+      ],
+      "title": "TemplateBehind",
+      "type": "object"
     },
     "ThreadApprovalRespondCommand": {
       "additionalProperties": false,

@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import shutil
-from collections.abc import Collection, Coroutine, Mapping
+from collections.abc import Collection, Coroutine, Iterable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -63,6 +63,7 @@ from kinby.contracts import (
     FactoryInstallCommand,
     FactoryInstallResult,
     FactoryInstanceSetup,
+    FactoryName,
     FactoryRemoveCommand,
     FactoryRemoveResult,
     ImageDescribeCommand,
@@ -80,6 +81,7 @@ from kinby.contracts import (
     InstanceLoginStartCommand,
     InstanceLogsCommand,
     InstanceLogsResult,
+    InstanceNotice,
     InstanceRecreateCommand,
     InstanceRemoveCommand,
     InstanceRestoreCommand,
@@ -112,12 +114,15 @@ from kinby.contracts import (
     StorageItem,
     StorageKind,
     SubscriptionLogin,
+    TemplateBehind,
 )
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import (
     AdoptionBlocked,
+    FactoryCheckFailed,
     FactoryInstalled,
+    FactoryNotFound,
     ImageNotPrepared,
     InvalidSetup,
     LifecycleOperationInFlight,
@@ -126,6 +131,7 @@ from kinby.core.errors import (
     ManagedInstanceNotFound,
 )
 from kinby.factories import SHIPPED_FACTORIES
+from kinby.factories.file import InstanceName
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
 from kinby.hub.control import (
@@ -229,21 +235,46 @@ def _acquire_directory(directory: Path) -> IO[str]:
     return handle
 
 
-def _notices(record: ManagedInstance, hub_revision: str) -> list[RevisionBehind]:
-    """The kinby revision the hub moved past, if it did."""
+def _notices(
+    record: ManagedInstance,
+    hub_revision: str,
+    served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
+) -> list[InstanceNotice]:
+    """The kinby revision the hub moved past, and the template the factory moved past, if they did.
+
+    *served* holds each template the hub serves now, by its factory and name.
+    """
+    notices: list[InstanceNotice] = []
     instance_revision = record.source_revision
-    if not instance_revision or instance_revision == hub_revision:
-        return []
-    return [
-        RevisionBehind(
-            message=(
-                f"The instance runs kinby {instance_revision[:7]}, "
-                f"and the hub is at {hub_revision[:7]}."
-            ),
-            instance_revision=instance_revision,
-            hub_revision=hub_revision,
+    if instance_revision and instance_revision != hub_revision:
+        notices.append(
+            RevisionBehind(
+                message=(
+                    f"The instance runs kinby {instance_revision[:7]}, "
+                    f"and the hub is at {hub_revision[:7]}."
+                ),
+                instance_revision=instance_revision,
+                hub_revision=hub_revision,
+            )
         )
-    ]
+    member = record.factory
+    if member is None:
+        return notices
+    template = served.get((member.factory, member.name))
+    if template is not None and template.baseline != member.baseline:
+        found = (
+            f'The hub kept no record of the files template "{member.name}" '
+            f'of factory "{member.factory}" supplied.'
+            if member.baseline is None
+            else f'Factory "{member.factory}" changed template "{member.name}" '
+            "since the hub copied it."
+        )
+        notices.append(
+            TemplateBehind(
+                message=f"{found} An instance update brings the files up to the factory's."
+            )
+        )
+    return notices
 
 
 def _selection(record: ManagedInstance, revision: str) -> ImageSelection:
@@ -497,6 +528,7 @@ class Hub:
                     name=template.name,
                     recipe=template.recipe,
                     setup=template.setup,
+                    baseline=template.baseline,
                 ),
             )
             creations[template.name] = self._begin_create(
@@ -1907,14 +1939,34 @@ class Hub:
 
     async def list(self, command: InstanceListCommand) -> InstanceListResult:
         hub_revision = await self._images.resolve(_PREPARED_REVISION)
+        records = self.registry.listed_instances(removed=command.removed)
+        served = await self._served_templates(records)
         return InstanceListResult(
-            instances=[
-                await self._summary(record, hub_revision)
-                for record in self.registry.listed_instances(removed=command.removed)
-            ]
+            instances=[await self._summary(record, hub_revision, served) for record in records]
         )
 
-    async def _summary(self, record: ManagedInstance, hub_revision: str) -> InstanceSummary:
+    async def _served_templates(
+        self, records: Iterable[ManagedInstance]
+    ) -> dict[tuple[FactoryName, InstanceName], InstanceTemplate]:
+        """Each template the factories of *records* serve now, by factory and name.
+
+        A factory the hub no longer serves, or one that fails its check, serves none.
+        """
+        served: dict[tuple[FactoryName, InstanceName], InstanceTemplate] = {}
+        for factory in {record.factory.factory for record in records if record.factory}:
+            try:
+                templates = await self.factories.templates(factory)
+            except FactoryNotFound, FactoryCheckFailed:
+                continue
+            served |= {(factory, template.name): template for template in templates}
+        return served
+
+    async def _summary(
+        self,
+        record: ManagedInstance,
+        hub_revision: str,
+        served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
+    ) -> InstanceSummary:
         observed = await self._observed(record)
         return InstanceSummary(
             instance_id=record.instance_id,
@@ -1930,7 +1982,7 @@ class Hub:
             avatar=record.avatar,
             setup_pending=self._setup(record).pending,
             factory=record.factory.factory if record.factory is not None else None,
-            notices=_notices(record, hub_revision),
+            notices=_notices(record, hub_revision, served),
             needs_human=self.runs.needing_human(record.factory),
         )
 

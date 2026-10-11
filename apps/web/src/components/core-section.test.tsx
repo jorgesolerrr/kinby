@@ -61,6 +61,26 @@ describe("CoreSection", () => {
     ).toBeDefined()
   })
 
+  it("shows the notice that the factory moved past the instance's template", () => {
+    openSection(
+      instanceSummary({
+        instance_id: "hub-ada",
+        notices: [
+          {
+            code: "template_behind",
+            message: 'Factory "software" changed template "coder" since the hub copied it.',
+          },
+        ],
+      }),
+    )
+
+    expect(screen.getByText("Behind the factory")).toBeDefined()
+    expect(
+      screen.getByText('Factory "software" changed template "coder" since the hub copied it.'),
+    ).toBeDefined()
+    expect(screen.queryByText("Behind the hub")).toBeNull()
+  })
+
   it("shows no notice for an instance on the hub's revision", () => {
     openSection(instanceSummary({ instance_id: "hub-ada", source_revision: "c".repeat(40) }))
 

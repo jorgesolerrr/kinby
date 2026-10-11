@@ -19,6 +19,7 @@ from kinby.contracts import (
     FactoryName,
     FactoryRun,
     FactoryRunStatus,
+    FileHash,
     IntendedState,
     LoginPrompt,
     LoginState,
@@ -58,6 +59,9 @@ class FactoryMember:
     recipe: RecipeName | None
     #: Kept as installed, so a later edit of the factory leaves the instance's setup alone.
     setup: DeclaredSetup
+    #: The hash of each file the template supplied, by its path. None for an instance installed
+    #: before the hub recorded them.
+    baseline: dict[str, FileHash] | None
 
 
 @dataclass(frozen=True)
@@ -181,7 +185,8 @@ class HubRegistry:
                     factory TEXT NOT NULL,
                     name TEXT NOT NULL,
                     recipe TEXT,
-                    setup TEXT NOT NULL
+                    setup TEXT NOT NULL,
+                    baseline TEXT
                 );
                 CREATE TABLE IF NOT EXISTS factory_runs (
                     id TEXT PRIMARY KEY,
@@ -227,6 +232,7 @@ class HubRegistry:
                 },
             )
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
+            self._add_columns(connection, "factory_members", {"baseline": "TEXT"})
             self._add_columns(
                 connection,
                 "operation_steps",
@@ -462,8 +468,9 @@ class HubRegistry:
             if member is not None:
                 connection.execute(
                     """
-                    INSERT INTO factory_members (instance_id, factory, name, recipe, setup)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO factory_members (
+                        instance_id, factory, name, recipe, setup, baseline
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(instance.instance_id),
@@ -471,6 +478,7 @@ class HubRegistry:
                         member.name,
                         member.recipe,
                         member.setup.model_dump_json(),
+                        None if member.baseline is None else json.dumps(member.baseline),
                     ),
                 )
             self._insert_operation(
@@ -1221,7 +1229,10 @@ class HubRegistry:
                 (str(instance_id),),
             ).fetchall()
             member = connection.execute(
-                "SELECT factory, name, recipe, setup FROM factory_members WHERE instance_id = ?",
+                """
+                SELECT factory, name, recipe, setup, baseline
+                FROM factory_members WHERE instance_id = ?
+                """,
                 (str(instance_id),),
             ).fetchone()
         if row is None:
@@ -1258,6 +1269,7 @@ class HubRegistry:
                     name=member[1],
                     recipe=member[2],
                     setup=DeclaredSetup.model_validate_json(member[3]),
+                    baseline=None if member[4] is None else json.loads(member[4]),
                 )
                 if member is not None
                 else None

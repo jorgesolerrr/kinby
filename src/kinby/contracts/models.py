@@ -1007,6 +1007,17 @@ class RevisionBehind(ContractModel):
     hub_revision: str
 
 
+class TemplateBehind(ContractModel):
+    """The template the instance's factory serves differs from the files the hub copied, or the
+    hub kept no record of them, so an update is there."""
+
+    code: Literal["template_behind"] = "template_behind"
+    message: str
+
+
+InstanceNotice = Annotated[RevisionBehind | TemplateBehind, Field(discriminator="code")]
+
+
 class InstanceSummary(ContractModel):
     instance_id: UUID
     manifest_id: str
@@ -1023,7 +1034,7 @@ class InstanceSummary(ContractModel):
     setup_pending: bool
     #: What the user may want to act on, such as an update the hub offers. None of them stops
     #: the instance.
-    notices: list[RevisionBehind]
+    notices: list[InstanceNotice]
     #: The factory runs stopped for the user, or awaiting approval, at one of the instance's steps.
     needs_human: int
     #: The factory the instance was installed from, if any.

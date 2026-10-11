@@ -376,12 +376,19 @@ def test_an_instance_summary_carries_its_notices() -> None:
 
     assert "notices" in cast(list[str], summary["required"])
     notice = _object(_object(summary["properties"])["notices"])["items"]
-    assert notice == {"$ref": "#/$defs/RevisionBehind"}
+    assert _object(notice)["oneOf"] == [
+        {"$ref": "#/$defs/RevisionBehind"},
+        {"$ref": "#/$defs/TemplateBehind"},
+    ]
     assert set(cast(list[str], _object(definitions["RevisionBehind"])["required"])) == {
         "code",
         "message",
         "instance_revision",
         "hub_revision",
+    }
+    assert set(cast(list[str], _object(definitions["TemplateBehind"])["required"])) == {
+        "code",
+        "message",
     }
 
 
