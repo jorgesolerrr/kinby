@@ -11,7 +11,9 @@ type Lister = Pick<InstanceClient, "call">
 export interface ThreadList {
   view: () => ThreadListResult | undefined
   onChange: (listener: () => void) => () => void
-  /** List this set again. The promise settles once the list is stored. */
+  /**
+   * List this set again. It stores after a `listKept` already in flight, and settles once stored.
+   */
   list: () => Promise<void>
   /**
    * List the threads again in every set kept for the instance, so a change shows in the sidebar and
@@ -28,6 +30,8 @@ interface KeptList extends ThreadList {
 
 // The lists live as long as the connection they read, like the thread stores beside them.
 const lists = new WeakMap<Lister, Map<ThreadFilter, KeptList>>()
+// The last refresh of every kept set. A newer read of one set stores after it, never between.
+const refreshes = new WeakMap<Lister, Promise<void>>()
 
 /** The `filter` set of `client`'s instance's threads. */
 export function threadList(client: Lister, filter: ThreadFilter): ThreadList {
@@ -72,11 +76,18 @@ function createThreadList(
     read,
     async list() {
       const store = await read()
+      await refreshes.get(client)
       store()
     },
     async listKept() {
-      const stores = await Promise.all([...kept.values()].map((list) => list.read()))
-      for (const store of stores) store()
+      const refresh = Promise.all([...kept.values()].map((list) => list.read())).then((stores) => {
+        for (const store of stores) store()
+      })
+      refreshes.set(
+        client,
+        refresh.catch(() => {}),
+      )
+      await refresh
     },
   }
 }

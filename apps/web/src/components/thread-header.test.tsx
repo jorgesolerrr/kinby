@@ -492,7 +492,7 @@ describe("a thread's header", () => {
       expect(screen.getByRole("button", { name: "Archive" })).toBeDefined()
     })
 
-    it("keeps focus on the archive button when the full list answers after the sidebar's", async () => {
+    it("keeps focus on the archive button when a poll answers before the full list", async () => {
       let archived = false
       const instance = stubCaller({
         "thread.list": ({ filter }) => ({
@@ -506,7 +506,7 @@ describe("a thread's header", () => {
         },
       })
       const held: (() => void)[] = []
-      openBesideSidebar({
+      const { poll } = openBesideSidebar({
         calls: instance.calls,
         call: async (method, params) => {
           if (archived && (params as ThreadListCommand).filter === "all") {
@@ -518,6 +518,7 @@ describe("a thread's header", () => {
       const user = userEvent.setup()
 
       await user.click(await screen.findByRole("button", { name: "Archive" }))
+      await poll()
       await act(async () => {
         for (const release of held) release()
       })
