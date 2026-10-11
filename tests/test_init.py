@@ -1,9 +1,11 @@
 import importlib
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from kinby.cli import main
+from kinby.instance import init_from_template
 from kinby.packages import InstalledPackage, PackageDescriptor
 
 cli_module = importlib.import_module("kinby.cli.main")
@@ -416,7 +418,11 @@ def test_package_init_into_the_current_directory(tmp_path, monkeypatch):
         ({"kinby.toml": "[\n"}, "Invalid"),
         ({"workspace/notes.md": "secret\n"}, 'cannot copy "workspace/notes.md"'),
         ({"routines": "not a directory\n"}, 'cannot copy "routines"'),
-        ({"kinby.toml": "[[models.extra]]\n"}, "cannot be serialized"),
+        ({"kinby.toml": "[[models.extra]]\n"}, "cannot hold an array of tables or a date"),
+        (
+            {"kinby.toml": "[memory]\nsince = 2026-01-01\n"},
+            "cannot hold an array of tables or a date",
+        ),
         ({"SYSTEM.md/child.txt": "nope\n"}, 'cannot copy "SYSTEM.md/child.txt"'),
     ],
 )
@@ -449,3 +455,47 @@ def test_invalid_package_files_are_rejected_before_creating_the_destination(
     assert exit_code == 1
     assert not target.exists()
     assert error in capsys.readouterr().err
+
+
+ODD_STRINGS = ["Bot 🤖", 'Say "hi" \\ then\nleave']
+
+
+@pytest.mark.parametrize("value", ODD_STRINGS)
+def test_init_from_template_writes_any_string_back_as_it_was(tmp_path, value):
+    target = init_from_template(
+        tmp_path / "coder",
+        {"kinby.toml": '[feedback]\nask = "off"\n'},
+        model="openai:gpt-5",
+        settings={"memory.greeting": value},
+    )
+
+    manifest = tomllib.loads((target / "kinby.toml").read_text(encoding="utf-8"))
+    assert manifest["memory"]["greeting"] == value
+    assert manifest["feedback"]["ask"] == "off"
+    assert manifest["models"]["main"] == "openai:gpt-5"
+
+
+@pytest.mark.parametrize("value", ODD_STRINGS)
+def test_package_init_writes_any_string_back_as_it_was(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(
+        cli_module,
+        "inspect_installed_package",
+        lambda package_id: InstalledPackage(
+            descriptor=PackageDescriptor(
+                id="writer",
+                display_name="Writing teammate",
+                description="Drafts articles.",
+                icon="pen",
+                distribution="kinby-writer",
+                version="1.4.2",
+            ),
+            files={"kinby.toml": f"[memory]\ngreeting = '''{value}'''\n"},
+        ),
+    )
+    target = tmp_path / "writer"
+
+    assert main(["init", str(target), "--package", "writer"]) == 0
+
+    manifest = tomllib.loads((target / "kinby.toml").read_text(encoding="utf-8"))
+    assert manifest["memory"]["greeting"] == value
+    assert manifest["package"]["id"] == "writer"
