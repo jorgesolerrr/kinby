@@ -14,21 +14,14 @@ import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemTitle,
-} from "@/components/ui/item"
+import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { usePace } from "@/hooks/use-pace"
 import { lastChanged } from "@/lib/config-changes"
-import { retried } from "@/lib/operation"
+import { type Pace, pace, retried } from "@/lib/operation"
 import {
   byName,
   type OpenedSkill,
@@ -55,7 +48,7 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
   const [selection, setSelection] = useState<Selection>()
 
   const load = useCallback(
-    () =>
+    (pacing: Pace) =>
       retried(() => client.call("skill.list", {}), pacing).then(
         (result) => {
           setListed(result)
@@ -63,11 +56,13 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
         },
         (error: unknown) => setFailure(error),
       ),
-    [client, pacing],
+    [client],
   )
   useEffect(() => {
-    void load()
-  }, [load])
+    const pacing = pace(clock)
+    void load(pacing)
+    return pacing.stop
+  }, [clock, load])
 
   if (listed === undefined) {
     return failure === undefined ? (
@@ -79,7 +74,7 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
   const groups = byName(listed.skills)
   const openInstanceSkill = (name: string) => {
     setSelection({ name, tier: "instance" })
-    void load()
+    void load(pacing)
   }
   const removed = (name: string, after: SkillListResult) => {
     setListed(after)
@@ -93,7 +88,7 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
       <Warnings warnings={listed.warnings} />
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          The model reads the first skill of each name: instance, then package, then workspace.
+          The model reads the first skill of each name: instance, then kinby, then workspace.
         </p>
         <Button variant="outline" size="sm" onClick={() => setSelection("new")}>
           <PlusIcon data-icon="inline-start" />
@@ -108,7 +103,7 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
             </EmptyMedia>
             <EmptyTitle>No skills</EmptyTitle>
             <EmptyDescription>
-              Neither the instance, its packages, nor its workspace has a skill.
+              Neither the instance, kinby, nor its workspace has a skill.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -150,7 +145,7 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
             (group) => group.winner.name === selection.name && group.shadowed.length > 0,
           )}
           onCustomized={openInstanceSkill}
-          onSaved={() => void load()}
+          onSaved={() => void load(pacing)}
           onRemoved={removed}
         />
       )}
@@ -160,7 +155,7 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
 
 const TIERS: Record<SkillTier, string> = {
   instance: "Instance",
-  package: "Package",
+  kinby: "kinby",
   workspace: "Workspace",
 }
 
@@ -200,11 +195,6 @@ function SkillItem({
           {skill.shadowed_by ? `Hidden by the ${skill.shadowed_by} skill` : skill.description}
         </ItemDescription>
       </ItemContent>
-      {skill.tier === "package" && (
-        <ItemActions>
-          <span className="text-xs text-muted-foreground">{skill.source}</span>
-        </ItemActions>
-      )}
     </Item>
   )
 }
@@ -246,7 +236,7 @@ function SkillView({
     setDraft(read.skill.content)
   }, [])
   const load = useCallback(
-    () =>
+    (pacing: Pace) =>
       retried(() => openSkill(client, name, tier), pacing).then(
         (read) => {
           show(read)
@@ -256,11 +246,13 @@ function SkillView({
         },
         (error: unknown) => setFailure(error),
       ),
-    [client, name, tier, pacing, show],
+    [client, name, tier, show],
   )
   useEffect(() => {
-    void load()
-  }, [load])
+    const pacing = pace(clock)
+    void load(pacing)
+    return pacing.stop
+  }, [clock, load])
 
   if (opened === undefined) {
     return failure === undefined ? (
@@ -306,15 +298,12 @@ function SkillView({
 
   return (
     <div className="flex flex-col gap-3">
-      {notice === "stale" && <StaleAlert file={skillFile(name)} onLoad={() => void load()} />}
+      {notice === "stale" && <StaleAlert file={skillFile(name)} onLoad={() => void load(pacing)} />}
       {failure !== undefined && <Failure error={failure} />}
       <Field data-invalid={invalid !== undefined || undefined}>
         <div className="flex items-center gap-2">
           <FieldLabel htmlFor={id}>SKILL.md</FieldLabel>
           <Badge variant={editable ? "default" : "secondary"}>{TIERS[tier]}</Badge>
-          {summary !== undefined && tier === "package" && (
-            <span className="text-xs text-muted-foreground">{summary.source}</span>
-          )}
         </div>
         {!editable && (
           <FieldDescription>

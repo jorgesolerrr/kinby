@@ -1,9 +1,8 @@
 import { CallError } from "@kinby/contract"
 import type {
-  CuratedPackage,
+  DeclaredSetup,
   OperationGetResult,
   OperationStep,
-  PackageDescription,
   SubscriptionLogin,
 } from "@kinby/contract"
 import { type Answers, type StubCaller, fakeClock, stubCaller } from "@kinby/contract/testing"
@@ -13,11 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { CreateWizard } from "@/components/create-wizard"
 
-const vanilla: PackageDescription = {
-  display_name: "Vanilla",
-  description: "kinby's built-in defaults, with no package.",
-  icon: "sparkles",
-  version: "0.1.0",
+const vanilla: DeclaredSetup = {
   setup_fields: [
     {
       name: "model",
@@ -47,7 +42,7 @@ const vanilla: PackageDescription = {
 }
 
 /** An image that declares a field of every other type, each with a default. */
-const typed: PackageDescription = {
+const typed: DeclaredSetup = {
   ...vanilla,
   setup_fields: [
     ...vanilla.setup_fields,
@@ -109,27 +104,8 @@ const codex: SubscriptionLogin = {
   prompt_pattern: "(?P<url>https://\\S+)\\s+(?P<code>\\S+)",
 }
 
-const coder: CuratedPackage = {
-  id: "coder",
-  display_name: "Software factory",
-  description: "Implements GitHub issues labeled ready-for-agent.",
-  icon: "code",
-  selection: {
-    id: "coder",
-    distribution: "kinby-code-factory",
-    version: {
-      url: "https://github.com/jorgesolerrr/kinby-code-factory",
-      sha: "3a68621643e4605d5be72a87f716181ec265ebf5",
-    },
-    image_recipe: "",
-  },
-}
-
-const noPackages: Answers = { "package.list": () => ({ packages: [] }) }
-
 function preparation(fields: Partial<OperationGetResult>): Answers {
   return {
-    ...noPackages,
     "image.prepare": () => ({ operation_id: "op-1" }),
     "operation.get": () => ({
       operation_id: "op-1",
@@ -140,87 +116,22 @@ function preparation(fields: Partial<OperationGetResult>): Answers {
       steps: [],
       ...fields,
     }),
-    "package.describe": () => vanilla,
+    "image.describe": () => vanilla,
   }
 }
 
-async function pickVanilla(answers: Answers) {
+async function prepareImage(answers: Answers) {
   const clock = fakeClock()
   render(<CreateWizard caller={stubCaller(answers)} clock={clock} />)
-  await userEvent.setup().click(screen.getByRole("button", { name: "Prepare vanilla" }))
+  await userEvent.setup().click(screen.getByRole("button", { name: "Prepare the image" }))
   await act(() => clock.advance(0))
 }
 
 const step = (name: string) => within(screen.getByRole("listitem", { name }))
 
-describe("the create wizard's package step", () => {
-  it("offers each curated package as a card next to vanilla", async () => {
-    const { container } = render(
-      <CreateWizard caller={stubCaller({ "package.list": () => ({ packages: [coder] }) })} />,
-    )
-
-    const card = await screen.findByRole("listitem", { name: "Software factory" })
-    expect(
-      within(card).getByText("Implements GitHub issues labeled ready-for-agent."),
-    ).toBeDefined()
-    expect(within(card).getByText("3a68621")).toBeDefined()
-    expect(card.querySelector("svg.lucide-code")).not.toBeNull()
-    expect(within(card).getByRole("button", { name: "Prepare Software factory" })).toBeDefined()
-    expect(
-      within(card).getByText("Implements GitHub issues labeled ready-for-agent.").className,
-    ).not.toMatch(/line-clamp-\d/)
-    expect(
-      within(screen.getByRole("listitem", { name: "Vanilla" })).getByRole("button", {
-        name: "Prepare vanilla",
-      }),
-    ).toBeDefined()
-    expect(container.querySelectorAll("[role=alert]")).toHaveLength(0)
-  })
-
-  it("prepares a curated package with the selection the list gave it", async () => {
-    const clock = fakeClock()
-    const caller = stubCaller({
-      ...preparation({
-        state: "succeeded",
-        steps: [{ name: "image", state: "succeeded", detail: "Building the image." }],
-      }),
-      "package.list": () => ({ packages: [coder] }),
-    })
-    render(<CreateWizard caller={caller} clock={clock} />)
-
-    await userEvent
-      .setup()
-      .click(await screen.findByRole("button", { name: "Prepare Software factory" }))
-    await act(() => clock.advance(0))
-
-    expect(await screen.findByRole("list", { name: "Setup fields" })).toBeDefined()
-    expect(
-      caller.calls.filter(
-        ({ method }) => method === "image.prepare" || method === "package.describe",
-      ),
-    ).toEqual([
-      { method: "image.prepare", params: { package: coder.selection } },
-      { method: "package.describe", params: { package: coder.selection } },
-    ])
-    expect(
-      screen.getByRole("button", { name: "Prepare Software factory" }).hasAttribute("disabled"),
-    ).toBe(true)
-    expect(screen.getByRole("button", { name: "Prepare vanilla" }).hasAttribute("disabled")).toBe(
-      false,
-    )
-  })
-
-  it("still offers vanilla when the curated list cannot be read", async () => {
-    render(<CreateWizard caller={stubCaller({})} />)
-
-    expect((await screen.findByRole("alert")).textContent).toContain(
-      "The stub has no answer for package.list.",
-    )
-    expect(screen.getByRole("button", { name: "Prepare vanilla" })).toBeDefined()
-  })
-
-  it("prepares vanilla when it is picked and shows the step running", async () => {
-    await pickVanilla(
+describe("the create wizard's image step", () => {
+  it("prepares the image and shows the step running", async () => {
+    await prepareImage(
       preparation({
         steps: [
           {
@@ -236,13 +147,13 @@ describe("the create wizard's package step", () => {
       step("image").getByText("Building the image, or reusing the one prepared."),
     ).toBeDefined()
     expect(step("image").getByText("Running")).toBeDefined()
-    expect(screen.getByRole("button", { name: "Prepare vanilla" }).hasAttribute("disabled")).toBe(
+    expect(screen.getByRole("button", { name: "Prepare the image" }).hasAttribute("disabled")).toBe(
       true,
     )
   })
 
   it("lists the fields the prepared image declares", async () => {
-    await pickVanilla(
+    await prepareImage(
       preparation({
         state: "succeeded",
         steps: [
@@ -265,9 +176,9 @@ describe("the create wizard's package step", () => {
   })
 
   it("lists each login the prepared image declares, after its fields", async () => {
-    await pickVanilla({
+    await prepareImage({
       ...preparation({ state: "succeeded" }),
-      "package.describe": () => ({ ...vanilla, logins: [codex] }),
+      "image.describe": () => ({ ...vanilla, logins: [codex] }),
     })
 
     const logins = await screen.findByRole("list", { name: "Subscription logins" })
@@ -282,7 +193,7 @@ describe("the create wizard's package step", () => {
 
   // jsdom lays nothing out, so the line clamp shows only in the classes.
   it("shows each field's whole description, however narrow the screen", async () => {
-    await pickVanilla(
+    await prepareImage(
       preparation({
         state: "succeeded",
         steps: [{ name: "image", state: "succeeded", detail: "Building the image." }],
@@ -295,9 +206,9 @@ describe("the create wizard's package step", () => {
   })
 
   it("shows each login's whole description, however narrow the screen", async () => {
-    await pickVanilla({
+    await prepareImage({
       ...preparation({ state: "succeeded" }),
-      "package.describe": () => ({ ...vanilla, logins: [codex] }),
+      "image.describe": () => ({ ...vanilla, logins: [codex] }),
     })
 
     const logins = within(await screen.findByRole("list", { name: "Subscription logins" }))
@@ -306,7 +217,7 @@ describe("the create wizard's package step", () => {
   })
 
   it("marks the step that failed with what went wrong", async () => {
-    await pickVanilla(
+    await prepareImage(
       preparation({
         state: "failed",
         detail: 'Executable "claude" is not on PATH.',
@@ -321,26 +232,25 @@ describe("the create wizard's package step", () => {
     expect(step("describe").getByText('Executable "claude" is not on PATH.')).toBeDefined()
     expect(step("image").getByText("Done")).toBeDefined()
     expect(screen.queryByRole("list", { name: "Setup fields" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Prepare vanilla" }).hasAttribute("disabled")).toBe(
+    expect(screen.getByRole("button", { name: "Prepare the image" }).hasAttribute("disabled")).toBe(
       false,
     )
   })
 
   it("says why when the preparation could not start", async () => {
-    await pickVanilla(noPackages)
+    await prepareImage({})
 
     expect((await screen.findByRole("alert")).textContent).toContain(
       "The stub has no answer for image.prepare.",
     )
-    expect(screen.getByRole("button", { name: "Prepare vanilla" }).hasAttribute("disabled")).toBe(
+    expect(screen.getByRole("button", { name: "Prepare the image" }).hasAttribute("disabled")).toBe(
       false,
     )
   })
 
-  it("prepares vanilla again after the preparation failed", async () => {
+  it("prepares the image again after the preparation failed", async () => {
     let prepares = 0
     const caller = stubCaller({
-      ...noPackages,
       "image.prepare": () => {
         prepares += 1
         return { operation_id: prepares === 1 ? "op-1" : "op-2" }
@@ -380,10 +290,10 @@ describe("the create wizard's package step", () => {
     render(<CreateWizard caller={caller} clock={clock} />)
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole("button", { name: "Prepare vanilla" }))
+    await user.click(screen.getByRole("button", { name: "Prepare the image" }))
     await act(() => clock.advance(0))
 
-    const again = screen.getByRole("button", { name: "Prepare vanilla" })
+    const again = screen.getByRole("button", { name: "Prepare the image" })
     expect(again.hasAttribute("disabled")).toBe(false)
     await user.click(again)
     await act(() => clock.advance(0))
@@ -394,8 +304,8 @@ describe("the create wizard's package step", () => {
     expect(step("image").getByText("Running")).toBeDefined()
     expect(again.hasAttribute("disabled")).toBe(true)
     expect(caller.calls.filter((call) => call.method === "image.prepare")).toEqual([
-      { method: "image.prepare", params: { package: null } },
-      { method: "image.prepare", params: { package: null } },
+      { method: "image.prepare", params: {} },
+      { method: "image.prepare", params: {} },
     ])
   })
 })
@@ -428,12 +338,11 @@ function operationAnswer(fields: Partial<OperationGetResult>): OperationGetResul
   }
 }
 
-/** A hub that prepared vanilla, and answers the create operation's polls with `created`. */
+/** A hub that prepared the image, and answers the create operation's polls with `created`. */
 function hub(answers: Answers, created: OperationGetResult = creating) {
   return stubCaller({
-    "package.list": () => ({ packages: [] }),
     "image.prepare": () => ({ operation_id: "op-1" }),
-    "package.describe": () => vanilla,
+    "image.describe": () => vanilla,
     "instance.create": () => ({ operation_id: "op-create", instance_id: "instance-1" }),
     "operation.get": ({ operation_id }) => (operation_id === "op-1" ? prepared : created),
     ...answers,
@@ -444,7 +353,7 @@ async function openWizard(caller: StubCaller, onPublished = () => {}) {
   const clock = fakeClock()
   const user = userEvent.setup()
   render(<CreateWizard caller={caller} clock={clock} onPublished={onPublished} />)
-  await user.click(screen.getByRole("button", { name: "Prepare vanilla" }))
+  await user.click(screen.getByRole("button", { name: "Prepare the image" }))
   await act(() => clock.advance(0))
   await user.click(await screen.findByRole("button", { name: "Continue" }))
   return { user, clock }
@@ -519,7 +428,6 @@ describe("the create wizard's setup step", () => {
       manifest_id: "Ada",
       persona_name: "Ada",
       model: "openai:gpt-5",
-      package: null,
       config: { behavior_prompt: "Answer in haiku." },
       secrets: { api_key: "sk-private" },
       avatar: { shape: "square", color: "blue" },
@@ -529,7 +437,7 @@ describe("the create wizard's setup step", () => {
   })
 
   it("does not send an untouched boolean or a blank optional secret", async () => {
-    const untouched: PackageDescription = {
+    const untouched: DeclaredSetup = {
       ...vanilla,
       setup_fields: [
         ...vanilla.setup_fields,
@@ -551,7 +459,7 @@ describe("the create wizard's setup step", () => {
         },
       ],
     }
-    const caller = hub({ "package.describe": () => untouched })
+    const caller = hub({ "image.describe": () => untouched })
     const { user } = await openWizard(caller)
     await nameIt(user)
     await fillSetup(user)
@@ -563,7 +471,6 @@ describe("the create wizard's setup step", () => {
       manifest_id: "Ada",
       persona_name: "Ada",
       model: "openai:gpt-5",
-      package: null,
       config: { behavior_prompt: "Answer in haiku." },
       secrets: { api_key: "sk-private" },
       avatar: { shape: "circle", color: "blue" },
@@ -571,7 +478,7 @@ describe("the create wizard's setup step", () => {
   })
 
   it("sends a boolean once the user sets the switch", async () => {
-    const untouched: PackageDescription = {
+    const untouched: DeclaredSetup = {
       ...vanilla,
       setup_fields: [
         ...vanilla.setup_fields,
@@ -585,7 +492,7 @@ describe("the create wizard's setup step", () => {
         },
       ],
     }
-    const caller = hub({ "package.describe": () => untouched })
+    const caller = hub({ "image.describe": () => untouched })
     const { user } = await openWizard(caller)
     await nameIt(user)
     await fillSetup(user)
@@ -599,7 +506,7 @@ describe("the create wizard's setup step", () => {
   })
 
   it("renders each field by its type, starting from its default", async () => {
-    const { user } = await openWizard(hub({ "package.describe": () => typed }))
+    const { user } = await openWizard(hub({ "image.describe": () => typed }))
     await nameIt(user)
 
     const configuration = within(screen.getByRole("group", { name: "Configuration" }))
@@ -619,7 +526,7 @@ describe("the create wizard's setup step", () => {
   })
 
   it("sends a picked choice, a switch, and a whole number as typed values", async () => {
-    const caller = hub({ "package.describe": () => typed })
+    const caller = hub({ "image.describe": () => typed })
     const { user } = await openWizard(caller)
     await nameIt(user)
     await fillSetup(user)
@@ -634,25 +541,6 @@ describe("the create wizard's setup step", () => {
 
     expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
       config: { behavior_prompt: "Answer in haiku.", tone: "formal", review: false, steps: 12 },
-    })
-  })
-
-  it("creates the instance from the curated package that was prepared", async () => {
-    const caller = hub({ "package.list": () => ({ packages: [coder] }) })
-    const clock = fakeClock()
-    const user = userEvent.setup()
-    render(<CreateWizard caller={caller} clock={clock} />)
-
-    await user.click(await screen.findByRole("button", { name: "Prepare Software factory" }))
-    await act(() => clock.advance(0))
-    await user.click(await screen.findByRole("button", { name: "Continue" }))
-    await nameIt(user)
-    await fillSetup(user)
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
-
-    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
-      manifest_id: "Ada",
-      package: coder.selection,
     })
   })
 
@@ -684,7 +572,7 @@ describe("the create wizard's setup step", () => {
 
   it("sends a malformed email and URL and shows the hub's error under each", async () => {
     const caller = hub({
-      "package.describe": () => typed,
+      "image.describe": () => typed,
       "instance.create": () => {
         throw new CallError({
           code: "INVALID_SETUP",
@@ -727,7 +615,7 @@ describe("the create wizard's setup step", () => {
   it("shows the fields a rebuilt image stored, and a retry sends the new one", async () => {
     let described = 0
     let creates = 0
-    const rebuilt: PackageDescription = {
+    const rebuilt: DeclaredSetup = {
       ...vanilla,
       setup_fields: [
         ...vanilla.setup_fields,
@@ -756,7 +644,7 @@ describe("the create wizard's setup step", () => {
       ],
     })
     const caller = hub({
-      "package.describe": () => {
+      "image.describe": () => {
         described += 1
         return described === 1 ? vanilla : rebuilt
       },
@@ -787,7 +675,7 @@ describe("the create wizard's setup step", () => {
     await user.click(screen.getByRole("button", { name: "Back" }))
     const asked = within(screen.getByRole("list", { name: "Setup fields" }))
     expect(asked.getByRole("listitem", { name: "Search token" })).toBeDefined()
-    expect(screen.getByRole("button", { name: "Prepare vanilla" }).hasAttribute("disabled")).toBe(
+    expect(screen.getByRole("button", { name: "Prepare the image" }).hasAttribute("disabled")).toBe(
       true,
     )
     await user.click(screen.getByRole("button", { name: "Continue" }))
@@ -956,7 +844,7 @@ describe("the create wizard's sign in step", () => {
   /** A hub whose prepared image declares Codex, and answers the login's polls in order. */
   function withLogin(...logins: OperationGetResult[]) {
     return hub({
-      "package.describe": () => ({ ...vanilla, logins: [codex] }),
+      "image.describe": () => ({ ...vanilla, logins: [codex] }),
       "instance.login.start": () => ({ operation_id: "op-login", instance_id: "instance-1" }),
       "operation.get": ({ operation_id }) => {
         if (operation_id === "op-1") return prepared

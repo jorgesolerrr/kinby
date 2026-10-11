@@ -11,33 +11,29 @@ const planning: SkillSummary = {
   name: "planning",
   tier: "instance",
   description: "Plan my way.",
-  source: "instance",
   shadowed_by: null,
 }
-const packagePlanning: SkillSummary = {
+const kinbyPlanning: SkillSummary = {
   name: "planning",
-  tier: "package",
-  description: "Plan the package way.",
-  source: "kinby-factory 0.3.0",
+  tier: "kinby",
+  description: "Plan the kinby way.",
   shadowed_by: "instance",
 }
 const review: SkillSummary = {
   name: "review",
-  tier: "package",
-  description: "Review the package way.",
-  source: "kinby-factory 0.3.0",
+  tier: "kinby",
+  description: "Review the kinby way.",
   shadowed_by: null,
 }
 const workspaceReview: SkillSummary = {
   name: "review",
   tier: "workspace",
   description: "Review the workspace way.",
-  source: "workspace",
-  shadowed_by: "package",
+  shadowed_by: "kinby",
 }
 
 const listed: SkillListResult = {
-  skills: [planning, packagePlanning, review, workspaceReview],
+  skills: [planning, kinbyPlanning, review, workspaceReview],
   warnings: [],
 }
 
@@ -46,13 +42,13 @@ const skillText = (name: string, body: string) =>
 
 const read: Record<string, SkillResult> = {
   "planning instance": { content: skillText("planning", "Plan my way."), files: [], hash: "h-1" },
-  "planning package": {
-    content: skillText("planning", "Plan the package way."),
+  "planning kinby": {
+    content: skillText("planning", "Plan the kinby way."),
     files: [],
     hash: "h-2",
   },
-  "review package": {
-    content: skillText("review", "Review the package way."),
+  "review kinby": {
+    content: skillText("review", "Review the kinby way."),
     files: ["checklist.md"],
     hash: "h-3",
   },
@@ -85,8 +81,8 @@ describe("SkillsSection", () => {
     const items = within(list).getAllByRole("button")
     expect(items.map((item) => item.getAttribute("aria-label"))).toEqual([
       "planning, instance skill",
-      "planning, package skill",
-      "review, package skill",
+      "planning, kinby skill",
+      "review, kinby skill",
       "review, workspace skill",
     ])
     expect(items.map((item) => item.dataset.variant)).toEqual([
@@ -96,8 +92,7 @@ describe("SkillsSection", () => {
       "muted",
     ])
     expect(within(items[1]).getByText("Hidden by the instance skill")).toBeDefined()
-    expect(within(items[2]).getByText("kinby-factory 0.3.0")).toBeDefined()
-    expect(within(items[3]).getByText("Hidden by the package skill")).toBeDefined()
+    expect(within(items[3]).getByText("Hidden by the kinby skill")).toBeDefined()
   })
 
   it("shows no list marker beside a skill, and indents the shadowed ones", async () => {
@@ -127,7 +122,7 @@ describe("SkillsSection", () => {
     ).toEqual([true, true, true, true])
   })
 
-  it("reads a package skill as read-only and customizes it into the instance", async () => {
+  it("reads a kinby skill as read-only and customizes it into the instance", async () => {
     let customized = false
     const { caller, user } = openSection({
       "skill.list": () =>
@@ -135,8 +130,8 @@ describe("SkillsSection", () => {
           ? {
               skills: [
                 planning,
-                packagePlanning,
-                { ...review, tier: "instance", source: "instance" },
+                kinbyPlanning,
+                { ...review, tier: "instance" },
                 { ...review, shadowed_by: "instance" },
                 { ...workspaceReview, shadowed_by: "instance" },
               ],
@@ -145,16 +140,16 @@ describe("SkillsSection", () => {
           : listed,
       "skill.customize": () => {
         customized = true
-        return { ...read["review package"], hash: "h-5" }
+        return { ...read["review kinby"], hash: "h-5" }
       },
       "skill.read": ({ name, tier }) =>
-        read[`${name} ${tier}`] ?? { ...read["review package"], hash: "h-5" },
+        read[`${name} ${tier}`] ?? { ...read["review kinby"], hash: "h-5" },
     })
 
-    await user.click(await screen.findByRole("button", { name: "review, package skill" }))
+    await user.click(await screen.findByRole("button", { name: "review, kinby skill" }))
     const viewer = await screen.findByRole("textbox", { name: "SKILL.md" })
     expect(viewer).toHaveProperty("readOnly", true)
-    expect(viewer).toHaveProperty("value", read["review package"].content)
+    expect(viewer).toHaveProperty("value", read["review kinby"].content)
     expect(screen.getByText("Other files: checklist.md")).toBeDefined()
     await user.click(screen.getByRole("button", { name: "Customize" }))
 
@@ -177,7 +172,7 @@ describe("SkillsSection", () => {
       true,
     )
     expect(
-      screen.getByText("The package skill hides this one, so the model reads that."),
+      screen.getByText("The kinby skill hides this one, so the model reads that."),
     ).toBeDefined()
     expect(screen.queryByRole("button", { name: "Customize" })).toBeNull()
   })
@@ -258,7 +253,7 @@ describe("SkillsSection", () => {
   it("removes a customization and shows the skill it hid", async () => {
     const { caller, user } = openSection({
       "skill.delete": () => ({
-        skills: [{ ...packagePlanning, shadowed_by: null }, review, workspaceReview],
+        skills: [{ ...kinbyPlanning, shadowed_by: null }, review, workspaceReview],
         warnings: [],
       }),
     })
@@ -267,10 +262,10 @@ describe("SkillsSection", () => {
     await user.click(await screen.findByRole("button", { name: "Remove customization" }))
 
     expect(called(caller, "skill.delete")).toEqual([{ name: "planning", hash: "h-1" }])
-    expect(await screen.findByDisplayValue(/Plan the package way\./)).toBeDefined()
+    expect(await screen.findByDisplayValue(/Plan the kinby way\./)).toBeDefined()
     expect(screen.queryByRole("button", { name: "planning, instance skill" })).toBeNull()
     expect(
-      screen.getByRole("button", { name: "planning, package skill" }).getAttribute("aria-current"),
+      screen.getByRole("button", { name: "planning, kinby skill" }).getAttribute("aria-current"),
     ).toBe("true")
   })
 
@@ -279,7 +274,6 @@ describe("SkillsSection", () => {
       name: "outlining",
       tier: "instance",
       description: "Outline first.",
-      source: "instance",
       shadowed_by: null,
     }
     let created = false

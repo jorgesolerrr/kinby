@@ -1,5 +1,5 @@
 import { CallError } from "@kinby/contract"
-import type { OperationGetResult, OperationStep, PackageDescription } from "@kinby/contract"
+import type { DeclaredSetup, OperationGetResult, OperationStep } from "@kinby/contract"
 import { fakeClock, stubCaller } from "@kinby/contract/testing"
 import { describe, expect, it } from "vitest"
 
@@ -17,11 +17,7 @@ const described: OperationStep = {
   detail: "Read what the image declares.",
 }
 
-const vanilla: PackageDescription = {
-  display_name: "Vanilla",
-  description: "kinby's built-in defaults, with no package.",
-  icon: "sparkles",
-  version: "0.1.0",
+const vanilla: DeclaredSetup = {
   setup_fields: [
     {
       name: "model",
@@ -59,12 +55,12 @@ describe("following a preparation", () => {
         operation({ steps: [building] }),
         operation({ state: "succeeded", steps: [built, described] }),
       ),
-      "package.describe": () => vanilla,
+      "image.describe": () => vanilla,
     })
     const clock = fakeClock()
     const reports: Preparation[] = []
 
-    followPreparation(caller, null, (preparation) => reports.push(preparation), clock)
+    followPreparation(caller, (preparation) => reports.push(preparation), clock)
     await clock.advance(1_000)
 
     expect(reports).toEqual([
@@ -72,10 +68,10 @@ describe("following a preparation", () => {
       { state: "prepared", steps: [built, described], description: vanilla },
     ])
     expect(caller.calls).toEqual([
-      { method: "image.prepare", params: { package: null } },
+      { method: "image.prepare", params: {} },
       { method: "operation.get", params: { operation_id: "op-1" } },
       { method: "operation.get", params: { operation_id: "op-1" } },
-      { method: "package.describe", params: { package: null } },
+      { method: "image.describe", params: {} },
     ])
   })
 
@@ -94,11 +90,11 @@ describe("following a preparation", () => {
     const clock = fakeClock()
     const reports: Preparation[] = []
 
-    followPreparation(caller, null, (preparation) => reports.push(preparation), clock)
+    followPreparation(caller, (preparation) => reports.push(preparation), clock)
     await clock.advance(0)
 
     expect(reports).toEqual([{ state: "failed", steps: [built, failed], detail: failed.detail }])
-    expect(caller.calls.map((call) => call.method)).not.toContain("package.describe")
+    expect(caller.calls.map((call) => call.method)).not.toContain("image.describe")
   })
 
   it("asks again when the connection drops, and the hub answers with the same preparation", async () => {
@@ -112,12 +108,12 @@ describe("following a preparation", () => {
         return { operation_id: "op-1" }
       },
       "operation.get": polls(operation({ state: "succeeded", steps: [built, described] })),
-      "package.describe": () => vanilla,
+      "image.describe": () => vanilla,
     })
     const clock = fakeClock()
     const reports: Preparation[] = []
 
-    followPreparation(caller, null, (preparation) => reports.push(preparation), clock)
+    followPreparation(caller, (preparation) => reports.push(preparation), clock)
     await clock.advance(1_000)
 
     expect(reports).toEqual([
@@ -133,7 +129,7 @@ describe("following a preparation", () => {
     const clock = fakeClock()
     const reports: Preparation[] = []
 
-    const stop = followPreparation(caller, null, (preparation) => reports.push(preparation), clock)
+    const stop = followPreparation(caller, (preparation) => reports.push(preparation), clock)
     await clock.advance(0)
     stop()
     await clock.advance(5_000)

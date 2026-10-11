@@ -4,7 +4,7 @@ import type { Client, Clock, OperationGetResult, OperationStep } from "@kinby/co
 /** How often a follower reads an operation that is still running. */
 const POLL_MS = 1_000
 
-/** A follower's pause between polls. Stopping it cancels the pause under way for good. */
+/** A follower's pause between polls. Once stopped, no pause ever ends, so no loop on it goes on. */
 export interface Pace {
   wait: () => Promise<void>
   stop: () => void
@@ -13,12 +13,21 @@ export interface Pace {
 
 export function pace(clock: Clock): Pace {
   let stopped = false
-  let cancel = () => {}
+  const cancels = new Set<() => void>()
   return {
-    wait: () => new Promise<void>((resolve) => (cancel = clock.after(POLL_MS, resolve))),
+    wait: () =>
+      new Promise<void>((resolve) => {
+        if (stopped) return
+        const cancel = clock.after(POLL_MS, () => {
+          cancels.delete(cancel)
+          resolve()
+        })
+        cancels.add(cancel)
+      }),
     stop: () => {
       stopped = true
-      cancel()
+      cancels.forEach((cancel) => cancel())
+      cancels.clear()
     },
     get stopped() {
       return stopped

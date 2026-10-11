@@ -43,7 +43,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useRead } from "@/hooks/use-read"
 import { OlderCore } from "@/lib/older-core"
-import { openPackage, selectTurn, turnPath } from "@/lib/selection"
+import { openCore, selectTurn, turnPath } from "@/lib/selection"
 import {
   bucketLabel,
   bucketPoints,
@@ -90,7 +90,7 @@ export function StatsPage({
   const older = value !== undefined && fromOlderCore(value.stats)
   const stats = older ? undefined : value?.stats
   const starts = value?.starts ?? []
-  const openUpdate = () => openPackage(instanceId)
+  const openUpdate = () => openCore(instanceId)
   const [drill, setDrill] = useState<Drill>({})
   const by = bucketSize(range)
   // A second click on the picked row drops the filter.

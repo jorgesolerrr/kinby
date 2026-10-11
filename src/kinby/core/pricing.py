@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from kinby.contracts import TokenTotals
-from kinby.instance import ModelPrice
+from kinby.instance import Instance, ModelPrice, reload_manifest
 
 TOKENS_PER_MILLION = 1_000_000
 
@@ -57,6 +57,11 @@ def price_map(overrides: Mapping[str, ModelPrice] | None = None) -> dict[str, Mo
     if overrides is not None:
         prices.update(overrides)
     return prices
+
+
+def instance_prices(instance: Instance) -> dict[str, ModelPrice]:
+    """Return the prices of the instance's manifest as it is on disk now."""
+    return price_map(reload_manifest(instance).prices)
 
 
 def token_cost(totals: TokenTotals, price: ModelPrice) -> float:

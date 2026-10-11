@@ -14,12 +14,10 @@ from uuid import UUID
 from kinby.contracts import (
     ContainerOwner,
     ControlToken,
-    PackageDescription,
-    PackageSelection,
+    DeclaredSetup,
     RoutineName,
     StorageItem,
 )
-from kinby.packages import InstalledPackage
 
 if TYPE_CHECKING:
     from kinby.core.dispatcher import Dispatcher
@@ -214,13 +212,11 @@ class ImageArtifact:
     dependency_id: str
     base_images: tuple[str, ...]
     dependencies: tuple[str, ...] = ()
-    package: PackageSelection | None = None
 
 
 @dataclass(frozen=True)
 class ImageSelection:
     revision: str
-    package: PackageSelection | None = None
     #: One of the image recipes kinby ships, by name, as a factory's instance template names it.
     recipe: str | None = None
 
@@ -233,25 +229,7 @@ class BuiltImage:
     reused: bool
 
 
-@dataclass(frozen=True)
-class PreparedImage:
-    artifact: ImageArtifact
-    package: InstalledPackage | None = None
-
-
 class ImagePreparation(Protocol):
-    async def prepare(
-        self,
-        selection: ImageSelection,
-        instance: StorageItem | None = None,
-    ) -> PreparedImage:
-        """Prepare the image, then run the candidate check inside it.
-
-        *instance* is an existing instance's directory, or that directory's
-        package.yaml. The check validates the file and mounts nothing else.
-        """
-        ...
-
     async def build(self, selection: ImageSelection) -> BuiltImage:
         """Build the selected image, or reuse the artifact already recorded for it.
 
@@ -259,8 +237,8 @@ class ImagePreparation(Protocol):
         """
         ...
 
-    async def describe(self, artifact: ImageArtifact) -> PackageDescription:
-        """Run the candidate check inside the image and read what it declares."""
+    async def describe(self, artifact: ImageArtifact) -> DeclaredSetup:
+        """Ask the kinby inside the image what a vanilla instance declares."""
         ...
 
     async def resolve(self, revision: str) -> str:
@@ -281,11 +259,4 @@ class ImageBackend(Protocol):
 
     async def exists(self, image_id: str) -> bool: ...
 
-    async def inspect_package(
-        self,
-        image_id: str,
-        package_id: str,
-        instance: StorageItem | None = None,
-    ) -> InstalledPackage: ...
-
-    async def inspect_vanilla(self, image_id: str) -> PackageDescription: ...
+    async def describe(self, image_id: str) -> DeclaredSetup: ...

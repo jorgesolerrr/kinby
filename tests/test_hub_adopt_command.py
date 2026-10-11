@@ -11,7 +11,7 @@ from kinby.cli.contract_socket import TOKEN_VARIABLE
 from kinby.contracts import IntendedState
 from kinby.hub import Hub
 from tests.test_hub import FakeControl, FakeImages, FakeRuntime, hub_at
-from tests.test_hub_adoption import CODER_CONTAINER, FACTORY, declare_package, existing_coder
+from tests.test_hub_adoption import CODER_CONTAINER, existing_coder
 from tests.test_hub_server import served, url
 from tests.test_hub_update_command import closed_url
 
@@ -27,7 +27,7 @@ def _adopt(hub: Hub, *arguments: str) -> int:
     return asyncio.run(scenario())
 
 
-def test_hub_adopt_previews_then_adopts_with_the_package(
+def test_hub_adopt_previews_then_adopts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -35,11 +35,8 @@ def test_hub_adopt_previews_then_adopts_with_the_package(
     runtime = FakeRuntime()
     hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
     directory = existing_coder(runtime, tmp_path / "box" / "coder")
-    declare_package(directory)
-    package = tmp_path / "coder-package.json"
-    package.write_text(FACTORY.model_dump_json(), encoding="utf-8")
     monkeypatch.setenv(TOKEN_VARIABLE, hub.access.rotate())
-    arguments = (str(directory), CODER_CONTAINER, "--package", str(package))
+    arguments = (str(directory), CODER_CONTAINER)
 
     blocked = _adopt(hub, *arguments, "--preview")
     blocked_preview = json.loads(capsys.readouterr().out)
@@ -55,7 +52,6 @@ def test_hub_adopt_previews_then_adopts_with_the_package(
     assert adopted == 0
     assert printed[-1] == "succeeded: The hub owns this instance."
     (record,) = hub.registry.managed_instances()
-    assert record.package == FACTORY
     assert record.intended_state is IntendedState.RUNNING
     assert hub.registry.signal_alias() == record.instance_id
 

@@ -1,8 +1,7 @@
 import type { Clock } from "@kinby/contract"
 import { useCallback, useEffect, useState } from "react"
 
-import { usePace } from "@/hooks/use-pace"
-import { retried } from "@/lib/operation"
+import { pace, retried } from "@/lib/operation"
 
 /**
  * What `read` last returned, or why it failed. It reads on open, whenever `read` changes, when the
@@ -13,19 +12,18 @@ export function useRead<T>(
   read: () => Promise<T>,
   clock: Clock,
 ): { value: T | undefined; failure: unknown; readAgain: () => void } {
-  const pacing = usePace(clock)
   const [reads, setReads] = useState(0)
   const [outcome, setOutcome] = useState<Outcome<T>>()
   const readAgain = useCallback(() => setReads((count) => count + 1), [])
 
   useEffect(() => {
-    let current = true
+    const pacing = pace(clock)
     retried(read, pacing).then(
       (value) => {
-        if (current) setOutcome({ read, value })
+        if (!pacing.stopped) setOutcome({ read, value })
       },
       (failure: unknown) => {
-        if (!current) return
+        if (pacing.stopped) return
         setOutcome((last) => ({
           read,
           value: last?.read === read ? last.value : undefined,
@@ -33,10 +31,8 @@ export function useRead<T>(
         }))
       },
     )
-    return () => {
-      current = false
-    }
-  }, [read, pacing, reads])
+    return pacing.stop
+  }, [read, clock, reads])
   // What was read changes while the user is elsewhere, and nothing tells the page.
   useEffect(() => {
     window.addEventListener("focus", readAgain)
