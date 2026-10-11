@@ -1,12 +1,7 @@
 import asyncio
 import re
 from datetime import date
-from importlib import import_module
-from importlib.metadata import entry_points
-from types import SimpleNamespace
 from uuid import uuid4
-
-import pytest
 
 from kinby.cli import main
 from kinby.contracts import PermissionMode
@@ -17,7 +12,7 @@ from kinby.plugins.routines import load_routines
 from kinby.plugins.skills import load_skills
 
 
-def test_fresh_instance_catalogues_and_shows_packaged_write_routine(tmp_path, capsys):
+def test_fresh_instance_catalogues_and_shows_kinbys_write_routine(tmp_path, capsys):
     path = init_instance(tmp_path / "instance")
     instance = load_instance(path)
 
@@ -36,7 +31,7 @@ def test_fresh_instance_catalogues_and_shows_packaged_write_routine(tmp_path, ca
     assert f"skills:\n  write-routine: {skills[0].source}\n" in capsys.readouterr().out
 
 
-def test_disabling_defaults_omits_packaged_write_routine(tmp_path, capsys):
+def test_disabling_defaults_omits_kinbys_write_routine(tmp_path, capsys):
     path = init_instance(tmp_path / "instance")
     with (path / "kinby.toml").open("a", encoding="utf-8") as manifest:
         manifest.write("\n[tools]\ndefaults = false\n")
@@ -56,7 +51,7 @@ def _write_skill(root, name, body):
     return path
 
 
-def test_instance_then_packaged_then_workspace_skill_precedence(tmp_path):
+def test_instance_then_kinby_then_workspace_skill_precedence(tmp_path):
     path = init_instance(tmp_path / "instance")
     workspace = path / "workspace" / ".agents" / "skills"
     _write_skill(workspace, "write-routine", "Workspace routine instructions.")
@@ -85,84 +80,6 @@ def test_instance_then_packaged_then_workspace_skill_precedence(tmp_path):
     remaining, warnings = load_skills(load_instance(path))
     assert not warnings
     assert remaining == skills
-
-
-@pytest.mark.parametrize("defaults", [True, False])
-def test_other_packages_survive_defaults_flag_and_keep_first_duplicate(
-    tmp_path, monkeypatch, defaults
-):
-    path = init_instance(tmp_path / "instance")
-    with (path / "kinby.toml").open("a", encoding="utf-8") as manifest:
-        manifest.write(f"\n[tools]\ndefaults = {str(defaults).lower()}\n")
-    first = _write_skill(tmp_path / "first", "shared", "First package.")
-    second = _write_skill(tmp_path / "second", "shared", "Second package.")
-    installed = entry_points(group="kinby.skills")
-
-    def discover(*, group):
-        assert group == "kinby.skills"
-        return (
-            *installed,
-            SimpleNamespace(
-                name="defaults",
-                dist=SimpleNamespace(name="other-package", version="1.0.0"),
-                value="other:SKILLS",
-                load=lambda: first.parent.parent,
-            ),
-            SimpleNamespace(
-                name="second",
-                value="second:SKILLS",
-                dist=None,
-                load=lambda: second.parent.parent,
-            ),
-        )
-
-    monkeypatch.setattr(import_module("kinby.plugins.skills"), "entry_points", discover)
-
-    skills, warnings = load_skills(load_instance(path))
-
-    assert [skill.name for skill in skills] == (
-        ["write-routine", "shared"] if defaults else ["shared"]
-    )
-    assert skills[-1].body == "First package."
-    assert len(warnings) == 1
-    assert warnings[0].sources == (str(first), str(second))
-
-
-@pytest.mark.parametrize(
-    "broken_export", ["wrong-type", "missing-path", "file-path", "import-error"]
-)
-def test_broken_packaged_skill_export_warns_and_preserves_other_skills(
-    tmp_path, monkeypatch, broken_export
-):
-    path = init_instance(tmp_path / "instance")
-    installed = entry_points(group="kinby.skills")
-    invalid_path = tmp_path / broken_export
-    if broken_export == "file-path":
-        invalid_path.write_text("not a skill directory", encoding="utf-8")
-
-    def load():
-        if broken_export == "import-error":
-            raise ImportError("Skill package is broken.")
-        if broken_export == "wrong-type":
-            return "not a Path"
-        return invalid_path
-
-    def discover(*, group):
-        assert group == "kinby.skills"
-        return (*installed, SimpleNamespace(name="broken", value="broken:SKILLS", load=load))
-
-    monkeypatch.setattr(import_module("kinby.plugins.skills"), "entry_points", discover)
-
-    skills, warnings = load_skills(load_instance(path))
-
-    assert [skill.name for skill in skills] == ["write-routine"]
-    assert len(warnings) == 1
-    assert warnings[0].sources == ("broken:SKILLS",)
-    assert warnings[0].message == (
-        "ImportError: Skill package is broken."
-        if broken_export == "import-error"
-        else 'TypeError: Entry point "broken:SKILLS" does not export a skill directory Path.'
-    )
 
 
 def test_write_routine_documents_every_frontmatter_key_from_spec(tmp_path):

@@ -186,7 +186,7 @@ describe("ManifestSection", () => {
     openSection()
 
     await screen.findByRole("combobox", { name: "Main model" })
-    for (const owned of [/^id$/i, /state dir/i, /listen/i, /workspace/i, /package/i]) {
+    for (const owned of [/^id$/i, /state dir/i, /listen/i, /workspace/i]) {
       expect(screen.queryByLabelText(owned)).toBeNull()
     }
   })

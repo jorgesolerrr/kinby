@@ -31,7 +31,6 @@ from kinby.core.prompt import render_step_message
 from kinby.core.turns import Turns
 from kinby.instance import Instance, ManifestError
 from kinby.instance.permissions import PermissionsError
-from kinby.packages import PackageConfigError, instance_package_config
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hooks import HookResult, StepEnd, load_hooks
 from kinby.plugins.registry import ToolRegistry
@@ -163,12 +162,8 @@ async def _run_code_step(
         # The factory's needs_human call: the step the run stopped at, and how it ended.
         held |= {"step": command.origin.step, "summary": step.summary}
     arguments = {name: value for name, value in held.items() if name in tool.runnable.args}
-    try:
-        package_config = instance_package_config(instance)
-    except PackageConfigError as exc:
-        return _failed(f'Tool "{step.call}" could not read the package config: {exc}')
     # A code step runs on no thread, so its tool's context names one no turn opens.
-    context = ToolContext(instance=instance, thread_id=uuid4(), package_config=package_config)
+    context = ToolContext(instance=instance, thread_id=uuid4())
     try:
         returned = await tool.ainvoke_value(arguments, context)
         if isinstance(returned, HookResult):

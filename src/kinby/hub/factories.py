@@ -34,7 +34,7 @@ from kinby.factories.file import (
     read_factory_file,
 )
 from kinby.instance.config_changes import directory_hash
-from kinby.packages import readable_template_files, with_built_in_fields
+from kinby.setup import readable_template_files, with_built_in_fields
 
 
 @dataclass(frozen=True)

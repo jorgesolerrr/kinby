@@ -56,8 +56,7 @@
         "retained-storage",
         "invalid-instance",
         "manifest-id-taken",
-        "retained-identity",
-        "package-mismatch"
+        "retained-identity"
       ],
       "title": "AdoptionFindingKind",
       "type": "string"
@@ -480,10 +479,6 @@
       "title": "CommandStepRun",
       "type": "object"
     },
-    "CommitSha": {
-      "pattern": "^[0-9a-f]{40}$",
-      "type": "string"
-    },
     "CompletionOutcome": {
       "enum": [
         "work",
@@ -614,36 +609,6 @@
       ],
       "title": "ContainerOwner",
       "type": "string"
-    },
-    "CuratedPackage": {
-      "additionalProperties": false,
-      "description": "One package of the curated list: its card, and the selection a client prepares it with.\n\nThe selection carries no image recipe. The hub adds the entry's recipe when it builds.",
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "display_name": {
-          "type": "string"
-        },
-        "icon": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "selection": {
-          "$ref": "#/$defs/PackageSelection"
-        }
-      },
-      "required": [
-        "id",
-        "display_name",
-        "description",
-        "icon",
-        "selection"
-      ],
-      "title": "CuratedPackage",
-      "type": "object"
     },
     "DeclaredSetup": {
       "additionalProperties": false,
@@ -1657,24 +1622,17 @@
       "minLength": 1,
       "type": "string"
     },
+    "ImageDescribeCommand": {
+      "additionalProperties": false,
+      "description": "Read what the prepared image declares. It never builds.",
+      "properties": {},
+      "title": "ImageDescribeCommand",
+      "type": "object"
+    },
     "ImagePrepareCommand": {
       "additionalProperties": false,
-      "description": "Prepare a package selection's image. No package prepares kinby's base image.",
-      "properties": {
-        "package": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PackageSelection"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "package"
-      ],
+      "description": "Prepare kinby's base image, the one a vanilla instance runs on.",
+      "properties": {},
       "title": "ImagePrepareCommand",
       "type": "object"
     },
@@ -1704,17 +1662,6 @@
           "default": false,
           "type": "boolean"
         },
-        "package": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PackageSelection"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "path": {
           "format": "path",
           "type": "string"
@@ -1742,17 +1689,6 @@
         "acknowledge_interrupting_stop": {
           "default": false,
           "type": "boolean"
-        },
-        "package": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PackageSelection"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         },
         "path": {
           "format": "path",
@@ -1868,17 +1804,6 @@
         },
         "model": {
           "type": "string"
-        },
-        "package": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PackageSelection"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         },
         "persona_name": {
           "anyOf": [
@@ -2120,12 +2045,6 @@
         },
         "contract_version": {
           "type": "string"
-        },
-        "restart_reasons": {
-          "items": {
-            "$ref": "#/$defs/RecreateReason"
-          },
-          "type": "array"
         }
       },
       "required": [
@@ -2362,34 +2281,9 @@
         },
         "notices": {
           "items": {
-            "discriminator": {
-              "mapping": {
-                "package_template_older": "#/$defs/PackageTemplateOlder",
-                "revision_behind": "#/$defs/RevisionBehind"
-              },
-              "propertyName": "code"
-            },
-            "oneOf": [
-              {
-                "$ref": "#/$defs/RevisionBehind"
-              },
-              {
-                "$ref": "#/$defs/PackageTemplateOlder"
-              }
-            ]
+            "$ref": "#/$defs/RevisionBehind"
           },
           "type": "array"
-        },
-        "package": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PackageSummary"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         },
         "persona_name": {
           "anyOf": [
@@ -2440,22 +2334,11 @@
     },
     "InstanceUpdateCommand": {
       "additionalProperties": false,
-      "description": "Move one instance to the image a revision prepares.\n\nIts package selection travels along, moved to another commit when a pin names one.",
+      "description": "Move one instance to the image a revision prepares.",
       "properties": {
         "instance_id": {
           "format": "uuid",
           "type": "string"
-        },
-        "package": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PackagePin"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         },
         "revision": {
           "minLength": 1,
@@ -3667,281 +3550,6 @@
       "title": "OwnBashPatterns",
       "type": "object"
     },
-    "PackageCommit": {
-      "additionalProperties": false,
-      "description": "One commit of a package's git repository, installed in place of an index version.",
-      "properties": {
-        "sha": {
-          "$ref": "#/$defs/CommitSha"
-        },
-        "url": {
-          "minLength": 1,
-          "type": "string"
-        }
-      },
-      "required": [
-        "url",
-        "sha"
-      ],
-      "title": "PackageCommit",
-      "type": "object"
-    },
-    "PackageConfigGetCommand": {
-      "additionalProperties": false,
-      "properties": {},
-      "title": "PackageConfigGetCommand",
-      "type": "object"
-    },
-    "PackageConfigResult": {
-      "additionalProperties": false,
-      "properties": {
-        "hash": {
-          "type": "string"
-        },
-        "schema": {
-          "additionalProperties": {
-            "$ref": "#/$defs/JsonValue"
-          },
-          "type": "object"
-        },
-        "values": {
-          "additionalProperties": {
-            "$ref": "#/$defs/JsonValue"
-          },
-          "type": "object"
-        }
-      },
-      "required": [
-        "schema",
-        "values",
-        "hash"
-      ],
-      "title": "PackageConfigResult",
-      "type": "object"
-    },
-    "PackageConfigSetCommand": {
-      "additionalProperties": false,
-      "properties": {
-        "hash": {
-          "type": "string"
-        },
-        "values": {
-          "additionalProperties": {
-            "$ref": "#/$defs/JsonValue"
-          },
-          "type": "object"
-        }
-      },
-      "required": [
-        "values",
-        "hash"
-      ],
-      "title": "PackageConfigSetCommand",
-      "type": "object"
-    },
-    "PackageDescribeCommand": {
-      "additionalProperties": false,
-      "description": "Read what a prepared selection declares. It never builds.",
-      "properties": {
-        "package": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PackageSelection"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "package"
-      ],
-      "title": "PackageDescribeCommand",
-      "type": "object"
-    },
-    "PackageDescription": {
-      "additionalProperties": false,
-      "description": "What a prepared image declares: its card, its version, its setup fields, and its logins.",
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "display_name": {
-          "type": "string"
-        },
-        "icon": {
-          "type": "string"
-        },
-        "logins": {
-          "items": {
-            "$ref": "#/$defs/SubscriptionLogin"
-          },
-          "type": "array"
-        },
-        "setup_fields": {
-          "items": {
-            "$ref": "#/$defs/SetupField"
-          },
-          "type": "array"
-        },
-        "version": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "setup_fields",
-        "display_name",
-        "description",
-        "icon",
-        "version"
-      ],
-      "title": "PackageDescription",
-      "type": "object"
-    },
-    "PackageListCommand": {
-      "additionalProperties": false,
-      "properties": {},
-      "title": "PackageListCommand",
-      "type": "object"
-    },
-    "PackageListResult": {
-      "additionalProperties": false,
-      "properties": {
-        "packages": {
-          "items": {
-            "$ref": "#/$defs/CuratedPackage"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "packages"
-      ],
-      "title": "PackageListResult",
-      "type": "object"
-    },
-    "PackagePin": {
-      "additionalProperties": false,
-      "description": "Move an instance's package to another commit of the git repository it comes from.\n\nIt names the package it moves, which must be the instance's own (ADR 0040).",
-      "properties": {
-        "id": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "image_recipe": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "sha": {
-          "$ref": "#/$defs/CommitSha"
-        }
-      },
-      "required": [
-        "id",
-        "sha"
-      ],
-      "title": "PackagePin",
-      "type": "object"
-    },
-    "PackageSelection": {
-      "additionalProperties": false,
-      "properties": {
-        "distribution": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "id": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "image_recipe": {
-          "default": "",
-          "type": "string"
-        },
-        "version": {
-          "anyOf": [
-            {
-              "minLength": 1,
-              "type": "string"
-            },
-            {
-              "$ref": "#/$defs/PackageCommit"
-            }
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "distribution",
-        "version"
-      ],
-      "title": "PackageSelection",
-      "type": "object"
-    },
-    "PackageSummary": {
-      "additionalProperties": false,
-      "properties": {
-        "distribution": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "version": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "$ref": "#/$defs/PackageCommit"
-            }
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "distribution",
-        "version"
-      ],
-      "title": "PackageSummary",
-      "type": "object"
-    },
-    "PackageTemplateOlder": {
-      "additionalProperties": false,
-      "description": "The instance's configuration was copied from another version of its installed package.",
-      "properties": {
-        "code": {
-          "const": "package_template_older",
-          "default": "package_template_older",
-          "type": "string"
-        },
-        "initialized_version": {
-          "type": "string"
-        },
-        "installed_version": {
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message",
-        "initialized_version",
-        "installed_version",
-        "code"
-      ],
-      "title": "PackageTemplateOlder",
-      "type": "object"
-    },
     "PermissionMode": {
       "enum": [
         "read-only",
@@ -4226,8 +3834,7 @@
     "RecreateReason": {
       "description": "A change a running instance applies only once it is recreated.",
       "enum": [
-        "secrets",
-        "package_config"
+        "secrets"
       ],
       "title": "RecreateReason",
       "type": "string"
@@ -5128,9 +4735,6 @@
             }
           ]
         },
-        "source": {
-          "type": "string"
-        },
         "tier": {
           "$ref": "#/$defs/SkillTier"
         }
@@ -5139,7 +4743,6 @@
         "name",
         "tier",
         "description",
-        "source",
         "shadowed_by"
       ],
       "title": "SkillSummary",
@@ -5149,7 +4752,7 @@
       "description": "Where a skill comes from, in the order the model looks for it.",
       "enum": [
         "instance",
-        "package",
+        "kinby",
         "workspace"
       ],
       "title": "SkillTier",
@@ -5926,7 +5529,7 @@
     },
     "SubscriptionLogin": {
       "additionalProperties": false,
-      "description": "One sign-in a package or a template declares, run in a setup container (ADR 0065).",
+      "description": "One sign-in a template declares, run in a setup container (ADR 0065).",
       "properties": {
         "command": {
           "items": {
@@ -6000,10 +5603,9 @@
       "type": "object"
     },
     "TargetFile": {
-      "description": "The instance file a package's configuration field lands in.",
+      "description": "The instance file a template's configuration field lands in.",
       "enum": [
-        "kinby.toml",
-        "package.yaml"
+        "kinby.toml"
       ],
       "title": "TargetFile",
       "type": "string"
@@ -7732,6 +7334,22 @@
           ],
           "type": "object"
         },
+        "image.describe": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ImageDescribeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/DeclaredSetup"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "image.prepare": {
           "additionalProperties": false,
           "properties": {
@@ -8156,70 +7774,6 @@
             },
             "result": {
               "$ref": "#/$defs/OperationGetResult"
-            }
-          },
-          "required": [
-            "command",
-            "result"
-          ],
-          "type": "object"
-        },
-        "package.config.get": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/PackageConfigGetCommand"
-            },
-            "result": {
-              "$ref": "#/$defs/PackageConfigResult"
-            }
-          },
-          "required": [
-            "command",
-            "result"
-          ],
-          "type": "object"
-        },
-        "package.config.set": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/PackageConfigSetCommand"
-            },
-            "result": {
-              "$ref": "#/$defs/PackageConfigResult"
-            }
-          },
-          "required": [
-            "command",
-            "result"
-          ],
-          "type": "object"
-        },
-        "package.describe": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/PackageDescribeCommand"
-            },
-            "result": {
-              "$ref": "#/$defs/PackageDescription"
-            }
-          },
-          "required": [
-            "command",
-            "result"
-          ],
-          "type": "object"
-        },
-        "package.list": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/PackageListCommand"
-            },
-            "result": {
-              "$ref": "#/$defs/PackageListResult"
             }
           },
           "required": [
@@ -8871,8 +8425,6 @@
         "manifest.set",
         "permissions.get",
         "permissions.set",
-        "package.config.get",
-        "package.config.set",
         "config.history",
         "memory.list",
         "memory.open",
@@ -8905,8 +8457,7 @@
         "instance.login.start",
         "operation.get",
         "image.prepare",
-        "package.describe",
-        "package.list",
+        "image.describe",
         "factory.list",
         "factory.get",
         "factory.check",

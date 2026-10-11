@@ -18,14 +18,13 @@ from kinby.contracts import (
     SetupField,
     SetupFieldKind,
     SetupValue,
-    TargetFile,
 )
 from kinby.instance import ModelName, api_key_variable
-from kinby.packages import (
+from kinby.setup import (
     API_KEY_FIELD,
     MODEL_FIELD,
-    package_fields,
     resolved_values,
+    template_fields,
     value_problem,
 )
 
@@ -89,18 +88,6 @@ def configuration(
     return resolved_values(fields, {**config, MODEL_FIELD.name: model})
 
 
-def targeted(
-    description: DeclaredSetup,
-    configured: Mapping[str, SetupValue],
-) -> dict[str, SetupValue]:
-    """The values of the package's own fields, which initialization writes at their targets."""
-    return {
-        field.name: configured[field.name]
-        for field in package_fields(description.setup_fields)
-        if field.target is not None and field.name in configured
-    }
-
-
 def manifest_settings(
     setup: DeclaredSetup,
     configured: Mapping[str, SetupValue],
@@ -108,10 +95,8 @@ def manifest_settings(
     """The values of a template's own fields, by the dotted key of kinby.toml each lands at."""
     return {
         field.target.key: configured[field.name]
-        for field in package_fields(setup.setup_fields)
-        if field.target is not None
-        and field.target.file is TargetFile.KINBY_TOML
-        and field.name in configured
+        for field in template_fields(setup.setup_fields)
+        if field.target is not None and field.name in configured
     }
 
 

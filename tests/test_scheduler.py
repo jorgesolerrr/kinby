@@ -1,6 +1,5 @@
 import asyncio
 import json
-from contextlib import suppress
 from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
@@ -13,7 +12,6 @@ from kinby.cli.repl import run_repl
 from kinby.contracts import (
     AcceptedResult,
     CompletionOutcome,
-    ContractModel,
     Delivery,
     DeliveryId,
     ErrorEnvelope,
@@ -31,7 +29,6 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.dispatcher import (
-    Dispatcher,
     ScheduledTurnConfig,
     TurnConfig,
     build_dispatcher,
@@ -137,27 +134,6 @@ def runtime(instance, clock, runner=None):
 
 async def call(dispatcher, method, **payload):
     return await dispatcher.dispatch(method, payload, set(Scope))
-
-
-async def start_payload_call(
-    dispatcher: Dispatcher, name: str, payload: str
-) -> asyncio.Task[ContractModel]:
-    pending_call = asyncio.create_task(
-        call(
-            dispatcher,
-            "routine.run",
-            name=name,
-            payload={"body": payload, "content_type": "text/plain"},
-        )
-    )
-    await asyncio.sleep(0)
-    return pending_call
-
-
-async def cancel_call(pending_call: asyncio.Task[ContractModel]) -> None:
-    pending_call.cancel()
-    with suppress(asyncio.CancelledError):
-        await pending_call
 
 
 async def events_for(dispatcher, thread_id):
@@ -413,7 +389,9 @@ class BlockingRunner(ScriptedRunner):
         return await super().run(turn, context)
 
 
-def test_delivery_received_while_routine_runs_waits_then_fires(tmp_path: Path) -> None:
+def test_payload_run_returns_while_a_user_turn_runs_then_fires_once_after_it(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)
         routine_file(instance, "description: News")
@@ -424,28 +402,33 @@ def test_delivery_received_while_routine_runs_waits_then_fires(tmp_path: Path) -
             runner,
         )
         assert dispatcher.scheduler is not None
-        running = await call(dispatcher, "routine.run", name="news")
-        assert isinstance(running, AcceptedResult)
-        receiving = await start_payload_call(dispatcher, "news", "later")
-        received_event = next(
-            event
-            for event in EventLog(instance.manifest.state_dir).all_events()
-            if isinstance(event.payload, SignalReceived)
-        )
-        assert not receiving.done()
-        assert not any(
-            isinstance(event.payload, TurnStarted)
-            for event in EventLog(instance.manifest.state_dir).stored(received_event.thread_id)
-        )
+        dispatcher.scheduler.start()
+        thread = await call(dispatcher, "thread.create")
+        await call(dispatcher, "thread.turn.start", thread_id=thread.id, message="Hi")
+
+        async with asyncio.timeout(3):
+            received = await call(
+                dispatcher,
+                "routine.run",
+                name="news",
+                payload={"body": "later", "content_type": "text/plain"},
+            )
+        assert isinstance(received, AcceptedResult)
+        await asyncio.sleep(0)
+        assert [
+            type(event.payload)
+            for event in EventLog(instance.manifest.state_dir).stored(received.thread_id)
+        ] == [SignalReceived]
 
         runner.release.set()
-        received = await receiving
-        assert isinstance(received, AcceptedResult)
+        await events_for(dispatcher, received.thread_id)
+        await dispatcher.scheduler.stop()
+        await dispatcher.scheduler.drain()
 
-        assert any(
-            isinstance(event.payload, TurnStarted)
+        assert [
+            type(event.payload)
             for event in EventLog(instance.manifest.state_dir).stored(received.thread_id)
-        )
+        ] == [SignalReceived, TurnStarted, MessageDelta, TurnCompleted]
 
     asyncio.run(scenario())
 
@@ -564,6 +547,7 @@ def test_failed_signal_firings_disable_routine_at_ten(
                 name="news",
                 payload={"body": str(count), "content_type": "text/plain"},
             )
+            await dispatcher.scheduler.tick()
             listed = await call(dispatcher, "routine.list")
             assert not isinstance(listed, ErrorEnvelope)
             assert listed.routines[0].failure_count == count
@@ -763,13 +747,17 @@ def test_first_scheduler_pass_fires_pending_delivery_with_fixed_turn_id(
         dispatcher = runtime(instance, clock, runner)
         assert dispatcher.scheduler is not None
         await call(dispatcher, "routine.run", name="issues")
-        receiving = await start_payload_call(dispatcher, "issues", "opened")
+        await call(
+            dispatcher,
+            "routine.run",
+            name="issues",
+            payload={"body": "opened", "content_type": "text/plain"},
+        )
         received = next(
             event
             for event in EventLog(instance.manifest.state_dir).all_events()
             if isinstance(event.payload, SignalReceived)
         )
-        await cancel_call(receiving)
         runner.release.set()
         await dispatcher.scheduler.drain()
 
@@ -836,8 +824,12 @@ def test_scheduler_fires_oldest_ready_work_one_per_pass(
         assert dispatcher.scheduler is not None
         await call(dispatcher, "routine.run", name="issues")
         clock.now = delivery_time
-        receiving = await start_payload_call(dispatcher, "issues", "opened")
-        await cancel_call(receiving)
+        await call(
+            dispatcher,
+            "routine.run",
+            name="issues",
+            payload={"body": "opened", "content_type": "text/plain"},
+        )
         runner.release.set()
         await dispatcher.scheduler.drain()
         clock.now = datetime(2026, 9, 6, 9, 2, tzinfo=UTC)
@@ -877,14 +869,18 @@ def test_scheduler_fires_every_pending_delivery_in_receipt_order(tmp_path: Path)
         assert dispatcher.scheduler is not None
         running = await call(dispatcher, "routine.run", name="news")
         assert isinstance(running, AcceptedResult)
-        receiving = []
         for name, body, minute in (
             ("news", "first", 2),
             ("issues", "second", 1),
             ("news", "third", 0),
         ):
             clock.now = datetime(2026, 9, 6, 9, minute, tzinfo=UTC)
-            receiving.append(await start_payload_call(dispatcher, name, body))
+            await call(
+                dispatcher,
+                "routine.run",
+                name=name,
+                payload={"body": body, "content_type": "text/plain"},
+            )
 
         received = [
             event
@@ -892,8 +888,6 @@ def test_scheduler_fires_every_pending_delivery_in_receipt_order(tmp_path: Path)
             if isinstance(event.payload, SignalReceived)
         ]
         assert len(received) == 3
-        for task in receiving:
-            await cancel_call(task)
 
         runner.release.set()
         await dispatcher.scheduler.drain()

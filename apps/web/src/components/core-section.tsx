@@ -1,10 +1,4 @@
-import type {
-  Client,
-  Clock,
-  InstanceSummary,
-  PackageSummary,
-  PackageTemplateOlder,
-} from "@kinby/contract"
+import type { Client, Clock, InstanceSummary, RevisionBehind } from "@kinby/contract"
 import { useCallback, useId, useState } from "react"
 
 import { OperationSteps } from "@/components/operation-steps"
@@ -16,16 +10,8 @@ import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/comp
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useFollowing } from "@/hooks/use-following"
-import { packageName } from "@/lib/instances"
 import { followUpdate, type Updating } from "@/lib/update"
 import { CircleCheckIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react"
-
-type InstanceNotice = InstanceSummary["notices"][number]
-
-const NOTICE_TITLES: Record<InstanceNotice["code"], string> = {
-  revision_behind: "Behind the hub",
-  package_template_older: "The template is older",
-}
 
 /** What "Update core" moves the instance to: the hub's own revision, or a ref the user types. */
 type Target = "hub" | "ref"
@@ -33,10 +19,10 @@ type Target = "hub" | "ref"
 const TARGETS: Record<Target, string> = { hub: "The hub's revision", ref: "Another ref" }
 
 /**
- * The instance's package and the versions it came from, what the hub says about them, and
- * "Update core". `caller` reaches the hub, and `onChanged` hears an update succeed.
+ * The kinby revision the instance runs, what the hub says about it, and "Update core".
+ * `caller` reaches the hub, and `onChanged` hears an update succeed.
  */
-export function PackageSection({
+export function CoreSection({
   caller,
   clock,
   instance,
@@ -47,22 +33,12 @@ export function PackageSection({
   instance: InstanceSummary
   onChanged: () => void
 }) {
-  const older = instance.notices.find(
-    (notice): notice is PackageTemplateOlder => notice.code === "package_template_older",
-  )
   return (
     <div className="flex max-w-2xl flex-col gap-6">
       {instance.notices.map((notice) => (
         <Notice key={notice.code} notice={notice} />
       ))}
-      <ItemGroup aria-label="Package and version">
-        <Fact label="Package">{packageName(instance.package)}</Fact>
-        {instance.package != null && (
-          <>
-            <Fact label="Set up from">{older?.initialized_version ?? "The installed version"}</Fact>
-            <Fact label="Installed">{installed(instance.package, older)}</Fact>
-          </>
-        )}
+      <ItemGroup aria-label="Core version">
         <Fact label="kinby">{instance.source_revision.slice(0, 7)}</Fact>
       </ItemGroup>
       <UpdateCore caller={caller} clock={clock} instance={instance} onChanged={onChanged} />
@@ -70,12 +46,12 @@ export function PackageSection({
   )
 }
 
-function Notice({ notice }: { notice: InstanceNotice }) {
+function Notice({ notice }: { notice: RevisionBehind }) {
   const titleId = useId()
   return (
     <Alert aria-labelledby={titleId}>
       <TriangleAlertIcon />
-      <AlertTitle id={titleId}>{NOTICE_TITLES[notice.code]}</AlertTitle>
+      <AlertTitle id={titleId}>Behind the hub</AlertTitle>
       <AlertDescription>{notice.message}</AlertDescription>
     </Alert>
   )
@@ -90,14 +66,6 @@ function Fact({ label, children }: { label: string; children: string }) {
       </ItemContent>
     </Item>
   )
-}
-
-/** A pinned commit reads as its short SHA, after the version it installs when the hub knows it. */
-function installed(summary: PackageSummary, older: PackageTemplateOlder | undefined): string {
-  const { version } = summary
-  if (typeof version === "string") return version
-  const commit = `commit ${version.sha.slice(0, 7)}`
-  return older === undefined ? commit : `${older.installed_version}, ${commit}`
 }
 
 function UpdateCore({

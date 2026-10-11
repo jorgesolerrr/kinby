@@ -1211,7 +1211,7 @@ def test_skill_write_rejects_a_name_with_a_slash_without_changes(tmp_path: Path)
     asyncio.run(scenario())
 
 
-def test_skill_write_reports_and_shadows_a_packaged_skill(tmp_path: Path) -> None:
+def test_skill_write_reports_and_shadows_a_kinby_skill(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance_at(tmp_path)
         (tmp_path / "kinby.toml").write_text(
@@ -1219,7 +1219,7 @@ def test_skill_write_reports_and_shadows_a_packaged_skill(tmp_path: Path) -> Non
             encoding="utf-8",
         )
         instance = load_instance(tmp_path)
-        packaged = next(
+        kinby_skill = next(
             skill for skill in load_skills(instance)[0] if skill.name == "write-routine"
         )
         content = (
@@ -1237,7 +1237,7 @@ def test_skill_write_reports_and_shadows_a_packaged_skill(tmp_path: Path) -> Non
         )
 
         assert result == (
-            f"Wrote skills/write-routine/SKILL.md. Shadows packaged skill at {packaged.source}."
+            f"Wrote skills/write-routine/SKILL.md. Shadows kinby skill at {kinby_skill.source}."
         )
         selected = next(
             skill for skill in load_skills(instance)[0] if skill.name == "write-routine"
@@ -1315,7 +1315,7 @@ def test_skill_delete_removes_an_instance_skill(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_skill_delete_refuses_to_remove_a_packaged_skill(tmp_path: Path) -> None:
+def test_skill_delete_refuses_to_remove_a_kinby_skill(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance_at(tmp_path)
         (tmp_path / "kinby.toml").write_text(
@@ -1323,7 +1323,7 @@ def test_skill_delete_refuses_to_remove_a_packaged_skill(tmp_path: Path) -> None
             encoding="utf-8",
         )
         instance = load_instance(tmp_path)
-        packaged = next(
+        kinby_skill = next(
             skill for skill in load_skills(instance)[0] if skill.name == "write-routine"
         )
         delete = next(tool for tool in instance_tools(instance) if tool.name == "skill_delete")
@@ -1335,13 +1335,13 @@ def test_skill_delete_refuses_to_remove_a_packaged_skill(tmp_path: Path) -> None
             )
 
         assert str(error.value) == (
-            'Skill "write-routine" exists only as a packaged skill at '
-            f"{packaged.source}; skill_delete removes instance skills only."
+            'Skill "write-routine" exists only as a kinby skill at '
+            f"{kinby_skill.source}; skill_delete removes instance skills only."
         )
         selected = next(
             skill for skill in load_skills(instance)[0] if skill.name == "write-routine"
         )
-        assert selected == packaged
+        assert selected == kinby_skill
         assert not (tmp_path / "skills" / "write-routine").exists()
 
     asyncio.run(scenario())

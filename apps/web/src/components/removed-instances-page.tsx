@@ -36,7 +36,6 @@ import {
   Item,
   ItemActions,
   ItemContent,
-  ItemDescription,
   ItemGroup,
   ItemMedia,
   ItemTitle,
@@ -44,7 +43,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
 import { type Deleting, followDeletion } from "@/lib/deletion"
-import { instanceName, packageName } from "@/lib/instances"
+import { instanceName } from "@/lib/instances"
 import { type Followed, followOperation, reason } from "@/lib/operation"
 import { openHome, selectInstance } from "@/lib/selection"
 import { ArchiveRestoreIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react"
@@ -181,7 +180,6 @@ function RemovedRow({
       </ItemMedia>
       <ItemContent>
         <ItemTitle>{name}</ItemTitle>
-        <ItemDescription>Package: {packageName(instance.package)}</ItemDescription>
       </ItemContent>
       <ItemActions>
         <Button

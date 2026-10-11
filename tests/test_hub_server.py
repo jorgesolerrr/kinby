@@ -328,8 +328,8 @@ def test_logout_ends_the_session_and_clears_its_cookie(tmp_path: Path) -> None:
 
 
 async def created_instance(socket: aiohttp.ClientWebSocketResponse) -> str:
-    """Prepare vanilla, then create an instance from it, the way the create wizard does."""
-    await call(socket, "image.prepare", package=None)
+    """Prepare the image, then create an instance from it, the way the create wizard does."""
+    await call(socket, "image.prepare")
     preparation = await frame(socket)
     assert isinstance(preparation["result"], dict), preparation
     await finished(socket, str(preparation["result"]["operation_id"]))

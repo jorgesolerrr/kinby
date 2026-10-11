@@ -614,7 +614,7 @@ describe("a page that breaks", () => {
 describe("creating an instance", () => {
   beforeEach(() => window.history.replaceState(null, "", "/"))
 
-  it("opens the create wizard from the sidebar, at its package step", async () => {
+  it("opens the create wizard from the sidebar, at its image step", async () => {
     openApp({ signedIn: true, instances: [ada] })
     const user = userEvent.setup()
 
@@ -622,7 +622,7 @@ describe("creating an instance", () => {
     await user.click(await screen.findByRole("link", { name: "New instance" }))
 
     expect(await screen.findByRole("heading", { name: "New instance" })).toBeDefined()
-    expect(screen.getByRole("button", { name: "Prepare vanilla" })).toBeDefined()
+    expect(screen.getByRole("button", { name: "Prepare the image" })).toBeDefined()
     expect(window.location.pathname).toBe("/new")
     expect((await instanceLink("New instance")).getAttribute("aria-current")).toBe("page")
     expect((await instanceLink("Ada")).getAttribute("aria-current")).toBeNull()

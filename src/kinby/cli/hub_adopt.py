@@ -12,8 +12,6 @@ import os
 import sys
 from pathlib import Path
 
-from pydantic import ValidationError
-
 from kinby.cli.client import format_error
 from kinby.cli.contract_socket import TOKEN_VARIABLE, InsecureContractUrl, contract_client
 from kinby.cli.hub_update import follow_operation
@@ -25,7 +23,6 @@ from kinby.contracts import (
     InstanceAdoptCommand,
     InstanceAdoptPreviewCommand,
     OperationGetCommand,
-    PackageSelection,
 )
 
 
@@ -52,28 +49,13 @@ def adopt_on_hub(argv: list[str]) -> int:
     parser.add_argument(
         "--claim-signals", action="store_true", help="keep the established webhook URL here"
     )
-    parser.add_argument(
-        "--package",
-        type=Path,
-        metavar="FILE",
-        help="JSON package selection the manifest's [package] names",
-    )
     args = parser.parse_args(argv)
-    try:
-        package = (
-            PackageSelection.model_validate_json(args.package.read_text(encoding="utf-8"))
-            if args.package is not None
-            else None
-        )
-    except (OSError, ValidationError) as exc:
-        parser.error(f"--package: {exc}")
     command = InstanceAdoptCommand(
         path=args.path,
         runtime_id=args.runtime_id,
         relinquished=args.relinquished,
         acknowledge_interrupting_stop=args.acknowledge_interrupting_stop,
         claim_signals=args.claim_signals,
-        package=package,
     )
     token = os.environ.get(TOKEN_VARIABLE)
     if not token:

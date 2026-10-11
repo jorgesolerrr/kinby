@@ -108,12 +108,6 @@ class NotAnIntake(CoreError):
     code = ErrorCode.PERMISSION_DENIED
 
 
-class PackageConfigNotFound(CoreError):
-    """The instance runs no package, or its package declares no config."""
-
-    code = ErrorCode.NOT_FOUND
-
-
 class ThreadNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
@@ -157,14 +151,8 @@ class AdoptionBlocked(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
-class PackagePinRefused(CoreError):
-    """A package pin names a package the instance does not run, or one not from git."""
-
-    code = ErrorCode.INVALID_ARGUMENT
-
-
-class SelectionNotPrepared(CoreError):
-    """No image preparation stored a descriptor for this selection, and describing never builds."""
+class ImageNotPrepared(CoreError):
+    """No image preparation stored what the image declares, and describing never builds."""
 
     code = ErrorCode.NOT_PREPARED
 
@@ -215,7 +203,7 @@ class LifecycleOperationNotFound(CoreError):
 
 
 class LoginNotFound(CoreError):
-    """The instance's package declares no subscription login by this id."""
+    """The instance's template declares no subscription login by this id."""
 
     code = ErrorCode.NOT_FOUND
 

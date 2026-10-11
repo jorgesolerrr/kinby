@@ -449,7 +449,7 @@ def test_a_removed_instance_is_restored_stopped_with_its_identity_data_and_secre
         images = FakeImages()
         hub = hub_at(tmp_path / "hub", runtime=runtime, images=images, control=FakeControl())
         client = hub_client(hub)
-        await prepared(client, None)
+        await prepared(client)
         accepted = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(

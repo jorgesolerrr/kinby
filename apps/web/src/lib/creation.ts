@@ -5,7 +5,6 @@ import type {
   Clock,
   InstanceCreateCommand,
   OperationStep,
-  PackageSelection,
   SetupField,
   SetupValue,
 } from "@kinby/contract"
@@ -59,9 +58,8 @@ export interface Identity {
   avatar: Avatar
 }
 
-/** The create command for a prepared selection, with each field's value sent by its kind. */
+/** The create command for the prepared image, with each field's value sent by its kind. */
 export function createCommand(
-  selection: PackageSelection | null,
   fields: SetupField[],
   inputs: Record<string, FieldInput>,
   { name, avatar }: Identity,
@@ -85,7 +83,6 @@ export function createCommand(
     manifest_id: trimmed,
     persona_name: trimmed,
     model,
-    package: selection,
     config,
     secrets,
     avatar,
