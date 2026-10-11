@@ -14,7 +14,7 @@ from pathlib import Path
 
 from kinby.cli.client import format_error
 from kinby.cli.contract_socket import TOKEN_VARIABLE, InsecureContractUrl, contract_client
-from kinby.cli.hub_update import follow_operation
+from kinby.cli.hub_update import ANSWER_SECONDS, follow_operation
 from kinby.contracts import (
     INSTANCE_ADOPT,
     INSTANCE_ADOPT_PREVIEW,
@@ -75,7 +75,7 @@ async def _adopt(
     *,
     preview: bool,
 ) -> int:
-    async with contract_client(url, token) as client:
+    async with contract_client(url, token, answer_within=ANSWER_SECONDS) as client:
         if preview:
             previewed = await client.call(
                 INSTANCE_ADOPT_PREVIEW,
