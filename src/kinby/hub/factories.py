@@ -33,7 +33,7 @@ from kinby.factories.file import (
     RecipeName,
     read_factory_file,
 )
-from kinby.instance.config_changes import directory_hash
+from kinby.instance.config_changes import files_hash
 from kinby.setup import readable_template_files, with_built_in_fields
 
 
@@ -71,15 +71,12 @@ class FactoryStore:
 
     async def get(self, command: FactoryGetCommand) -> FactoryResult:
         folder, source = self._folder(command.name)
+        files = _factory_files(folder)
         return FactoryResult(
             name=command.name,
             source=source,
-            files={
-                path.relative_to(folder).as_posix(): path.read_text(encoding="utf-8")
-                for path in sorted(folder.rglob("*"))
-                if path.is_file()
-            },
-            hash=directory_hash(folder),
+            files={relative: _text(relative, path) for relative, path in files.items()},
+            hash=files_hash(files),
         )
 
     async def check(self, command: FactoryCheckCommand) -> FactoryCheckResult:
@@ -138,17 +135,19 @@ class FactoryStore:
 
     def _edit(self, command: FactoryEditCommand) -> None:
         current = self._folders().get(command.name)
-        read = None if current is None else directory_hash(current[0])
+        files = {} if current is None else _factory_files(current[0])
+        read = None if current is None else files_hash(files)
         if read != command.hash:
             raise StaleWrite(f'Factory "{command.name}" changed since it was read. Read it again.')
         self._directory.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(prefix=".edit-", dir=self._directory) as temporary:
             # Staged under the factory's own name, since the check matches it to the folder.
             staged = Path(temporary) / command.name
-            if current is None:
-                staged.mkdir()
-            else:
-                shutil.copytree(current[0], staged)
+            staged.mkdir()
+            for relative, path in files.items():
+                target = staged / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, target)
             for path, content in command.files.items():
                 target = staged / path
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -177,6 +176,22 @@ class FactoryStore:
         return _named_folders(self._shipped, FactorySource.SHIPPED) | _named_folders(
             self._directory, FactorySource.HUB
         )
+
+
+def _factory_files(folder: Path) -> dict[str, Path]:
+    """Each file of the factory by its path in *folder*, without the bytecode Python leaves."""
+    return {
+        path.relative_to(folder).as_posix(): path
+        for path in sorted(folder.rglob("*"))
+        if path.is_file() and "__pycache__" not in path.relative_to(folder).parts
+    }
+
+
+def _text(relative: str, path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise InvalidConfig({"files": f'"{relative}" is not UTF-8 text.'}) from None
 
 
 def _named_folders(

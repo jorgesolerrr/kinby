@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from difflib import unified_diff
@@ -83,10 +83,15 @@ def file_hash(content: bytes) -> FileHash:
 def directory_hash(directory: Path) -> FileHash:
     """Hash every file under *directory* by its relative path. A missing one hashes as empty."""
     files = directory.rglob("*") if directory.is_dir() else ()
+    return files_hash(
+        {path.relative_to(directory).as_posix(): path for path in files if path.is_file()}
+    )
+
+
+def files_hash(files: Mapping[str, Path]) -> FileHash:
+    """Hash each file by the relative path it is named by."""
     digest = hashlib.sha256()
-    for relative, path in sorted(
-        (path.relative_to(directory).as_posix(), path) for path in files if path.is_file()
-    ):
+    for relative, path in sorted(files.items()):
         content = path.read_bytes()
         digest.update(f"{relative}\0{len(content)}\0".encode())
         digest.update(content)
