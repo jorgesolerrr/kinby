@@ -50,6 +50,10 @@ class ControlUnreachable(Exception):
     """The instance's private lifecycle endpoint did not answer."""
 
 
+class ControlUndelivered(ControlUnreachable):
+    """The instance provably did not take the call: the socket never opened, or it drains."""
+
+
 class ControlConnectionLost(ControlUnreachable):
     """The control socket dropped after the drain was sent.
 
@@ -131,15 +135,14 @@ async def _call[Command: ContractModel, Result: ContractModel](
                 heartbeat=_HEARTBEAT_SECONDS,
             ) as socket,
         ):
-            await socket.send_str(call.model_dump_json())
-            return _result(await _finished(socket), method.result, named)
+            return _result(await _exchange(socket, call), method.result, named)
     except (aiohttp.ClientError, TimeoutError) as exc:
-        raise ControlUnreachable(str(exc) or type(exc).__name__) from exc
+        raise ControlUndelivered(str(exc) or type(exc).__name__) from exc
 
 
-async def _finished(socket: aiohttp.ClientWebSocketResponse) -> str:
-    """Read the answer. A socket that dies after the call was sent is a lost connection."""
+async def _exchange(socket: aiohttp.ClientWebSocketResponse, call: CallFrame) -> str:
     try:
+        await socket.send_str(call.model_dump_json())
         return await _answer(socket)
     except (aiohttp.ClientError, TimeoutError) as exc:
         raise ControlConnectionLost(str(exc) or type(exc).__name__) from exc
@@ -182,6 +185,8 @@ def _result[Result: ContractModel](message: str, result: type[Result], named: st
             raise IncompatibleLifecycleEndpoint(
                 f"The instance does not know {named}: {error.error.message}"
             )
+        case ErrorFrame(error=ErrorEnvelope(code=ErrorCode.INSTANCE_DRAINING)) as error:
+            raise ControlUndelivered(f"The instance refused {named}: {error.error.message}")
         case ErrorFrame() as error:
             raise ControlUnreachable(f"The instance refused {named}: {error.error.message}")
         case ErrorEnvelope() as unreadable:

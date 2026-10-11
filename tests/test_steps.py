@@ -41,7 +41,7 @@ from kinby.contracts import (
 from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
 from kinby.core.events import EventLog
 from kinby.core.runtime import InstanceRuntime
-from kinby.hub import ControlEndpoint, HttpInstanceControl
+from kinby.hub import ControlEndpoint, ControlUndelivered, HttpInstanceControl
 from kinby.instance.layout import PERMISSIONS_NAME
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_drain import WaitingRunner, booted, call, opened_thread
@@ -204,6 +204,33 @@ def test_the_hub_runs_a_step_over_the_instances_control_socket(tmp_path):
         assert (workspace / "made").is_file()
 
     asyncio.run(scenario())
+
+
+def test_a_step_a_draining_instance_refuses_is_undelivered(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+
+    async def scenario() -> None:
+        await runtime.drain(InstanceDrainCommand())
+        async with served_dispatcher(runtime.dispatcher) as address:
+            with pytest.raises(ControlUndelivered, match="draining"):
+                await HttpInstanceControl().run_step(
+                    ControlEndpoint(f"http://{address.host}:{address.port}", TOKEN),
+                    StepRunCommand(
+                        step=CommandStepRun(run=["touch made"]), origin=ORIGIN, work_item={}
+                    ),
+                )
+
+        assert not (workspace / "made").exists()
+
+    asyncio.run(scenario())
+
+
+def test_a_step_call_that_cannot_connect_is_undelivered():
+    nobody = ControlEndpoint("http://127.0.0.1:1", TOKEN)
+    command = StepRunCommand(step=CommandStepRun(run=["true"]), origin=ORIGIN, work_item={})
+
+    with pytest.raises(ControlUndelivered):
+        asyncio.run(HttpInstanceControl().run_step(nobody, command))
 
 
 VERDICT_HOOK = """\

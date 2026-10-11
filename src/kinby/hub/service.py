@@ -131,6 +131,7 @@ from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_mana
 from kinby.hub.control import (
     ControlConnectionLost,
     ControlEndpoint,
+    ControlUndelivered,
     ControlUnreachable,
     HttpInstanceControl,
     IncompatibleLifecycleEndpoint,
@@ -153,7 +154,7 @@ from kinby.hub.models import (
 )
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
-from kinby.hub.runs import FactoryRuns
+from kinby.hub.runs import FactoryRuns, UndeliveredCall
 from kinby.hub.setup import (
     ENVIRONMENT_NAME,
     configuration,
@@ -420,15 +421,17 @@ class Hub:
         dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
         return dispatcher
 
-    async def _run_step(self, instance_id: UUID, command: StepRunCommand) -> StepResult:
-        """Run one factory step in the instance.
-
-        Anything that keeps the step from an answer fails the attempt, as it fails an operation,
-        so the instance's queue moves on.
-        """
+    async def _run_step(
+        self, instance_id: UUID, command: StepRunCommand
+    ) -> StepResult | UndeliveredCall:
         try:
             endpoint = await self._endpoint(self._active_instance(instance_id))
+        except Exception as exc:
+            return UndeliveredCall(str(exc) or type(exc).__name__)
+        try:
             return await self._control.run_step(endpoint, command)
+        except ControlUndelivered as exc:
+            return UndeliveredCall(str(exc) or type(exc).__name__)
         except Exception as exc:
             return StepResult(ending=StepEnding.FAILED, summary=str(exc) or type(exc).__name__)
 

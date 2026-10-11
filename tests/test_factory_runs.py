@@ -56,7 +56,7 @@ from kinby.contracts import (
     ToolResult,
     TurnFailed,
 )
-from kinby.hub import Hub
+from kinby.hub import ControlConnectionLost, ControlUndelivered, ControlUnreachable, Hub
 from kinby.hub.registry import HubRegistry
 from kinby.plugins.intake import intake_tools
 from tests.test_hub import (
@@ -326,20 +326,99 @@ def test_a_failing_step_is_tried_again_under_its_retry_then_needs_a_human(
     asyncio.run(scenario())
 
 
-def test_a_step_in_an_instance_the_hub_cannot_reach_fails_its_attempt(tmp_path):
+def test_a_step_its_instance_did_not_take_waits_for_it_and_keeps_its_retries(tmp_path, monkeypatch):
+    monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 0.01)
+    control = FakeControl()
+    control.step_results = [
+        ControlUndelivered(
+            "The instance refused the step: The instance is draining. "
+            "It takes no new work until it starts again."
+        ),
+        ControlUndelivered("Cannot connect to host kinby-instance:8787"),
+        StepResult(ending=StepEnding.FAILED, summary="Tests failed."),
+    ]
     runtime = FakeRuntime()
-    hub = factory_hub(tmp_path / "hub", FakeControl(reachable=False), runtime)
+    hub = factory_hub(
+        tmp_path / "hub", control, runtime, FILES | {"factory.yaml": FACTORY + "    retry: 1\n"}
+    )
 
     async def scenario() -> None:
         coder = await installed_coder(hub, runtime)
-        runtime.addresses.clear()
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [(attempt.attempt, attempt.ending) for attempt in finished.attempts] == [
+            (1, StepEnding.FAILED),
+            (2, StepEnding.CLEAN),
+        ]
+        assert len(control.steps) == 4
+
+    asyncio.run(scenario())
+
+
+def test_a_step_waiting_for_an_unreachable_instance_stays_queued_across_a_restart(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 60)
+    control = FakeControl()
+    runtime = FakeRuntime()
+    directory = tmp_path / "hub"
+    hub = factory_hub(directory, control, runtime)
+
+    async def before_the_restart() -> tuple[UUID, UUID, str]:
+        coder = await installed_coder(hub, runtime)
+        address = runtime.addresses.pop(str(coder))
+        run = await handed_in(hub, coder, 7)
+        await asyncio.sleep(0.05)
+        waiting = await detail(hub, run.run_id)
+
+        assert waiting.run.status is FactoryRunStatus.QUEUED
+        assert waiting.attempts == []
+        return run.run_id, coder, address
+
+    run_id, coder, address = asyncio.run(before_the_restart())
+    hub.close()
+    runtime.addresses[str(coder)] = address
+    restarted = Hub(
+        directory,
+        runtime=runtime,
+        images=FakeImages(),
+        control=control,
+        shipped_factories=directory / "shipped",
+    )
+
+    async def after_the_restart() -> None:
+        await restarted.recover()
+        finished = await settled(restarted, run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [(attempt.attempt, attempt.ending) for attempt in finished.attempts] == [
+            (1, StepEnding.CLEAN)
+        ]
+
+    asyncio.run(after_the_restart())
+
+
+def test_a_step_whose_socket_drops_after_the_call_was_sent_fails_its_attempt(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        ControlConnectionLost("The control socket closed before it answered (WSMsgType.CLOSED).")
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         finished = await settled(hub, run.run_id)
 
         assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
         [attempt] = finished.attempts
         assert attempt.ending is StepEnding.FAILED
-        assert attempt.summary == "The instance's lifecycle endpoint cannot be reached."
+        assert attempt.summary == (
+            "The control socket closed before it answered (WSMsgType.CLOSED)."
+        )
 
     asyncio.run(scenario())
 
@@ -483,6 +562,93 @@ def test_a_needs_human_report_queued_but_not_delivered_is_sent_after_a_restart(t
         again.close()
 
     asyncio.run(after_the_second_restart())
+
+
+def reports(control: FakeControl) -> list[str | None]:
+    return [
+        command.step.summary
+        for _, command in control.steps
+        if isinstance(command.step, CodeStepRun) and command.step.call == "notify_human"
+    ]
+
+
+async def reported(hub: Hub) -> None:
+    async with asyncio.timeout(5):
+        while hub.registry.unreported_runs():
+            await asyncio.sleep(0.01)
+
+
+def test_a_failed_needs_human_call_is_tried_again_until_it_is_delivered(tmp_path, monkeypatch):
+    monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 0.01)
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.FAILED, summary="Tests failed."),
+        ControlUnreachable("Cannot connect to host kinby-instance:8787"),
+        StepResult(ending=StepEnding.FAILED, summary="GitHub is down."),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, NEEDS_HUMAN_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+        await reported(hub)
+
+        assert reports(control) == ["Tests failed."] * 3
+
+    asyncio.run(scenario())
+
+
+def test_a_report_for_a_stop_the_user_already_retried_is_not_sent_again(tmp_path, monkeypatch):
+    monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 0.2)
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.FAILED, summary="First failure."),
+        StepResult(ending=StepEnding.FAILED, summary="GitHub is down."),
+        StepResult(ending=StepEnding.FAILED, summary="Second failure."),
+        StepResult(ending=StepEnding.FAILED, summary="GitHub is down."),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, NEEDS_HUMAN_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        async with asyncio.timeout(5):
+            while len(control.steps) < 2:
+                await asyncio.sleep(0.01)
+        await hub_client(hub).call(FACTORY_RUN_RETRY, FactoryRunRetryCommand(run_id=run.run_id))
+        await reported(hub)
+        await asyncio.sleep(0.3)
+
+        assert reports(control) == ["First failure.", "Second failure.", "Second failure."]
+
+    asyncio.run(scenario())
+
+
+def test_a_report_backing_off_does_not_delay_a_step_queued_after_it(tmp_path, monkeypatch):
+    monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 60)
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.FAILED, summary="Tests failed."),
+        StepResult(ending=StepEnding.FAILED, summary="GitHub is down."),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, NEEDS_HUMAN_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        await handed_in(hub, coder, 7)
+        async with asyncio.timeout(5):
+            while len(control.steps) < 2:
+                await asyncio.sleep(0.01)
+        later = await handed_in(hub, coder, 8)
+        finished = await settled(hub, later.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+
+    asyncio.run(scenario())
 
 
 def test_an_attempt_that_needs_a_human_once_settled_on_resume_is_reported_only_once(tmp_path):
