@@ -366,9 +366,8 @@ def _push_fix_round(
     ]
     if edits:
         _gh(workspace, "pr", "edit", str(pr), *edits)
-    commit = _git(workspace, "rev-parse", branch).strip()
     for thread, reply in replies.items():
-        body = f"{commit}: {reply['reply']}" if reply["fixed"] else reply["reply"]
+        body = f"{reply['commit']}: {reply['reply']}" if reply["fixed"] else reply["reply"]
         _gh(
             workspace,
             "api",

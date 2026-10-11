@@ -41,8 +41,9 @@ def check_implementation(end: StepEnd) -> HookResult | None:
 
 @hook
 def check_answers(end: StepEnd) -> HookResult | None:
-    """Record a fix round's replies, once each review thread has one and its fixes are committed
-    on the run's branch. Before the pull request opens there is no thread to answer.
+    """Record a fix round's replies, once each review thread has one and each fixed reply names
+    a commit of the run's branch ahead of its base, recorded by its full SHA. Before the pull
+    request opens there is no thread to answer.
 
     The replies file is read once, so a round never takes an earlier round's replies. A fix
     round records the title or body it did not rewrite as empty, so publish never applies an
@@ -52,7 +53,7 @@ def check_answers(end: StepEnd) -> HookResult | None:
     feedback = end.results.get("feedback")
     if not isinstance(feedback, str):
         return HookResult(values=words) if words else None
-    branch = str(end.results["branch"])
+    branch, base = str(end.results["branch"]), str(end.results["base"])
     path = end.workspace / REPLIES
     try:
         replies = json.loads(path.read_text(encoding="utf-8"))
@@ -71,12 +72,23 @@ def check_answers(end: StepEnd) -> HookResult | None:
             or not isinstance(reply.get("fixed"), bool)
             or not isinstance(reply.get("reply"), str)
             or not reply["reply"].strip()
+            or (reply["fixed"] and not isinstance(reply.get("commit"), str))
         ):
-            raise UnansweredThreads(f'The reply to thread {thread} is not {{"fixed", "reply"}}.')
+            raise UnansweredThreads(
+                f'The reply to thread {thread} is not {{"fixed", "reply"}}, with a "commit" when '
+                "fixed."
+            )
     _check_committed(end.workspace, branch)
-    fixed = any(reply["fixed"] for reply in replies.values())
-    if fixed and _git(end.workspace, "rev-list", "--count", f"origin/{branch}..{branch}") == "0":
-        raise UncommittedWork(f"The replies say a thread is fixed, but {branch} has no new commit.")
+    ahead = _git(end.workspace, "rev-list", f"origin/{base}..{branch}").split()
+    for thread, reply in replies.items():
+        if reply["fixed"]:
+            named = reply["commit"]
+            reply["commit"] = _resolved(end.workspace, named)
+            if reply["commit"] not in ahead:
+                raise UncommittedWork(
+                    f"The reply to thread {thread} names {named}, which is no commit of {branch} "
+                    f"ahead of {base}."
+                )
     return HookResult(values={"title": "", "body": "", **words, "replies": json.dumps(replies)})
 
 
@@ -103,6 +115,16 @@ def _check_committed(workspace: Path, branch: str) -> None:
     changes = _git(workspace, "status", "--porcelain", "--untracked-files=all")
     if changes:
         raise UncommittedWork(f"The workspace has changes no commit on {branch} holds:\n{changes}")
+
+
+def _resolved(workspace: Path, named: str) -> str:
+    """The full SHA of the commit *named*, or empty when it names none."""
+    return subprocess.run(
+        ("git", "rev-parse", "--verify", "--quiet", "--end-of-options", f"{named}^{{commit}}"),
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _git(workspace: Path, *arguments: str) -> str:
