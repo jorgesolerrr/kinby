@@ -19,6 +19,7 @@ from kinby.contracts import (
     CronSchedule,
     Delivery,
     RoutineFailureHandled,
+    RoutineFailuresReset,
     RoutineListCommand,
     RoutineListResult,
     RoutineName,
@@ -89,7 +90,7 @@ class Scheduler:
         self._worker: asyncio.Task[None] | None = None
         routines, _ = load_routines(self._instance)
         history = routine_history(self._log.all_events()).routines
-        self._armed = self._arm(routines, history)
+        self._armed = self._arm(routines, catch_up_from=history)
 
     def start(self) -> None:
         if self._worker is None or self._worker.done():
@@ -186,7 +187,9 @@ class Scheduler:
         return f"{time.astimezone(zone):%Y-%m-%d %H:%M %Z}"
 
     def _arm(
-        self, routines: Sequence[Routine], history: Mapping[RoutineName, RoutineHistory]
+        self,
+        routines: Sequence[Routine],
+        catch_up_from: Mapping[RoutineName, RoutineHistory],
     ) -> dict[RoutineName, ArmedRoutine]:
         armed = {}
         for routine in routines:
@@ -194,7 +197,7 @@ class Scheduler:
                 continue
             current = self._armed.get(routine.name)
             if current is None or current.schedule != routine.schedule:
-                last = history.get(routine.name, RoutineHistory()).last_run
+                last = catch_up_from.get(routine.name, RoutineHistory()).last_run
                 can_catch_up = (
                     last is not None
                     and last.outcome is not RoutineRunOutcome.INTERRUPTED
@@ -207,8 +210,9 @@ class Scheduler:
 
     async def list(self, command: RoutineListCommand) -> RoutineListResult:
         routines, warnings = load_routines(self._instance)
+        await self._reset_failures(routines)
         history = routine_history(self._log.all_events()).routines
-        armed = self._arm(routines, history)
+        self._armed = self._arm(routines, catch_up_from={})
         result = []
         for routine in routines:
             record = history.get(routine.name, RoutineHistory())
@@ -224,7 +228,9 @@ class Scheduler:
                     failure_count=record.failure_count,
                     last_failure=record.last_failure,
                     notices=record.notices,
-                    next_run=armed[routine.name].time if routine.name in armed else None,
+                    next_run=(
+                        self._armed[routine.name].time if routine.name in self._armed else None
+                    ),
                     signal=(
                         SignalSummary(
                             path=f"/signals/{routine.name}",
@@ -294,7 +300,7 @@ class Scheduler:
             routines, _ = load_routines(self._instance)
             histories = routine_history(self._log.all_events())
             history = histories.routines
-            self._armed = self._arm(routines, history)
+            self._armed = self._arm(routines, catch_up_from={})
             disabled = {routine.name for routine in routines if not routine.enabled}
             pending = [
                 item
@@ -350,9 +356,19 @@ class Scheduler:
             await self._turns.drain()
             await self._handle_failures()
 
+    async def _reset_failures(self, routines: Sequence[Routine]) -> None:
+        history = routine_history(self._log.all_events()).routines
+        for routine in routines:
+            notice = history.get(routine.name, RoutineHistory()).disable_notice
+            if routine.enabled and notice is not None:
+                await self._log.append(
+                    notice.thread_id, notice.turn_id, RoutineFailuresReset(name=routine.name)
+                )
+
     async def _handle_failures(self) -> None:
-        history = routine_history(self._log.all_events())
         routines, _ = load_routines(self._instance)
+        await self._reset_failures(routines)
+        history = routine_history(self._log.all_events())
         by_name = {routine.name: routine for routine in routines}
         for failure in history.failures:
             notice = None
