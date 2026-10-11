@@ -32,7 +32,7 @@ from kinby.contracts import (
 )
 from kinby.hub import BuiltImage, ImageArtifact, ImageSelection
 from kinby.instance import init_instance, inspect_instance
-from kinby.packages import with_built_in_fields
+from kinby.packages import vanilla_description, with_built_in_fields
 from tests.test_factory_install import FILES, install_hub, installed
 from tests.test_hub import (
     FakeImages,
@@ -254,6 +254,70 @@ def test_values_the_rebuilt_image_does_not_take_fail_validation_and_publish_noth
         assert listed.instances == []
         assert not isinstance(described, ErrorEnvelope)
         assert described.setup_fields[-1].name == "SEARCH_TOKEN"
+
+    asyncio.run(scenario())
+
+
+class MovingCheckout(FakeImages):
+    """The hub's checkout builds whichever image `image_id` names, as its HEAD moves."""
+
+    def __init__(self, declared: dict[str, DeclaredSetup]) -> None:
+        super().__init__()
+        self.declarations = declared
+        self.image_id = next(iter(declared))
+
+    async def build(self, selection: ImageSelection) -> BuiltImage:
+        built = await super().build(selection)
+        return BuiltImage(replace(built.artifact, image_id=self.image_id), reused=built.reused)
+
+    async def describe(self, artifact: ImageArtifact) -> DeclaredSetup:
+        self.described.append(artifact)
+        return self.declarations[artifact.image_id]
+
+
+def test_a_creation_refused_by_an_image_described_before_shows_that_images_fields(tmp_path):
+    async def scenario() -> None:
+        searching = DeclaredSetup(
+            setup_fields=with_built_in_fields(
+                [
+                    SetupField(
+                        name="SEARCH_TOKEN",
+                        label="Search token",
+                        description="Reaches the search service.",
+                        kind=SetupFieldKind.SECRET,
+                        type=SetupFieldType.TEXT,
+                        required=True,
+                    )
+                ]
+            )
+        )
+        images = MovingCheckout(
+            {"sha256:searching": searching, "sha256:plain": vanilla_description()}
+        )
+        hub = hub_at(tmp_path / "hub", images=images)
+        client = hub_client(hub)
+        await prepared(client)
+        images.image_id = "sha256:plain"
+        await prepared(client)
+        images.image_id = "sha256:searching"
+
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="ada", model="openai:gpt-5", secrets={"api_key": "sk-private"}
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+        described = await client.call(IMAGE_DESCRIBE, ImageDescribeCommand())
+
+        assert outcome.state is OperationState.FAILED
+        assert "SEARCH_TOKEN: Search token is required." in outcome.detail
+        assert [artifact.image_id for artifact in images.described] == [
+            "sha256:searching",
+            "sha256:plain",
+        ]
+        assert described == searching
 
     asyncio.run(scenario())
 

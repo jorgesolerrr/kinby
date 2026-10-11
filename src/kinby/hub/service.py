@@ -737,12 +737,11 @@ class Hub:
         """What the image just built declares.
 
         A rebuilt image may declare other fields than the one the client was shown, so it is
-        described again, and that description is kept.
+        described again. Kept as the last description even when it was stored before, so a
+        client that reads the image's fields again sees the ones this creation checked.
         """
         stored = self.registry.description(artifact.image_id)
-        if stored is not None:
-            return stored
-        description = await self._images.describe(artifact)
+        description = stored if stored is not None else await self._images.describe(artifact)
         self.registry.record_description(artifact.image_id, description)
         return description
 
