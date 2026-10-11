@@ -1,11 +1,13 @@
 import asyncio
 import json
+import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from kinby.contracts import (
     Delivery,
@@ -507,3 +509,120 @@ def test_signal_received_and_manual_payload_shapes() -> None:
     assert command.payload.body == delivery.body
     assert command.payload.content_type == "application/json"
     assert RoutineRunCommand(name="news").payload is None
+
+
+TORN_EVENT = '{"sequence": 3, "thread_id": "'
+
+
+def test_a_torn_last_event_is_skipped_and_the_next_append_takes_its_place(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        writer = EventLog(tmp_path)
+        whole = [
+            await writer.append(thread_id, turn_id, STARTED),
+            await writer.append(thread_id, turn_id, MessageDelta(text="kept")),
+        ]
+        events = tmp_path / "events.jsonl"
+        with events.open("a", encoding="utf-8") as log:
+            log.write(TORN_EVENT)
+        event_log = EventLog(tmp_path)
+
+        stream = await event_log.subscribe(thread_id)
+        replayed = [await anext(stream.items) for _ in whole]
+        await stream.items.aclose()
+
+        assert list(event_log.all_events()) == whole
+        assert event_log.stored(thread_id) == whole
+        assert (stream.head_sequence, replayed) == (2, whole)
+
+        appended = await event_log.append(
+            thread_id, turn_id, TurnCompleted(input_tokens=0, output_tokens=0)
+        )
+
+        assert appended.sequence == 3
+        lines = events.read_text(encoding="utf-8").splitlines()
+        assert [Event.model_validate_json(line) for line in lines] == [*whole, appended]
+        assert list(EventLog(tmp_path).all_events()) == [*whole, appended]
+
+    asyncio.run(scenario())
+
+
+def test_a_tail_torn_while_the_log_is_live_is_dropped_by_the_next_append(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        first = await event_log.append(thread_id, turn_id, STARTED)
+        events = tmp_path / "events.jsonl"
+        with events.open("a", encoding="utf-8") as log:
+            log.write(TORN_EVENT)
+
+        with caplog.at_level(logging.WARNING):
+            second = await event_log.append(thread_id, turn_id, MessageDelta(text="next"))
+
+        assert second.sequence == 2
+        assert list(EventLog(tmp_path).all_events()) == [first, second]
+        assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+            (logging.WARNING, f"Dropped the torn last line of {events}: {TORN_EVENT}")
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_read_begun_before_a_torn_tail_is_dropped_returns_only_whole_events(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        first = await event_log.append(thread_id, turn_id, STARTED)
+        with (tmp_path / "events.jsonl").open("a", encoding="utf-8") as log:
+            log.write(TORN_EVENT)
+        reading = event_log.all_events()
+        read = [next(reading)]
+
+        await event_log.append(thread_id, turn_id, MessageDelta(text="next"))
+        read.extend(reading)
+
+        assert read == [first]
+
+    asyncio.run(scenario())
+
+
+def test_a_log_holding_only_a_long_torn_event_reads_empty_until_an_append_replaces_it(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        events = tmp_path / "events.jsonl"
+        events.write_text(TORN_EVENT + "x" * 20_000, encoding="utf-8")
+        event_log = EventLog(tmp_path)
+
+        assert list(event_log.all_events()) == []
+
+        appended = await event_log.append(uuid4(), uuid4(), STARTED)
+
+        assert appended.sequence == 1
+        assert events.read_text(encoding="utf-8") == f"{appended.model_dump_json()}\n"
+        assert list(EventLog(tmp_path).all_events()) == [appended]
+
+    asyncio.run(scenario())
+
+
+def test_an_unparseable_line_before_the_last_still_raises(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        await event_log.append(thread_id, turn_id, STARTED)
+        with (tmp_path / "events.jsonl").open("a", encoding="utf-8") as log:
+            log.write(f"{TORN_EVENT}\n")
+        await event_log.append(thread_id, turn_id, MessageDelta(text="after"))
+
+        with pytest.raises(ValidationError, match="Invalid JSON"):
+            list(EventLog(tmp_path).all_events())
+
+    asyncio.run(scenario())

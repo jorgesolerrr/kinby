@@ -1,7 +1,9 @@
 import asyncio
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Barrier
 from uuid import uuid4
 
 import pytest
@@ -9,6 +11,9 @@ from langchain_core.messages import AIMessageChunk
 from pydantic import JsonValue
 
 from kinby.contracts import (
+    ConfigActor,
+    ConfigChange,
+    ConfigFile,
     Delivery,
     ErrorCode,
     ErrorEnvelope,
@@ -24,6 +29,7 @@ from kinby.core.errors import RoutineNotFound
 from kinby.core.receiver import Receiver
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
 from kinby.instance import Serve
+from kinby.instance.config_changes import ConfigChangeLog
 from kinby.instance.permissions import SHIPPED_BASH_DENY
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 from kinby.plugins import ToolContext
@@ -197,6 +203,58 @@ def test_config_history_lists_the_newest_first_by_file(tmp_path: Path) -> None:
         assert change.diff.endswith("-One.\n+Two.\n")
 
     asyncio.run(scenario())
+
+
+def test_config_history_skips_a_torn_last_change_and_the_next_append_drops_it(
+    tmp_path: Path,
+) -> None:
+    def change(diff: str) -> ConfigChange:
+        return ConfigChange(
+            at=datetime(2026, 10, 11, tzinfo=UTC),
+            file=ConfigFile("SYSTEM.md"),
+            actor=ConfigActor.APP,
+            diff=diff,
+        )
+
+    log = ConfigChangeLog(tmp_path)
+    log.append(change("first"))
+    with (tmp_path / "config-changes.jsonl").open("a", encoding="utf-8") as changes:
+        changes.write('{"at": "2026-10-')
+
+    assert log.history(None, 10) == [change("first")]
+
+    log.append(change("second"))
+
+    assert ConfigChangeLog(tmp_path).history(None, 10) == [change("second"), change("first")]
+
+
+def test_config_changes_appended_at_once_over_a_torn_tail_are_all_kept(tmp_path: Path) -> None:
+    writers = 8
+
+    def change(diff: str) -> ConfigChange:
+        return ConfigChange(
+            at=datetime(2026, 10, 11, tzinfo=UTC),
+            file=ConfigFile("SYSTEM.md"),
+            actor=ConfigActor.APP,
+            diff=diff,
+        )
+
+    for attempt in range(20):
+        log = ConfigChangeLog(tmp_path / str(attempt))
+        log.append(change("whole"))
+        with (tmp_path / str(attempt) / "config-changes.jsonl").open("a") as changes:
+            changes.write('{"at": "2026-10-')
+        start = Barrier(writers)
+
+        def append(writer: int, log: ConfigChangeLog = log, start: Barrier = start) -> None:
+            start.wait()
+            log.append(change(str(writer)))
+
+        with ThreadPoolExecutor(writers) as pool:
+            list(pool.map(append, range(writers)))
+
+        kept = {kept.diff for kept in log.history(None, writers + 1)}
+        assert kept == {"whole", *map(str, range(writers))}
 
 
 def test_an_agent_write_in_a_turn_records_its_thread_and_turn(tmp_path: Path) -> None:

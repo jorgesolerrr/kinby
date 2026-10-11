@@ -200,7 +200,7 @@ describe("a thread's header", () => {
     const user = userEvent.setup()
 
     await user.click(screen.getByRole("button", { name: "Deploy notes" }))
-    await user.click(modePicker())
+    await user.tab()
 
     expect(screen.queryByRole("textbox", { name: "Thread title" })).toBeNull()
     expect(document.activeElement).toBe(modePicker())

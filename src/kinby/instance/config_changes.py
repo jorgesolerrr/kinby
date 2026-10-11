@@ -13,6 +13,7 @@ from uuid import UUID
 
 from kinby.contracts import ConfigActor, ConfigChange, ConfigFile, FileHash
 from kinby.instance.dataclasses import Instance
+from kinby.jsonl import append_line, whole_lines
 
 CONFIG_CHANGES_NAME = "config-changes.jsonl"
 
@@ -24,16 +25,11 @@ class ConfigChangeLog:
         self._path = state_dir / CONFIG_CHANGES_NAME
 
     def append(self, change: ConfigChange) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._path.open("a", encoding="utf-8") as log:
-            log.write(f"{change.model_dump_json()}\n")
+        append_line(self._path, change.model_dump_json())
 
     def history(self, file: ConfigFile | None, limit: int) -> list[ConfigChange]:
         """The latest *limit* changes, newest first, to *file* or to any file."""
-        try:
-            lines = self._path.read_text(encoding="utf-8").splitlines()
-        except FileNotFoundError:
-            return []
+        lines = list(whole_lines(self._path))
         changes = (ConfigChange.model_validate_json(line) for line in reversed(lines))
         return list(islice((c for c in changes if file in (None, c.file)), limit))
 

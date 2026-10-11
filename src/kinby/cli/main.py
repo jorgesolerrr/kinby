@@ -1033,16 +1033,20 @@ def main(
                 _print_instance(instance)
                 with runtime_lock(instance.manifest.state_dir):
                     return asyncio.run(_serve_instance(instance))
-            case "thread" if args.thread_command is not None:
+            case "thread" if args.thread_command == "list":
                 client = _contract_client(_load_selected_instance(args), now)
-                match args.thread_command:
-                    case "create":
-                        return asyncio.run(_create_thread(client, args.title))
-                    case "archive":
-                        return asyncio.run(_archive_thread(client, args.thread_id))
-                    case "unarchive":
-                        return asyncio.run(_unarchive_thread(client, args.thread_id))
                 return asyncio.run(_list_threads(client, args.filter, args.routine))
+            case "thread" if args.thread_command is not None:
+                instance = _load_selected_instance(args)
+                client = _contract_client(instance, now)
+                with runtime_lock(instance.manifest.state_dir):
+                    match args.thread_command:
+                        case "create":
+                            return asyncio.run(_create_thread(client, args.title))
+                        case "archive":
+                            return asyncio.run(_archive_thread(client, args.thread_id))
+                        case "unarchive":
+                            return asyncio.run(_unarchive_thread(client, args.thread_id))
             case "routine" if args.routine_command in {"list", "run"}:
                 instance = _load_selected_instance(args)
                 with runtime_lock(instance.manifest.state_dir):

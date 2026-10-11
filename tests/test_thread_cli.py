@@ -1,10 +1,12 @@
+import os
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from kinby.cli import main
-from kinby.instance import init_instance
+from kinby.core.runtime_lock import runtime_lock
+from kinby.instance import init_instance, load_instance
 from tests.test_routines import instance_at, routine_file
 
 
@@ -100,3 +102,25 @@ def test_cli_lists_one_routines_runs(
     [title] = _titles(tmp_path, capsys, "--filter", "all", "--routine", "news")
 
     assert title.startswith("news · ")
+
+
+@pytest.mark.parametrize("thread_command", ["create", "archive", "unarchive"])
+def test_thread_writes_refuse_to_start_beside_a_live_server(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    thread_command: str,
+) -> None:
+    instance = tmp_path / "alice"
+    init_instance(instance)
+    thread_id = _create(instance, "Launch notes", capsys)
+    state_dir = load_instance(instance).manifest.state_dir
+    arguments = [] if thread_command == "create" else [thread_id]
+
+    with runtime_lock(state_dir):
+        refused = main(["thread", thread_command, *arguments, str(instance)])
+        listed = main(["thread", "list", str(instance)])
+    output = capsys.readouterr()
+
+    assert (refused, listed) == (1, 0)
+    assert str(os.getpid()) in output.err
+    assert output.out.count("Launch notes") == 1
