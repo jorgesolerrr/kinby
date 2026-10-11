@@ -14,7 +14,7 @@ from docker.errors import ContainerError, DockerException, ImageNotFound, NotFou
 from docker.types import Mount
 
 from docker import DockerClient
-from kinby.contracts import PackageDescription, StorageItem, StorageKind
+from kinby.contracts import DeclaredSetup, StorageItem, StorageKind
 from kinby.hub import (
     BuiltImage,
     DockerImageBackend,
@@ -25,12 +25,11 @@ from kinby.hub import (
     ImagePreparer,
     ImageSelection,
     InstanceSpec,
-    PreparedImage,
     RecoveredState,
     SetupSpec,
     secrets_digest,
 )
-from kinby.packages import InstalledPackage, PackageDescriptor, package_json, vanilla_description
+from kinby.packages import vanilla_description
 from tests.test_hub import hub_client, started_instance
 
 
@@ -70,8 +69,6 @@ class FakeContainers:
         self.run_arguments: tuple[object, object] | None = None
         self.run_options: dict[str, object] = {}
         self.run_failure: bytes | None = None
-        #: What the check prints. The package check's output unless a test sets another.
-        self.run_output: bytes | None = None
         #: What the next create returns: a container a test drives, or a bare placeholder.
         self.creates: object | None = None
         #: Containers `list` can see. A test that sets `list_error` makes `list` raise it.
@@ -109,21 +106,7 @@ class FakeContainers:
         self.run_options = options
         if self.run_failure is not None:
             raise ContainerError(object(), 1, command, image, self.run_failure)
-        if self.run_output is not None:
-            return self.run_output
-        return package_json(
-            InstalledPackage(
-                descriptor=PackageDescriptor(
-                    id="writer",
-                    display_name="Writing teammate",
-                    description="Drafts articles.",
-                    icon="pen",
-                    distribution="kinby-writer",
-                    version="1.4.2",
-                ),
-                files={"SYSTEM.md": "Write clearly.\n"},
-            )
-        ).encode()
+        return vanilla_description().model_dump_json().encode()
 
 
 class FakeDockerImages:
@@ -260,129 +243,11 @@ def test_docker_runtime_mounts_the_recorded_storage_and_offloads_creation(tmp_pa
     assert client.containers.options["restart_policy"] == {"Name": "unless-stopped"}
 
 
-def test_docker_image_backend_inspects_the_authoritative_package_in_the_image():
-    async def scenario() -> tuple[FakeDockerClient, InstalledPackage]:
+def test_docker_image_backend_asks_the_kinby_in_the_image_what_it_declares():
+    async def scenario() -> tuple[FakeDockerClient, DeclaredSetup]:
         client = FakeDockerClient()
         backend = DockerImageBackend(cast(DockerClient, client))
-        package = await backend.inspect_package("sha256:selected", "writer")
-        return client, package
-
-    client, package = asyncio.run(scenario())
-
-    assert package.descriptor.distribution == "kinby-writer"
-    assert package.descriptor.version == "1.4.2"
-    assert package.files == {"SYSTEM.md": "Write clearly.\n"}
-    assert client.containers.run_arguments == (
-        "sha256:selected",
-        ["-m", "kinby.packages", "writer"],
-    )
-    assert client.containers.run_options == {
-        "entrypoint": "python",
-        "remove": True,
-        "mounts": [],
-        "network_mode": "none",
-    }
-
-
-def test_the_candidate_check_mounts_package_yaml_and_not_instance_secrets(tmp_path):
-    instance_dir = tmp_path / "alice"
-    instance_dir.mkdir()
-    (instance_dir / ".env").write_text("KINBY_CONTROL_TOKEN=secret\n", encoding="utf-8")
-    (instance_dir / "package.yaml").write_text("tone: plain\n", encoding="utf-8")
-    instance = StorageItem(
-        kind=StorageKind.BIND,
-        source=str(instance_dir),
-        destination="/instance",
-        writable=True,
-    )
-
-    async def scenario() -> FakeDockerClient:
-        client = FakeDockerClient()
-        backend = DockerImageBackend(cast(DockerClient, client))
-        await backend.inspect_package("sha256:selected", "writer", instance)
-        return client
-
-    client = asyncio.run(scenario())
-
-    assert client.containers.run_arguments == (
-        "sha256:selected",
-        ["-m", "kinby.packages", "writer", "/instance"],
-    )
-    assert client.containers.run_options["network_mode"] == "none"
-    assert client.containers.run_options["mounts"] == [
-        Mount(
-            target="/instance/package.yaml",
-            source=str(instance_dir / "package.yaml"),
-            type="bind",
-            read_only=True,
-        )
-    ]
-
-
-def test_the_candidate_check_mounts_a_host_config_file_the_hub_cannot_see():
-    instance = StorageItem(
-        kind=StorageKind.BIND,
-        source="/var/lib/kinby/instances/alice/package.yaml",
-        destination="/instance/package.yaml",
-        writable=False,
-    )
-
-    async def scenario() -> FakeDockerClient:
-        client = FakeDockerClient()
-        backend = DockerImageBackend(cast(DockerClient, client))
-        await backend.inspect_package("sha256:selected", "writer", instance)
-        return client
-
-    client = asyncio.run(scenario())
-
-    assert client.containers.run_arguments == (
-        "sha256:selected",
-        ["-m", "kinby.packages", "writer", "/instance"],
-    )
-    assert client.containers.run_options["mounts"] == [
-        Mount(
-            target="/instance/package.yaml",
-            source="/var/lib/kinby/instances/alice/package.yaml",
-            type="bind",
-            read_only=True,
-        )
-    ]
-
-
-def test_a_missing_package_yaml_is_not_created_for_the_candidate_check(tmp_path):
-    instance_dir = tmp_path / "alice"
-    instance_dir.mkdir()
-    (instance_dir / ".env").write_text("KINBY_CONTROL_TOKEN=secret\n", encoding="utf-8")
-    instance = StorageItem(
-        kind=StorageKind.BIND,
-        source=str(instance_dir),
-        destination="/instance",
-        writable=True,
-    )
-
-    async def scenario() -> FakeDockerClient:
-        client = FakeDockerClient()
-        backend = DockerImageBackend(cast(DockerClient, client))
-        await backend.inspect_package("sha256:selected", "writer", instance)
-        return client
-
-    client = asyncio.run(scenario())
-
-    assert client.containers.run_arguments == (
-        "sha256:selected",
-        ["-m", "kinby.packages", "writer", "/instance"],
-    )
-    assert client.containers.run_options["mounts"] == []
-    assert client.containers.run_options["network_mode"] == "none"
-    assert not (instance_dir / "package.yaml").exists()
-
-
-def test_docker_image_backend_asks_the_kinby_in_the_image_what_vanilla_declares():
-    async def scenario() -> tuple[FakeDockerClient, PackageDescription]:
-        client = FakeDockerClient()
-        client.containers.run_output = vanilla_description().model_dump_json().encode()
-        backend = DockerImageBackend(cast(DockerClient, client))
-        return client, await backend.inspect_vanilla("sha256:selected")
+        return client, await backend.describe("sha256:selected")
 
     client, described = asyncio.run(scenario())
 
@@ -395,38 +260,18 @@ def test_docker_image_backend_asks_the_kinby_in_the_image_what_vanilla_declares(
     }
 
 
-def test_a_failing_vanilla_check_reports_what_it_printed():
+def test_a_failing_image_description_reports_what_it_printed():
     async def scenario() -> None:
         client = FakeDockerClient()
-        client.containers.run_failure = b"usage: python -m kinby.packages <package-id>\n"
+        client.containers.run_failure = b"No module named kinby.packages\n"
         backend = DockerImageBackend(cast(DockerClient, client))
-        await backend.inspect_vanilla("sha256:selected")
+        await backend.describe("sha256:selected")
 
     with pytest.raises(ValueError) as failure:
         asyncio.run(scenario())
 
     assert str(failure.value) == (
-        "The vanilla check failed in image sha256:selected.\n"
-        "usage: python -m kinby.packages <package-id>"
-    )
-
-
-def test_a_failing_candidate_check_reports_what_the_check_printed():
-    async def scenario() -> None:
-        client = FakeDockerClient()
-        client.containers.run_failure = (
-            b'Executable "claude" is not on PATH.\n/instance/package.yaml: tone: Field required\n'
-        )
-        backend = DockerImageBackend(cast(DockerClient, client))
-        await backend.inspect_package("sha256:selected", "writer")
-
-    with pytest.raises(ValueError) as failure:
-        asyncio.run(scenario())
-
-    assert str(failure.value) == (
-        'Package "writer" failed its check in image sha256:selected.\n'
-        'Executable "claude" is not on PATH.\n'
-        "/instance/package.yaml: tone: Field required"
+        "Describing image sha256:selected failed.\nNo module named kinby.packages"
     )
 
 
@@ -480,12 +325,12 @@ def test_real_docker_artifact_has_an_immutable_identity_and_excludes_managed_dat
         _git(source, "config", "user.name", "Test")
         _git(source, "add", ".")
         _git(source, "commit", "-m", "source")
-        prepared = await ImagePreparer(
+        built = await ImagePreparer(
             source,
             HubRegistry(tmp_path / "hub"),
             DockerImageBackend(),
-        ).prepare(ImageSelection("HEAD"))
-        artifact = prepared.artifact
+        ).build(ImageSelection("HEAD"))
+        artifact = built.artifact
         assert artifact.image_id.startswith("sha256:")
         return artifact.image_id
 
@@ -574,13 +419,6 @@ class PulledImage:
     def __init__(self, image_id: str) -> None:
         self._image_id = image_id
 
-    async def prepare(
-        self,
-        selection: ImageSelection,
-        instance: StorageItem | None = None,
-    ) -> PreparedImage:
-        return PreparedImage(artifact=(await self.build(selection)).artifact)
-
     async def build(self, selection: ImageSelection) -> BuiltImage:
         artifact = ImageArtifact(
             image_id=self._image_id,
@@ -590,7 +428,7 @@ class PulledImage:
         )
         return BuiltImage(artifact, reused=False)
 
-    async def describe(self, artifact: ImageArtifact) -> PackageDescription:
+    async def describe(self, artifact: ImageArtifact) -> DeclaredSetup:
         return vanilla_description()
 
     async def resolve(self, revision: str) -> str:

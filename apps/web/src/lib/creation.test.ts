@@ -37,7 +37,6 @@ describe("the create command", () => {
 
   it("leaves a blank optional secret unset", () => {
     const command = createCommand(
-      null,
       [
         model,
         apiKey,
@@ -55,7 +54,6 @@ describe("the create command", () => {
     const share = field({ name: "share", label: "Share", type: "boolean" })
 
     const command = createCommand(
-      null,
       [model, apiKey, share],
       { model: "openai:gpt-5", api_key: "sk-private" },
       identity,
@@ -70,7 +68,6 @@ describe("the create command", () => {
     const review = field({ name: "review", label: "Review", type: "boolean", default: true })
 
     const command = createCommand(
-      null,
       [model, apiKey, share, review],
       { model: "openai:gpt-5", api_key: "sk-private", share: false },
       identity,

@@ -6,7 +6,7 @@ const THREADS = "threads"
 const TURNS = "turns"
 const CONFIG = "config"
 const ROUTINES = "routines"
-const PACKAGE = "package"
+const CORE = "core"
 const MEMORY = "memory"
 const STATS = "stats"
 export const CREATE_PATH = "/new"
@@ -42,8 +42,8 @@ export function routinePath(instanceId: string, name: string): string {
   return `${configPath(instanceId)}/${ROUTINES}/${encodeURIComponent(name)}`
 }
 
-function packagePath(instanceId: string): string {
-  return `${configPath(instanceId)}/${PACKAGE}`
+function corePath(instanceId: string): string {
+  return `${configPath(instanceId)}/${CORE}`
 }
 
 function memoryPath(instanceId: string): string {
@@ -89,9 +89,9 @@ export function openRoutine(instanceId: string, name: string): void {
   navigate(routinePath(instanceId, name))
 }
 
-/** Open an instance's config panel on "Package and version" the same way. */
-export function openPackage(instanceId: string): void {
-  navigate(packagePath(instanceId))
+/** Open an instance's config panel on "Core version" the same way. */
+export function openCore(instanceId: string): void {
+  navigate(corePath(instanceId))
 }
 
 /**
@@ -245,10 +245,10 @@ export function linkedRoutine(): string | undefined {
     : undefined
 }
 
-/** Whether the URL opens its instance's config panel on "Package and version". */
-export function linkedPackage(): boolean {
+/** Whether the URL opens its instance's config panel on "Core version". */
+export function linkedCore(): boolean {
   const [, section, instanceId, config, linked] = window.location.pathname.split("/")
-  return section === SECTION && Boolean(instanceId) && config === CONFIG && linked === PACKAGE
+  return section === SECTION && Boolean(instanceId) && config === CONFIG && linked === CORE
 }
 
 function memoryOpen(): boolean {

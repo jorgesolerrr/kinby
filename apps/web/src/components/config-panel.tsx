@@ -10,9 +10,9 @@ import type {
 import { Fragment, type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert } from "@/components/config-alerts"
+import { CoreSection } from "@/components/core-section"
 import { ManifestSection } from "@/components/manifest-section"
 import { PackageConfigSection } from "@/components/package-config-section"
-import { PackageSection } from "@/components/package-section"
 import { PermissionsSection } from "@/components/permissions-section"
 import { RecreateNotice } from "@/components/recreate-notice"
 import { RoutinesSection } from "@/components/routines-section"
@@ -40,7 +40,7 @@ import { lastChanged } from "@/lib/config-changes"
 import { OlderCore } from "@/lib/older-core"
 import { type Pace, pace, retried } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
-import { leaveLink, linkedPackage, linkedRoutine } from "@/lib/selection"
+import { leaveLink, linkedCore, linkedRoutine } from "@/lib/selection"
 import {
   BoxIcon,
   CpuIcon,
@@ -48,10 +48,10 @@ import {
   KeyRoundIcon,
   type LucideIcon,
   NotebookPenIcon,
-  PackageIcon,
   RepeatIcon,
   ShieldIcon,
   SparklesIcon,
+  TagIcon,
   WrenchIcon,
 } from "lucide-react"
 
@@ -88,7 +88,7 @@ interface Section {
   reason?: RecreateReason
 }
 
-const PACKAGE = "Package and version"
+const CORE = "Core version"
 const ROUTINES = "Routines"
 
 const GROUPS: { label: string; sections: Section[] }[] = [
@@ -182,11 +182,11 @@ const GROUPS: { label: string; sections: Section[] }[] = [
         ),
       },
       {
-        label: PACKAGE,
-        hint: "template, installed, update",
-        icon: PackageIcon,
+        label: CORE,
+        hint: "the kinby it runs, update",
+        icon: TagIcon,
         render: ({ caller, clock, instance, onChanged }) => (
-          <PackageSection caller={caller} clock={clock} instance={instance} onChanged={onChanged} />
+          <CoreSection caller={caller} clock={clock} instance={instance} onChanged={onChanged} />
         ),
       },
     ],
@@ -286,7 +286,7 @@ export function ConfigPanel({
           <p className="text-sm text-muted-foreground">{section?.hint}</p>
         </div>
         <Separator />
-        <OlderCore value={behind(instance) ? () => open(PACKAGE) : undefined}>
+        <OlderCore value={behind(instance) ? () => open(CORE) : undefined}>
           <Fragment key={selected}>{section?.render?.(panel)}</Fragment>
         </OlderCore>
       </main>
@@ -297,13 +297,13 @@ export function ConfigPanel({
 /** The section a link opens the panel on: the routines for a linked routine, or the first one. */
 function linkedSection(routine: string | undefined): string {
   if (routine !== undefined) return ROUTINES
-  if (linkedPackage()) return PACKAGE
+  if (linkedCore()) return CORE
   return "Behavior prompt"
 }
 
 /**
- * Why each section needs the user, by its label: a change that waits on a recreate, or an
- * installed package behind the hub's.
+ * Why each section needs the user, by its label: a change that waits on a recreate, or a core
+ * behind the hub's.
  */
 function needsOf(
   instance: InstanceSummary,
@@ -313,7 +313,7 @@ function needsOf(
   for (const { label, reason } of SECTIONS) {
     if (reason !== undefined && reasons.includes(reason)) needs[label] = "Recreate to apply"
   }
-  if (behind(instance)) needs[PACKAGE] = "behind the hub"
+  if (behind(instance)) needs[CORE] = "behind the hub"
   return needs
 }
 

@@ -370,25 +370,18 @@ def test_the_schema_declares_the_profile_calls() -> None:
     }
 
 
-def test_an_instance_summary_carries_its_notices_as_a_union_on_code() -> None:
+def test_an_instance_summary_carries_its_notices() -> None:
     definitions = _object(contract_schema()["$defs"])
     summary = _object(definitions["InstanceSummary"])
 
     assert "notices" in cast(list[str], summary["required"])
     notice = _object(_object(summary["properties"])["notices"])["items"]
-    assert _object(notice)["discriminator"] == {
-        "propertyName": "code",
-        "mapping": {
-            "package_template_older": "#/$defs/PackageTemplateOlder",
-            "revision_behind": "#/$defs/RevisionBehind",
-        },
-    }
-    assert {
-        name: set(cast(list[str], _object(definitions[name])["required"]))
-        for name in ("RevisionBehind", "PackageTemplateOlder")
-    } == {
-        "RevisionBehind": {"code", "message", "instance_revision", "hub_revision"},
-        "PackageTemplateOlder": {"code", "message", "initialized_version", "installed_version"},
+    assert notice == {"$ref": "#/$defs/RevisionBehind"}
+    assert set(cast(list[str], _object(definitions["RevisionBehind"])["required"])) == {
+        "code",
+        "message",
+        "instance_revision",
+        "hub_revision",
     }
 
 

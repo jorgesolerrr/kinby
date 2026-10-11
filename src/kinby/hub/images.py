@@ -10,18 +10,10 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from kinby.contracts import PackageCommit, PackageDescription, PackageSelection, StorageItem
+from kinby.contracts import DeclaredSetup
 from kinby.factories import RECIPES_DIRECTORY
-from kinby.hub.models import (
-    BuildResult,
-    BuiltImage,
-    ImageArtifact,
-    ImageBackend,
-    ImageSelection,
-    PreparedImage,
-)
+from kinby.hub.models import BuildResult, BuiltImage, ImageArtifact, ImageBackend, ImageSelection
 from kinby.hub.registry import HubRegistry
-from kinby.packages import InstalledPackage, package_description
 
 _ROOT_FILES = frozenset({"Dockerfile", "pyproject.toml", "uv.lock", "README.md", "LICENSE"})
 _STAGE = re.compile(r"^FROM\s", re.MULTILINE | re.IGNORECASE)
@@ -57,15 +49,6 @@ def _included(path: str) -> bool:
     return path in _ROOT_FILES or path.startswith("src/") or path == "docker/entrypoint.sh"
 
 
-def _requirement(package: PackageSelection) -> str:
-    """What uv installs. The kinby already in the image satisfies the package's own kinby."""
-    match package.version:
-        case PackageCommit(url=url, sha=sha):
-            return f"git+{url}@{sha}"
-        case version:
-            return f"{package.distribution}=={version}"
-
-
 def _recipe(name: str) -> str:
     """The steps of one of the image recipes kinby ships."""
     return (RECIPES_DIRECTORY / f"{name}.Dockerfile").read_text(encoding="utf-8")
@@ -84,17 +67,6 @@ class ImagePreparer:
         self._registry = registry
         self._backend = backend
 
-    async def prepare(
-        self,
-        selection: ImageSelection,
-        instance: StorageItem | None = None,
-    ) -> PreparedImage:
-        artifact = (await self.build(selection)).artifact
-        return PreparedImage(
-            artifact=artifact,
-            package=await self._inspect_package(artifact, instance),
-        )
-
     async def resolve(self, revision: str) -> str:
         return await asyncio.to_thread(self._resolve, revision)
 
@@ -106,11 +78,9 @@ class ImagePreparer:
             self._keep_instance_stage(context / "Dockerfile")
             if selection.recipe is not None:
                 self._append_recipe(context / "Dockerfile", selection.recipe)
-            if selection.package is not None:
-                self._install_package(context / "Dockerfile", selection)
             dependency_id = self._dependency_id(context, selection)
             base_images = await self._backend.resolve_base_images(context / "Dockerfile")
-            input_key = self._input_key(resolved, dependency_id, base_images, selection)
+            input_key = self._input_key(resolved, dependency_id, base_images)
             recorded = self._registry.image_artifact(input_key)
             if recorded is not None and await self._backend.exists(recorded.image_id):
                 return BuiltImage(recorded, reused=True)
@@ -121,25 +91,12 @@ class ImagePreparer:
             dependency_id=dependency_id,
             base_images=base_images,
             dependencies=built.dependencies,
-            package=selection.package,
         )
         self._registry.record_image_artifact(input_key, artifact)
         return BuiltImage(artifact, reused=False)
 
-    async def describe(self, artifact: ImageArtifact) -> PackageDescription:
-        installed = await self._inspect_package(artifact, None)
-        if installed is None:
-            return await self._backend.inspect_vanilla(artifact.image_id)
-        return package_description(installed)
-
-    async def _inspect_package(
-        self,
-        artifact: ImageArtifact,
-        instance: StorageItem | None,
-    ) -> InstalledPackage | None:
-        if artifact.package is None:
-            return None
-        return await self._backend.inspect_package(artifact.image_id, artifact.package.id, instance)
+    async def describe(self, artifact: ImageArtifact) -> DeclaredSetup:
+        return await self._backend.describe(artifact.image_id)
 
     @staticmethod
     def _keep_instance_stage(dockerfile: Path) -> None:
@@ -157,26 +114,6 @@ class ImagePreparer:
     def _append_recipe(dockerfile: Path, recipe: str) -> None:
         body = dockerfile.read_text(encoding="utf-8").rstrip() + "\n"
         dockerfile.write_text(body + _recipe(recipe).rstrip() + "\n", encoding="utf-8")
-
-    @staticmethod
-    def _install_package(dockerfile: Path, selection: ImageSelection) -> None:
-        package = selection.package
-        if package is None:
-            return
-        body = dockerfile.read_text(encoding="utf-8").rstrip() + "\n"
-        if package.image_recipe:
-            body += package.image_recipe.rstrip() + "\n"
-        # A package's own [tool.uv.sources] never replaces the kinby already in the image.
-        command = [
-            "uv",
-            "pip",
-            "install",
-            "--system",
-            "--no-cache",
-            "--no-sources",
-            _requirement(package),
-        ]
-        dockerfile.write_text(f"{body}RUN {json.dumps(command)}\n", encoding="utf-8")
 
     def _resolve(self, revision: str) -> str:
         # With --quiet, git exits 1 without a word only when the revision names no commit.
@@ -208,28 +145,13 @@ class ImagePreparer:
             if path.is_file():
                 digest.update(name.encode())
                 digest.update(path.read_bytes())
-        if selection.package is not None:
-            digest.update(selection.package.model_dump_json().encode())
         if selection.recipe is not None:
             digest.update(_recipe(selection.recipe).encode())
         return f"sha256:{digest.hexdigest()}"
 
     @staticmethod
-    def _input_key(
-        revision: str,
-        dependency_id: str,
-        base_images: tuple[str, ...],
-        selection: ImageSelection,
-    ) -> str:
-        encoded = json.dumps(
-            [
-                revision,
-                dependency_id,
-                base_images,
-                selection.package.model_dump(mode="json") if selection.package else None,
-            ],
-            separators=(",", ":"),
-        ).encode()
+    def _input_key(revision: str, dependency_id: str, base_images: tuple[str, ...]) -> str:
+        encoded = json.dumps([revision, dependency_id, base_images], separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
 

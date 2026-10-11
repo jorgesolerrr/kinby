@@ -157,14 +157,8 @@ class AdoptionBlocked(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
-class PackagePinRefused(CoreError):
-    """A package pin names a package the instance does not run, or one not from git."""
-
-    code = ErrorCode.INVALID_ARGUMENT
-
-
-class SelectionNotPrepared(CoreError):
-    """No image preparation stored a descriptor for this selection, and describing never builds."""
+class ImageNotPrepared(CoreError):
+    """No image preparation stored what the image declares, and describing never builds."""
 
     code = ErrorCode.NOT_PREPARED
 

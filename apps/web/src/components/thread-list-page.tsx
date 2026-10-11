@@ -36,7 +36,7 @@ import {
 import { usePace } from "@/hooks/use-pace"
 import { when } from "@/lib/config-changes"
 import { pace, retried } from "@/lib/operation"
-import { openPackage, selectThread, threadPath } from "@/lib/selection"
+import { openCore, selectThread, threadPath } from "@/lib/selection"
 import { threadList, threadTitle } from "@/lib/thread-list"
 
 type Caller = Pick<InstanceClient, "call">
@@ -164,7 +164,7 @@ export function ThreadListPage({
       </div>
       {failure !== undefined &&
         (fromOlderCore(failure) ? (
-          <OlderCoreAlert onOpenUpdate={() => openPackage(instanceId)} />
+          <OlderCoreAlert onOpenUpdate={() => openCore(instanceId)} />
         ) : (
           <Failure error={failure} />
         ))}

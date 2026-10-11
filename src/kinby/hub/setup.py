@@ -89,18 +89,6 @@ def configuration(
     return resolved_values(fields, {**config, MODEL_FIELD.name: model})
 
 
-def targeted(
-    description: DeclaredSetup,
-    configured: Mapping[str, SetupValue],
-) -> dict[str, SetupValue]:
-    """The values of the package's own fields, which initialization writes at their targets."""
-    return {
-        field.name: configured[field.name]
-        for field in package_fields(description.setup_fields)
-        if field.target is not None and field.name in configured
-    }
-
-
 def manifest_settings(
     setup: DeclaredSetup,
     configured: Mapping[str, SetupValue],

@@ -176,11 +176,7 @@ describe("ConfigPanel", () => {
       "Manifest",
     ])
     expect(labels("Capabilities")).toEqual(["Routines", "Skills", "Tools"])
-    expect(labels("Instance")).toEqual([
-      "Secrets and login",
-      "Package config",
-      "Package and version",
-    ])
+    expect(labels("Instance")).toEqual(["Secrets and login", "Package config", "Core version"])
     expect(screen.getByRole("button", { name: "Behavior prompt" })).toHaveProperty(
       "disabled",
       false,
@@ -192,10 +188,7 @@ describe("ConfigPanel", () => {
     expect(screen.getByRole("button", { name: "Permissions" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Package config" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Manifest" })).toHaveProperty("disabled", false)
-    expect(screen.getByRole("button", { name: "Package and version" })).toHaveProperty(
-      "disabled",
-      false,
-    )
+    expect(screen.getByRole("button", { name: "Core version" })).toHaveProperty("disabled", false)
     expect(await screen.findByRole("heading", { name: "Behavior prompt" })).toBeDefined()
   })
 
@@ -207,18 +200,18 @@ describe("ConfigPanel", () => {
     expect(await screen.findByRole("heading", { name: "Behavior prompt" })).toBeDefined()
   })
 
-  it("says the package section is behind the hub in place of its hint", async () => {
-    const section = () => screen.getByRole("button", { name: "Package and version" })
+  it("says the core section is behind the hub in place of its hint", async () => {
+    const section = () => screen.getByRole("button", { name: "Core version" })
 
     openPanel({}, ada)
-    expect(section().textContent).toContain("template, installed, update")
+    expect(section().textContent).toContain("the kinby it runs, update")
     cleanup()
     const { user } = openPanel({}, behind)
 
     expect(section().textContent).toContain("behind the hub")
-    expect(section().textContent).not.toContain("template, installed, update")
+    expect(section().textContent).not.toContain("the kinby it runs, update")
     await user.click(section())
-    expect(await screen.findByRole("heading", { name: "Package and version" })).toBeDefined()
+    expect(await screen.findByRole("heading", { name: "Core version" })).toBeDefined()
     expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
   })
 
@@ -266,9 +259,9 @@ describe("ConfigPanel", () => {
     const alert = await screen.findByRole("alert")
     expect(alert.textContent).toContain("This instance runs an older core")
     expect(alert.textContent).not.toContain('Method "prompt.get" was not found.')
-    await user.click(within(alert).getByRole("button", { name: "Open Package and version" }))
+    await user.click(within(alert).getByRole("button", { name: "Open Core version" }))
 
-    expect(await screen.findByRole("heading", { name: "Package and version" })).toBeDefined()
+    expect(await screen.findByRole("heading", { name: "Core version" })).toBeDefined()
     expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
   })
 
@@ -406,12 +399,12 @@ describe("ConfigPanel", () => {
     }
   })
 
-  it("opens on Package and version when a link names it, and drops it from the URL on leaving", async () => {
-    window.history.replaceState(null, "", "/instances/instance-1/config/package")
+  it("opens on Core version when a link names it, and drops it from the URL on leaving", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1/config/core")
     try {
       const { user } = openPanel({}, behind)
 
-      expect(await screen.findByRole("heading", { name: "Package and version" })).toBeDefined()
+      expect(await screen.findByRole("heading", { name: "Core version" })).toBeDefined()
       expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
       await user.click(screen.getByRole("button", { name: "Recap prompt" }))
 
