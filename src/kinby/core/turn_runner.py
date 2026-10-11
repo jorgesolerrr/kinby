@@ -97,7 +97,6 @@ from kinby.instance.permissions import (
     load_permissions,
     validate_bash_regexes,
 )
-from kinby.packages import instance_package_config
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
@@ -610,7 +609,6 @@ class LangGraphRunner:
                     instance=self._instance,
                     thread_id=thread_id,
                     routine=routine.name,
-                    package_config=instance_package_config(self._instance),
                     run_reporter=_run_reporter(emit),
                 )
                 output = await code_step.ainvoke_raw(call.arguments, context)

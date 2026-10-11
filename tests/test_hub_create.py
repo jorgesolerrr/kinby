@@ -32,7 +32,7 @@ from kinby.contracts import (
 )
 from kinby.hub import BuiltImage, ImageArtifact, ImageSelection
 from kinby.instance import init_instance, inspect_instance
-from kinby.packages import vanilla_description, with_built_in_fields
+from kinby.setup import vanilla_description, with_built_in_fields
 from tests.test_factory_install import FILES, install_hub, installed
 from tests.test_hub import (
     FakeImages,

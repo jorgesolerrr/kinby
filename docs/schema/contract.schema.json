@@ -2045,12 +2045,6 @@
         },
         "contract_version": {
           "type": "string"
-        },
-        "restart_reasons": {
-          "items": {
-            "$ref": "#/$defs/RecreateReason"
-          },
-          "type": "array"
         }
       },
       "required": [
@@ -3556,59 +3550,6 @@
       "title": "OwnBashPatterns",
       "type": "object"
     },
-    "PackageConfigGetCommand": {
-      "additionalProperties": false,
-      "properties": {},
-      "title": "PackageConfigGetCommand",
-      "type": "object"
-    },
-    "PackageConfigResult": {
-      "additionalProperties": false,
-      "properties": {
-        "hash": {
-          "type": "string"
-        },
-        "schema": {
-          "additionalProperties": {
-            "$ref": "#/$defs/JsonValue"
-          },
-          "type": "object"
-        },
-        "values": {
-          "additionalProperties": {
-            "$ref": "#/$defs/JsonValue"
-          },
-          "type": "object"
-        }
-      },
-      "required": [
-        "schema",
-        "values",
-        "hash"
-      ],
-      "title": "PackageConfigResult",
-      "type": "object"
-    },
-    "PackageConfigSetCommand": {
-      "additionalProperties": false,
-      "properties": {
-        "hash": {
-          "type": "string"
-        },
-        "values": {
-          "additionalProperties": {
-            "$ref": "#/$defs/JsonValue"
-          },
-          "type": "object"
-        }
-      },
-      "required": [
-        "values",
-        "hash"
-      ],
-      "title": "PackageConfigSetCommand",
-      "type": "object"
-    },
     "PermissionMode": {
       "enum": [
         "read-only",
@@ -3893,8 +3834,7 @@
     "RecreateReason": {
       "description": "A change a running instance applies only once it is recreated.",
       "enum": [
-        "secrets",
-        "package_config"
+        "secrets"
       ],
       "title": "RecreateReason",
       "type": "string"
@@ -4795,9 +4735,6 @@
             }
           ]
         },
-        "source": {
-          "type": "string"
-        },
         "tier": {
           "$ref": "#/$defs/SkillTier"
         }
@@ -4806,7 +4743,6 @@
         "name",
         "tier",
         "description",
-        "source",
         "shadowed_by"
       ],
       "title": "SkillSummary",
@@ -4816,7 +4752,7 @@
       "description": "Where a skill comes from, in the order the model looks for it.",
       "enum": [
         "instance",
-        "package",
+        "kinby",
         "workspace"
       ],
       "title": "SkillTier",
@@ -5667,10 +5603,9 @@
       "type": "object"
     },
     "TargetFile": {
-      "description": "The instance file a package's configuration field lands in.",
+      "description": "The instance file a template's configuration field lands in.",
       "enum": [
-        "kinby.toml",
-        "package.yaml"
+        "kinby.toml"
       ],
       "title": "TargetFile",
       "type": "string"
@@ -7847,38 +7782,6 @@
           ],
           "type": "object"
         },
-        "package.config.get": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/PackageConfigGetCommand"
-            },
-            "result": {
-              "$ref": "#/$defs/PackageConfigResult"
-            }
-          },
-          "required": [
-            "command",
-            "result"
-          ],
-          "type": "object"
-        },
-        "package.config.set": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/PackageConfigSetCommand"
-            },
-            "result": {
-              "$ref": "#/$defs/PackageConfigResult"
-            }
-          },
-          "required": [
-            "command",
-            "result"
-          ],
-          "type": "object"
-        },
         "permissions.get": {
           "additionalProperties": false,
           "properties": {
@@ -8522,8 +8425,6 @@
         "manifest.set",
         "permissions.get",
         "permissions.set",
-        "package.config.get",
-        "package.config.set",
         "config.history",
         "memory.list",
         "memory.open",

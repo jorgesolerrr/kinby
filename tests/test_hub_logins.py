@@ -39,7 +39,7 @@ from kinby.contracts import (
     SubscriptionLogin,
 )
 from kinby.hub import Hub, SetupSpec
-from kinby.packages import with_built_in_fields
+from kinby.setup import with_built_in_fields
 from tests.test_hub import (
     FakeControl,
     FakeImages,

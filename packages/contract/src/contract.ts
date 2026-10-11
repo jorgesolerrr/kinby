@@ -15,9 +15,9 @@ export type SetupValue = boolean | number | string;
  */
 export type SetupFieldKind = "config" | "secret";
 /**
- * The instance file a package's configuration field lands in.
+ * The instance file a template's configuration field lands in.
  */
-export type TargetFile = "kinby.toml" | "package.yaml";
+export type TargetFile = "kinby.toml";
 /**
  * How a client asks for a setup field's value, and so what the value is.
  */
@@ -69,11 +69,11 @@ export type AvatarShape = "circle" | "squircle" | "square";
 export type DrainState = "drained" | "interrupted";
 export type IntendedState = "stopped" | "running" | "removed" | "deleted";
 export type ProcessState = "missing" | "created" | "starting" | "running" | "stopped" | "failed" | "unavailable";
+export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "unknown";
 /**
  * A change a running instance applies only once it is recreated.
  */
-export type RecreateReason = "secrets" | "package_config";
-export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "unknown";
+export type RecreateReason = "secrets";
 /**
  * How an instance's subscription login stands: not signed in yet, or how its last one ended.
  */
@@ -118,7 +118,7 @@ export type SignalAuth = "token" | "hmac-sha256";
 /**
  * Where a skill comes from, in the order the model looks for it.
  */
-export type SkillTier = "instance" | "package" | "workspace";
+export type SkillTier = "instance" | "kinby" | "workspace";
 export type StatsBucketSize = "day" | "week";
 export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
 export type TurnClosingKind = "completed" | "failed" | "interrupted";
@@ -340,14 +340,6 @@ export interface Contract {
     "operation.get": {
       command: OperationGetCommand;
       result: OperationGetResult;
-    };
-    "package.config.get": {
-      command: PackageConfigGetCommand;
-      result: PackageConfigResult;
-    };
-    "package.config.set": {
-      command: PackageConfigSetCommand;
-      result: PackageConfigResult;
     };
     "permissions.get": {
       command: PermissionsGetCommand;
@@ -928,7 +920,6 @@ export interface InstanceProbeCommand {}
 export interface InstanceProbeResult {
   capabilities: Capability[];
   contract_version: string;
-  restart_reasons?: RecreateReason[];
 }
 export interface InstanceRecreateCommand {
   instance_id: string;
@@ -1149,22 +1140,6 @@ export interface LoginPrompt {
   code: string;
   url: string;
 }
-export interface PackageConfigGetCommand {}
-export interface PackageConfigResult {
-  hash: string;
-  schema: {
-    [k: string]: JsonValue;
-  };
-  values: {
-    [k: string]: JsonValue;
-  };
-}
-export interface PackageConfigSetCommand {
-  hash: string;
-  values: {
-    [k: string]: JsonValue;
-  };
-}
 export interface PermissionsGetCommand {}
 export interface PermissionsResult {
   bash: BashPermissions;
@@ -1326,7 +1301,6 @@ export interface SkillSummary {
   description: string;
   name: string;
   shadowed_by: SkillTier | null;
-  source: string;
   tier: SkillTier;
 }
 export interface SkillListCommand {}

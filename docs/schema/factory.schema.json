@@ -889,10 +889,9 @@
       "type": "object"
     },
     "TargetFile": {
-      "description": "The instance file a package's configuration field lands in.",
+      "description": "The instance file a template's configuration field lands in.",
       "enum": [
-        "kinby.toml",
-        "package.yaml"
+        "kinby.toml"
       ],
       "title": "TargetFile",
       "type": "string"

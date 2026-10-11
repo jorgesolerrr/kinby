@@ -830,7 +830,7 @@ def test_instance_show_uses_the_supplied_date_for_turn_inputs(tmp_path, capsys):
     assert captured.err == ""
 
 
-def test_instance_show_omits_packaged_tools_when_defaults_are_disabled(tmp_path, capsys):
+def test_instance_show_omits_default_tools_when_defaults_are_disabled(tmp_path, capsys):
     instance = tmp_path / "alice"
     instance.mkdir()
     (instance / "kinby.toml").write_text(

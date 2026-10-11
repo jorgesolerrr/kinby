@@ -171,8 +171,8 @@ from kinby.instance import (
     inspect_instance,
 )
 from kinby.instance.layout import SYSTEM_NAME
-from kinby.packages import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
 from kinby.plugins.intake import INTAKE_URL_VARIABLE
+from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
 
 _logger = logging.getLogger(__name__)
 
@@ -191,8 +191,6 @@ _STOP_OBSERVE_SECONDS = 120
 READY_OBSERVE_SECONDS = 120
 #: How long a stats summary waits for one instance before it counts it unreachable.
 STATS_SECONDS = 5
-#: How long a status waits for a running instance to say what changed since it booted.
-REASONS_SECONDS = 5
 #: Pause before calling a drain again, so a socket that closes immediately does not spin.
 _DRAIN_RETRY_SECONDS = 0.2
 _RUNTIME_STOPPED = frozenset({"absent", "created", "stopped", "failed"})
@@ -1902,25 +1900,10 @@ class Hub:
     async def _recreate_reasons(
         self, record: ManagedInstance, process: ProcessState
     ) -> tuple[RecreateReason, ...]:
-        """Secrets replaced since the container was created, then what the running instance
-        says changed since it booted. A stopped instance boots again on its next start.
-        """
+        """Secrets replaced since the container was created."""
         if process in {ProcessState.MISSING, ProcessState.UNAVAILABLE}:
             return ()
-        secrets = (RecreateReason.SECRETS,) if await self._secrets_replaced(record) else ()
-        if process is not ProcessState.RUNNING:
-            return secrets
-        return (*secrets, *await self._restart_reasons(record))
-
-    async def _restart_reasons(self, record: ManagedInstance) -> tuple[RecreateReason, ...]:
-        """An instance that does not answer in time, or runs an older core, reports none, so a
-        status never waits long or fails.
-        """
-        try:
-            async with asyncio.timeout(REASONS_SECONDS):
-                return tuple(await self._control.restart_reasons(await self._endpoint(record)))
-        except ControlUnreachable, IncompatibleLifecycleEndpoint, TimeoutError:
-            return ()
+        return (RecreateReason.SECRETS,) if await self._secrets_replaced(record) else ()
 
     async def _observed(self, record: ManagedInstance) -> ObservedProcess:
         """Read the runtime once. A runtime that cannot be read reports the instance unavailable."""

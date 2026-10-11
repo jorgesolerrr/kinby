@@ -9,7 +9,7 @@ from kinby.contracts import DeclaredSetup
 from kinby.factories import RECIPES_DIRECTORY
 from kinby.hub import BuildResult, HubRegistry, ImagePreparer, ImageSelection
 from kinby.hub.images import GitFailed, RevisionNotFound
-from kinby.packages import vanilla_description
+from kinby.setup import vanilla_description
 
 
 class FakeImageBackend:

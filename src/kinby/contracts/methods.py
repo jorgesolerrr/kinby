@@ -79,9 +79,6 @@ from kinby.contracts.models import (
     MemoryWriteResult,
     OperationGetCommand,
     OperationGetResult,
-    PackageConfigGetCommand,
-    PackageConfigResult,
-    PackageConfigSetCommand,
     PermissionsGetCommand,
     PermissionsResult,
     PermissionsSetCommand,
@@ -253,12 +250,6 @@ PERMISSIONS_GET = Method(
 PERMISSIONS_SET = Method(
     "permissions.set", Scope.INSTANCE_ADMIN, PermissionsSetCommand, PermissionsResult
 )
-PACKAGE_CONFIG_GET = Method(
-    "package.config.get", Scope.INSTANCE_READ, PackageConfigGetCommand, PackageConfigResult
-)
-PACKAGE_CONFIG_SET = Method(
-    "package.config.set", Scope.INSTANCE_ADMIN, PackageConfigSetCommand, PackageConfigResult
-)
 MEMORY_LIST = Method("memory.list", Scope.INSTANCE_READ, MemoryListCommand, MemoryListResult)
 MEMORY_OPEN = Method("memory.open", Scope.INSTANCE_READ, MemoryOpenCommand, MemoryOpenResult)
 MEMORY_ADD = Method("memory.add", Scope.INSTANCE_ADMIN, MemoryAddCommand, MemoryWriteResult)
@@ -412,8 +403,6 @@ METHODS = (
     MANIFEST_SET,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
-    PACKAGE_CONFIG_GET,
-    PACKAGE_CONFIG_SET,
     CONFIG_HISTORY,
     MEMORY_LIST,
     MEMORY_OPEN,

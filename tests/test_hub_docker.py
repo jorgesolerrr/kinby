@@ -29,7 +29,7 @@ from kinby.hub import (
     SetupSpec,
     secrets_digest,
 )
-from kinby.packages import vanilla_description
+from kinby.setup import vanilla_description
 from tests.test_hub import hub_client, started_instance
 
 
@@ -252,7 +252,7 @@ def test_docker_image_backend_asks_the_kinby_in_the_image_what_it_declares():
     client, described = asyncio.run(scenario())
 
     assert described == vanilla_description()
-    assert client.containers.run_arguments == ("sha256:selected", ["-m", "kinby.packages"])
+    assert client.containers.run_arguments == ("sha256:selected", ["-m", "kinby.setup"])
     assert client.containers.run_options == {
         "entrypoint": "python",
         "remove": True,
@@ -263,7 +263,7 @@ def test_docker_image_backend_asks_the_kinby_in_the_image_what_it_declares():
 def test_a_failing_image_description_reports_what_it_printed():
     async def scenario() -> None:
         client = FakeDockerClient()
-        client.containers.run_failure = b"No module named kinby.packages\n"
+        client.containers.run_failure = b"No module named kinby.setup\n"
         backend = DockerImageBackend(cast(DockerClient, client))
         await backend.describe("sha256:selected")
 
@@ -271,7 +271,7 @@ def test_a_failing_image_description_reports_what_it_printed():
         asyncio.run(scenario())
 
     assert str(failure.value) == (
-        "Describing image sha256:selected failed.\nNo module named kinby.packages"
+        "Describing image sha256:selected failed.\nNo module named kinby.setup"
     )
 
 

@@ -24,8 +24,6 @@ from kinby.contracts import (
     MEMORY_FORGET,
     MEMORY_LIST,
     MEMORY_OPEN,
-    PACKAGE_CONFIG_GET,
-    PACKAGE_CONFIG_SET,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
     PROFILE_GET,
@@ -70,7 +68,6 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Event,
-    FileHash,
     InstanceProbeCommand,
     InstanceProbeResult,
     Method,
@@ -289,7 +286,6 @@ def build_dispatcher(
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
     clock: Callable[[], datetime] = utc_now,
-    booted_package_config: FileHash | None = None,
 ) -> ScheduledDispatcher: ...
 
 
@@ -313,11 +309,8 @@ def build_dispatcher(
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
     clock: Callable[[], datetime] = utc_now,
-    booted_package_config: FileHash | None = None,
 ) -> Dispatcher:
-    """The instance's contract methods. *booted_package_config* is the hash of the package.yaml
-    the instance validated at boot, which the probe compares with the file on disk.
-    """
+    """The instance's contract methods."""
     store = ThreadStore(state_dir)
     event_log = event_log or EventLog(state_dir)
     scheduler = None
@@ -431,16 +424,13 @@ def build_dispatcher(
         return await event_log.subscribe(command.thread_id, command.after_sequence)
 
     config = (
-        InstanceConfig(turns.scheduler.instance, booted_package_config)
-        if isinstance(turns, ScheduledTurnConfig)
-        else None
+        InstanceConfig(turns.scheduler.instance) if isinstance(turns, ScheduledTurnConfig) else None
     )
 
     async def probe(command: InstanceProbeCommand) -> InstanceProbeResult:
         return InstanceProbeResult(
             contract_version=CONTRACT_VERSION,
             capabilities=instance_capabilities(dispatcher),
-            restart_reasons=config.restart_reasons() if config is not None else [],
         )
 
     dispatcher.register(THREAD_CREATE, create_thread)
@@ -460,8 +450,6 @@ def build_dispatcher(
         dispatcher.register(MANIFEST_SET, config.set_manifest)
         dispatcher.register(PERMISSIONS_GET, config.get_permissions)
         dispatcher.register(PERMISSIONS_SET, config.set_permissions)
-        dispatcher.register(PACKAGE_CONFIG_GET, config.get_package_config)
-        dispatcher.register(PACKAGE_CONFIG_SET, config.set_package_config)
         dispatcher.register(CONFIG_HISTORY, config.history)
         dispatcher.register(PROFILE_GET, config.get_profile)
         dispatcher.register(PROFILE_SET, config.set_profile)

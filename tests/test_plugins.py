@@ -297,11 +297,11 @@ def test_default_entry_point_declares_tool_gate_metadata() -> None:
     ]
 
 
-def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypatch) -> None:
+def test_registry_reads_installed_tools_once_per_session(tmp_path: Path, monkeypatch) -> None:
     @tool(write=False)
-    def packaged() -> str:
-        """Return a packaged result."""
-        return "packaged"
+    def plugin() -> str:
+        """Return a plugin result."""
+        return "plugin"
 
     groups: list[str] = []
 
@@ -309,10 +309,10 @@ def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypa
         groups.append(group)
         return (
             SimpleNamespace(
-                name="package",
+                name="plugin",
                 value="example.tools:TOOLS",
                 dist=None,
-                load=lambda: (packaged,),
+                load=lambda: (plugin,),
             ),
         )
 
@@ -333,7 +333,7 @@ def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypa
                 "forget",
                 "memory_open",
                 "memory_search",
-                "packaged",
+                "plugin",
                 "remember",
                 "routine_delete",
                 "routine_list",
@@ -348,7 +348,7 @@ def test_registry_reads_packaged_tools_once_per_session(tmp_path: Path, monkeypa
                 "forget",
                 "memory_open",
                 "memory_search",
-                "packaged",
+                "plugin",
                 "remember",
                 "routine_delete",
                 "routine_list",
@@ -391,7 +391,7 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
 
     @tool(write=False)
     def available() -> str:
-        """Return an unambiguous packaged result."""
+        """Return an unambiguous plugin result."""
         return "available"
 
     def installed(*, group: str) -> tuple[SimpleNamespace, ...]:
@@ -469,7 +469,7 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
     monkeypatch,
 ) -> None:
     @tool(write=False)
-    def packaged() -> str:
+    def plugin() -> str:
         """Return a third-party result."""
         return "third-party"
 
@@ -480,7 +480,7 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
                 name="defaults",
                 value="third_party.tools:TOOLS",
                 dist=SimpleNamespace(name="third-party", version="2.0.0"),
-                load=lambda: (packaged,),
+                load=lambda: (plugin,),
             ),
         )
 
@@ -497,7 +497,7 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
             "forget",
             "memory_open",
             "memory_search",
-            "packaged",
+            "plugin",
             "remember",
             "routine_delete",
             "routine_list",
@@ -586,7 +586,7 @@ def test_broken_instance_tool_keeps_default_tools_on_the_first_turn(tmp_path: Pa
     asyncio.run(scenario())
 
 
-def test_instance_bash_shadows_the_packaged_bash(tmp_path: Path) -> None:
+def test_instance_bash_shadows_the_default_bash(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = _instance(tmp_path, defaults=True)
         (instance.path / "tools" / "bash.py").write_text(
