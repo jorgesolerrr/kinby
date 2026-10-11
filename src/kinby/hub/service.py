@@ -1688,7 +1688,11 @@ class Hub:
                 "so nothing was deleted."
             )
         owned = [item for item in record.storage if item.writable]
+        gone: list[Path] = []
         for directory in targets.directories:
+            # It went and left the inventory with its parent, so another instance may own it now.
+            if any(directory.is_relative_to(parent) for parent in gone):
+                continue
             entries = [
                 item
                 for item in owned
@@ -1699,6 +1703,7 @@ class Hub:
             self._record(operation_id, f"directory {directory}", f"Deleting {directory}.")
             await asyncio.to_thread(_delete_directory, directory)
             self.registry.release_storage(record.instance_id, entries)
+            gone.append(directory)
         for volume in targets.volumes:
             entries = [
                 item for item in owned if item.kind is StorageKind.VOLUME and item.source == volume

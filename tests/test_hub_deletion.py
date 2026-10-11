@@ -672,12 +672,44 @@ def test_a_writable_bind_inside_the_instance_directory_is_a_target_not_retained(
     asyncio.run(scenario())
 
 
-def test_a_bind_inside_a_deleted_instance_directory_leaves_the_inventory_with_it(
-    tmp_path,
-    monkeypatch,
-):
+def test_a_bind_deleted_with_the_instance_directory_is_not_deleted_again(tmp_path, monkeypatch):
     async def scenario() -> None:
         runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
+        client = hub_client(hub)
+        storage = (*coder_storage("/home/u/coder"), writable_bind("/home/u/coder/data"))
+        directory = existing_coder(runtime, tmp_path / "view" / "coder", storage=storage)
+        (directory / "data").mkdir()
+        instance_id = await adopted(client, directory, CODER_CONTAINER)
+        instance = LifecycleOperationResult(operation_id=uuid4(), instance_id=instance_id)
+        await removed(client, instance)
+        preview = await previewed(client, instance)
+        delete_tree = shutil.rmtree
+
+        def reused_once_released(path: Path) -> None:
+            delete_tree(path)
+            if path == directory.resolve():
+                # Another instance takes the released bind before the deletion ends.
+                (directory / "data").mkdir(parents=True)
+                (directory / "data" / "notes.md").write_text("the new owner's\n", encoding="utf-8")
+
+        monkeypatch.setattr(shutil, "rmtree", reused_once_released)
+
+        outcome = await deleted(client, preview)
+
+        assert preview.directories == [directory.resolve(), (directory / "data").resolve()]
+        assert outcome.state is OperationState.SUCCEEDED
+        assert [step.name for step in outcome.steps if step.name.startswith("directory")] == [
+            f"directory {directory.resolve()}"
+        ]
+        assert (directory / "data" / "notes.md").read_text(encoding="utf-8") == "the new owner's\n"
+
+    asyncio.run(scenario())
+
+
+def test_a_bind_inside_a_deleted_instance_directory_leaves_the_inventory_with_it(tmp_path):
+    async def scenario() -> None:
+        runtime = RefusingVolume("kinby_coder-workspace")
         hub = Hub(
             tmp_path / "hub",
             runtime=runtime,
@@ -699,15 +731,8 @@ def test_a_bind_inside_a_deleted_instance_directory_leaves_the_inventory_with_it
         instance = LifecycleOperationResult(operation_id=uuid4(), instance_id=instance_id)
         await removed(client, instance)
         first = await previewed(client, instance)
-        delete_tree = shutil.rmtree
 
-        def stopping_at_the_bind(path: Path) -> None:
-            if path == (directory / "data").resolve():
-                raise RuntimeError("the hub stopped")
-            delete_tree(path)
-
-        monkeypatch.setattr(shutil, "rmtree", stopping_at_the_bind)
-
+        # The deletion stops at the first volume, after the instance directory went.
         stopped = await deleted(client, first)
         second = await previewed(client, instance)
 
