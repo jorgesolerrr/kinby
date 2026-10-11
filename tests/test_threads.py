@@ -22,6 +22,7 @@ from kinby.contracts import (
 from kinby.contracts.methods import Method, Subscription
 from kinby.core.dispatcher import Dispatcher, build_dispatcher
 from kinby.core.events import EventLog
+from kinby.core.threads import ThreadStore
 from tests.helpers import thread_events
 
 STARTED = TurnStarted(
@@ -323,3 +324,22 @@ def test_contract_client_subscription_replays_then_stays_live(tmp_path: Path) ->
         assert [received_replay, received_live] == [replayed, live]
 
     asyncio.run(scenario())
+
+
+def test_a_torn_last_thread_record_is_skipped_and_dropped_by_the_next_append(
+    tmp_path: Path,
+) -> None:
+    store = ThreadStore(tmp_path)
+    kept = store.create("Kept")
+    threads = tmp_path / "threads.jsonl"
+    whole = threads.read_bytes()
+    store.create("Cut in the ellipsis…")
+    torn = threads.read_bytes()
+    threads.write_bytes(torn[: torn.rindex("…".encode()) + 1])
+
+    assert [thread.id for thread in store.threads()] == [kept.id]
+
+    renamed = store.rename(kept.id, "Renamed")
+
+    assert threads.read_bytes() == whole + f"{renamed.model_dump_json()}\n".encode()
+    assert ThreadStore(tmp_path).threads() == [renamed]

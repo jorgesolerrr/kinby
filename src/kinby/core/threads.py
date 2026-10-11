@@ -33,6 +33,7 @@ from kinby.contracts import (
 )
 from kinby.core.errors import ThreadNotFound
 from kinby.instance.permissions import GatePolicy, constrain_mode
+from kinby.jsonl import append_line, whole_lines
 
 THREADS_NAME = "threads.jsonl"
 #: The most characters a title taken from a thread's first message has.
@@ -81,13 +82,10 @@ class ThreadStore:
 
     def threads(self) -> list[ThreadRecord]:
         """Each thread once, in the order they were created."""
-        if not self._path.exists():
-            return []
-        with self._path.open(encoding="utf-8") as records:
-            latest = {
-                thread.id: thread
-                for thread in (ThreadRecord.model_validate_json(line) for line in records)
-            }
+        latest = {
+            thread.id: thread
+            for thread in map(ThreadRecord.model_validate_json, whole_lines(self._path))
+        }
         return list(latest.values())
 
     def thread(self, thread_id: UUID) -> ThreadRecord | None:
@@ -107,9 +105,7 @@ class ThreadStore:
         return changed
 
     def _append(self, thread: ThreadRecord) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._path.open("a", encoding="utf-8") as records:
-            records.write(f"{thread.model_dump_json()}\n")
+        append_line(self._path, thread.model_dump_json())
 
 
 def first_message_title(message: str) -> str:

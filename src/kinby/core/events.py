@@ -11,6 +11,7 @@ from uuid import UUID
 
 from kinby.contracts import Event, Payload, Stream
 from kinby.core.clock import utc_now
+from kinby.jsonl import append_line, whole_lines
 
 _EVENTS_NAME = "events.jsonl"
 
@@ -46,9 +47,7 @@ class EventLog:
                 payload=payload,
                 timestamp=timestamp.astimezone(UTC),
             )
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            with self._path.open("a", encoding="utf-8") as records:
-                records.write(f"{event.model_dump_json()}\n")
+            append_line(self._path, event.model_dump_json())
             heads[thread_id] = event.sequence
             for subscriber in self._subscribers.get(thread_id, set()):
                 subscriber.put_nowait(event)
@@ -106,8 +105,5 @@ class EventLog:
         return [event for event in self.all_events() if event.thread_id == thread_id]
 
     def all_events(self) -> Iterator[Event]:
-        if not self._path.exists():
-            return
-        with self._path.open(encoding="utf-8") as records:
-            for line in records:
-                yield Event.model_validate_json(line)
+        for line in whole_lines(self._path):
+            yield Event.model_validate_json(line)
