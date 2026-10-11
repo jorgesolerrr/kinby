@@ -268,6 +268,8 @@ def read_factory_file(folder: Path) -> FactoryFile:
         declared = yaml.safe_load(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise InvalidFactoryFile((f"The factory has no {FACTORY_FILE}.",)) from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise InvalidFactoryFile((f"{FACTORY_FILE} cannot be read as UTF-8 text: {exc}",)) from exc
     except yaml.YAMLError as exc:
         raise InvalidFactoryFile((f"{FACTORY_FILE} is not YAML: {exc}",)) from exc
     try:

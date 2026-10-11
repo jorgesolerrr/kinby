@@ -164,7 +164,36 @@ def _break(folder: Path) -> None:
     (folder / "factory.yaml").write_text("name: tickets\n", encoding="utf-8")
 
 
-@pytest.mark.parametrize("unserve", [_remove, _break], ids=["removed", "failing its check"])
+def _undecodable_factory_file(folder: Path) -> None:
+    (folder / "factory.yaml").write_bytes(b"name: tickets\n\xff\n")
+
+
+def _unreadable_factory_file(folder: Path) -> None:
+    (folder / "factory.yaml").unlink()
+    (folder / "factory.yaml").mkdir()
+
+
+def _undecodable_template_file(folder: Path) -> None:
+    (folder / "instances" / "coder" / "SYSTEM.md").write_bytes(b"\xff\n")
+
+
+@pytest.mark.parametrize(
+    "unserve",
+    [
+        _remove,
+        _break,
+        _undecodable_factory_file,
+        _unreadable_factory_file,
+        _undecodable_template_file,
+    ],
+    ids=[
+        "removed",
+        "failing its check",
+        "factory file not UTF-8",
+        "factory file unreadable",
+        "template file not UTF-8",
+    ],
+)
 def test_an_instance_whose_factory_the_hub_does_not_serve_has_no_template_notice(tmp_path, unserve):
     async def scenario() -> None:
         client = hub_client(install_hub(tmp_path))
@@ -203,3 +232,25 @@ def _no_record(template: str) -> TemplateBehind:
             "supplied. An instance update brings the files up to the factory's."
         )
     )
+
+
+def test_a_template_file_the_hub_cannot_read_leaves_the_list_whole(tmp_path, monkeypatch):
+    unreadable = _folder(tmp_path) / "instances" / "coder" / "SYSTEM.md"
+    read_text = Path.read_text
+
+    def denied(path: Path, *args, **kwargs) -> str:
+        if path == unreadable:
+            raise PermissionError(13, "Permission denied", str(path))
+        return read_text(path, *args, **kwargs)
+
+    async def scenario() -> None:
+        client = hub_client(install_hub(tmp_path))
+        await installed(client)
+        await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues well.\n"})
+
+        # The tests run as root, which reads past any file mode.
+        monkeypatch.setattr(Path, "read_text", denied)
+
+        assert await _notices_by_instance(client) == {"tickets-coder": [], "tickets-reviewer": []}
+
+    asyncio.run(scenario())
