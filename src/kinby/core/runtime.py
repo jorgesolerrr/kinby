@@ -22,6 +22,7 @@ from kinby.core.dispatcher import (
     turn_config,
 )
 from kinby.core.events import EventLog
+from kinby.core.pricing import instance_prices
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.instance import Instance
 from kinby.instance.permissions import load_permissions
@@ -105,6 +106,7 @@ async def boot_instance(
         event_log=event_log,
         turns=ScheduledTurnConfig(turns, SchedulerConfig(instance, clock)),
         permissions=partial(load_permissions, instance),
+        prices=partial(instance_prices, instance),
         clock=clock,
         booted_package_config=booted_package_config,
     )

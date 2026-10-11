@@ -65,6 +65,7 @@ from kinby.contracts import (
 from kinby.core import Dispatcher, assemble_system_prompt, boot_instance, build_dispatcher
 from kinby.core.clock import utc_now, utc_today
 from kinby.core.contract_server import ContractServer
+from kinby.core.pricing import instance_prices
 from kinby.core.receiver import Receiver
 from kinby.core.runtime_lock import InstanceBusyError, runtime_lock
 from kinby.instance import (
@@ -239,7 +240,7 @@ def _contract_client(instance: Instance, clock: Callable[[], datetime]) -> Contr
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
         permissions=partial(load_permissions, instance),
-        price_overrides=instance.manifest.prices,
+        prices=partial(instance_prices, instance),
         clock=clock,
     )
     return _contract_client_for(dispatcher)
