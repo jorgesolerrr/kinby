@@ -16,8 +16,8 @@ from kinby.core.snapshots import SnapshotError, SnapshotRef, WorkspaceDiff
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
     ApprovalAnswer,
-    Emit,
     PreparedTurnRequest,
+    TurnContext,
     TurnOutcome,
     TurnPreparation,
 )
@@ -68,7 +68,7 @@ async def does_not_park(
     self: object,
     turn: PreparedTurnRequest,
     answer: ApprovalAnswer,
-    emit: Emit,
+    context: TurnContext,
 ) -> TurnOutcome:
     raise AssertionError("this runner does not park")
 

@@ -127,7 +127,7 @@ def test_a_removal_drains_the_instance_and_removes_only_its_container(tmp_path):
         ]
         assert control.forces == [False]
         assert runtime.stopped == [30]
-        assert runtime.removed == [(str(created.instance_id), False)]
+        assert runtime.removed == [str(created.instance_id)]
         assert memory.read_text(encoding="utf-8") == "remembered\n"
         assert instance_environment(hub, created.instance_id)["PROVIDER_TOKEN"] == _SENTINEL
         assert await listed(client) == []
@@ -172,7 +172,7 @@ def test_a_pending_removal_drain_escalates_to_a_force_stop_inside_the_same_opera
             "container",
             "remove",
         ]
-        assert runtime.removed == [(str(created.instance_id), False)]
+        assert runtime.removed == [str(created.instance_id)]
 
     asyncio.run(scenario())
 
@@ -650,7 +650,7 @@ def test_a_restoration_refuses_a_container_already_under_the_instance_s_name(tmp
         assert outcome.state is OperationState.FAILED
         assert f'container "{runtime_id}" already exists' in outcome.detail
         assert len(runtime.created) == 1
-        assert runtime.removed == [(runtime_id, False)]
+        assert runtime.removed == [runtime_id]
 
     asyncio.run(scenario())
 
@@ -710,12 +710,12 @@ class CrashingRemoval(FakeRuntime):
         self._after_remove = after_remove
         self.crashed = asyncio.Event()
 
-    async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
+    async def remove(self, instance_id: str) -> None:
         if self.crashed.is_set():
-            await super().remove(instance_id, delete_data=delete_data)
+            await super().remove(instance_id)
             return
         if self._after_remove:
-            await super().remove(instance_id, delete_data=delete_data)
+            await super().remove(instance_id)
         self.crashed.set()
         raise asyncio.CancelledError
 
@@ -898,7 +898,7 @@ def test_a_removal_interrupted_before_the_container_went_is_reported_and_repeata
         assert [summary.instance_id for summary in active] == [created.instance_id]
         assert runtime.started == []
         assert again.state is OperationState.SUCCEEDED
-        assert runtime.removed == [(str(created.instance_id), False)]
+        assert runtime.removed == [str(created.instance_id)]
 
     asyncio.run(scenario())
 
@@ -936,7 +936,7 @@ def test_a_removal_interrupted_after_the_container_went_is_recorded_not_repeated
         assert [summary.instance_id for summary in await listed(client, removed=True)] == [
             created.instance_id
         ]
-        assert runtime.removed == [(str(created.instance_id), False)]
+        assert runtime.removed == [str(created.instance_id)]
 
     asyncio.run(scenario())
 

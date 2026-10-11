@@ -60,7 +60,7 @@ from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.pricing import instance_prices, price_map
 from kinby.core.turn_metrics import TurnKey
-from kinby.core.turns import Emit, PreparedTurnRequest, TurnOutcome
+from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
 from kinby.instance import ModelPrice, init_instance, load_instance
 from tests.helpers import (
     cannot_restore,
@@ -74,10 +74,10 @@ from tests.test_scheduler import call
 
 
 class MetricsRunner:
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         for call_id in ("bash-1", "bash-2"):
-            await emit(ToolCall(call_id=call_id, name="bash", arguments={}, write=True))
-            await emit(
+            await context.emit(ToolCall(call_id=call_id, name="bash", arguments={}, write=True))
+            await context.emit(
                 ToolResult(
                     call_id=call_id,
                     name="bash",
@@ -86,8 +86,10 @@ class MetricsRunner:
                     duration_ms=5,
                 )
             )
-        await emit(ToolCall(call_id="search-1", name="memory_search", arguments={}, write=False))
-        await emit(
+        await context.emit(
+            ToolCall(call_id="search-1", name="memory_search", arguments={}, write=False)
+        )
+        await context.emit(
             ToolResult(
                 call_id="search-1",
                 name="memory_search",
@@ -96,8 +98,10 @@ class MetricsRunner:
                 duration_ms=2,
             )
         )
-        await emit(ToolCall(call_id="open-1", name="memory_open", arguments={}, write=False))
-        await emit(
+        await context.emit(
+            ToolCall(call_id="open-1", name="memory_open", arguments={}, write=False)
+        )
+        await context.emit(
             ToolResult(
                 call_id="open-1",
                 name="memory_open",
@@ -106,7 +110,7 @@ class MetricsRunner:
                 duration_ms=2,
             )
         )
-        await emit(
+        await context.emit(
             ApprovalRequested(
                 approval_id=uuid4(),
                 name="bash",
@@ -114,7 +118,7 @@ class MetricsRunner:
                 rule="ask",
             )
         )
-        await emit(
+        await context.emit(
             ToolGated(
                 call_id="deny-policy",
                 name="bash",
@@ -123,7 +127,7 @@ class MetricsRunner:
                 decided_by=GateDecider.POLICY,
             )
         )
-        await emit(
+        await context.emit(
             ToolGated(
                 call_id="deny-user",
                 name="remember",

@@ -264,21 +264,9 @@ class DockerRuntime:
         container = await self._container(instance_id)
         await asyncio.to_thread(container.stop, timeout=grace_seconds)
 
-    async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
-        """Remove the container. Its named volumes go only when the caller asks for the data."""
-        described = await self.describe(instance_id)
+    async def remove(self, instance_id: str) -> None:
         container = await self._container(instance_id)
         await asyncio.to_thread(container.remove, v=True)
-        if not delete_data or described is None:
-            return
-        for item in described.storage:
-            if item.kind is not StorageKind.VOLUME:
-                continue
-            try:
-                volume = await asyncio.to_thread(self._client.volumes.get, item.source)
-            except NotFound:
-                continue
-            await asyncio.to_thread(volume.remove)
 
     async def describe(self, instance_id: str) -> ContainerDescription | None:
         """Read one existing container: its image, the storage it mounts, and who manages it."""
@@ -357,36 +345,13 @@ class DockerRuntime:
         name = (container.name or instance_id).lstrip("/")
         return f"http://{name}:{port}"
 
-    async def logs(
-        self,
-        instance_id: str,
-        *,
-        tail: int | None = None,
-        follow: bool = False,
-    ) -> AsyncIterator[bytes]:
+    async def logs(self, instance_id: str, *, tail: int | None = None) -> AsyncIterator[bytes]:
         container = await self._container(instance_id)
         selected_tail: int | str = tail if tail is not None else "all"
         output = await asyncio.to_thread(
-            container.logs,
-            stdout=True,
-            stderr=True,
-            stream=follow,
-            follow=follow,
-            tail=selected_tail,
+            container.logs, stdout=True, stderr=True, tail=selected_tail
         )
-        if not follow:
-            yield cast(bytes, output)
-            return
-        iterator = cast(Iterator[bytes], output)
-        while (chunk := await asyncio.to_thread(_next_or_end, iterator)) is not _END:
-            yield cast(bytes, chunk)
-
-    async def exec(self, instance_id: str, command: Sequence[str]) -> AsyncIterator[bytes]:
-        container = await self._container(instance_id)
-        result = await asyncio.to_thread(container.exec_run, list(command), stream=True)
-        iterator = cast(Iterator[bytes], result.output)
-        while (chunk := await asyncio.to_thread(_next_or_end, iterator)) is not _END:
-            yield cast(bytes, chunk)
+        yield cast(bytes, output)
 
     async def list(self) -> Sequence[str]:
         containers = await asyncio.to_thread(

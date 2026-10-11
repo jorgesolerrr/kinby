@@ -355,9 +355,7 @@ def test_removing_a_factory_removes_each_of_its_instances_and_no_other(tmp_path)
             assert (outcome.kind, outcome.state) == (OperationKind.REMOVE, OperationState.SUCCEEDED)
         assert await listed(client) == {outside.instance_id}
         assert await listed(client, removed=True) == ids(accepted.instances)
-        assert {runtime_id for runtime_id, _ in runtime.removed} == {
-            str(instance_id) for instance_id in ids(accepted.instances)
-        }
+        assert set(runtime.removed) == {str(instance_id) for instance_id in ids(accepted.instances)}
 
     asyncio.run(scenario())
 

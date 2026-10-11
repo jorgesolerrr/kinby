@@ -37,8 +37,8 @@ from kinby.core.dispatcher import AcceptedResult, Dispatcher, TurnConfig, build_
 from kinby.core.events import EventLog
 from kinby.core.snapshots import SnapshotError, SnapshotRef, SnapshotStore, WorkspaceDiff
 from kinby.core.turns import (
-    Emit,
     PreparedTurnRequest,
+    TurnContext,
     TurnOutcome,
     TurnResult,
     TurnRunner,
@@ -111,11 +111,11 @@ class ParksTheSecondTurnRunner:
         self._parking = ParkingRunner()
         self.closed = False
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnResult:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnResult:
         if not self.closed:
             self.closed = True
             return TurnOutcome(input_tokens=4, output_tokens=2)
-        return await self._parking.run(turn, emit)
+        return await self._parking.run(turn, context)
 
     resume = does_not_park
     restore = cannot_restore
@@ -555,7 +555,7 @@ class StubbornRunner:
         self.release = asyncio.Event()
         self.finished = asyncio.Event()
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         self.started.set()
         try:
             await asyncio.Event().wait()

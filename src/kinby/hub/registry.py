@@ -406,13 +406,6 @@ class HubRegistry:
                 (token_hash,),
             )
 
-    def open_session(self, token_hash: str) -> None:
-        with self._connect() as connection:
-            connection.execute(
-                "INSERT OR REPLACE INTO sessions (token_hash) VALUES (?)",
-                (token_hash,),
-            )
-
     def open_session_if_current(self, token_hash: str, session_hash: str) -> bool:
         """Insert the session only if this token hash is still the stored one."""
         with self._connect() as connection:

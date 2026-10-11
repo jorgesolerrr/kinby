@@ -43,9 +43,9 @@ from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import (
     ApprovalAnswer,
-    Emit,
     ParkedTurn,
     PreparedTurnRequest,
+    TurnContext,
     TurnOutcome,
     TurnPreparation,
 )
@@ -81,10 +81,10 @@ def _daily_budget_preparation(
 
 
 class ScriptedRunner:
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         assert turn.message == "Hello"
-        await emit(MessageDelta(text="Hi"))
-        await emit(MessageDelta(text=" there"))
+        await context.emit(MessageDelta(text="Hi"))
+        await context.emit(MessageDelta(text=" there"))
         return TurnOutcome(input_tokens=4, output_tokens=2)
 
     resume = does_not_park
@@ -92,8 +92,8 @@ class ScriptedRunner:
 
 
 class NoWorkAfterModelCallRunner:
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
-        await emit(
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
+        await context.emit(
             ModelCompleted(
                 model=turn.model,
                 input_tokens=4,
@@ -116,7 +116,7 @@ class WaitingRunner:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         self.started.set()
         await self.release.wait()
         return TurnOutcome()
@@ -129,7 +129,7 @@ class ModeRecordingRunner:
     def __init__(self) -> None:
         self.modes: list[PermissionMode] = []
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         self.modes.append(turn.permission_mode)
         return TurnOutcome()
 
@@ -138,7 +138,7 @@ class ModeRecordingRunner:
 
 
 class FailingRunner:
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         raise RuntimeError("provider unavailable")
 
     resume = does_not_park
@@ -159,9 +159,9 @@ class ParkingRunner:
             return self.parked
         return None
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> ParkedTurn:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> ParkedTurn:
         self.parked = turn
-        await emit(
+        await context.emit(
             ApprovalRequested(
                 approval_id=_APPROVAL_ID,
                 name="continue_turn",
@@ -175,11 +175,11 @@ class ParkingRunner:
         self,
         turn: PreparedTurnRequest,
         answer: ApprovalAnswer,
-        emit: Emit,
+        context: TurnContext,
     ) -> TurnOutcome:
         assert answer == ApprovalAnswer(ApprovalDecision.APPROVE)
         self.resumed_modes.append(turn.permission_mode)
-        await emit(MessageDelta(text="Approved"))
+        await context.emit(MessageDelta(text="Approved"))
         return TurnOutcome(input_tokens=3, output_tokens=1)
 
 
@@ -201,22 +201,22 @@ class PausingRestoreRunner(ParkingRunner):
         self,
         turn: PreparedTurnRequest,
         answer: ApprovalAnswer,
-        emit: Emit,
+        context: TurnContext,
     ) -> TurnOutcome:
         self.resume_calls += 1
-        return await super().resume(turn, answer, emit)
+        return await super().resume(turn, answer, context)
 
 
 class CancellationSuppressingRunner:
     def __init__(self) -> None:
         self.started = asyncio.Event()
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
-        await emit(MessageDelta(text="Before interrupt"))
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
+        await context.emit(MessageDelta(text="Before interrupt"))
         self.started.set()
         with suppress(asyncio.CancelledError):
             await asyncio.Event().wait()
-        await emit(MessageDelta(text="After interrupt"))
+        await context.emit(MessageDelta(text="After interrupt"))
         return TurnOutcome()
 
     resume = does_not_park

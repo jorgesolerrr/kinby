@@ -84,11 +84,6 @@ class HubAccess:
             return session
         return None
 
-    def open_session(self) -> SessionId:
-        session = SessionId(token_urlsafe(_TOKEN_BYTES))
-        self._registry.open_session(_hashed(session))
-        return session
-
     def session_open(self, session: SessionId) -> bool:
         return self._registry.session_open(_hashed(session))
 

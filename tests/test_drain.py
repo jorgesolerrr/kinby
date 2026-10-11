@@ -53,9 +53,9 @@ from kinby.core.scheduler import SchedulerConfig
 from kinby.core.snapshots import SnapshotRef, SnapshotStore
 from kinby.core.turns import (
     ApprovalAnswer,
-    Emit,
     ParkedTurn,
     PreparedTurnRequest,
+    TurnContext,
     TurnOutcome,
     TurnRunner,
 )
@@ -89,10 +89,10 @@ class WaitingRunner:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
         self.started.set()
         await self.release.wait()
-        await emit(MessageDelta(text="Finished"))
+        await context.emit(MessageDelta(text="Finished"))
         return TurnOutcome(input_tokens=1, output_tokens=1)
 
 
@@ -105,9 +105,9 @@ class ParkingRunner:
     async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None:
         return self.parked
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> ParkedTurn:
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> ParkedTurn:
         self.parked = turn
-        await emit(
+        await context.emit(
             ApprovalRequested(
                 approval_id=_APPROVAL_ID,
                 name="write",
@@ -121,9 +121,9 @@ class ParkingRunner:
         self,
         turn: PreparedTurnRequest,
         answer: ApprovalAnswer,
-        emit: Emit,
+        context: TurnContext,
     ) -> TurnOutcome:
-        await emit(MessageDelta(text="Approved"))
+        await context.emit(MessageDelta(text="Approved"))
         return TurnOutcome(input_tokens=1, output_tokens=1)
 
 

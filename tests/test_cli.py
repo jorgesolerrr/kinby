@@ -159,7 +159,8 @@ def test_hub_token_rotate_replaces_the_token_and_ends_sessions(tmp_path, capsys)
     access = HubAccess(HubRegistry(directory))
     first = access.issue()
     assert first is not None
-    session = access.open_session()
+    session = access.login(first)
+    assert session is not None
 
     exit_code = main(["hub", str(directory), "token", "rotate"])
 

@@ -410,10 +410,10 @@ class HeldRemoval(FakeRuntime):
         self.removing = asyncio.Event()
         self.released = asyncio.Event()
 
-    async def remove(self, instance_id: str, *, delete_data: bool = False) -> None:
+    async def remove(self, instance_id: str) -> None:
         self.removing.set()
         await self.released.wait()
-        await super().remove(instance_id, delete_data=delete_data)
+        await super().remove(instance_id)
 
 
 def test_deleting_an_instance_is_refused_while_one_of_its_logins_runs(tmp_path):

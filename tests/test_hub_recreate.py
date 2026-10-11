@@ -84,7 +84,7 @@ def test_a_recreation_applies_replaced_secrets_through_the_drain_and_stop_path(t
         assert runtime.created[1].storage == runtime.created[0].storage
         # The preparation and the creation built HEAD. Nothing since built another image.
         assert images.revisions == ["HEAD", "HEAD"]
-        assert runtime.removed == [(str(created.instance_id), False)]
+        assert runtime.removed == [str(created.instance_id)]
         assert runtime.started == [str(created.instance_id)] * 2
         assert _SENTINEL not in outcome.model_dump_json()
 
@@ -197,7 +197,7 @@ def test_a_stopped_instance_is_recreated_stopped(tmp_path):
         assert outcome.state is OperationState.SUCCEEDED
         assert [step.name for step in outcome.steps] == ["validate", "remove", "create"]
         assert runtime.started == []
-        assert runtime.removed == [(str(created.instance_id), False)]
+        assert runtime.removed == [str(created.instance_id)]
 
     asyncio.run(scenario())
 
@@ -227,7 +227,7 @@ def test_a_recreation_keeps_the_storage_the_memory_and_the_stored_secrets(tmp_pa
         assert after.instances == before.instances
         assert memory.read_text(encoding="utf-8") == "remembered\n"
         assert instance_environment(hub, created.instance_id)["PROVIDER_TOKEN"] == _SENTINEL
-        assert runtime.removed == [(str(created.instance_id), False)]
+        assert runtime.removed == [str(created.instance_id)]
 
     asyncio.run(scenario())
 

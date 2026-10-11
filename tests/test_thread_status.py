@@ -15,7 +15,7 @@ from kinby.contracts import (
     ThreadSummary,
 )
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
-from kinby.core.turns import Emit, ParkedTurn, PreparedTurnRequest, TurnOutcome
+from kinby.core.turns import ParkedTurn, PreparedTurnRequest, TurnContext, TurnOutcome
 from kinby.instance.permissions import GatePolicy
 from tests.helpers import (
     cannot_restore,
@@ -33,13 +33,15 @@ class ScriptedRunner:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def run(self, turn: PreparedTurnRequest, emit: Emit) -> TurnOutcome | ParkedTurn:
+    async def run(
+        self, turn: PreparedTurnRequest, context: TurnContext
+    ) -> TurnOutcome | ParkedTurn:
         match turn.message:
             case "hold":
                 self.started.set()
                 await self.release.wait()
             case "park":
-                await emit(
+                await context.emit(
                     ApprovalRequested(
                         approval_id=uuid4(), name="write_file", arguments={}, rule="scripted"
                     )
