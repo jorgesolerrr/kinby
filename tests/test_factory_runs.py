@@ -1258,6 +1258,44 @@ def test_the_hub_sends_a_client_step_its_prompt_timeout_model_and_the_session_it
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("answered", ["claude-1", "claude-2"], ids=["same", "new"])
+def test_a_client_step_resumes_the_newest_session_of_its_step_or_a_step_resuming_it(
+    tmp_path, answered
+):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, session="claude-1"),
+        StepResult(ending=StepEnding.CLEAN, session=answered),
+        StepResult(ending=StepEnding.CLEAN, session=answered),
+    ]
+    runtime = FakeRuntime()
+    answer = """\
+  - id: answer
+    kind: client
+    in: coder
+    client: claude
+    prompt: prompts/fix.md
+    resume: implement
+    hook: record_branch
+"""
+    factory = CLIENT.replace("  - id: fix\n", answer + "  - id: fix\n")
+    hub = factory_hub(tmp_path / "hub", control, runtime, CLIENT_FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [
+            (command.origin.step, command.step.resume)
+            for _, command in control.steps
+            if isinstance(command.step, ClientStepRun)
+        ] == [("implement", None), ("answer", "claude-1"), ("fix", answered)]
+
+    asyncio.run(scenario())
+
+
 def test_a_client_step_whose_resumed_step_left_no_session_fails_that_step(tmp_path):
     control = FakeControl()
     control.step_results = [StepResult(ending=StepEnding.CLEAN)] * 2

@@ -56,7 +56,8 @@ class CodingRun:
     """One run of a coding client, however it ended."""
 
     ending: StepEnding
-    #: What the client said last, then why the run did not end clean.
+    #: What the client said last, then why the run did not end clean and whether the session it
+    #: resumed was lost.
     summary: str
     #: The session the run went on in. None when the stream does not name it.
     session: CodingSessionId | None
@@ -70,6 +71,7 @@ async def run_coding_client(
     prompt: str,
     workspace: Path,
     *,
+    state_dir: Path,
     resume: CodingSessionId | None,
     timeout_seconds: int,
     model: CodingModel | None,
@@ -77,7 +79,9 @@ async def run_coding_client(
 ) -> CodingRun:
     """Run *client* in *workspace* with *prompt* on its input, continuing *resume* if given.
 
-    A *model* or *effort* of None leaves the client's default.
+    Claude keeps its sessions in *state_dir*, which outlives the container. When Claude no
+    longer has *resume*, the prompt runs once more in a new session, and that run is the one
+    returned. A *model* or *effort* of None leaves the client's default.
     """
     # Files rather than pipes: a task the client leaves running can hold a pipe open, and what
     # a killed client wrote survives it.
@@ -88,7 +92,7 @@ async def run_coding_client(
             process = await asyncio.create_subprocess_exec(
                 *_command(client, workspace, resume, model, effort),
                 cwd=workspace,
-                env=_environment(client),
+                env=_environment(client, state_dir),
                 stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
@@ -126,6 +130,24 @@ async def run_coding_client(
     if process.returncode is not None and process.returncode < 0:
         return _ended(
             ran, StepEnding.FAILED, f"{client} was killed by signal {-process.returncode}."
+        )
+    if (
+        client is CodingClient.CLAUDE
+        and resume is not None
+        and f"No conversation found with session ID: {resume}" in errors
+    ):
+        again = await run_coding_client(
+            client,
+            prompt,
+            workspace,
+            state_dir=state_dir,
+            resume=None,
+            timeout_seconds=timeout_seconds,
+            model=model,
+            effort=effort,
+        )
+        return _ended(
+            again, again.ending, f"Session {resume} was lost, so {client} ran in a new one."
         )
     tail = errors.strip()[-_ERROR_TAIL:]
     reason = f"{client} exited with code {process.returncode}.\n{tail}".strip()
@@ -187,9 +209,14 @@ def _command(
             return ("codex", "exec", "resume", *options, resume, "-")
 
 
-def _environment(client: CodingClient) -> Mapping[str, str]:
+def _environment(client: CodingClient, state_dir: Path) -> Mapping[str, str]:
     """A client runs on its subscription login, never on an API key the instance holds."""
-    return {name: value for name, value in os.environ.items() if name not in _API_KEYS[client]}
+    environment = {
+        name: value for name, value in os.environ.items() if name not in _API_KEYS[client]
+    }
+    if client is CodingClient.CLAUDE:
+        environment["CLAUDE_CONFIG_DIR"] = str(state_dir / "claude")
+    return environment
 
 
 def _ended(ran: CodingRun, ending: StepEnding, reason: str) -> CodingRun:

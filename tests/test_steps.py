@@ -42,7 +42,7 @@ from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
 from kinby.core.events import EventLog
 from kinby.core.runtime import InstanceRuntime
 from kinby.hub import ControlEndpoint, HttpInstanceControl
-from kinby.instance.layout import PERMISSIONS_NAME
+from kinby.instance.layout import PERMISSIONS_NAME, STATE_DIR
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_drain import WaitingRunner, booted, call, opened_thread
 from tests.test_gate import ScriptedModel
@@ -708,7 +708,8 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
         "import json, os, sys, time\n"
         f"with open({str(calls)!r}, 'a') as calls:\n"
         "    json.dump({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'stdin': sys.stdin.read(),\n"
-        f"               'api_keys': [name for name in {API_KEYS!r} if name in os.environ]}},\n"
+        f"               'api_keys': [name for name in {API_KEYS!r} if name in os.environ],\n"
+        "               'config_dir': os.environ.get('CLAUDE_CONFIG_DIR')},\n"
         "              calls)\n"
         "    calls.write('\\n')\n"
         f"{then}\n"
@@ -717,6 +718,7 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
     monkeypatch.setenv("PATH", f"{executable.parent}{os.pathsep}{os.environ['PATH']}")
     for variable in API_KEYS:
         monkeypatch.setenv(variable, "sk-test")
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     return calls
 
 
@@ -734,6 +736,8 @@ class ClientCall:
     stdin: str
     #: The API keys the client saw.
     api_keys: list[str]
+    #: Where Claude keeps its sessions, when the client was told.
+    config_dir: str | None
 
 
 def recorded_calls(calls: Path) -> list[ClientCall]:
@@ -759,7 +763,7 @@ async def run_client_step(
 
 
 @pytest.mark.parametrize(
-    ("client", "stream", "session", "arguments", "kept"),
+    ("client", "stream", "session", "arguments", "kept", "config_dir"),
     [
         (
             "claude",
@@ -767,6 +771,7 @@ async def run_client_step(
             "claude-1",
             ["-p", "--permission-mode", "acceptEdits"],
             ["OPENAI_API_KEY", "CODEX_API_KEY"],
+            f"{STATE_DIR}/claude",
         ),
         (
             "codex",
@@ -774,11 +779,12 @@ async def run_client_step(
             "codex-1",
             ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox"],
             ["ANTHROPIC_API_KEY"],
+            None,
         ),
     ],
 )
 def test_a_client_step_runs_the_client_in_the_workspace_with_the_prompt_and_keeps_its_session(
-    tmp_path, monkeypatch, client, stream, session, arguments, kept
+    tmp_path, monkeypatch, client, stream, session, arguments, kept, config_dir
 ):
     runtime, workspace = step_instance(tmp_path)
     calls = stub_client(tmp_path, monkeypatch, client, streaming(stream))
@@ -795,6 +801,7 @@ def test_a_client_step_runs_the_client_in_the_workspace_with_the_prompt_and_keep
         assert called.stdin.startswith("Implement the issue.\n")
         assert '{"work_item": {"issue": 7}, "results": {"branch": "agent/7"}}' in called.stdin
         assert called.api_keys == kept
+        assert called.config_dir == (config_dir and str(tmp_path / config_dir))
 
     asyncio.run(scenario())
 
@@ -871,6 +878,54 @@ def test_a_client_step_that_resumes_continues_the_earlier_steps_session(
         assert (result.ending, result.session) == (StepEnding.CLEAN, session)
         [called] = recorded_calls(calls)
         assert [argument for argument in called.argv if argument in arguments] == arguments
+
+    asyncio.run(scenario())
+
+
+def resume_failing(error: str) -> str:
+    """The stub's body that exits 1 with *error* when resuming, and otherwise implements."""
+    return (
+        "if '--resume' in sys.argv:\n"
+        f"    sys.stderr.write({error!r})\n"
+        "    sys.exit(1)\n"
+        f"{streaming(CLAUDE_STREAM)}"
+    )
+
+
+def test_a_claude_step_whose_session_was_lost_runs_once_more_in_a_new_session(
+    tmp_path, monkeypatch
+):
+    runtime, _ = step_instance(tmp_path)
+    error = "No conversation found with session ID: claude-0\n"
+    calls = stub_client(tmp_path, monkeypatch, "claude", resume_failing(error))
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, "claude", resume="claude-0")
+
+        assert result == StepResult(
+            ending=StepEnding.CLEAN,
+            summary="Implemented issue 7.\nSession claude-0 was lost, so claude ran in a new one.",
+            session="claude-1",
+        )
+        resumed, started = recorded_calls(calls)
+        assert resumed.argv[-2:] == ["--resume", "claude-0"]
+        assert "--resume" not in started.argv
+        assert started.stdin == resumed.stdin
+
+    asyncio.run(scenario())
+
+
+def test_a_resumed_claude_step_that_fails_otherwise_runs_only_once(tmp_path, monkeypatch):
+    runtime, _ = step_instance(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, "claude", resume_failing("Credit balance low\n"))
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, "claude", resume="claude-0")
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert result.summary == "claude exited with code 1.\nCredit balance low"
+        assert len(recorded_calls(calls)) == 1
 
     asyncio.run(scenario())
 
