@@ -1395,10 +1395,11 @@ class HubRegistry:
         return [artifact for key in keys if (artifact := self.image_artifact(key)) is not None]
 
     def unreferenced_images(self) -> list[str]:
-        """Recorded images no instance record names, removed ones included, nor any candidate.
+        """Recorded images no instance that is not deleted names, as its image or candidate.
 
         A removed instance keeps its image for a restoration (ADR 0053), and an instance
-        whose update failed still names its previous image (ADR 0035).
+        whose update failed still names its previous image (ADR 0035). Deletion leaves
+        the candidate row a failed update staged.
         """
         with self._connect() as connection:
             rows = connection.execute(
@@ -1407,11 +1408,14 @@ class HubRegistry:
                 WHERE image_id NOT IN (
                     SELECT image_id FROM instances
                     WHERE intended_state != ? AND image_id IS NOT NULL
+                    UNION
+                    SELECT update_candidates.image_id FROM update_candidates
+                    JOIN instances ON instances.id = update_candidates.instance_id
+                    WHERE instances.intended_state != ?
                 )
-                AND image_id NOT IN (SELECT image_id FROM update_candidates)
                 GROUP BY image_id ORDER BY MIN(rowid)
                 """,
-                (IntendedState.DELETED.value,),
+                (IntendedState.DELETED.value, IntendedState.DELETED.value),
             ).fetchall()
         return [row[0] for row in rows]
 

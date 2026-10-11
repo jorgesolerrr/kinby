@@ -126,6 +126,35 @@ def test_a_removed_instance_keeps_its_image_until_it_is_deleted(tmp_path):
     asyncio.run(scenario())
 
 
+def test_deleting_an_instance_frees_the_candidate_its_failed_update_staged(tmp_path):
+    async def scenario() -> None:
+        backend = FakeImageBackend()
+        runtime = FakeRuntime()
+        hub = _hub(tmp_path, backend, runtime)
+        client = hub_client(hub)
+        created = await created_instance(client)
+        _commit(tmp_path, "candidate")
+        runtime.create_failure = RuntimeError("The replacement could not be created.")
+        update = await client.call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(instance_id=created.instance_id, revision="HEAD"),
+        )
+        assert isinstance(update, LifecycleOperationResult)
+        assert (await finished_operation(client, update)).state is OperationState.FAILED
+        assert hub.registry.candidate_image(created.instance_id) == "sha256:image-2"
+        runtime.create_failure = None
+
+        assert (await removed(client, created)).state is OperationState.SUCCEEDED
+        assert (await deleted(client, await previewed(client, created))).state is (
+            OperationState.SUCCEEDED
+        )
+        await _settled(hub)
+
+        assert sorted(backend.removed) == ["sha256:image-1", "sha256:image-2"]
+
+    asyncio.run(scenario())
+
+
 def test_recovery_keeps_a_staged_candidate_and_removes_an_unused_prepared_image(tmp_path):
     async def scenario() -> None:
         backend = FakeImageBackend()
