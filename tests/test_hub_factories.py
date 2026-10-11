@@ -828,3 +828,65 @@ def test_get_names_a_factory_file_that_is_not_text(tmp_path):
         assert refused.fields == {"files": '"prompts/logo.png" is not UTF-8 text.'}
 
     asyncio.run(scenario())
+
+
+def test_an_edit_keeps_an_empty_instance_template(tmp_path):
+    hub = factory_hub(tmp_path)
+    folder = tmp_path / "hub" / "factories" / "tickets"
+    write_factory(
+        folder,
+        FILES
+        | {
+            "factory.yaml": FACTORY.replace(
+                "  coder: { image: coder }", "  coder: { image: coder }\n  helper: {}"
+            )
+        },
+    )
+    (folder / "instances" / "helper").mkdir()
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        before = await read(client)
+        edited = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(
+                name="tickets", files={"prompts/review.md": "Review it.\n"}, hash=before.hash
+            ),
+        )
+
+        assert isinstance(edited, FactoryResult)
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_keeps_an_instance_template_that_links_to_a_folder(tmp_path):
+    hub = factory_hub(tmp_path)
+    folder = tmp_path / "hub" / "factories" / "tickets"
+    write_factory(
+        folder, {name: content for name, content in FILES.items() if "instances/" not in name}
+    )
+    template = tmp_path / "coder"
+    write_factory(
+        template,
+        {
+            name.removeprefix("instances/coder/"): content
+            for name, content in FILES.items()
+            if name.startswith("instances/coder/")
+        },
+    )
+    (folder / "instances").mkdir()
+    (folder / "instances" / "coder").symlink_to(template, target_is_directory=True)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        before = await read(client)
+        edited = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(
+                name="tickets", files={"prompts/review.md": "Review it.\n"}, hash=before.hash
+            ),
+        )
+
+        assert isinstance(edited, FactoryResult)
+
+    asyncio.run(scenario())

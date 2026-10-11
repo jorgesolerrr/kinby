@@ -135,19 +135,17 @@ class FactoryStore:
 
     def _edit(self, command: FactoryEditCommand) -> None:
         current = self._folders().get(command.name)
-        files = {} if current is None else _factory_files(current[0])
-        read = None if current is None else files_hash(files)
+        read = None if current is None else files_hash(_factory_files(current[0]))
         if read != command.hash:
             raise StaleWrite(f'Factory "{command.name}" changed since it was read. Read it again.')
         self._directory.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(prefix=".edit-", dir=self._directory) as temporary:
             # Staged under the factory's own name, since the check matches it to the folder.
             staged = Path(temporary) / command.name
-            staged.mkdir()
-            for relative, path in files.items():
-                target = staged / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, target)
+            if current is None:
+                staged.mkdir()
+            else:
+                shutil.copytree(current[0], staged, ignore=shutil.ignore_patterns("__pycache__"))
             for path, content in command.files.items():
                 target = staged / path
                 target.parent.mkdir(parents=True, exist_ok=True)
