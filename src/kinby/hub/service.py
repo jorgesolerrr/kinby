@@ -1693,7 +1693,8 @@ class Hub:
                 item
                 for item in owned
                 if item.kind is StorageKind.BIND
-                and self._visible_directory(record, item) == directory
+                and (seen := self._visible_directory(record, item)) is not None
+                and seen.is_relative_to(directory)
             ]
             self._record(operation_id, f"directory {directory}", f"Deleting {directory}.")
             await asyncio.to_thread(_delete_directory, directory)

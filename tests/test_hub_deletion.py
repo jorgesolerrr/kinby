@@ -672,6 +672,55 @@ def test_a_writable_bind_inside_the_instance_directory_is_a_target_not_retained(
     asyncio.run(scenario())
 
 
+def test_a_bind_inside_a_deleted_instance_directory_leaves_the_inventory_with_it(
+    tmp_path,
+    monkeypatch,
+):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = Hub(
+            tmp_path / "hub",
+            runtime=runtime,
+            images=FakeImages(),
+            control=FakeControl(),
+            docker_host_directory=Path("/srv/kinby"),
+        )
+        client = hub_client(hub)
+        storage = (
+            *coder_storage("/srv/kinby/instances/coder"),
+            writable_bind("/srv/kinby/instances/coder/data"),
+        )
+        directory = existing_coder(runtime, tmp_path / "view" / "coder", storage=storage)
+        (directory / "data").mkdir()
+        unrelated = hub.instances_directory / "coder" / "data"
+        unrelated.mkdir(parents=True)
+        (unrelated / "notes.md").write_text("not this instance's\n", encoding="utf-8")
+        instance_id = await adopted(client, directory, CODER_CONTAINER)
+        instance = LifecycleOperationResult(operation_id=uuid4(), instance_id=instance_id)
+        await removed(client, instance)
+        first = await previewed(client, instance)
+        delete_tree = shutil.rmtree
+
+        def stopping_at_the_bind(path: Path) -> None:
+            if path == (directory / "data").resolve():
+                raise RuntimeError("the hub stopped")
+            delete_tree(path)
+
+        monkeypatch.setattr(shutil, "rmtree", stopping_at_the_bind)
+
+        stopped = await deleted(client, first)
+        second = await previewed(client, instance)
+
+        assert stopped.state is OperationState.FAILED
+        assert not directory.exists()
+        assert second.directories == []
+        assert second.retained == []
+        assert second.volumes == first.volumes
+        assert (unrelated / "notes.md").read_text(encoding="utf-8") == "not this instance's\n"
+
+    asyncio.run(scenario())
+
+
 def test_a_container_under_the_removed_instance_s_name_refuses_the_deletion(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
