@@ -169,6 +169,7 @@ from kinby.hub.setup import (
     manifest_settings,
     setup_errors,
 )
+from kinby.hub.template_sync import TemplateSync, template_sync
 from kinby.hub.usage import Uncounted, summed_usage
 from kinby.instance import (
     Instance,
@@ -1317,7 +1318,8 @@ class Hub:
         )
 
     async def update(self, command: InstanceUpdateCommand) -> LifecycleOperationResult:
-        """Move this instance onto the image a selected revision prepares."""
+        """Move this instance onto the image a selected revision prepares, and a factory's
+        instance onto the files its template supplies now."""
         record = self._claimed(self._active_instance(command.instance_id))
         selection = _selection(record, command.revision)
         operation_id = uuid4()
@@ -1369,6 +1371,7 @@ class Hub:
         """
         revision = selection.revision
         self._revalidate(operation_id, record)
+        sync = await self._template_sync(record)
         self._record(operation_id, "image", f"Preparing the image {revision} selects.")
         artifact = (await self._images.build(selection)).artifact
         self._record(
@@ -1379,6 +1382,15 @@ class Hub:
         )
         self.registry.stage_candidate(record.instance_id, revision, artifact)
         await self._remove_container(record, PendingStop(operation_id, asyncio.Event()))
+        if sync is not None:
+            self._record(
+                operation_id,
+                "template",
+                f'Bringing the files of template "{sync.template.name}" up to the factory\'s.',
+            )
+            sync.apply(record.path)
+            self.registry.record_template(record.instance_id, sync.template.setup, sync.baseline)
+            self.registry.succeed_step(operation_id, sync.detail)
         await self._create_container(operation_id, record, artifact.image_id)
         self.registry.record_selection(record.instance_id, revision, artifact)
         running = record.intended_state is IntendedState.RUNNING
@@ -1390,6 +1402,21 @@ class Hub:
             )
             await self._observe_ready(record)
         return "Instance updated." if running else "Instance updated and left stopped."
+
+    async def _template_sync(self, record: ManagedInstance) -> TemplateSync | None:
+        """What an update does to the files a factory's instance took from its template."""
+        member = record.factory
+        if member is None:
+            return None
+        templates = {
+            template.name: template for template in await self.factories.templates(member.factory)
+        }
+        if member.name not in templates:
+            raise ValueError(
+                f'Factory "{member.factory}" no longer has template "{member.name}", '
+                "so nothing was changed."
+            )
+        return template_sync(templates[member.name], record.path, member.baseline)
 
     async def remove(self, command: InstanceRemoveCommand) -> LifecycleOperationResult:
         """Drain and remove the container. The data and the record stay for a restoration."""

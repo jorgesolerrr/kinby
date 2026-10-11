@@ -57,7 +57,8 @@ class FactoryMember:
     name: InstanceName
     #: The image recipe its template names. None is kinby's base image.
     recipe: RecipeName | None
-    #: Kept as installed, so a later edit of the factory leaves the instance's setup alone.
+    #: As the install or the last update stored it, so an edit of the factory reaches the
+    #: instance's setup only through an update.
     setup: DeclaredSetup
     #: The hash of each file the template supplied, by its path. None for an instance installed
     #: before the hub recorded them.
@@ -629,6 +630,16 @@ class HubRegistry:
                     (str(instance_id), login_id, LoginState.PENDING.value, changed_at)
                     for login_id in login_ids
                 ],
+            )
+
+    def record_template(
+        self, instance_id: UUID, setup: DeclaredSetup, baseline: dict[str, FileHash]
+    ) -> None:
+        """Store the setup and the baseline an update just synced the factory's instance to."""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE factory_members SET setup = ?, baseline = ? WHERE instance_id = ?",
+                (setup.model_dump_json(), json.dumps(baseline), str(instance_id)),
             )
 
     def login_states(self, instance_id: UUID) -> dict[str, LoginState]:
