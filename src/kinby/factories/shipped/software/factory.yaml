@@ -183,18 +183,20 @@ steps:
   # Reads the pull request. Merge-ready, it labels it merge-ready and asks the maintainer for a
   # review, and the run is done; it never merges. Merged by someone, the run is done too; closed
   # without a merge, it stops. Threads to answer start a fix round, at most 3 before the run
-  # needs a human. Anything else waits for the next wake.
+  # needs a human. With none, checks that failed on the head go back to fix as a check repair,
+  # at most twice. Anything else waits for the next wake.
   - id: assess
     kind: code
     in: coder
     call: assess_pull_request
     requires: [pr]
-    results: { feedback: str, pr: int, merge_ready: bool }
+    results: { feedback: str, failure: str, replies: str, pr: int, merge_ready: bool }
     outcomes:
       merge-ready: done
       merged: done
       closed: stop
       feedback: { back: answer, max: 3 }
+      checks-failed: { back: fix, max: 2 }
       waiting: { back: babysit, max: 30 }
 done_requires: [merge_ready]
 # Labels the issue ready-for-human with the summary of the step the run stopped at. The branch

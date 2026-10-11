@@ -14,6 +14,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from kinby.factories.file import FAILURE
 from kinby.plugins.hooks import HookResult
 from kinby.plugins.intake import hand_over
 from kinby.plugins.tools import ToolContext, tool
@@ -42,6 +43,10 @@ _COMMAND_TIMEOUT = 900
 _TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 #: The review apps whose feedback babysitting answers, whatever their association (ADR 0079).
 _TRUSTED_APPS = frozenset({"greptile-apps", "chatgpt-codex-connector"})
+#: The conclusions of a finished check run that leave a pull request merge-ready.
+_PASSED = frozenset({"success", "neutral", "skipped", "stale"})
+#: The conclusions of a failed check run that a coding session can repair.
+_REPAIRABLE = frozenset({"failure", "timed_out"})
 _REVIEW_THREADS = """
 query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
@@ -213,12 +218,13 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
     """Read the pull request after a wake, and say what babysitting does next.
 
     Merged, the run is done; closed without a merge, it stops. Merge-ready, once a trusted
-    reviewer reviewed its head with no thread left to answer and no check still running: it gets
-    the merge-ready label and a review request for the maintainer. A trusted review app's
-    successful check run on the head is a review of it. After a *quiet* wait, one no reviewer
-    reviewed is merge-ready too, and a comment says so. Threads only trusted authors wrote are
-    feedback for a fix round. Another author's thread needs a human. Anything else waits for the
-    next wake. Nothing here ever merges.
+    reviewer reviewed its head with no thread left to answer and no check still running or
+    failed: it gets the merge-ready label and a review request for the maintainer. A trusted
+    review app's successful check run on the head is a review of it, and its failed one is no
+    failed check. After a *quiet* wait, one no reviewer reviewed is merge-ready too, and a
+    comment says so. Threads only trusted authors wrote are feedback for a fix round. Another
+    author's thread needs a human. With no thread to answer, checks that failed or timed out go
+    to a check repair. Anything else waits for the next wake. Nothing here ever merges.
     """
     workspace = context.workspace
     pull = _api(workspace, f"repos/{{owner}}/{{repo}}/pulls/{pr}")
@@ -266,10 +272,24 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
         raise UntrustedFeedback(
             f"Review feedback from untrusted authors needs a human: {', '.join(sorted(untrusted))}."
         )
+    failed = [
+        check
+        for check in checks
+        if check["conclusion"] not in _PASSED and not _from_trusted_app(check)
+    ]
+    if repairable := [check for check in failed if check["conclusion"] in _REPAIRABLE]:
+        failure = "Checks failed on the pull request's head:" + "".join(
+            f"\n- {check['name']} ({check['conclusion']}): {check['html_url']}"
+            for check in repairable
+        )
+        # It answers no thread, so publish posts none of an earlier fix round's replies again.
+        repair = {FAILURE: failure, "pr": pr, "replies": "{}"}
+        return HookResult(values=repair, outcome="checks-failed", summary=failure)
+    if failed:
+        return HookResult(outcome="waiting")
     reviews = _pages(workspace, f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews")
     reviewed = any(
-        check["conclusion"] == "success" and (check["app"] or {}).get("slug") in _TRUSTED_APPS
-        for check in checks
+        check["conclusion"] == "success" and _from_trusted_app(check) for check in checks
     ) or any(
         review["commit_id"] == head
         and (user := review["user"] or {"login": "ghost", "type": "User"})["login"] != coder
@@ -432,6 +452,10 @@ def _review_comment(node: dict) -> ReviewComment:
     return ReviewComment(
         author=author["login"], body=node["body"], trusted=_trusted(node["authorAssociation"], app)
     )
+
+
+def _from_trusted_app(check: dict) -> bool:
+    return (check["app"] or {}).get("slug") in _TRUSTED_APPS
 
 
 def _trusted(association: str, app: str | None) -> bool:

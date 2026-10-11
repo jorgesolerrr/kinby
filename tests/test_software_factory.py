@@ -383,6 +383,79 @@ def test_a_check_repair_in_a_fix_round_keeps_its_replies_and_the_pull_request(tm
     asyncio.run(scenario())
 
 
+CI_FAILED = (
+    "Checks failed on the pull request's head:\n"
+    "- pytest (failure): https://github.com/owner/project/runs/pytest"
+)
+CHECKS_FAILED = StepResult(
+    ending=StepEnding.CLEAN,
+    summary=CI_FAILED,
+    outcome="checks-failed",
+    values={"failure": CI_FAILED, "pr": 42, "replies": "{}"},
+)
+REPAIRED = StepResult(ending=StepEnding.CLEAN, summary="Fixed the test.", session="claude-1")
+PUSHED = StepResult(ending=StepEnding.CLEAN, summary="Pushed agent/7-add-dark-mode.")
+#: A check repair sent back from babysitting: the failed checks, their repair, pushed.
+CHECK_REPAIR = [CHECKS_FAILED, REPAIRED, CHECKED, PUSHED]
+
+
+@pytest.mark.parametrize("rounds", [[], FIX_ROUND], ids=["first", "after-a-fix-round"])
+def test_a_check_that_failed_on_the_pull_request_goes_back_to_fix_and_pushes_the_repair(
+    tmp_path, rounds
+):
+    control = FakeControl()
+    control.step_results = [*CHECKED_CHANGE, OPENED, *rounds, *CHECK_REPAIR]
+    runtime = FakeRuntime()
+    hub = fresh_hub(tmp_path / "hub", control, runtime)
+    waits = 1 + bool(rounds)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        for times in range(1, waits + 1):
+            await babysitting(hub, run.run_id, times)
+            await woken(hub, runtime, coder, CHECKS_DONE, "check_suite")
+        waiting = await babysitting(hub, run.run_id, waits + 1)
+
+        assert [attempt.step for attempt in waiting.attempts][-5:] == [
+            "assess",
+            "fix",
+            "checks",
+            "publish",
+            "babysit",
+        ]
+        (_, fix), _, (_, publish) = control.steps[-3:]
+        assert fix.step == coding("fix", 30, resume="claude-1")
+        assert fix.results["failure"] == CI_FAILED
+        assert publish.step == CodeStepRun(call="publish_pull_request")
+        assert publish.results["pr"] == 42
+        assert json.loads(str(publish.results["replies"])) == {}
+
+    asyncio.run(scenario())
+
+
+def test_the_third_failed_check_on_the_pull_request_leaves_the_run_needs_human(tmp_path):
+    control = FakeControl()
+    control.step_results = [*CHECKED_CHANGE, OPENED, *CHECK_REPAIR * 2, CHECKS_FAILED]
+    runtime = FakeRuntime()
+    hub = fresh_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        for times in range(1, 4):
+            await babysitting(hub, run.run_id, times)
+            await woken(hub, runtime, coder, CHECKS_DONE, "check_suite")
+        stopped = await settled(hub, run.run_id)
+
+        assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "assess")
+        assert stopped.attempts[-1].summary == (
+            f'{CI_FAILED}\nStep "assess" sent the work back to "fix" 2 times, its max.'
+        )
+
+    asyncio.run(scenario())
+
+
 def test_the_run_finishes_only_when_the_pull_request_is_merge_ready(tmp_path):
     control = FakeControl()
     unrecorded = StepResult(ending=StepEnding.CLEAN, outcome="merge-ready")
@@ -1440,9 +1513,17 @@ def submitted(author: str, association: str, commit: str = "head2") -> dict[str,
     }
 
 
-def check_run(status: str, app: str = "github-actions", conclusion: str = "success") -> dict:
+def check_run(
+    status: str, app: str = "github-actions", conclusion: str = "success", name: str = "lint"
+) -> dict:
     """A check run as GitHub's REST API lists it."""
-    return {"status": status, "conclusion": conclusion, "app": {"slug": app}}
+    return {
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "html_url": f"https://github.com/owner/project/runs/{name}",
+        "app": {"slug": app},
+    }
 
 
 def answer_pull_request(
@@ -1450,13 +1531,13 @@ def answer_pull_request(
     *,
     pull: Mapping[str, object] = PULL,
     checks: Sequence[str] = ("completed",),
-    app_checks: Sequence[dict] = (),
+    runs: Sequence[dict] = (),
     threads: Sequence[dict[str, object]] = (),
     reviews: Sequence[dict[str, object]] = (),
 ) -> None:
-    """Answer what assess reads of pull request 42 as the coder: its check runs, review threads
-    and reviews."""
-    runs = [*(check_run(status) for status in checks), *app_checks]
+    """Answer what assess reads of pull request 42 as the coder: its check runs, one successful
+    for each of *checks* by its status and then *runs*, its review threads and its reviews."""
+    runs = [*(check_run(status) for status in checks), *runs]
     github.answer("repos/{owner}/{repo}/pulls/42/reviews", output=[list(reviews)])
     github.answer("repos/{owner}/{repo}/pulls/42", output=pull)
     github.answer(
@@ -1567,7 +1648,7 @@ def test_assess_takes_a_trusted_review_apps_successful_check_run_on_the_head_as_
 ):
     instance = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_pull_request(github, app_checks=[check_run("completed", app, conclusion)])
+    answer_pull_request(github, runs=[check_run("completed", app, conclusion)])
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
@@ -1606,6 +1687,96 @@ def test_assess_after_a_quiet_wait_stops_waiting_for_a_reviewer_once_no_check_ru
         [(*_, said)] = commented
         assert said.startswith("No reviewer answered on this head")
         assert len(labelled(github)) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("conclusion", "reviews", "quiet"),
+    [
+        ("failure", [submitted("owner", "OWNER")], False),
+        ("timed_out", [submitted("owner", "OWNER")], False),
+        ("failure", [], True),
+    ],
+    ids=["failed", "timed-out", "failed-after-a-quiet-wait"],
+)
+def test_assess_sends_a_check_that_failed_on_the_head_back_for_repair(
+    tmp_path, monkeypatch, conclusion, reviews, quiet
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(
+        github,
+        runs=[check_run("completed", conclusion=conclusion, name="pytest")],
+        reviews=reviews,
+    )
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher, quiet=quiet)
+        failure = (
+            "Checks failed on the pull request's head:\n"
+            f"- pytest ({conclusion}): https://github.com/owner/project/runs/pytest"
+        )
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.outcome == "checks-failed"
+        assert result.values == {"failure": failure, "pr": 42, "replies": "{}"}
+        assert result.summary == failure
+        assert [arguments for arguments in github.calls if arguments[0] == "pr"] == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("conclusion", "outcome"),
+    [
+        ("cancelled", "waiting"),
+        ("action_required", "waiting"),
+        ("startup_failure", "waiting"),
+        ("neutral", "merge-ready"),
+        ("skipped", "merge-ready"),
+        ("stale", "merge-ready"),
+    ],
+)
+def test_assess_waits_on_a_check_no_coding_session_can_repair_and_passes_one_that_did_not_fail(
+    tmp_path, monkeypatch, conclusion, outcome
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(
+        github,
+        runs=[check_run("completed", conclusion=conclusion)],
+        reviews=[submitted("owner", "OWNER")],
+    )
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher, quiet=True)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.outcome == outcome
+        assert len(labelled(github)) == (outcome == "merge-ready")
+
+    asyncio.run(scenario())
+
+
+def test_assess_answers_review_threads_before_it_repairs_a_failed_check(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(
+        github,
+        runs=[check_run("completed", conclusion="failure")],
+        threads=[review_thread("T1", ("owner", "OWNER"))],
+    )
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.outcome == "feedback"
+        assert [thread["id"] for thread in json.loads(str(result.values["feedback"]))] == ["T1"]
 
     asyncio.run(scenario())
 

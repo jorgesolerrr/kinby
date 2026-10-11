@@ -45,6 +45,8 @@ class HookResult:
     values: Mapping[ValueName, StepValue] = field(default_factory=dict)
     #: None takes the next step.
     outcome: str | None = None
+    #: A code step's summary. A hook's step keeps the summary it ended with.
+    summary: str = ""
 
 
 @dataclass(frozen=True)

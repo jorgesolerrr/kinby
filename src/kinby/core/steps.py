@@ -168,7 +168,10 @@ async def _run_code_step(
         returned = await tool.ainvoke_value(arguments, context)
         if isinstance(returned, HookResult):
             return StepResult(
-                ending=StepEnding.CLEAN, outcome=returned.outcome, values=dict(returned.values)
+                ending=StepEnding.CLEAN,
+                summary=returned.summary,
+                outcome=returned.outcome,
+                values=dict(returned.values),
             )
         if isinstance(returned, Mapping):
             return StepResult(ending=StepEnding.CLEAN, values=dict(returned))

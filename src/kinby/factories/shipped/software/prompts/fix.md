@@ -2,7 +2,7 @@ Work on the branch `results.branch`. If the workspace is on another branch, swit
 
 If the factory run's data holds no `results.failure` and .scratch/review.md does not exist, nothing failed: change nothing and stop.
 
-`results.failure` is a failed check: the command that failed and the tail of its output. Rerun that command for the full output, find the root cause, and fix it. .scratch/review.md, when it exists, is a review of your work on this branch: fix every hard finding, and apply each suggestion once.
+`results.failure` is what failed. It is either a command, with the tail of its output, or the checks that failed on the pull request, each with its link. Rerun a failed command for the full output. Read a failed check's logs with `gh`, such as `gh run view --log-failed`. Then find the root cause and fix it. .scratch/review.md, when it exists, is a review of your work on this branch: fix every hard finding, and apply each suggestion once.
 
 A good result:
 
