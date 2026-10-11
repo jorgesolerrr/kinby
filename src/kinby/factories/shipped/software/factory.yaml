@@ -95,7 +95,7 @@ steps:
   # A fix round: the coding client answers the review threads trusted authors left on the pull
   # request, commits its fixes, and rewrites the title and body where the round changed them.
   # Work is only ever sent back, so it comes before the pull request opens, and finds no threads
-  # to answer the first time.
+  # to answer the first time or in a check repair.
   - id: answer
     kind: client
     in: coder
@@ -183,20 +183,22 @@ steps:
   # Reads the pull request. Merge-ready, it labels it merge-ready and asks the maintainer for a
   # review, and the run is done; it never merges. Merged by someone, the run is done too; closed
   # without a merge, it stops. Threads to answer start a fix round, at most 3 before the run
-  # needs a human. With none, checks that failed on the head go back to fix as a check repair,
-  # at most twice. Anything else waits for the next wake.
+  # needs a human. With none, checks that failed on the head start a check repair, at most
+  # twice. It goes back to answer, which finds no threads, so a repair whose own checks fail
+  # keeps the failed checks and the pull request (ADR 0086). Fix rounds and check repairs share
+  # one count. Anything else waits for the next wake.
   - id: assess
     kind: code
     in: coder
     call: assess_pull_request
     requires: [pr]
-    results: { feedback: str, failure: str, replies: str, pr: int, merge_ready: bool }
+    results: { feedback: str, failure: str, pr: int, merge_ready: bool }
     outcomes:
       merge-ready: done
       merged: done
       closed: stop
       feedback: { back: answer, max: 3 }
-      checks-failed: { back: fix, max: 2 }
+      checks-failed: { back: answer, max: 2 }
       waiting: { back: babysit, max: 30 }
 done_requires: [merge_ready]
 # Labels the issue ready-for-human with the summary of the step the run stopped at. The branch

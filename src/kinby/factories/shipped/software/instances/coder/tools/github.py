@@ -282,9 +282,9 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
             f"\n- {check['name']} ({check['conclusion']}): {check['html_url']}"
             for check in repairable
         )
-        # It answers no thread, so publish posts none of an earlier fix round's replies again.
-        repair = {FAILURE: failure, "pr": pr, "replies": "{}"}
-        return HookResult(values=repair, outcome="checks-failed", summary=failure)
+        return HookResult(
+            values={FAILURE: failure, "pr": pr}, outcome="checks-failed", summary=failure
+        )
     if failed:
         return HookResult(outcome="waiting")
     reviews = _pages(workspace, f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews")

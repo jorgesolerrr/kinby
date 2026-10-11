@@ -391,20 +391,34 @@ CHECKS_FAILED = StepResult(
     ending=StepEnding.CLEAN,
     summary=CI_FAILED,
     outcome="checks-failed",
-    values={"failure": CI_FAILED, "pr": 42, "replies": "{}"},
+    values={"failure": CI_FAILED, "pr": 42},
 )
 REPAIRED = StepResult(ending=StepEnding.CLEAN, summary="Fixed the test.", session="claude-1")
 PUSHED = StepResult(ending=StepEnding.CLEAN, summary="Pushed agent/7-add-dark-mode.")
-#: A check repair sent back from babysitting: the failed checks, their repair, pushed.
-CHECK_REPAIR = [CHECKS_FAILED, REPAIRED, CHECKED, PUSHED]
+#: A check repair sent back from babysitting: the failed checks, no thread to answer, their
+#: repair, pushed.
+CHECK_REPAIR = [CHECKS_FAILED, NOTHING_TO_ANSWER, REPAIRED, CHECKED, PUSHED]
 
 
-@pytest.mark.parametrize("rounds", [[], FIX_ROUND], ids=["first", "after-a-fix-round"])
-def test_a_check_that_failed_on_the_pull_request_goes_back_to_fix_and_pushes_the_repair(
-    tmp_path, rounds
+LOCAL_FAILED = StepResult(
+    ending=StepEnding.FAILED, summary='"bun run check" exited with code 1.\nruff: F401'
+)
+
+
+@pytest.mark.parametrize(
+    ("rounds", "repair", "failure"),
+    [
+        ([], CHECK_REPAIR, CI_FAILED),
+        (FIX_ROUND, CHECK_REPAIR, CI_FAILED),
+        ([], [*CHECK_REPAIR[:3], LOCAL_FAILED, *CHECK_REPAIR[2:]], LOCAL_FAILED.summary),
+    ],
+    ids=["first", "after-a-fix-round", "its-checks-failed"],
+)
+def test_a_check_that_failed_on_the_pull_request_is_repaired_and_pushed_to_it(
+    tmp_path, rounds, repair, failure
 ):
     control = FakeControl()
-    control.step_results = [*CHECKED_CHANGE, OPENED, *rounds, *CHECK_REPAIR]
+    control.step_results = [*CHECKED_CHANGE, OPENED, *rounds, *repair]
     runtime = FakeRuntime()
     hub = fresh_hub(tmp_path / "hub", control, runtime)
     waits = 1 + bool(rounds)
@@ -417,19 +431,18 @@ def test_a_check_that_failed_on_the_pull_request_goes_back_to_fix_and_pushes_the
             await woken(hub, runtime, coder, CHECKS_DONE, "check_suite")
         waiting = await babysitting(hub, run.run_id, waits + 1)
 
-        assert [attempt.step for attempt in waiting.attempts][-5:] == [
-            "assess",
-            "fix",
+        assert [attempt.step for attempt in waiting.attempts][-3:] == [
             "checks",
             "publish",
             "babysit",
         ]
-        (_, fix), _, (_, publish) = control.steps[-3:]
-        assert fix.step == coding("fix", 30, resume="claude-1")
-        assert fix.results["failure"] == CI_FAILED
+        fixes = [command for _, command in control.steps if command.origin.step == "fix"]
+        assert fixes[-1].step == coding("fix", 30, resume="claude-1")
+        assert fixes[-1].results["failure"] == failure
+        _, publish = control.steps[-1]
         assert publish.step == CodeStepRun(call="publish_pull_request")
         assert publish.results["pr"] == 42
-        assert json.loads(str(publish.results["replies"])) == {}
+        assert json.loads(str(publish.results.get("replies", "{}"))) == {}
 
     asyncio.run(scenario())
 
@@ -450,7 +463,7 @@ def test_the_third_failed_check_on_the_pull_request_leaves_the_run_needs_human(t
 
         assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "assess")
         assert stopped.attempts[-1].summary == (
-            f'{CI_FAILED}\nStep "assess" sent the work back to "fix" 2 times, its max.'
+            f'{CI_FAILED}\nStep "assess" sent the work back to "answer" 2 times, its max.'
         )
 
     asyncio.run(scenario())
@@ -1721,7 +1734,7 @@ def test_assess_sends_a_check_that_failed_on_the_head_back_for_repair(
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert result.outcome == "checks-failed"
-        assert result.values == {"failure": failure, "pr": 42, "replies": "{}"}
+        assert result.values == {"failure": failure, "pr": 42}
         assert result.summary == failure
         assert [arguments for arguments in github.calls if arguments[0] == "pr"] == []
 
