@@ -15,9 +15,9 @@ export type SetupValue = boolean | number | string;
  */
 export type SetupFieldKind = "config" | "secret";
 /**
- * The instance file a package's configuration field lands in.
+ * The instance file a template's configuration field lands in.
  */
-export type TargetFile = "kinby.toml" | "package.yaml";
+export type TargetFile = "kinby.toml";
 /**
  * How a client asks for a setup field's value, and so what the value is.
  */
@@ -36,7 +36,6 @@ export type StepValue = boolean | number | string;
  * How one attempt at a step ended.
  */
 export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted";
-export type CommitSha = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
  */
@@ -53,8 +52,7 @@ export type AdoptionFindingKind =
   | "retained-storage"
   | "invalid-instance"
   | "manifest-id-taken"
-  | "retained-identity"
-  | "package-mismatch";
+  | "retained-identity";
 /**
  * Who manages an existing container now, read from the labels it carries.
  */
@@ -71,11 +69,11 @@ export type AvatarShape = "circle" | "squircle" | "square";
 export type DrainState = "drained" | "interrupted";
 export type IntendedState = "stopped" | "running" | "removed" | "deleted";
 export type ProcessState = "missing" | "created" | "starting" | "running" | "stopped" | "failed" | "unavailable";
+export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "unknown";
 /**
  * A change a running instance applies only once it is recreated.
  */
-export type RecreateReason = "secrets" | "package_config";
-export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "unknown";
+export type RecreateReason = "secrets";
 /**
  * How an instance's subscription login stands: not signed in yet, or how its last one ended.
  */
@@ -120,7 +118,7 @@ export type SignalAuth = "token" | "hmac-sha256";
 /**
  * Where a skill comes from, in the order the model looks for it.
  */
-export type SkillTier = "instance" | "package" | "workspace";
+export type SkillTier = "instance" | "kinby" | "workspace";
 export type StatsBucketSize = "day" | "week";
 export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
 export type TurnClosingKind = "completed" | "failed" | "interrupted";
@@ -231,6 +229,10 @@ export interface Contract {
       command: FactoryRunSendBackCommand;
       result: FactoryRun;
     };
+    "image.describe": {
+      command: ImageDescribeCommand;
+      result: DeclaredSetup;
+    };
     "image.prepare": {
       command: ImagePrepareCommand;
       result: ImagePrepareResult;
@@ -338,22 +340,6 @@ export interface Contract {
     "operation.get": {
       command: OperationGetCommand;
       result: OperationGetResult;
-    };
-    "package.config.get": {
-      command: PackageConfigGetCommand;
-      result: PackageConfigResult;
-    };
-    "package.config.set": {
-      command: PackageConfigSetCommand;
-      result: PackageConfigResult;
-    };
-    "package.describe": {
-      command: PackageDescribeCommand;
-      result: PackageDescription;
-    };
-    "package.list": {
-      command: PackageListCommand;
-      result: PackageListResult;
     };
     "permissions.get": {
       command: PermissionsGetCommand;
@@ -581,7 +567,7 @@ export interface DeclaredSetup {
   setup_fields: SetupField[];
 }
 /**
- * One sign-in a package or a template declares, run in a setup container (ADR 0065).
+ * One sign-in a template declares, run in a setup container (ADR 0065).
  */
 export interface SubscriptionLogin {
   command: string[];
@@ -767,24 +753,13 @@ export interface FactoryRunSendBackCommand {
   step: StepId;
 }
 /**
- * Prepare a package selection's image. No package prepares kinby's base image.
+ * Read what the prepared image declares. It never builds.
  */
-export interface ImagePrepareCommand {
-  package: PackageSelection | null;
-}
-export interface PackageSelection {
-  distribution: string;
-  id: string;
-  image_recipe?: string;
-  version: string | PackageCommit;
-}
+export interface ImageDescribeCommand {}
 /**
- * One commit of a package's git repository, installed in place of an index version.
+ * Prepare kinby's base image, the one a vanilla instance runs on.
  */
-export interface PackageCommit {
-  sha: CommitSha;
-  url: string;
-}
+export interface ImagePrepareCommand {}
 export interface ImagePrepareResult {
   operation_id: string;
 }
@@ -794,7 +769,6 @@ export interface ImagePrepareResult {
 export interface InstanceAdoptCommand {
   acknowledge_interrupting_stop?: boolean;
   claim_signals?: boolean;
-  package?: PackageSelection | null;
   path: string;
   relinquished?: boolean;
   runtime_id: string;
@@ -804,7 +778,6 @@ export interface InstanceAdoptCommand {
  */
 export interface InstanceAdoptPreviewCommand {
   acknowledge_interrupting_stop?: boolean;
-  package?: PackageSelection | null;
   path: string;
   relinquished?: boolean;
   runtime_id: string;
@@ -855,7 +828,6 @@ export interface InstanceCreateCommand {
   };
   manifest_id: string;
   model: string;
-  package?: PackageSelection | null;
   persona_name?: string | null;
   revision?: string;
   secrets?: {
@@ -913,8 +885,7 @@ export interface InstanceSummary {
   intended_state: IntendedState;
   manifest_id: string;
   needs_human: number;
-  notices: (RevisionBehind | PackageTemplateOlder)[];
-  package?: PackageSummary | null;
+  notices: RevisionBehind[];
   persona_name: string | null;
   process: ProcessState;
   runtime_id: string;
@@ -930,20 +901,6 @@ export interface RevisionBehind {
   hub_revision: string;
   instance_revision: string;
   message: string;
-}
-/**
- * The instance's configuration was copied from another version of its installed package.
- */
-export interface PackageTemplateOlder {
-  code: "package_template_older";
-  initialized_version: string;
-  installed_version: string;
-  message: string;
-}
-export interface PackageSummary {
-  distribution: string;
-  id: string;
-  version: string | PackageCommit;
 }
 /**
  * Run one of the instance's subscription logins in a setup container.
@@ -964,7 +921,6 @@ export interface InstanceProbeCommand {}
 export interface InstanceProbeResult {
   capabilities: Capability[];
   contract_version: string;
-  restart_reasons?: RecreateReason[];
 }
 export interface InstanceRecreateCommand {
   instance_id: string;
@@ -1038,23 +994,10 @@ export interface InstanceStopCommand {
 }
 /**
  * Move one instance to the image a revision prepares.
- *
- * Its package selection travels along, moved to another commit when a pin names one.
  */
 export interface InstanceUpdateCommand {
   instance_id: string;
-  package?: PackagePin | null;
   revision: string;
-}
-/**
- * Move an instance's package to another commit of the git repository it comes from.
- *
- * It names the package it moves, which must be the instance's own (ADR 0040).
- */
-export interface PackagePin {
-  id: string;
-  image_recipe?: string | null;
-  sha: CommitSha;
 }
 export interface ManifestGetCommand {}
 export interface ManifestResult {
@@ -1197,55 +1140,6 @@ export interface OperationStep {
 export interface LoginPrompt {
   code: string;
   url: string;
-}
-export interface PackageConfigGetCommand {}
-export interface PackageConfigResult {
-  hash: string;
-  schema: {
-    [k: string]: JsonValue;
-  };
-  values: {
-    [k: string]: JsonValue;
-  };
-}
-export interface PackageConfigSetCommand {
-  hash: string;
-  values: {
-    [k: string]: JsonValue;
-  };
-}
-/**
- * Read what a prepared selection declares. It never builds.
- */
-export interface PackageDescribeCommand {
-  package: PackageSelection | null;
-}
-/**
- * What a prepared image declares: its card, its version, its setup fields, and its logins.
- */
-export interface PackageDescription {
-  description: string;
-  display_name: string;
-  icon: string;
-  logins?: SubscriptionLogin[];
-  setup_fields: SetupField[];
-  version: string;
-}
-export interface PackageListCommand {}
-export interface PackageListResult {
-  packages: CuratedPackage[];
-}
-/**
- * One package of the curated list: its card, and the selection a client prepares it with.
- *
- * The selection carries no image recipe. The hub adds the entry's recipe when it builds.
- */
-export interface CuratedPackage {
-  description: string;
-  display_name: string;
-  icon: string;
-  id: string;
-  selection: PackageSelection;
 }
 export interface PermissionsGetCommand {}
 export interface PermissionsResult {
@@ -1408,7 +1302,6 @@ export interface SkillSummary {
   description: string;
   name: string;
   shadowed_by: SkillTier | null;
-  source: string;
   tier: SkillTier;
 }
 export interface SkillListCommand {}

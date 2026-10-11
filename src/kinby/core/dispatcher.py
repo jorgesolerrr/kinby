@@ -24,8 +24,6 @@ from kinby.contracts import (
     MEMORY_FORGET,
     MEMORY_LIST,
     MEMORY_OPEN,
-    PACKAGE_CONFIG_GET,
-    PACKAGE_CONFIG_SET,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
     PROFILE_GET,
@@ -70,7 +68,6 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Event,
-    FileHash,
     InstanceProbeCommand,
     InstanceProbeResult,
     Method,
@@ -104,7 +101,7 @@ from kinby.core.config import InstanceConfig
 from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
 from kinby.core.memory import InstanceMemory
-from kinby.core.pricing import price_map
+from kinby.core.pricing import SHIPPED_PRICES
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
 from kinby.core.stats import TurnRun, active_limits, plan_use, stats_buckets, stats_summary
@@ -287,9 +284,8 @@ def build_dispatcher(
     turns: ScheduledTurnConfig,
     event_log: EventLog | None = None,
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
-    price_overrides: Mapping[str, ModelPrice] | None = None,
+    prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
     clock: Callable[[], datetime] = utc_now,
-    booted_package_config: FileHash | None = None,
 ) -> ScheduledDispatcher: ...
 
 
@@ -300,7 +296,7 @@ def build_dispatcher(
     turns: TurnConfig | None = None,
     event_log: EventLog | None = None,
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
-    price_overrides: Mapping[str, ModelPrice] | None = None,
+    prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
     clock: Callable[[], datetime] = utc_now,
 ) -> Dispatcher: ...
 
@@ -311,16 +307,12 @@ def build_dispatcher(
     event_log: EventLog | None = None,
     turns: TurnConfig | ScheduledTurnConfig | None = None,
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
-    price_overrides: Mapping[str, ModelPrice] | None = None,
+    prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
     clock: Callable[[], datetime] = utc_now,
-    booted_package_config: FileHash | None = None,
 ) -> Dispatcher:
-    """The instance's contract methods. *booted_package_config* is the hash of the package.yaml
-    the instance validated at boot, which the probe compares with the file on disk.
-    """
+    """The instance's contract methods."""
     store = ThreadStore(state_dir)
     event_log = event_log or EventLog(state_dir)
-    prices = price_map(price_overrides)
     scheduler = None
     turn_service = None
     turn_settings = turns.turns if isinstance(turns, ScheduledTurnConfig) else turns
@@ -372,7 +364,7 @@ def build_dispatcher(
     async def get_stats(command: StatsGetCommand) -> StatsGetResult:
         events = list(event_log.all_events())
         now = clock()
-        metrics = turn_metrics(events, prices)
+        metrics = turn_metrics(events, prices())
         time_range = TimeRange(command.since, command.until)
         records = [record for record in metrics.records if time_range.includes(record.closed_at)]
         runs = [
@@ -432,16 +424,13 @@ def build_dispatcher(
         return await event_log.subscribe(command.thread_id, command.after_sequence)
 
     config = (
-        InstanceConfig(turns.scheduler.instance, booted_package_config)
-        if isinstance(turns, ScheduledTurnConfig)
-        else None
+        InstanceConfig(turns.scheduler.instance) if isinstance(turns, ScheduledTurnConfig) else None
     )
 
     async def probe(command: InstanceProbeCommand) -> InstanceProbeResult:
         return InstanceProbeResult(
             contract_version=CONTRACT_VERSION,
             capabilities=instance_capabilities(dispatcher),
-            restart_reasons=config.restart_reasons() if config is not None else [],
         )
 
     dispatcher.register(THREAD_CREATE, create_thread)
@@ -461,8 +450,6 @@ def build_dispatcher(
         dispatcher.register(MANIFEST_SET, config.set_manifest)
         dispatcher.register(PERMISSIONS_GET, config.get_permissions)
         dispatcher.register(PERMISSIONS_SET, config.set_permissions)
-        dispatcher.register(PACKAGE_CONFIG_GET, config.get_package_config)
-        dispatcher.register(PACKAGE_CONFIG_SET, config.set_package_config)
         dispatcher.register(CONFIG_HISTORY, config.history)
         dispatcher.register(PROFILE_GET, config.get_profile)
         dispatcher.register(PROFILE_SET, config.set_profile)

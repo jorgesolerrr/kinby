@@ -1,8 +1,4 @@
 # The coding clients of the software factory's coder, appended to kinby's base image.
-# For an instance of the kinby-code-factory package, the hub adds its pinned `uv pip install`
-# after this recipe.
-# It comes from the factory's image/recipe.Dockerfile at the commit hub/curated/coder.toml pins;
-# move both together.
 ARG GH_VERSION=2.82.1
 ARG CLAUDE_CODE_VERSION=2.1.280
 ARG CODEX_VERSION=0.154.0

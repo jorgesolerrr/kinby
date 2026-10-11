@@ -12,9 +12,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
 
-import yaml
+import tomlkit
 
-from kinby.contracts import SetupValue, TargetFile
+from kinby.contracts import SetupValue
 from kinby.instance.dataclasses import FeedbackPolicy, RecapPolicy
 from kinby.instance.errors import InstanceExistsError
 from kinby.instance.layout import (
@@ -34,15 +34,13 @@ from kinby.instance.layout import (
     WORKSPACE_DIR,
 )
 from kinby.instance.recap import DEFAULT_RECAP_LENS
-from kinby.instance.toml import TomlValue, toml_document
-from kinby.packages import PACKAGE_CONFIG_NAME, InstalledPackage
 
 PLACEHOLDER_MODEL = "provider:model"
 README_NAME = "README.md"
 _PROTECTED_TEMPLATE_ROOTS = {STATE_DIR, WORKSPACE_DIR}
-#: A package offers its skills and tools from its own install, so its template's copies stay out.
-_PACKAGE_REFERENCED_ROOTS = frozenset({SKILLS_DIR, TOOLS_DIR})
-_FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir", "package")
+_FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir")
+
+type TomlValue = str | int | float | bool | list["TomlValue"] | dict[str, "TomlValue"]
 
 
 def _slugify(name: str) -> str:
@@ -52,9 +50,12 @@ def _slugify(name: str) -> str:
     return text.strip("-") or "instance"
 
 
-def _toml_string(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+def _is_toml_value(value: object) -> bool:
+    if isinstance(value, dict):
+        return all(_is_toml_value(item) for item in value.values())
+    if isinstance(value, list):
+        return all(not isinstance(item, dict) and _is_toml_value(item) for item in value)
+    return isinstance(value, str | int | float)
 
 
 def _write_readme(directory: Path, explanation: str) -> None:
@@ -81,13 +82,10 @@ def _relative_template_path(name: str) -> Path:
     return relative
 
 
-def _copied_template_path(name: str, *, referenced: frozenset[str]) -> Path | None:
-    """Where a template file lands in the instance. None for one the instance does not copy.
-
-    *referenced* names the folders a package offers from its own install instead.
-    """
+def _copied_template_path(name: str) -> Path | None:
+    """Where a template file lands in the instance. None for one the instance does not copy."""
     relative = _relative_template_path(name)
-    if name == MANIFEST_NAME or relative.parts[0] in referenced:
+    if name == MANIFEST_NAME:
         return None
     if relative.parts[0] in _PROTECTED_TEMPLATE_ROOTS or name == ENV_NAME:
         raise ValueError(f'Template cannot copy "{name}".')
@@ -107,23 +105,6 @@ def _set_key(document: dict[str, TomlValue], key: str, value: SetupValue) -> Non
     document[last] = value
 
 
-def _targeted(
-    package: InstalledPackage,
-    config: Mapping[str, SetupValue],
-    file: TargetFile,
-) -> dict[str, SetupValue]:
-    """The values that land in *file*, by the dotted key each field targets."""
-    targets = {field.name: field.target for field in package.descriptor.setup_fields}
-    landed: dict[str, SetupValue] = {}
-    for name, value in config.items():
-        target = targets.get(name)
-        if target is None:
-            raise ValueError(f'Setup field "{name}" names no target to write its value at.')
-        if target.file is file:
-            landed[target.key] = value
-    return landed
-
-
 def _template_manifest(body: str, settings: Mapping[str, SetupValue]) -> dict[str, TomlValue]:
     """A template's kinby.toml with *settings* set at their dotted keys, checked for merging."""
     template = cast(dict[str, TomlValue], tomllib.loads(body))
@@ -135,34 +116,14 @@ def _template_manifest(body: str, settings: Mapping[str, SetupValue]) -> dict[st
     models = template.get("models")
     if models is not None and not isinstance(models, dict):
         raise ValueError("Template [models] must be a table.")
-    try:
-        toml_document(template)
-    except TypeError as exc:
-        raise ValueError("Template manifest cannot be serialized.") from exc
+    if not _is_toml_value(template):
+        raise ValueError("Template manifest cannot hold an array of tables or a date.")
     return template
 
 
-def _package_template_manifest(
-    package: InstalledPackage,
-    config: Mapping[str, SetupValue],
-) -> dict[str, TomlValue]:
-    return _template_manifest(
-        package.files.get(MANIFEST_NAME, ""),
-        _targeted(package, config, TargetFile.KINBY_TOML),
-    )
-
-
-def _validate_template(files: Mapping[str, str], *, referenced: frozenset[str]) -> None:
+def _validate_template(files: Mapping[str, str]) -> None:
     for name in files:
-        _copied_template_path(name, referenced=referenced)
-
-
-def _validate_package_template(
-    package: InstalledPackage,
-    config: Mapping[str, SetupValue],
-) -> None:
-    _validate_template(package.files, referenced=_PACKAGE_REFERENCED_ROOTS)
-    _package_template_manifest(package, config)
+        _copied_template_path(name)
 
 
 def _merged_manifest(
@@ -184,31 +145,9 @@ def _merged_manifest(
     return base
 
 
-def _package_manifest(
-    directory: Path,
-    package: InstalledPackage,
-    *,
-    model: str,
-    config: Mapping[str, SetupValue],
-) -> None:
-    base = _merged_manifest(directory, _package_template_manifest(package, config), model=model)
-    descriptor = package.descriptor
-    base["package"] = {
-        "id": descriptor.id,
-        "distribution": descriptor.distribution,
-        "version": descriptor.version,
-    }
-    (directory / MANIFEST_NAME).write_text(toml_document(base), encoding="utf-8")
-
-
-def _copy_template(
-    directory: Path,
-    files: Mapping[str, str],
-    *,
-    referenced: frozenset[str],
-) -> None:
+def _copy_template(directory: Path, files: Mapping[str, str]) -> None:
     for name, body in files.items():
-        relative = _copied_template_path(name, referenced=referenced)
+        relative = _copied_template_path(name)
         if relative is None:
             continue
         destination = directory / relative
@@ -219,32 +158,6 @@ def _copy_template(
             raise ValueError(f'Template cannot copy "{name}".') from None
 
 
-def _package_config(
-    directory: Path,
-    package: InstalledPackage,
-    config: Mapping[str, SetupValue],
-) -> None:
-    """Write the values that land in package.yaml. A file they leave as it was keeps its comments.
-
-    The package's validator runs later, over the file this writes.
-    """
-    landed = _targeted(package, config, TargetFile.PACKAGE_YAML)
-    if not landed:
-        return
-    path = directory / PACKAGE_CONFIG_NAME
-    document = yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    if document is None:
-        document = {}
-    if not isinstance(document, dict):
-        raise ValueError(f"{PACKAGE_CONFIG_NAME} must be a mapping to take setup values.")
-    before = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
-    for key, value in landed.items():
-        _set_key(document, key, value)
-    after = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
-    if after != before:
-        path.write_text(after, encoding="utf-8")
-
-
 def _write_starter_tree(directory: Path, model: str) -> None:
     instance_id = _slugify(directory.name)
     (directory / MANIFEST_NAME).write_text(
@@ -253,16 +166,16 @@ def _write_starter_tree(directory: Path, model: str) -> None:
             "# id stays the same if you move the directory. "
             "[models].main is the only required setting.\n"
             "\n"
-            f"id = {_toml_string(instance_id)}\n"
+            f"id = {tomlkit.string(instance_id).as_string()}\n"
             "\n"
             "[models]\n"
-            f"main = {_toml_string(model)}\n"
+            f"main = {tomlkit.string(model).as_string()}\n"
             "\n"
             "[memory]\n"
-            f"recap = {_toml_string(RecapPolicy.EVERY_TURN)}\n"
+            f"recap = {tomlkit.string(RecapPolicy.EVERY_TURN).as_string()}\n"
             "\n"
             "[feedback]\n"
-            f"ask = {_toml_string(FeedbackPolicy.EVERY_TURN)}\n"
+            f"ask = {tomlkit.string(FeedbackPolicy.EVERY_TURN).as_string()}\n"
             "\n"
             "# [budgets]\n"
             "# One step is one node execution.\n"
@@ -344,7 +257,7 @@ def _write_starter_tree(directory: Path, model: str) -> None:
         directory / ROUTINES_DIR,
         "Each routine is routines/<name>/ROUTINE.md with frontmatter and a prompt body. "
         "An optional run.py beside it supplies the code step. "
-        "When kinby's packaged defaults are enabled, read the write-routine skill "
+        "When kinby's defaults are enabled, read the write-routine skill "
         "for the format.",
     )
     (directory / WORKSPACE_DIR).mkdir(exist_ok=True)
@@ -366,13 +279,13 @@ def init_from_template(
     directory = Path(directory).resolve()
     if directory.exists():
         raise InstanceExistsError(f"instance directory already exists: {directory}")
-    _validate_template(files, referenced=frozenset())
+    _validate_template(files)
     template = _template_manifest(files.get(MANIFEST_NAME, ""), settings)
     directory.mkdir(parents=True)
     _write_starter_tree(directory, model)
-    _copy_template(directory, files, referenced=frozenset())
+    _copy_template(directory, files)
     manifest = _merged_manifest(directory, template, model=model)
-    (directory / MANIFEST_NAME).write_text(toml_document(manifest), encoding="utf-8")
+    (directory / MANIFEST_NAME).write_text(tomlkit.dumps(manifest), encoding="utf-8")
     return directory
 
 
@@ -400,36 +313,19 @@ def _publish_directory(source: Path, destination: Path) -> None:
         source.replace(destination)
 
 
-def init_instance(
-    directory: Path,
-    model: str = PLACEHOLDER_MODEL,
-    *,
-    package: InstalledPackage | None = None,
-    config: Mapping[str, SetupValue] | None = None,
-) -> Path:
-    """Write a readable starter instance at *directory*.
-
-    *config* holds values for the package's configuration fields by name. Each lands at the
-    target its field declares, in kinby.toml or package.yaml.
-    """
-    config = config or {}
+def init_instance(directory: Path, model: str = PLACEHOLDER_MODEL) -> Path:
+    """Write a readable starter instance at *directory*."""
     directory = Path(directory).resolve()
     manifest = directory / MANIFEST_NAME
     if manifest.is_file():
         raise InstanceExistsError(f"instance already exists: {manifest}")
     if directory.is_dir() and any(directory.iterdir()):
         raise InstanceExistsError(f"instance directory is not empty: {directory}")
-    if package is not None:
-        _validate_package_template(package, config)
     parent = directory.parent
     parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=parent, prefix=f".{directory.name}.creating-") as temporary:
         staging = Path(temporary) / directory.name
         staging.mkdir()
         _write_starter_tree(staging, model)
-        if package is not None:
-            _copy_template(staging, package.files, referenced=_PACKAGE_REFERENCED_ROOTS)
-            _package_config(staging, package, config)
-            _package_manifest(staging, package, model=model, config=config)
         _publish_directory(staging, directory)
     return directory.resolve()

@@ -35,8 +35,8 @@ import {
 } from "@/components/ui/table"
 import { usePace } from "@/hooks/use-pace"
 import { when } from "@/lib/config-changes"
-import { retried } from "@/lib/operation"
-import { openPackage, selectThread, threadPath } from "@/lib/selection"
+import { pace, retried } from "@/lib/operation"
+import { openCore, selectThread, threadPath } from "@/lib/selection"
 import { threadList, threadTitle } from "@/lib/thread-list"
 
 type Caller = Pick<InstanceClient, "call">
@@ -83,35 +83,31 @@ export function ThreadListPage({
   const [failure, setFailure] = useState<unknown>()
 
   useEffect(() => {
-    let current = true
+    const pacing = pace(clock)
     retried(() => client.call("thread.list", command(shown)), pacing).then(
       (page) => {
-        if (!current) return
+        if (pacing.stopped) return
         setListed(page)
         setFailure(undefined)
       },
       (error: unknown) => {
-        if (current) setFailure(error)
+        if (!pacing.stopped) setFailure(error)
       },
     )
-    return () => {
-      current = false
-    }
-  }, [client, pacing, shown])
+    return pacing.stop
+  }, [client, clock, shown])
 
   useEffect(() => {
-    let current = true
+    const pacing = pace(clock)
     retried(() => client.call("routine.list", {}), pacing).then(
       (listed) => {
-        if (current) setRoutines(listed.routines.map((routine) => routine.name))
+        if (!pacing.stopped) setRoutines(listed.routines.map((routine) => routine.name))
       },
       // Without its routines, the filter offers all threads and the archived ones.
       () => {},
     )
-    return () => {
-      current = false
-    }
-  }, [client, pacing])
+    return pacing.stop
+  }, [client, clock])
 
   const loadMore = async (latest: ThreadListResult) => {
     if (latest.cursor === null) return
@@ -168,7 +164,7 @@ export function ThreadListPage({
       </div>
       {failure !== undefined &&
         (fromOlderCore(failure) ? (
-          <OlderCoreAlert onOpenUpdate={() => openPackage(instanceId)} />
+          <OlderCoreAlert onOpenUpdate={() => openCore(instanceId)} />
         ) : (
           <Failure error={failure} />
         ))}

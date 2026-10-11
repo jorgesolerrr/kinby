@@ -24,14 +24,12 @@ const grace = instanceSummary({
   intended_state: "removed",
   process: "missing",
   avatar: { shape: "squircle", color: "green" },
-  package: { id: "research", distribution: "kinby-packages", version: "1.2.0" },
 })
 const unnamed = instanceSummary({
   instance_id: "hub-unnamed",
   manifest_id: "scratch",
   intended_state: "removed",
   process: "missing",
-  package: null,
 })
 
 function openPage(answers: Answers = {}, removed: InstanceSummary[] = [grace, unnamed]) {
@@ -119,17 +117,14 @@ function rowOf(name: string) {
 describe("the Removed instances page", () => {
   beforeEach(() => window.history.replaceState(null, "", "/removed"))
 
-  it("lists each removed instance with its avatar, its persona name, and its package", () => {
+  it("lists each removed instance with its avatar and its persona name", () => {
     openPage()
 
     const row = rowOf("Grace")
     const avatar = row.querySelector("[data-slot=avatar]")
     expect(avatar?.getAttribute("data-shape")).toBe("squircle")
     expect(avatar?.querySelector("[data-slot=avatar-fallback]")?.textContent).toBe("G")
-    expect(within(row).getByText("Package: research from kinby-packages")).toBeDefined()
-    expect(
-      within(rowOf("scratch")).getByText("Package: None, kinby's built-in defaults"),
-    ).toBeDefined()
+    expect(rowOf("scratch")).toBeDefined()
   })
 
   it("restores an instance, showing its progress on the row, then opens it once listed again", async () => {
@@ -177,7 +172,7 @@ describe("the Removed instances page", () => {
   })
 
   it("says on the row why a restoration failed, and offers Restore again", async () => {
-    const detail = "The image sha256:image is gone. Rebuild the package's image to restore Grace."
+    const detail = "The image sha256:image is gone. Rebuild its image to restore Grace."
     const { clock, onChanged, user } = openPage({
       "instance.restore": () => ({ operation_id: "op-restore", instance_id: "hub-grace" }),
       "operation.get": () => restoration({ state: "failed", detail }),

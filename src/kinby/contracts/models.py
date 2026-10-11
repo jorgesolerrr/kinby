@@ -707,45 +707,8 @@ class StorageItem(ContractModel):
     writable: bool
 
 
-#: A full git commit SHA, so a pin names one commit and never a branch or a tag.
-type CommitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
-
-
 #: A factory's name, which is also its folder's name on the hub.
 type FactoryName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
-
-
-class PackageCommit(ContractModel):
-    """One commit of a package's git repository, installed in place of an index version."""
-
-    url: Annotated[str, Field(min_length=1)]
-    sha: CommitSha
-
-
-class PackagePin(ContractModel):
-    """Move an instance's package to another commit of the git repository it comes from.
-
-    It names the package it moves, which must be the instance's own (ADR 0040).
-    """
-
-    id: Annotated[str, Field(min_length=1)]
-    sha: CommitSha
-    #: The image recipe of that commit. None keeps the recipe the instance records (ADR 0061).
-    image_recipe: str | None = None
-
-
-class PackageSelection(ContractModel):
-    id: Annotated[str, Field(min_length=1)]
-    distribution: Annotated[str, Field(min_length=1)]
-    #: A version from the package index, or a git commit.
-    version: Annotated[str, Field(min_length=1)] | PackageCommit
-    image_recipe: str = ""
-
-
-class PackageSummary(ContractModel):
-    id: str
-    distribution: str
-    version: str | PackageCommit
 
 
 class SetupFieldKind(StrEnum):
@@ -774,10 +737,9 @@ type SetupValue = bool | int | str
 
 
 class TargetFile(StrEnum):
-    """The instance file a package's configuration field lands in."""
+    """The instance file a template's configuration field lands in."""
 
     KINBY_TOML = "kinby.toml"
-    PACKAGE_YAML = "package.yaml"
 
 
 class SetupTarget(ContractModel):
@@ -800,12 +762,12 @@ class SetupField(ContractModel):
     default: SetupValue | None = None
     #: The values a choice field offers. Only a choice field has them.
     choices: list[str] | None = None
-    #: Where a package's own configuration field lands. kinby writes the built-in fields itself.
+    #: Where a template's own configuration field lands. kinby writes the built-in fields itself.
     target: SetupTarget | None = None
 
 
 class SubscriptionLogin(ContractModel):
-    """One sign-in a package or a template declares, run in a setup container (ADR 0065)."""
+    """One sign-in a template declares, run in a setup container (ADR 0065)."""
 
     id: str
     label: str
@@ -826,50 +788,16 @@ class DeclaredSetup(ContractModel):
     logins: list[SubscriptionLogin] = Field(default_factory=list)
 
 
-class PackageDescription(DeclaredSetup):
-    """What a prepared image declares: its card, its version, its setup fields, and its logins."""
-
-    display_name: str
-    description: str
-    icon: str
-    version: str
-
-
 class ImagePrepareCommand(ContractModel):
-    """Prepare a package selection's image. No package prepares kinby's base image."""
-
-    package: PackageSelection | None
+    """Prepare kinby's base image, the one a vanilla instance runs on."""
 
 
 class ImagePrepareResult(ContractModel):
     operation_id: UUID
 
 
-class PackageDescribeCommand(ContractModel):
-    """Read what a prepared selection declares. It never builds."""
-
-    package: PackageSelection | None
-
-
-class PackageListCommand(ContractModel):
-    pass
-
-
-class CuratedPackage(ContractModel):
-    """One package of the curated list: its card, and the selection a client prepares it with.
-
-    The selection carries no image recipe. The hub adds the entry's recipe when it builds.
-    """
-
-    id: str
-    display_name: str
-    description: str
-    icon: str
-    selection: PackageSelection
-
-
-class PackageListResult(ContractModel):
-    packages: list[CuratedPackage]
+class ImageDescribeCommand(ContractModel):
+    """Read what the prepared image declares. It never builds."""
 
 
 class AvatarShape(StrEnum):
@@ -910,7 +838,6 @@ class InstanceCreateCommand(ContractModel):
     #: The value of the built-in model field. The hub checks it with the other setup values.
     model: str
     revision: Annotated[str, Field(min_length=1)] = "HEAD"
-    package: PackageSelection | None = None
     #: Values for the configuration fields the prepared image declares, by field name.
     config: dict[str, SetupValue] = Field(default_factory=dict)
     #: Values for its secret fields, and any other variables the instance should hold.
@@ -982,14 +909,10 @@ class InstanceDeleteCommand(ContractModel):
 
 
 class InstanceUpdateCommand(ContractModel):
-    """Move one instance to the image a revision prepares.
-
-    Its package selection travels along, moved to another commit when a pin names one.
-    """
+    """Move one instance to the image a revision prepares."""
 
     instance_id: UUID
     revision: Annotated[str, Field(min_length=1)]
-    package: PackagePin | None = None
 
 
 class InstanceSecretsSetCommand(ContractModel):
@@ -1036,14 +959,11 @@ class RecreateReason(StrEnum):
     """A change a running instance applies only once it is recreated."""
 
     SECRETS = "secrets"
-    PACKAGE_CONFIG = "package_config"
 
 
 class InstanceProbeResult(ContractModel):
     contract_version: str
     capabilities: list[Capability]
-    #: What changed since the instance booted. An instance that reports none needs no recreate.
-    restart_reasons: list[RecreateReason] = Field(default_factory=list)
 
 
 class DrainState(StrEnum):
@@ -1079,19 +999,6 @@ class RevisionBehind(ContractModel):
     hub_revision: str
 
 
-class PackageTemplateOlder(ContractModel):
-    """The instance's configuration was copied from another version of its installed package."""
-
-    code: Literal["package_template_older"] = "package_template_older"
-    message: str
-    initialized_version: str
-    installed_version: str
-
-
-#: Something about an instance the user may want to act on. It never stops the instance.
-InstanceNotice = Annotated[RevisionBehind | PackageTemplateOlder, Field(discriminator="code")]
-
-
 class InstanceSummary(ContractModel):
     instance_id: UUID
     manifest_id: str
@@ -1106,11 +1013,11 @@ class InstanceSummary(ContractModel):
     avatar: Avatar
     #: A declared login is not signed in, or a required secret is not set.
     setup_pending: bool
-    #: What the user may want to act on, such as an update the hub offers.
-    notices: list[InstanceNotice]
+    #: What the user may want to act on, such as an update the hub offers. None of them stops
+    #: the instance.
+    notices: list[RevisionBehind]
     #: The factory runs stopped for the user, or awaiting approval, at one of the instance's steps.
     needs_human: int
-    package: PackageSummary | None = None
     #: The factory the instance was installed from, if any.
     factory: FactoryName | None = None
     #: The runtime's word for the process, such as "restarting" beside `starting`.
@@ -1203,7 +1110,6 @@ class AdoptionFindingKind(StrEnum):
     INVALID_INSTANCE = "invalid-instance"
     MANIFEST_ID_TAKEN = "manifest-id-taken"
     RETAINED_IDENTITY = "retained-identity"
-    PACKAGE_MISMATCH = "package-mismatch"
 
 
 class AdoptionFinding(ContractModel):
@@ -1232,8 +1138,6 @@ class InstanceAdoptPreviewCommand(ContractModel):
     relinquished: bool = False
     #: A runtime that cannot drain may be interrupted. Never assumed.
     acknowledge_interrupting_stop: bool = False
-    #: The package the manifest's [package] names, recorded so later updates build and pin it.
-    package: PackageSelection | None = None
 
 
 class InstanceAdoptPreviewResult(ContractModel):
@@ -1662,27 +1566,6 @@ class PermissionsResult(ContractModel):
     hash: FileHash
 
 
-class PackageConfigGetCommand(ContractModel):
-    pass
-
-
-class PackageConfigSetCommand(ContractModel):
-    #: The value of each field, as the package's config model takes it.
-    values: dict[str, JsonValue]
-    #: The hash the client read. The write is refused as STALE when the file changed since.
-    hash: FileHash
-
-
-class PackageConfigResult(ContractModel):
-    model_config = ConfigDict(extra="forbid", serialize_by_alias=True)
-
-    #: The package's config model as JSON Schema, which a client renders as a form.
-    package_schema: dict[str, JsonValue] = Field(alias="schema")
-    #: The value of each field, as package.yaml has it.
-    values: dict[str, JsonValue]
-    hash: FileHash
-
-
 class ConfigActor(StrEnum):
     APP = "app"
     AGENT = "agent"
@@ -1861,7 +1744,7 @@ class SkillTier(StrEnum):
     """Where a skill comes from, in the order the model looks for it."""
 
     INSTANCE = "instance"
-    PACKAGE = "package"
+    KINBY = "kinby"
     WORKSPACE = "workspace"
 
 
@@ -1873,8 +1756,6 @@ class SkillSummary(ContractModel):
     name: SkillName
     tier: SkillTier
     description: str
-    #: ``instance``, ``workspace``, or the package's distribution and version.
-    source: str
     #: The tier of the skill that hides this one, when a higher tier has one by this name.
     shadowed_by: SkillTier | None
 
@@ -1935,7 +1816,7 @@ class ToolListCommand(ContractModel):
 
 class ToolSummary(ContractModel):
     name: str
-    #: ``core``, the package's distribution and version, or the instance file that defines it.
+    #: ``core``, the distribution and version that ship it, or the instance file that defines it.
     source: str
     write: bool
     rule: ToolRule

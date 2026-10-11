@@ -10,6 +10,7 @@ from kinby.contracts.models import (
     ConfigHistoryCommand,
     ConfigHistoryResult,
     ContractModel,
+    DeclaredSetup,
     Event,
     FactoryCheckCommand,
     FactoryCheckResult,
@@ -35,6 +36,7 @@ from kinby.contracts.models import (
     FactoryRunRetryCommand,
     FactoryRunSendBackCommand,
     FactoryRunSubscribeCommand,
+    ImageDescribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
     InstanceAdoptCommand,
@@ -77,13 +79,6 @@ from kinby.contracts.models import (
     MemoryWriteResult,
     OperationGetCommand,
     OperationGetResult,
-    PackageConfigGetCommand,
-    PackageConfigResult,
-    PackageConfigSetCommand,
-    PackageDescribeCommand,
-    PackageDescription,
-    PackageListCommand,
-    PackageListResult,
     PermissionsGetCommand,
     PermissionsResult,
     PermissionsSetCommand,
@@ -255,12 +250,6 @@ PERMISSIONS_GET = Method(
 PERMISSIONS_SET = Method(
     "permissions.set", Scope.INSTANCE_ADMIN, PermissionsSetCommand, PermissionsResult
 )
-PACKAGE_CONFIG_GET = Method(
-    "package.config.get", Scope.INSTANCE_READ, PackageConfigGetCommand, PackageConfigResult
-)
-PACKAGE_CONFIG_SET = Method(
-    "package.config.set", Scope.INSTANCE_ADMIN, PackageConfigSetCommand, PackageConfigResult
-)
 MEMORY_LIST = Method("memory.list", Scope.INSTANCE_READ, MemoryListCommand, MemoryListResult)
 MEMORY_OPEN = Method("memory.open", Scope.INSTANCE_READ, MemoryOpenCommand, MemoryOpenResult)
 MEMORY_ADD = Method("memory.add", Scope.INSTANCE_ADMIN, MemoryAddCommand, MemoryWriteResult)
@@ -343,10 +332,7 @@ OPERATION_GET = Method(
     alternative_scope=Scope.HUB_UPDATE,
 )
 IMAGE_PREPARE = Method("image.prepare", Scope.HUB_ADMIN, ImagePrepareCommand, ImagePrepareResult)
-PACKAGE_DESCRIBE = Method(
-    "package.describe", Scope.HUB_READ, PackageDescribeCommand, PackageDescription
-)
-PACKAGE_LIST = Method("package.list", Scope.HUB_READ, PackageListCommand, PackageListResult)
+IMAGE_DESCRIBE = Method("image.describe", Scope.HUB_READ, ImageDescribeCommand, DeclaredSetup)
 FACTORY_LIST = Method("factory.list", Scope.HUB_READ, FactoryListCommand, FactoryListResult)
 FACTORY_GET = Method("factory.get", Scope.HUB_READ, FactoryGetCommand, FactoryResult)
 FACTORY_EDIT = Method("factory.edit", Scope.HUB_ADMIN, FactoryEditCommand, FactoryResult)
@@ -417,8 +403,6 @@ METHODS = (
     MANIFEST_SET,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
-    PACKAGE_CONFIG_GET,
-    PACKAGE_CONFIG_SET,
     CONFIG_HISTORY,
     MEMORY_LIST,
     MEMORY_OPEN,
@@ -451,8 +435,7 @@ METHODS = (
     INSTANCE_LOGIN_START,
     OPERATION_GET,
     IMAGE_PREPARE,
-    PACKAGE_DESCRIBE,
-    PACKAGE_LIST,
+    IMAGE_DESCRIBE,
     FACTORY_LIST,
     FACTORY_GET,
     FACTORY_CHECK,

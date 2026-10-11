@@ -28,33 +28,25 @@ def _skill(root: Path, name: str, body: str) -> Path:
 def tiers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Instance:
     """An instance with a skill in each tier, some shadowing others.
 
-    ``planning`` is in the instance and the package, ``review`` in the package and the workspace.
+    ``planning`` is in the instance and kinby, ``review`` in kinby and the workspace.
     """
     path = tmp_path / "instance"
     path.mkdir()
     (path / "kinby.toml").write_text(
         'id = "test"\n[models]\nmain = "openai:gpt-5"\nrecap = "custom:unpriced"\n'
-        "[tools]\ndefaults = false\n[workspace.conventions]\nenabled = true\n",
+        "[workspace.conventions]\nenabled = true\n",
         encoding="utf-8",
     )
     _skill(path / "skills", "planning", "Plan my way.")
     _skill(path / "skills", "notes", "Take notes.")
-    package = tmp_path / "package"
-    _skill(package, "planning", "Plan the package way.")
-    _skill(package, "review", "Review the package way.")
-    (package / "review" / "checklist.md").write_text("- tests\n", encoding="utf-8")
+    kinby = tmp_path / "kinby"
+    _skill(kinby, "planning", "Plan the kinby way.")
+    _skill(kinby, "review", "Review the kinby way.")
+    (kinby / "review" / "checklist.md").write_text("- tests\n", encoding="utf-8")
     workspace = path / "workspace" / ".agents" / "skills"
     _skill(workspace, "review", "Review the workspace way.")
     _skill(workspace, "drafting", "Draft.")
-    factory = SimpleNamespace(
-        name="factory",
-        value="kinby_factory:SKILLS",
-        dist=SimpleNamespace(name="kinby-factory", version="0.3.0"),
-        load=lambda: package,
-    )
-    monkeypatch.setattr(
-        import_module("kinby.plugins.skills"), "entry_points", lambda *, group: (factory,)
-    )
+    monkeypatch.setattr(import_module("kinby.plugins.defaults"), "SKILLS", kinby)
     return load_instance(path)
 
 
@@ -67,15 +59,15 @@ def test_skill_list_shows_every_tier_with_the_shadowed_under_the_winner(tiers: I
         listed = await call(_dispatcher(tiers), "skill.list")
 
         assert [
-            (skill.name, skill.tier, skill.description, skill.source, skill.shadowed_by)
+            (skill.name, skill.tier, skill.description, skill.shadowed_by)
             for skill in listed.skills
         ] == [
-            ("drafting", "workspace", "Draft.", "workspace", None),
-            ("notes", "instance", "Take notes.", "instance", None),
-            ("planning", "instance", "Plan my way.", "instance", None),
-            ("planning", "package", "Plan the package way.", "kinby-factory 0.3.0", "instance"),
-            ("review", "package", "Review the package way.", "kinby-factory 0.3.0", None),
-            ("review", "workspace", "Review the workspace way.", "workspace", "package"),
+            ("drafting", "workspace", "Draft.", None),
+            ("notes", "instance", "Take notes.", None),
+            ("planning", "instance", "Plan my way.", None),
+            ("planning", "kinby", "Plan the kinby way.", "instance"),
+            ("review", "kinby", "Review the kinby way.", None),
+            ("review", "workspace", "Review the workspace way.", "kinby"),
         ]
         assert listed.warnings == ()
 
@@ -90,18 +82,17 @@ def test_skill_read_returns_any_tier_with_its_files_and_hash(tiers: Instance) ->
     async def scenario() -> None:
         dispatcher = _dispatcher(tiers)
 
-        package = await call(dispatcher, "skill.read", name="review", tier="package")
+        kinby = await call(dispatcher, "skill.read", name="review", tier="kinby")
         workspace = await call(dispatcher, "skill.read", name="review", tier="workspace")
-        missing = await call(dispatcher, "skill.read", name="notes", tier="package")
+        missing = await call(dispatcher, "skill.read", name="notes", tier="kinby")
 
-        assert package.content == (
-            "---\nname: review\ndescription: Review the package way.\n---\n"
-            "Review the package way.\n"
+        assert kinby.content == (
+            "---\nname: review\ndescription: Review the kinby way.\n---\nReview the kinby way.\n"
         )
-        assert package.files == ["checklist.md"]
+        assert kinby.files == ["checklist.md"]
         assert workspace.content.endswith("Review the workspace way.\n")
         assert workspace.files == []
-        assert package.hash != workspace.hash
+        assert kinby.hash != workspace.hash
         assert isinstance(missing, ErrorEnvelope)
         assert missing.code is ErrorCode.NOT_FOUND
 
@@ -119,7 +110,7 @@ def test_customize_copies_the_winning_skill_into_the_instance_to_edit(tiers: Ins
         )
 
         copy = tiers.path / "skills" / "review"
-        assert copied.content.endswith("Review the package way.\n")
+        assert copied.content.endswith("Review the kinby way.\n")
         assert copied.files == ["checklist.md"]
         assert (copy / "checklist.md").read_text(encoding="utf-8") == "- tests\n"
         assert (copy / "SKILL.md").read_text(encoding="utf-8") == edited
@@ -128,7 +119,7 @@ def test_customize_copies_the_winning_skill_into_the_instance_to_edit(tiers: Ins
         listed = await call(dispatcher, "skill.list")
         assert [(s.tier, s.shadowed_by) for s in listed.skills if s.name == "review"] == [
             ("instance", None),
-            ("package", "instance"),
+            ("kinby", "instance"),
             ("workspace", "instance"),
         ]
         history = await call(dispatcher, "config.history", file="skills/review", limit=10)
@@ -171,7 +162,7 @@ def test_delete_removes_the_instance_copy_and_brings_the_original_back(tiers: In
         assert stale.code is ErrorCode.STALE
         assert not (tiers.path / "skills" / "planning").exists()
         assert [(s.tier, s.shadowed_by) for s in deleted.skills if s.name == "planning"] == [
-            ("package", None)
+            ("kinby", None)
         ]
         history = await call(dispatcher, "config.history", file="skills/planning", limit=10)
         [change] = history.changes
@@ -181,12 +172,12 @@ def test_delete_removes_the_instance_copy_and_brings_the_original_back(tiers: In
     asyncio.run(scenario())
 
 
-def test_a_write_or_delete_of_a_package_skill_is_refused(tiers: Instance) -> None:
+def test_a_write_or_delete_of_a_kinby_skill_is_refused(tiers: Instance) -> None:
     async def scenario() -> None:
         dispatcher = _dispatcher(tiers)
-        read = await call(dispatcher, "skill.read", name="review", tier="package")
-        package_file = tiers.path.parent / "package" / "review" / "SKILL.md"
-        before = package_file.read_text(encoding="utf-8")
+        read = await call(dispatcher, "skill.read", name="review", tier="kinby")
+        kinby_file = tiers.path.parent / "kinby" / "review" / "SKILL.md"
+        before = kinby_file.read_text(encoding="utf-8")
 
         written = await call(
             dispatcher, "skill.write", name="review", content="Mine.", hash=read.hash
@@ -197,10 +188,10 @@ def test_a_write_or_delete_of_a_package_skill_is_refused(tiers: Instance) -> Non
             assert isinstance(refused, ErrorEnvelope)
             assert refused.code is ErrorCode.INVALID_ARGUMENT
             assert refused.fields == {
-                "name": '"review" is a package skill, which is read-only. '
+                "name": '"review" is a kinby skill, which is read-only. '
                 "Customize it to edit a copy in the instance."
             }
-        assert package_file.read_text(encoding="utf-8") == before
+        assert kinby_file.read_text(encoding="utf-8") == before
         assert not (tiers.path / "skills" / "review").exists()
         history = await call(dispatcher, "config.history", limit=10)
         assert history.changes == []

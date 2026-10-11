@@ -12,7 +12,6 @@ import { RefreshCwIcon } from "lucide-react"
 /** How the notice names each change that waits on a recreate. */
 const REASONS: Record<RecreateReason, string> = {
   secrets: "Replaced secrets",
-  package_config: "The edited package config",
 }
 
 /**

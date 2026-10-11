@@ -20,7 +20,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { usePace } from "@/hooks/use-pace"
 import { lastChanged } from "@/lib/config-changes"
-import { retried } from "@/lib/operation"
+import { type Pace, pace, retried } from "@/lib/operation"
 import {
   aboveCeiling,
   MODES,
@@ -78,7 +78,7 @@ export function PermissionsSection({ client, clock }: { client: Caller; clock: C
     setFields({})
   }, [])
   const load = useCallback(
-    () =>
+    (pacing: Pace) =>
       retried(() => openPermissions(client), pacing).then(
         (read) => {
           show(read)
@@ -87,11 +87,13 @@ export function PermissionsSection({ client, clock }: { client: Caller; clock: C
         },
         (error: unknown) => setFailure(error),
       ),
-    [client, pacing, show],
+    [client, show],
   )
   useEffect(() => {
-    void load()
-  }, [load])
+    const pacing = pace(clock)
+    void load(pacing)
+    return pacing.stop
+  }, [clock, load])
 
   if (opened === undefined || draft === undefined) {
     return failure === undefined ? (
@@ -135,7 +137,9 @@ export function PermissionsSection({ client, clock }: { client: Caller; clock: C
 
   return (
     <div className="flex flex-col gap-6">
-      {notice === "stale" && <StaleAlert file={PERMISSIONS_FILE} onLoad={() => void load()} />}
+      {notice === "stale" && (
+        <StaleAlert file={PERMISSIONS_FILE} onLoad={() => void load(pacing)} />
+      )}
       {failure !== undefined && <Failure error={failure} />}
       <FieldGroup>
         <FieldSet>
