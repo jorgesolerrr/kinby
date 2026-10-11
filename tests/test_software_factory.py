@@ -1169,6 +1169,7 @@ async def scanned(
         )
         accepted = await call(dispatcher, "routine.run", name="scan", payload=payload)
         assert isinstance(accepted, AcceptedResult), accepted
+        await dispatcher.scheduler.tick()
         stream = await thread_events(dispatcher, {"thread_id": accepted.thread_id}, set(Scope))
         async with asyncio.timeout(10):
             async for event in stream:
