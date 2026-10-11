@@ -360,6 +360,17 @@ def _install_errors(
     return errors
 
 
+def _instance_mount(storage: tuple[StorageItem, ...]) -> StorageItem | None:
+    return next(
+        (
+            item
+            for item in storage
+            if item.kind is StorageKind.BIND and item.destination == INSTANCE_MOUNT
+        ),
+        None,
+    )
+
+
 def _delete_directory(directory: Path) -> None:
     """A retry finds a directory an interrupted attempt already deleted, and that is done."""
     try:
@@ -1730,14 +1741,7 @@ class Hub:
         candidate the directory that holds .env. A missing file stays a directory
         mount with nothing attached, and the check reports the absence.
         """
-        mount = next(
-            (
-                item
-                for item in record.storage
-                if item.kind is StorageKind.BIND and item.destination == INSTANCE_MOUNT
-            ),
-            None,
-        )
+        mount = _instance_mount(record.storage)
         if mount is None or not (record.path / PACKAGE_CONFIG_NAME).is_file():
             return mount
         return StorageItem(
@@ -1750,10 +1754,15 @@ class Hub:
     def _visible_directory(self, record: ManagedInstance, item: StorageItem) -> Path | None:
         if item.destination == INSTANCE_MOUNT:
             return record.path.resolve()
+        mount = _instance_mount(record.storage)
+        seen_from = ((Path(mount.source), record.path.resolve()),) if mount is not None else ()
         source = Path(item.source)
-        if not source.is_relative_to(self._docker_host_directory):
-            return None
-        return (self.directory / source.relative_to(self._docker_host_directory)).resolve()
+        for host, seen in (*seen_from, (self._docker_host_directory, self.directory)):
+            if source.is_relative_to(host):
+                mapped = seen / source.relative_to(host)
+                # The hub would follow a symlink in its own namespace, not where Docker mounted it.
+                return mapped if mapped.resolve() == mapped else None
+        return None
 
     async def _observe_ready(self, record: ManagedInstance) -> None:
         """A container that runs is not an instance that booted.
