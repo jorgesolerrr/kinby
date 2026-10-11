@@ -71,6 +71,7 @@ const preview = {
   instance_id: "hub-grace",
   directories: ["/srv/kinby/instances/hub-grace", "/srv/kinby/shared/grace-notes"],
   volumes: ["kinby-hub-grace-workspace"],
+  retained: ["/home/grace/research"],
 }
 
 const previews = (caller: StubCaller) =>
@@ -208,6 +209,19 @@ describe("the Removed instances page", () => {
     expect(dialog.getByText("/srv/kinby/shared/grace-notes")).toBeDefined()
     expect(dialog.getByText("kinby-hub-grace-workspace")).toBeDefined()
     expect(previews(caller)).toEqual([{ instance_id: "hub-grace" }])
+  })
+
+  it("lists the binds the hub keeps before the user confirms, and says they stay on the Docker host", async () => {
+    const { user } = openPage({ "instance.delete.preview": () => preview })
+
+    await user.click(within(rowOf("Grace")).getByRole("button", { name: "Delete permanently" }))
+
+    const dialog = within(
+      await screen.findByRole("alertdialog", { name: "Delete Grace permanently" }),
+    )
+    const kept = await dialog.findByRole("list", { name: "Stays on the Docker host" })
+    expect(within(kept).getByText("/home/grace/research")).toBeDefined()
+    expect(dialog.getByText(/The hub can't see these binds/)).toBeDefined()
   })
 
   it("says why when the hub does not preview a deletion, and offers nothing to confirm", async () => {

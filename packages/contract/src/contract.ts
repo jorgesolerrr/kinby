@@ -889,6 +889,7 @@ export interface InstanceDeletePreviewCommand {
 export interface InstanceDeletePreviewResult {
   directories: string[];
   instance_id: string;
+  retained: string[];
   volumes: string[];
 }
 export interface InstanceDrainCommand {

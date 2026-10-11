@@ -1630,15 +1630,14 @@ class Hub:
                     self.registry.finish_operation(operation_id, OperationState.FAILED, str(exc))
                     return
                 try:
-                    await self._erase(operation_id, record, command)
+                    targets = await self._erase(operation_id, record, command)
                 except Exception as exc:
                     self._fail(operation_id, record, str(exc) or type(exc).__name__)
                     return
-                self.registry.finish_operation(
-                    operation_id,
-                    OperationState.SUCCEEDED,
-                    "Instance deleted. Its directories and named volumes are gone.",
-                )
+                detail = "Instance deleted. Its directories and named volumes are gone."
+                for path in targets.retained:
+                    detail += f" {path} stays on the Docker host."
+                self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, detail)
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
             raise
@@ -1648,7 +1647,7 @@ class Hub:
         operation_id: UUID,
         record: ManagedInstance,
         command: InstanceDeleteCommand,
-    ) -> None:
+    ) -> InstanceDeletePreviewResult:
         """Revalidate the preview, then delete each target and release it from the inventory.
 
         A target leaves the inventory only once it is gone. A retry therefore picks up
@@ -1682,7 +1681,8 @@ class Hub:
             entries = [
                 item
                 for item in owned
-                if item.kind is StorageKind.BIND and self._directory(record, item) == directory
+                if item.kind is StorageKind.BIND
+                and self._visible_directory(record, item) == directory
             ]
             self._record(operation_id, f"directory {directory}", f"Deleting {directory}.")
             await asyncio.to_thread(_delete_directory, directory)
@@ -1695,6 +1695,7 @@ class Hub:
             await self._runtime.delete_volume(volume)
             self.registry.release_storage(record.instance_id, entries)
         self.registry.mark_deleted(record.instance_id)
+        return targets
 
     def _deletion_targets(self, record: ManagedInstance) -> InstanceDeletePreviewResult:
         """The writable storage the retained inventory records, and nothing it does not.
@@ -1703,15 +1704,21 @@ class Hub:
         this instance's to delete. Neither is anything the manifest merely references.
         """
         owned = [item for item in record.storage if item.writable]
+        binds = [
+            (item, self._visible_directory(record, item))
+            for item in owned
+            if item.kind is StorageKind.BIND
+        ]
         return InstanceDeletePreviewResult(
             instance_id=record.instance_id,
             directories=list(
-                dict.fromkeys(
-                    self._directory(record, item) for item in owned if item.kind is StorageKind.BIND
-                )
+                dict.fromkeys(directory for _, directory in binds if directory is not None)
             ),
             volumes=list(
                 dict.fromkeys(item.source for item in owned if item.kind is StorageKind.VOLUME)
+            ),
+            retained=list(
+                dict.fromkeys(item.source for item, directory in binds if directory is None)
             ),
         )
 
@@ -1740,15 +1747,13 @@ class Hub:
             writable=False,
         )
 
-    def _directory(self, record: ManagedInstance, item: StorageItem) -> Path:
-        """Where this hub sees a bind source.
-
-        A bind source names a path on the Docker host. The instance directory is
-        where the record keeps it as the hub sees it, wherever the host mounts it from.
-        """
+    def _visible_directory(self, record: ManagedInstance, item: StorageItem) -> Path | None:
         if item.destination == INSTANCE_MOUNT:
             return record.path.resolve()
-        return Path(item.source).resolve()
+        source = Path(item.source)
+        if not source.is_relative_to(self._docker_host_directory):
+            return None
+        return (self.directory / source.relative_to(self._docker_host_directory)).resolve()
 
     async def _observe_ready(self, record: ManagedInstance) -> None:
         """A container that runs is not an instance that booted.

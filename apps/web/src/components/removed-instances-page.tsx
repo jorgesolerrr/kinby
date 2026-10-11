@@ -5,7 +5,7 @@ import type {
   InstanceDeletePreviewResult,
   InstanceSummary,
 } from "@kinby/contract"
-import { useCallback, useEffect, useId, useState } from "react"
+import { type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
 import { OperationSteps } from "@/components/operation-steps"
@@ -311,6 +311,9 @@ function Deletion({
         <div className="flex max-h-64 flex-col gap-4 overflow-y-auto">
           <Targets label="Directories" targets={preview.directories} />
           <Targets label="Volumes" targets={preview.volumes} />
+          <Targets label="Stays on the Docker host" targets={preview.retained}>
+            <p>The hub can't see these binds, so it leaves them where they are.</p>
+          </Targets>
         </div>
       )}
       <Field>
@@ -341,9 +344,11 @@ function Deletion({
           variant="destructive"
           disabled={preview === undefined || typed !== name || request !== undefined}
           onClick={() => {
+            if (preview === undefined) return
+            const { instance_id, directories, volumes } = preview
             setChanged(false)
             onDeleting(true)
-            setRequest(preview)
+            setRequest({ instance_id, directories, volumes })
           }}
         >
           Delete permanently
@@ -353,11 +358,20 @@ function Deletion({
   )
 }
 
-function Targets({ label, targets }: { label: string; targets: string[] }) {
+function Targets({
+  label,
+  targets,
+  children,
+}: {
+  label: string
+  targets: string[]
+  children?: ReactNode
+}) {
   if (targets.length === 0) return null
   return (
     <section className="flex flex-col gap-1 text-sm">
       <h3 className="font-medium">{label}</h3>
+      {children}
       <ul aria-label={label} className="font-mono break-all text-muted-foreground">
         {targets.map((target) => (
           <li key={target}>{target}</li>
