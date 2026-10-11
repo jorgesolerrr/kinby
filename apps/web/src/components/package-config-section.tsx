@@ -29,7 +29,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { usePace } from "@/hooks/use-pace"
 import { lastChanged } from "@/lib/config-changes"
-import { retried } from "@/lib/operation"
+import { type Pace, pace, retried } from "@/lib/operation"
 import {
   type FormField,
   located,
@@ -70,7 +70,7 @@ export function PackageConfigSection({
     setErrors({})
   }, [])
   const load = useCallback(
-    () =>
+    (pacing: Pace) =>
       retried(() => openPackageConfig(client), pacing).then(
         (read) => {
           show(read)
@@ -79,11 +79,13 @@ export function PackageConfigSection({
         },
         (error: unknown) => setFailure(error),
       ),
-    [client, pacing, show],
+    [client, show],
   )
   useEffect(() => {
-    void load()
-  }, [load])
+    const pacing = pace(clock)
+    void load(pacing)
+    return pacing.stop
+  }, [clock, load])
 
   if (opened === undefined) {
     return failure === undefined ? (
@@ -136,7 +138,9 @@ export function PackageConfigSection({
   const reasons = { ...errors, ...refused }
   return (
     <div className="flex flex-col gap-6">
-      {notice === "stale" && <StaleAlert file={PACKAGE_CONFIG_FILE} onLoad={() => void load()} />}
+      {notice === "stale" && (
+        <StaleAlert file={PACKAGE_CONFIG_FILE} onLoad={() => void load(pacing)} />
+      )}
       {failure !== undefined && <Failure error={failure} />}
       <FieldGroup>
         <ConfigFields fields={fields} path="" errors={reasons} onChange={change} />

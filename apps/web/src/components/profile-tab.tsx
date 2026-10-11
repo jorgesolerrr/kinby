@@ -9,7 +9,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { usePace } from "@/hooks/use-pace"
 import { lastChanged } from "@/lib/config-changes"
-import { retried } from "@/lib/operation"
+import { type Pace, pace, retried } from "@/lib/operation"
 import { type OpenedProfile, openProfile, PROFILE_FILE, saveProfile, tokens } from "@/lib/profile"
 
 type Caller = Pick<InstanceClient, "call">
@@ -33,7 +33,7 @@ export function ProfileTab({ client, clock }: { client: Caller; clock: Clock }) 
     setDraft(read.profile.text)
   }, [])
   const load = useCallback(
-    () =>
+    (pacing: Pace) =>
       retried(() => openProfile(client), pacing).then(
         (read) => {
           show(read)
@@ -42,11 +42,13 @@ export function ProfileTab({ client, clock }: { client: Caller; clock: Clock }) 
         },
         (error: unknown) => setFailure(error),
       ),
-    [client, pacing, show],
+    [client, show],
   )
   useEffect(() => {
-    void load()
-  }, [load])
+    const pacing = pace(clock)
+    void load(pacing)
+    return pacing.stop
+  }, [clock, load])
 
   if (opened === undefined) {
     return failure === undefined ? (
@@ -71,7 +73,7 @@ export function ProfileTab({ client, clock }: { client: Caller; clock: Clock }) 
 
   return (
     <div className="flex flex-col gap-3">
-      {notice === "stale" && <StaleAlert file={PROFILE_FILE} onLoad={() => void load()} />}
+      {notice === "stale" && <StaleAlert file={PROFILE_FILE} onLoad={() => void load(pacing)} />}
       {failure !== undefined && <Failure error={failure} />}
       <Field>
         <FieldLabel htmlFor={id}>{PROFILE_FILE}</FieldLabel>

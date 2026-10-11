@@ -19,8 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { usePace } from "@/hooks/use-pace"
-import { retried } from "@/lib/operation"
+import { pace, retried } from "@/lib/operation"
 import { failuresInARow, lastFiring, nextFiring } from "@/lib/routines"
 import { openRoutine, routinePath } from "@/lib/selection"
 import { money, originName, SOURCE_LABELS } from "@/lib/stats"
@@ -48,26 +47,23 @@ export function Origins({
   onPick: (origin: OriginUse) => void
   children: ReactNode
 }) {
-  const pacing = usePace(clock)
   const [routines, setRoutines] = useState<RoutineSummary[]>()
   const [failure, setFailure] = useState<unknown>()
 
   useEffect(() => {
-    let current = true
+    const pacing = pace(clock)
     retried(() => client.call("routine.list", {}), pacing).then(
       (listed) => {
-        if (!current) return
+        if (pacing.stopped) return
         setRoutines(listed.routines)
         setFailure(undefined)
       },
       (error: unknown) => {
-        if (current) setFailure(error)
+        if (!pacing.stopped) setFailure(error)
       },
     )
-    return () => {
-      current = false
-    }
-  }, [client, pacing, stats])
+    return pacing.stop
+  }, [client, clock, stats])
 
   return (
     <>

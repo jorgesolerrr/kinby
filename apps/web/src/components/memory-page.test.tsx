@@ -11,6 +11,7 @@ import { CallError } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { StrictMode } from "react"
 import { beforeEach, describe, expect, it } from "vitest"
 
 import { MemoryPage } from "@/components/memory-page"
@@ -217,6 +218,28 @@ describe("the memory page", () => {
 
     expect(await pane().findByText("The body of Fixed the deploy.")).toBeDefined()
     expect(called(caller, "memory.open")).toEqual([{ node: deploy.node }])
+  })
+
+  it("asks again for the opened node once a second under StrictMode, which remounts the pane", async () => {
+    window.history.replaceState(null, "", `/instances/instance-1/memory/${deploy.node}`)
+    const clock = fakeClock()
+    const caller = stubCaller({
+      "memory.list": () => listing([deploy]),
+      "memory.open": () => {
+        throw new CallError({ code: "CONNECTION_LOST", message: "dropped", retryable: false })
+      },
+    })
+    render(
+      <StrictMode>
+        <MemoryPage client={caller} clock={clock} instanceId="instance-1" />
+      </StrictMode>,
+    )
+    await act(() => clock.advance(0))
+    const opens = called(caller, "memory.open").length
+
+    await act(() => clock.advance(1_000))
+
+    expect(called(caller, "memory.open").length - opens).toBe(1)
   })
 
   it("says why a linked node forgotten since the link was made did not open", async () => {

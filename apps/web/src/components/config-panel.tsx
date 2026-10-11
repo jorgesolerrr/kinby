@@ -38,7 +38,7 @@ import { usePace } from "@/hooks/use-pace"
 import { usePolled } from "@/hooks/use-polled"
 import { lastChanged } from "@/lib/config-changes"
 import { OlderCore } from "@/lib/older-core"
-import { retried } from "@/lib/operation"
+import { type Pace, pace, retried } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
 import { leaveLink, linkedPackage, linkedRoutine } from "@/lib/selection"
 import {
@@ -402,7 +402,7 @@ function PromptSection({
     setDraft(read.prompt.content)
   }, [])
   const load = useCallback(
-    () =>
+    (pacing: Pace) =>
       retried(() => openPrompt(client, name), pacing).then(
         (read) => {
           show(read)
@@ -411,11 +411,13 @@ function PromptSection({
         },
         (error: unknown) => setFailure(error),
       ),
-    [client, name, pacing, show],
+    [client, name, show],
   )
   useEffect(() => {
-    void load()
-  }, [load])
+    const pacing = pace(clock)
+    void load(pacing)
+    return pacing.stop
+  }, [clock, load])
 
   if (opened === undefined) {
     return failure === undefined ? (
@@ -440,7 +442,7 @@ function PromptSection({
 
   return (
     <div className="flex flex-col gap-3">
-      {notice === "stale" && <StaleAlert file={file} onLoad={() => void load()} />}
+      {notice === "stale" && <StaleAlert file={file} onLoad={() => void load(pacing)} />}
       {failure !== undefined && <Failure error={failure} />}
       <Field>
         <div className="flex items-center gap-2">
