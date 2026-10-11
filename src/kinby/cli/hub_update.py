@@ -30,6 +30,10 @@ from kinby.contracts import (
 
 #: How often the command reads the operation. An update builds an image, so it takes minutes.
 POLL_SECONDS = 1.0
+#: How long a call waits for a connection to the hub before the command gives up.
+CONNECT_SECONDS = 60.0
+#: How long the command follows an operation with no poll reaching the hub.
+LOSS_SECONDS = 600.0
 
 
 def update_on_hub(argv: list[str]) -> int:
@@ -95,7 +99,7 @@ def update_on_hub(argv: list[str]) -> int:
 
 
 async def _update(url: str, token: UpdateToken, command: InstanceUpdateCommand) -> int:
-    async with contract_client(url, token) as client:
+    async with contract_client(url, token, connect_within=CONNECT_SECONDS) as client:
         accepted = await client.call(INSTANCE_UPDATE, command)
         if isinstance(accepted, ErrorEnvelope):
             print(format_error(accepted), file=sys.stderr)
@@ -108,24 +112,34 @@ async def _update(url: str, token: UpdateToken, command: InstanceUpdateCommand) 
 async def follow_operation(client: ContractClient, command: OperationGetCommand) -> int:
     """Print each step once, as it appears, then the outcome. Only success exits zero."""
     printed = 0
-    while True:
-        operation = await client.call(OPERATION_GET, command)
-        if isinstance(operation, ErrorEnvelope):
-            # The hub keeps the update running when the socket drops. The next poll
-            # reads the same operation once the client has reconnected.
-            if operation.code is ErrorCode.CONNECTION_LOST:
+    try:
+        async with asyncio.timeout(LOSS_SECONDS) as loss:
+            while True:
+                operation = await client.call(OPERATION_GET, command)
+                if isinstance(operation, ErrorEnvelope):
+                    # The hub keeps the update running when the socket drops. The next poll
+                    # reads the same operation once the client has reconnected.
+                    if operation.code is ErrorCode.CONNECTION_LOST:
+                        await asyncio.sleep(POLL_SECONDS)
+                        continue
+                    print(format_error(operation), file=sys.stderr)
+                    return 1
+                loss.reschedule(asyncio.get_running_loop().time() + LOSS_SECONDS)
+                for step in operation.steps[printed:]:
+                    print(f"{step.name}: {step.detail}", flush=True)
+                printed = len(operation.steps)
+                match operation.state:
+                    case OperationState.SUCCEEDED:
+                        print(f"succeeded: {operation.detail}")
+                        return 0
+                    case OperationState.FAILED:
+                        print(f"failed: {operation.detail}", file=sys.stderr)
+                        return 1
                 await asyncio.sleep(POLL_SECONDS)
-                continue
-            print(format_error(operation), file=sys.stderr)
-            return 1
-        for step in operation.steps[printed:]:
-            print(f"{step.name}: {step.detail}", flush=True)
-        printed = len(operation.steps)
-        match operation.state:
-            case OperationState.SUCCEEDED:
-                print(f"succeeded: {operation.detail}")
-                return 0
-            case OperationState.FAILED:
-                print(f"failed: {operation.detail}", file=sys.stderr)
-                return 1
-        await asyncio.sleep(POLL_SECONDS)
+    except TimeoutError:
+        print(
+            f"No poll reached the hub for {LOSS_SECONDS:g} seconds. "
+            "The operation may still be running on the hub.",
+            file=sys.stderr,
+        )
+        return 1

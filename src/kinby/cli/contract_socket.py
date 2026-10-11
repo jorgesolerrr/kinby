@@ -63,6 +63,11 @@ AUTHENTICATION_FAILED = ErrorEnvelope(
     message="The contract server rejected the token.",
     retryable=False,
 )
+UNANSWERED = ErrorEnvelope(
+    code=ErrorCode.CONNECTION_LOST,
+    message="The contract server did not answer before the client gave up waiting.",
+    retryable=False,
+)
 UNREADABLE = ErrorEnvelope(
     code=ErrorCode.INTERNAL,
     message="The contract server answered with something this client could not read.",
@@ -126,9 +131,15 @@ class _Subscription:
 class ContractSocket:
     """The two callables of a contract client, answered over a socket that comes and goes."""
 
-    def __init__(self, session: aiohttp.ClientSession, url: str) -> None:
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        connect_within: float | None = None,
+    ) -> None:
         self._session = session
         self._url = url
+        self._connect_within = connect_within
         self._socket: aiohttp.ClientWebSocketResponse | None = None
         self._live = asyncio.Event()
         self._stopped: ErrorEnvelope | None = None
@@ -155,9 +166,9 @@ class ContractSocket:
     ) -> ContractModel:
         """Scopes ride on the token: the contract server decides what this connection holds."""
         del scopes
-        await self._live.wait()
-        if self._stopped is not None:
-            return self._stopped
+        unreachable = await self._unreachable()
+        if unreachable is not None:
+            return unreachable
         frame_id = self._next_id()
         answer: asyncio.Future[ContractModel] = asyncio.get_running_loop().create_future()
         self._calls[frame_id] = _Call(RESULT_MODELS[method], answer)
@@ -176,9 +187,9 @@ class ContractSocket:
         scopes: Collection[Scope],
     ) -> Stream[ContractModel] | ErrorEnvelope:
         del scopes
-        await self._live.wait()
-        if self._stopped is not None:
-            return self._stopped
+        unreachable = await self._unreachable()
+        if unreachable is not None:
+            return unreachable
         frame_id = self._next_id()
         subscription = _Subscription(
             frame_id,
@@ -195,8 +206,17 @@ class ContractSocket:
             return head_sequence
         return Stream(head_sequence, self._items(subscription))
 
+    async def _unreachable(self) -> ErrorEnvelope | None:
+        """Wait for a live connection, and say why a call cannot go out without one."""
+        try:
+            async with asyncio.timeout(self._connect_within):
+                await self._live.wait()
+        except TimeoutError:
+            return UNANSWERED
+        return self._stopped
+
     async def _connect(self) -> None:
-        """Reconnect with full-jitter backoff until the body is done, or the token is rejected."""
+        """Reconnect with full-jitter backoff until the body is done, or a refusal is final."""
         attempt = 0
         while self._stopped is None:
             try:
@@ -207,8 +227,7 @@ class ContractSocket:
                         if message.type is aiohttp.WSMsgType.TEXT:
                             self._answer(parse_server_frame(message.data))
             except aiohttp.WSServerHandshakeError as refusal:
-                if refusal.status == HTTPStatus.UNAUTHORIZED:
-                    self._stopped = AUTHENTICATION_FAILED
+                self._stopped = _final_refusal(refusal.status)
                 _logger.info("The contract server refused the connection: %s", refusal)
             except (aiohttp.ClientError, OSError) as failure:
                 _logger.info("The contract server connection failed: %s", failure)
@@ -322,12 +341,18 @@ class ContractSocket:
 async def contract_client(
     url: str,
     token: ControlToken | AccessToken | UpdateToken,
+    *,
+    connect_within: float | None = None,
 ) -> AsyncIterator[ContractClient]:
-    """Open a client on an instance's or a hub's contract server, with a bearer token."""
+    """Open a client on an instance's or a hub's contract server, with a bearer token.
+
+    With ``connect_within`` seconds, a call that finds no live connection for that long
+    answers `UNANSWERED`. Without it, a call waits for the socket to come back.
+    """
     protected = protected_contract_url(url)
     headers = {"Authorization": f"Bearer {token}"}
     async with aiohttp.ClientSession(headers=headers) as session:
-        contract = ContractSocket(session, protected)
+        contract = ContractSocket(session, protected, connect_within)
         async with contract.connected():
             yield ContractClient(contract.dispatch, contract.subscribe, INSTANCE_SCOPES)
 
@@ -355,6 +380,29 @@ def _loopback(host: str) -> bool:
         return ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _final_refusal(status: int) -> ErrorEnvelope | None:
+    """The error a refused handshake stops the socket with, or None when a retry may succeed."""
+    match status:
+        case HTTPStatus.REQUEST_TIMEOUT | HTTPStatus.TOO_MANY_REQUESTS:
+            return None
+        case _ if status >= HTTPStatus.INTERNAL_SERVER_ERROR:
+            return None
+        case HTTPStatus.UNAUTHORIZED:
+            return AUTHENTICATION_FAILED
+        case HTTPStatus.FORBIDDEN:
+            code = ErrorCode.PERMISSION_DENIED
+        case HTTPStatus.NOT_FOUND:
+            code = ErrorCode.NOT_FOUND
+        case _:
+            code = ErrorCode.INVALID_ARGUMENT
+    return ErrorEnvelope(
+        code=code,
+        message=f"The contract server answered HTTP {status} instead of opening a socket. "
+        "Check the URL, which must end in /ws.",
+        retryable=False,
+    )
 
 
 def _backoff(attempt: int) -> float:

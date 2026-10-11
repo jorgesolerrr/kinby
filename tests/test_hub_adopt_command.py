@@ -13,6 +13,7 @@ from kinby.hub import Hub
 from tests.test_hub import FakeControl, FakeImages, FakeRuntime, hub_at
 from tests.test_hub_adoption import CODER_CONTAINER, FACTORY, declare_package, existing_coder
 from tests.test_hub_server import served, url
+from tests.test_hub_update_command import closed_url
 
 
 def _adopt(hub: Hub, *arguments: str) -> int:
@@ -71,3 +72,16 @@ def test_hub_adopt_needs_the_access_token(
 
     assert exit_code == 1
     assert TOKEN_VARIABLE in capsys.readouterr().err
+
+
+def test_hub_adopt_gives_up_when_no_connection_comes_up(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(TOKEN_VARIABLE, "token")
+    monkeypatch.setattr("kinby.cli.hub_adopt.CONNECT_SECONDS", 1)
+
+    exit_code = main(["hub", "adopt", "--connect", f"{closed_url()}/ws", "/instance", "coder"])
+
+    assert exit_code == 1
+    assert "did not answer" in capsys.readouterr().err

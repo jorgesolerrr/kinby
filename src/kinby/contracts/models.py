@@ -97,7 +97,8 @@ class ErrorCode(StrEnum):
     STALE = "STALE"
     #: The routine has deliveries waiting to fire, so it cannot be deleted yet.
     ROUTINE_PENDING = "ROUTINE_PENDING"
-    #: Raised by a client, never sent by a server: its connection dropped under a call.
+    #: Raised by a client, never sent by a server: its connection dropped under a call,
+    #: or never came up.
     CONNECTION_LOST = "CONNECTION_LOST"
     INTERNAL = "INTERNAL"
 

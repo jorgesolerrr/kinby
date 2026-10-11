@@ -1,11 +1,14 @@
 """`kinby hub update`: the command CI runs to update one instance through a hub."""
 
 import asyncio
+import socket
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
+from aiohttp import web
 
 from kinby.cli import main
 from kinby.cli.client import ContractClient
@@ -116,6 +119,40 @@ def test_hub_update_keeps_following_when_a_poll_loses_the_socket(
     assert captured.out.splitlines()[-1] == "succeeded: Instance updated."
 
 
+class _LoseEveryPoll:
+    """Answer every ``operation.get`` the way a socket drop does."""
+
+    def __init__(self, client: ContractClient) -> None:
+        self._client = client
+
+    async def call[Command: ContractModel, Result: ContractModel](
+        self,
+        method: Method[Command, Result],
+        command: Command,
+    ) -> Result | ErrorEnvelope:
+        if method is OPERATION_GET:
+            return CONNECTION_LOST
+        return await self._client.call(method, command)
+
+
+def test_hub_update_gives_up_when_no_poll_reaches_the_hub_for_too_long(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    hub = hub_at(tmp_path / "hub", images=CandidateImages(), control=FakeControl())
+    instance_id = _started(hub)
+    monkeypatch.setenv(TOKEN_VARIABLE, hub.access.rotate_update_token())
+    monkeypatch.setattr("kinby.cli.hub_update.POLL_SECONDS", 0.01)
+    monkeypatch.setattr("kinby.cli.hub_update.LOSS_SECONDS", 0.2)
+    monkeypatch.setattr("kinby.cli.hub_update.contract_client", _lose_every_poll)
+
+    exit_code = _update(hub, instance_id, "--revision", "v0.2.0")
+
+    assert exit_code == 1
+    assert "may still be running" in capsys.readouterr().err
+
+
 class _RefusePoll:
     """Answer ``operation.get`` with an error the hub actually sent."""
 
@@ -153,14 +190,26 @@ def test_hub_update_stops_when_the_hub_rejects_the_poll(
 
 
 @asynccontextmanager
-async def _drop_one_poll(url: str, token: UpdateToken) -> AsyncIterator[_LoseOnePoll]:
-    async with contract_client(url, token) as client:
+async def _drop_one_poll(
+    url: str, token: UpdateToken, *, connect_within: float
+) -> AsyncIterator[_LoseOnePoll]:
+    async with contract_client(url, token, connect_within=connect_within) as client:
         yield _LoseOnePoll(client)
 
 
 @asynccontextmanager
-async def _refuse_poll(url: str, token: UpdateToken) -> AsyncIterator[_RefusePoll]:
-    async with contract_client(url, token) as client:
+async def _lose_every_poll(
+    url: str, token: UpdateToken, *, connect_within: float
+) -> AsyncIterator[_LoseEveryPoll]:
+    async with contract_client(url, token, connect_within=connect_within) as client:
+        yield _LoseEveryPoll(client)
+
+
+@asynccontextmanager
+async def _refuse_poll(
+    url: str, token: UpdateToken, *, connect_within: float
+) -> AsyncIterator[_RefusePoll]:
+    async with contract_client(url, token, connect_within=connect_within) as client:
         yield _RefusePoll(client)
 
 
@@ -276,6 +325,102 @@ def test_hub_update_stops_when_the_hub_refuses_the_token(
 
     assert exit_code == 1
     assert "rejected the token" in capsys.readouterr().err
+
+
+def test_hub_update_gives_up_when_no_connection_comes_up(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(TOKEN_VARIABLE, "token")
+    monkeypatch.setattr("kinby.cli.hub_update.CONNECT_SECONDS", 1)
+
+    exit_code = main(
+        ["hub", "update", "--connect", f"{closed_url()}/ws", str(uuid4()), "--revision", "v0.2.0"]
+    )
+
+    assert exit_code == 1
+    assert "did not answer" in capsys.readouterr().err
+
+
+@asynccontextmanager
+async def _answering(status: int) -> AsyncIterator[tuple[str, list[str]]]:
+    """A server that answers every request with one status and never opens a socket."""
+    requests: list[str] = []
+
+    async def handler(request: web.Request) -> web.Response:
+        requests.append(request.path)
+        return web.Response(status=status)
+
+    application = web.Application()
+    application.router.add_get("/{path:.*}", handler)
+    runner = web.AppRunner(application, shutdown_timeout=0.1)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    try:
+        yield f"http://127.0.0.1:{site.port}", requests
+    finally:
+        await runner.cleanup()
+
+
+def _update_answered(status: int, path: str) -> list[str]:
+    """Run the command against a server answering ``status``, and list the requests it got."""
+
+    async def scenario() -> list[str]:
+        async with _answering(status) as (address, requests):
+            exit_code = await asyncio.to_thread(
+                main,
+                [
+                    "hub",
+                    "update",
+                    "--connect",
+                    f"{address}{path}",
+                    str(uuid4()),
+                    "--revision",
+                    "v0.2.0",
+                ],
+            )
+            assert exit_code == 1
+            return requests
+
+    return asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status", [404, 200])
+def test_hub_update_stops_at_the_first_answer_that_is_no_socket(
+    status: int,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(TOKEN_VARIABLE, "token")
+    monkeypatch.setattr("kinby.cli.hub_update.CONNECT_SECONDS", 5)
+
+    requests = _update_answered(status, "/")
+
+    refusal = capsys.readouterr().err
+    assert requests == ["/"]
+    assert str(status) in refusal
+    assert "/ws" in refusal
+
+
+def test_hub_update_retries_a_hub_that_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(TOKEN_VARIABLE, "token")
+    monkeypatch.setattr("kinby.cli.hub_update.CONNECT_SECONDS", 2)
+
+    requests = _update_answered(503, "/ws")
+
+    assert len(requests) > 1
+    assert "did not answer" in capsys.readouterr().err
+
+
+def closed_url() -> str:
+    """A loopback URL that refuses every connection, because nothing listens on its port."""
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return f"http://127.0.0.1:{listener.getsockname()[1]}"
 
 
 def test_hub_update_needs_the_token_and_a_package_for_its_commit(
