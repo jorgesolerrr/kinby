@@ -370,58 +370,19 @@ def test_the_schema_declares_the_profile_calls() -> None:
     }
 
 
-def test_an_instance_summary_carries_its_notices_as_a_union_on_code() -> None:
+def test_an_instance_summary_carries_its_notices() -> None:
     definitions = _object(contract_schema()["$defs"])
     summary = _object(definitions["InstanceSummary"])
 
     assert "notices" in cast(list[str], summary["required"])
     notice = _object(_object(summary["properties"])["notices"])["items"]
-    assert _object(notice)["discriminator"] == {
-        "propertyName": "code",
-        "mapping": {
-            "package_template_older": "#/$defs/PackageTemplateOlder",
-            "revision_behind": "#/$defs/RevisionBehind",
-        },
+    assert notice == {"$ref": "#/$defs/RevisionBehind"}
+    assert set(cast(list[str], _object(definitions["RevisionBehind"])["required"])) == {
+        "code",
+        "message",
+        "instance_revision",
+        "hub_revision",
     }
-    assert {
-        name: set(cast(list[str], _object(definitions[name])["required"]))
-        for name in ("RevisionBehind", "PackageTemplateOlder")
-    } == {
-        "RevisionBehind": {"code", "message", "instance_revision", "hub_revision"},
-        "PackageTemplateOlder": {"code", "message", "initialized_version", "installed_version"},
-    }
-
-
-def test_the_schema_declares_the_package_config_calls_and_restart_reasons() -> None:
-    schema = contract_schema()
-    definitions = _object(schema["$defs"])
-    methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
-
-    assert {
-        name: _object(methods_schema[name])["properties"]
-        for name in ("package.config.get", "package.config.set")
-    } == {
-        "package.config.get": {
-            "command": {"$ref": "#/$defs/PackageConfigGetCommand"},
-            "result": {"$ref": "#/$defs/PackageConfigResult"},
-        },
-        "package.config.set": {
-            "command": {"$ref": "#/$defs/PackageConfigSetCommand"},
-            "result": {"$ref": "#/$defs/PackageConfigResult"},
-        },
-    }
-    assert set(cast(list[str], _object(definitions["PackageConfigResult"])["required"])) == {
-        "schema",
-        "values",
-        "hash",
-    }
-    assert set(cast(list[str], _object(definitions["PackageConfigSetCommand"])["required"])) == {
-        "values",
-        "hash",
-    }
-    probe = _object(_object(definitions["InstanceProbeResult"])["properties"])
-    assert _object(probe["restart_reasons"])["items"] == {"$ref": "#/$defs/RecreateReason"}
-    assert _object(definitions["RecreateReason"])["enum"] == ["secrets", "package_config"]
 
 
 def test_the_status_lists_the_recreate_reasons_it_always_carries() -> None:
@@ -479,7 +440,6 @@ def test_the_schema_declares_the_skill_and_tool_calls() -> None:
         "name",
         "tier",
         "description",
-        "source",
         "shadowed_by",
     }
     assert set(cast(list[str], _object(definitions["SkillWriteCommand"])["required"])) == {
@@ -487,5 +447,5 @@ def test_the_schema_declares_the_skill_and_tool_calls() -> None:
         "content",
         "hash",
     }
-    assert _object(definitions["SkillTier"])["enum"] == ["instance", "package", "workspace"]
+    assert _object(definitions["SkillTier"])["enum"] == ["instance", "kinby", "workspace"]
     assert _object(definitions["ToolRule"])["enum"] == ["allow", "ask", "deny", "mode"]

@@ -1,6 +1,8 @@
 import asyncio
+import json
 import os
 import socket
+import sqlite3
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -16,6 +18,7 @@ from kinby.contracts import (
     CONTRACT_VERSION,
     CONTROL_SCOPES,
     HUB_SCOPES,
+    IMAGE_DESCRIBE,
     IMAGE_PREPARE,
     INSTANCE_CREATE,
     INSTANCE_DELETE,
@@ -32,16 +35,16 @@ from kinby.contracts import (
     INSTANCE_STOP,
     INSTANCE_UPDATE,
     OPERATION_GET,
-    PACKAGE_DESCRIBE,
-    PACKAGE_LIST,
     Capability,
     ContainerOwner,
     ControlToken,
+    DeclaredSetup,
     DrainState,
     ErrorCode,
     ErrorEnvelope,
     ErrorFrame,
     FrameId,
+    ImageDescribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
     InstanceCreateCommand,
@@ -57,10 +60,7 @@ from kinby.contracts import (
     OperationGetResult,
     OperationKind,
     OperationState,
-    PackageDescription,
-    PackageSelection,
     Readiness,
-    RecreateReason,
     Scope,
     SetupField,
     SetupFieldKind,
@@ -86,23 +86,17 @@ from kinby.hub import (
     ImageSelection,
     InstanceControl,
     InstanceSpec,
-    PreparedImage,
     RuntimeStatus,
     SetupSpec,
     secrets_digest,
 )
 from kinby.hub.service import HubAlreadyRunning
 from kinby.instance import inspect_instance
-from kinby.packages import (
-    InstalledPackage,
-    PackageDescriptor,
-    package_description,
-    vanilla_description,
-)
+from kinby.setup import vanilla_description
 
 
 def secret_field(name: str, label: str, description: str) -> SetupField:
-    """A required secret text field, as a package declares one."""
+    """A required secret text field, as a template declares one."""
     return SetupField(
         name=name,
         label=label,
@@ -118,36 +112,18 @@ class FakeImages:
         self,
         *,
         failure: str | None = None,
-        package: InstalledPackage | None = None,
+        declared: DeclaredSetup | None = None,
         check_failure: str | None = None,
-        config_failure: str | None = None,
     ) -> None:
         self.revisions: list[str] = []
         self.selections: list[ImageSelection] = []
         self.failure = failure
-        self.package = package
+        #: What the image declares. kinby's own vanilla fields unless a test says otherwise.
+        self.declared = declared or vanilla_description()
         self.check_failure = check_failure
-        #: What the package's validator says about any instance package.yaml it is shown.
-        self.config_failure = config_failure
-        #: Each instance package.yaml the candidate check read, as it read it.
-        self.checked_configs: list[str] = []
         self.described: list[ImageArtifact] = []
         #: The commit the hub's checkout is at: the one this fake builds, until a test moves it.
         self.hub_revision = "a" * 40
-
-    async def prepare(
-        self,
-        selection: ImageSelection,
-        instance: StorageItem | None = None,
-    ) -> PreparedImage:
-        artifact = (await self.build(selection)).artifact
-        if instance is not None:
-            config = Path(instance.source)
-            if config.is_file():
-                self.checked_configs.append(config.read_text(encoding="utf-8"))
-            if self.config_failure is not None:
-                raise ValueError(self.config_failure)
-        return PreparedImage(artifact=artifact, package=self.package)
 
     async def build(self, selection: ImageSelection) -> BuiltImage:
         """A selection built before is reused, as the recorded artifact would be."""
@@ -161,24 +137,35 @@ class FakeImages:
             revision="a" * 40,
             dependency_id="sha256:dependencies",
             base_images=("python@sha256:base",),
-            package=selection.package,
         )
         return BuiltImage(artifact, reused=reused)
 
-    async def describe(self, artifact: ImageArtifact) -> PackageDescription:
-        """What the candidate check prints in the image: kinby's own, or the package's."""
+    async def describe(self, artifact: ImageArtifact) -> DeclaredSetup:
+        """What the kinby in the image says a vanilla instance declares."""
         self.described.append(artifact)
         if self.check_failure is not None:
             raise ValueError(self.check_failure)
-        if artifact.package is None:
-            return vanilla_description()
-        assert self.package is not None, "a package image needs the package it installs"
-        return package_description(self.package)
+        return self.declared
 
     async def resolve(self, revision: str) -> str:
         """Only the hub's own checkout is asked for."""
         assert revision == "HEAD"
         return self.hub_revision
+
+
+class HeldImages(FakeImages):
+    """Hold a create's build until the test releases it, so the create stays before its publish."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.holding = asyncio.Event()
+        self.released = asyncio.Event()
+
+    async def build(self, selection: ImageSelection) -> BuiltImage:
+        if self.selections:  # The preparation built first; this build is the create's.
+            self.holding.set()
+            await self.released.wait()
+        return await super().build(selection)
 
 
 #: How the Docker runtime reports a container its restart policy keeps bringing back.
@@ -209,9 +196,13 @@ class FakeRuntime:
         self.setups_running = 0
         #: Setup containers a previous process left running.
         self.leftover_setups: list[str] = []
+        #: What a container create raises once a test sets it.
+        self.create_failure: BaseException | None = None
 
     async def create(self, spec: InstanceSpec) -> None:
         self.created.append(spec)
+        if self.create_failure is not None:
+            raise self.create_failure
         self.states[spec.instance_id] = RuntimeStatus("created", None)
         self.descriptions[spec.instance_id] = ContainerDescription(
             runtime_id=spec.instance_id,
@@ -298,6 +289,14 @@ class UnavailableRuntime(FakeRuntime):
         raise ConnectionError("Docker daemon unavailable")
 
 
+class LostAnswerRuntime(FakeRuntime):
+    """Create the container, then lose Docker's answer, as a timed-out request does."""
+
+    async def create(self, spec: InstanceSpec) -> None:
+        await super().create(spec)
+        raise TimeoutError("Read timed out.")
+
+
 class HeldRuntime(FakeRuntime):
     """Hold a start until the test releases it, so an operation stays in flight."""
 
@@ -349,7 +348,6 @@ class FakeControl:
         answers: bool = True,
         drops: int = 0,
         refuses: bool = False,
-        reasons: list[RecreateReason] | None = None,
     ) -> None:
         self.capabilities = capabilities or [Capability.WS, Capability.DRAIN]
         self.contract_version = contract_version
@@ -357,8 +355,6 @@ class FakeControl:
         self.answers = answers
         self.drops = drops
         self.refuses = refuses
-        #: What the instance says changed since it booted.
-        self.reasons = reasons or []
         self.endpoints: list[ControlEndpoint] = []
         self.forces: list[bool] = []
         #: What each instance answers stats with, or raises, by address. A missing address
@@ -405,11 +401,6 @@ class FakeControl:
         await self.release.wait()
         return DrainState.INTERRUPTED if any(self.forces) else DrainState.DRAINED
 
-    async def restart_reasons(self, endpoint: ControlEndpoint) -> list[RecreateReason]:
-        if not self.reachable:
-            raise ControlUnreachable("Cannot connect to host kinby-instance:8787")
-        return self.reasons
-
     async def run_step(self, endpoint: ControlEndpoint, command: StepRunCommand) -> StepResult:
         self.steps.append((endpoint, command))
         self.steps_running += 1
@@ -455,9 +446,9 @@ def hub_client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
     return _client(hub, scopes)
 
 
-async def prepared(client: ContractClient, package: PackageSelection | None) -> OperationGetResult:
-    """Prepare a selection's image, as a client does before it creates an instance from it."""
-    accepted = await client.call(IMAGE_PREPARE, ImagePrepareCommand(package=package))
+async def prepared(client: ContractClient) -> OperationGetResult:
+    """Prepare the image, as a client does before it creates an instance from it."""
+    accepted = await client.call(IMAGE_PREPARE, ImagePrepareCommand())
     assert isinstance(accepted, ImagePrepareResult)
     return await finished_operation(client, accepted)
 
@@ -469,7 +460,7 @@ async def created_instance(
     model: str = "openai:gpt-5",
 ) -> LifecycleOperationResult:
     """Prepare vanilla, create one instance from it, and wait for it to be published stopped."""
-    assert (await prepared(client, None)).state is OperationState.SUCCEEDED
+    assert (await prepared(client)).state is OperationState.SUCCEEDED
     created = await client.call(
         INSTANCE_CREATE,
         InstanceCreateCommand(
@@ -520,7 +511,7 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
         hub_id = hub.registry.hub_id()
         client = _client(hub)
 
-        await prepared(client, None)
+        await prepared(client)
         accepted = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
@@ -579,165 +570,72 @@ def test_create_prepares_a_stopped_vanilla_instance_and_survives_reopening(tmp_p
     asyncio.run(scenario())
 
 
-def test_create_from_a_pinned_package_seeds_owned_configuration_and_provenance(tmp_path):
+def test_a_registry_from_before_factories_keeps_its_instances_and_drops_its_packages(tmp_path):
     async def scenario() -> None:
-        package = InstalledPackage(
-            descriptor=PackageDescriptor(
-                id="writer",
-                display_name="Writing teammate",
-                description="Drafts and edits articles.",
-                icon="pen",
-                distribution="kinby-writer",
-                version="1.4.2",
-                setup_fields=(
-                    secret_field(
-                        "EDITOR_TOKEN", "Editor token", "Authenticates the editor service."
+        directory = tmp_path / "hub"
+        hub = hub_at(directory)
+        created = await created_instance(hub_client(hub))
+        hub.close()
+        declared = vanilla_description()
+        card = {"display_name": "Vanilla", "description": "", "icon": "sparkles", "version": "0"}
+        with sqlite3.connect(directory / "registry.sqlite") as connection:
+            connection.executescript(
+                """
+                ALTER TABLE instances ADD COLUMN package_id TEXT;
+                ALTER TABLE instances ADD COLUMN package_distribution TEXT;
+                ALTER TABLE instances ADD COLUMN package_version TEXT;
+                ALTER TABLE instances ADD COLUMN package_image_recipe TEXT;
+                ALTER TABLE instances ADD COLUMN package_commit_url TEXT;
+                ALTER TABLE instances ADD COLUMN package_commit_sha TEXT;
+                ALTER TABLE image_artifacts ADD COLUMN package_selection TEXT;
+                ALTER TABLE operations ADD COLUMN selection TEXT;
+                DROP TABLE image_descriptions;
+                CREATE TABLE package_descriptions (
+                    selection TEXT PRIMARY KEY,
+                    image_id TEXT NOT NULL,
+                    description TEXT NOT NULL
+                );
+                UPDATE instances SET package_id = 'writer', package_distribution = 'kinby-writer',
+                    package_version = '1.4.2';
+                """
+            )
+            connection.executemany(
+                "INSERT INTO package_descriptions VALUES (?, ?, ?)",
+                [
+                    (
+                        "null",
+                        "sha256:selected-image",
+                        json.dumps(card | declared.model_dump(mode="json")),
                     ),
-                ),
-            ),
-            files={
-                "kinby.toml": '[feedback]\nask = "off"\n',
-                "SYSTEM.md": "You are an exacting editor.\n",
-                "factory.toml": 'style = "plain"\n',
-                "routines/draft/ROUTINE.md": "---\nname: draft\n---\nDraft an article.\n",
-                "routines/draft/run.py": "from kinby_writer import draft\n",
-                "skills/voice/SKILL.md": "Packaged skill.\n",
-                "tools/editor.py": "def edit(): ...\n",
-            },
-        )
-        runtime = FakeRuntime()
-        images = FakeImages(package=package)
-        hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
-        client = _client(hub)
-        selection = PackageSelection(
-            id="writer",
-            distribution="kinby-writer",
-            version="1.4.2",
-        )
+                    ('{"id":"writer"}', "sha256:writer", json.dumps(card | {"setup_fields": []})),
+                ],
+            )
 
-        await prepared(client, selection)
-        accepted = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(
-                manifest_id="editor",
-                persona_name="Quill",
-                model="openai:gpt-5",
-                revision="v0.1.0",
-                package=selection,
-                secrets={"api_key": "sk-test", "EDITOR_TOKEN": "private-editor-token"},
-            ),
-        )
-        assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await finished_operation(client, accepted)
-
-        assert outcome.state is OperationState.SUCCEEDED
+        client = hub_client(hub_at(directory))
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        status = await client.call(
+            INSTANCE_STATUS, InstanceStatusCommand(instance_id=created.instance_id)
+        )
+        described = await client.call(IMAGE_DESCRIBE, ImageDescribeCommand())
+
         assert not isinstance(listed, ErrorEnvelope)
-        assert listed.instances[0].package is not None
-        assert listed.instances[0].package.id == "writer"
-        assert listed.instances[0].package.version == "1.4.2"
-        instance_path = tmp_path / "hub" / "instances" / str(accepted.instance_id)
-        instance = inspect_instance(instance_path)
-        assert instance.manifest.package is not None
-        assert instance.manifest.package.id == "writer"
-        assert instance.manifest.package.distribution == "kinby-writer"
-        assert instance.manifest.package.version == "1.4.2"
-        assert instance.manifest.feedback.ask == "off"
-        assert (instance_path / "SYSTEM.md").read_text() == "You are an exacting editor.\n"
-        assert (instance_path / "factory.toml").read_text() == 'style = "plain"\n'
-        assert (instance_path / "routines" / "draft" / "run.py").is_file()
-        assert not (instance_path / "skills" / "voice").exists()
-        assert not (instance_path / "tools" / "editor.py").exists()
-        assert runtime.created[0].env["EDITOR_TOKEN"] == "private-editor-token"
-        assert runtime.started == []
-
-    asyncio.run(scenario())
-
-
-def test_package_creation_refuses_a_missing_declared_secret_and_publishes_nothing(tmp_path):
-    async def scenario() -> None:
-        package = InstalledPackage(
-            descriptor=PackageDescriptor(
-                id="writer",
-                display_name="Writing teammate",
-                description="Drafts articles.",
-                icon="pen",
-                distribution="kinby-writer",
-                version="1.4.2",
-                setup_fields=(
-                    secret_field("EDITOR_TOKEN", "Editor token", "Authenticates editing."),
-                ),
-            ),
-            files={"SYSTEM.md": "Write clearly.\n"},
-        )
-        runtime = FakeRuntime()
-        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages(package=package))
-        client = _client(hub)
-
-        selection = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
-        await prepared(client, selection)
-
-        refused = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(
-                manifest_id="editor",
-                model="openai:gpt-5",
-                package=selection,
-                secrets={"api_key": "sk-test"},
-            ),
-        )
-
-        assert isinstance(refused, ErrorEnvelope)
-        assert refused.code is ErrorCode.INVALID_SETUP
-        assert refused.fields == {"EDITOR_TOKEN": "Editor token is required."}
-        assert runtime.created == []
-        assert list(hub.instances_directory.iterdir()) == []
-        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
-        assert not isinstance(listed, ErrorEnvelope)
-        assert listed.instances == []
-
-    asyncio.run(scenario())
-
-
-def test_invalid_package_configuration_is_not_published_or_sent_to_the_runtime(tmp_path):
-    async def scenario() -> None:
-        package = InstalledPackage(
-            descriptor=PackageDescriptor(
-                id="writer",
-                display_name="Writing teammate",
-                description="Drafts articles.",
-                icon="pen",
-                distribution="kinby-writer",
-                version="1.4.2",
-            ),
-            files={"kinby.toml": '[workspace]\nsnapshots = "invalid"\n'},
-        )
-        secret = "recognizable-package-secret"
-        runtime = FakeRuntime()
-        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages(package=package))
-        client = _client(hub)
-
-        selection = PackageSelection(id="writer", distribution="kinby-writer", version="1.4.2")
-        await prepared(client, selection)
-        accepted = await client.call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(
-                manifest_id="editor",
-                model="openai:gpt-5",
-                package=selection,
-                secrets={"api_key": "sk-test", "TOKEN": secret},
-            ),
-        )
-        assert isinstance(accepted, LifecycleOperationResult)
-        outcome = await finished_operation(client, accepted)
-
-        assert outcome.state is OperationState.FAILED
-        assert "workspace.snapshots" in outcome.detail
-        assert secret not in outcome.detail
-        assert runtime.created == []
-        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
-        assert not isinstance(listed, ErrorEnvelope)
-        assert listed.instances == []
+        assert [summary.instance_id for summary in listed.instances] == [created.instance_id]
+        assert not isinstance(status, ErrorEnvelope)
+        assert [(secret.name, secret.is_set) for secret in status.setup.secrets] == [
+            ("api_key", True)
+        ]
+        assert described == declared
+        with sqlite3.connect(directory / "registry.sqlite") as connection:
+            tables = [
+                row[0]
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            ]
+            columns = [
+                f"{table}.{row[1]}"
+                for table in tables
+                for row in connection.execute(f"PRAGMA table_info({table})")
+            ]
+        assert [name for name in [*tables, *columns] if "package" in name] == []
 
     asyncio.run(scenario())
 
@@ -808,7 +706,7 @@ def test_failed_build_is_inspectable_and_does_not_touch_the_runtime(tmp_path):
         images = FakeImages()
         hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
         client = _client(hub)
-        await prepared(client, None)
+        await prepared(client)
         images.failure = f"builder rejected {secret}"
 
         accepted = await client.call(
@@ -828,6 +726,140 @@ def test_failed_build_is_inspectable_and_does_not_touch_the_runtime(tmp_path):
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
         assert not isinstance(listed, ErrorEnvelope)
         assert listed.instances == []
+
+    asyncio.run(scenario())
+
+
+async def _created_operation(hub: Hub) -> LifecycleOperationResult:
+    client = _client(hub)
+    await prepared(client)
+    accepted = await client.call(
+        INSTANCE_CREATE,
+        InstanceCreateCommand(
+            manifest_id="alice",
+            model="openai:gpt-5",
+            secrets={"api_key": "sk-test"},
+        ),
+    )
+    assert isinstance(accepted, LifecycleOperationResult)
+    return accepted
+
+
+def test_a_failed_container_create_removes_the_published_directory(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        runtime.create_failure = RuntimeError("Conflict. The container name is in use.")
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == "Conflict. The container name is in use."
+        assert not (tmp_path / "hub" / "instances" / str(accepted.instance_id)).exists()
+        record = hub.registry.instance(accepted.instance_id)
+        assert record is not None
+        assert record.storage == ()
+
+    asyncio.run(scenario())
+
+
+def test_a_create_leaves_a_directory_already_at_its_path_untouched(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        images = HeldImages()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
+        accepted = await _created_operation(hub)
+        await images.holding.wait()
+        existing = tmp_path / "hub" / "instances" / str(accepted.instance_id)
+        existing.mkdir(parents=True)
+        (existing / "kept").write_text("someone else's", encoding="utf-8")
+        images.released.set()
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail.startswith("Instance directory already exists")
+        assert (existing / "kept").read_text(encoding="utf-8") == "someone else's"
+        assert runtime.created == []
+
+    asyncio.run(scenario())
+
+
+def test_a_create_that_raises_after_docker_made_the_container_keeps_its_directory(tmp_path):
+    async def scenario() -> None:
+        runtime = LostAnswerRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == "Read timed out."
+        assert (tmp_path / "hub" / "instances" / str(accepted.instance_id)).is_dir()
+        record = hub.registry.instance(accepted.instance_id)
+        assert record is not None
+        assert record.storage != ()
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_create_the_runtime_cannot_answer_for_keeps_its_directory_and_fails(tmp_path):
+    async def scenario() -> None:
+        runtime = UnavailableRuntime()
+        runtime.create_failure = RuntimeError("Docker daemon unavailable")
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == "Docker daemon unavailable"
+        assert (tmp_path / "hub" / "instances" / str(accepted.instance_id)).is_dir()
+
+    asyncio.run(scenario())
+
+
+def test_a_failure_after_the_container_exists_keeps_the_directory_it_mounts(tmp_path, monkeypatch):
+    def refuse(self: HubRegistry, instance_id: UUID) -> None:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(HubRegistry, "mark_prepared", refuse)
+
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert len(runtime.created) == 1
+        assert (tmp_path / "hub" / "instances" / str(accepted.instance_id)).is_dir()
+
+    asyncio.run(scenario())
+
+
+def test_a_cancelled_create_leaves_its_directory_for_recovery(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        runtime.create_failure = asyncio.CancelledError()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+        while not runtime.created:
+            await asyncio.sleep(0.01)
+
+        operation = await _client(hub).call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=accepted.operation_id),
+        )
+
+        assert not isinstance(operation, ErrorEnvelope)
+        assert operation.state is OperationState.RUNNING
+        assert (tmp_path / "hub" / "instances" / str(accepted.instance_id)).is_dir()
+        record = hub.registry.instance(accepted.instance_id)
+        assert record is not None
+        assert record.storage != ()
 
     asyncio.run(scenario())
 
@@ -1075,7 +1107,7 @@ def test_an_operation_reports_every_step_it_ran(tmp_path):
     async def scenario() -> None:
         hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
         client = _client(hub)
-        await prepared(client, None)
+        await prepared(client)
         created = await client.call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
@@ -1103,7 +1135,7 @@ def test_a_failed_operation_marks_the_step_that_failed(tmp_path):
         images = FakeImages()
         hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=images)
         client = _client(hub)
-        await prepared(client, None)
+        await prepared(client)
         images.failure = "no such revision"
         created = await client.call(
             INSTANCE_CREATE,
@@ -1344,8 +1376,7 @@ def test_no_scope_an_instance_grants_carries_hub_authority():
         INSTANCE_LOGS.scope,
         INSTANCE_DELETE_PREVIEW.scope,
         OPERATION_GET.scope,
-        PACKAGE_DESCRIBE.scope,
-        PACKAGE_LIST.scope,
+        IMAGE_DESCRIBE.scope,
     } == {Scope.HUB_READ}
     assert {
         INSTANCE_CREATE.scope,

@@ -45,7 +45,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { usePace } from "@/hooks/use-pace"
-import { type Pace, retried } from "@/lib/operation"
+import { pace, retried } from "@/lib/operation"
 import { leaveNode, linkedNode, selectThread } from "@/lib/selection"
 import { threadList, threadTitle } from "@/lib/thread-list"
 import {
@@ -142,21 +142,19 @@ function KnowledgeGraph({
   const [gone, setGone] = useState(false)
 
   useEffect(() => {
-    let current = true
+    const pacing = pace(clock)
     retried(() => client.call("memory.list", command(filters)), pacing).then(
       (page) => {
-        if (!current) return
+        if (pacing.stopped) return
         setListed(page)
         setFailure(undefined)
       },
       (error: unknown) => {
-        if (current) setFailure(error)
+        if (!pacing.stopped) setFailure(error)
       },
     )
-    return () => {
-      current = false
-    }
-  }, [client, pacing, filters, reads])
+    return pacing.stop
+  }, [client, clock, filters, reads])
 
   const narrow = (changed: Partial<Filters>) => setFilters({ ...filters, ...changed })
   // Once the user moves off a linked node, a reload no longer opens it.
@@ -234,7 +232,7 @@ function KnowledgeGraph({
             <NodePane
               key={`${selected} ${reads}`}
               client={client}
-              pacing={pacing}
+              clock={clock}
               instanceId={instanceId}
               node={selected}
               onSubject={(subject) => narrow({ subject })}
@@ -402,7 +400,7 @@ function KindIcon({ kind }: { kind: NodeKind }) {
  */
 function NodePane({
   client,
-  pacing,
+  clock,
   instanceId,
   node,
   onSubject,
@@ -411,7 +409,7 @@ function NodePane({
   onGone,
 }: {
   client: Caller
-  pacing: Pace
+  clock: Clock
   instanceId: string
   node: string
   onSubject: (subject: string) => void
@@ -426,19 +424,17 @@ function NodePane({
   const headingId = useId()
 
   useEffect(() => {
-    let current = true
+    const pacing = pace(clock)
     retried(() => client.call("memory.open", { node }), pacing).then(
       (read) => {
-        if (current) setOpened(read)
+        if (!pacing.stopped) setOpened(read)
       },
       (error: unknown) => {
-        if (current) setFailure(error)
+        if (!pacing.stopped) setFailure(error)
       },
     )
-    return () => {
-      current = false
-    }
-  }, [client, pacing, node])
+    return pacing.stop
+  }, [client, clock, node])
 
   if (opened === undefined) {
     return failure === undefined ? (
@@ -517,7 +513,7 @@ function NodePane({
         <p className="text-sm text-muted-foreground">Tool path: {opened.tools.join(" → ")}</p>
       )}
       <Separator />
-      <Origin client={client} pacing={pacing} instanceId={instanceId} opened={opened} />
+      <Origin client={client} clock={clock} instanceId={instanceId} opened={opened} />
       <div className="flex flex-wrap gap-2">
         {opened.kind === "fact" && (
           <Button variant="outline" disabled={forgetting} onClick={() => setCorrecting(true)}>
@@ -677,12 +673,12 @@ function FactForm({
 /** Where the node came from, linking to the thread it was learned or recapped in. */
 function Origin({
   client,
-  pacing,
+  clock,
   instanceId,
   opened,
 }: {
   client: Caller
-  pacing: Pace
+  clock: Clock
   instanceId: string
   opened: MemoryOpenResult
 }) {
@@ -693,8 +689,11 @@ function Origin({
   const missing = threadId !== null && thread === undefined
   // The sidebar lists the threads, but at phone width it is closed and nothing does.
   useEffect(() => {
-    if (missing) retried(() => threads.list(), pacing).catch(() => {})
-  }, [threads, pacing, missing])
+    if (!missing) return
+    const pacing = pace(clock)
+    retried(() => threads.list(), pacing).catch(() => {})
+    return pacing.stop
+  }, [threads, clock, missing])
 
   if (opened.source === "user" || threadId === null) {
     return (

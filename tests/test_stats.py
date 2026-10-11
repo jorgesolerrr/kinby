@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -53,11 +54,12 @@ from kinby.contracts import (
     UsageSource,
     UserOrigin,
 )
-from kinby.core import turn_metrics
-from kinby.core.budgets import daily_cost
+from kinby.core import boot_instance, turn_metrics
+from kinby.core.budgets import DailyBudget, check_daily_budget, daily_cost
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
-from kinby.core.pricing import price_map
+from kinby.core.pricing import instance_prices, price_map
+from kinby.core.turn_metrics import TurnKey
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
 from kinby.instance import ModelPrice, init_instance, load_instance
 from tests.helpers import (
@@ -67,6 +69,8 @@ from tests.helpers import (
     fixed_turn_preparation,
     thread_events,
 )
+from tests.test_routines import instance_at
+from tests.test_scheduler import call
 
 
 class MetricsRunner:
@@ -243,13 +247,50 @@ def test_stats_get_uses_a_manifest_price_override(tmp_path: Path) -> None:
         build_dispatcher(
             instance.manifest.state_dir,
             event_log=StaticEventLog(instance.manifest.state_dir, events),
-            price_overrides=instance.manifest.prices,
+            prices=partial(instance_prices, instance),
         ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
     )
 
     assert isinstance(result, StatsGetResult)
     assert result.records[0].cost == 0.00024
     assert result.buckets[0].cost == 0.00024
+
+
+def test_a_booted_instance_prices_stats_with_its_current_manifest_prices(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        with (tmp_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+            manifest.write(
+                '[memory]\nrecap = "off"\n'
+                '[prices."custom:priced"]\ninput = 2\noutput = 4\n'
+                '[prices."openai:gpt-5"]\ninput = 2\noutput = 4\n'
+            )
+        log = EventLog(instance.manifest.state_dir)
+        thread_id = uuid4()
+        for model in ("custom:priced", "openai:gpt-5"):
+            turn_id = uuid4()
+            await log.append(thread_id, turn_id, TurnStarted(message="priced", model=model))
+            await log.append(thread_id, turn_id, TurnCompleted(input_tokens=100, output_tokens=10))
+        runtime = await boot_instance(instance)
+        try:
+            booted = await call(runtime.dispatcher, "stats.get")
+            read = await call(runtime.dispatcher, "manifest.get")
+            await call(
+                runtime.dispatcher,
+                "manifest.set",
+                values=read.values.model_dump(mode="json"),
+                prices={"custom:priced": {"input": 4, "output": 8}},
+                hash=read.hash,
+            )
+            repriced = await call(runtime.dispatcher, "stats.get")
+        finally:
+            await runtime.stop_after_running_routine()
+
+        assert [record.cost for record in booted.records] == [0.00024, 0.00024]
+        assert booted.unpriced_models == []
+        assert [record.cost for record in repriced.records] == [0.00048, 0.00024]
+
+    asyncio.run(scenario())
 
 
 def test_turn_metrics_prices_cached_tokens_at_cache_rates() -> None:
@@ -315,7 +356,7 @@ def test_stats_get_cost_uses_cache_rates(tmp_path: Path) -> None:
         build_dispatcher(
             tmp_path,
             event_log=StaticEventLog(tmp_path, events),
-            price_overrides={"openai:gpt-5": ModelPrice(input=1.25, output=10, cache_read=0.125)},
+            prices=lambda: {"openai:gpt-5": ModelPrice(input=1.25, output=10, cache_read=0.125)},
         ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
     )
 
@@ -767,6 +808,53 @@ def test_turn_metrics_prices_main_tokens_from_the_closing_totals_after_two_recap
     assert record.cache_read_tokens == 130
     assert record.cache_creation_tokens == 5
     assert record.cost == 0.00027375
+
+
+def test_a_recap_that_spent_no_tokens_needs_no_price() -> None:
+    thread_id = uuid4()
+    empty_id = uuid4()
+    spent_id = uuid4()
+    cached_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    trace_only = _turn_events(
+        thread_id,
+        empty_id,
+        now,
+        TurnStarted(message="trace only", model="openai:gpt-5"),
+        TurnCompleted(input_tokens=100, output_tokens=10),
+        MemoryRecapped(node=None, input_tokens=0, output_tokens=0, model="custom:unpriced"),
+    )
+    recapped = _turn_events(
+        thread_id,
+        spent_id,
+        now,
+        TurnStarted(message="recapped", model="openai:gpt-5"),
+        TurnCompleted(input_tokens=100, output_tokens=10),
+        MemoryRecapped(node=None, input_tokens=50, output_tokens=5, model="custom:unpriced"),
+    )
+    cached = _turn_events(
+        thread_id,
+        cached_id,
+        now,
+        TurnStarted(message="cached", model="openai:gpt-5"),
+        TurnCompleted(input_tokens=100, output_tokens=10),
+        MemoryRecapped(
+            node=None,
+            input_tokens=0,
+            output_tokens=0,
+            cache_read_tokens=50,
+            model="custom:unpriced",
+        ),
+    )
+
+    metrics = turn_metrics([*trace_only, *recapped, *cached])
+
+    assert [record.cost for record in metrics.records] == [0.000225, None, None]
+    assert metrics.unpriced_models_by_turn == {
+        TurnKey(thread_id, spent_id): frozenset({"custom:unpriced"}),
+        TurnKey(thread_id, cached_id): frozenset({"custom:unpriced"}),
+    }
+    check_daily_budget(DailyBudget(limit=1, cost=daily_cost(trace_only, price_map(), now.date())))
 
 
 class StaticEventLog(EventLog):

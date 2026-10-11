@@ -21,10 +21,8 @@ from kinby.contracts import (
     SetupField,
     SetupFieldKind,
     SetupFieldType,
-    SubscriptionLogin,
 )
 from kinby.hub import Hub
-from kinby.packages import InstalledPackage, PackageDescriptor
 from tests.test_hub import (
     FakeControl,
     FakeImages,
@@ -37,10 +35,10 @@ from tests.test_hub import (
 from tests.test_hub_logins import (
     CODEX,
     EDITOR,
-    WRITER,
     created_writer,
     login_started,
     prompted,
+    writer,
 )
 
 TOKEN = SetupField(
@@ -61,22 +59,6 @@ WEBHOOK = SetupField(
 )
 
 
-def writer(*logins: SubscriptionLogin, fields: tuple[SetupField, ...] = ()) -> InstalledPackage:
-    return InstalledPackage(
-        descriptor=PackageDescriptor(
-            id="writer",
-            display_name="Writing teammate",
-            description="Drafts articles.",
-            icon="pen",
-            distribution="kinby-writer",
-            version="1.4.2",
-            setup_fields=fields,
-            logins=logins,
-        ),
-        files={"SYSTEM.md": "Write clearly.\n"},
-    )
-
-
 def setup_hub(tmp_path, images: FakeImages, runtime: FakeRuntime | None = None) -> Hub:
     return hub_at(
         tmp_path / "hub", runtime=runtime or FakeRuntime(), images=images, control=FakeControl()
@@ -93,8 +75,8 @@ async def setup_of(hub: Hub, instance_id: UUID) -> InstanceSetup:
 
 def test_a_created_instance_reads_its_logins_pending_and_which_secrets_are_set(tmp_path):
     async def scenario() -> None:
-        package = writer(EDITOR, CODEX, fields=(TOKEN, WEBHOOK))
-        hub = setup_hub(tmp_path, FakeImages(package=package))
+        declared = writer(EDITOR, CODEX, fields=(TOKEN, WEBHOOK))
+        hub = setup_hub(tmp_path, FakeImages(declared=declared))
 
         created = await created_writer(hub, secrets={"WRITER_TOKEN": "tok-private"})
         setup = await setup_of(hub, created.instance_id)
@@ -155,7 +137,7 @@ def test_a_login_being_signed_in_names_its_operation_until_it_ends(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
         runtime.setup_lines = ["Open https://auth.example/device and enter AB12-C3D"]
-        hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR, CODEX)), runtime)
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR, CODEX)), runtime)
         instance_id = (await created_writer(hub)).instance_id
         signing_in = await login_started(hub, instance_id, "editor")
         await prompted(hub, signing_in)
@@ -175,7 +157,7 @@ def test_a_login_that_signs_in_reads_signed_in_and_one_that_fails_reads_failed(t
         runtime = FakeRuntime()
         runtime.setup_lines = ["Open https://auth.example/device and enter AB12-C3D"]
         runtime.setup_exits.set()
-        hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR, CODEX)), runtime)
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR, CODEX)), runtime)
         instance_id = (await created_writer(hub)).instance_id
 
         signed_in = await login_started(hub, instance_id, "editor")
@@ -198,7 +180,7 @@ def test_signing_in_again_after_a_success_that_fails_stays_signed_in(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
         runtime.setup_exits.set()
-        hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR)), runtime)
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR)), runtime)
         instance_id = (await created_writer(hub)).instance_id
         await finished_operation(hub_client(hub), await login_started(hub, instance_id, "editor"))
 
@@ -218,7 +200,7 @@ def test_signing_in_again_after_a_success_whose_code_expires_stays_signed_in(tmp
     async def scenario() -> None:
         runtime = FakeRuntime()
         runtime.setup_exits.set()
-        hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR)), runtime)
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR)), runtime)
         instance_id = (await created_writer(hub)).instance_id
         await finished_operation(hub_client(hub), await login_started(hub, instance_id, "editor"))
 
@@ -239,7 +221,7 @@ def test_a_login_whose_code_expires_reads_failed(tmp_path, monkeypatch):
     monkeypatch.setattr("kinby.hub.service.LOGIN_SECONDS", 0.05)
 
     async def scenario() -> None:
-        hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR)))
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR)))
         instance_id = (await created_writer(hub)).instance_id
 
         expired = await finished_operation(
@@ -256,12 +238,12 @@ def test_a_login_whose_code_expires_reads_failed(tmp_path, monkeypatch):
 
 def test_a_login_a_restart_interrupted_reads_failed(tmp_path):
     async def scenario() -> None:
-        hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR)))
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR)))
         instance_id = (await created_writer(hub)).instance_id
         await login_started(hub, instance_id, "editor")
         hub.close()
 
-        reopened = setup_hub(tmp_path, FakeImages(package=writer(EDITOR)))
+        reopened = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR)))
 
         assert login_states(await setup_of(reopened, instance_id)) == {"editor": LoginState.FAILED}
 
@@ -278,7 +260,7 @@ def test_setup_is_pending_until_every_login_signs_in(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
         runtime.setup_exits.set()
-        hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR, CODEX)), runtime)
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR, CODEX)), runtime)
         instance_id = (await created_writer(hub)).instance_id
         seeded = await pending_by_instance(hub)
 
@@ -295,14 +277,14 @@ def test_setup_is_pending_until_every_login_signs_in(tmp_path):
 
 def test_setup_is_pending_while_a_required_secret_is_not_set(tmp_path):
     async def scenario() -> None:
-        images = FakeImages(package=writer())
+        images = FakeImages(declared=writer())
         hub = setup_hub(tmp_path, images)
         instance_id = (await created_writer(hub)).instance_id
         complete = await pending_by_instance(hub)
 
         # A rebuilt image asks for a secret the instance was created without.
-        images.package = writer(fields=(TOKEN, WEBHOOK))
-        await prepared(hub_client(hub), WRITER)
+        images.declared = writer(fields=(TOKEN, WEBHOOK))
+        await prepared(hub_client(hub))
         asked = await pending_by_instance(hub)
         replaced = await hub_client(hub).call(
             INSTANCE_SECRETS_SET,
@@ -321,7 +303,7 @@ def test_setup_is_pending_while_a_required_secret_is_not_set(tmp_path):
 
 def test_an_api_key_set_from_the_setup_card_reads_set(tmp_path):
     async def scenario() -> None:
-        hub = setup_hub(tmp_path, FakeImages(package=writer()))
+        hub = setup_hub(tmp_path, FakeImages(declared=writer()))
         instance_id = (await created_writer(hub)).instance_id
         # An instance whose secrets lost the key, which only a hand edit can bring about.
         (hub.instances_directory / str(instance_id) / ".env").write_text("")
@@ -359,13 +341,13 @@ def test_an_api_key_set_from_the_setup_card_reads_set(tmp_path):
 
 def test_an_instance_created_before_logins_were_tracked_reads_complete(tmp_path):
     async def scenario() -> None:
-        hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR)))
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR)))
         instance_id = (await created_writer(hub)).instance_id
         hub.close()
         with sqlite3.connect(tmp_path / "hub" / "registry.sqlite") as connection:
             connection.execute("DROP TABLE logins")
 
-        reopened = setup_hub(tmp_path, FakeImages(package=writer(EDITOR)))
+        reopened = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR)))
 
         assert login_states(await setup_of(reopened, instance_id)) == {
             "editor": LoginState.SIGNED_IN
@@ -378,7 +360,7 @@ def test_an_instance_created_before_logins_were_tracked_reads_complete(tmp_path)
 def test_an_instance_starts_while_its_setup_is_pending(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        hub = setup_hub(tmp_path, FakeImages(package=writer(EDITOR)), runtime)
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR)), runtime)
         instance_id = (await created_writer(hub)).instance_id
 
         started = await hub_client(hub).call(
@@ -400,7 +382,7 @@ async def secret_variables(hub: Hub, instance_id: UUID) -> dict[str, str | None]
 
 def test_each_secret_names_the_variable_its_value_lands_in(tmp_path):
     async def scenario() -> None:
-        hub = setup_hub(tmp_path, FakeImages(package=writer(fields=(TOKEN, WEBHOOK))))
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(fields=(TOKEN, WEBHOOK))))
         instance_id = (
             await created_writer(
                 hub, secrets={"WRITER_TOKEN": "tok"}, model="anthropic:claude-opus-5-5"
@@ -418,7 +400,7 @@ def test_each_secret_names_the_variable_its_value_lands_in(tmp_path):
 
 def test_the_api_key_names_no_variable_when_the_model_cannot_be_read(tmp_path):
     async def scenario() -> None:
-        hub = setup_hub(tmp_path, FakeImages(package=writer(fields=(TOKEN, WEBHOOK))))
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(fields=(TOKEN, WEBHOOK))))
         instance_id = (await created_writer(hub, secrets={"WRITER_TOKEN": "tok"})).instance_id
         (hub.instances_directory / str(instance_id) / "kinby.toml").write_text("not = [toml")
 

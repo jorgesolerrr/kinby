@@ -10,12 +10,13 @@ does.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import re
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
-from kinby.contracts import SetupFieldKind, TargetFile
+from kinby.contracts import SetupField, SetupFieldKind, SetupFieldType, SubscriptionLogin
 from kinby.factories import RECIPES_DIRECTORY
 from kinby.factories.file import (
     TEMPLATES_DIR,
@@ -41,10 +42,14 @@ from kinby.instance import (
     inspect_instance,
 )
 from kinby.instance.layout import ROUTINE_FILE, ROUTINES_DIR
-from kinby.packages import package_fields, readable_template_files
-from kinby.packages.check import field_declaration_problems, login_declaration_problems
 from kinby.plugins.hooks import load_hooks
 from kinby.plugins.registry import ToolRegistry
+from kinby.setup import BUILT_IN_FIELDS, readable_template_files, template_fields, value_problem
+
+_ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+#: A login's id names its Docker volume, so it takes the characters a volume name takes.
+_VOLUME_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+_PROMPT_GROUPS = ("url", "code")
 
 
 @dataclass(frozen=True)
@@ -124,20 +129,99 @@ def _instances(
 
 def _declarations(name: InstanceName, declared: InstanceDeclaration) -> Iterator[str]:
     for problem in (
-        *field_declaration_problems(declared.setup_fields),
-        *login_declaration_problems(declared.logins),
+        *_field_declaration_problems(declared.setup_fields),
+        *_login_declaration_problems(declared.logins),
     ):
         yield f'Instance "{name}": {problem}'
-    for field in package_fields(declared.setup_fields):
-        target = field.target
-        if (
-            field.kind is SetupFieldKind.CONFIG
-            and target
-            and target.file is not TargetFile.KINBY_TOML
-        ):
+
+
+def _field_declaration_problems(fields: Iterable[SetupField]) -> Iterator[str]:
+    built_in = {field.name: field for field in BUILT_IN_FIELDS}
+    seen: set[str] = set()
+    for field in fields:
+        if field.name in seen:
+            yield f'Setup field "{field.name}" is declared more than once.'
+            continue
+        seen.add(field.name)
+        yield from _field_failures(field)
+        overridden = built_in.get(field.name)
+        if overridden is None:
+            yield from _target_failures(field)
+        else:
+            yield from _override_failures(field, overridden)
+
+
+def _field_failures(field: SetupField) -> Iterator[str]:
+    name = field.name
+    secret = field.kind is SetupFieldKind.SECRET
+    if secret and _ENVIRONMENT_NAME.fullmatch(name) is None:
+        yield f'Secret field "{name}" is not an environment variable name.'
+    if not field.label.strip():
+        yield f'Setup field "{name}" has no label.'
+    if not field.description.strip():
+        yield f'Setup field "{name}" has no description.'
+    if field.choices is not None and field.type is not SetupFieldType.CHOICE:
+        yield f'Setup field "{name}" has choices, but it is not a choice field.'
+    if field.type is SetupFieldType.CHOICE and not field.choices:
+        yield f'Choice field "{name}" offers no choices.'
+    if secret and field.type not in (SetupFieldType.TEXT, SetupFieldType.MULTILINE):
+        yield f'Secret field "{name}" is {field.type}. A secret is text or multiline.'
+    if field.default is None:
+        return
+    if secret:
+        yield f'Secret field "{name}" has a default. A secret never ships in a template.'
+    elif (problem := value_problem(field, field.default)) is not None:
+        yield f'Setup field "{name}" has a default that {problem}.'
+
+
+def _target_failures(field: SetupField) -> Iterator[str]:
+    name = field.name
+    if field.kind is SetupFieldKind.SECRET:
+        if field.target is not None:
+            yield f'Secret field "{name}" has a target. A secret lands in the instance secrets.'
+    elif field.target is None:
+        yield f'Configuration field "{name}" names no target.'
+
+
+def _override_failures(field: SetupField, built_in: SetupField) -> Iterator[str]:
+    if (field.kind, field.type) != (built_in.kind, built_in.type):
+        yield (
+            f'Setup field "{field.name}" overrides a built-in field, so it keeps its kind and type.'
+        )
+    if field.target is not None:
+        yield (
+            f'Setup field "{field.name}" overrides a built-in field, which kinby writes itself, '
+            "so it takes no target."
+        )
+
+
+def _login_declaration_problems(logins: Iterable[SubscriptionLogin]) -> Iterator[str]:
+    seen: set[str] = set()
+    for login in logins:
+        if login.id in seen:
+            yield f'Login "{login.id}" is declared more than once.'
+            continue
+        seen.add(login.id)
+        try:
+            groups = re.compile(login.prompt_pattern).groupindex
+        except re.error as exc:
+            yield f'Login "{login.id}" has a prompt pattern that does not compile: {exc}.'
+        else:
+            for group in _PROMPT_GROUPS:
+                if group not in groups:
+                    yield (
+                        f'Login "{login.id}" has a prompt pattern without the named group '
+                        f'"{group}".'
+                    )
+        if _VOLUME_NAME.fullmatch(login.id) is None:
             yield (
-                f'Instance "{name}" asks for "{field.name}", which targets no key of '
-                "kinby.toml, where a template's configuration lands."
+                f'Login "{login.id}" has an id that cannot name a volume: use letters, digits, '
+                '".", "_" and "-", starting with a letter or digit.'
+            )
+        if not PurePosixPath(login.volume).is_absolute():
+            yield (
+                f'Login "{login.id}" mounts its volume at "{login.volume}", '
+                "which is not an absolute path."
             )
 
 
@@ -147,7 +231,7 @@ def _initialization(
     """An instance written from the template with its defaults, as an install writes one."""
     settings = {
         field.target.key: field.default
-        for field in package_fields(declared.setup_fields)
+        for field in template_fields(declared.setup_fields)
         if field.target is not None and field.default is not None
     }
     with TemporaryDirectory(prefix="kinby-factory-check-") as temporary:

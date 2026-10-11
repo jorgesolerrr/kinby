@@ -259,7 +259,7 @@ def test_a_create_interrupted_after_its_container_is_recorded_not_repeated(tmp_p
     async def scenario() -> None:
         runtime = CrashingRuntime(after_create=True)
         hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
-        await prepared(hub_client(hub), None)
+        await prepared(hub_client(hub))
         accepted = await hub_client(hub).call(
             INSTANCE_CREATE,
             InstanceCreateCommand(
@@ -301,7 +301,7 @@ def test_a_create_interrupted_before_its_container_stays_incomplete(tmp_path):
     async def scenario() -> None:
         runtime = CrashingRuntime(after_create=False)
         hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
-        await prepared(hub_client(hub), None)
+        await prepared(hub_client(hub))
         await hub_client(hub).call(
             INSTANCE_CREATE,
             InstanceCreateCommand(

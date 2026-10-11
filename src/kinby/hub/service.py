@@ -34,6 +34,7 @@ from kinby.contracts import (
     FACTORY_RUN_RETRY,
     FACTORY_RUN_SEND_BACK,
     FACTORY_RUN_SUBSCRIBE,
+    IMAGE_DESCRIBE,
     IMAGE_PREPARE,
     INSTANCE_ADOPT,
     INSTANCE_ADOPT_PREVIEW,
@@ -52,8 +53,6 @@ from kinby.contracts import (
     INSTANCE_STOP,
     INSTANCE_UPDATE,
     OPERATION_GET,
-    PACKAGE_DESCRIBE,
-    PACKAGE_LIST,
     STATS_SUMMARY,
     Avatar,
     Capability,
@@ -66,6 +65,7 @@ from kinby.contracts import (
     FactoryInstanceSetup,
     FactoryRemoveCommand,
     FactoryRemoveResult,
+    ImageDescribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
     InstanceAdoptCommand,
@@ -80,7 +80,6 @@ from kinby.contracts import (
     InstanceLoginStartCommand,
     InstanceLogsCommand,
     InstanceLogsResult,
-    InstanceNotice,
     InstanceRecreateCommand,
     InstanceRemoveCommand,
     InstanceRestoreCommand,
@@ -99,20 +98,10 @@ from kinby.contracts import (
     OperationGetResult,
     OperationKind,
     OperationState,
-    PackageCommit,
-    PackageDescribeCommand,
-    PackageDescription,
-    PackageListCommand,
-    PackageListResult,
-    PackagePin,
-    PackageSelection,
-    PackageSummary,
-    PackageTemplateOlder,
     ProcessState,
     Readiness,
     RecreateReason,
     RevisionBehind,
-    SetupFieldKind,
     SetupValue,
     StatsGetCommand,
     StatsGetResult,
@@ -129,13 +118,12 @@ from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import (
     AdoptionBlocked,
     FactoryInstalled,
+    ImageNotPrepared,
     InvalidSetup,
     LifecycleOperationInFlight,
     LifecycleOperationNotFound,
     LoginNotFound,
     ManagedInstanceNotFound,
-    PackagePinRefused,
-    SelectionNotPrepared,
 )
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.hub.access import HubAccess, new_control_token
@@ -148,17 +136,16 @@ from kinby.hub.control import (
     IncompatibleLifecycleEndpoint,
     InstanceControl,
 )
-from kinby.hub.curated import curated_list, with_recipe
 from kinby.hub.factories import FactoryStore, InstanceTemplate
 from kinby.hub.models import (
     ContainerRuntime,
+    ImageArtifact,
     ImagePreparation,
     ImageSelection,
     InstanceEndpoint,
     InstanceSpec,
     InstanceUnreachable,
     LifecycleRecovery,
-    PreparedImage,
     RuntimeStatus,
     SetupSpec,
     Signal,
@@ -174,27 +161,18 @@ from kinby.hub.setup import (
     instance_setup,
     manifest_settings,
     setup_errors,
-    targeted,
 )
 from kinby.hub.usage import Uncounted, summed_usage
 from kinby.instance import (
     Instance,
     ManifestError,
-    PackageProvenance,
     init_from_template,
     init_instance,
     inspect_instance,
 )
 from kinby.instance.layout import SYSTEM_NAME
-from kinby.packages import (
-    API_KEY_FIELD,
-    BEHAVIOR_PROMPT_FIELD,
-    MODEL_FIELD,
-    PACKAGE_CONFIG_NAME,
-    InstalledPackage,
-    package_description,
-)
 from kinby.plugins.intake import INTAKE_URL_VARIABLE
+from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
 
 _logger = logging.getLogger(__name__)
 
@@ -213,8 +191,6 @@ _STOP_OBSERVE_SECONDS = 120
 READY_OBSERVE_SECONDS = 120
 #: How long a stats summary waits for one instance before it counts it unreachable.
 STATS_SECONDS = 5
-#: How long a status waits for a running instance to say what changed since it booted.
-REASONS_SECONDS = 5
 #: Pause before calling a drain again, so a socket that closes immediately does not spin.
 _DRAIN_RETRY_SECONDS = 0.2
 _RUNTIME_STOPPED = frozenset({"absent", "created", "stopped", "failed"})
@@ -252,86 +228,27 @@ def _acquire_directory(directory: Path) -> IO[str]:
     return handle
 
 
-def _pinned_package(record: ManagedInstance, pin: PackagePin | None) -> PackageSelection | None:
-    """The package an update carries: the instance's own, moved to the pinned commit if any.
-
-    A pin never switches packages (ADR 0040), and it moves only a package that comes from git.
-    A pin that carries an image recipe replaces the recorded one (ADR 0061).
-    """
-    current = record.package
-    if pin is None:
-        return current
-    if current is None or current.id != pin.id:
-        running = f'package "{current.id}"' if current is not None else "no package"
-        raise PackagePinRefused(
-            f'Instance "{record.instance_id}" runs {running}, not "{pin.id}". '
-            "An update never switches packages."
-        )
-    match current.version:
-        case PackageCommit(url=url):
-            recipe = current.image_recipe if pin.image_recipe is None else pin.image_recipe
-            return current.model_copy(
-                update={"version": PackageCommit(url=url, sha=pin.sha), "image_recipe": recipe}
-            )
-        case version:
-            raise PackagePinRefused(
-                f'Package "{pin.id}" is installed from the package index at version {version}, '
-                "so there is no git repository to move to another commit."
-            )
-
-
-def _notices(
-    record: ManagedInstance,
-    hub_revision: str,
-    installed: PackageDescription | None,
-) -> list[InstanceNotice]:
-    """The kinby revision the hub moved past, and a template the installed package moved past.
-
-    *installed* is what the instance's package selection declares, as its image was described.
-    """
-    notices: list[InstanceNotice] = []
+def _notices(record: ManagedInstance, hub_revision: str) -> list[RevisionBehind]:
+    """The kinby revision the hub moved past, if it did."""
     instance_revision = record.source_revision
-    if instance_revision and instance_revision != hub_revision:
-        notices.append(
-            RevisionBehind(
-                message=(
-                    f"The instance runs kinby {instance_revision[:7]}, "
-                    f"and the hub is at {hub_revision[:7]}."
-                ),
-                instance_revision=instance_revision,
-                hub_revision=hub_revision,
-            )
+    if not instance_revision or instance_revision == hub_revision:
+        return []
+    return [
+        RevisionBehind(
+            message=(
+                f"The instance runs kinby {instance_revision[:7]}, "
+                f"and the hub is at {hub_revision[:7]}."
+            ),
+            instance_revision=instance_revision,
+            hub_revision=hub_revision,
         )
-    template = _template(record)
-    if template is not None and installed is not None and template.version != installed.version:
-        notices.append(
-            PackageTemplateOlder(
-                message=(
-                    f"The instance's configuration was copied from {template.id} "
-                    f"{template.version}, and {installed.version} is installed. "
-                    "An update never copies it again."
-                ),
-                initialized_version=template.version,
-                installed_version=installed.version,
-            )
-        )
-    return notices
+    ]
 
 
-def _template(record: ManagedInstance) -> PackageProvenance | None:
-    """The package version the instance's configuration was copied from, as kinby.toml says."""
-    try:
-        return inspect_instance(record.path).manifest.package
-    except ManifestError:
-        return None
-
-
-def _selection(
-    record: ManagedInstance, revision: str, package: PackageSelection | None
-) -> ImageSelection:
-    """The image an instance runs on: the revision, its package, and its template's recipe."""
+def _selection(record: ManagedInstance, revision: str) -> ImageSelection:
+    """The image an instance runs on: the revision, and its template's recipe."""
     recipe = record.factory.recipe if record.factory is not None else None
-    return ImageSelection(revision, package, recipe)
+    return ImageSelection(revision, recipe)
 
 
 def _install_errors(
@@ -437,7 +354,6 @@ class Hub:
             self._runtime = runtime
             self._images = images
             self._private_url = private_url
-            self._curated = curated_list()
             self.factories = FactoryStore(self.directory / "factories", shipped_factories)
             self.runs = FactoryRuns(self.registry, self.factories, self._run_step)
             self._control = control if control is not None else HttpInstanceControl()
@@ -463,8 +379,7 @@ class Hub:
             self.dispatcher.register(INSTANCE_LOGIN_START, self.start_login)
             self.dispatcher.register(OPERATION_GET, self.operation)
             self.dispatcher.register(IMAGE_PREPARE, self.prepare_image)
-            self.dispatcher.register(PACKAGE_DESCRIBE, self.describe_package)
-            self.dispatcher.register(PACKAGE_LIST, self.list_packages)
+            self.dispatcher.register(IMAGE_DESCRIBE, self.describe_image)
             self.dispatcher.register(FACTORY_LIST, self.factories.list)
             self.dispatcher.register(FACTORY_GET, self.factories.get)
             self.dispatcher.register(FACTORY_CHECK, self.factories.check)
@@ -512,10 +427,10 @@ class Hub:
         task.add_done_callback(self._tasks.discard)
 
     async def create(self, command: InstanceCreateCommand) -> LifecycleOperationResult:
-        """Accept a creation only for a prepared selection whose setup values all check out."""
+        """Accept a creation only once the image is prepared and the setup values all check out."""
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
         errors = setup_errors(
-            self._prepared_description(command.package),
+            self._prepared_description(),
             model=command.model,
             config=command.config,
             secrets=secrets,
@@ -526,7 +441,6 @@ class Hub:
             command.manifest_id,
             persona_name=command.persona_name,
             revision=command.revision,
-            package=with_recipe(command.package, self._curated),
             avatar=command.avatar,
         )
         return self._begin_create(record, command.model, command.config, secrets)
@@ -593,7 +507,6 @@ class Hub:
         *,
         persona_name: str | None = None,
         revision: str = _PREPARED_REVISION,
-        package: PackageSelection | None = None,
         avatar: Avatar = DEFAULT_AVATAR,
         factory: FactoryMember | None = None,
     ) -> ManagedInstance:
@@ -610,7 +523,6 @@ class Hub:
             runtime_id=str(instance_id),
             prepared=False,
             storage=(),
-            package=package,
             avatar=avatar,
             factory=factory,
         )
@@ -639,13 +551,15 @@ class Hub:
     ) -> None:
         """Prepare the image, write the instance from its template or its image, and publish it."""
         staging = record.path.with_name(f"{record.path.name}.creating")
+        unmounted: tuple[StorageItem, ...] = ()
         try:
             self._record(operation_id, "image", "Preparing the selected image.")
-            selection = _selection(record, record.requested_revision, record.package)
-            prepared = await self._images.prepare(selection)
+            artifact = (
+                await self._images.build(_selection(record, record.requested_revision))
+            ).artifact
             if template is None:
                 declared = await self._initialize_from_image(
-                    operation_id, record, staging, selection, prepared, model, config, secrets
+                    operation_id, record, staging, artifact, model, config, secrets
                 )
             else:
                 declared = self._initialize_from_template(
@@ -654,11 +568,11 @@ class Hub:
             self._record(
                 operation_id, "publish", "Creating the container and listing the instance."
             )
-            artifact = prepared.artifact
+            storage = self._storage(record.instance_id, record.path, declared.logins)
             if record.path.exists():
                 raise FileExistsError(f"Instance directory already exists: {record.path}")
             staging.replace(record.path)
-            storage = self._storage(record.instance_id, record.path, declared.logins)
+            unmounted = storage
             self.registry.record_preparation(record.instance_id, artifact, storage)
             await self._runtime.create(
                 InstanceSpec(
@@ -669,6 +583,7 @@ class Hub:
                     port=_INSTANCE_PORT,
                 )
             )
+            unmounted = ()
             self.registry.seed_logins(record.instance_id, [login.id for login in declared.logins])
             self.registry.mark_prepared(record.instance_id)
             self.registry.finish_operation(
@@ -677,33 +592,50 @@ class Hub:
                 "Instance prepared and stopped.",
             )
         except Exception as exc:
-            if staging.exists():
-                shutil.rmtree(staging)
+            try:
+                await self._discard_failed_create(record, staging, unmounted)
+            except Exception:
+                _logger.exception("Could not clean up the failed create of %s", record.instance_id)
             self.registry.finish_operation(
                 operation_id,
                 OperationState.FAILED,
                 self._redact(str(exc) or type(exc).__name__, secrets.values()),
             )
 
+    async def _discard_failed_create(
+        self,
+        record: ManagedInstance,
+        staging: Path,
+        unmounted: tuple[StorageItem, ...],
+    ) -> None:
+        """Remove what a failed create wrote and no container mounts.
+
+        A create can raise after Docker made the container, so the published directory goes
+        only once the runtime reports no container there.
+        """
+        if staging.exists():
+            shutil.rmtree(staging)
+        if unmounted and (await self._runtime.status(record.runtime_id)).state == "absent":
+            shutil.rmtree(record.path)
+            self.registry.release_storage(record.instance_id, list(unmounted))
+
     async def _initialize_from_image(
         self,
         operation_id: UUID,
         record: ManagedInstance,
         staging: Path,
-        selection: ImageSelection,
-        prepared: PreparedImage,
+        artifact: ImageArtifact,
         model: str,
         config: Mapping[str, SetupValue],
         secrets: dict[str, str],
-    ) -> PackageDescription:
-        """Write a vanilla or package instance, from what the image just prepared declares."""
-        package = self._package(prepared, selection)
+    ) -> DeclaredSetup:
+        """Write a vanilla instance, with what the image just built declares."""
         self._record(
             operation_id,
             "validate",
             "Checking the setup values against what the image declares.",
         )
-        description = await self._declared(selection, prepared)
+        description = await self._declared(artifact)
         errors = setup_errors(description, model=model, config=config, secrets=secrets)
         if errors:
             raise ValueError(
@@ -717,19 +649,13 @@ class Hub:
         )
         configured = configuration(description, model=model, config=config)
         model = str(configured[MODEL_FIELD.name])
-        init_instance(
-            staging,
-            model=model,
-            package=package,
-            config=targeted(description, configured),
-        )
+        init_instance(staging, model=model)
         self._write_configuration(staging, record.manifest_id, record.persona_name)
         behavior_prompt = configured.get(BEHAVIOR_PROMPT_FIELD.name)
-        if package is None and isinstance(behavior_prompt, str):
+        if isinstance(behavior_prompt, str):
             (staging / SYSTEM_NAME).write_text(behavior_prompt, encoding="utf-8")
         self._write_secrets(staging / ".env", self._instance_secrets(model, secrets))
         inspect_instance(staging)
-        await self._check_written_config(selection, package, staging)
         return description
 
     def _initialize_from_template(
@@ -769,57 +695,25 @@ class Hub:
             return {}
         return {INTAKE_URL_VARIABLE: f"{self._private_url}/instances/{record.instance_id}/intake"}
 
-    async def _check_written_config(
-        self,
-        selection: ImageSelection,
-        package: InstalledPackage | None,
-        staging: Path,
-    ) -> None:
-        """The package's validator has the last word on a package.yaml the setup values changed.
-
-        The file the package ships passed the check when the image was prepared.
-        """
-        path = staging / PACKAGE_CONFIG_NAME
-        if package is None or not path.is_file():
-            return
-        if path.read_text(encoding="utf-8") == package.files.get(PACKAGE_CONFIG_NAME):
-            return
-        await self._images.prepare(
-            selection,
-            StorageItem(
-                kind=StorageKind.BIND,
-                source=str(self._docker_host_directory / path.relative_to(self.directory)),
-                destination=f"{INSTANCE_MOUNT}/{PACKAGE_CONFIG_NAME}",
-                writable=False,
-            ),
-        )
-
     async def prepare_image(self, command: ImagePrepareCommand) -> ImagePrepareResult:
-        """Build or reuse a selection's image before any instance exists, and describe it."""
+        """Build or reuse kinby's base image before any instance exists, and describe it."""
         operation_id = uuid4()
-        package = with_recipe(command.package, self._curated)
-        opened = self.registry.begin_preparation(operation_id, package, "Preparation queued.")
+        opened = self.registry.begin_preparation(operation_id, "Preparation queued.")
         if opened == operation_id:
-            self._schedule(self._prepare_image(operation_id, package))
+            self._schedule(self._prepare_image(operation_id))
         return ImagePrepareResult(operation_id=opened)
 
-    async def _prepare_image(self, operation_id: UUID, package: PackageSelection | None) -> None:
+    async def _prepare_image(self, operation_id: UUID) -> None:
         try:
             self._record(operation_id, "image", "Building the image, or reusing the one prepared.")
-            built = await self._images.build(ImageSelection(_PREPARED_REVISION, package))
+            built = await self._images.build(ImageSelection(_PREPARED_REVISION))
             self.registry.succeed_step(
                 operation_id,
-                "Reused the image prepared for this selection."
-                if built.reused
-                else "Built the image.",
+                "Reused the image already prepared." if built.reused else "Built the image.",
             )
-            self._record(
-                operation_id,
-                "describe",
-                "Reading what the image declares with the candidate check.",
-            )
+            self._record(operation_id, "describe", "Reading what the image declares.")
             description = await self._images.describe(built.artifact)
-            self.registry.record_description(package, built.artifact.image_id, description)
+            self.registry.record_description(built.artifact.image_id, description)
             self.registry.succeed_step(operation_id, "Read what the image declares.")
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
@@ -833,39 +727,27 @@ class Hub:
             return
         self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, "Image prepared.")
 
-    async def describe_package(self, command: PackageDescribeCommand) -> PackageDescription:
-        """What the prepared selection declares, as its preparation stored it. It never builds."""
-        return self._prepared_description(command.package)
+    async def describe_image(self, command: ImageDescribeCommand) -> DeclaredSetup:
+        """What the prepared image declares, as its preparation stored it. It never builds."""
+        return self._prepared_description()
 
-    async def _declared(
-        self,
-        selection: ImageSelection,
-        prepared: PreparedImage,
-    ) -> PackageDescription:
-        """What the image just prepared declares.
+    async def _declared(self, artifact: ImageArtifact) -> DeclaredSetup:
+        """What the image just built declares.
 
         A rebuilt image may declare other fields than the one the client was shown, so it is
-        described again, and that description is kept.
+        described again. Kept as the last description even when it was stored before, so a
+        client that reads the image's fields again sees the ones this creation checked.
         """
-        artifact = prepared.artifact
-        stored = self.registry.description(selection.package, artifact.image_id)
-        if stored is not None:
-            return stored
-        description = await self._images.describe(artifact)
-        self.registry.record_description(selection.package, artifact.image_id, description)
+        stored = self.registry.description(artifact.image_id)
+        description = stored if stored is not None else await self._images.describe(artifact)
+        self.registry.record_description(artifact.image_id, description)
         return description
 
-    def _prepared_description(self, package: PackageSelection | None) -> PackageDescription:
-        description = self.registry.description(with_recipe(package, self._curated))
+    def _prepared_description(self) -> DeclaredSetup:
+        description = self.registry.description()
         if description is None:
-            raise SelectionNotPrepared(
-                "This selection has not been prepared. Prepare its image first."
-            )
+            raise ImageNotPrepared("The image has not been prepared. Prepare it first.")
         return description
-
-    async def list_packages(self, command: PackageListCommand) -> PackageListResult:
-        """The curated list, each package with the selection that prepares it."""
-        return PackageListResult(packages=[entry.package for entry in self._curated])
 
     async def start(self, command: InstanceStartCommand) -> LifecycleOperationResult:
         record = self._active_instance(command.instance_id)
@@ -1154,8 +1036,6 @@ class Hub:
             runtime_id=preview.runtime_id,
             prepared=False,
             storage=tuple(preview.storage),
-            # The running image stays. The next update builds this package (ADR 0058).
-            package=command.package,
         )
         operation_id = uuid4()
         try:
@@ -1377,7 +1257,7 @@ class Hub:
     async def update(self, command: InstanceUpdateCommand) -> LifecycleOperationResult:
         """Move this instance onto the image a selected revision prepares."""
         record = self._claimed(self._active_instance(command.instance_id))
-        selection = _selection(record, command.revision, _pinned_package(record, command.package))
+        selection = _selection(record, command.revision)
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id,
@@ -1426,14 +1306,7 @@ class Hub:
         revision = selection.revision
         self._revalidate(operation_id, record)
         self._record(operation_id, "image", f"Preparing the image {revision} selects.")
-        # The candidate validates this instance's own package.yaml before anything moves.
-        prepared = await self._images.prepare(selection, self._candidate_config(record))
-        artifact = prepared.artifact
-        # The candidate must carry this instance's package selection. The configuration
-        # that package once copied is the instance's own and is never seeded again,
-        # so nothing of the instance directory is rewritten here. See ADR 0039.
-        package = self._package(prepared, selection)
-        self._require_secrets(package, self._environment(record.path))
+        artifact = (await self._images.build(selection)).artifact
         self._record(
             operation_id,
             "replace",
@@ -1452,13 +1325,6 @@ class Hub:
                 operation_id, "ready", "Waiting for the replacement to report itself ready."
             )
             await self._observe_ready(record)
-        # A failed update keeps the previous pin: the package moves once the replacement is up.
-        self.registry.record_package(record.instance_id, selection.package)
-        if package is not None:
-            # A pin selects a package no preparation described, so its version is kept here.
-            self.registry.record_description(
-                selection.package, artifact.image_id, package_description(package)
-            )
         return "Instance updated." if running else "Instance updated and left stopped."
 
     async def remove(self, command: InstanceRemoveCommand) -> LifecycleOperationResult:
@@ -1713,31 +1579,6 @@ class Hub:
             volumes=list(
                 dict.fromkeys(item.source for item in owned if item.kind is StorageKind.VOLUME)
             ),
-        )
-
-    def _candidate_config(self, record: ManagedInstance) -> StorageItem | None:
-        """The instance file the candidate check may see, on the Docker host.
-
-        The check reads package.yaml and nothing else. When the file exists, the
-        mount source is that file's host path, so the hub does not hand the
-        candidate the directory that holds .env. A missing file stays a directory
-        mount with nothing attached, and the check reports the absence.
-        """
-        mount = next(
-            (
-                item
-                for item in record.storage
-                if item.kind is StorageKind.BIND and item.destination == INSTANCE_MOUNT
-            ),
-            None,
-        )
-        if mount is None or not (record.path / PACKAGE_CONFIG_NAME).is_file():
-            return mount
-        return StorageItem(
-            kind=StorageKind.BIND,
-            source=str(Path(mount.source) / PACKAGE_CONFIG_NAME),
-            destination=f"{mount.destination.rstrip('/')}/{PACKAGE_CONFIG_NAME}",
-            writable=False,
         )
 
     def _directory(self, record: ManagedInstance, item: StorageItem) -> Path:
@@ -2038,17 +1879,8 @@ class Hub:
             storage=list(record.storage),
             avatar=record.avatar,
             setup_pending=self._setup(record).pending,
-            package=(
-                PackageSummary(
-                    id=record.package.id,
-                    distribution=record.package.distribution,
-                    version=record.package.version,
-                )
-                if record.package is not None
-                else None
-            ),
             factory=record.factory.factory if record.factory is not None else None,
-            notices=_notices(record, hub_revision, self.registry.description(record.package)),
+            notices=_notices(record, hub_revision),
             needs_human=self.runs.needing_human(record.factory),
         )
 
@@ -2068,25 +1900,10 @@ class Hub:
     async def _recreate_reasons(
         self, record: ManagedInstance, process: ProcessState
     ) -> tuple[RecreateReason, ...]:
-        """Secrets replaced since the container was created, then what the running instance
-        says changed since it booted. A stopped instance boots again on its next start.
-        """
+        """Secrets replaced since the container was created."""
         if process in {ProcessState.MISSING, ProcessState.UNAVAILABLE}:
             return ()
-        secrets = (RecreateReason.SECRETS,) if await self._secrets_replaced(record) else ()
-        if process is not ProcessState.RUNNING:
-            return secrets
-        return (*secrets, *await self._restart_reasons(record))
-
-    async def _restart_reasons(self, record: ManagedInstance) -> tuple[RecreateReason, ...]:
-        """An instance that does not answer in time, or runs an older core, reports none, so a
-        status never waits long or fails.
-        """
-        try:
-            async with asyncio.timeout(REASONS_SECONDS):
-                return tuple(await self._control.restart_reasons(await self._endpoint(record)))
-        except ControlUnreachable, IncompatibleLifecycleEndpoint, TimeoutError:
-            return ()
+        return (RecreateReason.SECRETS,) if await self._secrets_replaced(record) else ()
 
     async def _observed(self, record: ManagedInstance) -> ObservedProcess:
         """Read the runtime once. A runtime that cannot be read reports the instance unavailable."""
@@ -2106,7 +1923,7 @@ class Hub:
         """What the instance asks for: its template's as installed, or its image's."""
         if record.factory is not None:
             return record.factory.setup
-        return self.registry.description(record.package)
+        return self.registry.description()
 
     def _setup(self, record: ManagedInstance) -> InstanceSetup:
         """The logins and secrets the instance's stored descriptor declares, and how they stand."""
@@ -2207,45 +2024,6 @@ class Hub:
         if record is None or record.intended_state is not IntendedState.REMOVED:
             raise ManagedInstanceNotFound(f'Removed instance "{instance_id}" was not found.')
         return record
-
-    @staticmethod
-    def _package(prepared: PreparedImage, selection: ImageSelection) -> InstalledPackage | None:
-        selected = selection.package
-        installed = prepared.package
-        if selected is None:
-            if installed is not None:
-                raise ValueError("A vanilla image unexpectedly exported a package.")
-            return None
-        if installed is None:
-            raise ValueError(f'Package "{selected.id}" was not found in the prepared image.')
-        descriptor = installed.descriptor
-        match selected.version:
-            case PackageCommit(url=url, sha=sha):
-                # A commit names no version before it is built; its own metadata reports one.
-                version, source = descriptor.version, f"git+{url}@{sha}"
-            case index_version:
-                version, source = index_version, index_version
-        expected = (selected.id, selected.distribution, version)
-        actual = (descriptor.id, descriptor.distribution, descriptor.version)
-        if actual != expected:
-            raise ValueError(
-                f"Prepared package was {descriptor.id} from "
-                f"{descriptor.distribution} {descriptor.version}; expected "
-                f"{selected.id} from {selected.distribution} {source}."
-            )
-        return installed
-
-    @staticmethod
-    def _require_secrets(package: InstalledPackage | None, secrets: dict[str, str]) -> None:
-        """An update's candidate may ask for a secret this instance does not hold yet."""
-        declared = package.descriptor.setup_fields if package is not None else ()
-        missing = [
-            field.name
-            for field in declared
-            if field.kind is SetupFieldKind.SECRET and field.required and field.name not in secrets
-        ]
-        if missing:
-            raise ValueError(f'Missing required secret: "{missing[0]}".')
 
     def _storage(
         self,

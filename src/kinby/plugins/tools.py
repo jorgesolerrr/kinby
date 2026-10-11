@@ -14,7 +14,6 @@ from pydantic import JsonValue
 
 from kinby.contracts import DelegatedRun, RoutineName
 from kinby.instance import Instance
-from kinby.packages import PackageConfig
 
 ToolFunction = Callable[..., object]
 RunReporter = Callable[[DelegatedRun], Awaitable[object]]
@@ -22,10 +21,7 @@ RunReporter = Callable[[DelegatedRun], Awaitable[object]]
 
 @dataclass(frozen=True)
 class ToolContext:
-    """Instance-owned values supplied by kinby when a tool runs.
-
-    A code step receives its instance's validated package config, read for that run.
-    """
+    """Instance-owned values supplied by kinby when a tool runs."""
 
     instance: Instance
     thread_id: UUID
@@ -33,7 +29,6 @@ class ToolContext:
     turn_id: UUID | None = None
     #: The routine whose turn the tool runs in. None in a turn the user started.
     routine: RoutineName | None = None
-    package_config: PackageConfig | None = None
     run_reporter: RunReporter | None = field(default=None, repr=False)
 
     @property

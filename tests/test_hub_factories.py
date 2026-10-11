@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from kinby.contracts import (
     FACTORY_CHECK,
     FACTORY_EDIT,
@@ -232,33 +234,6 @@ def test_the_check_reports_a_tool_or_hook_file_that_does_not_load(tmp_path):
     )
 
 
-def test_the_check_fails_a_template_configuration_field_that_does_not_land_in_kinby_toml(
-    tmp_path,
-):
-    fields = """\
-  coder:
-    image: coder
-    setup_fields:
-      - { name: model, label: Model, description: Its model., kind: config, type: text,
-          required: true, default: "openai:gpt-5" }
-      - { name: TOKEN, label: Token, description: A token., kind: secret, type: text,
-          required: true }
-      - { name: steps, label: Steps, description: A budget., kind: config, type: integer,
-          required: false, target: { file: kinby.toml, key: budgets.steps } }
-      - { name: tone, label: Tone, description: How it writes., kind: config, type: text,
-          required: false, target: { file: package.yaml, key: tone } }
-      - { name: style, label: Style, description: How it looks., kind: config, type: text,
-          required: false }
-"""
-    factory = FACTORY.replace("  coder: { image: coder }\n", fields)
-
-    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
-        'Instance "coder": Configuration field "style" names no target.',
-        'Instance "coder" asks for "tone", which targets no key of kinby.toml, '
-        "where a template's configuration lands.",
-    ]
-
-
 def test_the_check_fails_setup_and_login_declarations_an_install_would_fail_on(tmp_path):
     declarations = """\
   coder:
@@ -283,7 +258,7 @@ def test_the_check_fails_setup_and_login_declarations_an_install_would_fail_on(t
     found = problems(tmp_path, FILES | {"factory.yaml": factory})
 
     assert found[:2] == [
-        'Instance "coder": Secret field "TOKEN" has a default. A secret never ships in a package.',
+        'Instance "coder": Secret field "TOKEN" has a default. A secret never ships in a template.',
         'Instance "coder": Setup field "steps" has a default that is not a whole number.',
     ]
     assert found[2:] == [
@@ -292,6 +267,132 @@ def test_the_check_fails_setup_and_login_declarations_an_install_would_fail_on(t
         'Instance "coder": Login "codex" mounts its volume at "codex", '
         "which is not an absolute path.",
     ]
+
+
+def _field(name: str = "drafts", **options: str | None) -> str:
+    """One setup field in flow YAML, an integer landing in kinby.toml unless *options* say not."""
+    declared = {
+        "name": name,
+        "label": "Drafts",
+        "description": "Drafts a day.",
+        "kind": "config",
+        "type": "integer",
+        "required": "false",
+        "target": "{ file: kinby.toml, key: budgets.steps }",
+    } | options
+    return "{ " + ", ".join(f"{key}: {value}" for key, value in declared.items() if value) + " }"
+
+
+def _declaring(declarations: str) -> dict[str, str]:
+    factory = FACTORY.replace(
+        "  coder: { image: coder }\n", f"  coder:\n    image: coder\n{declarations}"
+    )
+    return FILES | {"factory.yaml": factory}
+
+
+@pytest.mark.parametrize(
+    ("field", "failure"),
+    [
+        (_field(target=None), 'Configuration field "drafts" names no target.'),
+        (_field(label='""'), 'Setup field "drafts" has no label.'),
+        (
+            _field(choices="[one, two]"),
+            'Setup field "drafts" has choices, but it is not a choice field.',
+        ),
+        (_field(type="choice"), 'Choice field "drafts" offers no choices.'),
+        (
+            _field("EDITOR-KEY", kind="secret", type="text", target=None),
+            'Secret field "EDITOR-KEY" is not an environment variable name.',
+        ),
+        (
+            _field("SEARCH_TOKEN", kind="secret", type="boolean", target=None),
+            'Secret field "SEARCH_TOKEN" is boolean. A secret is text or multiline.',
+        ),
+        (
+            _field("SEARCH_TOKEN", kind="secret", type="text"),
+            'Secret field "SEARCH_TOKEN" has a target. A secret lands in the instance secrets.',
+        ),
+        (
+            _field("model", type="text", default="openai:gpt-5"),
+            'Setup field "model" overrides a built-in field, which kinby writes itself, '
+            "so it takes no target.",
+        ),
+        (
+            _field("model", type="multiline", target=None),
+            'Setup field "model" overrides a built-in field, so it keeps its kind and type.',
+        ),
+        (
+            _field(type="boolean", default="1"),
+            'Setup field "drafts" has a default that is not true or false.',
+        ),
+        (
+            _field(type="choice", choices="[plain, formal]", default="loud"),
+            'Setup field "drafts" has a default that is not one of plain, formal.',
+        ),
+        (
+            _field(type="email", default="not-an-email"),
+            'Setup field "drafts" has a default that is not an email address, '
+            "like someone@example.com.",
+        ),
+        (
+            _field(type="url", default="owner/name"),
+            'Setup field "drafts" has a default that is not a URL with a scheme and a host, '
+            "like https://example.com.",
+        ),
+    ],
+    ids=[
+        "missing-target",
+        "no-label",
+        "choices-on-a-non-choice",
+        "choice-without-choices",
+        "secret-not-an-environment-name",
+        "secret-of-another-type",
+        "target-on-a-secret",
+        "target-on-a-built-in",
+        "built-in-of-another-type",
+        "boolean-default",
+        "choice-default",
+        "email-default",
+        "url-default",
+    ],
+)
+def test_the_check_fails_each_malformed_setup_field(tmp_path, field, failure):
+    found = problems(tmp_path, _declaring(f"    setup_fields:\n      - {field}\n"))
+
+    assert found == [f'Instance "coder": {failure}']
+
+
+def _login(login_id: str, pattern: str) -> str:
+    return (
+        f"{{ id: {login_id}, label: Editor, description: Signs in., command: [editor, login], "
+        f"volume: /root/.editor, prompt_pattern: '{pattern}' }}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("login", "failure"),
+    [
+        (
+            _login("reviewer", r"(?P<url>\S+"),
+            'Login "reviewer" has a prompt pattern that does not compile: '
+            "missing ), unterminated subpattern at position 0.",
+        ),
+        (
+            _login("mailer", r"(?P<url>\S+) (?P<token>\S+)"),
+            'Login "mailer" has a prompt pattern without the named group "code".',
+        ),
+        (
+            _login("Mail box", r"(?P<url>\S+) (?P<code>\S+)"),
+            'Login "Mail box" has an id that cannot name a volume: use letters, digits, ".", '
+            '"_" and "-", starting with a letter or digit.',
+        ),
+    ],
+    ids=["pattern-does-not-compile", "pattern-without-code", "id-not-a-volume-name"],
+)
+def test_the_check_fails_each_malformed_login(tmp_path, login, failure):
+    found = problems(tmp_path, _declaring(f"    logins:\n      - {login}\n"))
+
+    assert found == [f'Instance "coder": {failure}']
 
 
 def test_the_check_fails_a_template_that_does_not_initialize(tmp_path):

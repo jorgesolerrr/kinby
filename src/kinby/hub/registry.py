@@ -10,8 +10,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from pydantic import TypeAdapter
-
 from kinby.contracts import (
     DEFAULT_AVATAR,
     Avatar,
@@ -28,9 +26,6 @@ from kinby.contracts import (
     OperationKind,
     OperationState,
     OperationStep,
-    PackageCommit,
-    PackageDescription,
-    PackageSelection,
     StepAttempt,
     StepEnding,
     StepId,
@@ -78,7 +73,6 @@ class ManagedInstance:
     runtime_id: str
     prepared: bool
     storage: tuple[StorageItem, ...]
-    package: PackageSelection | None = None
     avatar: Avatar = DEFAULT_AVATAR
     factory: FactoryMember | None = None
 
@@ -121,12 +115,6 @@ class HubRegistry:
                     intended_state TEXT NOT NULL,
                     runtime_id TEXT NOT NULL UNIQUE,
                     prepared INTEGER NOT NULL DEFAULT 0,
-                    package_id TEXT,
-                    package_distribution TEXT,
-                    package_version TEXT,
-                    package_image_recipe TEXT,
-                    package_commit_url TEXT,
-                    package_commit_sha TEXT,
                     avatar_shape TEXT,
                     avatar_color TEXT
                 );
@@ -144,7 +132,6 @@ class HubRegistry:
                     kind TEXT NOT NULL,
                     state TEXT NOT NULL,
                     detail TEXT NOT NULL,
-                    selection TEXT,
                     login_id TEXT
                 );
                 CREATE TABLE IF NOT EXISTS operation_steps (
@@ -170,13 +157,11 @@ class HubRegistry:
                     revision TEXT NOT NULL,
                     dependency_id TEXT NOT NULL,
                     base_images TEXT NOT NULL,
-                    dependencies TEXT NOT NULL,
-                    package_selection TEXT
+                    dependencies TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS package_descriptions (
-                    selection TEXT PRIMARY KEY,
-                    image_id TEXT NOT NULL,
-                    description TEXT NOT NULL
+                CREATE TABLE IF NOT EXISTS image_descriptions (
+                    image_id TEXT PRIMARY KEY,
+                    setup TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS update_candidates (
                     instance_id TEXT PRIMARY KEY REFERENCES instances(id),
@@ -224,16 +209,7 @@ class HubRegistry:
             self._add_columns(
                 connection,
                 "instances",
-                {
-                    "package_id": "TEXT",
-                    "package_distribution": "TEXT",
-                    "package_version": "TEXT",
-                    "package_image_recipe": "TEXT",
-                    "package_commit_url": "TEXT",
-                    "package_commit_sha": "TEXT",
-                    "avatar_shape": "TEXT",
-                    "avatar_color": "TEXT",
-                },
+                {"avatar_shape": "TEXT", "avatar_color": "TEXT"},
             )
             self._add_columns(
                 connection,
@@ -253,11 +229,6 @@ class HubRegistry:
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
             self._add_columns(
                 connection,
-                "image_artifacts",
-                {"package_selection": "TEXT"},
-            )
-            self._add_columns(
-                connection,
                 "operation_steps",
                 {"prompt_url": "TEXT", "prompt_code": "TEXT"},
             )
@@ -265,6 +236,7 @@ class HubRegistry:
         # After the rebuild, which copies only the columns operations had before preparations.
         with self._connect() as connection:
             self._add_columns(connection, "operations", {"login_id": "TEXT"})
+            self._drop_packages(connection)
 
     def _let_operations_stand_alone(self) -> None:
         """Rebuild an operations table from before preparations, whose rows all name an instance.
@@ -286,8 +258,7 @@ class HubRegistry:
                     instance_id TEXT REFERENCES instances(id),
                     kind TEXT NOT NULL,
                     state TEXT NOT NULL,
-                    detail TEXT NOT NULL,
-                    selection TEXT
+                    detail TEXT NOT NULL
                 );
                 INSERT INTO operations_standing_alone (id, instance_id, kind, state, detail)
                 SELECT id, instance_id, kind, state, detail FROM operations ORDER BY rowid;
@@ -298,6 +269,51 @@ class HubRegistry:
             )
         finally:
             connection.close()
+
+    @classmethod
+    def _drop_packages(cls, connection: sqlite3.Connection) -> None:
+        """Drop what a registry from before factories kept about packages.
+
+        Every instance keeps its record. Of the descriptions, only the base image's still
+        describes something an instance can be created from.
+        """
+        cls._drop_columns(
+            connection,
+            "instances",
+            (
+                "package_id",
+                "package_distribution",
+                "package_version",
+                "package_image_recipe",
+                "package_commit_url",
+                "package_commit_sha",
+            ),
+        )
+        cls._drop_columns(connection, "image_artifacts", ("package_selection",))
+        cls._drop_columns(connection, "operations", ("selection",))
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master")}
+        if "package_descriptions" not in tables:
+            return
+        row = connection.execute(
+            "SELECT image_id, description FROM package_descriptions WHERE selection = 'null'"
+        ).fetchone()
+        if row is not None:
+            described = json.loads(row[1])
+            setup = DeclaredSetup(
+                setup_fields=described["setup_fields"], logins=described.get("logins", [])
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO image_descriptions (image_id, setup) VALUES (?, ?)",
+                (row[0], setup.model_dump_json()),
+            )
+        connection.execute("DROP TABLE package_descriptions")
+
+    @staticmethod
+    def _drop_columns(connection: sqlite3.Connection, table: str, columns: tuple[str, ...]) -> None:
+        existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        for name in columns:
+            if name in existing:
+                connection.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
 
     @staticmethod
     def _add_columns(
@@ -427,10 +443,8 @@ class HubRegistry:
                 """
                 INSERT INTO instances (
                     id, path, manifest_id, persona_name, requested_revision,
-                    intended_state, runtime_id, prepared, package_id,
-                    package_distribution, package_version, package_image_recipe,
-                    package_commit_url, package_commit_sha, avatar_shape, avatar_color
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+                    intended_state, runtime_id, prepared, avatar_shape, avatar_color
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 """,
                 (
                     str(instance.instance_id),
@@ -440,7 +454,6 @@ class HubRegistry:
                     instance.requested_revision,
                     instance.intended_state.value,
                     instance.runtime_id,
-                    *_package_columns(instance.package),
                     instance.avatar.shape.value,
                     instance.avatar.color.value,
                 ),
@@ -501,26 +514,19 @@ class HubRegistry:
             ),
         )
 
-    def begin_preparation(
-        self,
-        operation_id: UUID,
-        package: PackageSelection | None,
-        detail: str,
-    ) -> UUID:
-        """Open this image preparation, or return the unfinished one of the same selection."""
-        selection = _selection_key(package)
+    def begin_preparation(self, operation_id: UUID, detail: str) -> UUID:
+        """Open this image preparation, or return the unfinished one."""
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 """
                 SELECT id FROM operations
-                WHERE kind = ? AND selection = ? AND state IN (?, ?)
+                WHERE kind = ? AND state IN (?, ?)
                 ORDER BY rowid
                 LIMIT 1
                 """,
                 (
                     OperationKind.PREPARE.value,
-                    selection,
                     OperationState.PENDING.value,
                     OperationState.RUNNING.value,
                 ),
@@ -529,15 +535,14 @@ class HubRegistry:
                 return UUID(existing[0])
             connection.execute(
                 """
-                INSERT INTO operations (id, kind, state, detail, selection)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO operations (id, kind, state, detail)
+                VALUES (?, ?, ?, ?)
                 """,
                 (
                     str(operation_id),
                     OperationKind.PREPARE.value,
                     OperationState.PENDING.value,
                     detail,
-                    selection,
                 ),
             )
         return operation_id
@@ -638,39 +643,26 @@ class HubRegistry:
                 (prompt.url, prompt.code, str(operation_id), OperationState.RUNNING.value),
             )
 
-    def record_description(
-        self,
-        package: PackageSelection | None,
-        image_id: str,
-        description: PackageDescription,
-    ) -> None:
-        """Keep what this selection's image declares, so describing it never builds."""
+    def record_description(self, image_id: str, setup: DeclaredSetup) -> None:
+        """Keep what this image declares, so describing it never builds."""
         with self._connect() as connection:
             connection.execute(
-                """
-                INSERT OR REPLACE INTO package_descriptions (selection, image_id, description)
-                VALUES (?, ?, ?)
-                """,
-                (_selection_key(package), image_id, description.model_dump_json()),
+                "INSERT OR REPLACE INTO image_descriptions (image_id, setup) VALUES (?, ?)",
+                (image_id, setup.model_dump_json()),
             )
 
-    def description(
-        self,
-        package: PackageSelection | None,
-        image_id: str | None = None,
-    ) -> PackageDescription | None:
-        """What the image last prepared for this selection declares, if one was prepared.
-
-        With an image id, only if that image is the one the description was read from.
-        """
+    def description(self, image_id: str | None = None) -> DeclaredSetup | None:
+        """What this image declares, or with no image the one described last, if any was."""
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT image_id, description FROM package_descriptions WHERE selection = ?",
-                (_selection_key(package),),
+                """
+                SELECT setup FROM image_descriptions
+                WHERE ? IS NULL OR image_id = ?
+                ORDER BY rowid DESC LIMIT 1
+                """,
+                (image_id, image_id),
             ).fetchone()
-        if row is None or image_id not in {None, row[0]}:
-            return None
-        return PackageDescription.model_validate_json(row[1])
+        return DeclaredSetup.model_validate_json(row[0]) if row is not None else None
 
     def fail_interrupted_operations(self, detail: str) -> None:
         """Fail operations the previous process left unfinished.
@@ -951,23 +943,15 @@ class HubRegistry:
                     """
                     INSERT INTO instances (
                         id, path, manifest_id, persona_name, requested_revision,
-                        image_id, intended_state, runtime_id, prepared,
-                        package_id, package_distribution, package_version,
-                        package_image_recipe, package_commit_url, package_commit_sha
-                    ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+                        image_id, intended_state, runtime_id, prepared
+                    ) VALUES (?, ?, ?, ?, '', ?, ?, ?, 0)
                     ON CONFLICT(id) DO UPDATE SET
                         path = excluded.path,
                         manifest_id = excluded.manifest_id,
                         persona_name = excluded.persona_name,
                         image_id = excluded.image_id,
                         intended_state = excluded.intended_state,
-                        runtime_id = excluded.runtime_id,
-                        package_id = excluded.package_id,
-                        package_distribution = excluded.package_distribution,
-                        package_version = excluded.package_version,
-                        package_image_recipe = excluded.package_image_recipe,
-                        package_commit_url = excluded.package_commit_url,
-                        package_commit_sha = excluded.package_commit_sha
+                        runtime_id = excluded.runtime_id
                     """,
                     (
                         str(instance.instance_id),
@@ -977,7 +961,6 @@ class HubRegistry:
                         instance.image_id,
                         instance.intended_state.value,
                         instance.runtime_id,
-                        *_package_columns(instance.package),
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -1080,19 +1063,6 @@ class HubRegistry:
             "DELETE FROM update_candidates WHERE instance_id = ?",
             (str(instance_id),),
         )
-
-    def record_package(self, instance_id: UUID, package: PackageSelection | None) -> None:
-        """Point this instance at the package its running replacement carries."""
-        with self._connect() as connection:
-            connection.execute(
-                """
-                UPDATE instances
-                SET package_id = ?, package_distribution = ?, package_version = ?,
-                    package_image_recipe = ?, package_commit_url = ?, package_commit_sha = ?
-                WHERE id = ?
-                """,
-                (*_package_columns(package), str(instance_id)),
-            )
 
     def mark_prepared(self, instance_id: UUID) -> None:
         with self._connect() as connection:
@@ -1238,8 +1208,6 @@ class HubRegistry:
                 """
                 SELECT id, path, manifest_id, persona_name, requested_revision,
                        source_revision, image_id, intended_state, runtime_id, prepared,
-                       package_id, package_distribution, package_version,
-                       package_image_recipe, package_commit_url, package_commit_sha,
                        avatar_shape, avatar_color
                 FROM instances WHERE id = ?
                 """,
@@ -1278,22 +1246,10 @@ class HubRegistry:
                 )
                 for kind, source, destination, writable in storage_rows
             ),
-            package=(
-                PackageSelection(
-                    id=row[10],
-                    distribution=row[11],
-                    version=(
-                        PackageCommit(url=row[14], sha=row[15]) if row[15] is not None else row[12]
-                    ),
-                    image_recipe=row[13],
-                )
-                if row[10] is not None
-                else None
-            ),
             # Instances from before avatars have none recorded, and draw the default one.
             avatar=(
-                Avatar(shape=AvatarShape(row[16]), color=AvatarColor(row[17]))
-                if row[16] is not None
+                Avatar(shape=AvatarShape(row[10]), color=AvatarColor(row[11]))
+                if row[10] is not None
                 else DEFAULT_AVATAR
             ),
             factory=(
@@ -1395,8 +1351,7 @@ class HubRegistry:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT image_id, revision, dependency_id, base_images, dependencies,
-                       package_selection
+                SELECT image_id, revision, dependency_id, base_images, dependencies
                 FROM image_artifacts WHERE input_key = ?
                 """,
                 (input_key,),
@@ -1409,7 +1364,6 @@ class HubRegistry:
             dependency_id=row[2],
             base_images=tuple(json.loads(row[3])),
             dependencies=tuple(json.loads(row[4])),
-            package=(PackageSelection.model_validate_json(row[5]) if row[5] is not None else None),
         )
 
     def record_image_artifact(self, input_key: str, artifact: ImageArtifact) -> None:
@@ -1417,9 +1371,8 @@ class HubRegistry:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO image_artifacts (
-                    input_key, image_id, revision, dependency_id, base_images, dependencies,
-                    package_selection
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    input_key, image_id, revision, dependency_id, base_images, dependencies
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     input_key,
@@ -1428,7 +1381,6 @@ class HubRegistry:
                     artifact.dependency_id,
                     json.dumps(artifact.base_images),
                     json.dumps(artifact.dependencies),
-                    artifact.package.model_dump_json() if artifact.package is not None else None,
                 ),
             )
 
@@ -1700,7 +1652,6 @@ class HubRegistry:
 _RUN_COLUMNS = "id, factory, work_item, status, step, created_at, updated_at"
 #: The statuses a run never leaves.
 _FINISHED = (FactoryRunStatus.DONE.value, FactoryRunStatus.CANCELLED.value)
-_SELECTION = TypeAdapter(PackageSelection | None)
 
 
 def _now() -> str:
@@ -1723,22 +1674,3 @@ def _factory_run(row: tuple[str, ...]) -> FactoryRun:
         created_at=datetime.fromisoformat(created_at),
         updated_at=datetime.fromisoformat(updated_at),
     )
-
-
-def _selection_key(package: PackageSelection | None) -> str:
-    """One selection, as the JSON a client sends for it. Vanilla is null."""
-    return _SELECTION.dump_json(package).decode()
-
-
-type _PackageColumns = tuple[str | None, str | None, str | None, str | None, str | None, str | None]
-
-
-def _package_columns(package: PackageSelection | None) -> _PackageColumns:
-    """The id, distribution, index version, recipe, and git commit columns of one selection."""
-    if package is None:
-        return (None, None, None, None, None, None)
-    match package.version:
-        case PackageCommit(url=url, sha=sha):
-            return (package.id, package.distribution, None, package.image_recipe, url, sha)
-        case version:
-            return (package.id, package.distribution, version, package.image_recipe, None, None)

@@ -11,7 +11,6 @@ from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import yaml
 from pydantic import ValidationError
 
 from kinby.contracts import (
@@ -26,9 +25,6 @@ from kinby.contracts import (
     ManifestResult,
     ManifestSetCommand,
     ModelChoice,
-    PackageConfigGetCommand,
-    PackageConfigResult,
-    PackageConfigSetCommand,
     PermissionsGetCommand,
     PermissionsResult,
     PermissionsSetCommand,
@@ -40,7 +36,6 @@ from kinby.contracts import (
     PromptName,
     PromptResult,
     PromptSetCommand,
-    RecreateReason,
     RoutineDeleteCommand,
     RoutineDeleteResult,
     RoutineFile,
@@ -66,7 +61,6 @@ from kinby.contracts import (
 )
 from kinby.core.errors import (
     InvalidConfig,
-    PackageConfigNotFound,
     RoutineNotFound,
     RoutineRefused,
     SkillNotFound,
@@ -110,15 +104,6 @@ from kinby.instance.permissions import (
     parse_permissions,
 )
 from kinby.instance.recap import DEFAULT_RECAP_LENS
-from kinby.packages import (
-    PACKAGE_CONFIG_NAME,
-    PackageConfig,
-    SetupField,
-    config_field_errors,
-    load_package,
-    package_config_yaml,
-    validate_package_config,
-)
 from kinby.plugins.core import core_tools
 from kinby.plugins.instance_tools import (
     delete_routine,
@@ -198,13 +183,6 @@ def _write_over(path: Path, content: bytes, read: FileHash) -> None:
     staging.replace(path)
 
 
-def package_config_hash(instance: Instance) -> FileHash | None:
-    """The hash of a packaged instance's package.yaml. None for a vanilla instance."""
-    if instance.manifest.package is None:
-        return None
-    return file_hash(_read_bytes(instance.path / PACKAGE_CONFIG_NAME) or b"")
-
-
 def _manifest_result(content: bytes) -> ManifestResult:
     raw = parse_manifest(content.decode("utf-8"))
     return ManifestResult(
@@ -222,21 +200,10 @@ def _manifest_result(content: bytes) -> ManifestResult:
 
 
 class InstanceConfig:
-    """The instance's configuration as the contract reads and writes it.
+    """The instance's configuration as the contract reads and writes it."""
 
-    *booted_package_config* is the hash of the package.yaml the instance validated at boot.
-    """
-
-    def __init__(self, instance: Instance, booted_package_config: FileHash | None = None) -> None:
+    def __init__(self, instance: Instance) -> None:
         self._instance = instance
-        self._booted_package_config = booted_package_config
-
-    def restart_reasons(self) -> list[RecreateReason]:
-        """What changed on disk since boot that applies only once the instance is recreated."""
-        booted = self._booted_package_config
-        if booted is None or package_config_hash(self._instance) == booted:
-            return []
-        return [RecreateReason.PACKAGE_CONFIG]
 
     async def get_prompt(self, command: PromptGetCommand) -> PromptResult:
         content = _read_bytes(self._instance.path / _PROMPT_FILES[command.name])
@@ -325,33 +292,6 @@ class InstanceConfig:
             )
         return _permissions_result(policy, file_hash(content))
 
-    async def get_package_config(self, command: PackageConfigGetCommand) -> PackageConfigResult:
-        config, _ = self._package_config()
-        content = _read_bytes(self._instance.path / PACKAGE_CONFIG_NAME) or b""
-        values = yaml.safe_load(content) or {}
-        return PackageConfigResult(
-            schema=config.model_json_schema(),
-            values=values if isinstance(values, dict) else {},
-            hash=file_hash(content),
-        )
-
-    async def set_package_config(self, command: PackageConfigSetCommand) -> PackageConfigResult:
-        config, fields = self._package_config()
-        try:
-            validated = validate_package_config(config, fields, command.values)
-        except ValidationError as exc:
-            raise InvalidConfig(config_field_errors(exc)) from exc
-        content = package_config_yaml(validated).encode("utf-8")
-        async with self._instance.config_lock:
-            await asyncio.to_thread(
-                self._write, ConfigFile(PACKAGE_CONFIG_NAME), content, command.hash
-            )
-        return PackageConfigResult(
-            schema=config.model_json_schema(),
-            values=validated.model_dump(mode="json"),
-            hash=file_hash(content),
-        )
-
     async def list_skills(self, command: SkillListCommand) -> SkillListResult:
         tiered, warnings = load_skill_tiers(self._instance)
         winners: dict[SkillName, SkillTier] = {}
@@ -363,7 +303,6 @@ class InstanceConfig:
                     name=each.skill.name,
                     tier=each.tier,
                     description=each.skill.description,
-                    source=each.origin,
                     shadowed_by=None
                     if winners[each.skill.name] is each.tier
                     else winners[each.skill.name],
@@ -428,18 +367,6 @@ class InstanceConfig:
         log = ConfigChangeLog(self._instance.manifest.state_dir)
         return ConfigHistoryResult(changes=log.history(command.file, command.limit))
 
-    def _package_config(self) -> tuple[type[PackageConfig], tuple[SetupField, ...]]:
-        """The config model the instance's package declares, and the package's setup fields."""
-        provenance = self._instance.manifest.package
-        if provenance is None:
-            raise PackageConfigNotFound(
-                "The instance runs no package, so it has no package config."
-            )
-        package = load_package(provenance.id).package
-        if package.config is None:
-            raise PackageConfigNotFound(f'Package "{provenance.id}" declares no config.')
-        return package.config, package.setup_fields
-
     def _write(self, file: ConfigFile, content: bytes, read: FileHash) -> None:
         with self._recorded(file):
             _write_over(self._instance.path / file, content, read)
@@ -503,7 +430,7 @@ class InstanceConfig:
         return self._instance.path / SKILLS_DIR / name
 
     def _refuse_read_only(self, name: SkillName) -> None:
-        """Refuse a change to a package or workspace skill the instance has no copy of."""
+        """Refuse a change to a kinby or workspace skill the instance has no copy of."""
         lower = lower_tier_skill(self._instance, name)
         if lower is not None:
             raise InvalidConfig(
@@ -534,7 +461,7 @@ class InstanceConfig:
             raise StaleWrite(f"{SKILLS_DIR}/{name} is already in the instance. Read it again.")
         lower = lower_tier_skill(self._instance, name)
         if lower is None:
-            raise SkillNotFound(f'There is no package or workspace skill "{name}".')
+            raise SkillNotFound(f'There is no kinby or workspace skill "{name}".')
         directory.parent.mkdir(parents=True, exist_ok=True)
         with (
             self._recorded_skill(name),

@@ -44,7 +44,7 @@ from tests.test_hub import (
     hub_client,
 )
 from tests.test_hub_adoption import CODER_CONTAINER, adopted, coder_storage, existing_coder
-from tests.test_hub_logins import CODEX, created_writer, writer_package
+from tests.test_hub_logins import CODEX, created_writer, writer
 from tests.test_hub_recovery import claim_storage
 from tests.test_hub_removal import HeldCreate, listed, removed, storage_of
 
@@ -80,9 +80,7 @@ async def deleted(
 
 def login_hub(tmp_path, runtime: FakeRuntime) -> Hub:
     """A hub whose instances declare the Codex login, so each owns a second named volume."""
-    return hub_at(
-        tmp_path / "hub", runtime=runtime, images=FakeImages(package=writer_package(CODEX))
-    )
+    return hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(declared=writer(CODEX)))
 
 
 def volumes_of(hub: Hub, instance: LifecycleOperationResult) -> list[str]:

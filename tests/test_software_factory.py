@@ -1169,6 +1169,7 @@ async def scanned(
         )
         accepted = await call(dispatcher, "routine.run", name="scan", payload=payload)
         assert isinstance(accepted, AcceptedResult), accepted
+        await dispatcher.scheduler.tick()
         stream = await thread_events(dispatcher, {"thread_id": accepted.thread_id}, set(Scope))
         async with asyncio.timeout(10):
             async for event in stream:
@@ -1759,7 +1760,29 @@ FIXES = (
     "open('theme.py', 'w').write('DARK_MODE = True\\n')\n"
     "subprocess.run(['git', 'commit', '-am', 'Rename DARK'], check=True, capture_output=True)\n"
 )
-FIXED_T1 = {"T1": {"fixed": True, "reply": "Renamed it."}}
+
+
+def fixed_by(commit: str) -> dict[str, dict[str, object]]:
+    """A reply that says the thread T1 is fixed, naming *commit* as holding the fix."""
+    return {"T1": {"fixed": True, "commit": commit, "reply": "Renamed it."}}
+
+
+FIXED_T1 = fixed_by("HEAD")
+
+
+async def answered(dispatcher: ScheduledDispatcher, results: Mapping[str, StepValue]) -> StepResult:
+    return await run_in(
+        dispatcher,
+        StepRunCommand(
+            step=ClientStepRun(
+                client=CodingClient.CLAUDE, prompt="Answer them.", timeout_seconds=30
+            ),
+            hook="check_answers",
+            origin=origin("answer"),
+            work_item={"issue": 7},
+            results=BRANCH | {"pr": 42} | dict(results),
+        ),
+    )
 
 
 @pytest.mark.parametrize(
@@ -1780,11 +1803,32 @@ FIXED_T1 = {"T1": {"fixed": True, "reply": "Renamed it."}}
         ),
         ("", {}, StepEnding.CLEAN, None),
         (
-            writes_replies(FIXED_T1),
+            FIXES + writes_replies({"T1": {"fixed": True, "reply": "Renamed it."}}),
             {"feedback": THREADS},
             StepEnding.FAILED,
-            "UncommittedWork: The replies say a thread is fixed, but agent/7-add-dark-mode has "
-            "no new commit.",
+            'UnansweredThreads: The reply to thread T1 is not {"fixed", "reply"}, with a '
+            '"commit" when fixed.',
+        ),
+        (
+            FIXES + writes_replies(fixed_by("0123456789abc")),
+            {"feedback": THREADS},
+            StepEnding.FAILED,
+            "UncommittedWork: The reply to thread T1 names 0123456789abc, which is no commit "
+            "of agent/7-add-dark-mode ahead of main.",
+        ),
+        (
+            FIXES + writes_replies(fixed_by("stray")),
+            {"feedback": THREADS},
+            StepEnding.FAILED,
+            "UncommittedWork: The reply to thread T1 names stray, which is no commit of "
+            "agent/7-add-dark-mode ahead of main.",
+        ),
+        (
+            FIXES + writes_replies(fixed_by("origin/main")),
+            {"feedback": THREADS},
+            StepEnding.FAILED,
+            "UncommittedWork: The reply to thread T1 names origin/main, which is no commit of "
+            "agent/7-add-dark-mode ahead of main.",
         ),
         (
             FIXES,
@@ -1805,7 +1849,10 @@ FIXED_T1 = {"T1": {"fixed": True, "reply": "Renamed it."}}
         "fixed-and-rewritten",
         "explained",
         "no-feedback-yet",
-        "fix-not-committed",
+        "fix-names-no-commit",
+        "no-such-commit",
+        "commit-off-the-branch",
+        "commit-at-the-base",
         "no-replies",
         "wrong-thread",
     ],
@@ -1815,22 +1862,18 @@ def test_the_answer_hook_records_a_reply_for_every_thread_once_its_fixes_are_com
 ):
     instance = pushed_branch(tmp_path)
     workspace = instance.manifest.workspace.path
+    # A commit on no branch, after the branch's head.
+    git(
+        workspace,
+        "tag",
+        "stray",
+        git(workspace, "commit-tree", "-p", "HEAD", "-m", "Stray", "HEAD^{tree}"),
+    )
     stub_client(tmp_path, monkeypatch, "claude", then + streaming(CLAUDE_STREAM))
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
-        result = await run_in(
-            dispatcher,
-            StepRunCommand(
-                step=ClientStepRun(
-                    client=CodingClient.CLAUDE, prompt="Answer them.", timeout_seconds=30
-                ),
-                hook="check_answers",
-                origin=origin("answer"),
-                work_item={"issue": 7},
-                results=BRANCH | {"pr": 42} | results,
-            ),
-        )
+        result = await answered(dispatcher, results)
 
         assert result.ending is ending, result.summary
         assert not (workspace / ".scratch" / "review-replies.json").exists()
@@ -1839,6 +1882,8 @@ def test_the_answer_hook_records_a_reply_for_every_thread_once_its_fixes_are_com
         elif "feedback" in results:
             replies = json.loads(str(result.values.pop("replies")))
             assert set(replies) == {"T1"}
+            if replies["T1"]["fixed"]:
+                assert replies["T1"]["commit"] == git(workspace, "rev-parse", "HEAD")
             # An unwritten title or body is recorded as empty, over an earlier round's.
             assert result.values == (WORDS if WRITES_WORDS in then else {"title": "", "body": ""})
             assert not any((workspace / ".scratch").glob("pr-*"))
@@ -1848,22 +1893,50 @@ def test_the_answer_hook_records_a_reply_for_every_thread_once_its_fixes_are_com
     asyncio.run(scenario())
 
 
+def test_the_answer_hook_takes_a_fix_an_already_pushed_commit_holds_by_its_full_sha(
+    tmp_path, monkeypatch
+):
+    instance = pushed_branch(tmp_path)
+    workspace = instance.manifest.workspace.path
+    pushed = git(workspace, "rev-parse", "HEAD")
+    stub_client(
+        tmp_path,
+        monkeypatch,
+        "claude",
+        writes_replies(fixed_by(pushed[:7])) + streaming(CLAUDE_STREAM),
+    )
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await answered(dispatcher, {"feedback": THREADS})
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert json.loads(str(result.values["replies"])) == fixed_by(pushed)
+
+    asyncio.run(scenario())
+
+
 def test_publish_after_a_fix_round_pushes_it_and_replies_on_each_thread_it_answered(
     tmp_path, monkeypatch
 ):
     instance = pushed_branch(tmp_path)
     workspace = instance.manifest.workspace.path
+    pushed = git(workspace, "rev-parse", "HEAD")
     commit(workspace, "theme.py", "DARK_MODE = True\n")
+    head = git(workspace, "rev-parse", "HEAD")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
-    replies = FIXED_T1 | {"T2": {"fixed": False, "reply": "DARK is the house style."}}
+    replies = {
+        "T1": {"fixed": True, "commit": head, "reply": "Renamed it."},
+        "T2": {"fixed": True, "commit": pushed, "reply": "Added it before."},
+        "T3": {"fixed": False, "reply": "DARK is the house style."},
+    }
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
         result = await opened(dispatcher, 7, BRANCH | {"pr": 42, "replies": json.dumps(replies)})
 
-        head = git(workspace, "rev-parse", "HEAD")
         assert result.ending is StepEnding.CLEAN, result.summary
-        assert result.summary == "Pushed agent/7-add-dark-mode and replied on 2 review threads."
+        assert result.summary == "Pushed agent/7-add-dark-mode and replied on 3 review threads."
         assert git(tmp_path / "origin.git", "rev-parse", BRANCH["branch"]) == head
         graphql = [
             {
@@ -1880,7 +1953,9 @@ def test_publish_after_a_fix_round_pushes_it_and_replies_on_each_thread_it_answe
         ] == [
             (False, "T1", f"{head}: Renamed it."),
             (True, "T1", None),
-            (False, "T2", "DARK is the house style."),
+            (False, "T2", f"{pushed}: Added it before."),
+            (True, "T2", None),
+            (False, "T3", "DARK is the house style."),
         ]
         assert not any(
             arguments[:2] in (["pr", "create"], ["pr", "edit"]) for arguments in github.calls

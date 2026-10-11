@@ -13,8 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { usePace } from "@/hooks/use-pace"
-import { retried } from "@/lib/operation"
+import { pace, retried } from "@/lib/operation"
 
 type Caller = Pick<InstanceClient, "call">
 
@@ -38,13 +37,14 @@ export function ToolsSection({
 }) {
   const [listed, setListed] = useState<ToolListResult>()
   const [failure, setFailure] = useState<unknown>()
-  const pacing = usePace(clock)
 
   useEffect(() => {
+    const pacing = pace(clock)
     retried(() => client.call("tool.list", {}), pacing).then(setListed, (error: unknown) =>
       setFailure(error),
     )
-  }, [client, pacing])
+    return pacing.stop
+  }, [client, clock])
 
   if (listed === undefined) {
     return failure === undefined ? (

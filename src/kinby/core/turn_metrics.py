@@ -250,8 +250,14 @@ def turn_metrics(
             main_totals = closing_totals[key]
             main_price = prices.get(record.model) if record.model is not None else None
             recap_price = prices.get(payload.model) if payload.model is not None else None
-            if payload.model is not None and recap_price is None:
-                unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(payload.model))
+            if recap_price is not None:
+                recap_cost = token_cost(payload, recap_price)
+            elif not (payload.total or payload.cache_read_tokens or payload.cache_creation_tokens):
+                recap_cost = 0
+            else:
+                recap_cost = None
+                if payload.model is not None:
+                    unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(payload.model))
             record.input_tokens += payload.input_tokens - record.recap_input_tokens
             record.output_tokens += payload.output_tokens - record.recap_output_tokens
             record.cache_read_tokens = main_totals.cache_read_tokens + payload.cache_read_tokens
@@ -261,8 +267,8 @@ def turn_metrics(
             record.recap_input_tokens = payload.input_tokens
             record.recap_output_tokens = payload.output_tokens
             record.cost = (
-                token_cost(main_totals, main_price) + token_cost(payload, recap_price)
-                if main_price is not None and recap_price is not None
+                token_cost(main_totals, main_price) + recap_cost
+                if main_price is not None and recap_cost is not None
                 else None
             )
         elif isinstance(payload, TurnRated):

@@ -678,7 +678,7 @@ One conversation attached to a pull request diff. It may be resolved, or remain 
 
 ### Review reply
 
-The coding **instance**'s answer on a **review thread**. A reply records whether the feedback was fixed and explains what changed or why it stayed unchanged.
+The coding **instance**'s answer on a **review thread**. A reply records whether the feedback was fixed and explains what changed or why it stayed unchanged. A fixed reply names the commit that holds the fix.
 
 ### Actionable thread
 
