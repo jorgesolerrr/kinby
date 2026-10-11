@@ -114,7 +114,7 @@ def _check_committed(workspace: Path, branch: str) -> None:
     current = _git(workspace, "branch", "--show-current")
     if current != branch:
         raise UncommittedWork(f"The workspace is on {current or 'no branch'}, not on {branch}.")
-    changes = _git(workspace, "status", "--porcelain").splitlines()
+    changes = _git(workspace, "status", "--porcelain", "--untracked-files=normal").splitlines()
     if changes:
         named = "\n".join(changes[:_NAMED_CHANGES])
         rest = len(changes) - _NAMED_CHANGES

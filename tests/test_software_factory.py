@@ -809,6 +809,36 @@ def test_the_implement_hook_names_a_few_uncommitted_paths_and_counts_the_rest(tm
     asyncio.run(scenario())
 
 
+def test_the_implement_hook_fails_on_an_untracked_file_git_is_set_to_hide(tmp_path):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    git(workspace, "switch", "-c", BRANCH["branch"], "origin/main")
+    commit(workspace, "theme.py", "DARK = True\n")
+    git(workspace, "config", "status.showUntrackedFiles", "no")
+    (workspace / "notes.md").write_text("Half done.\n")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await run_in(
+            dispatcher,
+            StepRunCommand(
+                step=CommandStepRun(run=["true"]),
+                hook="check_implementation",
+                origin=origin("implement"),
+                work_item={"issue": 7},
+                results=BRANCH,
+            ),
+        )
+
+        assert result.ending is StepEnding.FAILED
+        assert result.summary.endswith(
+            "UncommittedWork: The workspace has changes no commit on agent/7-add-dark-mode "
+            "holds:\n?? notes.md"
+        )
+
+    asyncio.run(scenario())
+
+
 ISSUE = "repos/{{owner}}/{{repo}}/issues/{number}"
 REPOSITORY = {
     "name": "project",
