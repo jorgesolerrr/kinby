@@ -437,6 +437,18 @@ class Hub:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    async def _collecting_after(self, operation: Coroutine[object, object, None]) -> None:
+        """Run the operation, then remove the images it may have left unreferenced."""
+        await operation
+        await self._collect_images()
+
+    async def _collect_images(self) -> None:
+        """An image the collection cannot remove waits for the next one, and fails nothing."""
+        try:
+            await self._images.collect()
+        except Exception:
+            _logger.exception("Could not collect unreferenced images")
+
     async def create(self, command: InstanceCreateCommand) -> LifecycleOperationResult:
         """Accept a creation only once the image is prepared and the setup values all check out."""
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
@@ -548,7 +560,11 @@ class Hub:
     ) -> LifecycleOperationResult:
         operation_id = uuid4()
         self.registry.begin_create(record, operation_id)
-        self._schedule(self._create(operation_id, record, model, config, secrets, template))
+        self._schedule(
+            self._collecting_after(
+                self._create(operation_id, record, model, config, secrets, template)
+            )
+        )
         return LifecycleOperationResult(operation_id=operation_id, instance_id=record.instance_id)
 
     async def _create(
@@ -1276,7 +1292,9 @@ class Hub:
             OperationKind.UPDATE,
             "Update queued.",
         )
-        self._schedule(self._update(operation_id, record.instance_id, selection))
+        self._schedule(
+            self._collecting_after(self._update(operation_id, record.instance_id, selection))
+        )
         return LifecycleOperationResult(
             operation_id=operation_id,
             instance_id=record.instance_id,
@@ -1491,7 +1509,7 @@ class Hub:
             OperationKind.DELETE,
             "Deletion queued.",
         )
-        self._schedule(self._delete(operation_id, command))
+        self._schedule(self._collecting_after(self._delete(operation_id, command)))
         return LifecycleOperationResult(
             operation_id=operation_id,
             instance_id=record.instance_id,
@@ -1864,9 +1882,11 @@ class Hub:
 
         Setup containers from a login the previous process did not finish go first, so
         they are not still holding a login volume when recovery looks at the instances.
+        The images nothing refers to go after it, in the background.
         """
         await self._runtime.remove_setup_containers()
         recovery = await recover_lifecycle(self.registry, self._runtime, self._restore_start)
+        self._schedule(self._collect_images())
         self.runs.resume()
         return recovery
 

@@ -1394,6 +1394,51 @@ class HubRegistry:
             ]
         return [artifact for key in keys if (artifact := self.image_artifact(key)) is not None]
 
+    def unreferenced_images(self) -> list[str]:
+        """Recorded images no instance record names, removed ones included, nor any candidate.
+
+        A removed instance keeps its image for a restoration (ADR 0053), and an instance
+        whose update failed still names its previous image (ADR 0035).
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT image_id FROM image_artifacts
+                WHERE image_id NOT IN (
+                    SELECT image_id FROM instances
+                    WHERE intended_state != ? AND image_id IS NOT NULL
+                )
+                AND image_id NOT IN (SELECT image_id FROM update_candidates)
+                GROUP BY image_id ORDER BY MIN(rowid)
+                """,
+                (IntendedState.DELETED.value,),
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def forget_image(self, image_id: str) -> None:
+        """Drop every artifact and description of an image that is gone."""
+        with self._connect() as connection:
+            connection.execute("DELETE FROM image_artifacts WHERE image_id = ?", (image_id,))
+            connection.execute("DELETE FROM image_descriptions WHERE image_id = ?", (image_id,))
+
+    def preparing_images(self) -> bool:
+        """Whether a create, update or image preparation is unfinished.
+
+        Each one holds an image before any record names it.
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM operations WHERE kind IN (?, ?, ?) AND state IN (?, ?) LIMIT 1",
+                (
+                    OperationKind.CREATE.value,
+                    OperationKind.UPDATE.value,
+                    OperationKind.PREPARE.value,
+                    OperationState.PENDING.value,
+                    OperationState.RUNNING.value,
+                ),
+            ).fetchone()
+        return row is not None
+
     def open_run(
         self,
         factory: FactoryName,

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from docker.errors import ContainerError, DockerException, ImageNotFound, NotFound
+from docker.errors import APIError, DockerException, ImageNotFound, NotFound
 from docker.types import Mount
 
 from docker import DockerClient
@@ -66,9 +66,6 @@ class FakeContainers:
         self.arguments: tuple[object, object] | None = None
         self.options: dict[str, object] = {}
         self.thread_id: int | None = None
-        self.run_arguments: tuple[object, object] | None = None
-        self.run_options: dict[str, object] = {}
-        self.run_failure: bytes | None = None
         #: What the next create returns: a container a test drives, or a bare placeholder.
         self.creates: object | None = None
         #: Containers `list` can see. A test that sets `list_error` makes `list` raise it.
@@ -101,22 +98,24 @@ class FakeContainers:
             found.name = name
         return found
 
-    def run(self, image: object, command: object, **options: object) -> bytes:
-        self.run_arguments = (image, command)
-        self.run_options = options
-        if self.run_failure is not None:
-            raise ContainerError(object(), 1, command, image, self.run_failure)
-        return vanilla_description().model_dump_json().encode()
-
 
 class FakeDockerImages:
     def __init__(self, present: set[str]) -> None:
         self.present = present
+        #: Images a container still uses, which Docker refuses to remove.
+        self.used: set[str] = set()
 
     def get(self, name: str) -> object:
         if name not in self.present:
             raise ImageNotFound(name)
         return object()
+
+    def remove(self, image: str) -> None:
+        if image in self.used:
+            raise APIError(f"conflict: unable to delete {image}: image is being used")
+        if image not in self.present:
+            raise ImageNotFound(image)
+        self.present.discard(image)
 
 
 class FakeDockerVolume:
@@ -243,36 +242,121 @@ def test_docker_runtime_mounts_the_recorded_storage_and_offloads_creation(tmp_pa
     assert client.containers.options["restart_policy"] == {"Name": "unless-stopped"}
 
 
-def test_docker_image_backend_asks_the_kinby_in_the_image_what_it_declares():
-    async def scenario() -> tuple[FakeDockerClient, DeclaredSetup]:
-        client = FakeDockerClient()
-        backend = DockerImageBackend(cast(DockerClient, client))
-        return client, await backend.describe("sha256:selected")
+class FakeInspectionContainer:
+    """An inspection container that prints its output and exits, or one Docker cannot start."""
 
-    client, described = asyncio.run(scenario())
+    def __init__(
+        self,
+        *,
+        stdout: bytes = b"",
+        stderr: bytes = b"",
+        exit_code: int = 0,
+        start_failure: DockerException | None = None,
+    ) -> None:
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exit_code = exit_code
+        self.start_failure = start_failure
+        self.events: list[str] = []
+
+    def start(self) -> None:
+        self.events.append("start")
+        if self.start_failure is not None:
+            raise self.start_failure
+
+    def wait(self) -> dict[str, object]:
+        self.events.append("wait")
+        return {"StatusCode": self.exit_code, "Error": None}
+
+    def logs(self, *, stdout: bool, stderr: bool) -> bytes:
+        return (self.stdout if stdout else b"") + (self.stderr if stderr else b"")
+
+    def remove(self, *, force: bool = False, v: bool = False) -> None:
+        self.events.append(f"remove force={force} v={v}")
+
+
+def inspecting(container: FakeInspectionContainer) -> tuple[FakeDockerClient, DockerImageBackend]:
+    client = FakeDockerClient()
+    client.containers.creates = container
+    return client, DockerImageBackend("hub-id", cast(DockerClient, client))
+
+
+def test_docker_image_backend_asks_the_kinby_in_the_image_what_it_declares():
+    container = FakeInspectionContainer(stdout=vanilla_description().model_dump_json().encode())
+    client, backend = inspecting(container)
+
+    described = asyncio.run(backend.describe("sha256:selected"))
 
     assert described == vanilla_description()
-    assert client.containers.run_arguments == ("sha256:selected", ["-m", "kinby.setup"])
-    assert client.containers.run_options == {
+    assert client.containers.arguments == ("sha256:selected", ["-m", "kinby.setup"])
+    assert client.containers.options == {
         "entrypoint": "python",
-        "remove": True,
+        "labels": {"kinby.hub": "hub-id", "kinby.inspection": "sha256:selected"},
         "network_mode": "none",
     }
+    # v=True takes the anonymous /instance volume the image declares.
+    assert container.events == ["start", "wait", "remove force=True v=True"]
 
 
-def test_a_failing_image_description_reports_what_it_printed():
-    async def scenario() -> None:
-        client = FakeDockerClient()
-        client.containers.run_failure = b"No module named kinby.setup\n"
-        backend = DockerImageBackend(cast(DockerClient, client))
-        await backend.describe("sha256:selected")
+def test_a_failing_image_description_reports_what_it_printed_and_leaves_no_container():
+    container = FakeInspectionContainer(stderr=b"No module named kinby.setup\n", exit_code=1)
+    _, backend = inspecting(container)
 
     with pytest.raises(ValueError) as failure:
-        asyncio.run(scenario())
+        asyncio.run(backend.describe("sha256:selected"))
 
     assert str(failure.value) == (
         "Describing image sha256:selected failed.\nNo module named kinby.setup"
     )
+    assert container.events == ["start", "wait", "remove force=True v=True"]
+
+
+def test_an_inspection_docker_cannot_start_leaves_no_container():
+    container = FakeInspectionContainer(start_failure=APIError("cannot start container"))
+    _, backend = inspecting(container)
+
+    with pytest.raises(APIError):
+        asyncio.run(backend.describe("sha256:selected"))
+
+    assert container.events == ["start", "remove force=True v=True"]
+
+
+def test_a_reopened_backend_removes_only_the_inspection_containers_this_hub_left_behind():
+    # Every container of an instance image inherits the image's label.
+    artifact = {"kinby.image-artifact": "true"}
+    ours = FakeContainer("created", {"kinby.hub": "hub-id", "kinby.inspection": "sha256:a"})
+    other_hub = FakeContainer("created", {"kinby.hub": "other", "kinby.inspection": "sha256:a"})
+    instance = FakeContainer("exited", {"kinby.hub": "hub-id", "kinby.instance": "alice"})
+    setup = FakeContainer("exited", {"kinby.hub": "hub-id", "kinby.setup": "alice"})
+    for container in (ours, other_hub, instance, setup):
+        container.labels |= artifact
+    client = FakeDockerClient()
+    client.containers.present = [ours, other_hub, instance, setup]
+    backend = DockerImageBackend("hub-id", cast(DockerClient, client))
+
+    asyncio.run(backend.remove_inspection_containers())
+
+    assert ours.removal == {"force": True, "v": True}
+    assert other_hub.removal is None
+    assert instance.removal is None
+    assert setup.removal is None
+
+
+def test_the_image_backend_removes_an_image_and_keeps_one_a_container_still_uses():
+    client = FakeDockerClient()
+    client.images.present |= {"sha256:used"}
+    client.images.used.add("sha256:used")
+    backend = DockerImageBackend("hub-id", cast(DockerClient, client))
+
+    async def scenario() -> list[bool]:
+        return [
+            await backend.remove("sha256:selected"),
+            await backend.remove("sha256:used"),
+            await backend.remove("sha256:gone"),
+        ]
+
+    assert asyncio.run(scenario()) == [True, False, True]
+    assert client.images.present == {"sha256:used"}
 
 
 def docker_available() -> bool:
@@ -328,7 +412,7 @@ def test_real_docker_artifact_has_an_immutable_identity_and_excludes_managed_dat
         built = await ImagePreparer(
             source,
             HubRegistry(tmp_path / "hub"),
-            DockerImageBackend(),
+            DockerImageBackend(str(uuid.uuid4())),
         ).build(ImageSelection("HEAD"))
         artifact = built.artifact
         assert artifact.image_id.startswith("sha256:")
@@ -433,6 +517,9 @@ class PulledImage:
 
     async def resolve(self, revision: str) -> str:
         return "a" * 40
+
+    async def collect(self) -> None:
+        return None
 
 
 @pytest.mark.skipif(not docker_available(), reason="Docker daemon is not available")

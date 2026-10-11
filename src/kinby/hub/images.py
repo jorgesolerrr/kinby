@@ -66,6 +66,7 @@ class ImagePreparer:
         self._repository = Path(repository).resolve()
         self._registry = registry
         self._backend = backend
+        self._collecting = asyncio.Lock()
 
     async def resolve(self, revision: str) -> str:
         return await asyncio.to_thread(self._resolve, revision)
@@ -81,9 +82,10 @@ class ImagePreparer:
             dependency_id = self._dependency_id(context, selection)
             base_images = await self._backend.resolve_base_images(context / "Dockerfile")
             input_key = self._input_key(resolved, dependency_id, base_images)
-            recorded = self._registry.image_artifact(input_key)
-            if recorded is not None and await self._backend.exists(recorded.image_id):
-                return BuiltImage(recorded, reused=True)
+            async with self._collecting:
+                recorded = self._registry.image_artifact(input_key)
+                if recorded is not None and await self._backend.exists(recorded.image_id):
+                    return BuiltImage(recorded, reused=True)
             built = await self._backend.build(context, base_images)
         artifact = ImageArtifact(
             image_id=built.image_id,
@@ -97,6 +99,21 @@ class ImagePreparer:
 
     async def describe(self, artifact: ImageArtifact) -> DeclaredSetup:
         return await self._backend.describe(artifact.image_id)
+
+    async def collect(self) -> None:
+        """Remove leftover inspection containers, then every image nothing refers to.
+
+        Nothing goes while a create, update or preparation is unfinished, since the image it
+        took may be named nowhere yet. One that starts meanwhile reuses no image this removes.
+        An image Docker refuses to remove keeps its records for the next collection.
+        """
+        async with self._collecting:
+            if self._registry.preparing_images():
+                return
+            await self._backend.remove_inspection_containers()
+            for image_id in self._registry.unreferenced_images():
+                if await self._backend.remove(image_id):
+                    self._registry.forget_image(image_id)
 
     @staticmethod
     def _keep_instance_stage(dockerfile: Path) -> None:
