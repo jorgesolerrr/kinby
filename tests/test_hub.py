@@ -181,6 +181,24 @@ class FakeImages:
         return self.hub_revision
 
 
+class HeldImages(FakeImages):
+    """Hold a prepare until the test releases it, so a create stays before its publish."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.holding = asyncio.Event()
+        self.released = asyncio.Event()
+
+    async def prepare(
+        self,
+        selection: ImageSelection,
+        instance: StorageItem | None = None,
+    ) -> PreparedImage:
+        self.holding.set()
+        await self.released.wait()
+        return await super().prepare(selection, instance)
+
+
 #: How the Docker runtime reports a container its restart policy keeps bringing back.
 RESTARTING = RuntimeStatus("starting", healthy=False, detail="restarting")
 #: How the Docker runtime reports a running container before its first health check passes.
@@ -209,9 +227,13 @@ class FakeRuntime:
         self.setups_running = 0
         #: Setup containers a previous process left running.
         self.leftover_setups: list[str] = []
+        #: What a container create raises once a test sets it.
+        self.create_failure: BaseException | None = None
 
     async def create(self, spec: InstanceSpec) -> None:
         self.created.append(spec)
+        if self.create_failure is not None:
+            raise self.create_failure
         self.states[spec.instance_id] = RuntimeStatus("created", None)
         self.descriptions[spec.instance_id] = ContainerDescription(
             runtime_id=spec.instance_id,
@@ -310,6 +332,14 @@ class SerialRuntime(FakeRuntime):
 class UnavailableRuntime(FakeRuntime):
     async def status(self, instance_id: str) -> RuntimeStatus:
         raise ConnectionError("Docker daemon unavailable")
+
+
+class LostAnswerRuntime(FakeRuntime):
+    """Create the container, then lose Docker's answer, as a timed-out request does."""
+
+    async def create(self, spec: InstanceSpec) -> None:
+        await super().create(spec)
+        raise TimeoutError("Read timed out.")
 
 
 class HeldRuntime(FakeRuntime):
@@ -842,6 +872,140 @@ def test_failed_build_is_inspectable_and_does_not_touch_the_runtime(tmp_path):
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
         assert not isinstance(listed, ErrorEnvelope)
         assert listed.instances == []
+
+    asyncio.run(scenario())
+
+
+async def _created_operation(hub: Hub) -> LifecycleOperationResult:
+    client = _client(hub)
+    await prepared(client, None)
+    accepted = await client.call(
+        INSTANCE_CREATE,
+        InstanceCreateCommand(
+            manifest_id="alice",
+            model="openai:gpt-5",
+            secrets={"api_key": "sk-test"},
+        ),
+    )
+    assert isinstance(accepted, LifecycleOperationResult)
+    return accepted
+
+
+def test_a_failed_container_create_removes_the_published_directory(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        runtime.create_failure = RuntimeError("Conflict. The container name is in use.")
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == "Conflict. The container name is in use."
+        assert not (tmp_path / "hub" / "instances" / str(accepted.instance_id)).exists()
+        record = hub.registry.instance(accepted.instance_id)
+        assert record is not None
+        assert record.storage == ()
+
+    asyncio.run(scenario())
+
+
+def test_a_create_leaves_a_directory_already_at_its_path_untouched(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        images = HeldImages()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=images)
+        accepted = await _created_operation(hub)
+        await images.holding.wait()
+        existing = tmp_path / "hub" / "instances" / str(accepted.instance_id)
+        existing.mkdir(parents=True)
+        (existing / "kept").write_text("someone else's", encoding="utf-8")
+        images.released.set()
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail.startswith("Instance directory already exists")
+        assert (existing / "kept").read_text(encoding="utf-8") == "someone else's"
+        assert runtime.created == []
+
+    asyncio.run(scenario())
+
+
+def test_a_create_that_raises_after_docker_made_the_container_keeps_its_directory(tmp_path):
+    async def scenario() -> None:
+        runtime = LostAnswerRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == "Read timed out."
+        assert (tmp_path / "hub" / "instances" / str(accepted.instance_id)).is_dir()
+        record = hub.registry.instance(accepted.instance_id)
+        assert record is not None
+        assert record.storage != ()
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_create_the_runtime_cannot_answer_for_keeps_its_directory_and_fails(tmp_path):
+    async def scenario() -> None:
+        runtime = UnavailableRuntime()
+        runtime.create_failure = RuntimeError("Docker daemon unavailable")
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == "Docker daemon unavailable"
+        assert (tmp_path / "hub" / "instances" / str(accepted.instance_id)).is_dir()
+
+    asyncio.run(scenario())
+
+
+def test_a_failure_after_the_container_exists_keeps_the_directory_it_mounts(tmp_path, monkeypatch):
+    def refuse(self: HubRegistry, instance_id: UUID) -> None:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(HubRegistry, "mark_prepared", refuse)
+
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+
+        outcome = await finished_operation(_client(hub), accepted)
+
+        assert outcome.state is OperationState.FAILED
+        assert len(runtime.created) == 1
+        assert (tmp_path / "hub" / "instances" / str(accepted.instance_id)).is_dir()
+
+    asyncio.run(scenario())
+
+
+def test_a_cancelled_create_leaves_its_directory_for_recovery(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        runtime.create_failure = asyncio.CancelledError()
+        hub = Hub(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        accepted = await _created_operation(hub)
+        while not runtime.created:
+            await asyncio.sleep(0.01)
+
+        operation = await _client(hub).call(
+            OPERATION_GET,
+            OperationGetCommand(operation_id=accepted.operation_id),
+        )
+
+        assert not isinstance(operation, ErrorEnvelope)
+        assert operation.state is OperationState.RUNNING
+        assert (tmp_path / "hub" / "instances" / str(accepted.instance_id)).is_dir()
+        record = hub.registry.instance(accepted.instance_id)
+        assert record is not None
+        assert record.storage != ()
 
     asyncio.run(scenario())
 
