@@ -6,6 +6,8 @@ The deployed hub and the coders run on the playground box (netcup, Debian 13), s
 
 - The ssh alias is `playground` (user `jorge`, in `~/.ssh/config`). `playground-root` is the same box as root. Use it only when a file is root-owned.
 - Call it non-interactively from Git Bash, with single quotes around the remote command: `ssh -o BatchMode=yes -o ConnectTimeout=10 playground '<cmd>'`.
+- **At most 5 ssh connections in any 30 seconds.** `ufw limit` on port 22 drops a sixth, for both aliases, and each dropped attempt restarts the 30 seconds. So put everything you need into one ssh call: chain the remote commands with `;` inside the single quotes. Each `hub.sh` call is one connection, so never loop over it; run the loop on the box in one ssh call instead.
+- If ssh times out while `https://kinby.jorgesolerrr.dev` still answers, you hit that limit. Stop every ssh attempt, including background retry loops, wait a full minute, then connect once. Retrying sooner keeps the block alive. fail2ban is not the cause: it bans failed logins only (`sudo fail2ban-client status sshd`).
 - The host has no `sqlite3`. Query sqlite through `python3` on the host or `python` in a container.
 
 ## What runs where
@@ -24,6 +26,8 @@ The deployed hub and the coders run on the playground box (netcup, Debian 13), s
 | Instance events | `/home/jorge/kinby-hub/instances/<id>/.state/events.jsonl` |
 
 ## Ready queries
+
+Each line below is one ssh connection. Join the ones you need into a single call.
 
 ```sh
 # Containers and health
