@@ -8,28 +8,32 @@ one at a time for the same reason.
 import logging
 import os
 from collections.abc import Iterator
-from io import BytesIO
 from pathlib import Path
 from threading import Lock
+from typing import BinaryIO
 
 _logger = logging.getLogger(__name__)
 _appending = Lock()
+_BLOCK = 8192
 
 
 def whole_lines(path: Path) -> Iterator[str]:
     """Each line of *path* that ends in a newline, in order. A missing file has none.
 
-    One unbuffered read takes the file up to its size when opened. A read that resumed after an
-    append dropped a torn tail would join that tail to the record written in its place.
+    The read stops at the last newline the file had when opened. An append never changes what
+    comes before a newline, so a torn tail it drops meanwhile is never read.
     """
     try:
-        records = path.open("rb", buffering=0)
+        records = path.open("rb")
     except FileNotFoundError:
         return
     with records:
-        content = records.read(os.fstat(records.fileno()).st_size)
-    for line in BytesIO(content):
-        if line.endswith(b"\n"):
+        unread = _whole_end(records, os.fstat(records.fileno()).st_size)
+        records.seek(0)
+        for line in records:
+            unread -= len(line)
+            if unread < 0:
+                return
             yield line.decode()
 
 
@@ -38,12 +42,23 @@ def append_line(path: Path, line: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with _appending, path.open("a+b") as records:
         end = records.seek(0, os.SEEK_END)
-        records.seek(max(end - 1, 0))
-        if records.read(1) not in (b"", b"\n"):
-            records.seek(0)
-            content = records.read()
-            whole = content.rfind(b"\n") + 1
-            torn = content[whole:].decode(errors="replace")
+        whole = _whole_end(records, end)
+        if whole < end:
+            records.seek(whole)
+            torn = records.read().decode(errors="replace")
             _logger.warning("Dropped the torn last line of %s: %s", path, torn)
             records.truncate(whole)
         records.write(f"{line}\n".encode())
+
+
+def _whole_end(records: BinaryIO, size: int) -> int:
+    """Where the last whole line in the first *size* bytes of *records* ends, 0 when it has none."""
+    end = size
+    while end > 0:
+        start = max(end - _BLOCK, 0)
+        records.seek(start)
+        newline = records.read(end - start).rfind(b"\n")
+        if newline >= 0:
+            return start + newline + 1
+        end = start
+    return 0
