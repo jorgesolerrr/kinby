@@ -19,7 +19,7 @@ from kinby.contracts import (
     OperationState,
     RecreateReason,
 )
-from kinby.hub import ControlEndpoint, IncompatibleLifecycleEndpoint, RuntimeStatus
+from kinby.hub import RuntimeStatus
 from tests.test_hub import (
     FakeControl,
     FakeImages,
@@ -66,77 +66,6 @@ def test_replaced_secrets_are_a_reason_until_the_container_is_recreated(tmp_path
         assert before.recreate_reasons == []
         assert pending.recreate_reasons == [RecreateReason.SECRETS]
         assert after.recreate_reasons == []
-
-    asyncio.run(scenario())
-
-
-def test_an_edited_package_config_is_the_reason_the_instance_reports(tmp_path):
-    async def scenario() -> None:
-        control = FakeControl()
-        hub = hub_at(tmp_path / "hub", images=FakeImages(), control=control)
-        client = hub_client(hub)
-        created = await started_instance(client, hub)
-
-        before = await _status(client, created.instance_id)
-        control.reasons = [RecreateReason.PACKAGE_CONFIG]
-        pending = await _status(client, created.instance_id)
-
-        assert before.recreate_reasons == []
-        assert pending.recreate_reasons == [RecreateReason.PACKAGE_CONFIG]
-
-    asyncio.run(scenario())
-
-
-def test_both_reasons_are_listed_together(tmp_path):
-    async def scenario() -> None:
-        control = FakeControl(reasons=[RecreateReason.PACKAGE_CONFIG])
-        hub = hub_at(tmp_path / "hub", images=FakeImages(), control=control)
-        client = hub_client(hub)
-        created = await started_instance(client, hub, secrets={"PROVIDER_TOKEN": "first"})
-
-        await _replaced(client, created.instance_id)
-
-        assert (await _status(client, created.instance_id)).recreate_reasons == [
-            RecreateReason.SECRETS,
-            RecreateReason.PACKAGE_CONFIG,
-        ]
-
-    asyncio.run(scenario())
-
-
-def test_an_instance_that_does_not_answer_still_reports_its_replaced_secrets(tmp_path):
-    async def scenario() -> None:
-        control = FakeControl(reasons=[RecreateReason.PACKAGE_CONFIG])
-        hub = hub_at(tmp_path / "hub", images=FakeImages(), control=control)
-        client = hub_client(hub)
-        created = await started_instance(client, hub, secrets={"PROVIDER_TOKEN": "first"})
-        await _replaced(client, created.instance_id)
-
-        control.reachable = False
-        status = await _status(client, created.instance_id)
-
-        assert status.recreate_reasons == [RecreateReason.SECRETS]
-
-    asyncio.run(scenario())
-
-
-class _OlderCore(FakeControl):
-    """An instance on a core whose probe answer this hub cannot read."""
-
-    async def restart_reasons(self, endpoint: ControlEndpoint) -> list[RecreateReason]:
-        raise IncompatibleLifecycleEndpoint("The answer to the probe could not be read.")
-
-
-def test_an_instance_on_an_older_core_still_reports_its_replaced_secrets(tmp_path):
-    async def scenario() -> None:
-        hub = hub_at(tmp_path / "hub", images=FakeImages(), control=_OlderCore())
-        client = hub_client(hub)
-        created = await started_instance(client, hub, secrets={"PROVIDER_TOKEN": "first"})
-        await _replaced(client, created.instance_id)
-
-        status = await _status(client, created.instance_id)
-
-        assert status.recreate_reasons == [RecreateReason.SECRETS]
 
     asyncio.run(scenario())
 

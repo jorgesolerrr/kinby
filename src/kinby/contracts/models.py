@@ -737,10 +737,9 @@ type SetupValue = bool | int | str
 
 
 class TargetFile(StrEnum):
-    """The instance file a package's configuration field lands in."""
+    """The instance file a template's configuration field lands in."""
 
     KINBY_TOML = "kinby.toml"
-    PACKAGE_YAML = "package.yaml"
 
 
 class SetupTarget(ContractModel):
@@ -763,7 +762,7 @@ class SetupField(ContractModel):
     default: SetupValue | None = None
     #: The values a choice field offers. Only a choice field has them.
     choices: list[str] | None = None
-    #: Where a package's own configuration field lands. kinby writes the built-in fields itself.
+    #: Where a template's own configuration field lands. kinby writes the built-in fields itself.
     target: SetupTarget | None = None
 
 
@@ -958,14 +957,11 @@ class RecreateReason(StrEnum):
     """A change a running instance applies only once it is recreated."""
 
     SECRETS = "secrets"
-    PACKAGE_CONFIG = "package_config"
 
 
 class InstanceProbeResult(ContractModel):
     contract_version: str
     capabilities: list[Capability]
-    #: What changed since the instance booted. An instance that reports none needs no recreate.
-    restart_reasons: list[RecreateReason] = Field(default_factory=list)
 
 
 class DrainState(StrEnum):
@@ -1568,27 +1564,6 @@ class PermissionsResult(ContractModel):
     hash: FileHash
 
 
-class PackageConfigGetCommand(ContractModel):
-    pass
-
-
-class PackageConfigSetCommand(ContractModel):
-    #: The value of each field, as the package's config model takes it.
-    values: dict[str, JsonValue]
-    #: The hash the client read. The write is refused as STALE when the file changed since.
-    hash: FileHash
-
-
-class PackageConfigResult(ContractModel):
-    model_config = ConfigDict(extra="forbid", serialize_by_alias=True)
-
-    #: The package's config model as JSON Schema, which a client renders as a form.
-    package_schema: dict[str, JsonValue] = Field(alias="schema")
-    #: The value of each field, as package.yaml has it.
-    values: dict[str, JsonValue]
-    hash: FileHash
-
-
 class ConfigActor(StrEnum):
     APP = "app"
     AGENT = "agent"
@@ -1767,7 +1742,7 @@ class SkillTier(StrEnum):
     """Where a skill comes from, in the order the model looks for it."""
 
     INSTANCE = "instance"
-    PACKAGE = "package"
+    KINBY = "kinby"
     WORKSPACE = "workspace"
 
 
@@ -1779,8 +1754,6 @@ class SkillSummary(ContractModel):
     name: SkillName
     tier: SkillTier
     description: str
-    #: ``instance``, ``workspace``, or the package's distribution and version.
-    source: str
     #: The tier of the skill that hides this one, when a higher tier has one by this name.
     shadowed_by: SkillTier | None
 
@@ -1841,7 +1814,7 @@ class ToolListCommand(ContractModel):
 
 class ToolSummary(ContractModel):
     name: str
-    #: ``core``, the package's distribution and version, or the instance file that defines it.
+    #: ``core``, the distribution and version that ship it, or the instance file that defines it.
     source: str
     write: bool
     rule: ToolRule

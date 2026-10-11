@@ -18,14 +18,13 @@ from kinby.contracts import (
     SetupField,
     SetupFieldKind,
     SetupValue,
-    TargetFile,
 )
 from kinby.instance import ModelName, api_key_variable
-from kinby.packages import (
+from kinby.setup import (
     API_KEY_FIELD,
     MODEL_FIELD,
-    package_fields,
     resolved_values,
+    template_fields,
     value_problem,
 )
 
@@ -96,10 +95,8 @@ def manifest_settings(
     """The values of a template's own fields, by the dotted key of kinby.toml each lands at."""
     return {
         field.target.key: configured[field.name]
-        for field in package_fields(setup.setup_fields)
-        if field.target is not None
-        and field.target.file is TargetFile.KINBY_TOML
-        and field.name in configured
+        for field in template_fields(setup.setup_fields)
+        if field.target is not None and field.name in configured
     }
 
 

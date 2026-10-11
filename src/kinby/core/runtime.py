@@ -14,7 +14,6 @@ from kinby.contracts import (
     InstanceDrainResult,
 )
 from kinby.core.clock import utc_now
-from kinby.core.config import package_config_hash
 from kinby.core.dispatcher import (
     ScheduledDispatcher,
     ScheduledTurnConfig,
@@ -27,7 +26,6 @@ from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.instance import Instance
 from kinby.instance.permissions import load_permissions
 from kinby.memory import RecapWriter
-from kinby.packages import instance_package_config
 
 
 class InstanceRuntime:
@@ -90,13 +88,7 @@ async def boot_instance(
     model_override: str | None = None,
     clock: Callable[[], datetime] = utc_now,
 ) -> InstanceRuntime:
-    """Start one runtime that owns an instance's turns and routine fires.
-
-    An instance whose package.yaml fails its package's validator does not boot.
-    """
-    # Hashed before it is validated, so an edit in between asks for a recreate instead of hiding.
-    booted_package_config = package_config_hash(instance)
-    instance_package_config(instance)
+    """Start one runtime that owns an instance's turns and routine fires."""
     event_log = EventLog(instance.manifest.state_dir)
     turns = await turn_config(instance, event_log=event_log, model_override=model_override)
     if turns.recap is not None:
@@ -108,7 +100,6 @@ async def boot_instance(
         permissions=partial(load_permissions, instance),
         prices=partial(instance_prices, instance),
         clock=clock,
-        booted_package_config=booted_package_config,
     )
     runtime = InstanceRuntime(dispatcher, turns.recap)
     dispatcher.register(INSTANCE_DRAIN, runtime.drain)

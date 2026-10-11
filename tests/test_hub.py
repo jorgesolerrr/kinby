@@ -61,7 +61,6 @@ from kinby.contracts import (
     OperationKind,
     OperationState,
     Readiness,
-    RecreateReason,
     Scope,
     SetupField,
     SetupFieldKind,
@@ -93,7 +92,7 @@ from kinby.hub import (
 )
 from kinby.hub.service import HubAlreadyRunning
 from kinby.instance import inspect_instance
-from kinby.packages import vanilla_description
+from kinby.setup import vanilla_description
 
 
 def secret_field(name: str, label: str, description: str) -> SetupField:
@@ -363,7 +362,6 @@ class FakeControl:
         answers: bool = True,
         drops: int = 0,
         refuses: bool = False,
-        reasons: list[RecreateReason] | None = None,
     ) -> None:
         self.capabilities = capabilities or [Capability.WS, Capability.DRAIN]
         self.contract_version = contract_version
@@ -371,8 +369,6 @@ class FakeControl:
         self.answers = answers
         self.drops = drops
         self.refuses = refuses
-        #: What the instance says changed since it booted.
-        self.reasons = reasons or []
         self.endpoints: list[ControlEndpoint] = []
         self.forces: list[bool] = []
         #: What each instance answers stats with, or raises, by address. A missing address
@@ -418,11 +414,6 @@ class FakeControl:
             await asyncio.Event().wait()
         await self.release.wait()
         return DrainState.INTERRUPTED if any(self.forces) else DrainState.DRAINED
-
-    async def restart_reasons(self, endpoint: ControlEndpoint) -> list[RecreateReason]:
-        if not self.reachable:
-            raise ControlUnreachable("Cannot connect to host kinby-instance:8787")
-        return self.reasons
 
     async def run_step(self, endpoint: ControlEndpoint, command: StepRunCommand) -> StepResult:
         self.steps.append((endpoint, command))

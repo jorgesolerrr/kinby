@@ -83,8 +83,6 @@ from kinby.instance import (
 )
 from kinby.instance.permissions import load_permissions
 from kinby.instance.recap import load_recap_lens
-from kinby.packages import PackageConfigError, inspect_installed_package
-from kinby.packages.check import check_package
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
@@ -143,11 +141,6 @@ def _print_instance(instance: Instance) -> None:
             for path in skills:
                 print(f"    {path}")
     print(f"state dir: {manifest.state_dir}")
-    if manifest.package is not None:
-        print("package:")
-        print(f"  id: {manifest.package.id}")
-        print(f"  distribution: {manifest.package.distribution}")
-        print(f"  template version: {manifest.package.version}")
 
 
 def _print_turn_inputs(instance: Instance, today: date) -> None:
@@ -403,16 +396,6 @@ async def _show_stats(
         f"{result.model_dump_json(indent=2)}\n",
         encoding="utf-8",
     )
-    return 0
-
-
-def _check_package(package_id: str) -> int:
-    failures = check_package(package_id)
-    for failure in failures:
-        print(failure, file=sys.stderr)
-    if failures:
-        return 1
-    print(f'Package "{package_id}" passed the check.')
     return 0
 
 
@@ -782,11 +765,6 @@ def main(
         default=PLACEHOLDER_MODEL,
         help="value for [models].main (a placeholder is used when omitted)",
     )
-    init_parser.add_argument(
-        "--package",
-        dest="package_id",
-        help="installed package whose template should seed the instance",
-    )
     hub_parser = subparsers.add_parser(
         "hub",
         help="run the instance management hub",
@@ -852,13 +830,6 @@ def main(
         "instance_id",
         help="hub instance id that keeps the established webhook URL",
     )
-    package_parser = subparsers.add_parser("package", help="check installed packages")
-    package_subparsers = package_parser.add_subparsers(dest="package_command")
-    package_check_parser = package_subparsers.add_parser(
-        "check",
-        help="run kinby's install path against an installed package",
-    )
-    package_check_parser.add_argument("package", metavar="id", help="installed package id")
     instance_parser = subparsers.add_parser(
         "instance",
         help="inspect an instance",
@@ -993,17 +964,12 @@ def main(
         return 0
     if args.command == "init":
         try:
-            package = (
-                inspect_installed_package(args.package_id) if args.package_id is not None else None
-            )
-            path = init_instance(Path(args.directory), model=args.model, package=package)
-        except (InstanceExistsError, LookupError, TypeError, ValueError) as exc:
+            path = init_instance(Path(args.directory), model=args.model)
+        except InstanceExistsError as exc:
             print(exc, file=sys.stderr)
             return 1
         print(f"Created instance at {path}")
         return 0
-    if args.command == "package" and args.package_command == "check":
-        return _check_package(args.package)
     if args.command == "hub":
         if args.hub_command == "token":
             return _rotate_access_token(args.directory)
@@ -1103,7 +1069,6 @@ def main(
         InstanceBusyError,
         InsecureContractUrl,
         ManifestError,
-        PackageConfigError,
     ) as exc:
         print(exc, file=sys.stderr)
         return 1

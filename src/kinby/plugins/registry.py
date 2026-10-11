@@ -59,12 +59,12 @@ class ToolRegistry:
     def __init__(self, instance_path: Path, *, defaults: bool = True) -> None:
         self._instance_path = instance_path
         self._tools_path = instance_path / TOOLS_DIR
-        self._packaged, self._package_origins, self._package_warnings = _load_entry_points(
+        self._installed, self._installed_origins, self._installed_warnings = _load_entry_points(
             defaults=defaults
         )
         self._signature: FileSignature | None = None
         self._files: dict[Path, _FileTools] = {}
-        self._snapshot = ToolSnapshot(tuple(sorted(self._packaged, key=lambda tool: tool.name)))
+        self._snapshot = ToolSnapshot(tuple(sorted(self._installed, key=lambda tool: tool.name)))
 
     def refresh(self) -> tuple[ToolSnapshot, tuple[Warning, ...]]:
         try:
@@ -77,11 +77,11 @@ class ToolRegistry:
                         sources=(str(self._tools_path),),
                         message=exception_message(exc),
                     ),
-                    *self._package_warnings,
+                    *self._installed_warnings,
                 ),
             )
         if signature == self._signature:
-            return self._snapshot, self._package_warnings
+            return self._snapshot, self._installed_warnings
 
         candidate: dict[Path, _FileTools] = {}
         warnings: list[Warning] = []
@@ -97,29 +97,29 @@ class ToolRegistry:
                 warnings.append(Warning(sources=(str(path),), message=exception_message(exc)))
         self._files = candidate
         if warnings:
-            return self._snapshot, (*warnings, *self._package_warnings)
+            return self._snapshot, (*warnings, *self._installed_warnings)
 
         instance_tools = tuple(
             tool for file_tools in candidate.values() for tool in file_tools.tools
         )
         duplicate = _duplicate_warning(instance_tools)
         if duplicate is not None:
-            return self._snapshot, (duplicate, *self._package_warnings)
+            return self._snapshot, (duplicate, *self._installed_warnings)
 
         instance_names = {tool.name for tool in instance_tools}
         tools = instance_tools + tuple(
-            tool for tool in self._packaged if tool.name not in instance_names
+            tool for tool in self._installed if tool.name not in instance_names
         )
         self._signature = signature
         self._snapshot = ToolSnapshot(tools)
-        return self._snapshot, self._package_warnings
+        return self._snapshot, self._installed_warnings
 
     def origin(self, tool: Tool) -> str:
         """The instance file that defines *tool*, or the distribution and version that ship it."""
         tools_path = self._tools_path.resolve()
         if tool.source.is_relative_to(tools_path):
             return tool.source.relative_to(self._instance_path.resolve()).as_posix()
-        return self._package_origins[tool.name]
+        return self._installed_origins[tool.name]
 
 
 def _directory_signature(tools_path: Path) -> FileSignature:
@@ -157,7 +157,7 @@ def _module_tools(module: ModuleType) -> tuple[Tool, ...]:
 def _load_entry_points(
     *, defaults: bool
 ) -> tuple[tuple[Tool, ...], dict[str, str], tuple[Warning, ...]]:
-    """Load each package's tools, with the distribution and version that ship each one."""
+    """Load the tools installed distributions export, with the distribution that ships each."""
     tools: list[Tool] = []
     origins: dict[str, str] = {}
     warnings: list[Warning] = []
@@ -173,8 +173,8 @@ def _load_entry_points(
             continue
         tools.extend(loaded)
         origins.update((tool.name, distribution_label(entry_point)) for tool in loaded)
-    packaged, duplicates = _deduplicate_packaged_tools(tuple(tools))
-    return packaged, origins, (*warnings, *duplicates)
+    installed, duplicates = _deduplicate_installed_tools(tuple(tools))
+    return installed, origins, (*warnings, *duplicates)
 
 
 def _entry_point_tools(entry_point: EntryPoint) -> tuple[Tool, ...]:
@@ -197,7 +197,7 @@ def _duplicate_warning(tools: tuple[Tool, ...]) -> Warning | None:
     return None
 
 
-def _deduplicate_packaged_tools(
+def _deduplicate_installed_tools(
     tools: tuple[Tool, ...],
 ) -> tuple[tuple[Tool, ...], tuple[Warning, ...]]:
     found: dict[str, Tool] = {}

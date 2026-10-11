@@ -102,7 +102,7 @@ class DockerImageBackend:
             output = await asyncio.to_thread(
                 self._client.containers.run,
                 image_id,
-                command=["-m", "kinby.packages"],
+                command=["-m", "kinby.setup"],
                 entrypoint="python",
                 remove=True,
                 network_mode="none",

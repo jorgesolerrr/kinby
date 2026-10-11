@@ -171,7 +171,7 @@ describe("the Removed instances page", () => {
   })
 
   it("says on the row why a restoration failed, and offers Restore again", async () => {
-    const detail = "The image sha256:image is gone. Rebuild the package's image to restore Grace."
+    const detail = "The image sha256:image is gone. Rebuild its image to restore Grace."
     const { clock, onChanged, user } = openPage({
       "instance.restore": () => ({ operation_id: "op-restore", instance_id: "hub-grace" }),
       "operation.get": () => restoration({ state: "failed", detail }),

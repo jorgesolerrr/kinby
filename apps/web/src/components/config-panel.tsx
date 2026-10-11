@@ -12,7 +12,6 @@ import { Fragment, type ReactNode, useCallback, useEffect, useId, useState } fro
 import { Failure, StaleAlert } from "@/components/config-alerts"
 import { CoreSection } from "@/components/core-section"
 import { ManifestSection } from "@/components/manifest-section"
-import { PackageConfigSection } from "@/components/package-config-section"
 import { PermissionsSection } from "@/components/permissions-section"
 import { RecreateNotice } from "@/components/recreate-notice"
 import { RoutinesSection } from "@/components/routines-section"
@@ -42,7 +41,6 @@ import { type Pace, pace, retried } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
 import { leaveLink, linkedCore, linkedRoutine } from "@/lib/selection"
 import {
-  BoxIcon,
   CpuIcon,
   FileTextIcon,
   KeyRoundIcon,
@@ -136,7 +134,7 @@ const GROUPS: { label: string; sections: Section[] }[] = [
       },
       {
         label: "Skills",
-        hint: "instance, package, workspace",
+        hint: "instance, kinby, workspace",
         icon: SparklesIcon,
         render: ({ client, clock }) => <SkillsSection client={client} clock={clock} />,
       },
@@ -170,15 +168,6 @@ const GROUPS: { label: string; sections: Section[] }[] = [
             setup={status?.setup}
             onChanged={statusChanged}
           />
-        ),
-      },
-      {
-        label: "Package config",
-        hint: "the package's own settings",
-        icon: BoxIcon,
-        reason: "package_config",
-        render: ({ client, clock, statusChanged }) => (
-          <PackageConfigSection client={client} clock={clock} onSaved={statusChanged} />
         ),
       },
       {

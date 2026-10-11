@@ -6,9 +6,7 @@ import pytest
 
 from kinby.cli import main
 from kinby.instance import init_from_template
-from kinby.packages import InstalledPackage, PackageDescriptor
 
-cli_module = importlib.import_module("kinby.cli.main")
 init_module = importlib.import_module("kinby.instance.init")
 
 
@@ -66,7 +64,7 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
     assert routines_readme.startswith("<!--")
     assert "routines/<name>/ROUTINE.md" in routines_readme
     assert "run.py" in routines_readme
-    assert "When kinby's packaged defaults are enabled" in routines_readme
+    assert "When kinby's defaults are enabled" in routines_readme
 
 
 def test_init_writes_the_commented_permissions_template(tmp_path):
@@ -230,231 +228,17 @@ def test_init_does_not_validate_the_model_placeholder(tmp_path):
     assert 'main = "not-a-real-model"' in manifest
 
 
-def test_init_from_an_installed_package_copies_owned_configuration(
-    tmp_path,
-    monkeypatch,
-    capsys,
-):
-    package = InstalledPackage(
-        descriptor=PackageDescriptor(
-            id="writer",
-            display_name="Writing teammate",
-            description="Drafts articles.",
-            icon="pen",
-            distribution="kinby-writer",
-            version="1.4.2",
-        ),
-        files={
-            "kinby.toml": '[feedback]\nask = "off"\n',
-            "SYSTEM.md": "Write clearly.\n",
-            "factory.toml": 'style = "plain"\n',
-            "routines/draft/run.py": "from kinby_writer import draft\n",
-        },
-    )
-    monkeypatch.setattr(cli_module, "inspect_installed_package", lambda package_id: package)
-    target = tmp_path / "writer"
-
-    exit_code = main(["init", str(target), "--package", "writer", "--model", "openai:gpt-5"])
-
-    assert exit_code == 0
-    manifest = (target / "kinby.toml").read_text(encoding="utf-8")
-    assert '[package]\nid = "writer"' in manifest
-    assert 'distribution = "kinby-writer"' in manifest
-    assert 'version = "1.4.2"' in manifest
-    assert '[feedback]\nask = "off"' in manifest
-    assert (target / "SYSTEM.md").read_text(encoding="utf-8") == "Write clearly.\n"
-    assert (target / "factory.toml").read_text(encoding="utf-8") == 'style = "plain"\n'
-
-    assert main(["instance", "show", str(target)]) == 0
-    output = capsys.readouterr().out
-    assert (
-        "package:\n  id: writer\n  distribution: kinby-writer\n  template version: 1.4.2" in output
-    )
-
-
-def test_package_init_refuses_a_nonempty_destination_without_overwriting_it(
-    tmp_path,
-    monkeypatch,
-    capsys,
-):
-    target = tmp_path / "writer"
-    target.mkdir()
-    marker = target / "notes.md"
-    marker.write_text("keep this\n", encoding="utf-8")
-    package = InstalledPackage(
-        descriptor=PackageDescriptor(
-            id="writer",
-            display_name="Writing teammate",
-            description="Drafts articles.",
-            icon="pen",
-            distribution="kinby-writer",
-            version="1.4.2",
-        ),
-        files={"SYSTEM.md": "Write clearly.\n"},
-    )
-    monkeypatch.setattr(cli_module, "inspect_installed_package", lambda package_id: package)
-
-    exit_code = main(["init", str(target), "--package", "writer"])
-
-    assert exit_code == 1
-    assert marker.read_text(encoding="utf-8") == "keep this\n"
-    assert sorted(path.name for path in target.iterdir()) == ["notes.md"]
-    assert "not empty" in capsys.readouterr().err
-
-
-def test_package_init_does_not_overwrite_a_destination_that_fills_during_staging(
-    tmp_path,
-    monkeypatch,
-    capsys,
-):
-    target = tmp_path / "writer"
-    target.mkdir()
-    marker = target / "notes.md"
-    monkeypatch.setattr(
-        cli_module,
-        "inspect_installed_package",
-        lambda package_id: InstalledPackage(
-            descriptor=PackageDescriptor(
-                id="writer",
-                display_name="Writing teammate",
-                description="Drafts articles.",
-                icon="pen",
-                distribution="kinby-writer",
-                version="1.4.2",
-            ),
-            files={"SYSTEM.md": "Write clearly.\n"},
-        ),
-    )
-    write_starter = init_module._write_starter_tree
-
-    def contaminate(directory, model):
-        write_starter(directory, model)
-        marker.write_text("keep this\n", encoding="utf-8")
-
-    monkeypatch.setattr(init_module, "_write_starter_tree", contaminate)
-
-    exit_code = main(["init", str(target), "--package", "writer"])
-
-    assert exit_code == 1
-    assert marker.read_text(encoding="utf-8") == "keep this\n"
-    assert sorted(path.name for path in target.iterdir()) == ["notes.md"]
-    assert "not empty" in capsys.readouterr().err
-
-
-def test_failed_package_init_leaves_the_destination_unused_so_retry_can_succeed(
-    tmp_path,
-    monkeypatch,
-    capsys,
-):
-    descriptor = PackageDescriptor(
-        id="writer",
-        display_name="Writing teammate",
-        description="Drafts articles.",
-        icon="pen",
-        distribution="kinby-writer",
-        version="1.4.2",
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "inspect_installed_package",
-        lambda package_id: InstalledPackage(
-            descriptor=descriptor,
-            files={"kinby.toml": 'id = "from-package"\n'},
-        ),
-    )
-    target = tmp_path / "writer"
-
-    exit_code = main(["init", str(target), "--package", "writer"])
-
-    assert exit_code == 1
-    assert not target.exists()
-    assert 'cannot set "id"' in capsys.readouterr().err
-
-    monkeypatch.setattr(
-        cli_module,
-        "inspect_installed_package",
-        lambda package_id: InstalledPackage(
-            descriptor=descriptor,
-            files={"SYSTEM.md": "Write clearly.\n"},
-        ),
-    )
-
-    exit_code = main(["init", str(target), "--package", "writer"])
-
-    assert exit_code == 0
-    assert (target / "SYSTEM.md").read_text(encoding="utf-8") == "Write clearly.\n"
-
-
-def test_package_init_into_the_current_directory(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        cli_module,
-        "inspect_installed_package",
-        lambda package_id: InstalledPackage(
-            descriptor=PackageDescriptor(
-                id="writer",
-                display_name="Writing teammate",
-                description="Drafts articles.",
-                icon="pen",
-                distribution="kinby-writer",
-                version="1.4.2",
-            ),
-            files={"SYSTEM.md": "Write clearly.\n"},
-        ),
-    )
-    monkeypatch.chdir(tmp_path)
-    inode = tmp_path.stat().st_ino
-
-    exit_code = main(["init", ".", "--package", "writer"])
-
-    assert exit_code == 0
-    assert Path.cwd() == tmp_path
-    assert Path.cwd().stat().st_ino == inode
-    assert Path("SYSTEM.md").read_text(encoding="utf-8") == "Write clearly.\n"
-
-
 @pytest.mark.parametrize(
-    ("files", "error"),
-    [
-        ({"kinby.toml": "[\n"}, "Invalid"),
-        ({"workspace/notes.md": "secret\n"}, 'cannot copy "workspace/notes.md"'),
-        ({"routines": "not a directory\n"}, 'cannot copy "routines"'),
-        ({"kinby.toml": "[[models.extra]]\n"}, "cannot hold an array of tables or a date"),
-        (
-            {"kinby.toml": "[memory]\nsince = 2026-01-01\n"},
-            "cannot hold an array of tables or a date",
-        ),
-        ({"SYSTEM.md/child.txt": "nope\n"}, 'cannot copy "SYSTEM.md/child.txt"'),
-    ],
+    "manifest",
+    ["[[models.extra]]\n", "[memory]\nsince = 2026-01-01\n"],
 )
-def test_invalid_package_files_are_rejected_before_creating_the_destination(
-    tmp_path,
-    monkeypatch,
-    capsys,
-    files,
-    error,
-):
-    monkeypatch.setattr(
-        cli_module,
-        "inspect_installed_package",
-        lambda package_id: InstalledPackage(
-            descriptor=PackageDescriptor(
-                id="writer",
-                display_name="Writing teammate",
-                description="Drafts articles.",
-                icon="pen",
-                distribution="kinby-writer",
-                version="1.4.2",
-            ),
-            files=files,
-        ),
-    )
-    target = tmp_path / "writer"
+def test_init_from_template_refuses_a_manifest_it_cannot_write_back(tmp_path, manifest):
+    target = tmp_path / "coder"
 
-    exit_code = main(["init", str(target), "--package", "writer"])
+    with pytest.raises(ValueError, match="cannot hold an array of tables or a date"):
+        init_from_template(target, {"kinby.toml": manifest}, model="openai:gpt-5", settings={})
 
-    assert exit_code == 1
     assert not target.exists()
-    assert error in capsys.readouterr().err
 
 
 ODD_STRINGS = ["Bot 🤖", 'Say "hi" \\ then\nleave']
@@ -473,29 +257,3 @@ def test_init_from_template_writes_any_string_back_as_it_was(tmp_path, value):
     assert manifest["memory"]["greeting"] == value
     assert manifest["feedback"]["ask"] == "off"
     assert manifest["models"]["main"] == "openai:gpt-5"
-
-
-@pytest.mark.parametrize("value", ODD_STRINGS)
-def test_package_init_writes_any_string_back_as_it_was(tmp_path, monkeypatch, value):
-    monkeypatch.setattr(
-        cli_module,
-        "inspect_installed_package",
-        lambda package_id: InstalledPackage(
-            descriptor=PackageDescriptor(
-                id="writer",
-                display_name="Writing teammate",
-                description="Drafts articles.",
-                icon="pen",
-                distribution="kinby-writer",
-                version="1.4.2",
-            ),
-            files={"kinby.toml": f"[memory]\ngreeting = '''{value}'''\n"},
-        ),
-    )
-    target = tmp_path / "writer"
-
-    assert main(["init", str(target), "--package", "writer"]) == 0
-
-    manifest = tomllib.loads((target / "kinby.toml").read_text(encoding="utf-8"))
-    assert manifest["memory"]["greeting"] == value
-    assert manifest["package"]["id"] == "writer"

@@ -100,15 +100,6 @@ class Serve:
 
 
 @dataclass(frozen=True)
-class PackageProvenance:
-    """The package version that supplied this instance's copied configuration."""
-
-    id: str
-    distribution: str
-    version: str
-
-
-@dataclass(frozen=True)
 class Manifest:
     """Validated settings from ``kinby.toml``."""
 
@@ -124,7 +115,6 @@ class Manifest:
     prices: Mapping[str, ModelPrice]
     routines: Routines = field(default_factory=Routines)
     serve: Serve | None = None
-    package: PackageProvenance | None = None
 
 
 @dataclass(frozen=True)
@@ -143,7 +133,7 @@ class Instance:
         repr=False,
         compare=False,
     )
-    #: Held while a client writes the prompts, permissions.toml, kinby.toml, or package.yaml.
+    #: Held while a client writes the prompts, permissions.toml, or kinby.toml.
     config_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock,
         repr=False,

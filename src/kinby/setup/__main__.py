@@ -1,11 +1,11 @@
 """What a vanilla instance declares on this image, read by the hub when it prepares one.
 
-``python -m kinby.packages`` prints it as JSON.
+``python -m kinby.setup`` prints it as JSON.
 """
 
 from __future__ import annotations
 
-from kinby.packages import vanilla_description
+from kinby.setup import vanilla_description
 
 
 def main() -> int:

@@ -207,7 +207,6 @@ def test_the_control_route_alone_grants_the_lifecycle_scope(tmp_path: Path) -> N
         assert granted["result"] == {
             "contract_version": CONTRACT_VERSION,
             "capabilities": [Capability.WS.value],
-            "restart_reasons": [],
         }
 
     asyncio.run(scenario())

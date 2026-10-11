@@ -14,14 +14,7 @@ import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemTitle,
-} from "@/components/ui/item"
+import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
@@ -95,7 +88,7 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
       <Warnings warnings={listed.warnings} />
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          The model reads the first skill of each name: instance, then package, then workspace.
+          The model reads the first skill of each name: instance, then kinby, then workspace.
         </p>
         <Button variant="outline" size="sm" onClick={() => setSelection("new")}>
           <PlusIcon data-icon="inline-start" />
@@ -110,7 +103,7 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
             </EmptyMedia>
             <EmptyTitle>No skills</EmptyTitle>
             <EmptyDescription>
-              Neither the instance, its packages, nor its workspace has a skill.
+              Neither the instance, kinby, nor its workspace has a skill.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -162,7 +155,7 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
 
 const TIERS: Record<SkillTier, string> = {
   instance: "Instance",
-  package: "Package",
+  kinby: "kinby",
   workspace: "Workspace",
 }
 
@@ -202,11 +195,6 @@ function SkillItem({
           {skill.shadowed_by ? `Hidden by the ${skill.shadowed_by} skill` : skill.description}
         </ItemDescription>
       </ItemContent>
-      {skill.tier === "package" && (
-        <ItemActions>
-          <span className="text-xs text-muted-foreground">{skill.source}</span>
-        </ItemActions>
-      )}
     </Item>
   )
 }
@@ -316,9 +304,6 @@ function SkillView({
         <div className="flex items-center gap-2">
           <FieldLabel htmlFor={id}>SKILL.md</FieldLabel>
           <Badge variant={editable ? "default" : "secondary"}>{TIERS[tier]}</Badge>
-          {summary !== undefined && tier === "package" && (
-            <span className="text-xs text-muted-foreground">{summary.source}</span>
-          )}
         </div>
         {!editable && (
           <FieldDescription>

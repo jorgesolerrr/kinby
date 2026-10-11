@@ -108,12 +108,6 @@ class NotAnIntake(CoreError):
     code = ErrorCode.PERMISSION_DENIED
 
 
-class PackageConfigNotFound(CoreError):
-    """The instance runs no package, or its package declares no config."""
-
-    code = ErrorCode.NOT_FOUND
-
-
 class ThreadNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
@@ -209,7 +203,7 @@ class LifecycleOperationNotFound(CoreError):
 
 
 class LoginNotFound(CoreError):
-    """The instance's package declares no subscription login by this id."""
+    """The instance's template declares no subscription login by this id."""
 
     code = ErrorCode.NOT_FOUND
 
