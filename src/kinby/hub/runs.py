@@ -127,13 +127,15 @@ class _QueuedReport:
     """The factory's needs_human call for a run that stopped, waiting for its instance.
 
     It is no step of the run, so it records no attempt. *generation* ties it to the stop that
-    queued it, so delivering it marks only that stop reported, not a later one.
+    queued it, so delivering it marks only that stop reported, not a later one. *instance* names
+    the factory's instance that makes the call, so a retry finds the one installed by then.
     """
 
     run_id: UUID
+    instance: InstanceName
     command: StepRunCommand
     generation: int
-    failures: int = 0
+    waited: float = 0.0
 
 
 class FactoryRuns:
@@ -534,7 +536,7 @@ class FactoryRuns:
                     await self._send_report(instance_id, report)
 
     async def _deliver(self, instance_id: UUID, queued: _QueuedStep) -> None:
-        failures = 0
+        backoff = 0.0
         while True:
             self._publish(self._registry.begin_attempt(queued.run_id, queued.step))
             match await self._run_step(instance_id, queued.command):
@@ -544,7 +546,7 @@ class FactoryRuns:
                 case UndeliveredCall(reason=reason):
                     run = self._registry.drop_attempt(queued.run_id)
                     self._publish(run)
-            backoff = _backoff(failures)
+            backoff = _next_backoff(backoff)
             _logger.info(
                 "Step %s of factory run %s did not reach its instance, offering it again in %s "
                 "seconds: %s",
@@ -554,7 +556,6 @@ class FactoryRuns:
                 reason,
             )
             await asyncio.sleep(backoff)
-            failures += 1
             record = self._registry.instance(instance_id)
             if record is None or not record.active:
                 self._enqueue(run)
@@ -569,15 +570,14 @@ class FactoryRuns:
                 return
             case StepResult(summary=reason) | UndeliveredCall(reason=reason):
                 pass
-        backoff = _backoff(report.failures)
+        backoff = _next_backoff(report.waited)
         _logger.warning(
             "The needs_human call for factory run %s failed, trying again in %s seconds: %s",
             report.run_id,
             backoff,
             reason,
         )
-        again = replace(report, failures=report.failures + 1)
-        self._spawn(self._report_later(instance_id, again, backoff))
+        self._spawn(self._report_later(replace(report, waited=backoff)))
 
     def _stale(self, report: _QueuedReport) -> bool:
         run = self._registry.run(report.run_id)
@@ -587,9 +587,9 @@ class FactoryRuns:
             or self._registry.stop_generation(run.run_id) != report.generation
         )
 
-    async def _report_later(self, instance_id: UUID, report: _QueuedReport, after: float) -> None:
-        await asyncio.sleep(after)
-        self._queue(instance_id).put_nowait(report)
+    async def _report_later(self, report: _QueuedReport) -> None:
+        await asyncio.sleep(report.waited)
+        self._put_report(report)
 
     def _park(self, run_id: UUID, step: WaitStep | ApproveStep) -> None:
         """Open the step's attempt with the run parked at it, holding no instance.
@@ -683,16 +683,8 @@ class FactoryRuns:
         self, factory: FactoryFile, call: NeedsHumanCall, run: FactoryRun, summary: str
     ) -> None:
         """Queue the factory's needs_human call for the run, which stopped with this *summary*."""
-        instance_id = self._installed(run.factory, call.instance)
-        if instance_id is None or run.step is None:
-            _logger.warning(
-                "Factory run %s needs a human, and instance %s of factory %s is not installed "
-                "to report it.",
-                run.run_id,
-                call.instance,
-                run.factory,
-            )
-            return
+        if run.step is None:
+            raise ValueError(f'Factory run "{run.run_id}" is at no step to report.')
         command = StepRunCommand(
             step=CodeStepRun(call=call.call, summary=summary),
             origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=run.step),
@@ -700,7 +692,21 @@ class FactoryRuns:
             results=self._results(run.run_id, factory),
         )
         generation = self._registry.stop_generation(run.run_id)
-        self._queue(instance_id).put_nowait(_QueuedReport(run.run_id, command, generation))
+        self._put_report(_QueuedReport(run.run_id, call.instance, command, generation))
+
+    def _put_report(self, report: _QueuedReport) -> None:
+        factory = report.command.origin.factory
+        instance_id = self._installed(factory, report.instance)
+        if instance_id is None:
+            _logger.warning(
+                "Factory run %s needs a human, and instance %s of factory %s is not installed "
+                "to report it.",
+                report.run_id,
+                report.instance,
+                factory,
+            )
+            return
+        self._queue(instance_id).put_nowait(report)
 
     def _factory(self, name: FactoryName) -> FactoryFile | None:
         """The factory's file as the hub keeps it, or None once the factory is gone."""
@@ -958,8 +964,8 @@ def _retries(step: Step) -> int:
     return 1 if isinstance(step, AgentStep | ClientStep) else 0
 
 
-def _backoff(failures: int) -> float:
-    return min(BACKOFF_SECONDS * 2**failures, BACKOFF_CAP_SECONDS)
+def _next_backoff(waited: float) -> float:
+    return min(max(waited * 2, BACKOFF_SECONDS), BACKOFF_CAP_SECONDS)
 
 
 def _work_item_errors(

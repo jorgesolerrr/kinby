@@ -12,6 +12,7 @@ import pytest
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
     FACTORY_INSTALL,
+    FACTORY_REMOVE,
     FACTORY_RUN_CANCEL,
     FACTORY_RUN_GET,
     FACTORY_RUN_INTAKE,
@@ -32,6 +33,8 @@ from kinby.contracts import (
     FactoryInstallCommand,
     FactoryInstallResult,
     FactoryInstanceSetup,
+    FactoryRemoveCommand,
+    FactoryRemoveResult,
     FactoryRun,
     FactoryRunCancelCommand,
     FactoryRunDetail,
@@ -647,6 +650,58 @@ def test_a_report_backing_off_does_not_delay_a_step_queued_after_it(tmp_path, mo
         finished = await settled(hub, later.run_id)
 
         assert finished.run.status is FactoryRunStatus.DONE
+
+    asyncio.run(scenario())
+
+
+def test_a_needs_human_call_that_fails_a_thousand_times_is_still_tried_again(tmp_path, monkeypatch):
+    monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 0.0)
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="Tests failed.")] + [
+        StepResult(ending=StepEnding.FAILED, summary="GitHub is down.")
+    ] * 1100
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, NEEDS_HUMAN_FILES)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+        async with asyncio.timeout(30):
+            while hub.registry.unreported_runs():
+                await asyncio.sleep(0.01)
+
+        assert len(reports(control)) == 1101
+
+    asyncio.run(scenario())
+
+
+def test_a_report_backing_off_goes_to_the_instance_that_replaced_its_own(tmp_path, monkeypatch):
+    monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 0.2)
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.FAILED, summary="Tests failed."),
+        StepResult(ending=StepEnding.FAILED, summary="GitHub is down."),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, NEEDS_HUMAN_FILES)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        coder = await installed_coder(hub, runtime)
+        await handed_in(hub, coder, 7)
+        async with asyncio.timeout(5):
+            while len(control.steps) < 2:
+                await asyncio.sleep(0.01)
+        removal = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="checks"))
+        assert isinstance(removal, FactoryRemoveResult)
+        for removed in removal.instances.values():
+            assert (await finished_operation(client, removed)).state is OperationState.SUCCEEDED
+        replacement = await installed_coder(hub, runtime)
+        await reported(hub)
+
+        endpoint, _ = control.steps[-1]
+        assert endpoint.address == f"http://kinby-{replacement}:8787"
 
     asyncio.run(scenario())
 
