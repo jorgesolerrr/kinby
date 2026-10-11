@@ -251,6 +251,7 @@ class Scheduler:
         routine = next((r for r in routines if r.name == command.name), None)
         if routine is None:
             raise RoutineNotFound(f'Routine "{command.name}" was not found.')
+        await self._reset_failures([routine])
         if command.payload is not None:
             receipt = await self.receive(
                 routine.name,

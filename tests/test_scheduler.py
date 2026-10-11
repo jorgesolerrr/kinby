@@ -1475,6 +1475,22 @@ def test_reenabling_an_automatically_disabled_routine_resets_its_failures(tmp_pa
     asyncio.run(scenario())
 
 
+def test_a_run_right_after_a_reenable_counts_its_failure_as_the_first(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nenabled: true")
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, tzinfo=UTC)), FailingRunner())
+        await fail_routine(dispatcher, 10)
+        await call(dispatcher, "routine.set_enabled", name="news", enabled=True)
+
+        await fail_routine(dispatcher, 1)
+        routine = (await call(dispatcher, "routine.list")).routines[0]
+        assert routine.enabled and routine.failure_count == 1
+        assert routine.notices[-1].kind == "first-failure"
+
+    asyncio.run(scenario())
+
+
 def test_a_restart_after_a_reenable_resets_the_failures_once(tmp_path):
     async def scenario():
         from kinby.contracts import RoutineFailuresReset
