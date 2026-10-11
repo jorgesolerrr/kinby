@@ -896,6 +896,8 @@ class InstanceDeletePreviewResult(ContractModel):
     #: As the hub sees them, with every symlink resolved.
     directories: list[Path]
     volumes: list[str]
+    #: Writable binds the hub cannot see, as Docker host paths. They stay on the host.
+    retained: list[str]
 
 
 class InstanceDeleteCommand(ContractModel):

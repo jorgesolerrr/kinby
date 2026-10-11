@@ -2,6 +2,7 @@
 
 import asyncio
 import shutil
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -508,10 +509,237 @@ def test_an_adopted_instance_deletes_its_directory_where_the_hub_sees_it_and_no_
 
         assert preview.directories == [directory.resolve()]
         assert preview.volumes == ["kinby_coder-workspace", "kinby_coder-codex"]
+        assert preview.retained == []
         assert outcome.state is OperationState.SUCCEEDED
         assert not directory.exists()
         assert shared_login.is_dir()
         assert runtime.deleted_volumes == preview.volumes
+
+    asyncio.run(scenario())
+
+
+def writable_bind(source: Path | str) -> StorageItem:
+    return StorageItem(
+        kind=StorageKind.BIND,
+        source=str(source),
+        destination="/instance/data",
+        writable=True,
+    )
+
+
+def test_an_adopted_instance_retains_a_writable_bind_outside_the_docker_host_directory(
+    tmp_path,
+):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
+        client = hub_client(hub)
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "notes.md").write_text("the user's own work\n", encoding="utf-8")
+        storage = (*coder_storage("/srv/kinby/instances/coder"), writable_bind(data))
+        directory = existing_coder(runtime, tmp_path / "view" / "coder", storage=storage)
+        instance_id = await adopted(client, directory, CODER_CONTAINER)
+        instance = LifecycleOperationResult(operation_id=uuid4(), instance_id=instance_id)
+        await removed(client, instance)
+
+        preview = await previewed(client, instance)
+        outcome = await deleted(client, preview)
+
+        assert preview.directories == [directory.resolve()]
+        assert preview.retained == [str(data)]
+        assert outcome.state is OperationState.SUCCEEDED
+        assert f"{data} stays on the Docker host" in outcome.detail
+        assert not directory.exists()
+        assert (data / "notes.md").read_text(encoding="utf-8") == "the user's own work\n"
+        assert await listed(client, removed=True) == []
+
+        second = existing_coder(
+            runtime,
+            tmp_path / "view" / "second",
+            container="kinby-coder-2",
+            storage=(
+                *coder_storage("/srv/kinby/instances/second", volumes="kinby_second"),
+                writable_bind(data),
+            ),
+        )
+        await adopted(client, second, "kinby-coder-2")
+
+    asyncio.run(scenario())
+
+
+def test_a_writable_bind_under_the_docker_host_directory_is_deleted_where_the_hub_sees_it(
+    tmp_path,
+):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = Hub(
+            tmp_path / "hub",
+            runtime=runtime,
+            images=FakeImages(),
+            control=FakeControl(),
+            docker_host_directory=Path("/srv/kinby"),
+        )
+        client = hub_client(hub)
+        notes = hub.directory / "shared" / "notes"
+        notes.mkdir(parents=True)
+        storage = (
+            *coder_storage("/srv/kinby/instances/coder"),
+            writable_bind("/srv/kinby/shared/notes"),
+        )
+        directory = existing_coder(runtime, tmp_path / "view" / "coder", storage=storage)
+        instance_id = await adopted(client, directory, CODER_CONTAINER)
+        instance = LifecycleOperationResult(operation_id=uuid4(), instance_id=instance_id)
+        await removed(client, instance)
+
+        preview = await previewed(client, instance)
+        outcome = await deleted(client, preview)
+
+        assert preview.directories == [directory.resolve(), notes.resolve()]
+        assert preview.retained == []
+        assert outcome.state is OperationState.SUCCEEDED
+        assert not directory.exists()
+        assert not notes.exists()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("points_to", ["outside the hub", "another instance"])
+def test_a_bind_reached_through_a_symlink_under_the_hub_directory_is_retained(
+    tmp_path,
+    points_to,
+):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = Hub(
+            tmp_path / "hub",
+            runtime=runtime,
+            images=FakeImages(),
+            control=FakeControl(),
+            docker_host_directory=Path("/srv/kinby"),
+        )
+        client = hub_client(hub)
+        target = {
+            "outside the hub": tmp_path / "elsewhere",
+            "another instance": hub.instances_directory / "other",
+        }[points_to]
+        target.mkdir(parents=True)
+        (target / "notes.md").write_text("not this instance's\n", encoding="utf-8")
+        (hub.directory / "shared").symlink_to(target, target_is_directory=True)
+        storage = (
+            *coder_storage("/srv/kinby/instances/coder"),
+            writable_bind("/srv/kinby/shared"),
+        )
+        directory = existing_coder(runtime, tmp_path / "view" / "coder", storage=storage)
+        instance_id = await adopted(client, directory, CODER_CONTAINER)
+        instance = LifecycleOperationResult(operation_id=uuid4(), instance_id=instance_id)
+        await removed(client, instance)
+
+        preview = await previewed(client, instance)
+        outcome = await deleted(client, preview)
+
+        assert preview.directories == [directory.resolve()]
+        assert preview.retained == ["/srv/kinby/shared"]
+        assert outcome.state is OperationState.SUCCEEDED
+        assert (target / "notes.md").read_text(encoding="utf-8") == "not this instance's\n"
+
+    asyncio.run(scenario())
+
+
+def test_a_writable_bind_inside_the_instance_directory_is_a_target_not_retained(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
+        client = hub_client(hub)
+        storage = (*coder_storage("/home/u/coder"), writable_bind("/home/u/coder/data"))
+        directory = existing_coder(runtime, tmp_path / "view" / "coder", storage=storage)
+        (directory / "data").mkdir()
+        instance_id = await adopted(client, directory, CODER_CONTAINER)
+        instance = LifecycleOperationResult(operation_id=uuid4(), instance_id=instance_id)
+        await removed(client, instance)
+
+        preview = await previewed(client, instance)
+        outcome = await deleted(client, preview)
+
+        assert preview.directories == [directory.resolve(), (directory / "data").resolve()]
+        assert preview.retained == []
+        assert outcome.state is OperationState.SUCCEEDED
+        assert "stays on the Docker host" not in outcome.detail
+        assert not directory.exists()
+
+    asyncio.run(scenario())
+
+
+def test_a_bind_deleted_with_the_instance_directory_is_not_deleted_again(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=FakeControl())
+        client = hub_client(hub)
+        storage = (*coder_storage("/home/u/coder"), writable_bind("/home/u/coder/data"))
+        directory = existing_coder(runtime, tmp_path / "view" / "coder", storage=storage)
+        (directory / "data").mkdir()
+        instance_id = await adopted(client, directory, CODER_CONTAINER)
+        instance = LifecycleOperationResult(operation_id=uuid4(), instance_id=instance_id)
+        await removed(client, instance)
+        preview = await previewed(client, instance)
+        delete_tree = shutil.rmtree
+
+        def reused_once_released(path: Path) -> None:
+            delete_tree(path)
+            if path == directory.resolve():
+                # Another instance takes the released bind before the deletion ends.
+                (directory / "data").mkdir(parents=True)
+                (directory / "data" / "notes.md").write_text("the new owner's\n", encoding="utf-8")
+
+        monkeypatch.setattr(shutil, "rmtree", reused_once_released)
+
+        outcome = await deleted(client, preview)
+
+        assert preview.directories == [directory.resolve(), (directory / "data").resolve()]
+        assert outcome.state is OperationState.SUCCEEDED
+        assert [step.name for step in outcome.steps if step.name.startswith("directory")] == [
+            f"directory {directory.resolve()}"
+        ]
+        assert (directory / "data" / "notes.md").read_text(encoding="utf-8") == "the new owner's\n"
+
+    asyncio.run(scenario())
+
+
+def test_a_bind_inside_a_deleted_instance_directory_leaves_the_inventory_with_it(tmp_path):
+    async def scenario() -> None:
+        runtime = RefusingVolume("kinby_coder-workspace")
+        hub = Hub(
+            tmp_path / "hub",
+            runtime=runtime,
+            images=FakeImages(),
+            control=FakeControl(),
+            docker_host_directory=Path("/srv/kinby"),
+        )
+        client = hub_client(hub)
+        storage = (
+            *coder_storage("/srv/kinby/instances/coder"),
+            writable_bind("/srv/kinby/instances/coder/data"),
+        )
+        directory = existing_coder(runtime, tmp_path / "view" / "coder", storage=storage)
+        (directory / "data").mkdir()
+        unrelated = hub.instances_directory / "coder" / "data"
+        unrelated.mkdir(parents=True)
+        (unrelated / "notes.md").write_text("not this instance's\n", encoding="utf-8")
+        instance_id = await adopted(client, directory, CODER_CONTAINER)
+        instance = LifecycleOperationResult(operation_id=uuid4(), instance_id=instance_id)
+        await removed(client, instance)
+        first = await previewed(client, instance)
+
+        # The deletion stops at the first volume, after the instance directory went.
+        stopped = await deleted(client, first)
+        second = await previewed(client, instance)
+
+        assert stopped.state is OperationState.FAILED
+        assert not directory.exists()
+        assert second.directories == []
+        assert second.retained == []
+        assert second.volumes == first.volumes
+        assert (unrelated / "notes.md").read_text(encoding="utf-8") == "not this instance's\n"
 
     asyncio.run(scenario())
 

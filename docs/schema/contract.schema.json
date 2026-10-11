@@ -1898,6 +1898,12 @@
           "format": "uuid",
           "type": "string"
         },
+        "retained": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "volumes": {
           "items": {
             "type": "string"
@@ -1908,7 +1914,8 @@
       "required": [
         "instance_id",
         "directories",
-        "volumes"
+        "volumes",
+        "retained"
       ],
       "title": "InstanceDeletePreviewResult",
       "type": "object"

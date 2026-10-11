@@ -107,6 +107,7 @@ export function fakeHub({
               instance_id,
               directories: [`/srv/kinby/instances/${instance_id}`],
               volumes: [],
+              retained: [],
             }
           }
           if (method === "instance.delete" && isRecord(params)) {
