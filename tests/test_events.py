@@ -572,6 +572,27 @@ def test_a_tail_torn_while_the_log_is_live_is_dropped_by_the_next_append(
     asyncio.run(scenario())
 
 
+def test_a_read_begun_before_a_torn_tail_is_dropped_returns_only_whole_events(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        first = await event_log.append(thread_id, turn_id, STARTED)
+        with (tmp_path / "events.jsonl").open("a", encoding="utf-8") as log:
+            log.write(TORN_EVENT)
+        reading = event_log.all_events()
+        read = [next(reading)]
+
+        await event_log.append(thread_id, turn_id, MessageDelta(text="next"))
+        read.extend(reading)
+
+        assert read == [first]
+
+    asyncio.run(scenario())
+
+
 def test_an_unparseable_line_before_the_last_still_raises(tmp_path: Path) -> None:
     async def scenario() -> None:
         thread_id = uuid4()

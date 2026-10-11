@@ -8,6 +8,7 @@ one at a time for the same reason.
 import logging
 import os
 from collections.abc import Iterator
+from io import BytesIO
 from pathlib import Path
 from threading import Lock
 
@@ -16,15 +17,20 @@ _appending = Lock()
 
 
 def whole_lines(path: Path) -> Iterator[str]:
-    """Each line of *path* that ends in a newline, in order. A missing file has none."""
+    """Each line of *path* that ends in a newline, in order. A missing file has none.
+
+    One unbuffered read takes the file up to its size when opened. A read that resumed after an
+    append dropped a torn tail would join that tail to the record written in its place.
+    """
     try:
-        records = path.open("rb")
+        records = path.open("rb", buffering=0)
     except FileNotFoundError:
         return
     with records:
-        for line in records:
-            if line.endswith(b"\n"):
-                yield line.decode()
+        content = records.read(os.fstat(records.fileno()).st_size)
+    for line in BytesIO(content):
+        if line.endswith(b"\n"):
+            yield line.decode()
 
 
 def append_line(path: Path, line: str) -> None:
