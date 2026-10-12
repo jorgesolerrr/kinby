@@ -86,7 +86,7 @@ from kinby.hub.registry import FactoryMember, HubRegistry
 
 @dataclass(frozen=True)
 class UndeliveredCall:
-    """A call the instance provably did not take, so it ran nothing (ADR 0086)."""
+    """A call the instance provably did not take, so it ran nothing (ADR 0089)."""
 
     reason: str
 
