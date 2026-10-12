@@ -1,6 +1,6 @@
 import { CallError } from "@kinby/contract"
 import type { LibraryEntry, LibraryGitPreviewResult, LibraryListResult } from "@kinby/contract"
-import { fakeClock, stubCaller } from "@kinby/contract/testing"
+import { fakeClock, instanceSummary, stubCaller } from "@kinby/contract/testing"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
@@ -32,6 +32,16 @@ function openPage() {
       files: { "factory.yaml": `name: ${name}\n`, "prompts/implement.md": "Implement it.\n" },
       hash: "h-2",
     }),
+    "instance.list": () => ({
+      instances: [
+        instanceSummary({
+          instance_id: "instance-1",
+          manifest_id: "software-coder",
+          factory_role: { factory: "software", name: "coder" },
+        }),
+      ],
+    }),
+    "factory.run.list": () => ({ runs: [] }),
   })
   render(<LibraryPage client={caller} clock={fakeClock()} />)
   return { caller, user: userEvent.setup() }
@@ -77,6 +87,14 @@ describe("LibraryPage", () => {
     expect(file.hasAttribute("readonly")).toBe(true)
     expect(screen.getByText("Other files: prompts/implement.md")).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull()
+  })
+
+  it("opens a factory to list the instances that hold its roles", async () => {
+    const { user } = openPage()
+
+    await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
+
+    expect(await screen.findByRole("region", { name: "software-coder" })).toBeDefined()
   })
 })
 

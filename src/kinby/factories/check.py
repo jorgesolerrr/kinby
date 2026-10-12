@@ -4,7 +4,7 @@ It validates the factory file against its schema and each instance's setup decla
 resolves every instance template, image recipe, routine, prompt, tool and hook the file names,
 its needs_human call's among them, and checks that each step's inputs come from an earlier step
 or the work item. It runs each template's tool and hook files to learn their names, as an
-instance does, and initializes an instance from each template with its defaults, as an install
+instance does, and initializes an instance from each template with its defaults, as a creation
 does.
 """
 

@@ -18,7 +18,7 @@ import { instanceName, shownState } from "@/lib/instances"
 import {
   CREATE_PATH,
   instancePath,
-  openCreateWizard,
+  openOnboarding,
   openRemoved,
   REMOVED_PATH,
   selectInstance,
@@ -89,7 +89,7 @@ export function NavInstances({
             aria-current={creating ? "page" : undefined}
             onClick={(event) => {
               event.preventDefault()
-              openCreateWizard()
+              openOnboarding()
             }}
             render={
               <a href={CREATE_PATH}>

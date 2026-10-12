@@ -2035,48 +2035,6 @@ class FactoryDescription(ContractModel):
     suggested_picks: dict[str, list[SkillName]]
 
 
-class FactoryInstanceSetup(ContractModel):
-    """The setup values for one of the factory's instances, checked against its template."""
-
-    model_config = ConfigDict(hide_input_in_errors=True)
-
-    #: The value of the built-in model field.
-    model: str
-    #: Values for the configuration fields the template declares, by field name.
-    config: dict[str, SetupValue] = Field(default_factory=dict)
-    #: Values for its secret fields, and any other variables the instance should hold.
-    secrets: dict[str, SecretStr] = Field(default_factory=dict)
-
-    @field_serializer("secrets", when_used="json")
-    def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
-        return {name: value.get_secret_value() for name, value in secrets.items()}
-
-
-class FactoryInstallCommand(ContractModel):
-    """Create each of the factory's instances from its template, once the factory check passes."""
-
-    model_config = ConfigDict(hide_input_in_errors=True)
-
-    name: FactoryName
-    #: The setup values of every instance the factory declares, by its name in the factory.
-    instances: dict[str, FactoryInstanceSetup]
-
-
-class FactoryInstallResult(ContractModel):
-    #: The creation of each instance, by its name in the factory.
-    instances: dict[str, LifecycleOperationResult]
-
-
-class FactoryRemoveCommand(ContractModel):
-    """Remove the factory, which the hub refuses while an instance holds one of its roles."""
-
-    name: FactoryName
-
-
-class FactoryRemoveResult(ContractModel):
-    """No instance holds one of the factory's roles."""
-
-
 class LibraryKind(StrEnum):
     FACTORY = "factory"
     SKILL = "skill"

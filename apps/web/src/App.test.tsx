@@ -615,7 +615,7 @@ describe("a page that breaks", () => {
 describe("creating an instance", () => {
   beforeEach(() => window.history.replaceState(null, "", "/"))
 
-  it("opens the create wizard from the sidebar, at its image step", async () => {
+  it("opens the onboarding from the sidebar, at its image step", async () => {
     openApp({ signedIn: true, instances: [ada] })
     const user = userEvent.setup()
 

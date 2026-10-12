@@ -14,6 +14,7 @@ import { CircleXIcon, Trash2Icon } from "lucide-react"
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
+import { FactoryInstances } from "@/components/factory-instances"
 import { NewSkill, type WriteNew } from "@/components/new-skill"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -670,7 +671,7 @@ function NewerVersionCheck({
   )
 }
 
-/** A factory's `factory.yaml`, read-only, and its other files. */
+/** A factory's `factory.yaml`, read-only, its other files, and the instances holding its roles. */
 function FactoryEntry({ client, clock, name }: { client: Caller; clock: Clock; name: string }) {
   const id = useId()
   const read = useCallback(async () => {
@@ -688,12 +689,15 @@ function FactoryEntry({ client, clock, name }: { client: Caller; clock: Clock; n
     )
   }
   return (
-    <Field className="max-w-2xl">
-      <FieldLabel htmlFor={id}>factory.yaml</FieldLabel>
-      <Textarea id={id} className="min-h-72" value={opened.content} readOnly />
-      {opened.files.length > 0 && (
-        <FieldDescription>Other files: {opened.files.join(", ")}</FieldDescription>
-      )}
-    </Field>
+    <>
+      <Field className="max-w-2xl">
+        <FieldLabel htmlFor={id}>factory.yaml</FieldLabel>
+        <Textarea id={id} className="min-h-72" value={opened.content} readOnly />
+        {opened.files.length > 0 && (
+          <FieldDescription>Other files: {opened.files.join(", ")}</FieldDescription>
+        )}
+      </Field>
+      <FactoryInstances client={client} clock={clock} factory={name} />
+    </>
   )
 }

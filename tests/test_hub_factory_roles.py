@@ -5,7 +5,7 @@ from uuid import UUID
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
-    FACTORY_REMOVE,
+    FACTORY_DESCRIBE,
     INSTANCE_CREATE,
     INSTANCE_LIST,
     INSTANCE_REMOVE,
@@ -13,7 +13,8 @@ from kinby.contracts import (
     INSTANCE_STATUS,
     ErrorCode,
     ErrorEnvelope,
-    FactoryRemoveCommand,
+    FactoryDescribeCommand,
+    FactoryDescription,
     FactoryRole,
     InstanceCreateCommand,
     InstanceListCommand,
@@ -29,7 +30,7 @@ from kinby.contracts import (
 from kinby.hub import ImageSelection
 from kinby.instance import inspect_instance
 from kinby.instance.config_changes import file_hash
-from tests.test_factory_install import FACTORY, FILES, WITH_SETUP, install_hub, listed
+from tests.test_factory_templates import FACTORY, FILES, WITH_SETUP, factory_hub, listed
 from tests.test_hub import (
     FakeImages,
     FakeRuntime,
@@ -63,7 +64,7 @@ async def created(
 
 def test_an_instance_that_picks_a_role_is_written_from_the_roles_template(tmp_path):
     images = FakeImages()
-    hub = install_hub(tmp_path, WITH_SETUP, images=images)
+    hub = factory_hub(tmp_path, WITH_SETUP, images=images)
     client = hub_client(hub)
 
     async def scenario() -> None:
@@ -103,10 +104,53 @@ def test_an_instance_that_picks_a_role_is_written_from_the_roles_template(tmp_pa
     asyncio.run(scenario())
 
 
+def test_a_roles_behavior_prompt_starts_from_its_templates(tmp_path):
+    client = hub_client(factory_hub(tmp_path))
+
+    async def scenario() -> FactoryDescription:
+        described = await client.call(FACTORY_DESCRIBE, FactoryDescribeCommand(name="tickets"))
+        assert isinstance(described, FactoryDescription)
+        return described
+
+    described = asyncio.run(scenario())
+
+    prompts = {
+        role: [field for field in setup.setup_fields if field.name == "behavior_prompt"]
+        for role, setup in described.instances.items()
+    }
+    assert {role: [field.default for field in fields] for role, fields in prompts.items()} == {
+        "coder": ["You implement issues.\n"],
+        "reviewer": ["You review branches.\n"],
+    }
+
+
+def test_an_instance_that_picks_a_role_is_created_with_the_behavior_prompt_sent(tmp_path):
+    hub = factory_hub(tmp_path, WITH_SETUP)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                factory_role=CODER,
+                model="",
+                config={"behavior_prompt": "You implement billing issues.\n"},
+                secrets=CODER_SECRETS,
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult), accepted
+        assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
+
+        directory = hub.instances_directory / str(accepted.instance_id)
+        assert (directory / "SYSTEM.md").read_text() == "You implement billing issues.\n"
+
+    asyncio.run(scenario())
+
+
 def test_a_create_with_a_role_is_checked_whole_before_anything_is_created(tmp_path):
     images = FakeImages()
     runtime = FakeRuntime()
-    hub = install_hub(tmp_path, WITH_SETUP, images=images, runtime=runtime)
+    hub = factory_hub(tmp_path, WITH_SETUP, images=images, runtime=runtime)
     client = hub_client(hub)
 
     async def scenario() -> None:
@@ -133,7 +177,7 @@ def test_a_create_with_a_role_is_checked_whole_before_anything_is_created(tmp_pa
 def test_a_create_whose_factory_fails_its_check_creates_nothing(tmp_path):
     runtime = FakeRuntime()
     broken = FILES | {"factory.yaml": FACTORY.replace("hook: read_verdict", "hook: read_review")}
-    hub = install_hub(tmp_path, broken, runtime=runtime)
+    hub = factory_hub(tmp_path, broken, runtime=runtime)
     client = hub_client(hub)
 
     async def scenario() -> None:
@@ -149,7 +193,7 @@ def test_a_create_whose_factory_fails_its_check_creates_nothing(tmp_path):
 
 
 def test_a_create_whose_name_is_taken_fails_and_says_so(tmp_path):
-    hub = install_hub(tmp_path, WITH_SETUP)
+    hub = factory_hub(tmp_path, WITH_SETUP)
     client = hub_client(hub)
 
     async def scenario() -> None:
@@ -167,7 +211,7 @@ def test_a_create_whose_name_is_taken_fails_and_says_so(tmp_path):
 
 
 def test_a_vanilla_instance_needs_a_name(tmp_path):
-    hub = install_hub(tmp_path)
+    hub = factory_hub(tmp_path)
     client = hub_client(hub)
 
     async def scenario() -> None:
@@ -182,7 +226,7 @@ def test_a_vanilla_instance_needs_a_name(tmp_path):
 
 
 def test_two_instances_hold_one_role_each_with_its_own_name_and_directory(tmp_path):
-    hub = install_hub(tmp_path, WITH_SETUP)
+    hub = factory_hub(tmp_path, WITH_SETUP)
     client = hub_client(hub)
 
     async def scenario() -> None:
@@ -202,29 +246,8 @@ def test_two_instances_hold_one_role_each_with_its_own_name_and_directory(tmp_pa
     asyncio.run(scenario())
 
 
-def test_a_factory_with_instances_is_not_removed_and_its_instances_are_named(tmp_path):
-    hub = install_hub(tmp_path, WITH_SETUP)
-    client = hub_client(hub)
-
-    async def scenario() -> None:
-        await created(client)
-        await created(client, name="billing-coder")
-
-        refused = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="tickets"))
-
-        assert isinstance(refused, ErrorEnvelope)
-        assert refused.code is ErrorCode.INVALID_ARGUMENT
-        assert refused.message == (
-            'Factory "tickets" has instances tickets-coder, billing-coder. '
-            "Remove them before removing the factory."
-        )
-        assert len(hub.registry.managed_instances()) == 2
-
-    asyncio.run(scenario())
-
-
 def test_removing_one_instance_of_a_role_leaves_the_others(tmp_path):
-    hub = install_hub(tmp_path, WITH_SETUP)
+    hub = factory_hub(tmp_path, WITH_SETUP)
     client = hub_client(hub)
 
     async def scenario() -> None:
@@ -242,7 +265,7 @@ def test_removing_one_instance_of_a_role_leaves_the_others(tmp_path):
 
 
 def test_a_removed_instance_of_a_role_is_restored_beside_another_that_holds_it(tmp_path):
-    hub = install_hub(tmp_path, WITH_SETUP)
+    hub = factory_hub(tmp_path, WITH_SETUP)
     client = hub_client(hub)
 
     async def scenario() -> None:

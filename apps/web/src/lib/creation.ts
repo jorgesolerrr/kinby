@@ -3,6 +3,8 @@ import type {
   Avatar,
   Client,
   Clock,
+  DeclaredSetup,
+  FactoryRole,
   InstanceCreateCommand,
   OperationStep,
   SetupField,
@@ -52,17 +54,57 @@ function setupValue(field: SetupField, input: FieldInput): SetupValue {
   return Number.isInteger(number) ? number : input
 }
 
+/** The field the onboarding asks for in its own step, starting from kinby's or the role's. */
+export const PROMPT_FIELD = "behavior_prompt"
+
 /** What the user named the instance and how it is drawn. */
 export interface Identity {
   name: string
   avatar: Avatar
 }
 
-/** The create command for the prepared image, with each field's value sent by its kind. */
+/** What the instance picks: a factory role, or none for a vanilla instance, and its skills. */
+export interface Picks {
+  role: FactoryRole | undefined
+  skills: string[]
+}
+
+/** A factory role the library offers, with what an instance that picks it asks for. */
+export interface RoleOffer {
+  role: FactoryRole
+  setup: DeclaredSetup
+  suggestedPicks: string[]
+}
+
+/** Each role of each factory in the library. */
+export async function offeredRoles(caller: Pick<Client, "call">): Promise<RoleOffer[]> {
+  const { factories } = await caller.call("factory.list", {})
+  const described = await Promise.all(
+    factories.map(async ({ name }) => ({
+      factory: name,
+      ...(await caller.call("factory.describe", { name })),
+    })),
+  )
+  return described.flatMap(({ factory, instances, suggested_picks }) =>
+    Object.entries(instances).map(([name, setup]) => ({
+      role: { factory, name },
+      setup,
+      suggestedPicks: suggested_picks[name] ?? [],
+    })),
+  )
+}
+
+/** The name an instance that picks *role* starts with, as the hub would give it. */
+export function proposedName(role: FactoryRole | undefined): string {
+  return role === undefined ? "" : `${role.factory}-${role.name}`
+}
+
+/** The create command for the prepared image or the role, with each field's value by its kind. */
 export function createCommand(
   fields: SetupField[],
   inputs: Record<string, FieldInput>,
   { name, avatar }: Identity,
+  { role, skills }: Picks,
 ): InstanceCreateCommand {
   const config: Record<string, SetupValue> = {}
   const secrets: Record<string, string> = {}
@@ -82,10 +124,12 @@ export function createCommand(
   return {
     manifest_id: trimmed,
     persona_name: trimmed,
+    factory_role: role,
     model,
     config,
     secrets,
     avatar,
+    picks: skills,
   }
 }
 

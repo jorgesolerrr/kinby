@@ -199,17 +199,9 @@ export interface Contract {
       command: FactoryGetCommand;
       result: FactoryResult;
     };
-    "factory.install": {
-      command: FactoryInstallCommand;
-      result: FactoryInstallResult;
-    };
     "factory.list": {
       command: FactoryListCommand;
       result: FactoryListResult;
-    };
-    "factory.remove": {
-      command: FactoryRemoveCommand;
-      result: FactoryRemoveResult;
     };
     "factory.run.approve": {
       command: FactoryRunApproveCommand;
@@ -674,36 +666,6 @@ export interface FactoryResult {
 export interface FactoryGetCommand {
   name: FactoryName;
 }
-/**
- * Create each of the factory's instances from its template, once the factory check passes.
- */
-export interface FactoryInstallCommand {
-  instances: {
-    [k: string]: FactoryInstanceSetup;
-  };
-  name: FactoryName;
-}
-/**
- * The setup values for one of the factory's instances, checked against its template.
- */
-export interface FactoryInstanceSetup {
-  config?: {
-    [k: string]: SetupValue;
-  };
-  model: string;
-  secrets?: {
-    [k: string]: string;
-  };
-}
-export interface FactoryInstallResult {
-  instances: {
-    [k: string]: LifecycleOperationResult;
-  };
-}
-export interface LifecycleOperationResult {
-  instance_id: string;
-  operation_id: string;
-}
 export interface FactoryListCommand {}
 export interface FactoryListResult {
   factories: FactorySummary[];
@@ -712,16 +674,6 @@ export interface FactorySummary {
   name: FactoryName;
   source: FactorySource;
 }
-/**
- * Remove the factory, which the hub refuses while an instance holds one of its roles.
- */
-export interface FactoryRemoveCommand {
-  name: FactoryName;
-}
-/**
- * No instance holds one of the factory's roles.
- */
-export interface FactoryRemoveResult {}
 /**
  * Approve a run parked at an approve step, which moves it on as the step's next outcome.
  */
@@ -826,6 +778,10 @@ export interface InstanceAdoptCommand {
   path: string;
   relinquished?: boolean;
   runtime_id: string;
+}
+export interface LifecycleOperationResult {
+  instance_id: string;
+  operation_id: string;
 }
 /**
  * Preview an adoption. It reads the instance and its container and changes neither.

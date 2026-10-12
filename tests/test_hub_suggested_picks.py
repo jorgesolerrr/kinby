@@ -26,7 +26,7 @@ from kinby.contracts import (
 )
 from kinby.instance.skills_lock import skill_hash
 from kinby.library import SHIPPED_SKILLS
-from tests.test_factory_install import FACTORY, FILES, install_hub, installed
+from tests.test_factory_templates import FACTORY, FILES, created_roles, factory_hub
 from tests.test_hub import FakeRuntime, finished_operation, hub_client, prepared
 from tests.test_hub_factory_roles import CODER, CODER_SECRETS
 from tests.test_hub_template_sync import _directory, _factory, _template_step, _update
@@ -71,7 +71,7 @@ def _shipped(name: str) -> dict[str, str]:
 
 
 def test_describing_a_factory_returns_each_roles_suggested_picks(tmp_path):
-    client = hub_client(install_hub(tmp_path, SUGGESTING))
+    client = hub_client(factory_hub(tmp_path, SUGGESTING))
 
     async def scenario() -> FactoryDescription:
         described = await client.call(FACTORY_DESCRIBE, FactoryDescribeCommand(name="tickets"))
@@ -84,7 +84,7 @@ def test_describing_a_factory_returns_each_roles_suggested_picks(tmp_path):
 def test_a_role_created_with_picks_holds_them_beside_its_template_and_a_shorter_list_holds_less(
     tmp_path,
 ):
-    hub = install_hub(tmp_path, SUGGESTING | {"instances/coder/skills/own/SKILL.md": OWN_SKILL})
+    hub = factory_hub(tmp_path, SUGGESTING | {"instances/coder/skills/own/SKILL.md": OWN_SKILL})
     client = hub_client(hub)
 
     async def scenario() -> tuple[UUID, UUID]:
@@ -109,7 +109,7 @@ def test_a_role_created_with_picks_holds_them_beside_its_template_and_a_shorter_
 
 
 def test_a_vanilla_instance_is_created_with_picks(tmp_path):
-    hub = install_hub(tmp_path)
+    hub = factory_hub(tmp_path)
     client = hub_client(hub)
 
     async def scenario() -> UUID:
@@ -136,7 +136,7 @@ def test_a_vanilla_instance_is_created_with_picks(tmp_path):
 
 def test_a_create_whose_picks_the_library_or_the_template_refuses_creates_nothing(tmp_path):
     runtime = FakeRuntime()
-    hub = install_hub(
+    hub = factory_hub(
         tmp_path, SUGGESTING | {"instances/coder/skills/tdd/SKILL.md": OWN_SKILL}, runtime=runtime
     )
     client = hub_client(hub)
@@ -161,11 +161,11 @@ def test_an_update_makes_the_library_skills_an_older_template_supplied_picks(tmp
         | _shipped("unslop")
         | {"instances/coder/skills/own/SKILL.md": OWN_SKILL}
     )
-    hub = install_hub(tmp_path, files)
+    hub = factory_hub(tmp_path, files)
     client = hub_client(hub)
 
     async def scenario() -> None:
-        coder = (await installed(client)).instances["coder"].instance_id
+        coder = (await created_roles(client))["coder"]
         directory = _directory(tmp_path, coder)
         edited = directory / "skills" / "unslop" / "SKILL.md"
         edited.write_text(edited.read_text(encoding="utf-8") + "Mine too.\n", encoding="utf-8")

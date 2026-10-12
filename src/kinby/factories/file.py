@@ -63,7 +63,7 @@ class InstanceDeclaration:
 
     #: One of the image recipes kinby ships. None builds kinby's base image.
     image: RecipeName | None = None
-    #: What the instance asks for at install, after kinby's built-in fields. A field named like
+    #: What the instance asks for at creation, after kinby's built-in fields. A field named like
     #: a built-in one gives it another default. Each other configuration field targets a key of
     #: kinby.toml.
     setup_fields: tuple[SetupField, ...] = ()

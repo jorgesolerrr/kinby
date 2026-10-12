@@ -34,7 +34,6 @@ from kinby.contracts import (
     FactoryDescription,
     FactoryEditCommand,
     FactoryGetCommand,
-    FactoryInstanceSetup,
     FactoryResult,
     FactoryRole,
     FactoryRun,
@@ -90,7 +89,8 @@ SUGGESTED_PICKS = [
     "unslop",
 ]
 #: What the coder asks for at creation: the repository, GitHub, Claude Code and a commit identity.
-CODER_SETUP = FactoryInstanceSetup(
+CODER_CREATE = InstanceCreateCommand(
+    factory_role=FactoryRole(factory="software", name="coder"),
     model="anthropic:claude-sonnet-5",
     config={"repository": "https://github.com/owner/project.git"},
     secrets={
@@ -123,13 +123,7 @@ async def created_coder(client: ContractClient) -> UUID:
     assert isinstance(described, FactoryDescription), described
     accepted = await client.call(
         INSTANCE_CREATE,
-        InstanceCreateCommand(
-            factory_role=FactoryRole(factory="software", name="coder"),
-            model=CODER_SETUP.model,
-            config=CODER_SETUP.config,
-            secrets=CODER_SETUP.secrets,
-            picks=described.suggested_picks["coder"],
-        ),
+        CODER_CREATE.model_copy(update={"picks": described.suggested_picks["coder"]}),
     )
     assert isinstance(accepted, LifecycleOperationResult), accepted
     assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
@@ -732,7 +726,7 @@ def git(directory: Path, *arguments: str) -> str:
 
 
 def coder_at(tmp_path: Path) -> Instance:
-    """The software factory's coder as a fresh hub installs it, its workspace a clone of origin.
+    """The software factory's coder as a fresh hub creates it, its workspace a clone of origin.
 
     origin's main holds one commit.
     """

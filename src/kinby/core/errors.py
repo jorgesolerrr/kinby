@@ -73,12 +73,6 @@ class FactoryCheckFailed(CoreError):
         )
 
 
-class FactoryHasInstances(CoreError):
-    """Instances hold the factory's roles, so it is neither installed again nor removed."""
-
-    code = ErrorCode.INVALID_ARGUMENT
-
-
 class NameTaken(CoreError):
     """An instance the hub lists has this name already, so another may not take it."""
 
