@@ -82,9 +82,9 @@ async def run_coding_client(
 
     Claude keeps its sessions in *state_dir*, which outlives the container. When Claude no
     longer has *resume*, the prompt runs once more in a new session, and that run is the one
-    returned. Both runs share the one timeout. Claude waits for a command it left running in the
-    background, such as a long test suite, and goes on when it ends. A *model* or *effort* of
-    None leaves the client's default.
+    returned. Both runs share the one timeout. Claude runs every command in the foreground, and
+    may wait for one as long as the timeout. A *model* or *effort* of None leaves the client's
+    default.
     """
     run = partial(
         _run,
@@ -133,7 +133,7 @@ async def _run(
             process = await asyncio.create_subprocess_exec(
                 *_command(client, workspace, resume, model, effort),
                 cwd=workspace,
-                env=_environment(client, state_dir),
+                env=_environment(client, state_dir, timeout_seconds),
                 stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
@@ -231,16 +231,19 @@ def _command(
             return ("codex", "exec", "resume", *options, resume, "-")
 
 
-def _environment(client: CodingClient, state_dir: Path) -> Mapping[str, str]:
+def _environment(client: CodingClient, state_dir: Path, timeout_seconds: int) -> Mapping[str, str]:
     """A client runs on its subscription login, never on an API key the instance holds."""
     environment = {
         name: value for name, value in os.environ.items() if name not in _API_KEYS[client]
     }
     if client is CodingClient.CLAUDE:
         environment["CLAUDE_CONFIG_DIR"] = str(state_dir / "claude")
-        # Claude gives up on a command it left in the background after 10 idle minutes, and
-        # exits with its work uncommitted. Zero waits for it; the step's timeout is the limit.
-        environment["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = "0"
+        # `claude -p` exits when its turn ends, with whatever it left in the background still
+        # running. So a suite longer than Claude's 10 minutes for one command ended the step
+        # with the work uncommitted. Claude runs every command in the foreground instead, for
+        # as long as the step may take.
+        environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+        environment["BASH_MAX_TIMEOUT_MS"] = str(timeout_seconds * 1000)
     return environment
 
 

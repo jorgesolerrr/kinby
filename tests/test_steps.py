@@ -807,8 +807,9 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
         "    json.dump({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'stdin': sys.stdin.read(),\n"
         f"               'api_keys': [name for name in {API_KEYS!r} if name in os.environ],\n"
         "               'config_dir': os.environ.get('CLAUDE_CONFIG_DIR'),\n"
-        "               'background_wait':\n"
-        "                   os.environ.get('CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS')},\n"
+        "               'no_background':\n"
+        "                   os.environ.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'),\n"
+        "               'command_limit': os.environ.get('BASH_MAX_TIMEOUT_MS')},\n"
         "              calls)\n"
         "    calls.write('\\n')\n"
         f"{then}\n"
@@ -818,7 +819,8 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
     for variable in API_KEYS:
         monkeypatch.setenv(variable, "sk-test")
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    monkeypatch.delenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", raising=False)
+    monkeypatch.delenv("BASH_MAX_TIMEOUT_MS", raising=False)
     return calls
 
 
@@ -838,8 +840,10 @@ class ClientCall:
     api_keys: list[str]
     #: Where Claude keeps its sessions, when the client was told.
     config_dir: str | None
-    #: How long Claude waits, in milliseconds, for what it left running in the background.
-    background_wait: str | None
+    #: Set when Claude may leave no command running in the background.
+    no_background: str | None
+    #: The longest Claude may wait for one command, in milliseconds.
+    command_limit: str | None
 
 
 def recorded_calls(calls: Path) -> list[ClientCall]:
@@ -908,7 +912,7 @@ def test_a_client_step_runs_the_client_in_the_workspace_with_the_prompt_and_keep
     asyncio.run(scenario())
 
 
-def test_a_claude_step_waits_for_the_commands_claude_left_running_in_the_background(
+def test_a_claude_step_runs_every_command_in_the_foreground_for_as_long_as_the_step_may_take(
     tmp_path, monkeypatch
 ):
     runtime, _ = step_instance(tmp_path)
@@ -918,7 +922,8 @@ def test_a_claude_step_waits_for_the_commands_claude_left_running_in_the_backgro
         await run_client_step(runtime.dispatcher, "claude")
 
         [called] = recorded_calls(calls)
-        assert called.background_wait == "0"
+        assert called.no_background == "1"
+        assert called.command_limit == "1000"
 
     asyncio.run(scenario())
 
