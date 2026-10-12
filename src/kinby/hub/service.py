@@ -52,6 +52,8 @@ from kinby.contracts import (
     INSTANCE_STATUS,
     INSTANCE_STOP,
     INSTANCE_UPDATE,
+    LIBRARY_LIST,
+    LIBRARY_SKILL_READ,
     OPERATION_GET,
     STATS_SUMMARY,
     Avatar,
@@ -146,6 +148,7 @@ from kinby.hub.control import (
     InstanceControl,
 )
 from kinby.hub.factories import FactoryStore, InstanceTemplate
+from kinby.hub.library import Library
 from kinby.hub.models import (
     ContainerRuntime,
     ImageArtifact,
@@ -181,6 +184,7 @@ from kinby.instance import (
     inspect_instance,
 )
 from kinby.instance.layout import SYSTEM_NAME
+from kinby.library import SHIPPED_SKILLS
 from kinby.plugins.intake import INTAKE_URL_VARIABLE
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
 
@@ -400,6 +404,7 @@ class Hub:
         control: InstanceControl | None = None,
         docker_host_directory: Path | None = None,
         shipped_factories: Path = SHIPPED_FACTORIES,
+        shipped_skills: Path = SHIPPED_SKILLS,
         private_url: str | None = None,
     ) -> None:
         """*private_url* is where the hub's instances reach it on their private network."""
@@ -421,6 +426,8 @@ class Hub:
             self._images = images
             self._private_url = private_url
             self.factories = FactoryStore(self.directory / "factories", shipped_factories)
+            self.library = Library(self.directory / "skills", self.factories, self.registry)
+            self.library.receive(shipped_skills)
             self.runs = FactoryRuns(self.registry, self.factories, self._run_step)
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
@@ -460,6 +467,8 @@ class Hub:
             self.dispatcher.register(FACTORY_RUN_APPROVE, self.runs.approve)
             self.dispatcher.register(FACTORY_RUN_CANCEL, self.runs.cancel)
             self.dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
+            self.dispatcher.register(LIBRARY_LIST, self.library.list)
+            self.dispatcher.register(LIBRARY_SKILL_READ, self.library.read_skill)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
         except BaseException:
             self._directory_lock.close()

@@ -64,6 +64,9 @@ from kinby.contracts.models import (
     InstanceStatusResult,
     InstanceStopCommand,
     InstanceUpdateCommand,
+    LibraryListCommand,
+    LibraryListResult,
+    LibrarySkillReadCommand,
     LifecycleOperationResult,
     ManifestGetCommand,
     ManifestResult,
@@ -366,6 +369,10 @@ FACTORY_RUN_CANCEL = Method(
 FACTORY_RUN_SUBSCRIBE = Subscription(
     "factory.run.subscribe", Scope.HUB_READ, FactoryRunSubscribeCommand, FactoryRun
 )
+LIBRARY_LIST = Method("library.list", Scope.HUB_READ, LibraryListCommand, LibraryListResult)
+LIBRARY_SKILL_READ = Method(
+    "library.skill.read", Scope.HUB_READ, LibrarySkillReadCommand, SkillResult
+)
 #: The same time range and bucket size as stats.get, asked of every running instance.
 STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
 
@@ -450,6 +457,8 @@ METHODS = (
     FACTORY_RUN_SEND_BACK,
     FACTORY_RUN_APPROVE,
     FACTORY_RUN_CANCEL,
+    LIBRARY_LIST,
+    LIBRARY_SKILL_READ,
     STATS_SUMMARY,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE)

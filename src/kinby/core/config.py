@@ -164,7 +164,8 @@ def _directory_files(directory: Path) -> dict[str, bytes]:
     }
 
 
-def _skill_result(directory: Path) -> SkillResult:
+def skill_result(directory: Path) -> SkillResult:
+    """The skill in *directory* as a client reads it."""
     files = _directory_files(directory)
     return SkillResult(
         content=files[SKILL_FILE].decode("utf-8"),
@@ -325,7 +326,7 @@ class InstanceConfig:
         )
         if found is None:
             raise SkillNotFound(f'There is no {command.tier} skill "{command.name}".')
-        return _skill_result(found.skill.source.parent)
+        return skill_result(found.skill.source.parent)
 
     async def write_skill(self, command: SkillWriteCommand) -> SkillResult:
         async with self._instance.skill_lock:
@@ -453,7 +454,7 @@ class InstanceConfig:
                 write_skill(self._instance, command.name, command.content)
             except ValueError as exc:
                 raise InvalidConfig({"content": str(exc)}) from exc
-        return _skill_result(directory)
+        return skill_result(directory)
 
     def _customize_skill(self, name: SkillName) -> SkillResult:
         directory = self._skill_directory(name)
@@ -470,7 +471,7 @@ class InstanceConfig:
             staged = Path(temporary) / name
             shutil.copytree(lower.skill.source.parent, staged)
             staged.rename(directory)
-        return _skill_result(directory)
+        return skill_result(directory)
 
     def _delete_skill(self, command: SkillDeleteCommand) -> None:
         directory = self._skill_directory(command.name)

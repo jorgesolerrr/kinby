@@ -5,6 +5,7 @@ import { useCallback, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { CreateWizard } from "@/components/create-wizard"
+import { LibraryPage } from "@/components/library-page"
 import { MainPanel } from "@/components/main-panel"
 import { NavThreads } from "@/components/nav-threads"
 import { PageBoundary } from "@/components/page-boundary"
@@ -19,6 +20,7 @@ import { usePolled } from "@/hooks/use-polled"
 import {
   useConfigOpen,
   useCreating,
+  useLibraryOpen,
   useMemoryOpen,
   usePath,
   useRemovedOpen,
@@ -46,6 +48,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const memoryOpen = useMemoryOpen()
   const statsOpen = useStatsOpen()
   const usageOpen = useUsageOpen()
+  const libraryOpen = useLibraryOpen()
   const removedOpen = useRemovedOpen()
   const threadsOpen = useThreadsOpen()
   const path = usePath()
@@ -70,6 +73,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           anyRemoved={(listed?.removed.length ?? 0) > 0}
           removedOpen={removedOpen}
           usageOpen={usageOpen}
+          libraryOpen={libraryOpen}
           threadsOpen={threadsOpen}
           client={client}
           clock={clock}
@@ -97,6 +101,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
               <CreateWizard caller={client} clock={clock} onPublished={listAgain} />
             ) : usageOpen ? (
               <UsagePage client={client} clock={clock} />
+            ) : libraryOpen ? (
+              <LibraryPage client={client} clock={clock} />
             ) : removedOpen ? (
               <RemovedInstancesPage
                 caller={client}
