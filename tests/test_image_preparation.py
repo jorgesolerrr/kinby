@@ -18,6 +18,11 @@ class FakeImageBackend:
         self.images: set[str] = set()
         self.dockerfiles: list[str] = []
         self.described: list[str] = []
+        self.removed: list[str] = []
+        #: Images Docker refuses to remove, as it does one a container still uses.
+        self.refused: set[str] = set()
+        #: Inspection containers a hub that stopped mid-inspection left behind.
+        self.inspection_containers = 0
 
     async def resolve_base_images(self, dockerfile: Path) -> tuple[str, ...]:
         return ("python:3.14@sha256:resolved-base",)
@@ -38,6 +43,16 @@ class FakeImageBackend:
     async def describe(self, image_id: str) -> DeclaredSetup:
         self.described.append(image_id)
         return vanilla_description()
+
+    async def remove(self, image_id: str) -> bool:
+        if image_id in self.refused:
+            return False
+        self.removed.append(image_id)
+        self.images.discard(image_id)
+        return True
+
+    async def remove_inspection_containers(self) -> None:
+        self.inspection_containers = 0
 
 
 def _git(repo: Path, *args: str) -> str:

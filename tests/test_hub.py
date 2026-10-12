@@ -152,6 +152,9 @@ class FakeImages:
         assert revision == "HEAD"
         return self.hub_revision
 
+    async def collect(self) -> None:
+        """Every build here names the same image, which the instances keep."""
+
 
 class HeldImages(FakeImages):
     """Hold a create's build until the test releases it, so the create stays before its publish."""

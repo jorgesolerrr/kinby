@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from pathlib import Path
 from typing import cast
 
-from docker.errors import ContainerError, DockerException, ImageNotFound, NotFound
+from docker.errors import APIError, ContainerError, DockerException, ImageNotFound, NotFound
 from docker.models.containers import Container
 from docker.models.images import Image
 from docker.models.networks import Network
@@ -35,7 +35,8 @@ _LOGIN_MOUNT = "/kinby/login"
 class DockerImageBackend:
     """Build immutable images through the blocking Docker SDK off the event loop."""
 
-    def __init__(self, client: docker.DockerClient | None = None) -> None:
+    def __init__(self, hub_id: str, client: docker.DockerClient | None = None) -> None:
+        self._hub_id = hub_id
         self._client = client or docker.from_env()
 
     async def resolve_base_images(self, dockerfile: Path) -> tuple[str, ...]:
@@ -78,16 +79,10 @@ class DockerImageBackend:
 
     async def _dependencies(self, image: Image) -> tuple[str, ...]:
         try:
-            output = await asyncio.to_thread(
-                self._client.containers.run,
-                image.id,
-                command=["-m", "pip", "freeze", "--all"],
-                entrypoint="python",
-                remove=True,
-            )
+            output = await self._inspect(str(image.id), ["-m", "pip", "freeze", "--all"])
         except DockerException:
             return ()
-        return tuple(sorted(cast(bytes, output).decode().splitlines()))
+        return tuple(sorted(output.decode().splitlines()))
 
     async def exists(self, image_id: str) -> bool:
         try:
@@ -96,21 +91,58 @@ class DockerImageBackend:
             return False
         return True
 
-    async def describe(self, image_id: str) -> DeclaredSetup:
-        """Ask the kinby in the image what a vanilla instance declares. It has no network."""
+    async def remove(self, image_id: str) -> bool:
         try:
-            output = await asyncio.to_thread(
-                self._client.containers.run,
-                image_id,
-                command=["-m", "kinby.setup"],
-                entrypoint="python",
-                remove=True,
-                network_mode="none",
-            )
+            await asyncio.to_thread(self._client.images.remove, image_id)
+        except ImageNotFound:
+            return True
+        except APIError:
+            return False
+        return True
+
+    async def describe(self, image_id: str) -> DeclaredSetup:
+        """Ask the kinby in the image what a vanilla instance declares."""
+        try:
+            output = await self._inspect(image_id, ["-m", "kinby.setup"])
         except ContainerError as exc:
             printed = cast(bytes, exc.stderr or b"").decode(errors="replace").strip()
             raise ValueError(f"Describing image {image_id} failed.\n{printed}") from exc
-        return DeclaredSetup.model_validate_json(cast(bytes, output))
+        return DeclaredSetup.model_validate_json(output)
+
+    async def _inspect(self, image_id: str, command: list[str]) -> bytes:
+        """What Python in the image prints running *command*, with no network.
+
+        The container goes however the inspection ends. One a hub that died mid-inspection
+        left behind carries this hub's label, for `remove_inspection_containers`.
+        The image declares `VOLUME /instance`, and `v=True` takes the anonymous volume too.
+        """
+        container = await asyncio.to_thread(
+            self._client.containers.create,
+            image_id,
+            command,
+            entrypoint="python",
+            labels={"kinby.hub": self._hub_id, "kinby.inspection": image_id},
+            network_mode="none",
+        )
+        try:
+            await asyncio.to_thread(container.start)
+            exited = await asyncio.to_thread(container.wait)
+            status = int(exited["StatusCode"])
+            if status != 0:
+                stderr = await asyncio.to_thread(container.logs, stdout=False, stderr=True)
+                raise ContainerError(container, status, command, image_id, stderr)
+            return cast(bytes, await asyncio.to_thread(container.logs, stdout=True, stderr=False))
+        finally:
+            await asyncio.to_thread(container.remove, force=True, v=True)
+
+    async def remove_inspection_containers(self) -> None:
+        containers = await asyncio.to_thread(
+            self._client.containers.list,
+            all=True,
+            filters={"label": [f"kinby.hub={self._hub_id}", "kinby.inspection"]},
+        )
+        for container in containers:
+            await asyncio.to_thread(container.remove, force=True, v=True)
 
 
 class DockerRuntime:
