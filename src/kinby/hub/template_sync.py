@@ -56,7 +56,7 @@ def sync_template(
         target = directory / path
         linked = _linked(directory, path)
         held = file_hash(target.read_bytes()) if not linked and target.is_file() else None
-        if held == wanted and not linked:
+        if held == wanted and not linked and not _own_folder(template, target, path):
             continue
         if (
             linked
@@ -92,6 +92,11 @@ def _linked(directory: Path, path: str) -> bool:
         if target.is_symlink():
             return True
     return False
+
+
+def _own_folder(template: InstanceTemplate, target: Path, path: str) -> bool:
+    """Whether the instance made a folder at *path*, where the template has none."""
+    return target.is_dir() and not any(other.startswith(f"{path}/") for other in template.baseline)
 
 
 def _remove(directory: Path, path: str) -> None:
