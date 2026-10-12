@@ -665,7 +665,7 @@ One **babysitting** pass that asks the **coding client** to address every **acti
 
 ### Check repair
 
-The **coding client**, resumed in the session that implemented the change, fixing what a failed repository check reported. The **software factory** sends a failed check back for repair a few times before the run is **needs human**.
+The **coding client**, resumed in the session that implemented the change, fixing what a failed repository check reported, or a check that failed on its pull request's head. The **software factory** sends a failed check back for repair a few times before the run is **needs human**.
 _Avoid_: fix round (that answers review threads)
 
 ### Babysitting
@@ -686,7 +686,7 @@ An unresolved **review thread** whose latest reply is not from the coding **inst
 
 ### Merge-ready
 
-An **agent PR** with no **actionable threads** and no check still running, that a trusted reviewer reviewed on its current head. A trusted review app's successful check run on the head is a review of it. A pull request no reviewer answered within **babysitting**'s quiet time is merge-ready too, and a comment on it says so. The label reports readiness; the **software factory** never merges it.
+An **agent PR** with no **actionable threads** and no check still running or failed on its current head, that a trusted reviewer reviewed on that head. A trusted review app's successful check run on the head is a review of it. A pull request no reviewer answered within **babysitting**'s quiet time is merge-ready too, and a comment on it says so. The label reports readiness; the **software factory** never merges it.
 
 ### Agent PR
 
