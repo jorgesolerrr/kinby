@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Collection, Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from kinby.contracts import (
+    ConfigActor,
+    ConfigFile,
     FactoryListCommand,
+    InstancePicksResult,
     LibraryEntry,
     LibraryKind,
     LibraryListCommand,
@@ -15,14 +19,18 @@ from kinby.contracts import (
     LibrarySkillReadCommand,
     LibrarySource,
     SkillName,
+    SkillPick,
     SkillResult,
 )
 from kinby.core.config import skill_result
-from kinby.core.errors import SkillNotFound
+from kinby.core.errors import InvalidConfig, SkillNotFound
 from kinby.hub.factories import FactoryStore
 from kinby.hub.registry import HubRegistry
-from kinby.instance.config_changes import directory_hash
-from kinby.instance.layout import SKILL_FILE
+from kinby.instance import Instance
+from kinby.instance.config_changes import directory_hash, recorded_changes
+from kinby.instance.layout import SKILL_FILE, SKILLS_DIR, SKILLS_LOCK_NAME
+from kinby.instance.skills_lock import LockedSkill, SkillsLock, read_lock, write_lock
+from kinby.plugins.instance_tools import validate_name
 from kinby.plugins.skills import load_skill_file
 
 
@@ -77,7 +85,7 @@ class Library:
                         kind=LibraryKind.SKILL,
                         name=name,
                         description=load_skill_file(folder / SKILL_FILE).description,
-                        source=LibrarySource.SHIPPED if name in copied else LibrarySource.WRITTEN,
+                        source=_source(name, copied),
                     )
                     for name, folder in sorted(_skill_folders(self._directory).items())
                 ),
@@ -89,6 +97,67 @@ class Library:
         if folder is None:
             raise SkillNotFound(f'The library has no skill "{command.name}".')
         return skill_result(folder)
+
+    def picks(self, instance_path: Path) -> InstancePicksResult:
+        """The library skills the instance in *instance_path* picked, as its lock records them."""
+        return _picks(read_lock(instance_path))
+
+    def pick(self, instance: Instance, skills: Sequence[SkillName]) -> InstancePicksResult:
+        """Make *skills* the instance's picks, recorded as config changes.
+
+        Each new pick's folder is copied in from the library, and each dropped one's removed. A
+        skill without a lock entry is the agent's own, and is never touched.
+        """
+        lock = read_lock(instance.path)
+        folders = _skill_folders(self._directory)
+        held = instance.path / SKILLS_DIR
+        added = sorted(set(skills) - lock.skills.keys())
+        dropped = sorted(lock.skills.keys() - set(skills))
+        refusals = [
+            f'The library has no skill "{name}".'
+            if name not in folders
+            else f'The instance has its own skill "{name}". Rename or delete it to pick this one.'
+            for name in added
+            if name not in folders or (held / name).exists()
+        ]
+        if refusals:
+            raise InvalidConfig({"skills": " ".join(refusals)})
+        # The lock is a file the agent can edit, so a name in it must stay inside skills/.
+        for name in dropped:
+            validate_name(name)
+        if not added and not dropped:
+            return _picks(lock)
+        changed = [ConfigFile(f"{SKILLS_DIR}/{name}") for name in (*added, *dropped)]
+        shipped = self._registry.shipped_skills()
+        picked = {name: entry for name, entry in lock.skills.items() if name not in dropped}
+        with recorded_changes(instance, (*changed, ConfigFile(SKILLS_LOCK_NAME)), ConfigActor.APP):
+            for name in dropped:
+                if (held / name).exists():
+                    shutil.rmtree(held / name)
+            held.mkdir(exist_ok=True)
+            for name in added:
+                with TemporaryDirectory(prefix=".pick-", dir=instance.path) as temporary:
+                    staged = Path(temporary) / name
+                    shutil.copytree(folders[name], staged)
+                    staged.rename(held / name)
+                picked[name] = LockedSkill.of(held / name, _source(name, shipped))
+            lock = SkillsLock(skills=picked)
+            write_lock(instance.path, lock)
+        return _picks(lock)
+
+
+def _source(name: SkillName, copied: Collection[SkillName]) -> LibrarySource:
+    """Where the library's skill *name* came from, given the shipped skills the hub copied."""
+    return LibrarySource.SHIPPED if name in copied else LibrarySource.WRITTEN
+
+
+def _picks(lock: SkillsLock) -> InstancePicksResult:
+    return InstancePicksResult(
+        picks=[
+            SkillPick(name=name, source=entry.source_type)
+            for name, entry in sorted(lock.skills.items())
+        ]
+    )
 
 
 def _skill_folders(directory: Path) -> dict[SkillName, Path]:

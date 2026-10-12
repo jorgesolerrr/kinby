@@ -134,9 +134,16 @@ const GROUPS: { label: string; sections: Section[] }[] = [
       },
       {
         label: "Skills",
-        hint: "instance, kinby, workspace",
+        hint: "library picks, instance, kinby, workspace",
         icon: SparklesIcon,
-        render: ({ client, clock }) => <SkillsSection client={client} clock={clock} />,
+        render: ({ client, caller, clock, instance }) => (
+          <SkillsSection
+            client={client}
+            caller={caller}
+            clock={clock}
+            instanceId={instance.instance_id}
+          />
+        ),
       },
       {
         label: "Tools",

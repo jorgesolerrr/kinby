@@ -69,6 +69,10 @@ export type AvatarShape = "circle" | "squircle" | "square";
 export type DrainState = "drained" | "interrupted";
 export type IntendedState = "stopped" | "running" | "removed" | "deleted";
 export type ProcessState = "missing" | "created" | "starting" | "running" | "stopped" | "failed" | "unavailable";
+/**
+ * Where a library entry came from.
+ */
+export type LibrarySource = "shipped" | "written";
 export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "unknown";
 /**
  * A change a running instance applies only once it is recreated.
@@ -79,10 +83,6 @@ export type RecreateReason = "secrets";
  */
 export type LoginState = "pending" | "signed_in" | "failed";
 export type LibraryKind = "factory" | "skill";
-/**
- * Where a library entry came from.
- */
-export type LibrarySource = "shipped" | "written";
 export type PriceSource = "shipped" | "manifest";
 /**
  * When kinby asks the user to rate a completed turn.
@@ -277,6 +277,14 @@ export interface Contract {
     "instance.logs": {
       command: InstanceLogsCommand;
       result: InstanceLogsResult;
+    };
+    "instance.picks.get": {
+      command: InstancePicksGetCommand;
+      result: InstancePicksResult;
+    };
+    "instance.picks.set": {
+      command: InstancePicksSetCommand;
+      result: InstancePicksResult;
     };
     "instance.probe": {
       command: InstanceProbeCommand;
@@ -946,6 +954,20 @@ export interface InstanceLogsCommand {
 export interface InstanceLogsResult {
   instance_id: string;
   text: string;
+}
+export interface InstancePicksGetCommand {
+  instance_id: string;
+}
+export interface InstancePicksResult {
+  picks: SkillPick[];
+}
+export interface SkillPick {
+  name: string;
+  source: LibrarySource;
+}
+export interface InstancePicksSetCommand {
+  instance_id: string;
+  skills: string[];
 }
 export interface InstanceProbeCommand {}
 export interface InstanceProbeResult {

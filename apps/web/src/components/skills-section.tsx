@@ -1,7 +1,11 @@
+import { CallError } from "@kinby/contract"
 import type {
+  Client,
   Clock,
   InstanceClient,
+  LibraryEntry,
   SkillListResult,
+  SkillPick,
   SkillSummary,
   SkillTier,
 } from "@kinby/contract"
@@ -9,12 +13,20 @@ import { cn } from "cn"
 import { useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, StaleAlert, Warnings } from "@/components/config-alerts"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item"
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
@@ -30,22 +42,42 @@ import {
   skillFile,
   writeSkill,
 } from "@/lib/skills"
-import { PlusIcon, SparklesIcon } from "lucide-react"
+import { CircleXIcon, PlusIcon, SparklesIcon } from "lucide-react"
 
 type Caller = Pick<InstanceClient, "call">
+type HubCaller = Pick<Client, "call">
+
+/** The instance's picks, and the library's skills it could pick. */
+interface Picked {
+  picks: SkillPick[]
+  library: LibraryEntry[]
+}
 
 /** The skill open below the list, or the form for a new one. */
 type Selection = { name: string; tier: SkillTier } | "new"
 
 /**
- * Every skill in every tier, each name's shadowed skills greyed under the one the model reads.
- * Any skill opens read-only; an instance skill opens to edit.
+ * The skills the instance picked from the hub's library, to add or drop, then every skill in every
+ * tier, each name's shadowed skills greyed under the one the model reads. Any skill opens
+ * read-only; an instance skill opens to edit. `client` reaches the instance and `caller` the hub.
  */
-export function SkillsSection({ client, clock }: { client: Caller; clock: Clock }) {
+export function SkillsSection({
+  client,
+  caller,
+  clock,
+  instanceId,
+}: {
+  client: Caller
+  caller: HubCaller
+  clock: Clock
+  instanceId: string
+}) {
   const pacing = usePace(clock)
   const [listed, setListed] = useState<SkillListResult>()
   const [failure, setFailure] = useState<unknown>()
   const [selection, setSelection] = useState<Selection>()
+  const [picked, setPicked] = useState<Picked>()
+  const [picksFailure, setPicksFailure] = useState<unknown>()
 
   const load = useCallback(
     (pacing: Pace) =>
@@ -63,6 +95,27 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
     void load(pacing)
     return pacing.stop
   }, [clock, load])
+  useEffect(() => {
+    const pacing = pace(clock)
+    retried(
+      () =>
+        Promise.all([
+          caller.call("instance.picks.get", { instance_id: instanceId }),
+          caller.call("library.list", {}),
+        ]),
+      pacing,
+    ).then(
+      ([held, library]) => {
+        setPicked({
+          picks: held.picks,
+          library: library.entries.filter((entry) => entry.kind === "skill"),
+        })
+        setPicksFailure(undefined)
+      },
+      (error: unknown) => setPicksFailure(error),
+    )
+    return pacing.stop
+  }, [caller, clock, instanceId])
 
   if (listed === undefined) {
     return failure === undefined ? (
@@ -72,6 +125,7 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
     )
   }
   const groups = byName(listed.skills)
+  const pickedNames = new Set(picked?.picks.map((pick) => pick.name))
   const openInstanceSkill = (name: string) => {
     setSelection({ name, tier: "instance" })
     void load(pacing)
@@ -84,6 +138,19 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
 
   return (
     <div className="flex flex-col gap-4">
+      {picksFailure !== undefined && <Failure error={picksFailure} />}
+      {picked !== undefined && (
+        <Picks
+          caller={caller}
+          instanceId={instanceId}
+          picked={picked}
+          onPicked={(picks) => {
+            setPicked({ ...picked, picks })
+            void load(pacing)
+          }}
+        />
+      )}
+      <Separator />
       {failure !== undefined && <Failure error={failure} />}
       <Warnings warnings={listed.warnings} />
       <div className="flex items-center justify-between gap-3">
@@ -117,6 +184,7 @@ export function SkillsSection({ client, clock }: { client: Caller; clock: Clock 
               >
                 <SkillItem
                   skill={skill}
+                  picked={skill.tier === "instance" && pickedNames.has(skill.name)}
                   selected={
                     selection !== "new" &&
                     selection?.name === skill.name &&
@@ -159,12 +227,129 @@ const TIERS: Record<SkillTier, string> = {
   workspace: "Workspace",
 }
 
+/** What a pick's library entry came from. */
+const SOURCES: Record<LibraryEntry["source"], string> = {
+  shipped: "Shipped",
+  written: "Written",
+}
+
+/** The instance's picks, each to drop, and the library's other skills, each to add. */
+function Picks({
+  caller,
+  instanceId,
+  picked,
+  onPicked,
+}: {
+  caller: HubCaller
+  instanceId: string
+  picked: Picked
+  onPicked: (picks: SkillPick[]) => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [refusal, setRefusal] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
+  const names = picked.picks.map((pick) => pick.name)
+  const offered = picked.library.filter((entry) => !names.includes(entry.name))
+
+  const pick = async (skills: string[]) => {
+    setBusy(true)
+    setRefusal(undefined)
+    setFailure(undefined)
+    try {
+      onPicked((await caller.call("instance.picks.set", { instance_id: instanceId, skills })).picks)
+    } catch (error) {
+      if (error instanceof CallError && error.fields.skills !== undefined) {
+        setRefusal(error.fields.skills)
+      } else setFailure(error)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="font-medium">Picked from the library</h2>
+      {failure !== undefined && <Failure error={failure} />}
+      {refusal !== undefined && (
+        <Alert variant="destructive">
+          <CircleXIcon />
+          <AlertTitle>The hub refused the pick</AlertTitle>
+          <AlertDescription>{refusal}</AlertDescription>
+        </Alert>
+      )}
+      {picked.picks.length === 0 ? (
+        <p className="text-sm text-muted-foreground">The instance has picked no library skill.</p>
+      ) : (
+        <ItemGroup aria-label="Picks">
+          {picked.picks.map((each) => (
+            <li key={each.name} className="list-none">
+              <Item size="sm" variant="outline">
+                <ItemContent>
+                  <ItemTitle>
+                    {each.name}
+                    <Badge variant="secondary">{SOURCES[each.source]}</Badge>
+                  </ItemTitle>
+                </ItemContent>
+                <ItemActions>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    aria-label={`Drop ${each.name}`}
+                    onClick={() => void pick(names.filter((name) => name !== each.name))}
+                  >
+                    Drop
+                  </Button>
+                </ItemActions>
+              </Item>
+            </li>
+          ))}
+        </ItemGroup>
+      )}
+      {offered.length > 0 && (
+        <>
+          <h3 className="text-sm font-medium">Add from the library</h3>
+          <ItemGroup aria-label="Library skills">
+            {offered.map((entry) => (
+              <li key={entry.name} className="list-none">
+                <Item size="sm">
+                  <ItemContent>
+                    <ItemTitle>{entry.name}</ItemTitle>
+                    {entry.description !== null && (
+                      <ItemDescription>{entry.description}</ItemDescription>
+                    )}
+                  </ItemContent>
+                  <ItemActions>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      aria-label={`Add ${entry.name}`}
+                      onClick={() => void pick([...names, entry.name])}
+                    >
+                      <PlusIcon data-icon="inline-start" />
+                      Add
+                    </Button>
+                  </ItemActions>
+                </Item>
+              </li>
+            ))}
+          </ItemGroup>
+        </>
+      )}
+    </section>
+  )
+}
+
 function SkillItem({
   skill,
+  picked,
   selected,
   onSelect,
 }: {
   skill: SkillSummary
+  /** Whether this instance skill is a copy of a library skill the instance picked. */
+  picked: boolean
   selected: boolean
   onSelect: () => void
 }) {
@@ -178,7 +363,7 @@ function SkillItem({
       render={
         <button
           type="button"
-          aria-label={`${skill.name}, ${skill.tier} skill`}
+          aria-label={`${skill.name}, ${picked ? "picked" : skill.tier} skill`}
           aria-current={selected || undefined}
           onClick={onSelect}
         />
@@ -188,7 +373,7 @@ function SkillItem({
         <ItemTitle>
           {skill.name}
           <Badge variant={skill.tier === "instance" ? "default" : "secondary"}>
-            {TIERS[skill.tier]}
+            {picked ? "Picked" : TIERS[skill.tier]}
           </Badge>
         </ItemTitle>
         <ItemDescription>

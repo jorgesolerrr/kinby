@@ -2108,6 +2108,27 @@ class LibrarySkillReadCommand(ContractModel):
     name: SkillName
 
 
+class InstancePicksGetCommand(ContractModel):
+    instance_id: UUID
+
+
+class InstancePicksSetCommand(ContractModel):
+    instance_id: UUID
+    #: Every library skill the instance should hold. A pick left out is dropped.
+    skills: list[SkillName]
+
+
+class SkillPick(ContractModel):
+    name: SkillName
+    #: Where the library entry it was copied from came from.
+    source: LibrarySource
+
+
+class InstancePicksResult(ContractModel):
+    #: By name.
+    picks: list[SkillPick]
+
+
 type StepId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
 #: The name of a value a work item carries or a step result declares, such as ``branch``.
 type ValueName = Annotated[str, Field(pattern=r"^[a-z_][a-z0-9_]*$")]

@@ -2084,6 +2084,57 @@
       "title": "InstanceLogsResult",
       "type": "object"
     },
+    "InstancePicksGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "InstancePicksGetCommand",
+      "type": "object"
+    },
+    "InstancePicksResult": {
+      "additionalProperties": false,
+      "properties": {
+        "picks": {
+          "items": {
+            "$ref": "#/$defs/SkillPick"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "picks"
+      ],
+      "title": "InstancePicksResult",
+      "type": "object"
+    },
+    "InstancePicksSetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "instance_id",
+        "skills"
+      ],
+      "title": "InstancePicksSetCommand",
+      "type": "object"
+    },
     "InstanceProbeCommand": {
       "additionalProperties": false,
       "properties": {},
@@ -4846,6 +4897,23 @@
         "warnings"
       ],
       "title": "SkillListResult",
+      "type": "object"
+    },
+    "SkillPick": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/LibrarySource"
+        }
+      },
+      "required": [
+        "name",
+        "source"
+      ],
+      "title": "SkillPick",
       "type": "object"
     },
     "SkillReadCommand": {
@@ -7703,6 +7771,38 @@
           ],
           "type": "object"
         },
+        "instance.picks.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstancePicksGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstancePicksResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.picks.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstancePicksSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstancePicksResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "instance.probe": {
           "additionalProperties": false,
           "properties": {
@@ -8699,6 +8799,8 @@
         "factory.run.cancel",
         "library.list",
         "library.skill.read",
+        "instance.picks.get",
+        "instance.picks.set",
         "stats.summary"
       ],
       "type": "object"
