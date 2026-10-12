@@ -318,18 +318,24 @@ class FactoryRuns:
 
         A run needs the user when it stopped for a human or awaits approval. A step that runs in
         no instance counts toward the instance of the factory's intake. A run counts only toward
-        the instance that holds the step's role for it, the one its step runs in.
+        the instance its step runs in: the intake's instance for the runs it handed in, and the
+        first active instance of any other role.
         """
         member = record.factory
         factory = self._factory(member.factory) if member is not None else None
         if member is None or factory is None:
             return 0
+        if member.name == factory.intake.instance:
+            owner = record.instance_id
+        elif self._first_in(member.factory, member.name) == record.instance_id:
+            owner = None
+        else:
+            return 0
         return sum(
             _instance_of(factory, run.step) == member.name
-            and self._installed(run, member.name) == record.instance_id
             for run in (
-                *self._registry.runs(member.factory, FactoryRunStatus.NEEDS_HUMAN),
-                *self._registry.runs(member.factory, FactoryRunStatus.PARKED),
+                *self._registry.runs(member.factory, FactoryRunStatus.NEEDS_HUMAN, owner),
+                *self._registry.runs(member.factory, FactoryRunStatus.PARKED, owner),
             )
             if run.status is FactoryRunStatus.NEEDS_HUMAN or _awaits_approval(factory, run)
         )
@@ -451,11 +457,16 @@ class FactoryRuns:
         owner = self._registry.instance(run.instance_id)
         if owner is not None and owner.factory is not None and owner.factory.name == instance:
             return owner.instance_id if owner.active else None
+        return self._first_in(run.factory, instance)
+
+    def _first_in(self, factory: FactoryName, role: InstanceName) -> UUID | None:
+        """The factory's first active instance of *role*, which runs the role's steps for runs
+        another instance handed in."""
         return next(
             (
                 record.instance_id
-                for record in self._registry.factory_members(run.factory)
-                if record.active and record.factory is not None and record.factory.name == instance
+                for record in self._registry.factory_members(factory)
+                if record.active and record.factory is not None and record.factory.name == role
             ),
             None,
         )
