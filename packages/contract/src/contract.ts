@@ -959,6 +959,7 @@ export interface InstancePicksGetCommand {
   instance_id: string;
 }
 export interface InstancePicksResult {
+  hash: string | null;
   picks: SkillPick[];
 }
 export interface SkillPick {
@@ -966,6 +967,7 @@ export interface SkillPick {
   source: LibrarySource;
 }
 export interface InstancePicksSetCommand {
+  hash: string | null;
   instance_id: string;
   skills: string[];
 }

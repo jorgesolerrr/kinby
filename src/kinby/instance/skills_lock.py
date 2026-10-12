@@ -11,10 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field  # noqa: TID251 - the lock's f
 from pydantic.alias_generators import to_camel
 
 from kinby.contracts import FileHash, LibrarySource, SkillName
+from kinby.instance.config_changes import file_hash
 from kinby.instance.layout import SKILLS_LOCK_NAME
 
 # The order JavaScript's localeCompare puts these characters in. The `skills` CLI sorts a
-# skill's files with it before hashing them into `computedHash`.
+# skill's files with it before hashing them into `computedHash`. A character outside it sorts
+# after them by code point, where the root collation puts the CJK ideographs too.
 _COLLATION = " _-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$" + string.digits + string.ascii_lowercase
 
 #: Where a pick's ``source`` says it came from, by the kind of library entry it was copied from.
@@ -51,11 +53,15 @@ def read_lock(instance_path: Path) -> SkillsLock:
     return SkillsLock.model_validate_json(path.read_bytes())
 
 
-def write_lock(instance_path: Path, lock: SkillsLock) -> None:
+def lock_hash(instance_path: Path) -> FileHash | None:
+    """The hash of the instance's lock as a client reads it, or None when it has none."""
+    path = instance_path / SKILLS_LOCK_NAME
+    return file_hash(path.read_bytes()) if path.is_file() else None
+
+
+def write_lock(path: Path, lock: SkillsLock) -> None:
     ordered = SkillsLock(skills=dict(sorted(lock.skills.items())))
-    (instance_path / SKILLS_LOCK_NAME).write_text(
-        ordered.model_dump_json(indent=2) + "\n", encoding="utf-8"
-    )
+    path.write_text(ordered.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
 
 def skill_hash(folder: Path) -> FileHash:
@@ -69,4 +75,9 @@ def skill_hash(folder: Path) -> FileHash:
 
 
 def _collation_key(path: str) -> tuple[list[int], list[bool]]:
-    return [_COLLATION.find(char.lower()) for char in path], [char.isupper() for char in path]
+    return [_collation_rank(char.lower()) for char in path], [char.isupper() for char in path]
+
+
+def _collation_rank(char: str) -> int:
+    rank = _COLLATION.find(char)
+    return rank if rank >= 0 else len(_COLLATION) + ord(char)

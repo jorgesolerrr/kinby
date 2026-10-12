@@ -3,9 +3,9 @@ import type {
   Client,
   Clock,
   InstanceClient,
+  InstancePicksResult,
   LibraryEntry,
   SkillListResult,
-  SkillPick,
   SkillSummary,
   SkillTier,
 } from "@kinby/contract"
@@ -47,9 +47,9 @@ import { CircleXIcon, PlusIcon, SparklesIcon } from "lucide-react"
 type Caller = Pick<InstanceClient, "call">
 type HubCaller = Pick<Client, "call">
 
-/** The instance's picks, and the library's skills it could pick. */
+/** The instance's picks with the hash of its lock, and the library's skills it could pick. */
 interface Picked {
-  picks: SkillPick[]
+  held: InstancePicksResult
   library: LibraryEntry[]
 }
 
@@ -95,27 +95,32 @@ export function SkillsSection({
     void load(pacing)
     return pacing.stop
   }, [clock, load])
+  const loadPicks = useCallback(
+    (pacing: Pace) =>
+      retried(
+        () =>
+          Promise.all([
+            caller.call("instance.picks.get", { instance_id: instanceId }),
+            caller.call("library.list", {}),
+          ]),
+        pacing,
+      ).then(
+        ([held, library]) => {
+          setPicked({
+            held,
+            library: library.entries.filter((entry) => entry.kind === "skill"),
+          })
+          setPicksFailure(undefined)
+        },
+        (error: unknown) => setPicksFailure(error),
+      ),
+    [caller, instanceId],
+  )
   useEffect(() => {
     const pacing = pace(clock)
-    retried(
-      () =>
-        Promise.all([
-          caller.call("instance.picks.get", { instance_id: instanceId }),
-          caller.call("library.list", {}),
-        ]),
-      pacing,
-    ).then(
-      ([held, library]) => {
-        setPicked({
-          picks: held.picks,
-          library: library.entries.filter((entry) => entry.kind === "skill"),
-        })
-        setPicksFailure(undefined)
-      },
-      (error: unknown) => setPicksFailure(error),
-    )
+    void loadPicks(pacing)
     return pacing.stop
-  }, [caller, clock, instanceId])
+  }, [clock, loadPicks])
 
   if (listed === undefined) {
     return failure === undefined ? (
@@ -125,7 +130,7 @@ export function SkillsSection({
     )
   }
   const groups = byName(listed.skills)
-  const pickedNames = new Set(picked?.picks.map((pick) => pick.name))
+  const pickedNames = new Set(picked?.held.picks.map((pick) => pick.name))
   const openInstanceSkill = (name: string) => {
     setSelection({ name, tier: "instance" })
     void load(pacing)
@@ -134,6 +139,8 @@ export function SkillsSection({
     setListed(after)
     const winner = byName(after.skills).find((group) => group.winner.name === name)?.winner
     setSelection(winner && { name, tier: winner.tier })
+    // A deleted pick is no pick any more, so the library offers it again.
+    if (pickedNames.has(name)) void loadPicks(pacing)
   }
 
   return (
@@ -144,10 +151,11 @@ export function SkillsSection({
           caller={caller}
           instanceId={instanceId}
           picked={picked}
-          onPicked={(picks) => {
-            setPicked({ ...picked, picks })
+          onPicked={(held) => {
+            setPicked({ ...picked, held })
             void load(pacing)
           }}
+          onLoad={() => void loadPicks(pacing)}
         />
       )}
       <Separator />
@@ -233,32 +241,48 @@ const SOURCES: Record<LibraryEntry["source"], string> = {
   written: "Written",
 }
 
-/** The instance's picks, each to drop, and the library's other skills, each to add. */
+/**
+ * The instance's picks, each to drop, and the library's other skills, each to add. A change
+ * carries the hash of the picks it read, so one over a change made since is refused, and "Load
+ * theirs" reads them again.
+ */
 function Picks({
   caller,
   instanceId,
   picked,
   onPicked,
+  onLoad,
 }: {
   caller: HubCaller
   instanceId: string
   picked: Picked
-  onPicked: (picks: SkillPick[]) => void
+  onPicked: (held: InstancePicksResult) => void
+  onLoad: () => void
 }) {
   const [busy, setBusy] = useState(false)
+  const [stale, setStale] = useState(false)
   const [refusal, setRefusal] = useState<string>()
   const [failure, setFailure] = useState<unknown>()
-  const names = picked.picks.map((pick) => pick.name)
+  const picks = picked.held.picks
+  const names = picks.map((pick) => pick.name)
   const offered = picked.library.filter((entry) => !names.includes(entry.name))
 
   const pick = async (skills: string[]) => {
     setBusy(true)
+    setStale(false)
     setRefusal(undefined)
     setFailure(undefined)
     try {
-      onPicked((await caller.call("instance.picks.set", { instance_id: instanceId, skills })).picks)
+      onPicked(
+        await caller.call("instance.picks.set", {
+          instance_id: instanceId,
+          skills,
+          hash: picked.held.hash,
+        }),
+      )
     } catch (error) {
-      if (error instanceof CallError && error.fields.skills !== undefined) {
+      if (error instanceof CallError && error.code === "STALE") setStale(true)
+      else if (error instanceof CallError && error.fields.skills !== undefined) {
         setRefusal(error.fields.skills)
       } else setFailure(error)
     } finally {
@@ -269,6 +293,15 @@ function Picks({
   return (
     <section className="flex flex-col gap-3">
       <h2 className="font-medium">Picked from the library</h2>
+      {stale && (
+        <StaleAlert
+          file="skills-lock.json"
+          onLoad={() => {
+            setStale(false)
+            onLoad()
+          }}
+        />
+      )}
       {failure !== undefined && <Failure error={failure} />}
       {refusal !== undefined && (
         <Alert variant="destructive">
@@ -277,11 +310,11 @@ function Picks({
           <AlertDescription>{refusal}</AlertDescription>
         </Alert>
       )}
-      {picked.picks.length === 0 ? (
+      {picks.length === 0 ? (
         <p className="text-sm text-muted-foreground">The instance has picked no library skill.</p>
       ) : (
         <ItemGroup aria-label="Picks">
-          {picked.picks.map((each) => (
+          {picks.map((each) => (
             <li key={each.name} className="list-none">
               <Item size="sm" variant="outline">
                 <ItemContent>

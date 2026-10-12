@@ -2101,6 +2101,16 @@
     "InstancePicksResult": {
       "additionalProperties": false,
       "properties": {
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "picks": {
           "items": {
             "$ref": "#/$defs/SkillPick"
@@ -2109,7 +2119,8 @@
         }
       },
       "required": [
-        "picks"
+        "picks",
+        "hash"
       ],
       "title": "InstancePicksResult",
       "type": "object"
@@ -2117,6 +2128,16 @@
     "InstancePicksSetCommand": {
       "additionalProperties": false,
       "properties": {
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "instance_id": {
           "format": "uuid",
           "type": "string"
@@ -2130,7 +2151,8 @@
       },
       "required": [
         "instance_id",
-        "skills"
+        "skills",
+        "hash"
       ],
       "title": "InstancePicksSetCommand",
       "type": "object"

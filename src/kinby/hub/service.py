@@ -1109,7 +1109,7 @@ class Hub:
     async def set_picks(self, command: InstancePicksSetCommand) -> InstancePicksResult:
         """Change the instance's picks in place. A running instance reads them at its next turn."""
         record = self._active_instance(command.instance_id)
-        return self.library.pick(inspect_instance(record.path), command.skills)
+        return self.library.pick(inspect_instance(record.path), command.skills, command.hash)
 
     async def stop(self, command: InstanceStopCommand) -> LifecycleOperationResult:
         """Stop the instance gracefully, or escalate the stop already running to a force stop."""
