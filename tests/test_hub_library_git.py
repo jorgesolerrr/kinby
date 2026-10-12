@@ -295,3 +295,54 @@ def test_a_pick_of_a_skill_from_git_locks_where_it_came_from(tmp_path):
         "skillPath": "skills/grill",
         "commit": shown.commit,
     }
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "https://someone:s3cret@github.com/owner/repo.git",
+        "https://s3cret@github.com/owner/repo.git",
+        "ssh://someone:s3cret@example.com/owner/repo.git",
+    ],
+    ids=["user-and-password", "token-as-user", "ssh-password"],
+)
+def test_an_address_carrying_credentials_is_refused_without_echoing_them(tmp_path, address):
+    hub = hub_at(tmp_path / "hub")
+    client = hub_client(hub)
+
+    refused = [preview(client, address), add(client, address, "0" * 40, "grill")]
+
+    for answer in refused:
+        assert "credential" in refusal(answer)
+        assert "s3cret" not in refusal(answer)
+
+
+def test_two_adds_of_one_name_at_once_land_one_and_refuse_the_other(tmp_path):
+    hub = hub_at(tmp_path / "hub")
+    client = hub_client(hub)
+    sources = [
+        repository(tmp_path / name, {"skills/grill/SKILL.md": skill("grill", f"From {name}.")})
+        for name in ("first", "second")
+    ]
+    commits = [previewed(client, str(source)).commit for source in sources]
+
+    async def both() -> list[object]:
+        return await asyncio.gather(
+            *(
+                client.call(
+                    LIBRARY_GIT_ADD,
+                    LibraryGitAddCommand(address=str(source), commit=commit, skills=["grill"]),
+                )
+                for source, commit in zip(sources, commits, strict=True)
+            )
+        )
+
+    answers = asyncio.run(both())
+
+    added = [answer for answer in answers if isinstance(answer, LibraryGitAddResult)]
+    assert len(added) == 1
+    refused = next(answer for answer in answers if isinstance(answer, ErrorEnvelope))
+    assert 'The library already holds a skill "grill".' in refusal(refused)
+    landed = added[0].entries[0].git
+    assert landed is not None
+    assert read(client, "grill").content == skill("grill", f"From {Path(landed.url).name}.")

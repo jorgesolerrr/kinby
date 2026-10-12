@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import threading
 from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -76,6 +77,7 @@ class Library:
         self._directory = directory
         self._factories = factories
         self._registry = registry
+        self._adding = threading.Lock()
 
     def receive(self, shipped: Path) -> None:
         """Copy each skill kinby ships that the hub has never copied, and record its hash.
@@ -154,9 +156,10 @@ class Library:
 
     def _add(self, address: Address, command: LibraryGitAddCommand) -> LibraryGitAddResult:
         names = sorted(set(command.skills))
-        folders = _skill_folders(self._directory)
-        with checked_out(address.url, command.commit) as (commit, tree):
+        with checked_out(address.url, command.commit) as (commit, tree), self._adding:
             found = found_skills(tree, address.path)
+            # Read under the lock, so a second add of the same name sees the first one's folder.
+            folders = _skill_folders(self._directory)
             refusals = [
                 f'The library already holds a skill "{name}".'
                 if name in folders

@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from urllib.parse import urlsplit
 
 from kinby.contracts import GitCommit, SkillName
 from kinby.core.errors import InvalidConfig
@@ -40,7 +41,9 @@ def parse_address(text: str) -> Address:
     if tree := _GITHUB_TREE.fullmatch(location.rstrip("/")):
         owner, repo, branch, path = tree.groups()
         return Address(f"https://github.com/{owner}/{repo}.git", _path(path), ref or branch)
-    if location.startswith(("/", ".", "git@")) or "://" in location:
+    if "://" in location:
+        return Address(_without_credentials(location), None, ref)
+    if location.startswith(("/", ".", "git@")):
         return Address(location, None, ref)
     if _SHORTHAND.fullmatch(location):
         owner, repo, *path = location.split("/")
@@ -51,6 +54,23 @@ def parse_address(text: str) -> Address:
             "each with an optional #ref."
         }
     )
+
+
+def _without_credentials(url: str) -> str:
+    """*url*, once it carries no password, nor a user over HTTP, where a user is a token.
+
+    The hub records the URL and lists it to every reader, so a credential belongs to git's own
+    configuration on the hub.
+    """
+    parts = urlsplit(url)
+    if parts.password is not None or (parts.scheme in {"http", "https"} and parts.username):
+        raise InvalidConfig(
+            {
+                "address": "The URL carries a credential. Give it without one, and let git's "
+                "credential helper on the hub supply it."
+            }
+        )
+    return url
 
 
 def _path(text: str | None) -> PurePosixPath | None:
