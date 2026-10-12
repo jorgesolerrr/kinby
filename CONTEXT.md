@@ -507,11 +507,39 @@ The **hub**'s record of which managed **instance** answers the public **signal**
 
 ### Instance template
 
-The initial behavior, configuration and **setup fields** a **factory** supplies for each of its **instances**, naming one of the image recipes kinby ships. The **hub** copies its files into the instance and records what it copied. The **manifest** it merges belongs to the instance from then on. An **instance update** brings the other files up to the factory's, except any the instance changed.
+The initial behavior, configuration and **setup fields** a **factory** supplies for one **factory role**, naming one of the image recipes kinby ships, with the **suggested picks** for that role. The **hub** copies its files into an instance that picks the role and records what it copied. The **manifest** it merges belongs to the instance from then on. An **instance update** brings the other files up to the factory's, except any the instance changed.
+
+### Factory role
+
+The part an **instance** plays in a **factory**, such as `coder`. A factory has an **instance template** per role. An instance picks at most one role, at creation, and keeps it for life.
+_Avoid_: member, slot
 
 ### Vanilla instance
 
-An **instance** created from kinby's built-in defaults, outside any **factory**, such as the home instance.
+An **instance** that picked no **factory role**, created from kinby's built-in defaults, such as the home instance.
+
+### Library
+
+The **hub**'s store of what an **instance** can pick: **skills** and **factories**. kinby ships a default library, and the user adds to it, edits it and removes from it. Nothing in it reaches an instance until picked.
+_Avoid_: registry, marketplace, skill repository, package list
+
+### Library entry
+
+One pickable thing in the **library**, of one kind. An entry added from git records the repository, path and commit it came from, and moves to another commit only when the user moves it.
+
+### Pick
+
+An **instance**'s choice of a **library entry**. Picking a **skill** copies it into the instance as an instance-tier skill and records the version copied, and a running instance can add or drop one. An **instance update** brings a picked skill up to the library's unless the instance changed it. Picking a **factory role** happens once, at creation.
+_Avoid_: install (of a skill or a factory), package
+
+### Suggested pick
+
+A **skill** a **factory role** proposes to an **instance** that picks the role. The **onboarding** preselects it, and the user may decline it.
+
+### Onboarding
+
+The one flow that creates an **instance**: its name and appearance, image, **factory role**, **skills**, prompt, and the setup those **picks** require. The web app and the home instance both run it.
+_Avoid_: factory install, create wizard
 
 ### Plugin
 
@@ -607,7 +635,7 @@ The issue-to-PR process that assigns implementation and review to **coding clien
 
 ### Factory
 
-A declared sequence of **steps** the **hub** runs to carry a **work item** from start to finish, handing it between **instances** and deciding what happens when a step fails. Its instances are ordinary instances, and a **routine** in one of them hands it new work.
+A declared sequence of **steps** the **hub** runs to carry a **work item** from start to finish, handing it between **instances** and deciding what happens when a step fails. Its instances are ordinary instances that picked one of its **factory roles**, and a **routine** in one of them hands it new work. It holds behavior only: nothing in it names one repository's commands or conventions, or a picked **skill**.
 _Avoid_: workflow, package, pipeline (for the concept)
 
 ### Step
@@ -620,7 +648,7 @@ The unit of work a **factory** carries, such as one issue.
 
 ### Factory run
 
-One **work item**'s trip through a **factory**'s **steps**. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
+One **work item**'s trip through a **factory**'s **steps**. It belongs to the **instance** that handed the work item in. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
 
 ### Step result
 
