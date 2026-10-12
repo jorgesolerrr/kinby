@@ -116,6 +116,12 @@ class FactoryStore:
         async with self._edit_lock:
             return await asyncio.to_thread(self._templates, name)
 
+    async def template(self, name: FactoryName, role: InstanceName) -> InstanceTemplate | None:
+        """The factory's instance template for *role*, or None when the factory has no such role."""
+        return next(
+            (template for template in await self.templates(name) if template.name == role), None
+        )
+
     def _templates(self, name: FactoryName) -> tuple[InstanceTemplate, ...]:
         folder, _ = self._folder(name)
         problems = check_factory(folder)

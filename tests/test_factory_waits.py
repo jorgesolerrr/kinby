@@ -27,6 +27,7 @@ from kinby.hub import Hub
 from kinby.instance import Serve
 from tests.test_factory_runs import (
     FILES,
+    created_in,
     detail,
     factory_hub,
     handed_in,
@@ -155,6 +156,28 @@ def test_a_signal_matching_a_parked_wait_moves_its_run_on(tmp_path):
             ("babysit", StepEnding.CLEAN),
             ("test", StepEnding.CLEAN),
         ]
+
+    asyncio.run(scenario())
+
+
+def test_a_signal_moves_on_only_the_runs_its_own_instance_handed_in(tmp_path):
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, WAIT_FILES)
+
+    async def scenario() -> None:
+        first = await created_in(hub, runtime, "coder", "checks-coder")
+        second = await created_in(hub, runtime, "coder", "billing-coder")
+        own = await handed_in(hub, first, 7)
+        other = await handed_in(hub, second, 7)
+        await parked(hub, own.run_id)
+        await parked(hub, other.run_id)
+        await signalled(hub, runtime, first, COMMENT)
+        finished = await settled(hub, own.run_id)
+        await asyncio.sleep(0.05)
+        waiting = await detail(hub, other.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert (waiting.run.status, waiting.run.step) == (FactoryRunStatus.PARKED, "babysit")
 
     asyncio.run(scenario())
 

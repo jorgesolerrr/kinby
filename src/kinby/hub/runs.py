@@ -128,7 +128,7 @@ class _QueuedReport:
 
     It is no step of the run, so it records no attempt. *generation* ties it to the stop that
     queued it, so delivering it marks only that stop reported, not a later one. *instance* names
-    the factory's instance that makes the call, so a retry finds the one installed by then.
+    the role that makes the call, so a retry finds the instance that holds it by then.
     """
 
     run_id: UUID
@@ -229,20 +229,22 @@ class FactoryRuns:
         """Move on each run of the instance's factory whose parked wait the signal matches.
 
         A run still working toward a wait the signal matches moves on from it as soon as it
-        parks there, so a signal that lands between two steps is not lost.
+        parks there, so a signal that lands between two steps is not lost. The instance of the
+        factory's intake moves on only the runs it handed in.
         """
         membership = self._membership(instance_id)
         if membership is None:
             return
         member, factory = membership
+        owner = instance_id if member.name == factory.intake.instance else None
         body = _json(signal.body)
         waits = [step for step in factory.steps if isinstance(step, WaitStep)]
         # Read before any parked run moves on, so the signal wakes each run at most once.
         working = (
-            *self._registry.runs(member.factory, FactoryRunStatus.QUEUED),
-            *self._registry.runs(member.factory, FactoryRunStatus.RUNNING),
+            *self._registry.runs(member.factory, FactoryRunStatus.QUEUED, owner),
+            *self._registry.runs(member.factory, FactoryRunStatus.RUNNING, owner),
         )
-        for run in self._registry.runs(member.factory, FactoryRunStatus.PARKED):
+        for run in self._registry.runs(member.factory, FactoryRunStatus.PARKED, owner):
             step = _step(factory, run.step) if run.step is not None else None
             held = run.work_item | self._results(run.run_id, factory)
             if isinstance(step, WaitStep) and any(
@@ -315,14 +317,20 @@ class FactoryRuns:
         """How many runs of the instance's factory need the user at a step in that instance.
 
         A run needs the user when it stopped for a human or awaits approval. A step that runs in
-        no instance counts toward the instance of the factory's intake, which counts only the runs
-        it handed in.
+        no instance counts toward the instance of the factory's intake. A run counts only toward
+        the instance its step runs in: the intake's instance for the runs it handed in, and the
+        first active instance of any other role.
         """
         member = record.factory
         factory = self._factory(member.factory) if member is not None else None
         if member is None or factory is None:
             return 0
-        owner = record.instance_id if member.name == factory.intake.instance else None
+        if member.name == factory.intake.instance:
+            owner = record.instance_id
+        elif self._first_in(member.factory, member.name) == record.instance_id:
+            owner = None
+        else:
+            return 0
         return sum(
             _instance_of(factory, run.step) == member.name
             for run in (
@@ -426,7 +434,7 @@ class FactoryRuns:
                 asked, hook = CodeStepRun(call=step.call), None
             case WaitStep() | ApproveStep():
                 return step
-        instance_id = self._installed(run.factory, step.instance)
+        instance_id = self._installed(run, step.instance)
         if instance_id is None:
             return _Refused(
                 step.id, f'Instance "{step.instance}" of factory "{run.factory}" is not installed.'
@@ -440,13 +448,25 @@ class FactoryRuns:
         )
         return instance_id, _QueuedStep(run.run_id, step.id, command)
 
-    def _installed(self, factory: FactoryName, instance: InstanceName) -> UUID | None:
-        """The id of the factory's instance by that name, or None when it is not installed."""
+    def _installed(self, run: FactoryRun, instance: InstanceName) -> UUID | None:
+        """The id of the instance that holds role *instance* for the run, or None when none does.
+
+        The instance that handed the run in holds its own role for it, and no other instance of
+        that role does, since one may work on another repository.
+        """
+        owner = self._registry.instance(run.instance_id)
+        if owner is not None and owner.factory is not None and owner.factory.name == instance:
+            return owner.instance_id if owner.active else None
+        return self._first_in(run.factory, instance)
+
+    def _first_in(self, factory: FactoryName, role: InstanceName) -> UUID | None:
+        """The factory's first active instance of *role*, which runs the role's steps for runs
+        another instance handed in."""
         return next(
             (
                 record.instance_id
                 for record in self._registry.factory_members(factory)
-                if record.active and record.factory is not None and record.factory.name == instance
+                if record.active and record.factory is not None and record.factory.name == role
             ),
             None,
         )
@@ -722,7 +742,7 @@ class FactoryRuns:
 
     def _put_report(self, report: _QueuedReport) -> None:
         factory = report.command.origin.factory
-        instance_id = self._installed(factory, report.instance)
+        instance_id = self._installed(self._existing(report.run_id), report.instance)
         if instance_id is None:
             _logger.warning(
                 "Factory run %s needs a human, and instance %s of factory %s is not installed "

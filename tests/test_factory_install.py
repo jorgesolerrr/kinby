@@ -6,8 +6,8 @@ from kinby.cli.client import ContractClient
 from kinby.contracts import (
     FACTORY_DESCRIBE,
     FACTORY_INSTALL,
-    FACTORY_REMOVE,
     INSTANCE_LIST,
+    INSTANCE_REMOVE,
     INSTANCE_RESTORE,
     INSTANCE_STATUS,
     INSTANCE_UPDATE,
@@ -18,17 +18,16 @@ from kinby.contracts import (
     FactoryInstallCommand,
     FactoryInstallResult,
     FactoryInstanceSetup,
-    FactoryRemoveCommand,
-    FactoryRemoveResult,
+    FactoryRole,
     InstanceListCommand,
     InstanceListResult,
+    InstanceRemoveCommand,
     InstanceRestoreCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
     InstanceUpdateCommand,
     LifecycleOperationResult,
     LoginState,
-    OperationKind,
     OperationState,
     SecretSetup,
     StorageItem,
@@ -40,7 +39,6 @@ from kinby.instance.config_changes import file_hash
 from tests.test_hub import (
     FakeImages,
     FakeRuntime,
-    created_instance,
     finished_operation,
     hub_client,
     instance_environment,
@@ -177,11 +175,17 @@ def test_installing_a_factory_creates_each_instance_from_its_template(tmp_path):
         assert [step.name for step in operation.steps] == ["image", "initialize", "publish"]
         assert isinstance(listed, InstanceListResult)
         assert {
-            (summary.manifest_id, summary.factory, summary.instance_id)
+            summary.instance_id: (summary.manifest_id, summary.factory_role)
             for summary in listed.instances
         } == {
-            ("tickets-coder", "tickets", accepted.instances["coder"].instance_id),
-            ("tickets-reviewer", "tickets", accepted.instances["reviewer"].instance_id),
+            accepted.instances["coder"].instance_id: (
+                "tickets-coder",
+                FactoryRole(factory="tickets", name="coder"),
+            ),
+            accepted.instances["reviewer"].instance_id: (
+                "tickets-reviewer",
+                FactoryRole(factory="tickets", name="reviewer"),
+            ),
         }
         coder = hub.instances_directory / str(accepted.instances["coder"].instance_id)
         reviewer = hub.instances_directory / str(accepted.instances["reviewer"].instance_id)
@@ -363,27 +367,12 @@ def test_an_install_whose_factory_check_fails_creates_nothing(tmp_path):
     asyncio.run(scenario())
 
 
-def test_removing_a_factory_removes_each_of_its_instances_and_no_other(tmp_path):
-    runtime = FakeRuntime()
-    hub = install_hub(tmp_path, runtime=runtime)
-    client = hub_client(hub)
-
-    async def scenario() -> None:
-        accepted = await installed(client)
-        outside = await created_instance(client)
-
-        removal = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="tickets"))
-
-        assert isinstance(removal, FactoryRemoveResult)
-        assert ids(removal.instances) == ids(accepted.instances)
-        for removed in removal.instances.values():
-            outcome = await finished_operation(client, removed)
-            assert (outcome.kind, outcome.state) == (OperationKind.REMOVE, OperationState.SUCCEEDED)
-        assert await listed(client) == {outside.instance_id}
-        assert await listed(client, removed=True) == ids(accepted.instances)
-        assert set(runtime.removed) == {str(instance_id) for instance_id in ids(accepted.instances)}
-
-    asyncio.run(scenario())
+async def removed(client: ContractClient, operations: dict[str, LifecycleOperationResult]) -> None:
+    """Remove each instance, and wait for each removal to finish."""
+    for instance_id in ids(operations):
+        removal = await client.call(INSTANCE_REMOVE, InstanceRemoveCommand(instance_id=instance_id))
+        assert isinstance(removal, LifecycleOperationResult)
+        assert (await finished_operation(client, removal)).state is OperationState.SUCCEEDED
 
 
 def test_a_factory_is_installed_again_only_once_its_instances_are_removed(tmp_path):
@@ -394,10 +383,7 @@ def test_a_factory_is_installed_again_only_once_its_instances_are_removed(tmp_pa
     async def scenario() -> None:
         first = await installed(client)
         again = await client.call(FACTORY_INSTALL, command)
-        removal = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="tickets"))
-        assert isinstance(removal, FactoryRemoveResult)
-        for removed in removal.instances.values():
-            await finished_operation(client, removed)
+        await removed(client, first.instances)
         second = await installed(client)
 
         assert isinstance(again, ErrorEnvelope)
@@ -432,16 +418,13 @@ def test_an_update_of_a_factory_instance_keeps_its_templates_image_recipe(tmp_pa
     asyncio.run(scenario())
 
 
-def test_a_removed_factory_instance_is_not_restored_beside_one_of_the_same_name(tmp_path):
+def test_a_removed_instance_is_not_restored_beside_one_of_the_same_name(tmp_path):
     hub = install_hub(tmp_path)
     client = hub_client(hub)
 
     async def scenario() -> None:
         first = await installed(client)
-        removal = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="tickets"))
-        assert isinstance(removal, FactoryRemoveResult)
-        for removed in removal.instances.values():
-            await finished_operation(client, removed)
+        await removed(client, first.instances)
         second = await installed(client)
 
         refused = await client.call(
@@ -452,8 +435,7 @@ def test_a_removed_factory_instance_is_not_restored_beside_one_of_the_same_name(
         assert isinstance(refused, ErrorEnvelope)
         assert refused.code is ErrorCode.INVALID_ARGUMENT
         assert refused.message == (
-            'Factory "tickets" has an instance "coder" already. '
-            "Remove it before restoring this one."
+            'An instance named "tickets-coder" exists already. Remove it before restoring this one.'
         )
         assert await listed(client) == ids(second.instances)
 

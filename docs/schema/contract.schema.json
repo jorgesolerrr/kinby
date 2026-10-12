@@ -1213,7 +1213,7 @@
     },
     "FactoryRemoveCommand": {
       "additionalProperties": false,
-      "description": "Remove each of the factory's active instances. Their data and records stay behind.",
+      "description": "Remove the factory, which the hub refuses while an instance holds one of its roles.",
       "properties": {
         "name": {
           "$ref": "#/$defs/FactoryName"
@@ -1227,17 +1227,8 @@
     },
     "FactoryRemoveResult": {
       "additionalProperties": false,
-      "properties": {
-        "instances": {
-          "additionalProperties": {
-            "$ref": "#/$defs/LifecycleOperationResult"
-          },
-          "type": "object"
-        }
-      },
-      "required": [
-        "instances"
-      ],
+      "description": "No instance holds one of the factory's roles.",
+      "properties": {},
       "title": "FactoryRemoveResult",
       "type": "object"
     },
@@ -1267,6 +1258,25 @@
         "hash"
       ],
       "title": "FactoryResult",
+      "type": "object"
+    },
+    "FactoryRole": {
+      "additionalProperties": false,
+      "description": "The part an instance plays in a factory, such as ``coder`` in ``software``.",
+      "properties": {
+        "factory": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "factory",
+        "name"
+      ],
+      "title": "FactoryRole",
       "type": "object"
     },
     "FactoryRun": {
@@ -1819,9 +1829,28 @@
           },
           "type": "object"
         },
+        "factory_role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FactoryRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "manifest_id": {
-          "minLength": 1,
-          "type": "string"
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "model": {
           "type": "string"
@@ -1853,7 +1882,6 @@
         }
       },
       "required": [
-        "manifest_id",
         "model"
       ],
       "title": "InstanceCreateCommand",
@@ -2280,10 +2308,10 @@
           "default": "",
           "type": "string"
         },
-        "factory": {
+        "factory_role": {
           "anyOf": [
             {
-              "$ref": "#/$defs/FactoryName"
+              "$ref": "#/$defs/FactoryRole"
             },
             {
               "type": "null"

@@ -329,7 +329,7 @@ def test_the_hub_keeps_the_avatar_and_lists_it_with_the_instance(tmp_path):
         client = hub_client(hub)
         await prepared(client)
         chosen = await created(client, Avatar(shape=AvatarShape.SQUIRCLE, color=AvatarColor.GREEN))
-        default = await created(client)
+        default = await created(client, name="bea")
         hub.close()
 
         listed = await hub_client(hub_at(directory)).call(INSTANCE_LIST, InstanceListCommand())
@@ -538,12 +538,14 @@ def test_a_malformed_url_or_email_is_refused_on_its_field_and_creates_nothing(
     asyncio.run(scenario())
 
 
-async def created(client: ContractClient, avatar: Avatar = DEFAULT_AVATAR) -> UUID:
+async def created(
+    client: ContractClient, avatar: Avatar = DEFAULT_AVATAR, name: str = "ada"
+) -> UUID:
     """Create a vanilla instance from the prepared image, and wait until it is published."""
     accepted = await client.call(
         INSTANCE_CREATE,
         InstanceCreateCommand(
-            manifest_id="ada",
+            manifest_id=name,
             model="openai:gpt-5",
             secrets={"api_key": "sk-private"},
             avatar=avatar,

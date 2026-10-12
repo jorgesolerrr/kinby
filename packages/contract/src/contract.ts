@@ -660,16 +660,15 @@ export interface FactorySummary {
   source: FactorySource;
 }
 /**
- * Remove each of the factory's active instances. Their data and records stay behind.
+ * Remove the factory, which the hub refuses while an instance holds one of its roles.
  */
 export interface FactoryRemoveCommand {
   name: FactoryName;
 }
-export interface FactoryRemoveResult {
-  instances: {
-    [k: string]: LifecycleOperationResult;
-  };
-}
+/**
+ * No instance holds one of the factory's roles.
+ */
+export interface FactoryRemoveResult {}
 /**
  * Approve a run parked at an approve step, which moves it on as the step's next outcome.
  */
@@ -828,7 +827,8 @@ export interface InstanceCreateCommand {
   config?: {
     [k: string]: SetupValue;
   };
-  manifest_id: string;
+  factory_role?: FactoryRole | null;
+  manifest_id?: string | null;
   model: string;
   persona_name?: string | null;
   revision?: string;
@@ -842,6 +842,13 @@ export interface InstanceCreateCommand {
 export interface Avatar {
   color: AvatarColor;
   shape: AvatarShape;
+}
+/**
+ * The part an instance plays in a factory, such as ``coder`` in ``software``.
+ */
+export interface FactoryRole {
+  factory: FactoryName;
+  name: string;
 }
 /**
  * Delete the previewed targets. A target that changed since the preview stops it.
@@ -881,7 +888,7 @@ export interface InstanceListResult {
 export interface InstanceSummary {
   avatar: Avatar;
   detail?: string;
-  factory?: FactoryName | null;
+  factory_role?: FactoryRole | null;
   image_id: string;
   instance_id: string;
   intended_state: IntendedState;

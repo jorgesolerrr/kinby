@@ -13,7 +13,6 @@ import pytest
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
     FACTORY_INSTALL,
-    FACTORY_REMOVE,
     FACTORY_RUN_CANCEL,
     FACTORY_RUN_GET,
     FACTORY_RUN_INTAKE,
@@ -21,7 +20,9 @@ from kinby.contracts import (
     FACTORY_RUN_RETRY,
     FACTORY_RUN_SEND_BACK,
     FACTORY_RUN_SUBSCRIBE,
+    INSTANCE_CREATE,
     INSTANCE_LIST,
+    INSTANCE_REMOVE,
     INSTANCE_START,
     INTAKE_SCOPES,
     AgentStepRun,
@@ -34,8 +35,7 @@ from kinby.contracts import (
     FactoryInstallCommand,
     FactoryInstallResult,
     FactoryInstanceSetup,
-    FactoryRemoveCommand,
-    FactoryRemoveResult,
+    FactoryRole,
     FactoryRun,
     FactoryRunCancelCommand,
     FactoryRunDetail,
@@ -48,8 +48,10 @@ from kinby.contracts import (
     FactoryRunSendBackCommand,
     FactoryRunStatus,
     FactoryRunSubscribeCommand,
+    InstanceCreateCommand,
     InstanceListCommand,
     InstanceListResult,
+    InstanceRemoveCommand,
     InstanceStartCommand,
     LifecycleOperationResult,
     OperationState,
@@ -125,15 +127,38 @@ async def installed(hub: Hub, runtime: FakeRuntime, *names: str) -> dict[str, UU
         FactoryInstallCommand(name="checks", instances=dict.fromkeys(names, SETUP)),
     )
     assert isinstance(accepted, FactoryInstallResult)
-    for created in accepted.instances.values():
-        assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
-        started = await client.call(
-            INSTANCE_START, InstanceStartCommand(instance_id=created.instance_id)
-        )
-        assert isinstance(started, LifecycleOperationResult)
-        assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
-        runtime.addresses[str(created.instance_id)] = f"http://kinby-{created.instance_id}:8787"
-    return {name: created.instance_id for name, created in accepted.instances.items()}
+    return {
+        name: await started(client, runtime, created)
+        for name, created in accepted.instances.items()
+    }
+
+
+async def created_in(hub: Hub, runtime: FakeRuntime, role: str, name: str) -> UUID:
+    """Create an instance named *name* that picks the factory's *role*, and start it."""
+    client = hub_client(hub)
+    accepted = await client.call(
+        INSTANCE_CREATE,
+        InstanceCreateCommand(
+            manifest_id=name,
+            factory_role=FactoryRole(factory="checks", name=role),
+            model=SETUP.model,
+            secrets=SETUP.secrets,
+        ),
+    )
+    assert isinstance(accepted, LifecycleOperationResult), accepted
+    return await started(client, runtime, accepted)
+
+
+async def started(
+    client: ContractClient, runtime: FakeRuntime, created: LifecycleOperationResult
+) -> UUID:
+    """Wait for the creation, then start the instance, which answers on its control endpoint."""
+    assert (await finished_operation(client, created)).state is OperationState.SUCCEEDED
+    start = await client.call(INSTANCE_START, InstanceStartCommand(instance_id=created.instance_id))
+    assert isinstance(start, LifecycleOperationResult)
+    assert (await finished_operation(client, start)).state is OperationState.SUCCEEDED
+    runtime.addresses[str(created.instance_id)] = f"http://kinby-{created.instance_id}:8787"
+    return created.instance_id
 
 
 def intake_client(hub: Hub, instance_id: UUID) -> ContractClient:
@@ -679,6 +704,8 @@ def test_a_needs_human_call_that_fails_a_thousand_times_is_still_tried_again(tmp
 
 
 def test_a_report_backing_off_goes_to_the_instance_that_replaced_its_own(tmp_path, monkeypatch):
+    """A report in another role than the run's instance goes to whichever instance holds that
+    role when the report is tried again."""
     monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 0.2)
     control = FakeControl()
     control.step_results = [
@@ -686,20 +713,26 @@ def test_a_report_backing_off_goes_to_the_instance_that_replaced_its_own(tmp_pat
         StepResult(ending=StepEnding.FAILED, summary="GitHub is down."),
     ]
     runtime = FakeRuntime()
-    hub = factory_hub(tmp_path / "hub", control, runtime, NEEDS_HUMAN_FILES)
+    factory = FACTORY.replace("  coder: {}", "  coder: {}\n  checker: {}")
+    files = FILES | {
+        "factory.yaml": factory + "needs_human: { in: checker, call: notify_human }\n",
+        "instances/checker/tools/notify.py": NEEDS_HUMAN_TOOL,
+    }
+    hub = factory_hub(tmp_path / "hub", control, runtime, files)
     client = hub_client(hub)
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
-        await handed_in(hub, coder, 7)
+        installs = await installed(hub, runtime, "coder", "checker")
+        await handed_in(hub, installs["coder"], 7)
         async with asyncio.timeout(5):
             while len(control.steps) < 2:
                 await asyncio.sleep(0.01)
-        removal = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="checks"))
-        assert isinstance(removal, FactoryRemoveResult)
-        for removed in removal.instances.values():
-            assert (await finished_operation(client, removed)).state is OperationState.SUCCEEDED
-        replacement = await installed_coder(hub, runtime)
+        removal = await client.call(
+            INSTANCE_REMOVE, InstanceRemoveCommand(instance_id=installs["checker"])
+        )
+        assert isinstance(removal, LifecycleOperationResult)
+        assert (await finished_operation(client, removal)).state is OperationState.SUCCEEDED
+        replacement = await created_in(hub, runtime, "checker", "checks-checker")
         await reported(hub)
 
         endpoint, _ = control.steps[-1]
@@ -1761,7 +1794,31 @@ def test_a_run_that_needs_a_human_counts_toward_its_steps_instance_until_it_move
     asyncio.run(scenario())
 
 
-def test_two_instances_of_one_factory_each_hold_their_own_run_of_one_work_item(tmp_path):
+def test_a_run_that_needs_a_human_counts_only_toward_the_instance_its_step_ran_in(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED)]
+    runtime = FakeRuntime()
+    factory = FACTORY.replace("  coder: {}", "  coder: {}\n  checker: {}").replace(
+        "in: coder", "in: checker"
+    )
+    files = FILES | {"factory.yaml": factory, "instances/checker/AGENTS.md": "Check.\n"}
+    hub = factory_hub(tmp_path / "hub", control, runtime, files)
+
+    async def scenario() -> None:
+        instances = await installed(hub, runtime, "coder", "checker")
+        coder, checker = instances["coder"], instances["checker"]
+        spare = await created_in(hub, runtime, "checker", "spare-checker")
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+
+        [(endpoint, _)] = control.steps
+        assert endpoint.address == f"http://kinby-{checker}:8787"
+        assert await needing_human(hub) == {coder: 0, checker: 1, spare: 0}
+
+    asyncio.run(scenario())
+
+
+def test_two_coders_each_run_their_own_run_of_one_work_item(tmp_path):
     control = FakeControl()
     control.step_results = [StepResult(ending=StepEnding.FAILED)] * 2
     runtime = FakeRuntime()
@@ -1776,26 +1833,26 @@ def test_two_instances_of_one_factory_each_hold_their_own_run_of_one_work_item(t
         return [run.run_id for run in listed.runs]
 
     async def scenario() -> None:
-        first = await installed_coder(hub, runtime)
-        earlier = await handed_in(hub, first, 7)
-        await settled(hub, earlier.run_id)
-        removal = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="checks"))
-        assert isinstance(removal, FactoryRemoveResult)
-        for removed in removal.instances.values():
-            assert (await finished_operation(client, removed)).state is OperationState.SUCCEEDED
-        second = await installed_coder(hub, runtime)
+        first = await created_in(hub, runtime, "coder", "checks-coder")
+        second = await created_in(hub, runtime, "coder", "billing-coder")
         before = await needing_human(hub)
-        later = await handed_in(hub, second, 7)
+        own = await handed_in(hub, first, 7)
+        other = await handed_in(hub, second, 7)
         again = await handed_in(hub, second, 7)
-        stopped = await settled(hub, later.run_id)
+        await settled(hub, own.run_id)
+        stopped = await settled(hub, other.run_id)
 
-        assert later.run_id != earlier.run_id
-        assert again.run_id == later.run_id
+        assert own.run_id != other.run_id
+        assert again.run_id == other.run_id
         assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
-        assert before == {second: 0}
-        assert await needing_human(hub) == {second: 1}
-        assert await runs_of(first) == [earlier.run_id]
-        assert await runs_of(second) == [later.run_id]
+        assert {command.origin.run_id: endpoint.address for endpoint, command in control.steps} == {
+            own.run_id: f"http://kinby-{first}:8787",
+            other.run_id: f"http://kinby-{second}:8787",
+        }
+        assert before == {first: 0, second: 0}
+        assert await needing_human(hub) == {first: 1, second: 1}
+        assert await runs_of(first) == [own.run_id]
+        assert await runs_of(second) == [other.run_id]
 
     asyncio.run(scenario())
 

@@ -205,7 +205,7 @@ def test_retained_records_are_readable_under_hub_read_and_hidden_from_the_active
         hub = hub_at(tmp_path / "hub")
         client = hub_client(hub)
         kept = await created_instance(client)
-        gone = await created_instance(client)
+        gone = await created_instance(client, name="bob")
         assert (await removed(client, gone)).state is OperationState.SUCCEEDED
         reader = hub_client(hub, {Scope.HUB_READ})
 

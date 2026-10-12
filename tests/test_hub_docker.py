@@ -551,7 +551,7 @@ def test_a_real_docker_hub_restart_keeps_one_instance_up_and_starts_the_other_ag
             hub = _docker_hub(directory, network_name, client, images)
             first = await started_instance(hub_client(hub), hub)
             runtime_ids.append(str(first.instance_id))
-            second = await started_instance(hub_client(hub), hub)
+            second = await started_instance(hub_client(hub), hub, name="bob")
             runtime_ids.append(str(second.instance_id))
             running = await asyncio.to_thread(client.containers.get, str(first.instance_id))
             stopping = await asyncio.to_thread(client.containers.get, str(second.instance_id))

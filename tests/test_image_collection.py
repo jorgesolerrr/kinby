@@ -92,7 +92,7 @@ def test_an_image_another_instance_uses_stays_after_an_update(tmp_path):
         backend = FakeImageBackend()
         hub = _hub(tmp_path, backend)
         created = await created_instance(hub_client(hub))
-        await created_instance(hub_client(hub))
+        await created_instance(hub_client(hub), name="bob")
         _commit(tmp_path, "updated")
 
         await _updated(hub, created)
