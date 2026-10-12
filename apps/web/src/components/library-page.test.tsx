@@ -416,6 +416,24 @@ describe("LibraryPage, moving a skill to a newer version", () => {
     })
   })
 
+  it("holds the move while SKILL.md has unsaved edits", async () => {
+    const { caller, user } = openUpdatablePage()
+
+    await user.click(await screen.findByRole("button", { name: "pr, git skill" }))
+    await user.type(await screen.findByRole("textbox", { name: "SKILL.md" }), "More.\n")
+    await user.click(screen.getByRole("button", { name: "Check for a newer version" }))
+    await screen.findByRole("textbox", { name: "Diff" })
+
+    const move = screen.getByRole("button", { name: "Move to this version" })
+    expect(move.hasAttribute("disabled")).toBe(true)
+    expect(screen.getByText("Save your edits to SKILL.md before moving it.")).toBeTruthy()
+    await user.click(move)
+    expect(caller.calls.some((call) => call.method === "library.skill.move")).toBe(false)
+    expect((screen.getByRole("textbox", { name: "SKILL.md" }) as HTMLTextAreaElement).value).toBe(
+      `${tdd}More.\n`,
+    )
+  })
+
   it("shows why the hub refused a move", async () => {
     const { user } = openUpdatablePage({
       move: () => {

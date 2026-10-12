@@ -521,6 +521,7 @@ function SkillEntry({
           client={client}
           name={name}
           edited={entry.edited === true}
+          unsaved={draft !== opened.content}
           onChecked={onChecked}
           onMoved={() => {
             void load(pacing)
@@ -567,18 +568,21 @@ function SkillEntry({
 
 /**
  * Check a shipped or git skill for a newer version, read the diff, and move the library's skill
- * to it. A skill the user edited moves only after they agree to overwrite the edits.
+ * to it. A skill the user edited moves only after they agree to overwrite the edits, and one with
+ * unsaved edits only once they are saved.
  */
 function NewerVersionCheck({
   client,
   name,
   edited,
+  unsaved,
   onChecked,
   onMoved,
 }: {
   client: Caller
   name: string
   edited: boolean
+  unsaved: boolean
   onChecked: (newer: boolean) => void
   onMoved: () => void
 }) {
@@ -627,10 +631,10 @@ function NewerVersionCheck({
               {newer.commit === null ? "The version this kinby ships." : `Commit ${newer.commit}`}
             </FieldDescription>
           </Field>
-          <div>
+          <div className="flex items-center gap-3">
             {edited ? (
               <AlertDialog>
-                <AlertDialogTrigger render={<Button disabled={busy} />}>
+                <AlertDialogTrigger render={<Button disabled={busy || unsaved} />}>
                   Move to this version
                 </AlertDialogTrigger>
                 <AlertDialogContent>
@@ -650,9 +654,14 @@ function NewerVersionCheck({
                 </AlertDialogContent>
               </AlertDialog>
             ) : (
-              <Button disabled={busy} onClick={() => void move(newer)}>
+              <Button disabled={busy || unsaved} onClick={() => void move(newer)}>
                 Move to this version
               </Button>
+            )}
+            {unsaved && (
+              <span className="text-sm text-muted-foreground">
+                Save your edits to SKILL.md before moving it.
+              </span>
             )}
           </div>
         </>
