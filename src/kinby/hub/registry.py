@@ -1605,6 +1605,18 @@ class HubRegistry:
             )
         return self._existing_run(run_id)
 
+    def drop_attempt(self, run_id: UUID) -> FactoryRun:
+        """Delete the run's open attempt, which its instance never took, and queue the run again."""
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM step_attempts WHERE run_id = ? AND ended_at IS NULL", (str(run_id),)
+            )
+            connection.execute(
+                "UPDATE factory_runs SET status = ?, updated_at = ? WHERE id = ?",
+                (FactoryRunStatus.QUEUED.value, _now(), str(run_id)),
+            )
+        return self._existing_run(run_id)
+
     def end_attempt(self, run_id: UUID, result: StepResult) -> None:
         """Record how the run's open attempt ended. Its result is never written again."""
         with self._connect() as connection:

@@ -628,7 +628,7 @@ What a **step** hands on: a short summary plus the named values the **factory** 
 
 ### Step attempt
 
-One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or interrupted when the **hub** stopped while it ran. A failed or interrupted attempt is tried again under the step's retry; a timed-out one never is. A step that declares where its failures go sends a failed attempt back there instead, with what failed. After that the run is **needs human**.
+One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or interrupted when the **hub** stopped while it ran. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. A failed or interrupted attempt is tried again under the step's retry; a timed-out one never is. A step that declares where its failures go sends a failed attempt back there instead, with what failed. After that the run is **needs human**.
 
 ### Hook
 

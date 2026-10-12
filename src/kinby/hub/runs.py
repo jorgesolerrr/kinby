@@ -11,8 +11,8 @@ import asyncio
 import json
 import logging
 from collections import Counter
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Iterable, Mapping
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -83,11 +83,21 @@ from kinby.hub.factories import FactoryStore
 from kinby.hub.models import Signal
 from kinby.hub.registry import FactoryMember, HubRegistry
 
-#: Run one step in the instance with this id, and return its result.
-type StepCaller = Callable[[UUID, StepRunCommand], Awaitable[StepResult]]
+
+@dataclass(frozen=True)
+class UndeliveredCall:
+    """A call the instance provably did not take, so it ran nothing (ADR 0089)."""
+
+    reason: str
+
+
+#: Run one step in the instance with this id, and return its result or why it went undelivered.
+type StepCaller = Callable[[UUID, StepRunCommand], Awaitable[StepResult | UndeliveredCall]]
 
 _logger = logging.getLogger(__name__)
 
+BACKOFF_SECONDS = 5.0
+BACKOFF_CAP_SECONDS = 300.0
 #: How long a client step's coding client runs when the step declares no timeout.
 _CLIENT_TIMEOUT: Duration = "60m"
 _INTERRUPTED = StepResult(
@@ -117,12 +127,15 @@ class _QueuedReport:
     """The factory's needs_human call for a run that stopped, waiting for its instance.
 
     It is no step of the run, so it records no attempt. *generation* ties it to the stop that
-    queued it, so delivering it marks only that stop reported, not a later one.
+    queued it, so delivering it marks only that stop reported, not a later one. *instance* names
+    the factory's instance that makes the call, so a retry finds the one installed by then.
     """
 
     run_id: UUID
+    instance: InstanceName
     command: StepRunCommand
     generation: int
+    waited: float = 0.0
 
 
 class FactoryRuns:
@@ -136,7 +149,7 @@ class FactoryRuns:
         self._run_step = run_step
         #: The steps and needs_human calls waiting for each instance, by instance id.
         self._queues: dict[UUID, asyncio.Queue[_QueuedStep | _QueuedReport]] = {}
-        self._workers: set[asyncio.Task[None]] = set()
+        self._tasks: set[asyncio.Task[None]] = set()
         #: The quiet time or deadline of each run parked at a wait that has one, by run id.
         self._deadlines: dict[UUID, asyncio.Task[None]] = {}
         #: The waits a signal matched while the run was still on its way to them, by run id.
@@ -359,10 +372,13 @@ class FactoryRuns:
         queue = self._queues.get(instance_id)
         if queue is None:
             queue = self._queues[instance_id] = asyncio.Queue()
-            worker = asyncio.create_task(self._work(instance_id, queue))
-            self._workers.add(worker)
-            worker.add_done_callback(self._workers.discard)
+            self._spawn(self._work(instance_id, queue))
         return queue
+
+    def _spawn(self, work: Coroutine[object, object, None]) -> None:
+        task = asyncio.create_task(work)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     def _placed(
         self, run: FactoryRun, step_id: StepId
@@ -530,19 +546,66 @@ class FactoryRuns:
         """Run the instance's queued work one at a time, in the order it was queued."""
         while True:
             match await queue.get():
-                case _QueuedStep(run_id=run_id, step=step, command=command):
-                    self._publish(self._registry.begin_attempt(run_id, step))
-                    self._advance(run_id, await self._run_step(instance_id, command))
-                case _QueuedReport(run_id=run_id, command=command, generation=generation):
-                    reported = await self._run_step(instance_id, command)
-                    if reported.ending is StepEnding.CLEAN:
-                        self._registry.mark_reported(run_id, generation)
-                    else:
-                        _logger.warning(
-                            "The needs_human call for factory run %s failed: %s",
-                            run_id,
-                            reported.summary,
-                        )
+                case _QueuedStep() as queued:
+                    await self._deliver(instance_id, queued)
+                case _QueuedReport() as report:
+                    await self._send_report(instance_id, report)
+
+    async def _deliver(self, instance_id: UUID, queued: _QueuedStep) -> None:
+        backoff = 0.0
+        while True:
+            self._publish(self._registry.begin_attempt(queued.run_id, queued.step))
+            match await self._run_step(instance_id, queued.command):
+                case StepResult() as result:
+                    self._advance(queued.run_id, result)
+                    return
+                case UndeliveredCall(reason=reason):
+                    run = self._registry.drop_attempt(queued.run_id)
+                    self._publish(run)
+            backoff = _next_backoff(backoff)
+            _logger.info(
+                "Step %s of factory run %s did not reach its instance, offering it again in %s "
+                "seconds: %s",
+                queued.step,
+                queued.run_id,
+                backoff,
+                reason,
+            )
+            await asyncio.sleep(backoff)
+            record = self._registry.instance(instance_id)
+            if record is None or not record.active:
+                self._enqueue(run)
+                return
+
+    async def _send_report(self, instance_id: UUID, report: _QueuedReport) -> None:
+        if self._stale(report):
+            return
+        match await self._run_step(instance_id, report.command):
+            case StepResult(ending=StepEnding.CLEAN):
+                self._registry.mark_reported(report.run_id, report.generation)
+                return
+            case StepResult(summary=reason) | UndeliveredCall(reason=reason):
+                pass
+        backoff = _next_backoff(report.waited)
+        _logger.warning(
+            "The needs_human call for factory run %s failed, trying again in %s seconds: %s",
+            report.run_id,
+            backoff,
+            reason,
+        )
+        self._spawn(self._report_later(replace(report, waited=backoff)))
+
+    def _stale(self, report: _QueuedReport) -> bool:
+        run = self._registry.run(report.run_id)
+        return (
+            run is None
+            or run.status is not FactoryRunStatus.NEEDS_HUMAN
+            or self._registry.stop_generation(run.run_id) != report.generation
+        )
+
+    async def _report_later(self, report: _QueuedReport) -> None:
+        await asyncio.sleep(report.waited)
+        self._put_report(report)
 
     def _park(self, run_id: UUID, step: WaitStep | ApproveStep) -> None:
         """Open the step's attempt with the run parked at it, holding no instance.
@@ -636,16 +699,8 @@ class FactoryRuns:
         self, factory: FactoryFile, call: NeedsHumanCall, run: FactoryRun, summary: str
     ) -> None:
         """Queue the factory's needs_human call for the run, which stopped with this *summary*."""
-        instance_id = self._installed(run.factory, call.instance)
-        if instance_id is None or run.step is None:
-            _logger.warning(
-                "Factory run %s needs a human, and instance %s of factory %s is not installed "
-                "to report it.",
-                run.run_id,
-                call.instance,
-                run.factory,
-            )
-            return
+        if run.step is None:
+            raise ValueError(f'Factory run "{run.run_id}" is at no step to report.')
         command = StepRunCommand(
             step=CodeStepRun(call=call.call, summary=summary),
             origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=run.step),
@@ -653,7 +708,21 @@ class FactoryRuns:
             results=self._results(run.run_id, factory),
         )
         generation = self._registry.stop_generation(run.run_id)
-        self._queue(instance_id).put_nowait(_QueuedReport(run.run_id, command, generation))
+        self._put_report(_QueuedReport(run.run_id, call.instance, command, generation))
+
+    def _put_report(self, report: _QueuedReport) -> None:
+        factory = report.command.origin.factory
+        instance_id = self._installed(factory, report.instance)
+        if instance_id is None:
+            _logger.warning(
+                "Factory run %s needs a human, and instance %s of factory %s is not installed "
+                "to report it.",
+                report.run_id,
+                report.instance,
+                factory,
+            )
+            return
+        self._queue(instance_id).put_nowait(report)
 
     def _factory(self, name: FactoryName) -> FactoryFile | None:
         """The factory's file as the hub keeps it, or None once the factory is gone."""
@@ -909,6 +978,10 @@ def _retries(step: Step) -> int:
     if step.retry is not None:
         return step.retry
     return 1 if isinstance(step, AgentStep | ClientStep) else 0
+
+
+def _next_backoff(waited: float) -> float:
+    return min(max(waited * 2, BACKOFF_SECONDS), BACKOFF_CAP_SECONDS)
 
 
 def _work_item_errors(

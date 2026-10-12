@@ -78,6 +78,7 @@ from kinby.hub import (
     ContainerDescription,
     ControlConnectionLost,
     ControlEndpoint,
+    ControlUndelivered,
     ControlUnreachable,
     HttpInstanceControl,
     Hub,
@@ -1915,7 +1916,7 @@ def test_a_drain_answer_that_refuses_is_not_a_lost_connection():
         async with control_server(_refuse_drain) as endpoint:
             with pytest.raises(ControlUnreachable, match="refused the drain") as raised:
                 await HttpInstanceControl().drain(endpoint, force=False)
-            assert not isinstance(raised.value, ControlConnectionLost)
+            assert not isinstance(raised.value, ControlConnectionLost | ControlUndelivered)
 
     asyncio.run(scenario())
 

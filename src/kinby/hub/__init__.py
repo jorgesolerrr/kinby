@@ -5,6 +5,7 @@ from kinby.hub.adoption import hub_instance_id, preflight
 from kinby.hub.control import (
     ControlConnectionLost,
     ControlEndpoint,
+    ControlUndelivered,
     ControlUnreachable,
     HttpInstanceControl,
     IncompatibleLifecycleEndpoint,
@@ -44,6 +45,7 @@ __all__ = [
     "ContainerRuntime",
     "ControlConnectionLost",
     "ControlEndpoint",
+    "ControlUndelivered",
     "ControlUnreachable",
     "DockerImageBackend",
     "DockerRuntime",
