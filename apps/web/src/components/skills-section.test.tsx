@@ -387,6 +387,26 @@ describe("SkillsSection", () => {
       ])
     })
 
+    it("shows a pick edited locally once its copy is saved", async () => {
+      let state: SkillPick["state"] = "behind"
+      const { user } = openWithPicks({
+        "instance.picks.get": () => ({ picks: [{ ...pickedTdd, state }] }),
+        "skill.read": () => ({ content: skillText("tdd", "Test first."), files: [], hash: "h-9" }),
+        "skill.write": ({ content }) => {
+          state = "edited"
+          return { content, files: [], hash: "h-10" }
+        },
+      })
+
+      const picks = await screen.findByRole("list", { name: "Picks" })
+      expect(await within(picks).findByText(/Behind the library/)).toBeDefined()
+      await user.click(screen.getByRole("button", { name: "tdd, picked skill" }))
+      await user.type(await screen.findByRole("textbox", { name: "SKILL.md" }), "Mine.")
+      await user.click(screen.getByRole("button", { name: "Save" }))
+
+      expect(await within(picks).findByText(/Edited locally/)).toBeDefined()
+    })
+
     it("offers the library's other skills and adds one to the picks", async () => {
       const { caller, user } = openWithPicks()
 

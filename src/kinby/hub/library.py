@@ -203,7 +203,8 @@ class Library:
         """Bring each pick of the instance in *instance_path* up to the library's (ADR 0091).
 
         A pick behind the library is written from it, unless the instance edited its copy, which
-        is kept. A pick the library no longer holds is left alone.
+        is kept. A pick the library no longer holds is left alone. A copy that already matches the
+        library, as an interrupted update leaves one, only takes its lock entry.
         """
         lock = read_lock(instance_path)
         folders = _skill_folders(self._directory)
@@ -211,17 +212,22 @@ class Library:
         held = instance_path / SKILLS_DIR
         written: list[SkillName] = []
         kept: list[SkillName] = []
+        relocked = False
         for name, entry in sorted(lock.skills.items()):
             library = folders.get(name)
-            if library is None or skill_hash(library) == entry.computed_hash:
+            latest = None if library is None else skill_hash(library)
+            if library is None or latest == entry.computed_hash:
                 continue
-            if _edited(entry, held, name):
-                kept.append(name)
-                continue
-            _copy_in(library, held / name, instance_path)
+            copy = _copy_hash(held, name)
+            if copy != latest:
+                if copy != entry.computed_hash:
+                    kept.append(name)
+                    continue
+                _copy_in(library, held / name, instance_path)
+                written.append(name)
             lock.skills[name] = LockedSkill.of(held / name, _source(name, shipped))
-            written.append(name)
-        if written:
+            relocked = True
+        if relocked:
             write_lock(instance_path, lock)
         return PickSync(written=tuple(written), kept=tuple(kept))
 
@@ -331,22 +337,34 @@ def _source(name: SkillName, copied: Collection[SkillName]) -> LibrarySource:
 def _state(entry: LockedSkill, held: Path, name: SkillName, library: Path | None) -> PickState:
     """How the pick *name*, held in *held* and locked as *entry*, stands against *library*, its
     library entry's folder."""
-    if _edited(entry, held, name):
+    copy = _copy_hash(held, name)
+    latest = None if library is None else skill_hash(library)
+    if copy is not None and copy == latest:
+        return PickState.UP_TO_DATE
+    if copy != entry.computed_hash:
         return PickState.EDITED
-    if library is not None and skill_hash(library) != entry.computed_hash:
+    if latest is not None and latest != entry.computed_hash:
         return PickState.BEHIND
     return PickState.UP_TO_DATE
 
 
-def _edited(entry: LockedSkill, held: Path, name: SkillName) -> bool:
-    """Whether the instance's copy of the pick *name* in *held* no longer hashes to *entry*."""
+def _copy_hash(held: Path, name: SkillName) -> FileHash | None:
+    """The hash of the instance's copy of the pick *name* in its skills folder *held*, or None
+    where the hub must not read or write it: the agent can write the lock and the folder, so a
+    name could lead out of *held*, and a link could lead out of the instance."""
     try:
         validate_name(name)
     except ValueError:
-        # The agent can write the lock, and a name in it could lead out of the skills folder.
-        return True
+        return None
     copy = held / name
-    return copy.is_symlink() or skill_hash(copy) != entry.computed_hash
+    if held.is_symlink() or copy.is_symlink() or _linked(copy):
+        return None
+    return skill_hash(copy)
+
+
+def _linked(folder: Path) -> bool:
+    """Whether *folder* holds a link, whose target the hub must never read."""
+    return any(path.is_symlink() for path in folder.rglob("*"))
 
 
 def _copy_in(folder: Path, target: Path, instance_path: Path) -> None:

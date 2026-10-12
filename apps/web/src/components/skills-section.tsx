@@ -95,6 +95,7 @@ export function SkillsSection({
     void load(pacing)
     return pacing.stop
   }, [clock, load])
+  // A saved or removed copy of a pick changes its state, so the picks load again after either.
   const loadPicks = useCallback(
     (pacing: Pace) =>
       retried(
@@ -137,10 +138,9 @@ export function SkillsSection({
   }
   const removed = (name: string, after: SkillListResult) => {
     setListed(after)
+    void loadPicks(pacing)
     const winner = byName(after.skills).find((group) => group.winner.name === name)?.winner
     setSelection(winner && { name, tier: winner.tier })
-    // A deleted pick is no pick any more, so the library offers it again.
-    if (pickedNames.has(name)) void loadPicks(pacing)
   }
 
   return (
@@ -221,7 +221,10 @@ export function SkillsSection({
             (group) => group.winner.name === selection.name && group.shadowed.length > 0,
           )}
           onCustomized={openInstanceSkill}
-          onSaved={() => void load(pacing)}
+          onSaved={() => {
+            void load(pacing)
+            void loadPicks(pacing)
+          }}
           onRemoved={removed}
         />
       )}

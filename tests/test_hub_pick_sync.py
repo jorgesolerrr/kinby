@@ -141,3 +141,39 @@ def test_the_hub_reports_each_pick_up_to_date_behind_or_edited(tmp_path):
         "tdd": PickState.BEHIND,
         "unslop": PickState.EDITED,
     }
+
+
+def test_an_update_keeps_a_pick_whose_skills_folder_links_out_of_the_instance(tmp_path):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    _pick(hub_client(hub), directory, "tdd")
+    outside = tmp_path / "outside"
+    (directory / "skills").rename(outside)
+    (directory / "skills").symlink_to(outside, target_is_directory=True)
+    held = skill_hash(outside / "tdd")
+    _append(hub.directory / "skills" / "tdd" / "SKILL.md", CHANGED)
+
+    assert _states(hub, directory) == {"tdd": PickState.EDITED}
+
+    outcome = _update(hub, directory)
+
+    assert _picks_step(outcome) == "Kept the instance's own tdd."
+    assert skill_hash(outside / "tdd") == held
+
+
+def test_an_update_that_stopped_after_writing_a_pick_finishes_its_lock_entry(tmp_path):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    _pick(hub_client(hub), directory, "tdd")
+    library = hub.directory / "skills" / "tdd"
+    _append(library / "SKILL.md", CHANGED)
+    # What an update leaves when it stops after writing the folder and before writing the lock.
+    shutil.rmtree(directory / "skills" / "tdd")
+    shutil.copytree(library, directory / "skills" / "tdd")
+
+    assert _states(hub, directory) == {"tdd": PickState.UP_TO_DATE}
+
+    _update(hub, directory)
+
+    assert _lock(directory)["tdd"]["computedHash"] == skill_hash(library)
+    assert _states(hub, directory) == {"tdd": PickState.UP_TO_DATE}
