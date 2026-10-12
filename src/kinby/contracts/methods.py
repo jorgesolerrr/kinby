@@ -67,6 +67,10 @@ from kinby.contracts.models import (
     InstanceStatusResult,
     InstanceStopCommand,
     InstanceUpdateCommand,
+    LibraryGitAddCommand,
+    LibraryGitAddResult,
+    LibraryGitPreviewCommand,
+    LibraryGitPreviewResult,
     LibraryListCommand,
     LibraryListResult,
     LibrarySkillReadCommand,
@@ -376,6 +380,13 @@ LIBRARY_LIST = Method("library.list", Scope.HUB_READ, LibraryListCommand, Librar
 LIBRARY_SKILL_READ = Method(
     "library.skill.read", Scope.HUB_READ, LibrarySkillReadCommand, SkillResult
 )
+#: Admin only: the hub fetches whatever the address names, a path on the hub included.
+LIBRARY_GIT_PREVIEW = Method(
+    "library.git.preview", Scope.HUB_ADMIN, LibraryGitPreviewCommand, LibraryGitPreviewResult
+)
+LIBRARY_GIT_ADD = Method(
+    "library.git.add", Scope.HUB_ADMIN, LibraryGitAddCommand, LibraryGitAddResult
+)
 INSTANCE_PICKS_GET = Method(
     "instance.picks.get", Scope.HUB_READ, InstancePicksGetCommand, InstancePicksResult
 )
@@ -468,6 +479,8 @@ METHODS = (
     FACTORY_RUN_CANCEL,
     LIBRARY_LIST,
     LIBRARY_SKILL_READ,
+    LIBRARY_GIT_PREVIEW,
+    LIBRARY_GIT_ADD,
     INSTANCE_PICKS_GET,
     INSTANCE_PICKS_SET,
     STATS_SUMMARY,

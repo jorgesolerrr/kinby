@@ -1659,6 +1659,43 @@
       "title": "GateOutcome",
       "type": "string"
     },
+    "GitCommit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "GitSource": {
+      "additionalProperties": false,
+      "description": "Where in which repository a library entry from git came from, as a Claude Code marketplace\nentry's git source records it.",
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/GitCommit"
+        },
+        "path": {
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "path",
+        "ref",
+        "commit"
+      ],
+      "title": "GitSource",
+      "type": "object"
+    },
     "HookName": {
       "minLength": 1,
       "type": "string"
@@ -2561,6 +2598,17 @@
             }
           ]
         },
+        "git": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "kind": {
           "$ref": "#/$defs/LibraryKind"
         },
@@ -2578,6 +2626,97 @@
         "source"
       ],
       "title": "LibraryEntry",
+      "type": "object"
+    },
+    "LibraryGitAddCommand": {
+      "additionalProperties": false,
+      "description": "Add skills a preview showed to the library.",
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "commit": {
+          "$ref": "#/$defs/GitCommit"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "address",
+        "commit",
+        "skills"
+      ],
+      "title": "LibraryGitAddCommand",
+      "type": "object"
+    },
+    "LibraryGitAddResult": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/LibraryEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "title": "LibraryGitAddResult",
+      "type": "object"
+    },
+    "LibraryGitPreviewCommand": {
+      "additionalProperties": false,
+      "description": "Show the skills a git repository holds, and change nothing.",
+      "properties": {
+        "address": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "address"
+      ],
+      "title": "LibraryGitPreviewCommand",
+      "type": "object"
+    },
+    "LibraryGitPreviewResult": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/GitCommit"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/PreviewedSkill"
+          },
+          "type": "array"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "ref",
+        "commit",
+        "skills"
+      ],
+      "title": "LibraryGitPreviewResult",
       "type": "object"
     },
     "LibraryKind": {
@@ -2627,7 +2766,8 @@
       "description": "Where a library entry came from.",
       "enum": [
         "shipped",
-        "written"
+        "written",
+        "git"
       ],
       "title": "LibrarySource",
       "type": "string"
@@ -3922,6 +4062,34 @@
         "runs"
       ],
       "title": "PlanUse",
+      "type": "object"
+    },
+    "PreviewedSkill": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "content",
+        "files"
+      ],
+      "title": "PreviewedSkill",
       "type": "object"
     },
     "PriceSource": {
@@ -7999,6 +8167,38 @@
           ],
           "type": "object"
         },
+        "library.git.add": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibraryGitAddCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LibraryGitAddResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "library.git.preview": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibraryGitPreviewCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LibraryGitPreviewResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "library.list": {
           "additionalProperties": false,
           "properties": {
@@ -8851,6 +9051,8 @@
         "factory.run.cancel",
         "library.list",
         "library.skill.read",
+        "library.git.preview",
+        "library.git.add",
         "instance.picks.get",
         "instance.picks.set",
         "stats.summary"

@@ -20,6 +20,7 @@ from kinby.contracts import (
     FactoryRun,
     FactoryRunStatus,
     FileHash,
+    GitSource,
     IntendedState,
     LoginPrompt,
     LoginState,
@@ -216,6 +217,13 @@ class HubRegistry:
                 CREATE TABLE IF NOT EXISTS shipped_skills (
                     name TEXT PRIMARY KEY,
                     hash TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS git_skills (
+                    name TEXT PRIMARY KEY,
+                    url TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    ref TEXT,
+                    git_commit TEXT NOT NULL
                 );
                 """
             )
@@ -1484,6 +1492,25 @@ class HubRegistry:
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO shipped_skills (name, hash) VALUES (?, ?)", (name, copied)
+            )
+
+    def git_skills(self) -> dict[SkillName, GitSource]:
+        """Where each skill the user added to the library from git came from, by name."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT name, url, path, ref, git_commit FROM git_skills"
+            ).fetchall()
+        return {
+            SkillName(name): GitSource(url=url, path=path, ref=ref, commit=commit)
+            for name, url, path, ref, commit in rows
+        }
+
+    def record_git_skill(self, name: SkillName, source: GitSource) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO git_skills (name, url, path, ref, git_commit)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (name, source.url, source.path, source.ref, source.commit),
             )
 
     def open_run(
