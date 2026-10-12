@@ -8,8 +8,6 @@ A good result:
 - Fixes what you agree with, held to the rules you implemented the issue by, and explains anything you do not fix.
 - Is committed on the branch, and `bun run check` passes.
 - Has .scratch/review-replies.json as one JSON object mapping every thread id to `{"fixed": true, "commit": "<sha of the commit that holds the fix>", "reply": "your reply"}` or `{"fixed": false, "reply": "your reply"}`.
-- Rewrites the pull request's title or body only where this round changed what it says: the whole new title in .scratch/pr-title.txt, the whole new body in .scratch/pr-body.md, with the pr skill and then unslop. Leave a file unwritten to keep that part as it is.
+- Rewrites the pull request's title or body only where this round changed what it says: the whole new title in .scratch/pr-title.txt, the whole new body in .scratch/pr-body.md. Leave a file unwritten to keep that part as it is.
 
 The factory pushes the branch, applies the title and body, and posts the replies.
-
-Read a skill from /instance/skills/<name>/SKILL.md. Paths in a skill are relative to its own directory.

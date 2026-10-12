@@ -922,6 +922,22 @@ def test_a_claude_step_waits_for_the_commands_claude_left_running_in_the_backgro
     asyncio.run(scenario())
 
 
+def test_a_client_steps_prompt_has_no_skills_catalogue_when_the_instance_has_no_skills(
+    tmp_path, monkeypatch
+):
+    runtime, _ = step_instance(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    async def scenario() -> None:
+        await run_client_step(runtime.dispatcher, "claude")
+
+        [called] = recorded_calls(calls)
+        assert called.stdin.endswith("</factory-run-data>")
+        assert "# Skills" not in called.stdin
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("then", "ending", "session"),
     [

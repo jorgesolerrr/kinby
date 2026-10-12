@@ -59,6 +59,7 @@ from kinby.core.dispatcher import ScheduledDispatcher
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.hub import Hub
 from kinby.instance import Instance, inspect_instance, load_instance
+from kinby.plugins import defaults
 from tests.helpers import thread_events
 from tests.test_drain import call
 from tests.test_factory_runs import detail, intake_client, settled
@@ -73,7 +74,7 @@ from tests.test_hub import (
 )
 from tests.test_hub_server import served, url
 from tests.test_routines import RoutineModel, signal_runtime
-from tests.test_steps import CLAUDE_STREAM, streaming, stub_client
+from tests.test_steps import CLAUDE_STREAM, recorded_calls, streaming, stub_client
 
 #: What the coder asks for at install: the repository, GitHub, Claude Code and a commit identity.
 CODER_SETUP = FactoryInstanceSetup(
@@ -923,6 +924,64 @@ def test_the_implement_hook_fails_on_an_untracked_file_git_is_set_to_hide(tmp_pa
         )
 
     asyncio.run(scenario())
+
+
+def client_step(prompt: str, step: str = "implement") -> StepRunCommand:
+    return StepRunCommand(
+        step=ClientStepRun(client=CodingClient.CLAUDE, prompt=prompt, timeout_seconds=30),
+        origin=origin(step),
+        work_item={"issue": 7},
+        results=BRANCH,
+    )
+
+
+def test_a_client_steps_prompt_ends_with_the_skills_catalogue_each_skill_from_its_highest_tier(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    hidden = instance.manifest.workspace.path / ".agents" / "skills" / "tdd" / "SKILL.md"
+    hidden.parent.mkdir(parents=True)
+    hidden.write_text("---\nname: tdd\ndescription: Test last.\n---\nWrite the tests last.\n")
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        await run_in(dispatcher, client_step("Implement it."))
+
+        [called] = recorded_calls(calls)
+        _, catalogue = called.stdin.split("</factory-run-data>\n\n# Skills\n")
+        assert [line for line in catalogue.splitlines() if line.startswith("- tdd ")] == [
+            f"- tdd ({instance.path / 'skills' / 'tdd' / 'SKILL.md'}): Test-driven development. "
+            'Use when the user wants to build features or fix bugs test-first, mentions "red-green'
+            '-refactor", or wants integration tests.'
+        ]
+        assert called.stdin.endswith(
+            f"\n- write-routine ({defaults.SKILLS / 'write-routine' / 'SKILL.md'}): "
+            "Draft kinby routine files for recurring or manual work."
+        )
+
+    asyncio.run(scenario())
+
+
+def test_no_shipped_prompt_names_a_skill_but_implement_ticket(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    carried = {skill.name for skill in (instance.path / "skills").iterdir()}
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    prompts = sorted((SHIPPED_FACTORIES / "software" / "prompts").glob("*.md"))
+
+    async def scenario() -> None:
+        for prompt in prompts:
+            await run_in(dispatcher, client_step(prompt.read_text(), prompt.stem))
+
+    asyncio.run(scenario())
+    for prompt, called in zip(prompts, recorded_calls(calls), strict=True):
+        sent, _ = called.stdin.split("# Skills\n")
+        named = {
+            name for name in carried if re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w-])", sent)
+        }
+        assert named <= {"implement-ticket"}, prompt.name
+        assert "SKILL.md" not in sent, prompt.name
 
 
 ISSUE = "repos/{{owner}}/{{repo}}/issues/{number}"

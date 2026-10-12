@@ -27,7 +27,7 @@ from kinby.contracts import (
 from kinby.core.coding_clients import own_tokens, run_coding_client
 from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
-from kinby.core.prompt import render_step_message
+from kinby.core.prompt import render_client_message, render_step_message
 from kinby.core.turns import Turns
 from kinby.instance import Instance, ManifestError
 from kinby.instance.permissions import PermissionsError
@@ -35,6 +35,7 @@ from kinby.plugins.errors import exception_message
 from kinby.plugins.hooks import HookResult, StepEnd, load_hooks
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.routines import SharedCodeStep, resolve_code_step
+from kinby.plugins.skills import load_skills
 from kinby.plugins.tools import ToolContext
 
 #: How much of a failed command's output its step's summary keeps, from the end.
@@ -110,9 +111,10 @@ async def _run_client_step(
 
     What the client said last is only the summary.
     """
+    skills, _ = load_skills(instance)
     ran = await run_coding_client(
         step.client,
-        render_step_message(step.prompt, command.work_item, command.results),
+        render_client_message(step.prompt, command.work_item, command.results, skills),
         instance.manifest.workspace.path,
         state_dir=instance.manifest.state_dir,
         resume=step.resume,
