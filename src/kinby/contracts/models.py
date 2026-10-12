@@ -2206,6 +2206,8 @@ class FactoryRun(ContractModel):
 
     run_id: UUID
     factory: FactoryName
+    #: The instance that handed in its work item.
+    instance_id: UUID
     work_item: dict[ValueName, StepValue]
     status: FactoryRunStatus
     #: The step the run is at. None once it is done.
@@ -2234,7 +2236,7 @@ class StepAttempt(ContractModel):
 class FactoryRunIntakeCommand(ContractModel):
     """Hand a work item to the factory whose intake is this instance and routine.
 
-    A work item that matches an unfinished run of the factory returns that run instead.
+    A work item that matches an unfinished run this instance handed in returns that run instead.
     """
 
     routine: RoutineName
@@ -2245,6 +2247,8 @@ class FactoryRunListCommand(ContractModel):
     factory: FactoryName
     #: Only the runs in this status. None lists every run of the factory.
     status: FactoryRunStatus | None = None
+    #: Only the runs this instance handed in. None lists every instance's.
+    instance_id: UUID | None = None
 
 
 class FactoryRunListResult(ContractModel):

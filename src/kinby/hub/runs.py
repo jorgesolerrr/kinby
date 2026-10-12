@@ -81,7 +81,7 @@ from kinby.factories.file import (
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.models import Signal
-from kinby.hub.registry import FactoryMember, HubRegistry
+from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
 
 
 @dataclass(frozen=True)
@@ -155,11 +155,12 @@ class FactoryRuns:
         #: The waits a signal matched while the run was still on its way to them, by run id.
         self._woken: dict[UUID, set[StepId]] = {}
         self._subscribers: set[asyncio.Queue[FactoryRun]] = set()
+        registry.attribute_runs(self._intake_instance)
 
     async def intake(self, instance_id: UUID, command: FactoryRunIntakeCommand) -> FactoryRun:
         """Start a run of the factory whose intake is this instance and routine.
 
-        A work item that matches an unfinished run of the factory returns that run.
+        A work item that matches an unfinished run this instance handed in returns that run.
         """
         member, factory = self._membership(instance_id) or (None, None)
         if (
@@ -174,7 +175,7 @@ class FactoryRuns:
         if errors:
             raise InvalidWorkItem(errors)
         run, started = self._registry.open_run(
-            member.factory, command.work_item, factory.steps[0].id
+            instance_id, member.factory, command.work_item, factory.steps[0].id
         )
         if started:
             self._publish(run)
@@ -182,7 +183,9 @@ class FactoryRuns:
         return run
 
     async def list(self, command: FactoryRunListCommand) -> FactoryRunListResult:
-        return FactoryRunListResult(runs=self._registry.runs(command.factory, command.status))
+        return FactoryRunListResult(
+            runs=self._registry.runs(command.factory, command.status, command.instance_id)
+        )
 
     async def get(self, command: FactoryRunGetCommand) -> FactoryRunDetail:
         run = self._existing(command.run_id)
@@ -308,20 +311,23 @@ class FactoryRuns:
                 summary = attempts[-1].summary if attempts else ""
                 self._report(factory, factory.needs_human, run, summary)
 
-    def needing_human(self, member: FactoryMember | None) -> int:
-        """How many runs of the member's factory need the user at a step in that instance.
+    def needing_human(self, record: ManagedInstance) -> int:
+        """How many runs of the instance's factory need the user at a step in that instance.
 
         A run needs the user when it stopped for a human or awaits approval. A step that runs in
-        no instance counts toward the instance of the factory's intake.
+        no instance counts toward the instance of the factory's intake, which counts only the runs
+        it handed in.
         """
+        member = record.factory
         factory = self._factory(member.factory) if member is not None else None
         if member is None or factory is None:
             return 0
+        owner = record.instance_id if member.name == factory.intake.instance else None
         return sum(
             _instance_of(factory, run.step) == member.name
             for run in (
-                *self._registry.runs(member.factory, FactoryRunStatus.NEEDS_HUMAN),
-                *self._registry.runs(member.factory, FactoryRunStatus.PARKED),
+                *self._registry.runs(member.factory, FactoryRunStatus.NEEDS_HUMAN, owner),
+                *self._registry.runs(member.factory, FactoryRunStatus.PARKED, owner),
             )
             if run.status is FactoryRunStatus.NEEDS_HUMAN or _awaits_approval(factory, run)
         )
@@ -334,6 +340,10 @@ class FactoryRuns:
         if member is None or factory is None:
             return None
         return member, factory
+
+    def _intake_instance(self, name: FactoryName) -> InstanceName | None:
+        factory = self._factory(name)
+        return factory.intake.instance if factory is not None else None
 
     def _existing(self, run_id: UUID) -> FactoryRun:
         run = self._registry.run(run_id)

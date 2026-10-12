@@ -2009,7 +2009,7 @@ class Hub:
             setup_pending=self._setup(record).pending,
             factory=record.factory.factory if record.factory is not None else None,
             notices=_notices(record, hub_revision, served),
-            needs_human=self.runs.needing_human(record.factory),
+            needs_human=self.runs.needing_human(record),
         )
 
     async def status(self, command: InstanceStatusCommand) -> InstanceStatusResult:

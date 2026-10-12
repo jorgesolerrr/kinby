@@ -1280,6 +1280,10 @@
         "factory": {
           "$ref": "#/$defs/FactoryName"
         },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
         "run_id": {
           "format": "uuid",
           "type": "string"
@@ -1314,6 +1318,7 @@
       "required": [
         "run_id",
         "factory",
+        "instance_id",
         "work_item",
         "status",
         "step",
@@ -1389,7 +1394,7 @@
     },
     "FactoryRunIntakeCommand": {
       "additionalProperties": false,
-      "description": "Hand a work item to the factory whose intake is this instance and routine.\n\nA work item that matches an unfinished run of the factory returns that run instead.",
+      "description": "Hand a work item to the factory whose intake is this instance and routine.\n\nA work item that matches an unfinished run this instance handed in returns that run instead.",
       "properties": {
         "routine": {
           "type": "string"
@@ -1416,6 +1421,18 @@
       "properties": {
         "factory": {
           "$ref": "#/$defs/FactoryName"
+        },
+        "instance_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "status": {
           "anyOf": [

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -192,6 +192,7 @@ class HubRegistry:
                 CREATE TABLE IF NOT EXISTS factory_runs (
                     id TEXT PRIMARY KEY,
                     factory TEXT NOT NULL,
+                    instance_id TEXT,
                     work_item TEXT NOT NULL,
                     status TEXT NOT NULL,
                     step TEXT,
@@ -230,6 +231,7 @@ class HubRegistry:
                     # Bumped each time the run moves to needs_human, so a report still in
                     # flight for an earlier stop can never mark a later stop as reported.
                     "stop_generation": "INTEGER NOT NULL DEFAULT 0",
+                    "instance_id": "TEXT",
                 },
             )
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
@@ -1468,11 +1470,13 @@ class HubRegistry:
 
     def open_run(
         self,
+        instance_id: UUID,
         factory: FactoryName,
         work_item: Mapping[ValueName, StepValue],
         step: StepId,
     ) -> tuple[FactoryRun, bool]:
-        """Queue a new run at its first step, or find the unfinished run of the same work item.
+        """Queue a new run at its first step, or find the instance's unfinished run of the same
+        work item.
 
         True when the run is new.
         """
@@ -1482,19 +1486,55 @@ class HubRegistry:
             open_run = connection.execute(
                 f"""
                 SELECT {_RUN_COLUMNS} FROM factory_runs
-                WHERE factory = ? AND work_item = ? AND status NOT IN (?, ?)
+                WHERE instance_id = ? AND work_item = ? AND status NOT IN (?, ?)
                 ORDER BY rowid LIMIT 1
                 """,
-                (factory, key, *_FINISHED),
+                (str(instance_id), key, *_FINISHED),
             ).fetchone()
             if open_run is not None:
                 return _factory_run(open_run), False
             now = _now()
-            row = (str(uuid4()), factory, key, FactoryRunStatus.QUEUED.value, step, now, now)
+            row = (
+                str(uuid4()),
+                factory,
+                str(instance_id),
+                key,
+                FactoryRunStatus.QUEUED.value,
+                step,
+                now,
+                now,
+            )
             connection.execute(
-                f"INSERT INTO factory_runs ({_RUN_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)", row
+                f"INSERT INTO factory_runs ({_RUN_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", row
             )
         return _factory_run(row), True
+
+    def attribute_runs(self, intake: Callable[[FactoryName], InstanceName | None]) -> None:
+        """Give each run stored before runs recorded their instance to its factory's intake.
+
+        *intake* names the factory's instance of the intake. The newest instance by that name gets
+        the runs, or the factory's newest instance when none has that name.
+        """
+        with self._connect() as connection:
+            factories = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT DISTINCT factory FROM factory_runs WHERE instance_id IS NULL"
+                )
+            ]
+            for factory in factories:
+                connection.execute(
+                    """
+                    UPDATE factory_runs SET instance_id = (
+                        SELECT factory_members.instance_id FROM factory_members
+                        JOIN instances ON instances.id = factory_members.instance_id
+                        WHERE factory_members.factory = factory_runs.factory
+                        ORDER BY factory_members.name = ? DESC, instances.rowid DESC LIMIT 1
+                    )
+                    WHERE factory = ? AND instance_id IS NULL
+                    """,
+                    (intake(factory), factory),
+                )
 
     def run(self, run_id: UUID) -> FactoryRun | None:
         with self._connect() as connection:
@@ -1503,17 +1543,27 @@ class HubRegistry:
             ).fetchone()
         return _factory_run(row) if row is not None else None
 
-    def runs(self, factory: FactoryName, status: FactoryRunStatus | None) -> list[FactoryRun]:
-        """The factory's runs, oldest first, in one status or in any."""
+    def runs(
+        self,
+        factory: FactoryName,
+        status: FactoryRunStatus | None,
+        instance_id: UUID | None = None,
+    ) -> list[FactoryRun]:
+        """The factory's runs, oldest first, in one status or in any.
+
+        With *instance_id*, only the runs that instance handed in.
+        """
         wanted = status.value if status is not None else None
+        owner = str(instance_id) if instance_id is not None else None
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
                 SELECT {_RUN_COLUMNS} FROM factory_runs
                 WHERE factory = ? AND (? IS NULL OR status = ?)
+                    AND (? IS NULL OR instance_id = ?)
                 ORDER BY rowid
                 """,
-                (factory, wanted, wanted),
+                (factory, wanted, wanted, owner, owner),
             ).fetchall()
         return [_factory_run(row) for row in rows]
 
@@ -1733,7 +1783,7 @@ class HubRegistry:
         return run
 
 
-_RUN_COLUMNS = "id, factory, work_item, status, step, created_at, updated_at"
+_RUN_COLUMNS = "id, factory, instance_id, work_item, status, step, created_at, updated_at"
 #: The statuses a run never leaves.
 _FINISHED = (FactoryRunStatus.DONE.value, FactoryRunStatus.CANCELLED.value)
 
@@ -1748,10 +1798,11 @@ def _work_item_key(work_item: Mapping[ValueName, StepValue]) -> str:
 
 
 def _factory_run(row: tuple[str, ...]) -> FactoryRun:
-    run_id, factory, work_item, status, step, created_at, updated_at = row
+    run_id, factory, instance_id, work_item, status, step, created_at, updated_at = row
     return FactoryRun(
         run_id=UUID(run_id),
         factory=factory,
+        instance_id=UUID(instance_id),
         work_item=json.loads(work_item),
         status=FactoryRunStatus(status),
         step=step,

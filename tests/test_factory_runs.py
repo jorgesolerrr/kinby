@@ -1,6 +1,7 @@
 """Factory runs on the hub: intake, the per-instance step queue, attempts and run events."""
 
 import asyncio
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from functools import partial
@@ -201,6 +202,7 @@ def test_an_intake_hands_a_work_item_to_a_one_step_factory_that_runs_to_done(tmp
             finished = await settled(hub, run.run_id)
 
         assert (run.factory, run.work_item, run.step) == ("checks", {"issue": 7}, "test")
+        assert finished.run.instance_id == coder
         assert finished.run.status is FactoryRunStatus.DONE
         assert finished.run.step is None
         [attempt] = finished.attempts
@@ -760,7 +762,7 @@ def test_a_reports_delivery_only_marks_reported_its_own_stop(tmp_path):
     again before the report completes, the late report must not clear the new stop's flag.
     """
     registry = HubRegistry(tmp_path / "hub")
-    run, _ = registry.open_run("checks", {"issue": 7}, "test")
+    run, _ = registry.open_run(UUID(int=1), "checks", {"issue": 7}, "test")
 
     registry.begin_attempt(run.run_id, "test")
     registry.end_attempt(run.run_id, StepResult(ending=StepEnding.FAILED, summary="first failure"))
@@ -1757,6 +1759,69 @@ def test_a_run_that_needs_a_human_counts_toward_its_steps_instance_until_it_move
         assert await needing_human(hub) == {coder: 0, checker: 0}
 
     asyncio.run(scenario())
+
+
+def test_two_instances_of_one_factory_each_hold_their_own_run_of_one_work_item(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED)] * 2
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime)
+    client = hub_client(hub)
+
+    async def runs_of(instance_id: UUID) -> list[UUID]:
+        listed = await client.call(
+            FACTORY_RUN_LIST, FactoryRunListCommand(factory="checks", instance_id=instance_id)
+        )
+        assert isinstance(listed, FactoryRunListResult), listed
+        return [run.run_id for run in listed.runs]
+
+    async def scenario() -> None:
+        first = await installed_coder(hub, runtime)
+        earlier = await handed_in(hub, first, 7)
+        await settled(hub, earlier.run_id)
+        removal = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="checks"))
+        assert isinstance(removal, FactoryRemoveResult)
+        for removed in removal.instances.values():
+            assert (await finished_operation(client, removed)).state is OperationState.SUCCEEDED
+        second = await installed_coder(hub, runtime)
+        before = await needing_human(hub)
+        later = await handed_in(hub, second, 7)
+        again = await handed_in(hub, second, 7)
+        stopped = await settled(hub, later.run_id)
+
+        assert later.run_id != earlier.run_id
+        assert again.run_id == later.run_id
+        assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert before == {second: 0}
+        assert await needing_human(hub) == {second: 1}
+        assert await runs_of(first) == [earlier.run_id]
+        assert await runs_of(second) == [later.run_id]
+
+    asyncio.run(scenario())
+
+
+def test_a_run_from_before_runs_named_their_instance_belongs_to_the_factorys_intake(tmp_path):
+    runtime = FakeRuntime()
+    directory = tmp_path / "hub"
+    factory = FACTORY.replace("  coder: {}", "  coder: {}\n  checker: {}")
+    files = FILES | {"factory.yaml": factory, "instances/checker/AGENTS.md": "Check.\n"}
+    hub = factory_hub(directory, FakeControl(), runtime, files)
+
+    async def before() -> tuple[UUID, UUID]:
+        coder = (await installed(hub, runtime, "coder", "checker"))["coder"]
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+        return coder, run.run_id
+
+    coder, run_id = asyncio.run(before())
+    hub.close()
+    with sqlite3.connect(directory / "registry.sqlite") as connection:
+        connection.execute("ALTER TABLE factory_runs DROP COLUMN instance_id")
+    reopened = factory_hub(directory, FakeControl(), FakeRuntime(), files)
+
+    found = asyncio.run(detail(reopened, run_id))
+
+    assert found.run.instance_id == coder
 
 
 def test_a_value_of_another_type_than_its_step_declares_fails_the_step(tmp_path):

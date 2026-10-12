@@ -682,6 +682,7 @@ export interface FactoryRunApproveCommand {
 export interface FactoryRun {
   created_at: string;
   factory: FactoryName;
+  instance_id: string;
   run_id: string;
   status: FactoryRunStatus;
   step: StepId | null;
@@ -722,7 +723,7 @@ export interface StepAttempt {
 /**
  * Hand a work item to the factory whose intake is this instance and routine.
  *
- * A work item that matches an unfinished run of the factory returns that run instead.
+ * A work item that matches an unfinished run this instance handed in returns that run instead.
  */
 export interface FactoryRunIntakeCommand {
   routine: string;
@@ -732,6 +733,7 @@ export interface FactoryRunIntakeCommand {
 }
 export interface FactoryRunListCommand {
   factory: FactoryName;
+  instance_id?: string | null;
   status?: FactoryRunStatus | null;
 }
 export interface FactoryRunListResult {
