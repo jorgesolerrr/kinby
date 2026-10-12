@@ -136,7 +136,7 @@ def test_the_hub_adds_up_usage_across_two_running_instances(tmp_path):
         hub = hub_at(tmp_path / "hub", control=control)
         client = hub_client(hub)
         first = await started_instance(client, hub)
-        second = await started_instance(client, hub)
+        second = await started_instance(client, hub, name="bob")
         first_answer = _answer(
             _used(
                 input_tokens=100,
@@ -211,7 +211,7 @@ def test_a_stopped_instance_is_skipped_and_named(tmp_path):
         hub = hub_at(tmp_path / "hub", control=control)
         client = hub_client(hub)
         running = await started_instance(client, hub)
-        stopped = await created_instance(client)
+        stopped = await created_instance(client, name="bob")
         answer = _answer(_used(input_tokens=100, output_tokens=20, cost=0.5))
         control.usage[_address(running.instance_id)] = answer
 
@@ -237,7 +237,7 @@ def test_an_instance_that_does_not_answer_in_time_is_unreachable_and_the_rest_co
         hub = hub_at(tmp_path / "hub", control=control)
         client = hub_client(hub)
         answering = await started_instance(client, hub)
-        silent = await started_instance(client, hub)
+        silent = await started_instance(client, hub, name="bob")
         answer = _answer(_used(input_tokens=100, output_tokens=20, cost=0.5))
         control.usage[_address(answering.instance_id)] = answer
 
@@ -260,7 +260,7 @@ def test_an_instance_on_an_older_core_is_outdated_and_logged_and_the_rest_count(
         hub = hub_at(tmp_path / "hub", control=control)
         client = hub_client(hub)
         answering = await started_instance(client, hub)
-        older = await started_instance(client, hub)
+        older = await started_instance(client, hub, name="bob")
         answer = _answer(_used(input_tokens=100, output_tokens=20, cost=0.5))
         control.usage[_address(answering.instance_id)] = answer
         control.usage[_address(older.instance_id)] = IncompatibleLifecycleEndpoint(
@@ -307,7 +307,7 @@ def test_limits_merge_to_the_latest_reset_per_usage_source(tmp_path):
         hub = hub_at(tmp_path / "hub", control=control)
         client = hub_client(hub)
         first = await started_instance(client, hub)
-        second = await started_instance(client, hub)
+        second = await started_instance(client, hub, name="bob")
         control.usage[_address(first.instance_id)] = _answer(
             _used(),
             [

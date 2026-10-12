@@ -66,6 +66,7 @@ from kinby.contracts import (
     FactoryName,
     FactoryRemoveCommand,
     FactoryRemoveResult,
+    FactoryRole,
     ImageDescribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
@@ -121,7 +122,7 @@ from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import (
     AdoptionBlocked,
     FactoryCheckFailed,
-    FactoryInstalled,
+    FactoryHasInstances,
     FactoryNotFound,
     ImageNotPrepared,
     InvalidSetup,
@@ -129,6 +130,7 @@ from kinby.core.errors import (
     LifecycleOperationNotFound,
     LoginNotFound,
     ManagedInstanceNotFound,
+    NameTaken,
 )
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.factories.file import InstanceName
@@ -282,6 +284,26 @@ def _selection(record: ManagedInstance, revision: str) -> ImageSelection:
     """The image an instance runs on: the revision, and its template's recipe."""
     recipe = record.factory.recipe if record.factory is not None else None
     return ImageSelection(revision, recipe)
+
+
+def _instance_name(command: InstanceCreateCommand) -> str:
+    """The name the request gives, or ``{factory}-{role}`` for one that picks a factory role."""
+    if command.manifest_id is not None:
+        return command.manifest_id
+    if command.factory_role is None:
+        raise InvalidSetup({"manifest_id": "Name the instance, or pick a factory role."})
+    return f"{command.factory_role.factory}-{command.factory_role.name}"
+
+
+def _member(factory: FactoryName, template: InstanceTemplate) -> FactoryMember:
+    """The role an instance written from *template* holds, with what the template supplied."""
+    return FactoryMember(
+        factory=factory,
+        name=template.name,
+        recipe=template.recipe,
+        setup=template.setup,
+        baseline=template.baseline,
+    )
 
 
 def _install_errors(
@@ -485,23 +507,39 @@ class Hub:
             _logger.exception("Could not collect unreferenced images")
 
     async def create(self, command: InstanceCreateCommand) -> LifecycleOperationResult:
-        """Accept a creation only once the image is prepared and the setup values all check out."""
+        """Accept a creation only once the whole request checks out: a vanilla instance's image is
+        prepared, a factory role's factory passes the check, the name is free, and the setup values
+        fit what the image or the role's template declares."""
+        manifest_id = _instance_name(command)
+        role = command.factory_role
+        template: InstanceTemplate | None = None
+        member: FactoryMember | None = None
+        if role is not None:
+            template = await self.factories.template(role.factory, role.name)
+            if template is None:
+                raise InvalidSetup(
+                    {"factory_role": f'Factory "{role.factory}" has no role "{role.name}".'}
+                )
+            member = _member(role.factory, template)
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
         errors = setup_errors(
-            self._prepared_description(),
+            self._prepared_description() if template is None else template.setup,
             model=command.model,
             config=command.config,
             secrets=secrets,
         )
+        if self._name_taken(manifest_id):
+            errors["manifest_id"] = f'An instance named "{manifest_id}" exists already.'
         if errors:
             raise InvalidSetup(errors)
         record = self._new_record(
-            command.manifest_id,
+            manifest_id,
             persona_name=command.persona_name,
             revision=command.revision,
             avatar=command.avatar,
+            factory=member,
         )
-        return self._begin_create(record, command.model, command.config, secrets)
+        return self._begin_create(record, command.model, command.config, secrets, template)
 
     async def install_factory(self, command: FactoryInstallCommand) -> FactoryInstallResult:
         """Create each of the factory's instances from its template, once the check passes.
@@ -512,25 +550,15 @@ class Hub:
         errors = _install_errors(templates, command.instances)
         if errors:
             raise InvalidSetup(errors)
-        if any(
-            record.active or self.registry.active_operation(record.instance_id) is not None
-            for record in self.registry.factory_members(command.name)
-        ):
-            raise FactoryInstalled(
+        if any(self._held(record) for record in self.registry.factory_members(command.name)):
+            raise FactoryHasInstances(
                 f'Factory "{command.name}" is installed already. Remove it before installing it.'
             )
         creations: dict[str, LifecycleOperationResult] = {}
         for template in templates:
             values = command.instances[template.name]
             record = self._new_record(
-                f"{command.name}-{template.name}",
-                factory=FactoryMember(
-                    factory=command.name,
-                    name=template.name,
-                    recipe=template.recipe,
-                    setup=template.setup,
-                    baseline=template.baseline,
-                ),
+                f"{command.name}-{template.name}", factory=_member(command.name, template)
             )
             creations[template.name] = self._begin_create(
                 record,
@@ -542,22 +570,30 @@ class Hub:
         return FactoryInstallResult(instances=creations)
 
     async def remove_factory(self, command: FactoryRemoveCommand) -> FactoryRemoveResult:
-        """Remove each of the factory's active instances the way an instance removal does.
+        """Refuse while an instance holds one of the factory's roles, and name each of them.
 
-        Every one of them is free to go before the first removal starts.
+        Removing an instance is the only removal that touches one (ADR 0090).
         """
-        members = {
-            record.factory.name: record
+        holders = [
+            record.manifest_id
             for record in self.registry.factory_members(command.name)
-            if record.factory is not None and record.active
-        }
-        for record in members.values():
-            self._not_signing_in(self._claimed(record))
-        return FactoryRemoveResult(
-            instances={
-                name: await self.remove(InstanceRemoveCommand(instance_id=record.instance_id))
-                for name, record in members.items()
-            }
+            if self._held(record)
+        ]
+        if holders:
+            raise FactoryHasInstances(
+                f'Factory "{command.name}" has instances {", ".join(holders)}. '
+                "Remove them before removing the factory."
+            )
+        return FactoryRemoveResult()
+
+    def _held(self, record: ManagedInstance) -> bool:
+        """Whether the hub lists the instance, or an operation is still at work on it."""
+        return record.active or self.registry.active_operation(record.instance_id) is not None
+
+    def _name_taken(self, manifest_id: str) -> bool:
+        return any(
+            record.manifest_id == manifest_id and self._held(record)
+            for record in self.registry.managed_instances()
         )
 
     def _new_record(
@@ -1407,15 +1443,13 @@ class Hub:
     async def _served_template(self, member: FactoryMember) -> InstanceTemplate:
         """The template the hub serves now for a factory's instance, from a factory that passes
         the check."""
-        templates = {
-            template.name: template for template in await self.factories.templates(member.factory)
-        }
-        if member.name not in templates:
+        template = await self.factories.template(member.factory, member.name)
+        if template is None:
             raise ValueError(
                 f'Factory "{member.factory}" no longer has template "{member.name}", '
                 "so nothing was changed."
             )
-        return templates[member.name]
+        return template
 
     async def remove(self, command: InstanceRemoveCommand) -> LifecycleOperationResult:
         """Drain and remove the container. The data and the record stay for a restoration."""
@@ -1475,20 +1509,11 @@ class Hub:
         self.registry.set_intended_state(record.instance_id, IntendedState.REMOVED)
 
     async def restore(self, command: InstanceRestoreCommand) -> LifecycleOperationResult:
-        """Bring a removed instance back from its retained record, and leave it stopped.
-
-        A factory has one active instance of each name, so the factory removal reaches them all.
-        """
+        """Bring a removed instance back from its retained record, and leave it stopped."""
         record = self._claimed(self._removed_instance(command.instance_id))
-        member = record.factory
-        if member is not None and any(
-            other.factory is not None
-            and other.factory.name == member.name
-            and (other.active or self.registry.active_operation(other.instance_id) is not None)
-            for other in self.registry.factory_members(member.factory)
-        ):
-            raise FactoryInstalled(
-                f'Factory "{member.factory}" has an instance "{member.name}" already. '
+        if self._name_taken(record.manifest_id):
+            raise NameTaken(
+                f'An instance named "{record.manifest_id}" exists already. '
                 "Remove it before restoring this one."
             )
         operation_id = uuid4()
@@ -2007,7 +2032,11 @@ class Hub:
             storage=list(record.storage),
             avatar=record.avatar,
             setup_pending=self._setup(record).pending,
-            factory=record.factory.factory if record.factory is not None else None,
+            factory_role=(
+                FactoryRole(factory=record.factory.factory, name=record.factory.name)
+                if record.factory is not None
+                else None
+            ),
             notices=_notices(record, hub_revision, served),
             needs_human=self.runs.needing_human(record),
         )

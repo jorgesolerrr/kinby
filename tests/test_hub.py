@@ -462,13 +462,14 @@ async def created_instance(
     *,
     secrets: dict[str, str] | None = None,
     model: str = "openai:gpt-5",
+    name: str = "alice",
 ) -> LifecycleOperationResult:
     """Prepare vanilla, create one instance from it, and wait for it to be published stopped."""
     assert (await prepared(client)).state is OperationState.SUCCEEDED
     created = await client.call(
         INSTANCE_CREATE,
         InstanceCreateCommand(
-            manifest_id="alice",
+            manifest_id=name,
             model=model,
             secrets={"api_key": "sk-test", **(secrets or {})},
         ),
@@ -493,8 +494,9 @@ async def started_instance(
     hub: Hub,
     *,
     secrets: dict[str, str] | None = None,
+    name: str = "alice",
 ) -> LifecycleOperationResult:
-    created = await created_instance(client, secrets=secrets)
+    created = await created_instance(client, secrets=secrets, name=name)
     started = await client.call(
         INSTANCE_START,
         InstanceStartCommand(instance_id=created.instance_id),
@@ -1001,7 +1003,7 @@ def test_metadata_for_two_created_instances_never_changes_process_environment(tm
         client = _client(hub)
         before = dict(os.environ)
         for value in ("one", "two"):
-            await created_instance(client, secrets={"SHARED": value})
+            await created_instance(client, secrets={"SHARED": value}, name=value)
 
         assert dict(os.environ) == before
         assert runtime.created[0].env["SHARED"] == "one"
@@ -1018,8 +1020,8 @@ def test_each_instance_gets_its_own_control_token_and_never_the_access_token(tmp
         assert access_token is not None
         client = _client(hub)
         paths = []
-        for _ in range(2):
-            created = await created_instance(client)
+        for name in ("alice", "bob"):
+            created = await created_instance(client, name=name)
             paths.append(tmp_path / "hub" / "instances" / str(created.instance_id))
 
         tokens = [spec.env["KINBY_CONTROL_TOKEN"] for spec in runtime.created]
@@ -1076,7 +1078,7 @@ def test_retained_writable_bind_rejects_an_overlapping_path_alias(tmp_path):
     async def scenario() -> None:
         hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
         client = _client(hub)
-        created = [await created_instance(client), await created_instance(client)]
+        created = [await created_instance(client), await created_instance(client, name="bob")]
 
         first = hub.registry.instance(created[0].instance_id)
         second = hub.registry.instance(created[1].instance_id)

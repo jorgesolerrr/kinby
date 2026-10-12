@@ -838,15 +838,28 @@ class Avatar(ContractModel):
 DEFAULT_AVATAR = Avatar(shape=AvatarShape.CIRCLE, color=AvatarColor.BLUE)
 
 
+class FactoryRole(ContractModel):
+    """The part an instance plays in a factory, such as ``coder`` in ``software``."""
+
+    factory: FactoryName
+    #: The role's name in the factory file, which is also its instance template's.
+    name: Annotated[str, Field(min_length=1)]
+
+
 class InstanceCreateCommand(ContractModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
-    manifest_id: Annotated[str, Field(min_length=1)]
+    #: The instance's name. One that picks a factory role is named ``{factory}-{role}`` without it.
+    manifest_id: Annotated[str, Field(min_length=1)] | None = None
     persona_name: Annotated[str, Field(min_length=1)] | None = None
+    #: The role the instance plays for life, whose instance template it is written from. None
+    #: creates a vanilla instance.
+    factory_role: FactoryRole | None = None
     #: The value of the built-in model field. The hub checks it with the other setup values.
     model: str
     revision: Annotated[str, Field(min_length=1)] = "HEAD"
-    #: Values for the configuration fields the prepared image declares, by field name.
+    #: Values for the configuration fields the prepared image, or the role's template, declares,
+    #: by field name.
     config: dict[str, SetupValue] = Field(default_factory=dict)
     #: Values for its secret fields, and any other variables the instance should hold.
     secrets: dict[str, SecretStr] = Field(default_factory=dict)
@@ -1037,8 +1050,8 @@ class InstanceSummary(ContractModel):
     notices: list[InstanceNotice]
     #: The factory runs stopped for the user, or awaiting approval, at one of the instance's steps.
     needs_human: int
-    #: The factory the instance was installed from, if any.
-    factory: FactoryName | None = None
+    #: The factory role the instance picked at creation, if any.
+    factory_role: FactoryRole | None = None
     #: The runtime's word for the process, such as "restarting" beside `starting`.
     detail: str = ""
 
@@ -2051,14 +2064,13 @@ class FactoryInstallResult(ContractModel):
 
 
 class FactoryRemoveCommand(ContractModel):
-    """Remove each of the factory's active instances. Their data and records stay behind."""
+    """Remove the factory, which the hub refuses while an instance holds one of its roles."""
 
     name: FactoryName
 
 
 class FactoryRemoveResult(ContractModel):
-    #: The removal of each instance, by its name in the factory.
-    instances: dict[str, LifecycleOperationResult]
+    """No instance holds one of the factory's roles."""
 
 
 type StepId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]

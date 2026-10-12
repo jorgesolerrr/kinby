@@ -216,7 +216,7 @@ def test_concurrent_replacements_serialize_and_keep_each_instance_to_its_own_sec
         hub = hub_at(tmp_path / "hub", images=FakeImages())
         client = hub_client(hub)
         first = await created_instance(client, secrets={"PROVIDER_TOKEN": "first-value"})
-        second = await created_instance(client, secrets={"OTHER_TOKEN": "second-value"})
+        second = await created_instance(client, secrets={"OTHER_TOKEN": "second-value"}, name="bob")
 
         accepted: list[LifecycleOperationResult] = []
         for instance_id, secrets in (
