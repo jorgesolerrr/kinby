@@ -111,7 +111,9 @@ async def _run_client_step(
 
     What the client said last is only the summary.
     """
-    skills, _ = load_skills(instance)
+    skills, warnings = load_skills(instance)
+    for warning in warnings:
+        await log.append(command.origin.run_id, uuid4(), warning)
     ran = await run_coding_client(
         step.client,
         render_client_message(step.prompt, command.work_item, command.results, skills),
