@@ -4,26 +4,34 @@ import type { InstanceClient, ThreadFilter, ThreadListResult, ThreadSummary } fr
 type Lister = Pick<InstanceClient, "call">
 
 /**
- * An instance's threads in one set as it last listed them. The sidebar reads the `sidebar` set, and
- * the open thread and the memory page look a thread up in `all`, so an archived one still resolves.
+ * An instance's threads in one set as it last listed them. The sidebar and the open thread read the
+ * `sidebar` set. The open thread looks a thread outside it up in `all`, as the memory page does, so
+ * an archived one still resolves.
  */
 export interface ThreadList {
   view: () => ThreadListResult | undefined
   onChange: (listener: () => void) => () => void
   /**
-   * List the threads again in every set kept for the instance, so a change shows in the sidebar and
-   * the open thread at once. The promise settles once the lists are stored.
+   * List this set again. It stores after a `listKept` already in flight, and settles once stored.
    */
   list: () => Promise<void>
+  /**
+   * List the threads again in every set kept for the instance, so a change shows in the sidebar and
+   * the open thread at once. They are stored together once all are read, so a thread an archive
+   * takes out of the sidebar set never shows as missing from both.
+   */
+  listKept: () => Promise<void>
 }
 
 interface KeptList extends ThreadList {
-  /** List this set alone again. */
-  listOwn: () => Promise<void>
+  /** Read this set again, and return what stores it unless a newer read came since. */
+  read: () => Promise<() => void>
 }
 
 // The lists live as long as the connection they read, like the thread stores beside them.
 const lists = new WeakMap<Lister, Map<ThreadFilter, KeptList>>()
+// The last refresh of every kept set. A newer read of one set stores after it, never between.
+const refreshes = new WeakMap<Lister, Promise<void>>()
 
 /** The `filter` set of `client`'s instance's threads. */
 export function threadList(client: Lister, filter: ThreadFilter): ThreadList {
@@ -50,21 +58,36 @@ function createThreadList(
   // A newer read retires the one already in flight.
   let generation = 0
 
+  const read = async () => {
+    const mine = ++generation
+    const next = await listThreads(client, filter)
+    return () => {
+      if (mine !== generation) return
+      listed = next
+      for (const listener of listeners) listener()
+    }
+  }
   return {
     view: () => listed,
     onChange(listener) {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
+    read,
     async list() {
-      await Promise.all([...kept.values()].map((list) => list.listOwn()))
+      const store = await read()
+      await refreshes.get(client)
+      store()
     },
-    async listOwn() {
-      const mine = ++generation
-      const next = await listThreads(client, filter)
-      if (mine !== generation) return
-      listed = next
-      for (const listener of listeners) listener()
+    async listKept() {
+      const refresh = Promise.all([...kept.values()].map((list) => list.read())).then((stores) => {
+        for (const store of stores) store()
+      })
+      refreshes.set(
+        client,
+        refresh.catch(() => {}),
+      )
+      await refresh
     },
   }
 }

@@ -36,19 +36,19 @@ export function NavThreads({
 }) {
   const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
   const list = threadList(client, "sidebar")
-  const [, listAgain] = usePolled(list.list, clock, connected, LIST_INTERVAL_MS)
+  usePolled(list.list, clock, connected, LIST_INTERVAL_MS)
   const threads = useSyncExternalStore(list.onChange, list.view)?.threads
   const selectedId = useSelectedThreadId()
 
   const startThread = () =>
-    client.call("thread.create", {}).then(
-      (created) => {
+    client
+      .call("thread.create", {})
+      .then((created) => {
         selectThread(instanceId, created.id)
-        return listAgain()
-      },
-      // A dropped socket shows as reconnecting. Nothing was started, so there is nothing to show.
-      () => {},
-    )
+        return list.listKept()
+      })
+      // A dropped socket shows as reconnecting, and the next poll lists a thread that did start.
+      .catch(() => {})
 
   return (
     <>

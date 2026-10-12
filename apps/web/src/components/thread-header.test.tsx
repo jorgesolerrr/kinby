@@ -8,7 +8,7 @@ import {
   type ThreadListCommand,
   type ThreadSummary,
 } from "@kinby/contract"
-import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
+import { type Answers, type StubCaller, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
@@ -49,7 +49,7 @@ async function openHeader(
   const client = connected(
     stubCaller({ "thread.list": () => ({ threads: [listed()], ceiling, cursor: null }), ...calls }),
   )
-  await act(() => threadList(client, "all").list())
+  await act(() => threadList(client, "sidebar").list())
   render(<ThreadHeader client={client} threadId="t1" />)
   return client
 }
@@ -71,7 +71,7 @@ async function openHeaderOffline() {
       return new Promise<never>((_resolve, reject) => (fail = reject))
     },
   })
-  await act(() => threadList(client, "all").list())
+  await act(() => threadList(client, "sidebar").list())
   render(<ThreadHeader client={client} threadId="t1" />)
   const lost = new CallError({
     code: "CONNECTION_LOST",
@@ -281,49 +281,6 @@ describe("a thread's header", () => {
     expect(modePicker().textContent).toContain("Ask")
   })
 
-  it("archives the thread out of the sidebar beside it, and unarchives it back", async () => {
-    let archived = false
-    const put = (to: boolean) => () => {
-      archived = to
-      return thread({ archived })
-    }
-    const client = connected(
-      stubCaller({
-        "thread.list": ({ filter }) => ({
-          threads: filter === "sidebar" && archived ? [] : [thread({ archived })],
-          ceiling: "full-access",
-          cursor: null,
-        }),
-        "thread.archive": put(true),
-        "thread.unarchive": put(false),
-      }),
-    )
-    render(
-      <SidebarProvider>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <NavThreads client={client} clock={fakeClock()} instanceId="hub-ada" />
-          </SidebarMenuItem>
-        </SidebarMenu>
-        <ThreadHeader client={client} threadId="t1" />
-      </SidebarProvider>,
-    )
-    const user = userEvent.setup()
-    await screen.findByRole("link", { name: "Deploy notes" })
-
-    await user.click(await screen.findByRole("button", { name: "Archive" }))
-
-    expect(client.calls).toContainEqual({ method: "thread.archive", params: { thread_id: "t1" } })
-    expect(screen.queryByRole("link", { name: "Deploy notes" })).toBeNull()
-    expect(screen.getByRole("heading").textContent).toBe("Deploy notes")
-
-    await user.click(screen.getByRole("button", { name: "Unarchive" }))
-
-    expect(client.calls).toContainEqual({ method: "thread.unarchive", params: { thread_id: "t1" } })
-    expect(screen.getByRole("link", { name: "Deploy notes" })).toBeDefined()
-    expect(screen.getByRole("button", { name: "Archive" })).toBeDefined()
-  })
-
   describe("without the sidebar", () => {
     it("lists the threads itself when nothing has listed them", async () => {
       const client = connected(
@@ -343,7 +300,7 @@ describe("a thread's header", () => {
       const client = connected(
         stubCaller({ "thread.list": () => ({ threads, ceiling: "full-access", cursor: null }) }),
       )
-      await act(() => threadList(client, "all").list())
+      await act(() => threadList(client, "sidebar").list())
 
       threads = [thread()]
       render(<ThreadHeader client={client} threadId="t1" />)
@@ -398,37 +355,195 @@ describe("a thread's header", () => {
     })
   })
 
-  it("leaves listing the threads again to the sidebar beside it", async () => {
-    const client = connected(
-      stubCaller({
-        "thread.list": () => ({ threads: [thread()], ceiling: "full-access", cursor: null }),
-      }),
-    )
-    const clock = fakeClock()
-    render(
-      <SidebarProvider>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <NavThreads client={client} clock={clock} instanceId="hub-ada" />
-          </SidebarMenuItem>
-        </SidebarMenu>
-        <ThreadHeader client={client} threadId="t1" />
-      </SidebarProvider>,
-    )
-    await screen.findByRole("heading")
-    const listings = (filter: ThreadFilter) =>
-      client.calls.filter(
-        (call) =>
-          call.method === "thread.list" && (call.params as ThreadListCommand).filter === filter,
-      ).length
-    const onMount = { sidebar: listings("sidebar"), all: listings("all") }
+  describe("beside the sidebar", () => {
+    /**
+     * Render thread t1's header beside Ada's threads in the sidebar. `poll` advances the sidebar's
+     * clock to its next poll and returns the filters `thread.list` was called with meanwhile.
+     */
+    function openBesideSidebar(client: StubCaller) {
+      const clock = fakeClock()
+      const instance = connected(client)
+      render(
+        <SidebarProvider>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <NavThreads client={instance} clock={clock} instanceId="hub-ada" />
+            </SidebarMenuItem>
+          </SidebarMenu>
+          <ThreadHeader client={instance} threadId="t1" />
+        </SidebarProvider>,
+      )
+      const listings = () =>
+        client.calls
+          .filter((call) => call.method === "thread.list")
+          .map((call) => (call.params as ThreadListCommand).filter)
+      const poll = async () => {
+        const before = listings().length
+        await act(() => clock.advance(5_000))
+        return listings().slice(before)
+      }
+      return { listings, poll }
+    }
 
-    for (const _ of [1, 2, 3]) await act(() => clock.advance(5_000))
+    /** An instance whose sidebar set holds `inSidebar()` and whose full set holds `inAll()`. */
+    function listing(inSidebar: () => ThreadSummary[], inAll = inSidebar) {
+      return stubCaller({
+        "thread.list": ({ filter }) => ({
+          threads: filter === "sidebar" ? inSidebar() : inAll(),
+          ceiling: "full-access",
+          cursor: null,
+        }),
+      })
+    }
 
-    expect(onMount.sidebar).toBeLessThanOrEqual(2)
-    expect(onMount.all).toBeLessThanOrEqual(2)
-    // Each poll lists the full set the header reads along with the sidebar's own.
-    expect(listings("sidebar") - onMount.sidebar).toBe(3)
-    expect(listings("all") - onMount.all).toBe(3)
+    it("lists only the sidebar's threads on each poll", async () => {
+      const { poll } = openBesideSidebar(listing(() => [thread()]))
+      await screen.findByRole("heading")
+
+      for (const _ of [1, 2, 3]) expect(await poll()).toEqual<ThreadFilter[]>(["sidebar"])
+    })
+
+    it("shows a title the instance sets after the next poll of the sidebar", async () => {
+      let title: string | null = null
+      const { poll } = openBesideSidebar(listing(() => [thread({ title })]))
+      expect((await screen.findByRole("heading")).textContent).toBe("Untitled thread")
+
+      title = "Deploy notes"
+
+      expect(await poll()).toEqual<ThreadFilter[]>(["sidebar"])
+      expect(screen.getByRole("heading").textContent).toBe("Deploy notes")
+    })
+
+    it.each([
+      ["an archived thread", thread({ archived: true })],
+      [
+        "a quiet routine run",
+        thread({ origin: { kind: "routine", name: "news", trigger: "scheduled" } }),
+      ],
+    ])("gives %s a header from one listing of every thread", async (_, outside) => {
+      const { listings, poll } = openBesideSidebar(
+        listing(
+          () => [],
+          () => [outside],
+        ),
+      )
+
+      expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
+      expect(listings().filter((filter) => filter === "all")).toHaveLength(1)
+      expect(await poll()).toEqual<ThreadFilter[]>(["sidebar"])
+    })
+
+    it("renames the thread in the sidebar without waiting for a poll", async () => {
+      let title = "Deploy notes"
+      openBesideSidebar(
+        stubCaller({
+          "thread.list": () => ({
+            threads: [thread({ title })],
+            ceiling: "full-access",
+            cursor: null,
+          }),
+          "thread.rename": (params) => {
+            title = params.title
+            return thread({ title })
+          },
+        }),
+      )
+      const user = userEvent.setup()
+
+      await user.click(await screen.findByRole("button", { name: "Deploy notes" }))
+      await user.keyboard(" v2{Enter}")
+
+      expect(screen.getByRole("heading").textContent).toBe("Deploy notes v2")
+      expect(screen.getByRole("link", { name: "Deploy notes v2" })).toBeDefined()
+    })
+
+    it("archives the thread out of the sidebar, and unarchives it back", async () => {
+      let archived = false
+      const put = (to: boolean) => () => {
+        archived = to
+        return thread({ archived })
+      }
+      const client = stubCaller({
+        "thread.list": ({ filter }) => ({
+          threads: filter === "sidebar" && archived ? [] : [thread({ archived })],
+          ceiling: "full-access",
+          cursor: null,
+        }),
+        "thread.archive": put(true),
+        "thread.unarchive": put(false),
+      })
+      openBesideSidebar(client)
+      const user = userEvent.setup()
+      await screen.findByRole("link", { name: "Deploy notes" })
+
+      await user.click(await screen.findByRole("button", { name: "Archive" }))
+
+      expect(client.calls).toContainEqual({ method: "thread.archive", params: { thread_id: "t1" } })
+      expect(screen.queryByRole("link", { name: "Deploy notes" })).toBeNull()
+      expect(screen.getByRole("heading").textContent).toBe("Deploy notes")
+
+      await user.click(screen.getByRole("button", { name: "Unarchive" }))
+
+      expect(client.calls).toContainEqual({
+        method: "thread.unarchive",
+        params: { thread_id: "t1" },
+      })
+      expect(screen.getByRole("link", { name: "Deploy notes" })).toBeDefined()
+      expect(screen.getByRole("button", { name: "Archive" })).toBeDefined()
+    })
+
+    it("keeps focus on the archive button when a poll answers before the full list", async () => {
+      let archived = false
+      const instance = stubCaller({
+        "thread.list": ({ filter }) => ({
+          threads: filter === "sidebar" && archived ? [] : [thread({ archived })],
+          ceiling: "full-access",
+          cursor: null,
+        }),
+        "thread.archive": () => {
+          archived = true
+          return thread({ archived })
+        },
+      })
+      const held: (() => void)[] = []
+      const { poll } = openBesideSidebar({
+        calls: instance.calls,
+        call: async (method, params) => {
+          if (archived && (params as ThreadListCommand).filter === "all") {
+            await new Promise<void>((resolve) => held.push(resolve))
+          }
+          return instance.call(method, params)
+        },
+      })
+      const user = userEvent.setup()
+
+      await user.click(await screen.findByRole("button", { name: "Archive" }))
+      await poll()
+      await act(async () => {
+        for (const release of held) release()
+      })
+
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Unarchive" }))
+    })
+
+    it("shows the thread of a core from before archiving, which refuses the filter", async () => {
+      openBesideSidebar(
+        stubCaller({
+          "thread.list": (params) => {
+            if ("filter" in params) {
+              throw new CallError({
+                code: "INVALID_ARGUMENT",
+                message: "filter: Extra inputs are not permitted",
+                retryable: false,
+              })
+            }
+            return { threads: [thread()], ceiling: "full-access", cursor: null }
+          },
+        }),
+      )
+
+      expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
+      expect(screen.getByRole("link", { name: "Deploy notes" })).toBeDefined()
+    })
   })
 })
