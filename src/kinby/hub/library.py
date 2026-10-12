@@ -37,19 +37,23 @@ class Library:
     def receive(self, shipped: Path) -> None:
         """Copy each skill kinby ships that the hub has never copied, and record its hash.
 
-        A shipped skill the user deleted stays deleted, and one the user edited stays edited. A
-        folder the library already holds by the skill's name is the user's and stays as it is.
+        A shipped skill the user deleted stays deleted, and one the user edited stays edited. An
+        unrecorded folder that matches the shipped skill is a copy cut short before its record,
+        and is recorded. One that differs is the user's and stays as it is.
         """
         copied = self._registry.shipped_skills()
         self._directory.mkdir(parents=True, exist_ok=True)
         for name, source in _skill_folders(shipped).items():
             destination = self._directory / name
-            if name in copied or destination.exists():
+            if name in copied:
                 continue
-            with TemporaryDirectory(prefix=".copy-", dir=self._directory) as temporary:
-                staged = Path(temporary) / name
-                shutil.copytree(source, staged)
-                staged.rename(destination)
+            if not destination.exists():
+                with TemporaryDirectory(prefix=".copy-", dir=self._directory) as temporary:
+                    staged = Path(temporary) / name
+                    shutil.copytree(source, staged)
+                    staged.rename(destination)
+            elif directory_hash(destination) != directory_hash(source):
+                continue
             self._registry.record_shipped_skill(name, directory_hash(destination))
 
     async def list(self, command: LibraryListCommand) -> LibraryListResult:

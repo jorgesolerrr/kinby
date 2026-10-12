@@ -92,6 +92,28 @@ def test_a_shipped_skill_the_user_deleted_does_not_come_back(tmp_path):
     assert skills(hub) == [name for name in SHIPPED if name != "tdd"]
 
 
+def test_a_copy_cut_short_before_its_record_is_recorded_on_the_next_open(tmp_path):
+    hub = Hub(
+        tmp_path / "hub",
+        runtime=FakeRuntime(),
+        images=FakeImages(),
+        shipped_skills=tmp_path / "none",
+    )
+    # What a hub that stopped between moving the copies in and recording them leaves.
+    shutil.copytree(SHIPPED_SKILLS / "tdd", hub.directory / "skills" / "tdd")
+    mine = hub.directory / "skills" / "unslop"
+    mine.mkdir()
+    (mine / "SKILL.md").write_text("---\nname: unslop\ndescription: Mine.\n---\nMy way.\n")
+
+    hub = reopened(hub)
+    sources = {entry.name: entry.source for entry in library(hub)}
+    shutil.rmtree(hub.directory / "skills" / "tdd")
+    hub = reopened(hub)
+
+    assert (sources["tdd"], sources["unslop"]) == (LibrarySource.SHIPPED, LibrarySource.WRITTEN)
+    assert "tdd" not in skills(hub)
+
+
 @pytest.mark.parametrize("name", SHIPPED)
 def test_a_shipped_skill_reads_with_its_body_credits_and_licence(tmp_path, name):
     hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
