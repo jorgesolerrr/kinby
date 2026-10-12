@@ -5,49 +5,49 @@
       "source": "jorgesolerrr/skills",
       "sourceType": "github",
       "skillPath": "skills/mine/adversarial-review/SKILL.md",
-      "computedHash": "b70ff8bc1da8d546ea6be87055e80e1a70a0565631ab3530b6298eca47bb9625"
+      "computedHash": "51e23b889659229dfc8b2bcc4f0822ad1ce4cbc7ceb1119e606081ccc1beeb89"
     },
     "api-and-interface-design": {
       "source": "jorgesolerrr/skills",
       "sourceType": "github",
       "skillPath": "skills/addyosmani/api-and-interface-design/SKILL.md",
-      "computedHash": "b44b8479f2bb7fbd9f6e7b226d435ca66524f4c1c3663bae212b9ee4df9a49cd"
+      "computedHash": "978b924e3f45eae67eb525f4636a6400eef04302add14ce0050efb310592ef00"
     },
     "codebase-design": {
       "source": "jorgesolerrr/skills",
       "sourceType": "github",
       "skillPath": "skills/mattpocock/codebase-design/SKILL.md",
-      "computedHash": "93b6cbc768402126aa105eb4f5f59b65edb1f32d56b4e607e093075bcab2aeab"
+      "computedHash": "b797f5e9ee2e8f1c2ad8f6113465154eed25a1b3dcaf9225a964a96bca8e22d9"
     },
     "no-comments": {
       "source": "jorgesolerrr/skills",
       "sourceType": "github",
       "skillPath": "skills/pstack/no-comments/SKILL.md",
-      "computedHash": "f880399843f96d13ff15dbe1019a50b438916f52da05be194b1db9c740a8d658"
+      "computedHash": "e51bdcaea7d7019305ae45504c7ca3a85ef5417a9250bbd80925716c2f799ff4"
     },
     "ponytail": {
       "source": "jorgesolerrr/skills",
       "sourceType": "github",
       "skillPath": "skills/ponytail/ponytail/SKILL.md",
-      "computedHash": "740906c102310efd3af305eac867d05053e5d2aa5a024ddb0f37d9267df3eafb"
+      "computedHash": "f1dbfc46543a2ad718c9c2a7fd783c8dcab0d8bc4daffee4846871afc29265aa"
     },
     "pr": {
       "source": "jorgesolerrr/skills",
       "sourceType": "github",
       "skillPath": "skills/mattpocock/pr/SKILL.md",
-      "computedHash": "22a15d4d469344b38e03eb0e95772478393975836289393b1bad3c0febcdc679"
+      "computedHash": "590674e3658d9a73104e7d395fe635e81353b6268878ec66c5b100c44e3c0d9e"
     },
     "tdd": {
       "source": "jorgesolerrr/skills",
       "sourceType": "github",
       "skillPath": "skills/mattpocock/tdd/SKILL.md",
-      "computedHash": "1a08af82ebfa299e90295a4763416c89395c6eed140a75c31a8ca34c7c7c9ed0"
+      "computedHash": "4f10c1dfb08e08a24f8f92d6374579b96fb6d6ef6b47cf99a72d26e2b7fa32cf"
     },
     "unslop": {
       "source": "jorgesolerrr/skills",
       "sourceType": "github",
       "skillPath": "skills/pstack/unslop/SKILL.md",
-      "computedHash": "1b034485ef26285010207427c8e5ed52d7a8bd7f377ec043e27409ceceaab246"
+      "computedHash": "bb54350b63a7a48e9ac742a231e018e290a32321768374e877a6fc87b997527d"
     }
   }
 }
