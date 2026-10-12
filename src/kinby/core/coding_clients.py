@@ -82,8 +82,9 @@ async def run_coding_client(
 
     Claude keeps its sessions in *state_dir*, which outlives the container. When Claude no
     longer has *resume*, the prompt runs once more in a new session, and that run is the one
-    returned. Both runs share the one timeout. A *model* or *effort* of None leaves the client's
-    default.
+    returned. Both runs share the one timeout. Claude waits for a command it left running in the
+    background, such as a long test suite, and goes on when it ends. A *model* or *effort* of
+    None leaves the client's default.
     """
     run = partial(
         _run,
@@ -237,6 +238,9 @@ def _environment(client: CodingClient, state_dir: Path) -> Mapping[str, str]:
     }
     if client is CodingClient.CLAUDE:
         environment["CLAUDE_CONFIG_DIR"] = str(state_dir / "claude")
+        # Claude gives up on a command it left in the background after 10 idle minutes, and
+        # exits with its work uncommitted. Zero waits for it; the step's timeout is the limit.
+        environment["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = "0"
     return environment
 
 
