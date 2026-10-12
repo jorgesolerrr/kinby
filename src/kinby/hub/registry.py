@@ -251,6 +251,8 @@ class HubRegistry:
             )
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
             self._add_columns(connection, "factory_members", {"baseline": "TEXT"})
+            # Null for a git skill added before the hub recorded the hash it landed with.
+            self._add_columns(connection, "git_skills", {"hash": "TEXT"})
             self._add_columns(
                 connection,
                 "operation_steps",
@@ -1525,8 +1527,20 @@ class HubRegistry:
         """
         with self._connect() as connection:
             shipped = connection.execute("SELECT name, hash FROM shipped_skills").fetchall()
-            git = connection.execute("SELECT name, hash FROM git_skills").fetchall()
+            git = connection.execute(
+                "SELECT name, hash FROM git_skills WHERE hash IS NOT NULL"
+            ).fetchall()
         return {SkillName(name): FileHash(hash) for name, hash in (*shipped, *git)}
+
+    def unhashed_git_skills(self) -> list[SkillName]:
+        """Each git skill added before the hub recorded the hash it landed with."""
+        with self._connect() as connection:
+            rows = connection.execute("SELECT name FROM git_skills WHERE hash IS NULL").fetchall()
+        return [SkillName(name) for (name,) in rows]
+
+    def record_landed_git_skill(self, name: SkillName, landed: FileHash) -> None:
+        with self._connect() as connection:
+            connection.execute("UPDATE git_skills SET hash = ? WHERE name = ?", (landed, name))
 
     def open_run(
         self,

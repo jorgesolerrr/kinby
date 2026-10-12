@@ -1,6 +1,7 @@
 """The user writes a skill in the library on the hub, edits any skill entry, and deletes one."""
 
 import asyncio
+import sqlite3
 
 import pytest
 
@@ -216,3 +217,24 @@ def test_deleting_a_skill_that_changed_since_it_was_read_or_is_absent_is_refused
     assert entry(hub, "tdd") is not None
     assert isinstance(absent, ErrorEnvelope), absent
     assert absent.code is ErrorCode.NOT_FOUND
+
+
+def test_a_git_skill_from_before_the_hub_recorded_hashes_counts_as_landed_as_it_stands(tmp_path):
+    hub = hub_at(tmp_path / "hub")
+    client = hub_client(hub)
+    source = repository(tmp_path / "skills", TWO_SKILLS)
+    add(client, str(source), previewed(client, str(source)).commit, "grill")
+    hub.close()
+    with sqlite3.connect(tmp_path / "hub" / "registry.sqlite") as connection:
+        connection.execute("ALTER TABLE git_skills DROP COLUMN hash")
+
+    hub = hub_at(tmp_path / "hub")
+    client = hub_client(hub)
+    before = entry(hub, "grill")
+    edit(client, "grill", skill("grill", "Edited on the hub."))
+
+    assert before is not None
+    assert (before.source, before.edited) == (LibrarySource.GIT, False)
+    edited = entry(hub, "grill")
+    assert edited is not None
+    assert edited.edited

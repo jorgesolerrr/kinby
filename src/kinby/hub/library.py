@@ -80,6 +80,9 @@ class Library:
         self._factories = factories
         self._registry = registry
         self._adding = threading.Lock()
+        # A write or a delete moves folders on the event loop, where every reader of the library
+        # runs, so no pick sees a folder half moved. The lock keeps them from landing over an add,
+        # whose fetch waits in a thread.
         self._edit_lock = asyncio.Lock()
 
     def receive(self, shipped: Path) -> None:
@@ -88,6 +91,8 @@ class Library:
         A shipped skill the user deleted stays deleted, and one the user edited stays edited. An
         unrecorded folder that matches the shipped skill is a copy cut short before its record,
         and is recorded. One that differs is the user's and stays as it is.
+
+        A git skill added before the hub recorded hashes counts as landed as it stands.
         """
         copied = self._registry.shipped_skills()
         self._directory.mkdir(parents=True, exist_ok=True)
@@ -103,6 +108,9 @@ class Library:
             elif directory_hash(destination) != directory_hash(source):
                 continue
             self._registry.record_shipped_skill(name, directory_hash(destination))
+        for name in self._registry.unhashed_git_skills():
+            if (self._directory / name).is_dir():
+                self._registry.record_landed_git_skill(name, directory_hash(self._directory / name))
 
     async def list(self, command: LibraryListCommand) -> LibraryListResult:
         factories = await self._factories.list(FactoryListCommand())
@@ -131,7 +139,7 @@ class Library:
 
     async def write_skill(self, command: LibrarySkillWriteCommand) -> SkillResult:
         async with self._edit_lock:
-            return await asyncio.to_thread(self._write_skill, command)
+            return self._write_skill(command)
 
     def _write_skill(self, command: LibrarySkillWriteCommand) -> SkillResult:
         if command.hash is not None:
@@ -147,7 +155,7 @@ class Library:
     async def delete_skill(self, command: LibrarySkillDeleteCommand) -> LibraryListResult:
         """Delete the skill from the library, and from no instance (ADR 0091)."""
         async with self._edit_lock:
-            await asyncio.to_thread(self._delete_skill, command)
+            self._delete_skill(command)
         return await self.list(LibraryListCommand())
 
     def _delete_skill(self, command: LibrarySkillDeleteCommand) -> None:
