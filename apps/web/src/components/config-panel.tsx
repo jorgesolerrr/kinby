@@ -292,7 +292,7 @@ function linkedSection(routine: string | undefined): string {
 
 /**
  * Why each section needs the user, by its label: a change that waits on a recreate, or a core
- * behind the hub's.
+ * behind the hub's or files behind the factory's.
  */
 function needsOf(
   instance: InstanceSummary,
@@ -303,6 +303,9 @@ function needsOf(
     if (reason !== undefined && reasons.includes(reason)) needs[label] = "Recreate to apply"
   }
   if (behind(instance)) needs[CORE] = "behind the hub"
+  else if (instance.notices.some((notice) => notice.code === "template_behind")) {
+    needs[CORE] = "behind the factory"
+  }
   return needs
 }
 

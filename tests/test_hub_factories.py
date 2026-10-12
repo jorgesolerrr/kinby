@@ -585,6 +585,23 @@ def test_the_check_reports_a_factory_file_that_is_missing_or_not_yaml(tmp_path):
     assert found[0].startswith("factory.yaml is not a JSON document: ")
 
 
+def test_the_check_reports_a_factory_file_it_cannot_read_as_utf8_text(tmp_path):
+    hub = factory_hub(tmp_path)
+    folder = tmp_path / "hub" / "factories" / "tickets"
+    write_factory(folder, FILES)
+    (folder / "factory.yaml").write_bytes(b"name: tickets\n\xff\n")
+    client = hub_client(hub)
+
+    async def check() -> list[str]:
+        result = await client.call(FACTORY_CHECK, FactoryCheckCommand(name="tickets"))
+        assert isinstance(result, FactoryCheckResult)
+        return result.problems
+
+    found = asyncio.run(check())
+    assert len(found) == 1
+    assert found[0].startswith("factory.yaml cannot be read as UTF-8 text: ")
+
+
 async def read(client, name: str = "tickets") -> FactoryResult:
     result = await client.call(FACTORY_GET, FactoryGetCommand(name=name))
     assert isinstance(result, FactoryResult)

@@ -1,4 +1,4 @@
-import type { Client, Clock, InstanceSummary, RevisionBehind } from "@kinby/contract"
+import type { Client, Clock, InstanceSummary } from "@kinby/contract"
 import { useCallback, useId, useState } from "react"
 
 import { OperationSteps } from "@/components/operation-steps"
@@ -17,6 +17,13 @@ import { CircleCheckIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react"
 type Target = "hub" | "ref"
 
 const TARGETS: Record<Target, string> = { hub: "The hub's revision", ref: "Another ref" }
+
+type InstanceNotice = InstanceSummary["notices"][number]
+
+const NOTICE_TITLES: Record<InstanceNotice["code"], string> = {
+  revision_behind: "Behind the hub",
+  template_behind: "Behind the factory",
+}
 
 /**
  * The kinby revision the instance runs, what the hub says about it, and "Update core".
@@ -46,12 +53,12 @@ export function CoreSection({
   )
 }
 
-function Notice({ notice }: { notice: RevisionBehind }) {
+function Notice({ notice }: { notice: InstanceNotice }) {
   const titleId = useId()
   return (
     <Alert aria-labelledby={titleId}>
       <TriangleAlertIcon />
-      <AlertTitle id={titleId}>Behind the hub</AlertTitle>
+      <AlertTitle id={titleId}>{NOTICE_TITLES[notice.code]}</AlertTitle>
       <AlertDescription>{notice.message}</AlertDescription>
     </Alert>
   )

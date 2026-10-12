@@ -244,7 +244,7 @@ def _initialization(
                     settings=settings,
                 )
             )
-        except (InstanceExistsError, ValueError) as exc:
+        except (InstanceExistsError, ValueError, OSError) as exc:
             yield f'Instance "{name}": the template does not initialize: {exc}'
 
 

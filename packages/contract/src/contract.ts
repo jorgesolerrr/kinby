@@ -885,7 +885,7 @@ export interface InstanceSummary {
   intended_state: IntendedState;
   manifest_id: string;
   needs_human: number;
-  notices: RevisionBehind[];
+  notices: (RevisionBehind | TemplateBehind)[];
   persona_name: string | null;
   process: ProcessState;
   runtime_id: string;
@@ -900,6 +900,14 @@ export interface RevisionBehind {
   code: "revision_behind";
   hub_revision: string;
   instance_revision: string;
+  message: string;
+}
+/**
+ * The template the instance's factory serves differs from the files the hub copied, or the
+ * hub kept no record of them, so an update is there.
+ */
+export interface TemplateBehind {
+  code: "template_behind";
   message: string;
 }
 /**

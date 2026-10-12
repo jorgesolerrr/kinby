@@ -36,6 +36,7 @@ from kinby.contracts import (
 )
 from kinby.hub import Hub, ImageSelection
 from kinby.instance import inspect_instance
+from kinby.instance.config_changes import file_hash
 from tests.test_hub import (
     FakeImages,
     FakeRuntime,
@@ -193,6 +194,31 @@ def test_installing_a_factory_creates_each_instance_from_its_template(tmp_path):
         assert (reviewer / "SYSTEM.md").read_text() == "You review branches.\n"
         assert not (reviewer / "tools" / "github.py").exists()
         assert sorted(selection.recipe or "" for selection in images.selections) == ["", "coder"]
+
+    asyncio.run(scenario())
+
+
+def test_an_install_records_the_hash_of_each_file_the_template_supplied_but_its_manifest(tmp_path):
+    hub = install_hub(tmp_path)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        accepted = await installed(client)
+
+        coder_id = accepted.instances["coder"].instance_id
+        coder = hub.instances_directory / str(coder_id)
+        record = hub.registry.instance(coder_id)
+        assert record is not None
+        assert record.factory is not None
+        assert record.factory.baseline == {
+            path: file_hash((coder / path).read_bytes())
+            for path in (
+                "SYSTEM.md",
+                "hooks/record.py",
+                "routines/scan/ROUTINE.md",
+                "tools/github.py",
+            )
+        }
 
     asyncio.run(scenario())
 
