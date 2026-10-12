@@ -950,6 +950,9 @@ def test_a_client_steps_prompt_ends_with_the_skills_catalogue_each_skill_from_it
 
         [called] = recorded_calls(calls)
         _, catalogue = called.stdin.split("</factory-run-data>\n\n# Skills\n")
+        listed = {line.split(" ")[1] for line in catalogue.splitlines() if line.startswith("- ")}
+        carried = {skill.parent.name for skill in (instance.path / "skills").glob("*/SKILL.md")}
+        assert carried <= listed
         assert [line for line in catalogue.splitlines() if line.startswith("- tdd ")] == [
             f"- tdd ({instance.path / 'skills' / 'tdd' / 'SKILL.md'}): Test-driven development. "
             'Use when the user wants to build features or fix bugs test-first, mentions "red-green'

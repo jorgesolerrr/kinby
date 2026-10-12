@@ -63,6 +63,36 @@ Handle the delivery.
     assert body == "Handle the delivery."
 
 
+def test_parse_frontmatter_reads_folded_and_literal_block_values() -> None:
+    document = """---
+name: ponytail
+description: >
+  Lazy senior dev mode: the smallest change
+  that fully solves the task.
+
+  Levels: lite, full.
+notes: |-
+  First line.
+    Kept indent.
+license: MIT
+---
+Body.
+"""
+
+    frontmatter, body = parse_frontmatter(document)
+
+    assert frontmatter == {
+        "name": "ponytail",
+        "description": (
+            "Lazy senior dev mode: the smallest change that fully solves the task.\n"
+            "Levels: lite, full."
+        ),
+        "notes": "First line.\n  Kept indent.",
+        "license": "MIT",
+    }
+    assert body == "Body."
+
+
 def test_parse_frontmatter_rejects_indented_fields_outside_a_table() -> None:
     document = """---
 description: News
