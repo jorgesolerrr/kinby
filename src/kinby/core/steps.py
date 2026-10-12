@@ -114,6 +114,7 @@ async def _run_client_step(
         step.client,
         render_step_message(step.prompt, command.work_item, command.results),
         instance.manifest.workspace.path,
+        state_dir=instance.manifest.state_dir,
         resume=step.resume,
         timeout_seconds=step.timeout_seconds,
         model=step.model,
