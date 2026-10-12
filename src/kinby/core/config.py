@@ -451,7 +451,12 @@ class InstanceConfig:
         _check_unchanged(self._instance.path, _skill_config_file(command.name), command.hash)
         with self._recorded_skill(command.name):
             try:
-                write_skill(self._instance, command.name, command.content)
+                write_skill(
+                    self._instance.path / SKILLS_DIR,
+                    command.name,
+                    command.content,
+                    self._instance.path,
+                )
             except ValueError as exc:
                 raise InvalidConfig({"content": str(exc)}) from exc
         return skill_result(directory)

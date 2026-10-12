@@ -223,7 +223,8 @@ class HubRegistry:
                     url TEXT NOT NULL,
                     path TEXT NOT NULL,
                     ref TEXT,
-                    git_commit TEXT NOT NULL
+                    git_commit TEXT NOT NULL,
+                    hash TEXT NOT NULL
                 );
                 """
             )
@@ -1505,13 +1506,27 @@ class HubRegistry:
             for name, url, path, ref, commit in rows
         }
 
-    def record_git_skill(self, name: SkillName, source: GitSource) -> None:
+    def record_git_skill(self, name: SkillName, source: GitSource, landed: FileHash) -> None:
         with self._connect() as connection:
             connection.execute(
-                "INSERT OR REPLACE INTO git_skills (name, url, path, ref, git_commit)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (name, source.url, source.path, source.ref, source.commit),
+                "INSERT OR REPLACE INTO git_skills (name, url, path, ref, git_commit, hash)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (name, source.url, source.path, source.ref, source.commit, landed),
             )
+
+    def forget_git_skill(self, name: SkillName) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM git_skills WHERE name = ?", (name,))
+
+    def landed_skills(self) -> dict[SkillName, FileHash]:
+        """The hash each shipped or git skill had when it landed in the library, by name.
+
+        A git skill's wins over a shipped one's of the same name, which the user deleted.
+        """
+        with self._connect() as connection:
+            shipped = connection.execute("SELECT name, hash FROM shipped_skills").fetchall()
+            git = connection.execute("SELECT name, hash FROM git_skills").fetchall()
+        return {SkillName(name): FileHash(hash) for name, hash in (*shipped, *git)}
 
     def open_run(
         self,

@@ -55,16 +55,16 @@ def _next_firing(schedule: CronSchedule, instance: Instance) -> datetime:
     return next(CronSim(schedule, datetime.now(zone)))
 
 
-def write_skill(instance: Instance, name: str, content: str) -> None:
-    """Write an instance skill's SKILL.md once the skill loader accepts it.
+def write_skill(skills: Path, name: str, content: str, staging: Path) -> None:
+    """Write the SKILL.md of the skill *name* in the folder *skills* once the skill loader
+    accepts it.
 
-    The skill is staged beside the instance and renamed into place, keeping its other files.
+    The skill is staged in *staging* and renamed into place, keeping its other files.
     """
     validate_name(name)
-    skills = instance.path / SKILLS_DIR
     skills.mkdir(parents=True, exist_ok=True)
     target = skills / name
-    with TemporaryDirectory(prefix=".skill-", dir=instance.path) as temporary:
+    with TemporaryDirectory(prefix=".skill-", dir=staging) as temporary:
         staged = Path(temporary) / name
         if target.is_dir():
             shutil.copytree(target, staged)
@@ -290,7 +290,7 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         validate_name(name)
         shadow = describe_skill_shadow(context.instance, SkillName(name))
         with _recorded(context, ConfigFile(f"{SKILLS_DIR}/{name}")):
-            write_skill(context.instance, name, content)
+            write_skill(context.instance.path / SKILLS_DIR, name, content, context.instance.path)
         result = f"Wrote skills/{name}/SKILL.md."
         if shadow is not None:
             result = f"{result} Shadows {shadow}."

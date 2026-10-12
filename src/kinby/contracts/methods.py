@@ -73,7 +73,9 @@ from kinby.contracts.models import (
     LibraryGitPreviewResult,
     LibraryListCommand,
     LibraryListResult,
+    LibrarySkillDeleteCommand,
     LibrarySkillReadCommand,
+    LibrarySkillWriteCommand,
     LifecycleOperationResult,
     ManifestGetCommand,
     ManifestResult,
@@ -380,6 +382,12 @@ LIBRARY_LIST = Method("library.list", Scope.HUB_READ, LibraryListCommand, Librar
 LIBRARY_SKILL_READ = Method(
     "library.skill.read", Scope.HUB_READ, LibrarySkillReadCommand, SkillResult
 )
+LIBRARY_SKILL_WRITE = Method(
+    "library.skill.write", Scope.HUB_ADMIN, LibrarySkillWriteCommand, SkillResult
+)
+LIBRARY_SKILL_DELETE = Method(
+    "library.skill.delete", Scope.HUB_ADMIN, LibrarySkillDeleteCommand, LibraryListResult
+)
 #: Admin only: the hub fetches whatever the address names, a path on the hub included.
 LIBRARY_GIT_PREVIEW = Method(
     "library.git.preview", Scope.HUB_ADMIN, LibraryGitPreviewCommand, LibraryGitPreviewResult
@@ -479,6 +487,8 @@ METHODS = (
     FACTORY_RUN_CANCEL,
     LIBRARY_LIST,
     LIBRARY_SKILL_READ,
+    LIBRARY_SKILL_WRITE,
+    LIBRARY_SKILL_DELETE,
     LIBRARY_GIT_PREVIEW,
     LIBRARY_GIT_ADD,
     INSTANCE_PICKS_GET,
