@@ -59,9 +59,11 @@ def lock_hash(instance_path: Path) -> FileHash | None:
     return file_hash(path.read_bytes()) if path.is_file() else None
 
 
-def write_lock(path: Path, lock: SkillsLock) -> None:
+def write_lock(instance_path: Path, lock: SkillsLock) -> None:
     ordered = SkillsLock(skills=dict(sorted(lock.skills.items())))
-    path.write_text(ordered.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    (instance_path / SKILLS_LOCK_NAME).write_text(
+        ordered.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def skill_hash(folder: Path) -> FileHash:
@@ -75,7 +77,7 @@ def skill_hash(folder: Path) -> FileHash:
 
 
 def _collation_key(path: str) -> tuple[list[int], list[bool]]:
-    return [_collation_rank(char.lower()) for char in path], [char.isupper() for char in path]
+    return [_collation_rank(char) for char in path.lower()], [char.isupper() for char in path]
 
 
 def _collation_rank(char: str) -> int:

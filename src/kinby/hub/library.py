@@ -145,8 +145,7 @@ class Library:
             for name in added:
                 shutil.copytree(folders[name], staged / name)
                 picked[name] = LockedSkill.of(staged / name, _source(name, shipped))
-            new_lock = Path(temporary) / SKILLS_LOCK_NAME
-            write_lock(new_lock, SkillsLock(skills=picked))
+            write_lock(Path(temporary), SkillsLock(skills=picked))
             with recorded_changes(
                 instance, (*changed, ConfigFile(SKILLS_LOCK_NAME)), ConfigActor.APP
             ):
@@ -156,7 +155,7 @@ class Library:
                         (held / name).rename(removed / name)
                 for name in added:
                     (staged / name).rename(held / name)
-                new_lock.replace(instance.path / SKILLS_LOCK_NAME)
+                (Path(temporary) / SKILLS_LOCK_NAME).replace(instance.path / SKILLS_LOCK_NAME)
         return self.picks(instance.path)
 
 

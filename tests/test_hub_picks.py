@@ -326,3 +326,11 @@ def test_the_content_hash_orders_files_outside_the_collation_after_it_by_code_po
         expected.update(name.encode())
 
     assert skill_hash(skill) == expected.hexdigest()
+
+
+def test_the_content_hash_takes_a_file_name_whose_lowercase_is_longer(tmp_path):
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "İ.md").write_text("x", encoding="utf-8")
+
+    assert skill_hash(skill) == hashlib.sha256("İ.md".encode() + b"x").hexdigest()
