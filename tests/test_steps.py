@@ -38,6 +38,7 @@ from kinby.contracts import (
     ThreadListResult,
     ToolResult,
     UsageSource,
+    Warning,
 )
 from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
 from kinby.core.events import EventLog
@@ -918,6 +919,48 @@ def test_a_claude_step_waits_for_the_commands_claude_left_running_in_the_backgro
 
         [called] = recorded_calls(calls)
         assert called.background_wait == "0"
+
+    asyncio.run(scenario())
+
+
+def test_a_client_steps_prompt_has_no_skills_catalogue_when_the_instance_has_no_skills(
+    tmp_path, monkeypatch
+):
+    runtime, _ = step_instance(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    async def scenario() -> None:
+        await run_client_step(runtime.dispatcher, "claude")
+
+        [called] = recorded_calls(calls)
+        assert called.stdin.endswith("</factory-run-data>")
+        assert "# Skills" not in called.stdin
+
+    asyncio.run(scenario())
+
+
+def test_a_client_step_records_a_warning_for_a_skill_it_could_not_load(tmp_path, monkeypatch):
+    instance = instance_at(tmp_path)
+    instance.manifest.workspace.path.mkdir(parents=True)
+    broken = tmp_path / "skills" / "broken" / "SKILL.md"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("No frontmatter.\n")
+    stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    dispatcher, log = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        await run_client_step(dispatcher, "claude")
+
+        assert [
+            (event.thread_id, event.payload)
+            for event in log.all_events()
+            if isinstance(event.payload, Warning)
+        ] == [
+            (
+                ORIGIN.run_id,
+                Warning(sources=(str(broken),), message="Skill frontmatter is missing."),
+            )
+        ]
 
     asyncio.run(scenario())
 

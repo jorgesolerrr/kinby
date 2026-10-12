@@ -10,5 +10,3 @@ A good result:
 - Is committed on the branch, and `bun run check` passes.
 
 The factory pushes the branch.
-
-Read a skill from /instance/skills/<name>/SKILL.md. Paths in a skill are relative to its own directory.

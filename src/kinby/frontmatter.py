@@ -1,6 +1,7 @@
 """Parse the frontmatter and body from a markdown document."""
 
 import json
+from textwrap import dedent
 
 type FrontmatterValue = str | list[str] | dict[str, str]
 
@@ -45,6 +46,33 @@ def render_frontmatter_value(value: str | tuple[str, ...]) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _joined_block_values(lines: list[str]) -> list[str]:
+    """Each `key: >` or `key: |` field and its indented lines, as one `key: "text"` line.
+
+    A folded value joins its lines with spaces and its paragraphs with newlines. A literal value
+    keeps its lines. Neither keeps a trailing newline.
+    """
+    joined: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        key, _, value = line.partition(":")
+        style = value.strip().rstrip("+-")
+        if line[:1].isspace() or style not in (">", "|"):
+            joined.append(line)
+            continue
+        block: list[str] = []
+        while index < len(lines) and (not lines[index].strip() or lines[index][:1].isspace()):
+            block.append(lines[index])
+            index += 1
+        text = dedent("\n".join(block)).strip("\n")
+        if style == ">":
+            text = "\n".join(" ".join(part.split("\n")) for part in text.split("\n\n"))
+        joined.append(f"{key}: {json.dumps(text)}")
+    return joined
+
+
 def parse_frontmatter(document: str) -> tuple[dict[str, FrontmatterValue], str]:
     """Parse `key: value` frontmatter and return it with the markdown body."""
     lines = document.splitlines()
@@ -56,7 +84,7 @@ def parse_frontmatter(document: str) -> tuple[dict[str, FrontmatterValue], str]:
         raise FrontmatterError("Frontmatter is missing.") from exc
     values: dict[str, FrontmatterValue] = {}
     table: dict[str, str] | None = None
-    for line in lines[1:closing]:
+    for line in _joined_block_values(lines[1:closing]):
         stripped = line.lstrip()
         indented = bool(stripped) and line[: len(line) - len(stripped)] != ""
         key, separator, value = stripped.partition(":")
