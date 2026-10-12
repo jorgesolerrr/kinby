@@ -761,3 +761,132 @@ def test_an_edit_that_fails_to_swap_in_keeps_the_last_good_factory(tmp_path, mon
         assert await read(client) == before
 
     asyncio.run(scenario())
+
+
+BYTECODE = b"\xa7\r\r\n\x00\xff"
+
+
+def test_get_leaves_out_the_bytecode_python_writes_beside_the_factorys_python(tmp_path):
+    hub = factory_hub(tmp_path)
+    folder = tmp_path / "hub" / "factories" / "tickets"
+    write_factory(folder, FILES)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        before = await read(client)
+        bytecode = folder / "instances" / "coder" / "hooks" / "__pycache__" / "x.pyc"
+        bytecode.parent.mkdir()
+        bytecode.write_bytes(BYTECODE)
+        after = await read(client)
+        edited = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(
+                name="tickets", files={"prompts/review.md": "Review it.\n"}, hash=before.hash
+            ),
+        )
+
+        assert after == before
+        assert isinstance(edited, FactoryResult)
+
+    asyncio.run(scenario())
+
+
+def test_editing_a_shipped_factory_leaves_its_bytecode_behind(tmp_path):
+    hub = factory_hub(tmp_path, shipped={"software": renamed(FILES, "software")})
+    bytecode = tmp_path / "shipped" / "software" / "instances" / "coder" / "tools" / "__pycache__"
+    bytecode.mkdir()
+    (bytecode / "github.pyc").write_bytes(BYTECODE)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        before = await read(client, "software")
+        edited = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(
+                name="software", files={"prompts/review.md": "Review it.\n"}, hash=before.hash
+            ),
+        )
+
+        assert isinstance(edited, FactoryResult)
+        assert not list((tmp_path / "hub" / "factories" / "software").rglob("__pycache__"))
+
+    asyncio.run(scenario())
+
+
+def test_get_names_a_factory_file_that_is_not_text(tmp_path):
+    hub = factory_hub(tmp_path)
+    folder = tmp_path / "hub" / "factories" / "tickets"
+    write_factory(folder, FILES)
+    (folder / "prompts" / "logo.png").write_bytes(BYTECODE)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        refused = await client.call(FACTORY_GET, FactoryGetCommand(name="tickets"))
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert refused.fields == {"files": '"prompts/logo.png" is not UTF-8 text.'}
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_keeps_an_empty_instance_template(tmp_path):
+    hub = factory_hub(tmp_path)
+    folder = tmp_path / "hub" / "factories" / "tickets"
+    write_factory(
+        folder,
+        FILES
+        | {
+            "factory.yaml": FACTORY.replace(
+                "  coder: { image: coder }", "  coder: { image: coder }\n  helper: {}"
+            )
+        },
+    )
+    (folder / "instances" / "helper").mkdir()
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        before = await read(client)
+        edited = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(
+                name="tickets", files={"prompts/review.md": "Review it.\n"}, hash=before.hash
+            ),
+        )
+
+        assert isinstance(edited, FactoryResult)
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_keeps_an_instance_template_that_links_to_a_folder(tmp_path):
+    hub = factory_hub(tmp_path)
+    folder = tmp_path / "hub" / "factories" / "tickets"
+    write_factory(
+        folder, {name: content for name, content in FILES.items() if "instances/" not in name}
+    )
+    template = tmp_path / "coder"
+    write_factory(
+        template,
+        {
+            name.removeprefix("instances/coder/"): content
+            for name, content in FILES.items()
+            if name.startswith("instances/coder/")
+        },
+    )
+    (folder / "instances").mkdir()
+    (folder / "instances" / "coder").symlink_to(template, target_is_directory=True)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        before = await read(client)
+        edited = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(
+                name="tickets", files={"prompts/review.md": "Review it.\n"}, hash=before.hash
+            ),
+        )
+
+        assert isinstance(edited, FactoryResult)
+
+    asyncio.run(scenario())
