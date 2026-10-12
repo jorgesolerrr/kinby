@@ -753,6 +753,10 @@ A durable message about a **routine**'s first failure in a streak or its automat
 
 The rule that counts consecutive failed **firings**, reports the first failure, and disables a **routine** at ten failures. Successful work resets the count; no work, interruption, and daily-budget refusal leave it unchanged.
 
+### Failure reset
+
+The **scheduler**'s record that a **routine** the **failure policy** disabled is enabled again, whoever enabled it. It goes on the turn of the failed **firing** that caused the disable, once, and the routine's next failure is a first failure. The disable notice stays.
+
 ### Cron schedule
 
 A five-field recurrence rule for a **routine**, interpreted in the instance's time zone.

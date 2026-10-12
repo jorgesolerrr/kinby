@@ -4,6 +4,6 @@ The September 5 research review for [#113](https://github.com/jorgesolerrr/kinby
 
 Code-step errors, model errors, and per-turn budget exhaustion count as failed firings. Successful work resets the count, including a successful manual run. A code step returning `None`, a user interruption, and a refusal at the daily cost limit neither increment nor reset it. A parked approval is not a failure. Count firings, not retries of the same firing.
 
-Report the first failure and the automatic disable, and keep every failure in the history. `routine.list` and the REPL expose the status until channels provide delivery. Re-enabling requires an explicit edit or a future gated routine operation. A manual run never re-enables the routine by itself.
+Report the first failure and the automatic disable, and keep every failure in the history. `routine.list` and the REPL expose the status until channels provide delivery. Re-enabling requires an explicit edit or a future gated routine operation. A re-enable after an automatic disable resets the streak, whoever made it ([ADR 0086](0086-a-reenable-after-an-automatic-disable-resets-the-failure-streak.md)). A manual run never re-enables the routine by itself.
 
 No hard minimum interval or enabled-routine cap is added. Deterministic checks may run frequently without model spend. The writing skill recommends suitable schedules and push sources when available.

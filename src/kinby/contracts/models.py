@@ -154,6 +154,7 @@ class EventType(StrEnum):
     RUN_DELEGATED = "run.delegated"
     MEMORY_RECAPPED = "memory.recapped"
     ROUTINE_FAILURE_HANDLED = "routine.failure.handled"
+    ROUTINE_FAILURES_RESET = "routine.failures.reset"
     SIGNAL_RECEIVED = "signal.received"
     WORKSPACE_REVERTED = "workspace.reverted"
 
@@ -426,6 +427,11 @@ class RoutineFailureHandled(ContractModel):
     notice: RoutineNotice | None = None
 
 
+class RoutineFailuresReset(ContractModel):
+    type: Literal[EventType.ROUTINE_FAILURES_RESET] = EventType.ROUTINE_FAILURES_RESET
+    name: RoutineName
+
+
 class Delivery(ContractModel):
     headers: dict[str, str]
     content_type: str
@@ -457,6 +463,7 @@ Payload = Annotated[
     | RunDelegated
     | MemoryRecapped
     | RoutineFailureHandled
+    | RoutineFailuresReset
     | SignalReceived
     | WorkspaceReverted,
     Field(discriminator="type"),

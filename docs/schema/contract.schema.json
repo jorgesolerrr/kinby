@@ -915,6 +915,7 @@
               "mode.pinned": "#/$defs/ModePinned",
               "model.completed": "#/$defs/ModelCompleted",
               "routine.failure.handled": "#/$defs/RoutineFailureHandled",
+              "routine.failures.reset": "#/$defs/RoutineFailuresReset",
               "run.delegated": "#/$defs/RunDelegated",
               "signal.received": "#/$defs/SignalReceived",
               "tool.call": "#/$defs/ToolCall",
@@ -978,6 +979,9 @@
             },
             {
               "$ref": "#/$defs/RoutineFailureHandled"
+            },
+            {
+              "$ref": "#/$defs/RoutineFailuresReset"
             },
             {
               "$ref": "#/$defs/SignalReceived"
@@ -3970,6 +3974,25 @@
         "type"
       ],
       "title": "RoutineFailureHandled",
+      "type": "object"
+    },
+    "RoutineFailuresReset": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "const": "routine.failures.reset",
+          "default": "routine.failures.reset",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "title": "RoutineFailuresReset",
       "type": "object"
     },
     "RoutineFile": {

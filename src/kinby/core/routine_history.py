@@ -11,14 +11,15 @@ from kinby.contracts import (
     Event,
     MessageDelta,
     RoutineFailureHandled,
+    RoutineFailuresReset,
     RoutineLastRun,
     RoutineName,
     RoutineNotice,
+    RoutineNoticeKind,
     RoutineOrigin,
     RoutineRunOutcome,
     SignalReceived,
     ToolCall,
-    ToolResult,
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
@@ -43,6 +44,7 @@ class RoutineHistory:
     failure_count: int = 0
     last_failure: str | None = None
     notices: list[RoutineNotice] = field(default_factory=list)
+    disable_notice: RoutineNotice | None = None
     pending: list[PendingDelivery] = field(default_factory=list)
 
 
@@ -62,7 +64,6 @@ class RoutineHistories:
 
 def routine_history(events: Iterable[Event]) -> RoutineHistories:
     histories: dict[RoutineName, RoutineHistory] = {}
-    enable_calls: dict[tuple[TurnKey, str], RoutineName] = {}
     runs: dict[TurnKey, tuple[RoutineName, RoutineLastRun]] = {}
     texts: dict[TurnKey, str] = {}
     closed: set[TurnKey] = set()
@@ -72,18 +73,6 @@ def routine_history(events: Iterable[Event]) -> RoutineHistories:
     for receipt_order, event in enumerate(events):
         key = TurnKey(event.thread_id, event.turn_id)
         payload = event.payload
-        if isinstance(payload, ToolCall) and payload.name == "routine_set_enabled":
-            name = payload.arguments.get("name")
-            if payload.arguments.get("enabled") is True and isinstance(name, str):
-                enable_calls[(key, payload.call_id)] = RoutineName(name)
-        elif isinstance(payload, ToolResult):
-            name = enable_calls.pop((key, payload.call_id), None)
-            if name is not None and payload.name == "routine_set_enabled" and not payload.error:
-                history = histories.setdefault(name, RoutineHistory())
-                history.failure_count = 0
-                failures = {
-                    key: failure for key, failure in failures.items() if failure.name != name
-                }
         if isinstance(payload, SignalReceived):
             if key in pending:
                 continue
@@ -99,8 +88,16 @@ def routine_history(events: Iterable[Event]) -> RoutineHistories:
             pending[key] = payload.origin.name, item
         elif isinstance(payload, RoutineFailureHandled):
             if key not in handled and payload.notice is not None:
-                histories.setdefault(payload.name, RoutineHistory()).notices.append(payload.notice)
+                history = histories.setdefault(payload.name, RoutineHistory())
+                history.notices.append(payload.notice)
+                if payload.notice.kind is RoutineNoticeKind.DISABLED:
+                    history.disable_notice = payload.notice
             handled.add(key)
+        elif isinstance(payload, RoutineFailuresReset):
+            history = histories.setdefault(payload.name, RoutineHistory())
+            history.failure_count = 0
+            history.disable_notice = None
+            failures = {key: f for key, f in failures.items() if f.name != payload.name}
         elif isinstance(payload, TurnStarted) and isinstance(payload.origin, RoutineOrigin):
             queued = pending.pop(key, None)
             if queued is not None:
@@ -133,6 +130,7 @@ def routine_history(events: Iterable[Event]) -> RoutineHistories:
                     run.outcome = RoutineRunOutcome(outcome.value)
                     if outcome is CompletionOutcome.WORK:
                         history.failure_count = 0
+                        history.disable_notice = None
                         failures = {key: f for key, f in failures.items() if f.name != name}
                 case TurnFailed(message=reason):
                     run.outcome = RoutineRunOutcome.FAILED

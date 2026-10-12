@@ -123,6 +123,7 @@ class ScriptedRunner:
 def runtime(instance, clock, runner=None):
     return build_dispatcher(
         instance.manifest.state_dir,
+        event_log=EventLog(instance.manifest.state_dir, clock=clock),
         turns=ScheduledTurnConfig(
             TurnConfig(
                 fixed_turn_preparation, fixed_permission_ceiling, runner or ScriptedRunner()
@@ -354,6 +355,64 @@ def test_reload_and_invalid_schedules(tmp_path):
         listed = await call(dispatcher, "routine.list")
         assert listed.routines == []
         assert len(listed.warnings) == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_rescheduled_routine_does_not_fire_for_a_time_already_past(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        path = routine_file(instance, "description: News\nschedule: 0 9 * * *")
+        clock = FakeClock(datetime(2026, 9, 7, 8, 59, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        clock.now = datetime(2026, 9, 7, 9, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+        clock.now = datetime(2026, 9, 7, 15, tzinfo=UTC)
+        path.write_text(path.read_text().replace("0 9 * * *", "0 12 * * *"))
+
+        await dispatcher.scheduler.tick()
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 1
+        listed = await call(dispatcher, "routine.list")
+        assert listed.routines[0].next_run == datetime(2026, 9, 8, 12, tzinfo=UTC)
+
+    asyncio.run(scenario())
+
+
+def test_a_routine_enabled_days_after_it_was_disabled_does_not_fire_at_once(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        path = routine_file(instance, "description: News\nschedule: 0 9 * * *")
+        clock = FakeClock(datetime(2026, 9, 7, 8, 59, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        clock.now = datetime(2026, 9, 7, 9, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+        await call(dispatcher, "routine.set_enabled", name="news", enabled=False)
+        await dispatcher.scheduler.tick()
+        clock.now = datetime(2026, 9, 11, 15, tzinfo=UTC)
+        await call(dispatcher, "routine.set_enabled", name="news", enabled=True)
+
+        await dispatcher.scheduler.tick()
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 1
+        listed = await call(dispatcher, "routine.list")
+        assert listed.routines[0].next_run == datetime(2026, 9, 12, 9, tzinfo=UTC)
+        assert "enabled: true" in path.read_text()
+
+    asyncio.run(scenario())
+
+
+def test_a_listed_next_run_is_when_the_routine_fires(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nschedule: 0 9 * * *\nenabled: false")
+        clock = FakeClock(datetime(2026, 9, 7, 8, 59, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        await call(dispatcher, "routine.set_enabled", name="news", enabled=True)
+        listed = await call(dispatcher, "routine.list")
+        assert listed.routines[0].next_run == datetime(2026, 9, 7, 9, tzinfo=UTC)
+
+        clock.now = datetime(2026, 9, 7, 9, 1, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+        assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 1
 
     asyncio.run(scenario())
 
@@ -1384,31 +1443,85 @@ def test_reenable_with_failed_history_is_not_undone(tmp_path):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize(
-    ("enabled", "error", "failure_count"),
-    [(True, False, 0), (True, True, 1), (False, False, 1)],
-)
-def test_routine_enable_result_controls_failure_history(
-    tmp_path: Path,
-    enabled: bool,
-    error: bool,
-    failure_count: int,
-) -> None:
-    async def scenario() -> None:
+async def fail_routine(dispatcher, times):
+    for _ in range(times):
+        accepted = await call(dispatcher, "routine.run", name="news")
+        await events_for(dispatcher, accepted.thread_id)
+        await dispatcher.scheduler.drain()
+
+
+@pytest.mark.parametrize("reenable", ["app", "file"])
+def test_reenabling_an_automatically_disabled_routine_resets_its_failures(tmp_path, reenable):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        path = routine_file(instance, "description: News\nenabled: true")
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, tzinfo=UTC)), FailingRunner())
+        await fail_routine(dispatcher, 10)
+        if reenable == "app":
+            await call(dispatcher, "routine.set_enabled", name="news", enabled=True)
+        else:
+            path.write_text(path.read_text().replace("enabled: false", "enabled: true"))
+
+        assert (await call(dispatcher, "routine.list")).routines[0].failure_count == 0
+        await fail_routine(dispatcher, 1)
+        routine = (await call(dispatcher, "routine.list")).routines[0]
+        assert routine.enabled and routine.failure_count == 1
+        assert [notice.kind for notice in routine.notices] == [
+            "first-failure",
+            "disabled",
+            "first-failure",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_run_right_after_a_reenable_counts_its_failure_as_the_first(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nenabled: true")
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, tzinfo=UTC)), FailingRunner())
+        await fail_routine(dispatcher, 10)
+        await call(dispatcher, "routine.set_enabled", name="news", enabled=True)
+
+        await fail_routine(dispatcher, 1)
+        routine = (await call(dispatcher, "routine.list")).routines[0]
+        assert routine.enabled and routine.failure_count == 1
+        assert routine.notices[-1].kind == "first-failure"
+
+    asyncio.run(scenario())
+
+
+def test_a_restart_after_a_reenable_resets_the_failures_once(tmp_path):
+    async def scenario():
+        from kinby.contracts import RoutineFailuresReset
+
+        instance = instance_at(tmp_path)
+        path = routine_file(instance, "description: News\nenabled: true")
+        clock = FakeClock(datetime(2026, 9, 6, tzinfo=UTC))
+        await fail_routine(runtime(instance, clock, FailingRunner()), 10)
+        path.write_text(path.read_text().replace("enabled: false", "enabled: true"))
+
+        restarted = runtime(instance, clock)
+        await restarted.scheduler.tick()
+        await restarted.scheduler.tick()
+        routine = (await call(restarted, "routine.list")).routines[0]
+        assert routine.enabled and routine.failure_count == 0
+        events = EventLog(instance.manifest.state_dir).all_events()
+        assert sum(isinstance(event.payload, RoutineFailuresReset) for event in events) == 1
+
+    asyncio.run(scenario())
+
+
+def test_an_enable_tool_call_below_the_threshold_keeps_the_failure_streak(tmp_path):
+    async def scenario():
         from uuid import uuid4
 
         from kinby.contracts import ToolCall, ToolResult
-        from kinby.core.routine_history import routine_history
 
         instance = instance_at(tmp_path)
         routine_file(instance, "description: News")
-        dispatcher = runtime(
-            instance,
-            FakeClock(datetime(2026, 9, 6, tzinfo=UTC)),
-            FailingRunner(),
-        )
-        accepted = await call(dispatcher, "routine.run", name="news")
-        await events_for(dispatcher, accepted.thread_id)
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, tzinfo=UTC)), FailingRunner())
+        await fail_routine(dispatcher, 3)
         thread_id = uuid4()
         turn_id = uuid4()
         log = EventLog(instance.manifest.state_dir)
@@ -1418,7 +1531,7 @@ def test_routine_enable_result_controls_failure_history(
             ToolCall(
                 call_id="change-1",
                 name="routine_set_enabled",
-                arguments={"name": "news", "enabled": enabled},
+                arguments={"name": "news", "enabled": True},
                 write=True,
             ),
         )
@@ -1426,16 +1539,11 @@ def test_routine_enable_result_controls_failure_history(
             thread_id,
             turn_id,
             ToolResult(
-                call_id="change-1",
-                name="routine_set_enabled",
-                output="failed" if error else "disabled",
-                error=error,
+                call_id="change-1", name="routine_set_enabled", output="enabled", error=False
             ),
         )
 
-        histories = routine_history(log.all_events())
-        assert histories.routines[RoutineName("news")].failure_count == failure_count
-        assert len(histories.failures) == failure_count
+        assert (await call(dispatcher, "routine.list")).routines[0].failure_count == 3
 
     asyncio.run(scenario())
 
