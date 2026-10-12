@@ -1,6 +1,6 @@
 # The playground box
 
-The deployed hub and the coders run on the playground box (netcup, Debian 13), served at `kinby.jorgesolerrr.dev`. Read this before you debug any of them. Paths were checked on the box on 2026-10-10.
+The deployed hub and the coders run on the playground box (netcup, Debian 13), served at `kinby.jorgesolerrr.dev`. Read this before you debug any of them. Paths were checked on the box on 2026-10-12.
 
 ## Reaching it
 
@@ -17,9 +17,9 @@ The deployed hub and the coders run on the playground box (netcup, Debian 13), s
 | Checkout of `jorgesolerrr/kinby` | `/home/jorge/dev/kinby`. Cron runs `git fetch` every minute but never merges. |
 | Hub container | `kinby-hub-1`, from `compose.hub.yaml`. Mounts `/home/jorge/kinby-hub` at `/hub` and the checkout at `/source`. |
 | Caddy | `kinby-caddy-1` |
-| Instances | One container per instance, named after its hub instance ID. Data is in `/home/jorge/kinby-hub/instances/<id>`, mounted at `/instance`. Files there are root-owned. |
-| kinby's coder | Instance `software-coder`, from the shipped `software` factory. Its workspace is `/instance/workspace`. |
-| CEC-Agent's coder | Instance `cec-agent-coder`, from the hub's `cec-agent` factory in `/home/jorge/kinby-hub/factories/cec-agent`. `deploy/kinby/factory` in `pb-cec/CEC-Agent` builds that factory. |
+| Instances | One container per instance, named after its hub instance ID, a UUID. Data is in `/home/jorge/kinby-hub/instances/<id>`, mounted at `/instance`. Files there are root-owned. `hub.sh instances` maps each ID to its name. |
+| kinby's coder | The instance `hub.sh instances` lists as `software-coder`, from the shipped `software` factory. Its workspace is `/instance/workspace`, a Docker volume of its own. |
+| CEC-Agent's coder | The instance listed as `cec-agent-coder`, from the hub's `cec-agent` factory in `/home/jorge/kinby-hub/factories/cec-agent`. `deploy/kinby/factory` in `pb-cec/CEC-Agent` builds that factory. |
 | CEC-Agent's test services | `cec-agent-test-postgres` and `cec-agent-test-minio`, from `/home/jorge/cec-agent-kinby/compose.yaml` |
 | Hub registry | `/home/jorge/kinby-hub/registry.sqlite`, which is `/hub/registry.sqlite` in the hub |
 | Hub access token | `/home/jorge/kinby-hub/access-token`. Pipe it and never print it. See `.claude/skills/e2e-pass/SKILL.md`. |
@@ -33,7 +33,7 @@ Each line below is one ssh connection. Join the ones you need into a single call
 # Containers and health
 ssh -o BatchMode=yes playground 'docker ps --format "{{.Names}}\t{{.Status}}"'
 
-# Instance IDs and names
+# Instance IDs and names. Every <id> below is one of these IDs, never a name.
 bash .claude/skills/e2e-pass/hub.sh instances
 
 # Logs (hub, then an instance by its ID). Add -t for timestamps: a frame line has none of its own.
@@ -43,9 +43,18 @@ ssh -o BatchMode=yes playground 'docker logs --since 30m <id> 2>&1 | grep -v "GE
 # Registry: tables are instances, operations, operation_steps, sessions, logins, ...
 ssh -o BatchMode=yes playground 'docker exec kinby-hub-1 python -c "import sqlite3; c=sqlite3.connect(\"/hub/registry.sqlite\"); [print(r) for r in c.execute(\"select id, persona_name, intended_state, runtime_id from instances\")]; [print(r) for r in c.execute(\"select instance_id, kind, state, detail from operations order by rowid desc limit 5\")]"'
 
+# Factory runs and where each stopped. step_attempts holds every step's ending, summary and times by run_id.
+ssh -o BatchMode=yes playground 'docker exec kinby-hub-1 python -c "import sqlite3; c=sqlite3.connect(\"/hub/registry.sqlite\"); [print(r) for r in c.execute(\"select id, factory, work_item, status, step, updated_at from factory_runs order by rowid desc limit 10\")]"'
+
 # What a coder is working on
 ssh -o BatchMode=yes playground 'docker exec <id> git -C /instance/workspace branch --show-current; docker top <id> -eo pid,etimes,args | cut -c1-160'
 ```
+
+## Runs that need a human
+
+A run that stopped stays unfinished in `needs-human`. Putting `ready-for-agent` back on its issue starts nothing while that run exists, because the hub hands the scan the same run again. Restart the run through the hub instead. `factory.run.retry` tries the step it stopped at again, and `factory.run.send_back` sends it to an earlier step. `hub.sh cancel <run-id>` ends it, and then the label starts a new run, unless the issue already has an open agent pull request.
+
+The runs of one coder share its workspace. A run that stops with uncommitted work leaves it there, and the next run's coding step fails on it. Send the stopped run back to `prepare`, which cleans the workspace, before you retry any other.
 
 ## Run transcripts
 
