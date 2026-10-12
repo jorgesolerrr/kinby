@@ -56,7 +56,7 @@ def sync_template(
         target = directory / path
         linked = _linked(directory, path)
         held = file_hash(target.read_bytes()) if not linked and target.is_file() else None
-        if held == wanted:
+        if held == wanted and not linked:
             continue
         if (
             linked

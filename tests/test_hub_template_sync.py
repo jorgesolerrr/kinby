@@ -371,3 +371,22 @@ def test_an_update_keeps_a_folder_of_the_instances_own_where_the_template_wants_
         assert mine.read_text(encoding="utf-8") == "Mine.\n"
 
     asyncio.run(scenario())
+
+
+def test_an_update_keeps_a_link_where_the_template_dropped_its_file(tmp_path):
+    async def scenario() -> None:
+        client = hub_client(install_hub(tmp_path))
+        coder = await _installed_coder(client)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        system = _directory(tmp_path, coder) / "SYSTEM.md"
+        _link_file(_directory(tmp_path, coder), outside)
+        (_factory(tmp_path) / "instances" / "coder" / "SYSTEM.md").unlink()
+
+        outcome = await _update(client, coder)
+
+        assert _template_step(outcome) == "Kept the instance's own SYSTEM.md."
+        assert system.is_symlink()
+        assert (await _notices_by_instance(client))["tickets-coder"] == [CODER_BEHIND]
+
+    asyncio.run(scenario())
