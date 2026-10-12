@@ -1494,7 +1494,7 @@ class HubRegistry:
     def record_shipped_skill(self, name: SkillName, copied: FileHash) -> None:
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO shipped_skills (name, hash) VALUES (?, ?)", (name, copied)
+                "INSERT OR REPLACE INTO shipped_skills (name, hash) VALUES (?, ?)", (name, copied)
             )
 
     def git_skills(self) -> dict[SkillName, GitSource]:

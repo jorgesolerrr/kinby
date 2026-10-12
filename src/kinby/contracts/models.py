@@ -2124,6 +2124,9 @@ class LibraryEntry(ContractModel):
     #: A shipped or git skill the user changed since it landed. A written skill is the user's own,
     #: and never counts as edited.
     edited: bool = False
+    #: A shipped skill this kinby ships a newer version of. A git skill's newer commit shows only
+    #: on a check, which reads its remote.
+    newer: bool = False
 
 
 class LibraryListResult(ContractModel):
@@ -2148,6 +2151,41 @@ class LibrarySkillDeleteCommand(ContractModel):
 
     name: SkillName
     hash: FileHash
+
+
+class LibrarySkillCheckCommand(ContractModel):
+    """Look for a newer version of a shipped or git skill, and change nothing. A git skill's ref
+    is read from its remote."""
+
+    name: SkillName
+
+
+class NewerVersion(ContractModel):
+    #: The commit a git skill's ref names now. None for a shipped skill, whose newer version is
+    #: the one this kinby ships.
+    commit: GitCommit | None
+    #: The library folder's hash, which the diff starts from.
+    hash: FileHash
+    #: From the library's files to the newer version's, as a unified diff.
+    diff: str
+
+
+class LibrarySkillCheckResult(ContractModel):
+    #: None when the skill is current, or was written on the hub.
+    newer: NewerVersion | None
+
+
+class LibrarySkillMoveCommand(ContractModel):
+    """Move a library skill to the newer version a check showed. No instance changes."""
+
+    name: SkillName
+    #: The hash the check showed. STALE when the folder changed since.
+    hash: FileHash
+    #: The commit the check showed for a git skill, which lands even when the ref has moved
+    #: since. None for a shipped skill.
+    commit: GitCommit | None
+    #: Replace a skill the user edited since it landed. Without it, the hub refuses one.
+    overwrite: bool = False
 
 
 class LibraryGitPreviewCommand(ContractModel):

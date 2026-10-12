@@ -57,7 +57,9 @@ from kinby.contracts import (
     LIBRARY_GIT_ADD,
     LIBRARY_GIT_PREVIEW,
     LIBRARY_LIST,
+    LIBRARY_SKILL_CHECK,
     LIBRARY_SKILL_DELETE,
+    LIBRARY_SKILL_MOVE,
     LIBRARY_SKILL_READ,
     LIBRARY_SKILL_WRITE,
     OPERATION_GET,
@@ -437,8 +439,10 @@ class Hub:
             self._images = images
             self._private_url = private_url
             self.factories = FactoryStore(self.directory / "factories", shipped_factories)
-            self.library = Library(self.directory / "skills", self.factories, self.registry)
-            self.library.receive(shipped_skills)
+            self.library = Library(
+                self.directory / "skills", shipped_skills, self.factories, self.registry
+            )
+            self.library.receive()
             self.runs = FactoryRuns(self.registry, self.factories, self._run_step)
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
@@ -482,6 +486,8 @@ class Hub:
             self.dispatcher.register(LIBRARY_SKILL_READ, self.library.read_skill)
             self.dispatcher.register(LIBRARY_SKILL_WRITE, self.library.write_skill)
             self.dispatcher.register(LIBRARY_SKILL_DELETE, self.library.delete_skill)
+            self.dispatcher.register(LIBRARY_SKILL_CHECK, self.library.check)
+            self.dispatcher.register(LIBRARY_SKILL_MOVE, self.library.move)
             self.dispatcher.register(LIBRARY_GIT_PREVIEW, self.library.preview)
             self.dispatcher.register(LIBRARY_GIT_ADD, self.library.add)
             self.dispatcher.register(INSTANCE_PICKS_GET, self.picks)

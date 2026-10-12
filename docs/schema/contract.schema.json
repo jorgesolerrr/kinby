@@ -2619,6 +2619,10 @@
         "name": {
           "type": "string"
         },
+        "newer": {
+          "default": false,
+          "type": "boolean"
+        },
         "source": {
           "$ref": "#/$defs/LibrarySource"
         }
@@ -2753,6 +2757,40 @@
       "title": "LibraryListResult",
       "type": "object"
     },
+    "LibrarySkillCheckCommand": {
+      "additionalProperties": false,
+      "description": "Look for a newer version of a shipped or git skill, and change nothing. A git skill's ref\nis read from its remote.",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "LibrarySkillCheckCommand",
+      "type": "object"
+    },
+    "LibrarySkillCheckResult": {
+      "additionalProperties": false,
+      "properties": {
+        "newer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NewerVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "newer"
+      ],
+      "title": "LibrarySkillCheckResult",
+      "type": "object"
+    },
     "LibrarySkillDeleteCommand": {
       "additionalProperties": false,
       "description": "Delete a skill from the library. Every instance that picked it keeps its copy.",
@@ -2769,6 +2807,39 @@
         "hash"
       ],
       "title": "LibrarySkillDeleteCommand",
+      "type": "object"
+    },
+    "LibrarySkillMoveCommand": {
+      "additionalProperties": false,
+      "description": "Move a library skill to the newer version a check showed. No instance changes.",
+      "properties": {
+        "commit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitCommit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "overwrite": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "hash",
+        "commit"
+      ],
+      "title": "LibrarySkillMoveCommand",
       "type": "object"
     },
     "LibrarySkillReadCommand": {
@@ -3726,6 +3797,34 @@
         "output"
       ],
       "title": "NewModelPrice",
+      "type": "object"
+    },
+    "NewerVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitCommit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diff": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "commit",
+        "hash",
+        "diff"
+      ],
+      "title": "NewerVersion",
       "type": "object"
     },
     "NodeKind": {
@@ -8266,11 +8365,43 @@
           ],
           "type": "object"
         },
+        "library.skill.check": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibrarySkillCheckCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LibrarySkillCheckResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "library.skill.delete": {
           "additionalProperties": false,
           "properties": {
             "command": {
               "$ref": "#/$defs/LibrarySkillDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LibraryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "library.skill.move": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibrarySkillMoveCommand"
             },
             "result": {
               "$ref": "#/$defs/LibraryListResult"
@@ -9136,6 +9267,8 @@
         "library.skill.read",
         "library.skill.write",
         "library.skill.delete",
+        "library.skill.check",
+        "library.skill.move",
         "library.git.preview",
         "library.git.add",
         "instance.picks.get",

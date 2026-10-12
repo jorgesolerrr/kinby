@@ -70,7 +70,7 @@ def recorded_changes(
                 actor=actor,
                 thread_id=thread_id,
                 turn_id=turn_id,
-                diff=_diff(texts, _texts(instance.path, file)),
+                diff=text_diff(texts, _texts(instance.path, file)),
                 hash=_hash(instance.path / file),
             )
         )
@@ -126,7 +126,8 @@ def _texts(instance_path: Path, file: ConfigFile) -> dict[str, str]:
     return texts
 
 
-def _diff(before: dict[str, str], after: dict[str, str]) -> str:
+def text_diff(before: dict[str, str], after: dict[str, str]) -> str:
+    """A unified diff from *before* to *after*, each a text by its path."""
     lines = [
         line
         for name in sorted(before.keys() | after.keys())
