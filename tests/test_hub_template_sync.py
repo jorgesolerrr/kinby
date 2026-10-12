@@ -3,8 +3,11 @@
 import asyncio
 import shutil
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from uuid import UUID
+
+import pytest
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
@@ -18,8 +21,9 @@ from kinby.contracts import (
     OperationState,
     SecretSetup,
 )
+from kinby.hub import BuiltImage, ImageSelection
 from tests.test_factory_install import FILES, WITH_SETUP, install_hub, installed
-from tests.test_hub import FakeRuntime, finished_operation, hub_client
+from tests.test_hub import FakeImages, FakeRuntime, finished_operation, hub_client
 from tests.test_hub_notices import (
     CODER_BEHIND,
     SKILL,
@@ -29,6 +33,18 @@ from tests.test_hub_notices import (
 )
 
 OWN_SKILL = "---\nname: mine\ndescription: The agent's own.\n---\nMine.\n"
+
+
+class EditingImages(FakeImages):
+    """Runs *during_build* while it builds, as an instance may edit itself while an update waits."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.during_build: Callable[[], object] = lambda: None
+
+    async def build(self, selection: ImageSelection) -> BuiltImage:
+        self.during_build()
+        return await super().build(selection)
 
 
 def _factory(tmp_path: Path) -> Path:
@@ -239,5 +255,119 @@ def test_an_update_never_writes_the_instances_memory(tmp_path):
         assert _template_step(outcome) == "Kept the instance's own memory/profile.md."
         profile = _directory(tmp_path, coder) / "memory" / "profile.md"
         assert profile.read_text(encoding="utf-8") == "Works on tickets.\n"
+
+    asyncio.run(scenario())
+
+
+def test_an_update_keeps_a_file_the_instance_changed_while_the_update_waited(tmp_path):
+    async def scenario() -> None:
+        images = EditingImages()
+        client = hub_client(install_hub(tmp_path, images=images))
+        coder = await _installed_coder(client)
+        system = _directory(tmp_path, coder) / "SYSTEM.md"
+        await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues well.\n"})
+        images.during_build = lambda: system.write_text("Edited meanwhile.\n", encoding="utf-8")
+
+        outcome = await _update(client, coder)
+
+        assert _template_step(outcome) == "Kept the instance's own SYSTEM.md."
+        assert system.read_text(encoding="utf-8") == "Edited meanwhile.\n"
+
+    asyncio.run(scenario())
+
+
+def _link_file(directory: Path, outside: Path) -> str:
+    (outside / "SYSTEM.md").write_text("Not the instance's.\n", encoding="utf-8")
+    (directory / "SYSTEM.md").unlink()
+    (directory / "SYSTEM.md").symlink_to(outside / "SYSTEM.md")
+    return "SYSTEM.md"
+
+
+def _link_folder(directory: Path, outside: Path) -> str:
+    shutil.rmtree(directory / "skills")
+    (directory / "skills").symlink_to(outside, target_is_directory=True)
+    return "skills/ponytail/SKILL.md"
+
+
+@pytest.mark.parametrize("link", [_link_file, _link_folder], ids=["file", "folder"])
+def test_an_update_never_writes_through_a_link_the_instance_made(tmp_path, link):
+    async def scenario() -> None:
+        hub = install_hub(tmp_path)
+        coder = await _installed_coder(hub_client(hub))
+        hub.close()
+        with sqlite3.connect(tmp_path / "hub" / "registry.sqlite") as connection:
+            connection.execute("UPDATE factory_members SET baseline = NULL")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        linked = link(_directory(tmp_path, coder), outside)
+        before = {path: path.read_bytes() for path in outside.rglob("*")}
+        client = hub_client(install_hub(tmp_path))
+        await _edit(
+            client,
+            {
+                "instances/coder/SYSTEM.md": "You implement issues well.\n",
+                "instances/coder/skills/ponytail/SKILL.md": SKILL,
+            },
+        )
+
+        outcome = await _update(client, coder)
+
+        assert f"Kept the instance's own {linked}." in _template_step(outcome)
+        assert {path: path.read_bytes() for path in outside.rglob("*")} == before
+
+    asyncio.run(scenario())
+
+
+def test_an_update_moves_a_file_the_template_turned_into_a_folder(tmp_path):
+    async def scenario() -> None:
+        client = hub_client(install_hub(tmp_path, FILES | {"instances/coder/notes": "Notes.\n"}))
+        coder = await _installed_coder(client)
+        template = _factory(tmp_path) / "instances" / "coder"
+        (template / "notes").unlink()
+        (template / "notes").mkdir()
+        (template / "notes" / "today.md").write_text("Today.\n", encoding="utf-8")
+
+        outcome = await _update(client, coder)
+
+        assert _template_step(outcome) == "Wrote notes/today.md. Removed notes."
+        notes = _directory(tmp_path, coder) / "notes" / "today.md"
+        assert notes.read_text(encoding="utf-8") == "Today.\n"
+
+    asyncio.run(scenario())
+
+
+def test_an_update_moves_a_folder_the_template_turned_into_a_file(tmp_path):
+    async def scenario() -> None:
+        files = FILES | {"instances/coder/notes/today.md": "Today.\n"}
+        client = hub_client(install_hub(tmp_path, files))
+        coder = await _installed_coder(client)
+        template = _factory(tmp_path) / "instances" / "coder"
+        shutil.rmtree(template / "notes")
+        (template / "notes").write_text("Notes.\n", encoding="utf-8")
+
+        outcome = await _update(client, coder)
+
+        assert _template_step(outcome) == "Wrote notes. Removed notes/today.md."
+        notes = _directory(tmp_path, coder) / "notes"
+        assert notes.read_text(encoding="utf-8") == "Notes.\n"
+
+    asyncio.run(scenario())
+
+
+def test_an_update_keeps_a_folder_of_the_instances_own_where_the_template_wants_a_file(tmp_path):
+    async def scenario() -> None:
+        files = FILES | {"instances/coder/notes/today.md": "Today.\n"}
+        client = hub_client(install_hub(tmp_path, files))
+        coder = await _installed_coder(client)
+        mine = _directory(tmp_path, coder) / "notes" / "mine.md"
+        mine.write_text("Mine.\n", encoding="utf-8")
+        template = _factory(tmp_path) / "instances" / "coder"
+        shutil.rmtree(template / "notes")
+        (template / "notes").write_text("Notes.\n", encoding="utf-8")
+
+        outcome = await _update(client, coder)
+
+        assert _template_step(outcome) == ("Removed notes/today.md. Kept the instance's own notes.")
+        assert mine.read_text(encoding="utf-8") == "Mine.\n"
 
     asyncio.run(scenario())
