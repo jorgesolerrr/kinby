@@ -174,31 +174,34 @@ class Library:
 
         *served* is the paths of the template's files now. A pick's lock entry hashes the
         instance's copy where it still matches *baseline*, and the library's otherwise, so a copy
-        the instance edited counts as edited locally.
+        the instance edited or linked out of its folder counts as edited locally. A skill an
+        interrupted update already made a pick leaves *baseline* too, keeping its lock entry.
         """
         lock = read_lock(instance_path)
         folders = _skill_folders(self._directory)
         shipped = self._registry.shipped_skills()
         held = instance_path / SKILLS_DIR
+        dropped = skill_names(baseline) - skill_names(served)
         taken = tuple(
             sorted(
                 name
-                for name in skill_names(baseline) - skill_names(served) - lock.skills.keys()
+                for name in dropped - lock.skills.keys()
                 if name in shipped
                 and name in folders
                 and (held / name).is_dir()
                 and not (held / name).is_symlink()
             )
         )
-        prefixes = tuple(f"{SKILLS_DIR}/{name}/" for name in taken)
-        for name, prefix in zip(taken, prefixes, strict=True):
+        for name in taken:
+            prefix = f"{SKILLS_DIR}/{name}/"
             supplied = {path: entry for path, entry in baseline.items() if path.startswith(prefix)}
-            untouched = _file_hashes(held / name, prefix) == supplied
+            untouched = not _linked(held / name) and _file_hashes(held / name, prefix) == supplied
             lock.skills[name] = LockedSkill.of(
                 held / name if untouched else folders[name], LibrarySource.SHIPPED
             )
         if taken:
             write_lock(instance_path, lock)
+        prefixes = tuple(f"{SKILLS_DIR}/{name}/" for name in dropped & lock.skills.keys())
         return {
             path: entry for path, entry in baseline.items() if not path.startswith(prefixes)
         }, taken
@@ -245,6 +248,11 @@ def skill_names(paths: Iterable[str]) -> set[SkillName]:
         for parts in (PurePosixPath(path).parts for path in paths)
         if len(parts) > 2 and parts[0] == SKILLS_DIR
     }
+
+
+def _linked(folder: Path) -> bool:
+    """Whether *folder* holds a link, whose target the hub must never read."""
+    return any(path.is_symlink() for path in folder.rglob("*"))
 
 
 def _file_hashes(folder: Path, prefix: str) -> dict[str, FileHash]:

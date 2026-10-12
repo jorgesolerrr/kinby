@@ -173,6 +173,19 @@ def test_the_coder_role_suggests_the_eight_shipped_skills(tmp_path):
     assert [folder.name for folder in template.iterdir() if folder.is_dir()] == ["implement-ticket"]
 
 
+def test_implement_ticket_names_no_skill_a_coder_may_not_have_picked():
+    skill = SHIPPED_FACTORIES / "software" / "instances" / "coder" / "skills" / "implement-ticket"
+    text = (skill / "SKILL.md").read_text(encoding="utf-8")
+
+    named = [
+        name
+        for name in SUGGESTED_PICKS
+        if re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w-])", text)
+    ]
+
+    assert named == []
+
+
 async def started_coder(hub: Hub, runtime: FakeRuntime) -> UUID:
     """Install the software factory and start its coder, which answers on its control endpoint."""
     client = hub_client(hub)

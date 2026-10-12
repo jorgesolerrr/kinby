@@ -193,3 +193,68 @@ def test_an_update_makes_the_library_skills_an_older_template_supplied_picks(tmp
         )
 
     asyncio.run(scenario())
+
+
+def test_an_update_after_one_interrupted_past_the_lock_keeps_the_skills_it_made_picks(tmp_path):
+    client = hub_client(install_hub(tmp_path, FILES | _shipped("tdd")))
+
+    async def scenario() -> None:
+        coder = (await installed(client)).instances["coder"].instance_id
+        directory = _directory(tmp_path, coder)
+        held = directory / "skills" / "tdd"
+        # The lock an update writes before it stores the baseline without the new picks.
+        (directory / "skills-lock.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "skills": {
+                        "tdd": {
+                            "source": "kinby",
+                            "sourceType": "shipped",
+                            "computedHash": skill_hash(held),
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        shutil.rmtree(_factory(tmp_path) / "instances" / "coder" / "skills")
+
+        outcome = await _update(client, coder)
+
+        assert _template_step(outcome) == 'The files already match template "coder".'
+        assert (held / "SKILL.md").read_bytes() == (
+            SHIPPED_SKILLS / "tdd" / "SKILL.md"
+        ).read_bytes()
+        assert set(_lock(directory)) == {"tdd"}
+
+    asyncio.run(scenario())
+
+
+def test_an_update_never_reads_through_a_link_in_a_skill_it_makes_a_pick(tmp_path, monkeypatch):
+    client = hub_client(install_hub(tmp_path, FILES | _shipped("tdd")))
+    outside = tmp_path / "outside.md"
+    outside.write_text((SHIPPED_SKILLS / "tdd" / "tests.md").read_text(encoding="utf-8"))
+    read_bytes = Path.read_bytes
+
+    def denied(path: Path) -> bytes:
+        if path.resolve() == outside:
+            raise PermissionError(f"Permission denied: {path}")
+        return read_bytes(path)
+
+    async def scenario() -> None:
+        coder = (await installed(client)).instances["coder"].instance_id
+        directory = _directory(tmp_path, coder)
+        linked = directory / "skills" / "tdd" / "tests.md"
+        linked.unlink()
+        linked.symlink_to(outside)
+        shutil.rmtree(_factory(tmp_path) / "instances" / "coder" / "skills")
+        monkeypatch.setattr(Path, "read_bytes", denied)
+
+        outcome = await _update(client, coder)
+
+        assert outcome.state is OperationState.SUCCEEDED, outcome.detail
+        assert linked.is_symlink()
+        assert _lock(directory)["tdd"]["computedHash"] == skill_hash(SHIPPED_SKILLS / "tdd")
+
+    asyncio.run(scenario())
