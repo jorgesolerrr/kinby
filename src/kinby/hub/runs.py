@@ -403,7 +403,7 @@ class FactoryRuns:
                     return prompt
                 asked, hook = AgentStepRun(prompt=prompt), step.hook
             case ClientStep():
-                client_run = self._client_run(run, step)
+                client_run = self._client_run(run, factory, step)
                 if isinstance(client_run, _Refused):
                     return client_run
                 asked, hook = client_run, step.hook
@@ -447,7 +447,9 @@ class FactoryRuns:
         except (FactoryNotFound, OSError) as exc:
             return _Refused(step.id, f'Prompt "{step.prompt}" cannot be read: {exc}')
 
-    def _client_run(self, run: FactoryRun, step: ClientStep) -> ClientStepRun | _Refused:
+    def _client_run(
+        self, run: FactoryRun, factory: FactoryFile, step: ClientStep
+    ) -> ClientStepRun | _Refused:
         """What the client step asks its instance to run.
 
         When the step it resumes recorded no session, that step fails an attempt, as it would for
@@ -458,7 +460,7 @@ class FactoryRuns:
             return prompt
         session = None
         if step.resume is not None:
-            session = self._session(run.run_id, step.resume)
+            session = self._session(run.run_id, factory, step.resume)
             if session is None:
                 return _Refused(
                     step.resume,
@@ -474,13 +476,27 @@ class FactoryRuns:
             effort=step.effort,
         )
 
-    def _session(self, run_id: UUID, step: StepId) -> CodingSessionId | None:
-        """The coding client session of the step's last attempt that recorded one."""
+    def _session(self, run_id: UUID, factory: FactoryFile, step: StepId) -> CodingSessionId | None:
+        """The newest coding client session recorded by any step that shares the step's session.
+
+        Steps share a session when their resumes lead back to the same step. A step that resumes
+        a lost session runs in a new one, which the steps after it continue.
+        """
+        resumes = {
+            other.id: other.resume for other in factory.steps if isinstance(other, ClientStep)
+        }
+
+        def first(step_id: StepId) -> StepId:
+            while (resumed := resumes.get(step_id)) is not None:
+                step_id = resumed
+            return step_id
+
+        sharing = {step} | {other for other in resumes if first(other) == first(step)}
         return next(
             (
                 attempt.session
                 for attempt in reversed(self._registry.attempts(run_id))
-                if attempt.step == step and attempt.session is not None
+                if attempt.step in sharing and attempt.session is not None
             ),
             None,
         )

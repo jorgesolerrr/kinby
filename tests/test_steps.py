@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -42,7 +43,7 @@ from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
 from kinby.core.events import EventLog
 from kinby.core.runtime import InstanceRuntime
 from kinby.hub import ControlEndpoint, ControlUndelivered, HttpInstanceControl
-from kinby.instance.layout import PERMISSIONS_NAME
+from kinby.instance.layout import PERMISSIONS_NAME, STATE_DIR
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_drain import WaitingRunner, booted, call, opened_thread
 from tests.test_gate import ScriptedModel
@@ -254,6 +255,16 @@ async def record_nothing(end: StepEnd) -> None:
 @hook
 def broken(end: StepEnd) -> HookResult:
     raise RuntimeError("the repository is gone")
+
+
+@hook
+def long_winded(end: StepEnd) -> HookResult:
+    raise RuntimeError("first words " + "x" * 5_000_000 + " last words")
+
+
+@hook
+def heavy(end: StepEnd) -> HookResult:
+    return HookResult(values={"diff": "x" * 2_000_000})
 """
 
 
@@ -347,6 +358,64 @@ def test_a_timed_out_step_whose_hook_fails_still_times_out(tmp_path, hook, summa
         assert isinstance(result, StepResult)
         assert result.ending is StepEnding.TIMED_OUT
         assert result.summary == f"The commands ran past the step's timeout of 1s.\n{summary}"
+
+    asyncio.run(scenario())
+
+
+def test_a_long_summary_keeps_its_start_and_its_end_and_says_how_much_was_cut(tmp_path):
+    runtime, _ = hooked_instance(tmp_path)
+
+    async def scenario() -> None:
+        result = await run_hooked_step(runtime.dispatcher, "long_winded", "touch made")
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert len(result.summary) < 16_100
+        assert result.summary.startswith(
+            'Every command exited with code 0.\nHook "long_winded" failed: RuntimeError: first '
+        )
+        assert result.summary.endswith("x last words")
+        assert re.search(r"\n\[4,98\d,\d{3} characters cut\]\n", result.summary)
+
+    asyncio.run(scenario())
+
+
+def test_the_hub_reads_a_step_whose_hook_failed_with_megabytes_of_message(tmp_path):
+    runtime, _ = hooked_instance(tmp_path)
+
+    async def scenario() -> None:
+        async with served_dispatcher(runtime.dispatcher) as address:
+            result = await HttpInstanceControl().run_step(
+                ControlEndpoint(f"http://{address.host}:{address.port}", TOKEN),
+                StepRunCommand(
+                    step=CommandStepRun(run=["touch made"]),
+                    hook="long_winded",
+                    origin=ORIGIN,
+                    work_item={},
+                ),
+            )
+
+        assert result.ending is StepEnding.FAILED
+        assert 'Hook "long_winded" failed: RuntimeError: first words' in result.summary
+        assert result.summary.endswith("x last words")
+
+    asyncio.run(scenario())
+
+
+def test_a_result_too_large_to_send_fails_the_step_and_names_its_size(tmp_path):
+    runtime, _ = hooked_instance(tmp_path)
+
+    async def scenario() -> None:
+        result = await run_hooked_step(runtime.dispatcher, "heavy", "touch made")
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert result.values == {}
+        assert re.fullmatch(
+            r"Every command exited with code 0\.\n"
+            r"The step's result is 2,000,\d{3} bytes, over the 1,048,576-byte limit\.",
+            result.summary,
+        )
 
     asyncio.run(scenario())
 
@@ -735,7 +804,8 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
         "import json, os, sys, time\n"
         f"with open({str(calls)!r}, 'a') as calls:\n"
         "    json.dump({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'stdin': sys.stdin.read(),\n"
-        f"               'api_keys': [name for name in {API_KEYS!r} if name in os.environ]}},\n"
+        f"               'api_keys': [name for name in {API_KEYS!r} if name in os.environ],\n"
+        "               'config_dir': os.environ.get('CLAUDE_CONFIG_DIR')},\n"
         "              calls)\n"
         "    calls.write('\\n')\n"
         f"{then}\n"
@@ -744,6 +814,7 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
     monkeypatch.setenv("PATH", f"{executable.parent}{os.pathsep}{os.environ['PATH']}")
     for variable in API_KEYS:
         monkeypatch.setenv(variable, "sk-test")
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     return calls
 
 
@@ -761,6 +832,8 @@ class ClientCall:
     stdin: str
     #: The API keys the client saw.
     api_keys: list[str]
+    #: Where Claude keeps its sessions, when the client was told.
+    config_dir: str | None
 
 
 def recorded_calls(calls: Path) -> list[ClientCall]:
@@ -786,7 +859,7 @@ async def run_client_step(
 
 
 @pytest.mark.parametrize(
-    ("client", "stream", "session", "arguments", "kept"),
+    ("client", "stream", "session", "arguments", "kept", "config_dir"),
     [
         (
             "claude",
@@ -794,6 +867,7 @@ async def run_client_step(
             "claude-1",
             ["-p", "--permission-mode", "acceptEdits"],
             ["OPENAI_API_KEY", "CODEX_API_KEY"],
+            f"{STATE_DIR}/claude",
         ),
         (
             "codex",
@@ -801,11 +875,12 @@ async def run_client_step(
             "codex-1",
             ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox"],
             ["ANTHROPIC_API_KEY"],
+            None,
         ),
     ],
 )
 def test_a_client_step_runs_the_client_in_the_workspace_with_the_prompt_and_keeps_its_session(
-    tmp_path, monkeypatch, client, stream, session, arguments, kept
+    tmp_path, monkeypatch, client, stream, session, arguments, kept, config_dir
 ):
     runtime, workspace = step_instance(tmp_path)
     calls = stub_client(tmp_path, monkeypatch, client, streaming(stream))
@@ -822,6 +897,7 @@ def test_a_client_step_runs_the_client_in_the_workspace_with_the_prompt_and_keep
         assert called.stdin.startswith("Implement the issue.\n")
         assert '{"work_item": {"issue": 7}, "results": {"branch": "agent/7"}}' in called.stdin
         assert called.api_keys == kept
+        assert called.config_dir == (config_dir and str(tmp_path / config_dir))
 
     asyncio.run(scenario())
 
@@ -898,6 +974,73 @@ def test_a_client_step_that_resumes_continues_the_earlier_steps_session(
         assert (result.ending, result.session) == (StepEnding.CLEAN, session)
         [called] = recorded_calls(calls)
         assert [argument for argument in called.argv if argument in arguments] == arguments
+
+    asyncio.run(scenario())
+
+
+def resume_failing(error: str) -> str:
+    """The stub's body that exits 1 with *error* when resuming, and otherwise implements."""
+    return (
+        "if '--resume' in sys.argv:\n"
+        f"    sys.stderr.write({error!r})\n"
+        "    sys.exit(1)\n"
+        f"{streaming(CLAUDE_STREAM)}"
+    )
+
+
+def test_a_claude_step_whose_session_was_lost_runs_once_more_in_a_new_session(
+    tmp_path, monkeypatch
+):
+    runtime, _ = step_instance(tmp_path)
+    error = "No conversation found with session ID: claude-0\n"
+    calls = stub_client(tmp_path, monkeypatch, "claude", resume_failing(error))
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, "claude", resume="claude-0")
+
+        assert result == StepResult(
+            ending=StepEnding.CLEAN,
+            summary="Implemented issue 7.\nSession claude-0 was lost, so claude ran in a new one.",
+            session="claude-1",
+        )
+        resumed, started = recorded_calls(calls)
+        assert resumed.argv[-2:] == ["--resume", "claude-0"]
+        assert "--resume" not in started.argv
+        assert started.stdin == resumed.stdin
+
+    asyncio.run(scenario())
+
+
+def test_a_claude_step_whose_session_was_lost_runs_again_only_until_the_steps_timeout(
+    tmp_path, monkeypatch
+):
+    runtime, _ = step_instance(tmp_path)
+    error = "No conversation found with session ID: claude-0\n"
+    stub_client(tmp_path, monkeypatch, "claude", "time.sleep(0.6)\n" + resume_failing(error))
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, "claude", resume="claude-0")
+
+        assert result == StepResult(
+            ending=StepEnding.TIMED_OUT,
+            summary="claude ran past its 1-second timeout and was killed.\n"
+            "Session claude-0 was lost, so claude ran in a new one.",
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_resumed_claude_step_that_fails_otherwise_runs_only_once(tmp_path, monkeypatch):
+    runtime, _ = step_instance(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, "claude", resume_failing("Credit balance low\n"))
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, "claude", resume="claude-0")
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert result.summary == "claude exited with code 1.\nCredit balance low"
+        assert len(recorded_calls(calls)) == 1
 
     asyncio.run(scenario())
 

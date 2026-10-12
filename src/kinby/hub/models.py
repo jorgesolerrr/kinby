@@ -237,6 +237,10 @@ class ImagePreparation(Protocol):
         """The commit a revision names in the checkout images are built from."""
         ...
 
+    async def collect(self) -> None:
+        """Remove every recorded image that no instance, update candidate or container uses."""
+        ...
+
 
 @dataclass(frozen=True)
 class BuildResult:
@@ -251,4 +255,12 @@ class ImageBackend(Protocol):
 
     async def exists(self, image_id: str) -> bool: ...
 
+    async def remove(self, image_id: str) -> bool:
+        """Whether the image is gone. Docker refuses to remove one a container still uses."""
+        ...
+
     async def describe(self, image_id: str) -> DeclaredSetup: ...
+
+    async def remove_inspection_containers(self) -> None:
+        """Remove the containers inspections of this hub left when it stopped mid-inspection."""
+        ...

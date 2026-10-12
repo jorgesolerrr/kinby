@@ -16,6 +16,8 @@ REPLIES = ".scratch/review-replies.json"
 #: Where the coding client writes the pull request's title and body, by the value each is
 #: recorded as (ADR 0083).
 WORDS = {"title": ".scratch/pr-title.txt", "body": ".scratch/pr-body.md"}
+#: How many uncommitted paths the check names before it counts the rest.
+_NAMED_CHANGES = 20
 
 
 class UncommittedWork(RuntimeError):
@@ -112,9 +114,14 @@ def _check_committed(workspace: Path, branch: str) -> None:
     current = _git(workspace, "branch", "--show-current")
     if current != branch:
         raise UncommittedWork(f"The workspace is on {current or 'no branch'}, not on {branch}.")
-    changes = _git(workspace, "status", "--porcelain", "--untracked-files=all")
+    changes = _git(workspace, "status", "--porcelain", "--untracked-files=normal").splitlines()
     if changes:
-        raise UncommittedWork(f"The workspace has changes no commit on {branch} holds:\n{changes}")
+        named = "\n".join(changes[:_NAMED_CHANGES])
+        rest = len(changes) - _NAMED_CHANGES
+        raise UncommittedWork(
+            f"The workspace has changes no commit on {branch} holds:\n{named}"
+            + (f"\nAnd {rest} more." if rest > 0 else "")
+        )
 
 
 def _resolved(workspace: Path, named: str) -> str:

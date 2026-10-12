@@ -49,7 +49,7 @@ ssh -o BatchMode=yes playground 'docker exec <id> git -C /instance/workspace bra
 
 ## Run transcripts
 
-Nothing saves a run's stdout by default. Claude Code keeps each session of a coder in `/root/.claude/projects/` inside its container, until the container is recreated.
+Nothing saves a run's stdout by default. Claude Code keeps each session of a coder in `/instance/.state/claude/projects/`, in the instance directory, so sessions survive a recreate of the container. Sessions from before #635 were in `/root/.claude/projects/` and went with the container.
 
 ## Changing the box
 

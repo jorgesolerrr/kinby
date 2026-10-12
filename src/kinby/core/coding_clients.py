@@ -14,6 +14,7 @@ from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryFile
 from time import monotonic
@@ -56,7 +57,8 @@ class CodingRun:
     """One run of a coding client, however it ended."""
 
     ending: StepEnding
-    #: What the client said last, then why the run did not end clean.
+    #: What the client said last, then why the run did not end clean and whether the session it
+    #: resumed was lost.
     summary: str
     #: The session the run went on in. None when the stream does not name it.
     session: CodingSessionId | None
@@ -70,6 +72,7 @@ async def run_coding_client(
     prompt: str,
     workspace: Path,
     *,
+    state_dir: Path,
     resume: CodingSessionId | None,
     timeout_seconds: int,
     model: CodingModel | None,
@@ -77,8 +80,49 @@ async def run_coding_client(
 ) -> CodingRun:
     """Run *client* in *workspace* with *prompt* on its input, continuing *resume* if given.
 
-    A *model* or *effort* of None leaves the client's default.
+    Claude keeps its sessions in *state_dir*, which outlives the container. When Claude no
+    longer has *resume*, the prompt runs once more in a new session, and that run is the one
+    returned. Both runs share the one timeout. A *model* or *effort* of None leaves the client's
+    default.
     """
+    run = partial(
+        _run,
+        client,
+        prompt,
+        workspace,
+        state_dir=state_dir,
+        timeout_seconds=timeout_seconds,
+        deadline=asyncio.get_running_loop().time() + timeout_seconds,
+        model=model,
+        effort=effort,
+    )
+    ran, errors = await run(resume)
+    if (
+        client is CodingClient.CLAUDE
+        and resume is not None
+        and ran.ending is StepEnding.FAILED
+        and f"No conversation found with session ID: {resume}" in errors
+    ):
+        again, _ = await run(None)
+        return _ended(
+            again, again.ending, f"Session {resume} was lost, so {client} ran in a new one."
+        )
+    return ran
+
+
+async def _run(
+    client: CodingClient,
+    prompt: str,
+    workspace: Path,
+    resume: CodingSessionId | None,
+    *,
+    state_dir: Path,
+    timeout_seconds: int,
+    deadline: float,
+    model: CodingModel | None,
+    effort: ReasoningEffort | None,
+) -> tuple[CodingRun, str]:
+    """One run of *client*, killed at the event loop's *deadline*, and its error output."""
     # Files rather than pipes: a task the client leaves running can hold a pipe open, and what
     # a killed client wrote survives it.
     with TemporaryFile() as stdin, TemporaryFile() as stdout, TemporaryFile() as stderr:
@@ -88,7 +132,7 @@ async def run_coding_client(
             process = await asyncio.create_subprocess_exec(
                 *_command(client, workspace, resume, model, effort),
                 cwd=workspace,
-                env=_environment(client),
+                env=_environment(client, state_dir),
                 stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
@@ -96,11 +140,11 @@ async def run_coding_client(
                 start_new_session=True,
             )
         except OSError as exc:
-            return CodingRun(StepEnding.FAILED, f"{client} could not start: {exc}", None, None)
+            return CodingRun(StepEnding.FAILED, f"{client} could not start: {exc}", None, None), ""
         started = monotonic()
         timed_out = False
         try:
-            async with asyncio.timeout(timeout_seconds):
+            async with asyncio.timeout_at(deadline):
                 await process.wait()
         except TimeoutError:
             timed_out = True
@@ -120,16 +164,15 @@ async def run_coding_client(
     ran = CodingRun(StepEnding.CLEAN, said, reported.session, reported)
     if timed_out:
         reason = f"{client} ran past its {timeout_seconds}-second timeout and was killed."
-        return _ended(ran, StepEnding.TIMED_OUT, reason)
+        return _ended(ran, StepEnding.TIMED_OUT, reason), errors
     if process.returncode == 0:
-        return ran
+        return ran, errors
     if process.returncode is not None and process.returncode < 0:
-        return _ended(
-            ran, StepEnding.FAILED, f"{client} was killed by signal {-process.returncode}."
-        )
+        reason = f"{client} was killed by signal {-process.returncode}."
+        return _ended(ran, StepEnding.FAILED, reason), errors
     tail = errors.strip()[-_ERROR_TAIL:]
     reason = f"{client} exited with code {process.returncode}.\n{tail}".strip()
-    return _ended(ran, StepEnding.FAILED, reason)
+    return _ended(ran, StepEnding.FAILED, reason), errors
 
 
 def own_tokens(run: DelegatedRun, earlier: Iterable[DelegatedRun]) -> DelegatedRun:
@@ -187,9 +230,14 @@ def _command(
             return ("codex", "exec", "resume", *options, resume, "-")
 
 
-def _environment(client: CodingClient) -> Mapping[str, str]:
+def _environment(client: CodingClient, state_dir: Path) -> Mapping[str, str]:
     """A client runs on its subscription login, never on an API key the instance holds."""
-    return {name: value for name, value in os.environ.items() if name not in _API_KEYS[client]}
+    environment = {
+        name: value for name, value in os.environ.items() if name not in _API_KEYS[client]
+    }
+    if client is CodingClient.CLAUDE:
+        environment["CLAUDE_CONFIG_DIR"] = str(state_dir / "claude")
+    return environment
 
 
 def _ended(ran: CodingRun, ending: StepEnding, reason: str) -> CodingRun:

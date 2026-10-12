@@ -153,6 +153,9 @@ class FakeImages:
         assert revision == "HEAD"
         return self.hub_revision
 
+    async def collect(self) -> None:
+        """Every build here names the same image, which the instances keep."""
+
 
 class HeldImages(FakeImages):
     """Hold a create's build until the test releases it, so the create stays before its publish."""
@@ -1895,6 +1898,19 @@ def test_a_control_socket_that_closes_after_the_drain_is_sent_is_a_lost_connecti
     asyncio.run(scenario())
 
 
+def test_an_answer_over_the_control_sockets_frame_limit_says_it_was_too_large():
+    async def scenario() -> None:
+        async with control_server(_answer_too_large) as endpoint:
+            with pytest.raises(ControlConnectionLost) as raised:
+                await HttpInstanceControl().drain(endpoint, force=False)
+
+        assert str(raised.value) == (
+            "The answer was larger than the control socket's 4,194,304-byte limit."
+        )
+
+    asyncio.run(scenario())
+
+
 def test_a_drain_answer_that_refuses_is_not_a_lost_connection():
     async def scenario() -> None:
         async with control_server(_refuse_drain) as endpoint:
@@ -1908,6 +1924,12 @@ def test_a_drain_answer_that_refuses_is_not_a_lost_connection():
 async def _close_after_call(opened: web.WebSocketResponse) -> None:
     await opened.receive()
     await opened.close()
+
+
+async def _answer_too_large(opened: web.WebSocketResponse) -> None:
+    await opened.receive()
+    await opened.send_str("x" * 5_000_000)
+    await opened.receive()
 
 
 async def _refuse_drain(opened: web.WebSocketResponse) -> None:

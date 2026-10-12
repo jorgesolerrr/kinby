@@ -1863,6 +1863,7 @@ export interface Event {
     | RunDelegated
     | MemoryRecapped
     | RoutineFailureHandled
+    | RoutineFailuresReset
     | SignalReceived
     | WorkspaceReverted;
   sequence: number;
@@ -1975,6 +1976,10 @@ export interface RoutineFailureHandled {
   name: string;
   notice?: RoutineNotice | null;
   type: "routine.failure.handled";
+}
+export interface RoutineFailuresReset {
+  name: string;
+  type: "routine.failures.reset";
 }
 export interface SignalReceived {
   delivery: Delivery;
