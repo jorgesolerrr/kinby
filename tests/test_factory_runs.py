@@ -1794,6 +1794,30 @@ def test_a_run_that_needs_a_human_counts_toward_its_steps_instance_until_it_move
     asyncio.run(scenario())
 
 
+def test_a_run_that_needs_a_human_counts_only_toward_the_instance_its_step_ran_in(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED)]
+    runtime = FakeRuntime()
+    factory = FACTORY.replace("  coder: {}", "  coder: {}\n  checker: {}").replace(
+        "in: coder", "in: checker"
+    )
+    files = FILES | {"factory.yaml": factory, "instances/checker/AGENTS.md": "Check.\n"}
+    hub = factory_hub(tmp_path / "hub", control, runtime, files)
+
+    async def scenario() -> None:
+        instances = await installed(hub, runtime, "coder", "checker")
+        coder, checker = instances["coder"], instances["checker"]
+        spare = await created_in(hub, runtime, "checker", "spare-checker")
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+
+        [(endpoint, _)] = control.steps
+        assert endpoint.address == f"http://kinby-{checker}:8787"
+        assert await needing_human(hub) == {coder: 0, checker: 1, spare: 0}
+
+    asyncio.run(scenario())
+
+
 def test_two_coders_each_run_their_own_run_of_one_work_item(tmp_path):
     control = FakeControl()
     control.step_results = [StepResult(ending=StepEnding.FAILED)] * 2

@@ -317,19 +317,19 @@ class FactoryRuns:
         """How many runs of the instance's factory need the user at a step in that instance.
 
         A run needs the user when it stopped for a human or awaits approval. A step that runs in
-        no instance counts toward the instance of the factory's intake, which counts only the runs
-        it handed in.
+        no instance counts toward the instance of the factory's intake. A run counts only toward
+        the instance that holds the step's role for it, the one its step runs in.
         """
         member = record.factory
         factory = self._factory(member.factory) if member is not None else None
         if member is None or factory is None:
             return 0
-        owner = record.instance_id if member.name == factory.intake.instance else None
         return sum(
             _instance_of(factory, run.step) == member.name
+            and self._installed(run, member.name) == record.instance_id
             for run in (
-                *self._registry.runs(member.factory, FactoryRunStatus.NEEDS_HUMAN, owner),
-                *self._registry.runs(member.factory, FactoryRunStatus.PARKED, owner),
+                *self._registry.runs(member.factory, FactoryRunStatus.NEEDS_HUMAN),
+                *self._registry.runs(member.factory, FactoryRunStatus.PARKED),
             )
             if run.status is FactoryRunStatus.NEEDS_HUMAN or _awaits_approval(factory, run)
         )
