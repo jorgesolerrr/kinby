@@ -5,6 +5,15 @@ name: software
 instances:
   coder:
     image: coder
+    suggested_picks:
+      - adversarial-review
+      - api-and-interface-design
+      - codebase-design
+      - no-comments
+      - ponytail
+      - pr
+      - tdd
+      - unslop
     setup_fields:
       - name: repository
         label: Repository

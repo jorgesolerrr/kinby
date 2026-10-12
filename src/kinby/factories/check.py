@@ -42,6 +42,7 @@ from kinby.instance import (
     inspect_instance,
 )
 from kinby.instance.layout import ROUTINE_FILE, ROUTINES_DIR
+from kinby.library import SHIPPED_SKILLS
 from kinby.plugins.hooks import load_hooks
 from kinby.plugins.registry import ToolRegistry
 from kinby.setup import BUILT_IN_FIELDS, readable_template_files, template_fields, value_problem
@@ -114,12 +115,19 @@ def _instances(
     folder: Path,
     templates: dict[InstanceName, _Template],
 ) -> Iterator[str]:
+    shipped_skills = {path.name for path in SHIPPED_SKILLS.iterdir() if path.is_dir()}
     for name, declared in factory.instances.items():
         if name not in templates:
             yield f'Instance "{name}" has no template: {TEMPLATES_DIR}/{name}/ is not a folder.'
         recipe = declared.image
         if recipe is not None and not (RECIPES_DIRECTORY / f"{recipe}.Dockerfile").is_file():
             yield f'Instance "{name}" names image recipe "{recipe}", which kinby does not ship.'
+        for skill in declared.suggested_picks:
+            if skill not in shipped_skills:
+                yield (
+                    f'Instance "{name}" suggests skill "{skill}", '
+                    "which the shipped library does not hold."
+                )
         declarations = list(_declarations(name, declared))
         yield from declarations
         # The defaults land only where the declarations hold, so one mistake is reported once.

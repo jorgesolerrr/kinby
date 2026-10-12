@@ -28,7 +28,7 @@ I'm a passionate programmer who likes complex things done in a simple way. That 
 
 Skills in `.claude/skills/` whose `skills-lock.json` source is `jorgesolerrr/skills` are copies of that registry. Change one in the registry, then run `bun run skills:sync` and commit the result. Never edit those copies in place. `bun run check` fails when a copy stops matching its locked hash. `open-pr` and `e2e-pass` belong to this repo and are not in the lock, so edit them here.
 
-The software factory's coder carries registry copies too, in `src/kinby/factories/shipped/software/instances/coder/skills`, locked in `skills-lock.coder.json`. `bun run skills:sync` refreshes both. The coder's `implement-ticket` belongs to the factory, so edit it there.
+The skills kinby ships in its library live in `src/kinby/library/skills`. They are kinby's own copies, with no lock, so edit them there. The software factory's `coder` role names them as suggested picks. Its template keeps only `implement-ticket`, which belongs to the factory, so edit it there too.
 
 ### Issue tracker
 

@@ -25,6 +25,7 @@ from kinby.contracts import (
     HookName,
     ReasoningEffort,
     SetupField,
+    SkillName,
     StepId,
     StepValue,
     SubscriptionLogin,
@@ -67,6 +68,8 @@ class InstanceDeclaration:
     #: kinby.toml.
     setup_fields: tuple[SetupField, ...] = ()
     logins: tuple[SubscriptionLogin, ...] = ()
+    #: Skills of the shipped library an instance that picks this role is offered, by name.
+    suggested_picks: tuple[SkillName, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)

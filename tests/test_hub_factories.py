@@ -409,6 +409,18 @@ def test_the_check_fails_a_template_that_does_not_initialize(tmp_path):
         assert found[0].startswith(f'Instance "coder": the template does not initialize: {problem}')
 
 
+def test_the_check_fails_a_suggested_pick_the_shipped_library_does_not_hold(tmp_path):
+    factory = FACTORY.replace(
+        "coder: { image: coder }", "coder: { image: coder, suggested_picks: [tdd, absent] }"
+    )
+
+    found = problems(tmp_path, FILES | {"factory.yaml": factory})
+
+    assert found == [
+        'Instance "coder" suggests skill "absent", which the shipped library does not hold.'
+    ]
+
+
 def test_a_prompt_outside_the_factory_folder_does_not_resolve(tmp_path):
     (tmp_path / "secret.md").write_text("outside\n", encoding="utf-8")
     factory = FACTORY.replace("prompts/review.md", "../../../secret.md")
