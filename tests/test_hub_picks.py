@@ -19,6 +19,7 @@ from kinby.contracts import (
     InstancePicksResult,
     InstancePicksSetCommand,
     LibrarySource,
+    PickState,
     SkillPick,
 )
 from kinby.hub import Hub
@@ -30,8 +31,8 @@ from kinby.plugins.skills import load_skills
 from tests.test_hub import hub_at, hub_client, started_instance
 
 OWN_SKILL = "---\nname: mine\ndescription: The agent's own.\n---\nMine.\n"
-TDD = SkillPick(name="tdd", source=LibrarySource.SHIPPED)
-UNSLOP = SkillPick(name="unslop", source=LibrarySource.SHIPPED)
+TDD = SkillPick(name="tdd", source=LibrarySource.SHIPPED, state=PickState.UP_TO_DATE)
+UNSLOP = SkillPick(name="unslop", source=LibrarySource.SHIPPED, state=PickState.UP_TO_DATE)
 
 
 def _running(tmp_path: Path) -> tuple[Hub, ContractClient, Path]:

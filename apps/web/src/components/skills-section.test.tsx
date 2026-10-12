@@ -329,7 +329,7 @@ describe("SkillsSection", () => {
       { kind: "skill", name: "tdd", description: "Test first.", source: "shipped" },
       { kind: "skill", name: "unslop", description: "Cut AI tells.", source: "shipped" },
     ]
-    const pickedTdd: SkillPick = { name: "tdd", source: "shipped" }
+    const pickedTdd: SkillPick = { name: "tdd", source: "shipped", state: "up-to-date" }
 
     function openWithPicks(answers: Answers = {}) {
       let picks = [pickedTdd]
@@ -343,7 +343,7 @@ describe("SkillsSection", () => {
         "instance.picks.get": () => ({ picks, hash }),
         "library.list": () => ({ entries: library }),
         "instance.picks.set": ({ skills }) => {
-          picks = skills.map((name) => ({ name, source: "shipped" }))
+          picks = skills.map((name) => ({ name, source: "shipped", state: "up-to-date" }))
           hash = `lock-${skills.length + 2}`
           return { picks, hash }
         },
@@ -362,6 +362,29 @@ describe("SkillsSection", () => {
           .getAllByRole("button")
           .map((item) => item.getAttribute("aria-label")),
       ).toEqual(["planning, instance skill", "tdd, picked skill"])
+    })
+
+    it("shows each pick as up to date, behind the library, or edited locally", async () => {
+      openWithPicks({
+        "instance.picks.get": () => ({
+          picks: [
+            pickedTdd,
+            { name: "unslop", source: "shipped", state: "behind" },
+            { name: "ponytail", source: "written", state: "edited" },
+          ],
+        }),
+      })
+
+      const picks = await screen.findByRole("list", { name: "Picks" })
+      expect(
+        within(picks)
+          .getAllByRole("listitem")
+          .map((item) => item.textContent),
+      ).toEqual([
+        expect.stringContaining("Up to date"),
+        expect.stringContaining("Behind the library"),
+        expect.stringContaining("Edited locally"),
+      ])
     })
 
     it("offers the library's other skills and adds one to the picks", async () => {

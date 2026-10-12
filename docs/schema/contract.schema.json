@@ -3873,6 +3873,16 @@
       "title": "PermissionsSetCommand",
       "type": "object"
     },
+    "PickState": {
+      "description": "How a pick stands against its lock entry and the library.",
+      "enum": [
+        "up-to-date",
+        "behind",
+        "edited"
+      ],
+      "title": "PickState",
+      "type": "string"
+    },
     "PlanLimit": {
       "additionalProperties": false,
       "description": "A subscription usage source whose plan stopped a delegated run, until its window resets.",
@@ -4945,11 +4955,15 @@
         },
         "source": {
           "$ref": "#/$defs/LibrarySource"
+        },
+        "state": {
+          "$ref": "#/$defs/PickState"
         }
       },
       "required": [
         "name",
-        "source"
+        "source",
+        "state"
       ],
       "title": "SkillPick",
       "type": "object"

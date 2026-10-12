@@ -241,6 +241,13 @@ const SOURCES: Record<LibraryEntry["source"], string> = {
   written: "Written",
 }
 
+/** How a pick stands against its library entry, and what an instance update does to it. */
+const STATES: Record<SkillPick["state"], string> = {
+  "up-to-date": "Up to date.",
+  behind: "Behind the library. An instance update brings it up.",
+  edited: "Edited locally. An instance update keeps this copy.",
+}
+
 /**
  * The instance's picks, each to drop, and the library's other skills, each to add. A change
  * carries the hash of the picks it read, so one over a change made since is refused, and "Load
@@ -322,6 +329,7 @@ function Picks({
                     {each.name}
                     <Badge variant="secondary">{SOURCES[each.source]}</Badge>
                   </ItemTitle>
+                  <ItemDescription>{STATES[each.state]}</ItemDescription>
                 </ItemContent>
                 <ItemActions>
                   <Button

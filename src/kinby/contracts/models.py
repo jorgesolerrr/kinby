@@ -2124,10 +2124,21 @@ class InstancePicksSetCommand(ContractModel):
     hash: FileHash | None
 
 
+class PickState(StrEnum):
+    """How a pick stands against its lock entry and the library."""
+
+    UP_TO_DATE = "up-to-date"
+    #: The library's entry changed since the instance's copy was taken from it.
+    BEHIND = "behind"
+    #: The instance's copy no longer matches its lock entry, so an update keeps it.
+    EDITED = "edited"
+
+
 class SkillPick(ContractModel):
     name: SkillName
     #: Where the library entry it was copied from came from.
     source: LibrarySource
+    state: PickState
 
 
 class InstancePicksResult(ContractModel):
