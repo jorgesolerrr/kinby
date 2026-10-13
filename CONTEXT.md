@@ -211,7 +211,7 @@ _Avoid_: login container, helper container
 
 ### Pending setup
 
-What an **instance** still needs after creation: a **subscription login** that is not signed in, or a required secret **setup field** with no value in its **instance secrets**. The **hub** tracks each declared login per instance as pending, signed in, or failed, from its creation on, and reads the secrets from the instance's stored descriptor and its secrets file, never showing a value. An instance created before the hub tracked logins reads as complete. Pending setup never blocks a start. A stopped instance with pending setup opens on its setup card, where the user signs in, sees which secrets are set, and starts it.
+What an **instance** still needs after creation: a **subscription login** that is not signed in, a required secret **setup field** with no value in its **instance secrets**, or **repository commands** its **factory**'s steps name and it does not hold. The **hub** tracks each declared login per instance as pending, signed in, or failed, from its creation on, and reads the secrets from the instance's stored descriptor and its secrets file, never showing a value. An instance created before the hub tracked logins reads as complete. Pending setup never blocks a start. A stopped instance with pending setup opens on its setup card, where the user signs in, sees which secrets are set, and starts it.
 _Avoid_: incomplete instance, onboarding
 
 ### Avatar
@@ -695,6 +695,16 @@ One **babysitting** pass that asks the **coding client** to address every **acti
 
 The **coding client**, resumed in the session that implemented the change, fixing what a failed repository check reported, or a check that failed on its pull request's head. The **software factory** sends a failed check back for repair a few times before the run is **needs human**.
 _Avoid_: fix round (that answers review threads)
+
+### Repository commands
+
+The commands an **instance** runs for the repository it works in, held as named lists, such as the setup commands that prepare a checkout and the check commands that judge a change. A **factory**'s steps name the lists they run, and an empty list is a valid one. The instance records them through the **instance tool**. They belong to the instance, never to the **factory** or the repository, so two instances of one **factory role** each hold their own.
+_Avoid_: onboarding, environment, the repository's gate
+
+### Repository survey
+
+An **instance** reading its repository to propose its **repository commands**, when the user asks for it. It proposes commands only, and reports a toolchain or service the image lacks as text.
+_Avoid_: onboarding, environment setup
 
 ### Babysitting
 
