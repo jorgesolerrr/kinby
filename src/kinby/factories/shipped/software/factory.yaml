@@ -76,16 +76,15 @@ steps:
     in: coder
     call: prepare_branch
     results: { branch: str, base: str }
-  # Installs the dependencies of a repository on uv and bun, as kinby is. Replace the installs
-  # with your repository's.
+  # Runs the coder's setup list of repository commands on the branch. A coder that holds no
+  # setup or checks list takes no work: ask it in a thread for a repository survey.
   - id: setup
     kind: command
     in: coder
     requires: [branch]
     run:
       - git switch {{branch}}
-      - uv sync --frozen
-      - bun install --frozen-lockfile
+      - { commands: setup }
   # Every client step continues implement's session, so one coding session per issue writes the
   # change, answers its reviews and repairs its checks. It writes the pull request's title, body
   # and replies. Each step's hook records them as the run's values, and publish applies them
@@ -147,18 +146,18 @@ steps:
   #   results: { reviewed: bool }
   #   outcomes: { clean: next, changes: { back: fix, max: 2 } }
   #   timeout: 15m
-  # kinby's checks. Replace the installs and `bun run check` with your repository's. Other runs'
-  # steps share the workspace, so the first command puts it back on this run's branch. A failure
-  # goes back to fix with the failing command and the tail of its output, at most twice.
+  # Runs the coder's setup list again, so a change to the dependencies is checked against fresh
+  # installs, then its checks list. Other runs' steps share the workspace, so the first command
+  # puts it back on this run's branch. A failure goes back to fix with the failing command and
+  # the tail of its output, at most twice.
   - id: checks
     kind: command
     in: coder
     requires: [branch]
     run:
       - git switch {{branch}}
-      - uv sync --frozen
-      - bun install --frozen-lockfile
-      - bun run check
+      - { commands: setup }
+      - { commands: checks }
     failed: { back: fix, max: 2 }
   # Pushes the branch. The first time, it opens the pull request; after a fix round, it applies
   # the title and body the session rewrote, and replies on each thread the round answered. Never
