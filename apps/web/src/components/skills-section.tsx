@@ -6,6 +6,7 @@ import type {
   InstancePicksResult,
   LibraryEntry,
   SkillListResult,
+  SkillPick,
   SkillSummary,
   SkillTier,
 } from "@kinby/contract"

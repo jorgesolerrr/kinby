@@ -372,6 +372,7 @@ describe("SkillsSection", () => {
             { name: "unslop", source: "shipped", state: "behind" },
             { name: "ponytail", source: "written", state: "edited" },
           ],
+          hash: "lock-1",
         }),
       })
 
@@ -390,7 +391,7 @@ describe("SkillsSection", () => {
     it("shows a pick edited locally once its copy is saved", async () => {
       let state: SkillPick["state"] = "behind"
       const { user } = openWithPicks({
-        "instance.picks.get": () => ({ picks: [{ ...pickedTdd, state }] }),
+        "instance.picks.get": () => ({ picks: [{ ...pickedTdd, state }], hash: "lock-1" }),
         "skill.read": () => ({ content: skillText("tdd", "Test first."), files: [], hash: "h-9" }),
         "skill.write": ({ content }) => {
           state = "edited"
@@ -471,7 +472,10 @@ describe("SkillsSection", () => {
       const { user } = openWithPicks({
         "instance.picks.get": () =>
           theirs
-            ? { picks: [pickedTdd, { name: "unslop", source: "shipped" }], hash: "lock-9" }
+            ? {
+                picks: [pickedTdd, { name: "unslop", source: "shipped", state: "up-to-date" }],
+                hash: "lock-9",
+              }
             : { picks: [pickedTdd], hash: "lock-1" },
         "instance.picks.set": () => {
           theirs = true
