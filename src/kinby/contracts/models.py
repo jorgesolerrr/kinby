@@ -1111,6 +1111,13 @@ class InstanceSetup(ContractModel):
         )
 
 
+class RepositoryCommandList(ContractModel):
+    """One of an instance's lists of repository commands, its commands in the order they run."""
+
+    name: CommandListName
+    commands: list[str]
+
+
 class InstanceStatusResult(ContractModel):
     instance_id: UUID
     process: ProcessState
@@ -1121,6 +1128,8 @@ class InstanceStatusResult(ContractModel):
     active_operation_id: UUID | None = None
     #: What waits on a container recreation. A start applies them to a stopped instance.
     recreate_reasons: list[RecreateReason]
+    #: The lists of repository commands it holds, when its factory role's steps name any.
+    repository_commands: list[RepositoryCommandList]
 
 
 class InstanceLogsResult(ContractModel):

@@ -48,6 +48,7 @@ from kinby.contracts import (
     FactoryRunSendBackCommand,
     FactoryRunStatus,
     FactoryRunSubscribeCommand,
+    RepositoryCommandList,
     StepAttempt,
     StepEnding,
     StepId,
@@ -367,6 +368,18 @@ class FactoryRuns:
         if member is None or factory is None:
             return []
         return _missing_commands(factory, member.name, record.path)
+
+    def held_commands(self, record: ManagedInstance) -> Sequence[RepositoryCommandList]:
+        """The lists of repository commands the instance holds now, when its factory role needs
+        any."""
+        member = record.factory
+        factory = self._factory(member.factory) if member is not None else None
+        if member is None or factory is None or not command_lists(factory, member.name):
+            return []
+        return [
+            RepositoryCommandList(name=name, commands=commands)
+            for name, commands in _held_commands(record.path).items()
+        ]
 
     def _membership(self, instance_id: UUID) -> tuple[FactoryMember, FactoryFile] | None:
         """The instance's place in its factory, and that factory's file, if it has one."""
@@ -1049,15 +1062,19 @@ def _missing_commands(
     factory: FactoryFile, role: InstanceName, instance: Path
 ) -> list[CommandListName]:
     """The lists of repository commands the factory's steps in *role* name that the instance in
-    *instance* does not hold now. One whose manifest cannot be read holds none."""
+    *instance* does not hold now."""
     needed = command_lists(factory, role)
-    if not needed:
-        return []
-    try:
-        held = repository_commands(instance)
-    except ManifestError:
-        held = {}
+    held = _held_commands(instance) if needed else {}
     return [name for name in needed if name not in held]
+
+
+def _held_commands(instance: Path) -> dict[CommandListName, list[str]]:
+    """The lists of repository commands the instance in *instance* holds now. One whose manifest
+    cannot be read holds none."""
+    try:
+        return repository_commands(instance)
+    except ManifestError:
+        return {}
 
 
 def _work_item_errors(

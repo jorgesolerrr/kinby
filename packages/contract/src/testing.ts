@@ -129,6 +129,7 @@ export function fakeHub({
               readiness: "not-running",
               setup: { logins: [], secrets: [], missing_commands: [] },
               recreate_reasons: [],
+              repository_commands: [],
             }
           }
           return undefined

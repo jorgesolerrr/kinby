@@ -82,11 +82,11 @@ export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "un
  * A change a running instance applies only once it is recreated.
  */
 export type RecreateReason = "secrets";
+export type CommandListName = string;
 /**
  * How an instance's subscription login stands: not signed in yet, or how its last one ended.
  */
 export type LoginState = "pending" | "signed_in" | "failed";
-export type CommandListName = string;
 export type GitCommit = string;
 export type LibraryKind = "factory" | "skill";
 export type PriceSource = "shipped" | "manifest";
@@ -1004,7 +1004,15 @@ export interface InstanceStatusResult {
   process: ProcessState;
   readiness: Readiness;
   recreate_reasons: RecreateReason[];
+  repository_commands: RepositoryCommandList[];
   setup: InstanceSetup;
+}
+/**
+ * One of an instance's lists of repository commands, its commands in the order they run.
+ */
+export interface RepositoryCommandList {
+  commands: string[];
+  name: CommandListName;
 }
 /**
  * What an instance declares it needs, as its stored descriptor has it, and what is done.

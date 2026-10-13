@@ -232,6 +232,7 @@ describe("following a start", () => {
         setup: { logins: [], secrets: [], missing_commands: [] },
         active_operation_id: "op-2",
         recreate_reasons: [],
+        repository_commands: [],
       }),
       "operation.get": () => operation({ operation_id: "op-2", kind: "start", state: "succeeded" }),
     })

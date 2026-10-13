@@ -2324,6 +2324,12 @@
           },
           "type": "array"
         },
+        "repository_commands": {
+          "items": {
+            "$ref": "#/$defs/RepositoryCommandList"
+          },
+          "type": "array"
+        },
         "setup": {
           "$ref": "#/$defs/InstanceSetup"
         }
@@ -2333,7 +2339,8 @@
         "process",
         "readiness",
         "setup",
-        "recreate_reasons"
+        "recreate_reasons",
+        "repository_commands"
       ],
       "title": "InstanceStatusResult",
       "type": "object"
@@ -4359,6 +4366,27 @@
         "run"
       ],
       "title": "ReportedRun",
+      "type": "object"
+    },
+    "RepositoryCommandList": {
+      "additionalProperties": false,
+      "description": "One of an instance's lists of repository commands, its commands in the order they run.",
+      "properties": {
+        "commands": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "$ref": "#/$defs/CommandListName"
+        }
+      },
+      "required": [
+        "name",
+        "commands"
+      ],
+      "title": "RepositoryCommandList",
       "type": "object"
     },
     "RepositoryCommands": {

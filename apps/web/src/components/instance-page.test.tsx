@@ -74,6 +74,7 @@ function status(fields: Partial<InstanceStatusResult> = {}): InstanceStatusResul
     readiness: "not-running",
     setup,
     recreate_reasons: [],
+    repository_commands: [],
     ...fields,
   }
 }
@@ -152,6 +153,24 @@ describe("the setup card", () => {
     expect(lists.getAllByText("Missing")).toHaveLength(2)
     expect(
       card().getByText(/Start Ada and ask it in a thread for a repository survey/),
+    ).toBeDefined()
+  })
+
+  it("shows the lists of repository commands it holds beside a missing one", async () => {
+    await openPage({
+      "instance.status": () =>
+        status({
+          setup: { ...setup, missing_commands: ["checks"] },
+          repository_commands: [{ name: "setup", commands: ["uv sync"] }],
+        }),
+    })
+
+    const lists = within(card().getByRole("list", { name: "Repository commands" }))
+    expect(
+      within(lists.getByRole("listitem", { name: "setup" })).getByText("uv sync"),
+    ).toBeDefined()
+    expect(
+      within(lists.getByRole("listitem", { name: "checks" })).getByText("Missing"),
     ).toBeDefined()
   })
 
@@ -531,6 +550,53 @@ describe("a running instance", () => {
 
     expect(screen.queryByText("Nothing here yet")).toBeNull()
     expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
+  })
+})
+
+describe("the repository commands", () => {
+  const running = { ...stopped, intended_state: "running", setup_pending: false } as const
+  const held = status({
+    process: "running",
+    setup: { ...setup, logins: [], missing_commands: ["deploy"] },
+    repository_commands: [
+      { name: "setup", commands: [] },
+      { name: "checks", commands: ["uv run ruff check .", "uv run pytest"] },
+    ],
+  })
+  const section = () => within(screen.getByRole("region", { name: "Repository commands" }))
+  const list = (name: string) => within(section().getByRole("listitem", { name }))
+
+  it("shows each list by name with its commands in order, an empty one and a missing one", async () => {
+    await openPage({ "instance.status": () => held }, running)
+
+    expect(
+      list("checks")
+        .getAllByRole("listitem")
+        .map((command) => command.textContent),
+    ).toEqual(["uv run ruff check .", "uv run pytest"])
+    expect(list("setup").getByText("Empty")).toBeDefined()
+    expect(list("deploy").getByText("Missing")).toBeDefined()
+    expect(screen.queryByText("Nothing here yet")).toBeNull()
+  })
+
+  it("offers no way to edit a list, and says to ask the instance", async () => {
+    await openPage({ "instance.status": () => held }, running)
+
+    expect(section().queryByRole("button")).toBeNull()
+    expect(section().queryByRole("textbox")).toBeNull()
+    expect(section().getByText(/To change them, ask Ada in a thread/)).toBeDefined()
+  })
+
+  it("shows them on a stopped instance too", async () => {
+    await openPage({ "instance.status": () => held }, { ...running, intended_state: "stopped" })
+
+    expect(list("checks").getByText("uv run pytest")).toBeDefined()
+  })
+
+  it("shows no section when its factory role needs no list", async () => {
+    await openPage({ "instance.status": () => status({ process: "running" }) }, running)
+
+    expect(screen.queryByRole("region", { name: "Repository commands" })).toBeNull()
   })
 })
 

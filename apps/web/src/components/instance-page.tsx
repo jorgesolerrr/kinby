@@ -5,6 +5,7 @@ import type {
   InstanceSummary,
   LifecycleOperationResult,
   LoginSetup,
+  RepositoryCommandList,
 } from "@kinby/contract"
 import { type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
@@ -68,7 +69,8 @@ import {
  * What one instance shows. A stopped instance with setup pending opens on its setup card, and
  * keeps it until it runs. Any other stopped one offers Start. A running one opens its config panel,
  * its memory, and its stats, offers Stop, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
- * all are.
+ * all are. Outside the setup card, an instance whose factory role needs repository commands shows
+ * them.
  * Running or stopped, its ⋯ menu offers Remove, and a removal that succeeds goes home.
  * `onChanged` hears a sign-in, a start, a stop or a removal end, so the instances are listed again,
  * and must keep its identity. The hub marks the instance stopped before it drains, so a stop asked
@@ -114,16 +116,22 @@ export function InstancePage({
       />
     )
   }
+  const commands = status !== undefined && hasCommands(status) && (
+    <RepositoryCommands name={name} status={status} />
+  )
   if (intended === "stopped") {
     return (
-      <Stopped
-        caller={caller}
-        clock={clock}
-        instance={instance}
-        name={name}
-        onChanged={onChanged}
-        onRemoved={removed}
-      />
+      <>
+        <Stopped
+          caller={caller}
+          clock={clock}
+          instance={instance}
+          name={name}
+          onChanged={onChanged}
+          onRemoved={removed}
+        />
+        {commands}
+      </>
     )
   }
   // The empty state waits until the status is read. A read that failed has nothing to sign in to.
@@ -162,7 +170,7 @@ export function InstancePage({
           />
         </div>
         <ProcessAlert instance={instance} name={name} />
-        {logins.length > 0 ? (
+        {logins.length > 0 && (
           <section className="flex max-w-2xl flex-col gap-3 p-6">
             <h2 className="font-medium">Subscription logins</h2>
             <p className="text-sm text-muted-foreground">
@@ -176,9 +184,9 @@ export function InstancePage({
               onEnded={onChanged}
             />
           </section>
-        ) : (
-          <NothingHereYet name={name} />
         )}
+        {commands}
+        {logins.length === 0 && !commands && <NothingHereYet name={name} />}
       </>
     )
   }
@@ -541,20 +549,7 @@ function SetupCard({
                   {name} takes no work until it holds these lists. Start {name} and ask it in a
                   thread for a repository survey.
                 </p>
-                <ItemGroup aria-label="Repository commands">
-                  {missing.map((list) => (
-                    <Item key={list} render={<li />} aria-label={list} variant="outline" size="sm">
-                      <ItemContent>
-                        <ItemTitle>
-                          <code className="font-mono">{list}</code>
-                        </ItemTitle>
-                      </ItemContent>
-                      <ItemActions>
-                        <Badge variant="outline">Missing</Badge>
-                      </ItemActions>
-                    </Item>
-                  ))}
-                </ItemGroup>
+                <CommandLists held={status.repository_commands} missing={missing} />
               </section>
             )}
           </div>
@@ -577,6 +572,73 @@ function SetupCard({
         </CardFooter>
       </Card>
     </section>
+  )
+}
+
+function hasCommands(status: InstanceStatusResult): boolean {
+  return status.repository_commands.length > 0 || status.setup.missing_commands.length > 0
+}
+
+/**
+ * The repository commands the instance holds and those its factory role needs that it lacks.
+ * They are read-only here: the instance records them.
+ */
+function RepositoryCommands({ name, status }: { name: string; status: InstanceStatusResult }) {
+  const titleId = useId()
+  return (
+    <section aria-labelledby={titleId} className="flex max-w-2xl flex-col gap-3 p-6">
+      <h2 id={titleId} className="font-medium">
+        Repository commands
+      </h2>
+      <p className="text-sm text-muted-foreground">
+        What {name} runs for the repository it works in. To change them, ask {name} in a thread.
+      </p>
+      <CommandLists held={status.repository_commands} missing={status.setup.missing_commands} />
+    </section>
+  )
+}
+
+/** Each list held, by name with its commands in the order they run, then each missing one. */
+function CommandLists({ held, missing }: { held: RepositoryCommandList[]; missing: string[] }) {
+  return (
+    <ItemGroup aria-label="Repository commands">
+      {held.map(({ name, commands }) => (
+        <Item key={name} render={<li />} aria-label={name} variant="outline" size="sm">
+          <ItemContent>
+            <ItemTitle>
+              <code className="font-mono">{name}</code>
+            </ItemTitle>
+            {commands.length > 0 && (
+              <ol className="flex flex-col gap-1 text-muted-foreground">
+                {commands.map((command, index) => (
+                  // A list may run the same command twice.
+                  <li key={index}>
+                    <code className="font-mono break-all">{command}</code>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </ItemContent>
+          {commands.length === 0 && (
+            <ItemActions>
+              <Badge variant="outline">Empty</Badge>
+            </ItemActions>
+          )}
+        </Item>
+      ))}
+      {missing.map((list) => (
+        <Item key={list} render={<li />} aria-label={list} variant="outline" size="sm">
+          <ItemContent>
+            <ItemTitle>
+              <code className="font-mono">{list}</code>
+            </ItemTitle>
+          </ItemContent>
+          <ItemActions>
+            <Badge variant="outline">Missing</Badge>
+          </ItemActions>
+        </Item>
+      ))}
+    </ItemGroup>
   )
 }
 

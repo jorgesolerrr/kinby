@@ -2040,6 +2040,7 @@ class Hub:
             detail=observed.detail,
             active_operation_id=self.registry.active_operation(record.instance_id),
             recreate_reasons=[*await self._recreate_reasons(record, observed.process)],
+            repository_commands=[*self.runs.held_commands(record)],
         )
 
     async def _recreate_reasons(
