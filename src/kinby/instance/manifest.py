@@ -22,6 +22,7 @@ from pydantic import (
     WithJsonSchema,
     field_validator,
 )
+from tomlkit.items import InlineTable
 
 from kinby.contracts import CommandListName, ManifestValues, NewModelPrice
 from kinby.instance.dataclasses import (
@@ -232,7 +233,8 @@ def with_repository_commands(text: str, name: CommandListName, commands: list[st
     """
     document = tomlkit.parse(text)
     workspace = document.setdefault("workspace", tomlkit.table())
-    workspace.setdefault("commands", tomlkit.table())[name] = commands
+    table = tomlkit.inline_table() if isinstance(workspace, InlineTable) else tomlkit.table()
+    workspace.setdefault("commands", table)[name] = commands
     edited = tomlkit.dumps(document)
     parse_manifest(edited)
     return edited

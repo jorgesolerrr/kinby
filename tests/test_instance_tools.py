@@ -1424,6 +1424,38 @@ def test_repository_commands_write_replaces_the_whole_list(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "workspace",
+    [
+        'workspace = { path = "workspace" }\n',
+        'workspace = { commands = { checks = ["bun run check"] } }\n',
+        'workspace.path = "workspace"\n',
+        '[workspace]\ncommands = { checks = ["bun run check"] }\n',
+        "[workspace.conventions]\nenabled = true\n",
+    ],
+)
+def test_repository_commands_write_records_into_any_form_of_the_workspace_table(
+    tmp_path: Path, workspace: str
+) -> None:
+    async def scenario() -> None:
+        (tmp_path / "kinby.toml").write_text(
+            f'id = "test"\n{workspace}[models]\nmain = "openai:gpt-5"\n'
+            if workspace.startswith("workspace")
+            else f'id = "test"\n[models]\nmain = "openai:gpt-5"\n{workspace}'
+        )
+        instance = load_instance(tmp_path)
+        held = repository_commands(tmp_path)
+
+        await commands_write(instance).ainvoke(
+            {"name": "setup", "commands": ["uv sync"]},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert repository_commands(tmp_path) == {**held, "setup": ["uv sync"]}
+
+    asyncio.run(scenario())
+
+
 def test_repository_commands_write_records_an_empty_list(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)
