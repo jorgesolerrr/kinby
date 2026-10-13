@@ -196,10 +196,10 @@ def test_an_update_makes_the_library_skills_an_older_template_supplied_picks(tmp
 
 
 def test_an_update_after_one_interrupted_past_the_lock_keeps_the_skills_it_made_picks(tmp_path):
-    client = hub_client(install_hub(tmp_path, FILES | _shipped("tdd")))
+    client = hub_client(factory_hub(tmp_path, FILES | _shipped("tdd")))
 
     async def scenario() -> None:
-        coder = (await installed(client)).instances["coder"].instance_id
+        coder = (await created_roles(client))["coder"]
         directory = _directory(tmp_path, coder)
         held = directory / "skills" / "tdd"
         # The lock an update writes before it stores the baseline without the new picks.
@@ -232,7 +232,7 @@ def test_an_update_after_one_interrupted_past_the_lock_keeps_the_skills_it_made_
 
 
 def test_an_update_never_reads_through_a_link_in_a_skill_it_makes_a_pick(tmp_path, monkeypatch):
-    client = hub_client(install_hub(tmp_path, FILES | _shipped("tdd")))
+    client = hub_client(factory_hub(tmp_path, FILES | _shipped("tdd")))
     outside = tmp_path / "outside.md"
     outside.write_text((SHIPPED_SKILLS / "tdd" / "tests.md").read_text(encoding="utf-8"))
     read_bytes = Path.read_bytes
@@ -243,7 +243,7 @@ def test_an_update_never_reads_through_a_link_in_a_skill_it_makes_a_pick(tmp_pat
         return read_bytes(path)
 
     async def scenario() -> None:
-        coder = (await installed(client)).instances["coder"].instance_id
+        coder = (await created_roles(client))["coder"]
         directory = _directory(tmp_path, coder)
         linked = directory / "skills" / "tdd" / "tests.md"
         linked.unlink()
