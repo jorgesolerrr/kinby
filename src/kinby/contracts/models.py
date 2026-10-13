@@ -2121,6 +2121,9 @@ class LibraryEntry(ContractModel):
     source: LibrarySource
     #: Where an entry from git came from. None for any other entry.
     git: GitSource | None = None
+    #: A shipped or git skill the user changed since it landed. A written skill is the user's own,
+    #: and never counts as edited.
+    edited: bool = False
 
 
 class LibraryListResult(ContractModel):
@@ -2130,6 +2133,21 @@ class LibraryListResult(ContractModel):
 
 class LibrarySkillReadCommand(ContractModel):
     name: SkillName
+
+
+class LibrarySkillWriteCommand(ContractModel):
+    """Write a library skill's ``SKILL.md``, creating the skill when ``hash`` is null."""
+
+    name: SkillName
+    content: str
+    hash: FileHash | None
+
+
+class LibrarySkillDeleteCommand(ContractModel):
+    """Delete a skill from the library. Every instance that picked it keeps its copy."""
+
+    name: SkillName
+    hash: FileHash
 
 
 class LibraryGitPreviewCommand(ContractModel):

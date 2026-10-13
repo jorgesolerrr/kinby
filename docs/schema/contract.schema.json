@@ -2598,6 +2598,10 @@
             }
           ]
         },
+        "edited": {
+          "default": false,
+          "type": "boolean"
+        },
         "git": {
           "anyOf": [
             {
@@ -2749,6 +2753,24 @@
       "title": "LibraryListResult",
       "type": "object"
     },
+    "LibrarySkillDeleteCommand": {
+      "additionalProperties": false,
+      "description": "Delete a skill from the library. Every instance that picked it keeps its copy.",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "hash"
+      ],
+      "title": "LibrarySkillDeleteCommand",
+      "type": "object"
+    },
     "LibrarySkillReadCommand": {
       "additionalProperties": false,
       "properties": {
@@ -2760,6 +2782,35 @@
         "name"
       ],
       "title": "LibrarySkillReadCommand",
+      "type": "object"
+    },
+    "LibrarySkillWriteCommand": {
+      "additionalProperties": false,
+      "description": "Write a library skill's ``SKILL.md``, creating the skill when ``hash`` is null.",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "content",
+        "hash"
+      ],
+      "title": "LibrarySkillWriteCommand",
       "type": "object"
     },
     "LibrarySource": {
@@ -8215,11 +8266,43 @@
           ],
           "type": "object"
         },
+        "library.skill.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibrarySkillDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LibraryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "library.skill.read": {
           "additionalProperties": false,
           "properties": {
             "command": {
               "$ref": "#/$defs/LibrarySkillReadCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "library.skill.write": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibrarySkillWriteCommand"
             },
             "result": {
               "$ref": "#/$defs/SkillResult"
@@ -9051,6 +9134,8 @@
         "factory.run.cancel",
         "library.list",
         "library.skill.read",
+        "library.skill.write",
+        "library.skill.delete",
         "library.git.preview",
         "library.git.add",
         "instance.picks.get",

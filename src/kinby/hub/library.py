@@ -25,7 +25,9 @@ from kinby.contracts import (
     LibraryKind,
     LibraryListCommand,
     LibraryListResult,
+    LibrarySkillDeleteCommand,
     LibrarySkillReadCommand,
+    LibrarySkillWriteCommand,
     LibrarySource,
     PickState,
     PreviewedSkill,
@@ -49,7 +51,7 @@ from kinby.instance.skills_lock import (
     skill_hash,
     write_lock,
 )
-from kinby.plugins.instance_tools import validate_name
+from kinby.plugins.instance_tools import validate_name, write_skill
 from kinby.plugins.skills import load_skill_file
 
 
@@ -78,6 +80,10 @@ class Library:
         self._factories = factories
         self._registry = registry
         self._adding = threading.Lock()
+        # A write or a delete moves folders on the event loop, where every reader of the library
+        # runs, so no pick sees a folder half moved. The lock keeps them from landing over an add,
+        # whose fetch waits in a thread.
+        self._edit_lock = asyncio.Lock()
 
     def receive(self, shipped: Path) -> None:
         """Copy each skill kinby ships that the hub has never copied, and record its hash.
@@ -85,6 +91,8 @@ class Library:
         A shipped skill the user deleted stays deleted, and one the user edited stays edited. An
         unrecorded folder that matches the shipped skill is a copy cut short before its record,
         and is recorded. One that differs is the user's and stays as it is.
+
+        A git skill added before the hub recorded hashes counts as landed as it stands.
         """
         copied = self._registry.shipped_skills()
         self._directory.mkdir(parents=True, exist_ok=True)
@@ -100,6 +108,9 @@ class Library:
             elif directory_hash(destination) != directory_hash(source):
                 continue
             self._registry.record_shipped_skill(name, directory_hash(destination))
+        for name in self._registry.unhashed_git_skills():
+            if (self._directory / name).is_dir():
+                self._registry.record_landed_git_skill(name, directory_hash(self._directory / name))
 
     async def list(self, command: LibraryListCommand) -> LibraryListResult:
         factories = await self._factories.list(FactoryListCommand())
@@ -124,10 +135,34 @@ class Library:
         )
 
     async def read_skill(self, command: LibrarySkillReadCommand) -> SkillResult:
-        folder = _skill_folders(self._directory).get(command.name)
-        if folder is None:
-            raise SkillNotFound(f'The library has no skill "{command.name}".')
-        return skill_result(folder)
+        return skill_result(self._folder(command.name))
+
+    async def write_skill(self, command: LibrarySkillWriteCommand) -> SkillResult:
+        async with self._edit_lock:
+            return self._write_skill(command)
+
+    def _write_skill(self, command: LibrarySkillWriteCommand) -> SkillResult:
+        if command.hash is not None:
+            self._as_read(command.name, command.hash)
+        elif command.name in _skill_folders(self._directory):
+            raise InvalidConfig({"name": f'The library already holds a skill "{command.name}".'})
+        try:
+            write_skill(self._directory, command.name, command.content, self._directory)
+        except ValueError as exc:
+            raise InvalidConfig({"content": str(exc)}) from exc
+        return skill_result(self._directory / command.name)
+
+    async def delete_skill(self, command: LibrarySkillDeleteCommand) -> LibraryListResult:
+        """Delete the skill from the library, and from no instance (ADR 0091)."""
+        async with self._edit_lock:
+            self._delete_skill(command)
+        return await self.list(LibraryListCommand())
+
+    def _delete_skill(self, command: LibrarySkillDeleteCommand) -> None:
+        folder = self._as_read(command.name, command.hash)
+        with TemporaryDirectory(prefix=".delete-", dir=self._directory) as temporary:
+            folder.rename(Path(temporary) / command.name)
+        self._registry.forget_git_skill(command.name)
 
     async def preview(self, command: LibraryGitPreviewCommand) -> LibraryGitPreviewResult:
         return await asyncio.to_thread(self._preview, parse_address(command.address))
@@ -152,7 +187,8 @@ class Library:
     async def add(self, command: LibraryGitAddCommand) -> LibraryGitAddResult:
         """Add skills from git at the commit a preview resolved, whatever the ref names now."""
         address = parse_address(command.address)
-        return await asyncio.to_thread(self._add, address, command)
+        async with self._edit_lock:
+            return await asyncio.to_thread(self._add, address, command)
 
     def _add(self, address: Address, command: LibraryGitAddCommand) -> LibraryGitAddResult:
         names = sorted(set(command.skills))
@@ -176,6 +212,7 @@ class Library:
                     GitSource(
                         url=address.url, path=str(found[name]), ref=address.ref, commit=commit
                     ),
+                    directory_hash(self._directory / name),
                 )
         return LibraryGitAddResult(
             entries=[self._entry(name, self._directory / name) for name in names]
@@ -325,14 +362,31 @@ class Library:
             path: entry for path, entry in baseline.items() if not path.startswith(prefixes)
         }, taken
 
+    def _folder(self, name: SkillName) -> Path:
+        folder = _skill_folders(self._directory).get(name)
+        if folder is None:
+            raise SkillNotFound(f'The library has no skill "{name}".')
+        return folder
+
+    def _as_read(self, name: SkillName, read: FileHash) -> Path:
+        """The folder of the skill *name*, unless it changed since the client read it as *read*."""
+        folder = self._folder(name)
+        if directory_hash(folder) != read:
+            raise StaleWrite(
+                f'The library\'s skill "{name}" changed since it was read. Read it again.'
+            )
+        return folder
+
     def _entry(self, name: SkillName, folder: Path) -> LibraryEntry:
         origin = self._origin(name)
+        landed = self._registry.landed_skills().get(name)
         return LibraryEntry(
             kind=LibraryKind.SKILL,
             name=name,
             description=load_skill_file(folder / SKILL_FILE).description,
             source=LibrarySource.GIT if isinstance(origin, GitSource) else origin,
             git=origin if isinstance(origin, GitSource) else None,
+            edited=landed is not None and directory_hash(folder) != landed,
         )
 
     def _origin(self, name: SkillName) -> LibrarySource | GitSource:

@@ -339,8 +339,16 @@ export interface Contract {
       command: LibraryListCommand;
       result: LibraryListResult;
     };
+    "library.skill.delete": {
+      command: LibrarySkillDeleteCommand;
+      result: LibraryListResult;
+    };
     "library.skill.read": {
       command: LibrarySkillReadCommand;
+      result: SkillResult;
+    };
+    "library.skill.write": {
+      command: LibrarySkillWriteCommand;
       result: SkillResult;
     };
     "manifest.get": {
@@ -1087,6 +1095,7 @@ export interface LibraryGitAddResult {
 }
 export interface LibraryEntry {
   description: string | null;
+  edited?: boolean;
   git?: GitSource | null;
   kind: LibraryKind;
   name: string;
@@ -1124,6 +1133,13 @@ export interface LibraryListCommand {}
 export interface LibraryListResult {
   entries: LibraryEntry[];
 }
+/**
+ * Delete a skill from the library. Every instance that picked it keeps its copy.
+ */
+export interface LibrarySkillDeleteCommand {
+  hash: string;
+  name: string;
+}
 export interface LibrarySkillReadCommand {
   name: string;
 }
@@ -1131,6 +1147,14 @@ export interface SkillResult {
   content: string;
   files: string[];
   hash: string;
+}
+/**
+ * Write a library skill's ``SKILL.md``, creating the skill when ``hash`` is null.
+ */
+export interface LibrarySkillWriteCommand {
+  content: string;
+  hash: string | null;
+  name: string;
 }
 export interface ManifestGetCommand {}
 export interface ManifestResult {

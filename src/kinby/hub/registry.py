@@ -223,7 +223,8 @@ class HubRegistry:
                     url TEXT NOT NULL,
                     path TEXT NOT NULL,
                     ref TEXT,
-                    git_commit TEXT NOT NULL
+                    git_commit TEXT NOT NULL,
+                    hash TEXT NOT NULL
                 );
                 """
             )
@@ -250,6 +251,8 @@ class HubRegistry:
             )
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
             self._add_columns(connection, "factory_members", {"baseline": "TEXT"})
+            # Null for a git skill added before the hub recorded the hash it landed with.
+            self._add_columns(connection, "git_skills", {"hash": "TEXT"})
             self._add_columns(
                 connection,
                 "operation_steps",
@@ -1505,13 +1508,39 @@ class HubRegistry:
             for name, url, path, ref, commit in rows
         }
 
-    def record_git_skill(self, name: SkillName, source: GitSource) -> None:
+    def record_git_skill(self, name: SkillName, source: GitSource, landed: FileHash) -> None:
         with self._connect() as connection:
             connection.execute(
-                "INSERT OR REPLACE INTO git_skills (name, url, path, ref, git_commit)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (name, source.url, source.path, source.ref, source.commit),
+                "INSERT OR REPLACE INTO git_skills (name, url, path, ref, git_commit, hash)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (name, source.url, source.path, source.ref, source.commit, landed),
             )
+
+    def forget_git_skill(self, name: SkillName) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM git_skills WHERE name = ?", (name,))
+
+    def landed_skills(self) -> dict[SkillName, FileHash]:
+        """The hash each shipped or git skill had when it landed in the library, by name.
+
+        A git skill's wins over a shipped one's of the same name, which the user deleted.
+        """
+        with self._connect() as connection:
+            shipped = connection.execute("SELECT name, hash FROM shipped_skills").fetchall()
+            git = connection.execute(
+                "SELECT name, hash FROM git_skills WHERE hash IS NOT NULL"
+            ).fetchall()
+        return {SkillName(name): FileHash(hash) for name, hash in (*shipped, *git)}
+
+    def unhashed_git_skills(self) -> list[SkillName]:
+        """Each git skill added before the hub recorded the hash it landed with."""
+        with self._connect() as connection:
+            rows = connection.execute("SELECT name FROM git_skills WHERE hash IS NULL").fetchall()
+        return [SkillName(name) for (name,) in rows]
+
+    def record_landed_git_skill(self, name: SkillName, landed: FileHash) -> None:
+        with self._connect() as connection:
+            connection.execute("UPDATE git_skills SET hash = ? WHERE name = ?", (landed, name))
 
     def open_run(
         self,
