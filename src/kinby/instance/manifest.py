@@ -224,6 +224,20 @@ def edited_manifest(text: str, values: ManifestValues, prices: Mapping[str, NewM
     return edited
 
 
+def with_repository_commands(text: str, name: CommandListName, commands: list[str]) -> str:
+    """The text of ``kinby.toml`` with its list of repository commands *name* set to
+    *commands*, keeping its comments.
+
+    Raises ``ValidationError`` when the result is not a valid manifest.
+    """
+    document = tomlkit.parse(text)
+    workspace = document.setdefault("workspace", tomlkit.table())
+    workspace.setdefault("commands", tomlkit.table())[name] = commands
+    edited = tomlkit.dumps(document)
+    parse_manifest(edited)
+    return edited
+
+
 def _put(table: MutableMapping[str, object], key: str, value: object) -> None:
     if value is None:
         table.pop(key, None)

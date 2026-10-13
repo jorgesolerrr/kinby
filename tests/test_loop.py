@@ -55,6 +55,7 @@ class CoreSkillModel:
             "memory_open",
             "memory_search",
             "remember",
+            "repository_commands_write",
             "routine_delete",
             "routine_list",
             "routine_read",
