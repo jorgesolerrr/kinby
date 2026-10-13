@@ -17,7 +17,7 @@ from kinby.contracts import (
 from kinby.hub import Hub
 from kinby.instance.skills_lock import skill_hash
 from tests.test_hub import FakeControl, finished_operation, hub_at, hub_client, started_instance
-from tests.test_hub_picks import _instance_id, _lock, _pick, _picks
+from tests.test_hub_picks import _instance_id, _lock, _pick, _picks, _read, _refused
 
 CHANGED = "\nThe library's newer line.\n"
 EDITED = "\nThe instance's own line.\n"
@@ -153,7 +153,7 @@ def test_an_update_keeps_a_pick_whose_skills_folder_links_out_of_the_instance(tm
     held = skill_hash(outside / "tdd")
     _append(hub.directory / "skills" / "tdd" / "SKILL.md", CHANGED)
 
-    assert _states(hub, directory) == {"tdd": PickState.EDITED}
+    assert "link" in _refused(_read(hub_client(hub), directory))
 
     outcome = _update(hub, directory)
 
