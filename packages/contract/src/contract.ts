@@ -339,8 +339,16 @@ export interface Contract {
       command: LibraryListCommand;
       result: LibraryListResult;
     };
+    "library.skill.check": {
+      command: LibrarySkillCheckCommand;
+      result: LibrarySkillCheckResult;
+    };
     "library.skill.delete": {
       command: LibrarySkillDeleteCommand;
+      result: LibraryListResult;
+    };
+    "library.skill.move": {
+      command: LibrarySkillMoveCommand;
       result: LibraryListResult;
     };
     "library.skill.read": {
@@ -1099,6 +1107,7 @@ export interface LibraryEntry {
   git?: GitSource | null;
   kind: LibraryKind;
   name: string;
+  newer?: boolean;
   source: LibrarySource;
 }
 /**
@@ -1134,11 +1143,35 @@ export interface LibraryListResult {
   entries: LibraryEntry[];
 }
 /**
+ * Look for a newer version of a shipped or git skill, and change nothing. A git skill's ref
+ * is read from its remote.
+ */
+export interface LibrarySkillCheckCommand {
+  name: string;
+}
+export interface LibrarySkillCheckResult {
+  newer: NewerVersion | null;
+}
+export interface NewerVersion {
+  commit: GitCommit | null;
+  diff: string;
+  hash: string;
+}
+/**
  * Delete a skill from the library. Every instance that picked it keeps its copy.
  */
 export interface LibrarySkillDeleteCommand {
   hash: string;
   name: string;
+}
+/**
+ * Move a library skill to the newer version a check showed. No instance changes.
+ */
+export interface LibrarySkillMoveCommand {
+  commit: GitCommit | null;
+  hash: string;
+  name: string;
+  overwrite?: boolean;
 }
 export interface LibrarySkillReadCommand {
   name: string;

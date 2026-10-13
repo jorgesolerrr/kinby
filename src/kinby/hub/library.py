@@ -15,6 +15,7 @@ from kinby.contracts import (
     ConfigFile,
     FactoryListCommand,
     FileHash,
+    GitCommit,
     GitSource,
     InstancePicksResult,
     LibraryEntry,
@@ -25,10 +26,14 @@ from kinby.contracts import (
     LibraryKind,
     LibraryListCommand,
     LibraryListResult,
+    LibrarySkillCheckCommand,
+    LibrarySkillCheckResult,
     LibrarySkillDeleteCommand,
+    LibrarySkillMoveCommand,
     LibrarySkillReadCommand,
     LibrarySkillWriteCommand,
     LibrarySource,
+    NewerVersion,
     PickState,
     PreviewedSkill,
     SkillName,
@@ -41,7 +46,12 @@ from kinby.hub.factories import FactoryStore
 from kinby.hub.git_skills import Address, checked_out, found_skills, parse_address
 from kinby.hub.registry import HubRegistry
 from kinby.instance import Instance
-from kinby.instance.config_changes import directory_hash, file_hash, recorded_changes
+from kinby.instance.config_changes import (
+    directory_hash,
+    file_hash,
+    recorded_changes,
+    text_diff,
+)
 from kinby.instance.layout import SKILL_FILE, SKILLS_DIR, SKILLS_LOCK_NAME
 from kinby.instance.skills_lock import (
     LockedSkill,
@@ -75,8 +85,11 @@ class PickSync:
 class Library:
     """Serve the library's entries: the skill folders in *directory* and the hub's factories."""
 
-    def __init__(self, directory: Path, factories: FactoryStore, registry: HubRegistry) -> None:
+    def __init__(
+        self, directory: Path, shipped: Path, factories: FactoryStore, registry: HubRegistry
+    ) -> None:
         self._directory = directory
+        self._shipped = shipped
         self._factories = factories
         self._registry = registry
         self._adding = threading.Lock()
@@ -85,7 +98,7 @@ class Library:
         # whose fetch waits in a thread.
         self._edit_lock = asyncio.Lock()
 
-    def receive(self, shipped: Path) -> None:
+    def receive(self) -> None:
         """Copy each skill kinby ships that the hub has never copied, and record its hash.
 
         A shipped skill the user deleted stays deleted, and one the user edited stays edited. An
@@ -96,7 +109,7 @@ class Library:
         """
         copied = self._registry.shipped_skills()
         self._directory.mkdir(parents=True, exist_ok=True)
-        for name, source in _skill_folders(shipped).items():
+        for name, source in _skill_folders(self._shipped).items():
             destination = self._directory / name
             if name in copied:
                 continue
@@ -163,6 +176,58 @@ class Library:
         with TemporaryDirectory(prefix=".delete-", dir=self._directory) as temporary:
             folder.rename(Path(temporary) / command.name)
         self._registry.forget_git_skill(command.name)
+
+    async def check(self, command: LibrarySkillCheckCommand) -> LibrarySkillCheckResult:
+        return LibrarySkillCheckResult(newer=await asyncio.to_thread(self._check, command.name))
+
+    def _check(self, name: SkillName) -> NewerVersion | None:
+        folder = self._folder(name)
+        match self._origin(name):
+            case GitSource() as git:
+                with checked_out(git.url, git.ref or "HEAD") as (commit, tree):
+                    if commit == git.commit:
+                        return None
+                    return _newer(folder, _git_skill(tree, name, git, commit), commit)
+            case LibrarySource.SHIPPED if (shipped := self._newer_shipped(name)) is not None:
+                return _newer(folder, shipped, None)
+        return None
+
+    async def move(self, command: LibrarySkillMoveCommand) -> LibraryListResult:
+        """Move the skill to the version a check showed, and no instance with it (ADR 0091)."""
+        async with self._edit_lock:
+            await asyncio.to_thread(self._move, command)
+        return await self.list(LibraryListCommand())
+
+    def _move(self, command: LibrarySkillMoveCommand) -> None:
+        name = command.name
+        folder = self._as_read(name, command.hash)
+        if self._changed_since_landing(name, folder) and not command.overwrite:
+            raise InvalidConfig(
+                {
+                    "overwrite": f'The library\'s skill "{name}" was edited since it landed. '
+                    "Overwrite the edits to move it."
+                }
+            )
+        match self._origin(name):
+            case GitSource() as git:
+                if command.commit is None:
+                    raise InvalidConfig(
+                        {"commit": f'"{name}" is from git, and moves to the commit a check shows.'}
+                    )
+                with checked_out(git.url, command.commit) as (commit, tree):
+                    _copy_in(_git_skill(tree, name, git, commit), folder, self._directory)
+                self._registry.record_git_skill(
+                    name, git.model_copy(update={"commit": commit}), directory_hash(folder)
+                )
+            case LibrarySource.SHIPPED if (shipped := self._newer_shipped(name)) is not None:
+                _copy_in(shipped, folder, self._directory)
+                self._registry.record_shipped_skill(name, directory_hash(folder))
+            case LibrarySource.SHIPPED:
+                raise InvalidConfig({"name": f'This kinby ships no newer version of "{name}".'})
+            case LibrarySource.WRITTEN:
+                raise InvalidConfig(
+                    {"name": f'"{name}" was written on the hub, and has no newer version.'}
+                )
 
     async def preview(self, command: LibraryGitPreviewCommand) -> LibraryGitPreviewResult:
         return await asyncio.to_thread(self._preview, parse_address(command.address))
@@ -379,15 +444,29 @@ class Library:
 
     def _entry(self, name: SkillName, folder: Path) -> LibraryEntry:
         origin = self._origin(name)
-        landed = self._registry.landed_skills().get(name)
         return LibraryEntry(
             kind=LibraryKind.SKILL,
             name=name,
             description=load_skill_file(folder / SKILL_FILE).description,
             source=LibrarySource.GIT if isinstance(origin, GitSource) else origin,
             git=origin if isinstance(origin, GitSource) else None,
-            edited=landed is not None and directory_hash(folder) != landed,
+            edited=self._changed_since_landing(name, folder),
+            newer=origin is LibrarySource.SHIPPED and self._newer_shipped(name) is not None,
         )
+
+    def _changed_since_landing(self, name: SkillName, folder: Path) -> bool:
+        """Whether the user changed the shipped or git skill *name* in *folder* since it landed."""
+        landed = self._registry.landed_skills().get(name)
+        return landed is not None and directory_hash(folder) != landed
+
+    def _newer_shipped(self, name: SkillName) -> Path | None:
+        """The folder of the version of *name* this kinby ships, if it is not the one the library
+        took last."""
+        shipped = _skill_folders(self._shipped).get(name)
+        taken = self._registry.shipped_skills().get(name)
+        if shipped is None or taken is None or directory_hash(shipped) == taken:
+            return None
+        return shipped
 
     def _origin(self, name: SkillName) -> LibrarySource | GitSource:
         """Where the library's skill *name* came from: its git source, or shipped or written."""
@@ -487,6 +566,32 @@ def _copy_hash(held: Path, name: SkillName) -> FileHash | None:
 def _linked(folder: Path) -> bool:
     """Whether *folder* holds a link, whose target the hub must never read."""
     return any(path.is_symlink() for path in folder.rglob("*"))
+
+
+def _git_skill(tree: Path, name: SkillName, git: GitSource, commit: GitCommit) -> Path:
+    """The folder of the skill *name* in *tree*, the files of *git*'s repository at *commit*."""
+    found = found_skills(tree, PurePosixPath(git.path))
+    if name not in found:
+        raise InvalidConfig(
+            {"name": f'{git.url} holds no skill "{name}" at {git.path} in {commit}.'}
+        )
+    return tree / found[name]
+
+
+def _newer(folder: Path, version: Path, commit: GitCommit | None) -> NewerVersion:
+    """The *version* folder, at *commit* for a git skill, as a newer version of *folder*."""
+    return NewerVersion(
+        commit=commit, hash=directory_hash(folder), diff=text_diff(_texts(folder), _texts(version))
+    )
+
+
+def _texts(folder: Path) -> dict[str, str]:
+    """Each file in *folder*, by its path in it."""
+    return {
+        path.relative_to(folder).as_posix(): path.read_text(encoding="utf-8", errors="replace")
+        for path in folder.rglob("*")
+        if path.is_file()
+    }
 
 
 def _copy_in(folder: Path, target: Path, staging: Path) -> None:

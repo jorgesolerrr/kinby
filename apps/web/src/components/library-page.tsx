@@ -5,6 +5,8 @@ import type {
   LibraryEntry,
   LibraryGitPreviewResult,
   LibraryKind,
+  LibrarySkillCheckResult,
+  NewerVersion,
   PreviewedSkill,
   SkillResult,
 } from "@kinby/contract"
@@ -65,6 +67,14 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
   const { value: listed, failure, readAgain } = useRead(list, clock)
   const [opened, setOpened] = useState<LibraryEntry>()
   const [form, setForm] = useState<"write" | "git">()
+  // A git skill's newer commit is known only from a check, which the list does not run.
+  const [checkedNewer, setCheckedNewer] = useState<string[]>([])
+  const marked = (name: string, newer: boolean) =>
+    setCheckedNewer((names) => [...names.filter((each) => each !== name), ...(newer ? [name] : [])])
+  const shown =
+    opened &&
+    (listed?.entries.find((entry) => entry.kind === opened.kind && entry.name === opened.name) ??
+      opened)
 
   const writeNew: WriteNew = async (name, content) => {
     try {
@@ -130,6 +140,7 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
                     <EntryItem
                       key={entry.name}
                       entry={entry}
+                      newer={entry.newer === true || checkedNewer.includes(entry.name)}
                       selected={opened?.kind === kind && opened.name === entry.name}
                       onSelect={() => setOpened(entry)}
                     />
@@ -137,23 +148,28 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
               </ItemGroup>
             </section>
           ))}
-      {opened !== undefined && (
+      {shown !== undefined && (
         <>
           <Separator className="max-w-2xl" />
-          {opened.kind === "skill" ? (
+          {shown.kind === "skill" ? (
             <SkillEntry
-              key={opened.name}
+              key={shown.name}
               client={client}
               clock={clock}
-              name={opened.name}
+              entry={shown}
               onSaved={readAgain}
+              onChecked={(newer) => marked(shown.name, newer)}
+              onMoved={() => {
+                marked(shown.name, false)
+                readAgain()
+              }}
               onDeleted={() => {
                 setOpened(undefined)
                 readAgain()
               }}
             />
           ) : (
-            <FactoryEntry key={opened.name} client={client} clock={clock} name={opened.name} />
+            <FactoryEntry key={shown.name} client={client} clock={clock} name={shown.name} />
           )}
         </>
       )}
@@ -163,10 +179,12 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
 
 function EntryItem({
   entry,
+  newer,
   selected,
   onSelect,
 }: {
   entry: LibraryEntry
+  newer: boolean
   selected: boolean
   onSelect: () => void
 }) {
@@ -178,7 +196,7 @@ function EntryItem({
       render={
         <button
           type="button"
-          aria-label={`${entry.name}, ${entry.source} ${entry.kind}${entry.edited ? ", edited" : ""}`}
+          aria-label={`${entry.name}, ${entry.source} ${entry.kind}${entry.edited ? ", edited" : ""}${newer ? ", newer" : ""}`}
           aria-current={selected || undefined}
           onClick={onSelect}
         />
@@ -189,6 +207,7 @@ function EntryItem({
           {entry.name}
           <Badge variant="secondary">{LIBRARY_SOURCES[entry.source]}</Badge>
           {entry.edited && <Badge variant="outline">Edited</Badge>}
+          {newer && <Badge>Newer version</Badge>}
         </ItemTitle>
         {entry.description !== null && <ItemDescription>{entry.description}</ItemDescription>}
         {entry.git != null && (
@@ -198,6 +217,39 @@ function EntryItem({
         )}
       </ItemContent>
     </Item>
+  )
+}
+
+/** Make one call to the hub at a time, keeping why the hub refused it or how it failed. */
+function useHubCall() {
+  const [busy, setBusy] = useState(false)
+  const [refusal, setRefusal] = useState<string>()
+  const [failure, setFailure] = useState<unknown>()
+
+  const ask = async (call: () => Promise<void>) => {
+    setBusy(true)
+    setRefusal(undefined)
+    setFailure(undefined)
+    try {
+      await call()
+    } catch (error) {
+      if (error instanceof CallError && Object.keys(error.fields).length > 0) {
+        setRefusal(Object.values(error.fields).join(" "))
+      } else setFailure(error)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return { busy, refusal, failure, ask }
+}
+
+function Refusal({ reason }: { reason: string }) {
+  return (
+    <Alert variant="destructive">
+      <CircleXIcon />
+      <AlertTitle>The hub refused it</AlertTitle>
+      <AlertDescription>{reason}</AlertDescription>
+    </Alert>
   )
 }
 
@@ -224,24 +276,7 @@ function AddFromGit({
   const [address, setAddress] = useState("")
   const [preview, setPreview] = useState<Previewed>()
   const [chosen, setChosen] = useState<string[]>([])
-  const [busy, setBusy] = useState(false)
-  const [refusal, setRefusal] = useState<string>()
-  const [failure, setFailure] = useState<unknown>()
-
-  const ask = async (call: () => Promise<void>) => {
-    setBusy(true)
-    setRefusal(undefined)
-    setFailure(undefined)
-    try {
-      await call()
-    } catch (error) {
-      if (error instanceof CallError && Object.keys(error.fields).length > 0) {
-        setRefusal(Object.values(error.fields).join(" "))
-      } else setFailure(error)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const { busy, refusal, failure, ask } = useHubCall()
 
   const previewAddress = (event: FormEvent) => {
     event.preventDefault()
@@ -295,13 +330,7 @@ function AddFromGit({
         </FieldGroup>
       </form>
       {failure !== undefined && <Failure error={failure} />}
-      {refusal !== undefined && (
-        <Alert variant="destructive">
-          <CircleXIcon />
-          <AlertTitle>The hub refused it</AlertTitle>
-          <AlertDescription>{refusal}</AlertDescription>
-        </Alert>
-      )}
+      {refusal !== undefined && <Refusal reason={refusal} />}
       {preview !== undefined && (
         <FieldSet>
           <FieldLegend>Skills to add</FieldLegend>
@@ -362,20 +391,28 @@ function SkillPreview({
   )
 }
 
-/** A library skill's `SKILL.md` to edit, and Delete. An instance that picked it keeps its copy. */
+/**
+ * A library skill's `SKILL.md` to edit, a shipped or git skill's newer version to move to, and
+ * Delete. An instance that picked it keeps its copy.
+ */
 function SkillEntry({
   client,
   clock,
-  name,
+  entry,
   onSaved,
+  onChecked,
+  onMoved,
   onDeleted,
 }: {
   client: Caller
   clock: Clock
-  name: string
+  entry: LibraryEntry
   onSaved: () => void
+  onChecked: (newer: boolean) => void
+  onMoved: () => void
   onDeleted: () => void
 }) {
+  const { name } = entry
   const id = useId()
   const pacing = usePace(clock)
   const [opened, setOpened] = useState<SkillResult>()
@@ -479,6 +516,19 @@ function SkillEntry({
           <FieldDescription>Other files: {opened.files.join(", ")}</FieldDescription>
         )}
       </Field>
+      {entry.source !== "written" && (
+        <NewerVersionCheck
+          client={client}
+          name={name}
+          edited={entry.edited === true}
+          unsaved={draft !== opened.content}
+          onChecked={onChecked}
+          onMoved={() => {
+            void load(pacing)
+            onMoved()
+          }}
+        />
+      )}
       <div className="flex items-center gap-3">
         <Button disabled={busy || draft === opened.content} onClick={() => void save()}>
           {busy && <Spinner data-icon="inline-start" />}
@@ -513,6 +563,110 @@ function SkillEntry({
         </AlertDialog>
       </div>
     </div>
+  )
+}
+
+/**
+ * Check a shipped or git skill for a newer version, read the diff, and move the library's skill
+ * to it. A skill the user edited moves only after they agree to overwrite the edits, and one with
+ * unsaved edits only once they are saved.
+ */
+function NewerVersionCheck({
+  client,
+  name,
+  edited,
+  unsaved,
+  onChecked,
+  onMoved,
+}: {
+  client: Caller
+  name: string
+  edited: boolean
+  unsaved: boolean
+  onChecked: (newer: boolean) => void
+  onMoved: () => void
+}) {
+  const id = useId()
+  const [checked, setChecked] = useState<LibrarySkillCheckResult>()
+  const { busy, refusal, failure, ask } = useHubCall()
+
+  const check = () =>
+    ask(async () => {
+      const result = await client.call("library.skill.check", { name })
+      setChecked(result)
+      onChecked(result.newer !== null)
+    })
+  const move = (newer: NewerVersion) =>
+    ask(async () => {
+      await client.call("library.skill.move", {
+        name,
+        hash: newer.hash,
+        commit: newer.commit,
+        overwrite: edited,
+      })
+      setChecked(undefined)
+      onMoved()
+    })
+
+  const newer = checked?.newer
+  return (
+    <section className="flex flex-col gap-3" aria-label="Newer version">
+      <div className="flex items-center gap-3">
+        <Button variant="outline" disabled={busy} onClick={() => void check()}>
+          {busy && <Spinner data-icon="inline-start" />}
+          Check for a newer version
+        </Button>
+        {checked !== undefined && newer === null && (
+          <span className="text-sm text-muted-foreground">No newer version.</span>
+        )}
+      </div>
+      {failure !== undefined && <Failure error={failure} />}
+      {refusal !== undefined && <Refusal reason={refusal} />}
+      {newer != null && (
+        <>
+          <Field>
+            <FieldLabel htmlFor={id}>Diff</FieldLabel>
+            <Textarea id={id} className="min-h-48" value={newer.diff} readOnly />
+            <FieldDescription>
+              {newer.commit === null ? "The version this kinby ships." : `Commit ${newer.commit}`}
+            </FieldDescription>
+          </Field>
+          <div className="flex items-center gap-3">
+            {edited ? (
+              <AlertDialog>
+                <AlertDialogTrigger render={<Button disabled={busy || unsaved} />}>
+                  Move to this version
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Overwrite your edits to {name}?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      The newer version replaces the library&apos;s copy you edited. Instances that
+                      picked it keep theirs.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction variant="destructive" onClick={() => void move(newer)}>
+                      Overwrite
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            ) : (
+              <Button disabled={busy || unsaved} onClick={() => void move(newer)}>
+                Move to this version
+              </Button>
+            )}
+            {unsaved && (
+              <span className="text-sm text-muted-foreground">
+                Save your edits to SKILL.md before moving it.
+              </span>
+            )}
+          </div>
+        </>
+      )}
+    </section>
   )
 }
 

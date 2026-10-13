@@ -295,3 +295,170 @@ describe("LibraryPage, writing, editing and deleting a skill", () => {
     expect(screen.queryByRole("textbox", { name: "SKILL.md" })).toBeNull()
   })
 })
+
+const later = "fedcba9876543210fedcba9876543210fedcba98"
+const diff = "--- a/SKILL.md\n+++ b/SKILL.md\n@@ -4 +4 @@\n-Do it well.\n+Ask why five times.\n"
+
+/** A page whose git skill pr and shipped skill unslop have newer versions. */
+function openUpdatablePage({
+  edited = false,
+  move,
+}: { edited?: boolean; move?: () => never } = {}) {
+  const pr: LibraryEntry = {
+    kind: "skill",
+    name: "pr",
+    description: "Write the body.",
+    source: "git",
+    git: { url: "https://github.com/owner/repo.git", path: "skills/pr", ref: null, commit },
+    edited,
+  }
+  let entries: LibraryEntry[] = [
+    listed.entries[2],
+    { ...listed.entries[3], newer: true },
+    pr,
+  ].filter((entry) => entry !== undefined)
+  const caller = stubCaller({
+    "library.list": () => ({ entries }),
+    "library.skill.read": () => ({ content: tdd, files: [], hash: "h-1" }),
+    "library.skill.check": ({ name }) => ({
+      newer:
+        name === "tdd" ? null : { commit: name === "pr" ? later : null, hash: `h-${name}`, diff },
+    }),
+    "library.skill.move": ({ name }) => {
+      move?.()
+      entries = entries.map((entry) =>
+        entry.name === name
+          ? { ...entry, newer: false, edited: false, git: pr.git && { ...pr.git, commit: later } }
+          : entry,
+      )
+      return { entries }
+    },
+  })
+  render(<LibraryPage client={caller} clock={fakeClock()} />)
+  return { caller, user: userEvent.setup() }
+}
+
+const updates = (caller: ReturnType<typeof openUpdatablePage>["caller"]) =>
+  caller.calls.filter((call) => /^library\.skill\.(check|move)$/.test(call.method))
+
+describe("LibraryPage, moving a skill to a newer version", () => {
+  it("marks a shipped skill kinby ships a newer version of", async () => {
+    openUpdatablePage()
+
+    const skills = await screen.findByRole("list", { name: "Skills" })
+    const unslop = within(skills).getByRole("button", { name: "unslop, shipped skill, newer" })
+    expect(within(unslop).getByText("Newer version")).toBeTruthy()
+    expect(within(skills).getAllByText("Newer version")).toHaveLength(1)
+  })
+
+  it("checks a git skill, shows the diff, marks it and moves it to the commit it showed", async () => {
+    const { caller, user } = openUpdatablePage()
+
+    await user.click(await screen.findByRole("button", { name: "pr, git skill" }))
+    await user.click(await screen.findByRole("button", { name: "Check for a newer version" }))
+
+    const shown = await screen.findByRole("textbox", { name: "Diff" })
+    expect((shown as HTMLTextAreaElement).value).toBe(diff)
+    expect(screen.getByText(`Commit ${later}`)).toBeTruthy()
+    expect(screen.getByRole("button", { name: "pr, git skill, newer" })).toBeTruthy()
+    expect(updates(caller)).toEqual([{ method: "library.skill.check", params: { name: "pr" } }])
+
+    await user.click(screen.getByRole("button", { name: "Move to this version" }))
+
+    expect(await screen.findByRole("button", { name: "pr, git skill" })).toBeTruthy()
+    expect(screen.getByText(`https://github.com/owner/repo.git at ${later}`)).toBeTruthy()
+    expect(screen.queryByRole("textbox", { name: "Diff" })).toBeNull()
+    expect(updates(caller).at(-1)).toEqual({
+      method: "library.skill.move",
+      params: { name: "pr", hash: "h-pr", commit: later, overwrite: false },
+    })
+  })
+
+  it("moves a shipped skill to the version kinby ships", async () => {
+    const { caller, user } = openUpdatablePage()
+
+    await user.click(await screen.findByRole("button", { name: "unslop, shipped skill, newer" }))
+    await user.click(await screen.findByRole("button", { name: "Check for a newer version" }))
+    await screen.findByRole("textbox", { name: "Diff" })
+    await user.click(screen.getByRole("button", { name: "Move to this version" }))
+
+    expect(await screen.findByRole("button", { name: "unslop, shipped skill" })).toBeTruthy()
+    expect(updates(caller).at(-1)).toEqual({
+      method: "library.skill.move",
+      params: { name: "unslop", hash: "h-unslop", commit: null, overwrite: false },
+    })
+  })
+
+  it("says a skill with no newer version is current", async () => {
+    const { user } = openUpdatablePage()
+
+    await user.click(await screen.findByRole("button", { name: "tdd, shipped skill" }))
+    await user.click(await screen.findByRole("button", { name: "Check for a newer version" }))
+
+    expect(await screen.findByText("No newer version.")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Move to this version" })).toBeNull()
+  })
+
+  it("asks before overwriting a skill the user edited", async () => {
+    const { caller, user } = openUpdatablePage({ edited: true })
+
+    await user.click(await screen.findByRole("button", { name: "pr, git skill, edited" }))
+    await user.click(await screen.findByRole("button", { name: "Check for a newer version" }))
+    await user.click(await screen.findByRole("button", { name: "Move to this version" }))
+    const dialog = await screen.findByRole("alertdialog", { name: "Overwrite your edits to pr?" })
+    expect(updates(caller).some((call) => call.method === "library.skill.move")).toBe(false)
+    await user.click(within(dialog).getByRole("button", { name: "Overwrite" }))
+
+    expect(await screen.findByRole("button", { name: "pr, git skill" })).toBeTruthy()
+    expect(updates(caller).at(-1)).toEqual({
+      method: "library.skill.move",
+      params: { name: "pr", hash: "h-pr", commit: later, overwrite: true },
+    })
+  })
+
+  it("holds the move while SKILL.md has unsaved edits", async () => {
+    const { caller, user } = openUpdatablePage()
+
+    await user.click(await screen.findByRole("button", { name: "pr, git skill" }))
+    await user.type(await screen.findByRole("textbox", { name: "SKILL.md" }), "More.\n")
+    await user.click(screen.getByRole("button", { name: "Check for a newer version" }))
+    await screen.findByRole("textbox", { name: "Diff" })
+
+    const move = screen.getByRole("button", { name: "Move to this version" })
+    expect(move.hasAttribute("disabled")).toBe(true)
+    expect(screen.getByText("Save your edits to SKILL.md before moving it.")).toBeTruthy()
+    await user.click(move)
+    expect(caller.calls.some((call) => call.method === "library.skill.move")).toBe(false)
+    expect((screen.getByRole("textbox", { name: "SKILL.md" }) as HTMLTextAreaElement).value).toBe(
+      `${tdd}More.\n`,
+    )
+  })
+
+  it("shows why the hub refused a move", async () => {
+    const { user } = openUpdatablePage({
+      move: () => {
+        throw refused({ name: 'https://github.com/owner/repo.git holds no skill "pr".' })
+      },
+    })
+
+    await user.click(await screen.findByRole("button", { name: "pr, git skill" }))
+    await user.click(await screen.findByRole("button", { name: "Check for a newer version" }))
+    await user.click(await screen.findByRole("button", { name: "Move to this version" }))
+
+    const alert = await screen.findByRole("alert")
+    expect(within(alert).getByText(/holds no skill "pr"/)).toBeTruthy()
+  })
+
+  it("offers no check for a written skill", async () => {
+    const { user } = openEditablePage()
+
+    await user.click(await screen.findByRole("button", { name: "Write a skill" }))
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "grill")
+    await user.type(screen.getByRole("textbox", { name: "Description" }), "Ask why.")
+    await user.click(screen.getByRole("button", { name: "Create" }))
+    await user.click(await screen.findByRole("button", { name: "grill, written skill" }))
+
+    await screen.findByRole("textbox", { name: "SKILL.md" })
+    expect(screen.queryByRole("button", { name: "Check for a newer version" })).toBeNull()
+  })
+})
