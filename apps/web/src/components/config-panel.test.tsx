@@ -53,6 +53,7 @@ const setup: InstanceSetup = {
       is_set: false,
     },
   ],
+  missing_commands: [],
 }
 
 function status(fields: Partial<InstanceStatusResult> = {}): InstanceStatusResult {

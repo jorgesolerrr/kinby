@@ -2240,6 +2240,12 @@
           },
           "type": "array"
         },
+        "missing_commands": {
+          "items": {
+            "$ref": "#/$defs/CommandListName"
+          },
+          "type": "array"
+        },
         "secrets": {
           "items": {
             "$ref": "#/$defs/SecretSetup"
@@ -2249,7 +2255,8 @@
       },
       "required": [
         "logins",
-        "secrets"
+        "secrets",
+        "missing_commands"
       ],
       "title": "InstanceSetup",
       "type": "object"

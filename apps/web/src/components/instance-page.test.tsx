@@ -57,6 +57,7 @@ const setup: InstanceSetup = {
       is_set: false,
     },
   ],
+  missing_commands: [],
 }
 
 const stopped = instanceSummary({
@@ -139,6 +140,25 @@ describe("the setup card", () => {
     expect(secret("GitHub token").getByText("Not set")).toBeDefined()
     expect(secret("Webhook secret").getByText("Optional")).toBeDefined()
     expect(secret("Webhook secret").getByText("Not set")).toBeDefined()
+  })
+
+  it("names each missing list of repository commands, and says to ask for a survey", async () => {
+    const missing: InstanceSetup = { ...setup, missing_commands: ["setup", "checks"] }
+    await openPage({ "instance.status": () => status({ setup: missing }) })
+
+    const lists = within(card().getByRole("list", { name: "Repository commands" }))
+    expect(lists.getByRole("listitem", { name: "setup" })).toBeDefined()
+    expect(lists.getByRole("listitem", { name: "checks" })).toBeDefined()
+    expect(lists.getAllByText("Missing")).toHaveLength(2)
+    expect(
+      card().getByText(/Start Ada and ask it in a thread for a repository survey/),
+    ).toBeDefined()
+  })
+
+  it("shows no repository commands when none is missing", async () => {
+    await openPage({})
+
+    expect(card().queryByRole("heading", { name: "Repository commands" })).toBeNull()
   })
 
   it("reads a login whose last sign-in failed as failed", async () => {

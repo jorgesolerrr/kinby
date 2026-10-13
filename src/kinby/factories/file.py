@@ -21,6 +21,7 @@ from pydantic.dataclasses import dataclass
 from kinby.contracts import (
     CodingClient,
     CodingModel,
+    CommandListName,
     FactoryName,
     HookName,
     ReasoningEffort,
@@ -254,6 +255,19 @@ class FactoryFile:
 
 
 FACTORY_FILE_ADAPTER = TypeAdapter(FactoryFile)
+
+
+def command_lists(factory: FactoryFile, role: InstanceName) -> list[CommandListName]:
+    """The lists of repository commands the factory's steps in *role* name, each once."""
+    return list(
+        dict.fromkeys(
+            entry.commands
+            for step in factory.steps
+            if isinstance(step, CommandStep) and step.instance == role
+            for entry in step.run
+            if isinstance(entry, RepositoryCommands)
+        )
+    )
 
 
 def duration_seconds(duration: Duration) -> int:

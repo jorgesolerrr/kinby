@@ -40,6 +40,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from "@/components/ui/item"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -496,7 +497,7 @@ function SetupCard({
   onRemoved: () => void
 }) {
   const titleId = useId()
-  const { logins, secrets } = status.setup
+  const { logins, secrets, missing_commands: missing } = status.setup
   return (
     <section aria-labelledby={titleId} className="p-6">
       <Card className="max-w-2xl">
@@ -531,6 +532,29 @@ function SetupCard({
                   secrets={secrets}
                   onSet={onChanged}
                 />
+              </section>
+            )}
+            {missing.length > 0 && (
+              <section className="flex flex-col gap-3">
+                <h3 className="font-medium">Repository commands</h3>
+                <p className="text-sm text-muted-foreground">
+                  {name} takes no work until it holds these lists. Start {name} and ask it in a
+                  thread for a repository survey.
+                </p>
+                <ItemGroup aria-label="Repository commands">
+                  {missing.map((list) => (
+                    <Item key={list} render={<li />} aria-label={list} variant="outline" size="sm">
+                      <ItemContent>
+                        <ItemTitle>
+                          <code className="font-mono">{list}</code>
+                        </ItemTitle>
+                      </ItemContent>
+                      <ItemActions>
+                        <Badge variant="outline">Missing</Badge>
+                      </ItemActions>
+                    </Item>
+                  ))}
+                </ItemGroup>
               </section>
             )}
           </div>

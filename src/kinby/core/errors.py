@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
 
@@ -105,6 +106,20 @@ class NotAnIntake(CoreError):
     """No factory names this instance and routine as its intake, so no run started."""
 
     code = ErrorCode.PERMISSION_DENIED
+
+
+class RepositoryCommandsMissing(CoreError):
+    """The instance lacks lists of repository commands its factory role's steps name, so no run
+    started."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+    def __init__(self, missing: Sequence[str]) -> None:
+        names = ", ".join(f'"{name}"' for name in missing)
+        super().__init__(
+            f"This instance holds no repository commands named {names}. "
+            "Ask it in a thread for a repository survey."
+        )
 
 
 class ThreadNotFound(CoreError):

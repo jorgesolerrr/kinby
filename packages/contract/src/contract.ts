@@ -86,6 +86,7 @@ export type RecreateReason = "secrets";
  * How an instance's subscription login stands: not signed in yet, or how its last one ended.
  */
 export type LoginState = "pending" | "signed_in" | "failed";
+export type CommandListName = string;
 export type GitCommit = string;
 export type LibraryKind = "factory" | "skill";
 export type PriceSource = "shipped" | "manifest";
@@ -143,7 +144,6 @@ export type CodingClient = "claude" | "codex";
  */
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CodingModel = string;
-export type CommandListName = string;
 export type ToolName = string;
 export type ApprovalDecision = "approve" | "deny";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
@@ -1011,6 +1011,7 @@ export interface InstanceStatusResult {
  */
 export interface InstanceSetup {
   logins: LoginSetup[];
+  missing_commands: CommandListName[];
   secrets: SecretSetup[];
 }
 /**
