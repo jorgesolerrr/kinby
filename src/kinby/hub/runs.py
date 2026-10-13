@@ -11,9 +11,18 @@ import asyncio
 import json
 import logging
 from collections import Counter
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Iterable, Mapping
+from collections.abc import (
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import UUID
 
 from pydantic import JsonValue
@@ -23,6 +32,7 @@ from kinby.contracts import (
     ClientStepRun,
     CodeStepRun,
     CodingSessionId,
+    CommandListName,
     CommandStepRun,
     FactoryName,
     FactoryRun,
@@ -53,6 +63,7 @@ from kinby.core.errors import (
     InvalidWorkItem,
     NotAnEarlierStep,
     NotAnIntake,
+    RepositoryCommandsMissing,
     RunAwaitsNoApproval,
     RunNeedsNoHuman,
 )
@@ -74,6 +85,7 @@ from kinby.factories.file import (
     Step,
     ValueType,
     WaitStep,
+    command_lists,
     duration_seconds,
     run_value_name,
     run_value_names,
@@ -82,6 +94,7 @@ from kinby.factories.file import (
 from kinby.hub.factories import FactoryStore
 from kinby.hub.models import Signal
 from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
+from kinby.instance import ManifestError, repository_commands
 
 
 @dataclass(frozen=True)
@@ -160,11 +173,14 @@ class FactoryRuns:
     async def intake(self, instance_id: UUID, command: FactoryRunIntakeCommand) -> FactoryRun:
         """Start a run of the factory whose intake is this instance and routine.
 
-        A work item that matches an unfinished run this instance handed in returns that run.
+        A work item that matches an unfinished run this instance handed in returns that run. An
+        instance lacking a list of repository commands its role's steps name takes no work.
         """
+        record = self._registry.instance(instance_id)
         member, factory = self._membership(instance_id) or (None, None)
         if (
-            member is None
+            record is None
+            or member is None
             or factory is None
             or (factory.intake.instance, factory.intake.routine) != (member.name, command.routine)
         ):
@@ -174,6 +190,9 @@ class FactoryRuns:
         errors = _work_item_errors(factory.work_item, command.work_item)
         if errors:
             raise InvalidWorkItem(errors)
+        missing = _missing_commands(factory, member.name, record.path)
+        if missing:
+            raise RepositoryCommandsMissing(missing)
         run, started = self._registry.open_run(
             instance_id, member.factory, command.work_item, factory.steps[0].id
         )
@@ -339,6 +358,15 @@ class FactoryRuns:
             )
             if run.status is FactoryRunStatus.NEEDS_HUMAN or _awaits_approval(factory, run)
         )
+
+    def missing_commands(self, record: ManagedInstance) -> Sequence[CommandListName]:
+        """The lists of repository commands the instance's factory role needs and it does not
+        hold."""
+        member = record.factory
+        factory = self._factory(member.factory) if member is not None else None
+        if member is None or factory is None:
+            return []
+        return _missing_commands(factory, member.name, record.path)
 
     def _membership(self, instance_id: UUID) -> tuple[FactoryMember, FactoryFile] | None:
         """The instance's place in its factory, and that factory's file, if it has one."""
@@ -1015,6 +1043,21 @@ def _retries(step: Step) -> int:
 
 def _next_backoff(waited: float) -> float:
     return min(max(waited * 2, BACKOFF_SECONDS), BACKOFF_CAP_SECONDS)
+
+
+def _missing_commands(
+    factory: FactoryFile, role: InstanceName, instance: Path
+) -> list[CommandListName]:
+    """The lists of repository commands the factory's steps in *role* name that the instance in
+    *instance* does not hold now. One whose manifest cannot be read holds none."""
+    needed = command_lists(factory, role)
+    if not needed:
+        return []
+    try:
+        held = repository_commands(instance)
+    except ManifestError:
+        held = {}
+    return [name for name in needed if name not in held]
 
 
 def _work_item_errors(

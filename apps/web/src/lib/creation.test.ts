@@ -229,7 +229,7 @@ describe("following a start", () => {
         instance_id: "instance-1",
         process: "starting",
         readiness: "starting",
-        setup: { logins: [], secrets: [] },
+        setup: { logins: [], secrets: [], missing_commands: [] },
         active_operation_id: "op-2",
         recreate_reasons: [],
       }),

@@ -127,7 +127,7 @@ export function fakeHub({
               instance_id: "",
               process: "created",
               readiness: "not-running",
-              setup: { logins: [], secrets: [] },
+              setup: { logins: [], secrets: [], missing_commands: [] },
               recreate_reasons: [],
             }
           }

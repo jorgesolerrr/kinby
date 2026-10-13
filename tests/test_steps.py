@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+import tomlkit
 from langchain_core.messages import AIMessageChunk, BaseMessage
 
 from kinby.contracts import (
@@ -76,9 +78,12 @@ async def run_step(dispatcher: Dispatcher, *commands: str | RepositoryCommands) 
 
 
 def hold_commands(instance: Path, lists: str) -> None:
-    """Write *lists*, a TOML table body, as the instance's repository commands."""
+    """Write *lists*, a TOML table body, as the instance's repository commands, in place of the
+    ones it held."""
     manifest = instance / "kinby.toml"
-    manifest.write_text(f"{manifest.read_text()}[workspace.commands]\n{lists}")
+    document = tomlkit.parse(manifest.read_text())
+    document.setdefault("workspace", tomlkit.table())["commands"] = tomllib.loads(lists)
+    manifest.write_text(tomlkit.dumps(document))
 
 
 def test_a_command_step_runs_each_command_in_the_workspace_without_a_shell(tmp_path):

@@ -73,6 +73,7 @@ from tests.test_hub import (
 from tests.test_hub_factories import write_factory
 from tests.test_hub_server import served, url
 from tests.test_routines import RoutineModel, fire, instance_at, routine_file
+from tests.test_steps import hold_commands
 
 FACTORY = """\
 name: checks
@@ -1055,6 +1056,7 @@ def test_the_hub_passes_a_list_a_command_step_names_to_its_instance_as_named(tmp
 
     async def scenario() -> None:
         coder = await started_coder(hub, runtime)
+        hold_commands(hub.instances_directory / str(coder), 'setup = ["uv sync"]\n')
         run = await handed_in(hub, coder, 7)
         await settled(hub, run.run_id)
 
@@ -1063,6 +1065,82 @@ def test_the_hub_passes_a_list_a_command_step_names_to_its_instance_as_named(tmp
             run=["make 7", RepositoryCommands(commands="setup"), "make check"],
             timeout_seconds=600,
         )
+
+    asyncio.run(scenario())
+
+
+LISTS_FACTORY = FACTORY.replace(
+    'run: ["uv run pytest", "uv run ruff check ."]',
+    'run: ["make {{issue}}", { commands: setup }, { commands: checks }, { commands: setup }]',
+)
+
+
+def test_intake_refuses_a_work_item_while_its_instance_lacks_a_list_its_roles_steps_name(tmp_path):
+    runtime = FakeRuntime()
+    files = FILES | {"factory.yaml": LISTS_FACTORY}
+    hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, files)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        work_item = FactoryRunIntakeCommand(routine="scan", work_item={"issue": 7})
+        none_held = await intake_client(hub, coder).call(FACTORY_RUN_INTAKE, work_item)
+        hold_commands(hub.instances_directory / str(coder), 'setup = ["uv sync"]\n')
+        one_held = await intake_client(hub, coder).call(FACTORY_RUN_INTAKE, work_item)
+        listed = await hub_client(hub).call(
+            FACTORY_RUN_LIST, FactoryRunListCommand(factory="checks")
+        )
+
+        assert isinstance(none_held, ErrorEnvelope)
+        assert none_held.code is ErrorCode.INVALID_ARGUMENT
+        assert none_held.message == (
+            'This instance holds no repository commands named "setup", "checks". '
+            "Ask it in a thread for a repository survey."
+        )
+        assert isinstance(one_held, ErrorEnvelope)
+        assert '"checks"' in one_held.message
+        assert '"setup"' not in one_held.message
+        assert listed == FactoryRunListResult(runs=[])
+
+    asyncio.run(scenario())
+
+
+def test_intake_refuses_a_work_item_while_its_instances_manifest_cannot_be_read(tmp_path):
+    runtime = FakeRuntime()
+    files = FILES | {"factory.yaml": LISTS_FACTORY}
+    hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, files)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        (hub.instances_directory / str(coder) / "kinby.toml").write_bytes(b"\xff\xfe")
+        refused = await intake_client(hub, coder).call(
+            FACTORY_RUN_INTAKE, FactoryRunIntakeCommand(routine="scan", work_item={"issue": 7})
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert '"setup", "checks"' in refused.message
+
+    asyncio.run(scenario())
+
+
+def test_intake_accepts_the_work_item_it_refused_once_every_list_is_held_an_empty_one_too(
+    tmp_path,
+):
+    runtime = FakeRuntime()
+    files = FILES | {"factory.yaml": LISTS_FACTORY}
+    hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, files)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        work_item = FactoryRunIntakeCommand(routine="scan", work_item={"issue": 7})
+        refused = await intake_client(hub, coder).call(FACTORY_RUN_INTAKE, work_item)
+        hold_commands(
+            hub.instances_directory / str(coder), 'setup = []\nchecks = ["bun run check"]\n'
+        )
+        run = await handed_in(hub, coder, 7)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert (await settled(hub, run.run_id)).run.status is FactoryRunStatus.DONE
 
     asyncio.run(scenario())
 

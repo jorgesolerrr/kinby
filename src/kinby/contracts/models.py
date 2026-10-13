@@ -1097,12 +1097,17 @@ class InstanceSetup(ContractModel):
 
     logins: list[LoginSetup]
     secrets: list[SecretSetup]
+    #: The lists of repository commands its factory role's steps name and it does not hold.
+    missing_commands: list[CommandListName]
 
     @property
     def pending(self) -> bool:
-        """A login is not signed in, or a required secret is not set."""
-        return any(login.state is not LoginState.SIGNED_IN for login in self.logins) or any(
-            secret.required and not secret.is_set for secret in self.secrets
+        """A login is not signed in, a required secret is not set, or a list of repository
+        commands is missing."""
+        return (
+            any(login.state is not LoginState.SIGNED_IN for login in self.logins)
+            or any(secret.required and not secret.is_set for secret in self.secrets)
+            or bool(self.missing_commands)
         )
 
 

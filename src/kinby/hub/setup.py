@@ -4,12 +4,13 @@ how much of that setup an instance has done."""
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from pydantic import TypeAdapter, ValidationError
 
 from kinby.contracts import (
+    CommandListName,
     DeclaredSetup,
     InstanceSetup,
     LoginSetup,
@@ -116,8 +117,10 @@ def instance_setup(
     running: Mapping[str, UUID],
     secrets: Mapping[str, str],
     model: ModelName | None,
+    missing_commands: Sequence[CommandListName],
 ) -> InstanceSetup:
-    """Each login and secret field the instance's stored descriptor declares, and how it stands.
+    """Each login and secret field the instance's stored descriptor declares, and how it stands,
+    and the lists of repository commands it is missing.
 
     `running` names the sign-in each login has running, by login id.
 
@@ -126,7 +129,7 @@ def instance_setup(
     Blank text counts as not set, the way creation reads it.
     """
     if description is None:
-        return InstanceSetup(logins=[], secrets=[])
+        return InstanceSetup(logins=[], secrets=[], missing_commands=list(missing_commands))
 
     def variable(field: SetupField) -> str | None:
         if field.name != API_KEY_FIELD.name:
@@ -159,6 +162,7 @@ def instance_setup(
             for field in description.setup_fields
             if field.kind is SetupFieldKind.SECRET
         ],
+        missing_commands=list(missing_commands),
     )
 
 

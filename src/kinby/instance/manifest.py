@@ -347,7 +347,7 @@ def _read_manifest(instance_path: Path) -> RawManifest:
         return parse_manifest(manifest_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ManifestError(f"{MANIFEST_NAME}: not found in {instance_path}") from exc
-    except tomllib.TOMLDecodeError as exc:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ManifestError(f"{MANIFEST_NAME}: {exc}") from exc
     except ValidationError as exc:
         raise _manifest_error(exc) from exc

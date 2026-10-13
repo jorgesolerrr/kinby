@@ -2071,7 +2071,8 @@ class Hub:
         return self.registry.description()
 
     def _setup(self, record: ManagedInstance) -> InstanceSetup:
-        """The logins and secrets the instance's stored descriptor declares, and how they stand."""
+        """The logins and secrets the instance's stored descriptor declares, how they stand, and
+        the lists of repository commands it is missing."""
         try:
             model = inspect_instance(record.path).manifest.models.main
         except ManifestError:
@@ -2089,6 +2090,7 @@ class Hub:
             running=running,
             secrets=self._environment(record.path),
             model=model,
+            missing_commands=self.runs.missing_commands(record),
         )
 
     async def logs(self, command: InstanceLogsCommand) -> InstanceLogsResult:
