@@ -4,8 +4,15 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { openThreads, openUsage, threadsPath, USAGE_PATH } from "@/lib/selection"
-import { ChartColumnIcon, MessagesSquareIcon } from "lucide-react"
+import {
+  LIBRARY_PATH,
+  openLibrary,
+  openThreads,
+  openUsage,
+  threadsPath,
+  USAGE_PATH,
+} from "@/lib/selection"
+import { ChartColumnIcon, LibraryIcon, MessagesSquareIcon } from "lucide-react"
 
 /**
  * The hub's own pages, above the instances, and the selected instance's thread list. With no
@@ -13,10 +20,12 @@ import { ChartColumnIcon, MessagesSquareIcon } from "lucide-react"
  */
 export function NavMain({
   usageOpen,
+  libraryOpen,
   threadsOpen,
   instanceId,
 }: {
   usageOpen: boolean
+  libraryOpen: boolean
   threadsOpen: boolean
   instanceId: string | undefined
 }) {
@@ -36,6 +45,23 @@ export function NavMain({
               <a href={USAGE_PATH}>
                 <ChartColumnIcon />
                 <span>Usage</span>
+              </a>
+            }
+          />
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            tooltip="Library"
+            isActive={libraryOpen}
+            aria-current={libraryOpen ? "page" : undefined}
+            onClick={(event) => {
+              event.preventDefault()
+              openLibrary()
+            }}
+            render={
+              <a href={LIBRARY_PATH}>
+                <LibraryIcon />
+                <span>Library</span>
               </a>
             }
           />

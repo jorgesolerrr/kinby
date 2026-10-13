@@ -27,6 +27,7 @@ from kinby.contracts import (
     OperationKind,
     OperationState,
     OperationStep,
+    SkillName,
     StepAttempt,
     StepEnding,
     StepId,
@@ -210,6 +211,11 @@ class HubRegistry:
                     started_at TEXT NOT NULL,
                     ended_at TEXT,
                     PRIMARY KEY (run_id, step, attempt)
+                );
+                -- Kept when the user deletes the skill, so the hub never copies it again.
+                CREATE TABLE IF NOT EXISTS shipped_skills (
+                    name TEXT PRIMARY KEY,
+                    hash TEXT NOT NULL
                 );
                 """
             )
@@ -1467,6 +1473,18 @@ class HubRegistry:
                 ),
             ).fetchone()
         return row is not None
+
+    def shipped_skills(self) -> dict[SkillName, FileHash]:
+        """The hash of each shipped skill the hub copied into its library, by name."""
+        with self._connect() as connection:
+            rows = connection.execute("SELECT name, hash FROM shipped_skills").fetchall()
+        return {SkillName(name): FileHash(hash) for name, hash in rows}
+
+    def record_shipped_skill(self, name: SkillName, copied: FileHash) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO shipped_skills (name, hash) VALUES (?, ?)", (name, copied)
+            )
 
     def open_run(
         self,

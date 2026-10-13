@@ -181,6 +181,10 @@ class FactoryStore:
                     replaced.rename(destination)
                 raise
 
+    def ships(self, name: FactoryName) -> bool:
+        """Whether kinby ships a factory by this name, served as it is or as the hub's copy."""
+        return name in _named_folders(self._shipped, FactorySource.SHIPPED)
+
     def _folder(self, name: FactoryName) -> tuple[Path, FactorySource]:
         found = self._folders().get(name)
         if found is None:

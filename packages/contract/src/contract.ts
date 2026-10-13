@@ -78,6 +78,11 @@ export type RecreateReason = "secrets";
  * How an instance's subscription login stands: not signed in yet, or how its last one ended.
  */
 export type LoginState = "pending" | "signed_in" | "failed";
+export type LibraryKind = "factory" | "skill";
+/**
+ * Where a library entry came from.
+ */
+export type LibrarySource = "shipped" | "written";
 export type PriceSource = "shipped" | "manifest";
 /**
  * When kinby asks the user to rate a completed turn.
@@ -308,6 +313,14 @@ export interface Contract {
     "instance.update": {
       command: InstanceUpdateCommand;
       result: LifecycleOperationResult;
+    };
+    "library.list": {
+      command: LibraryListCommand;
+      result: LibraryListResult;
+    };
+    "library.skill.read": {
+      command: LibrarySkillReadCommand;
+      result: SkillResult;
     };
     "manifest.get": {
       command: ManifestGetCommand;
@@ -1016,6 +1029,24 @@ export interface InstanceUpdateCommand {
   instance_id: string;
   revision: string;
 }
+export interface LibraryListCommand {}
+export interface LibraryListResult {
+  entries: LibraryEntry[];
+}
+export interface LibraryEntry {
+  description: string | null;
+  kind: LibraryKind;
+  name: string;
+  source: LibrarySource;
+}
+export interface LibrarySkillReadCommand {
+  name: string;
+}
+export interface SkillResult {
+  content: string;
+  files: string[];
+  hash: string;
+}
 export interface ManifestGetCommand {}
 export interface ManifestResult {
   hash: string;
@@ -1298,11 +1329,6 @@ export interface RoutineWriteCommand {
  */
 export interface SkillCustomizeCommand {
   name: string;
-}
-export interface SkillResult {
-  content: string;
-  files: string[];
-  hash: string;
 }
 /**
  * Delete the instance copy, so the skill it hid, if any, applies again.

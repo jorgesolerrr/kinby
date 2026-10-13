@@ -2073,6 +2073,41 @@ class FactoryRemoveResult(ContractModel):
     """No instance holds one of the factory's roles."""
 
 
+class LibraryKind(StrEnum):
+    FACTORY = "factory"
+    SKILL = "skill"
+
+
+class LibrarySource(StrEnum):
+    """Where a library entry came from."""
+
+    #: kinby ships it, and the hub copied or serves it.
+    SHIPPED = "shipped"
+    #: The user wrote it on the hub.
+    WRITTEN = "written"
+
+
+class LibraryListCommand(ContractModel):
+    pass
+
+
+class LibraryEntry(ContractModel):
+    kind: LibraryKind
+    name: str
+    #: A skill's, from its ``SKILL.md``. A factory declares none.
+    description: str | None
+    source: LibrarySource
+
+
+class LibraryListResult(ContractModel):
+    #: By kind, then by name.
+    entries: list[LibraryEntry]
+
+
+class LibrarySkillReadCommand(ContractModel):
+    name: SkillName
+
+
 type StepId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
 #: The name of a value a work item carries or a step result declares, such as ``branch``.
 type ValueName = Annotated[str, Field(pattern=r"^[a-z_][a-z0-9_]*$")]

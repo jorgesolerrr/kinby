@@ -2459,6 +2459,90 @@
       "type": "object"
     },
     "JsonValue": {},
+    "LibraryEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/LibraryKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/LibrarySource"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "description",
+        "source"
+      ],
+      "title": "LibraryEntry",
+      "type": "object"
+    },
+    "LibraryKind": {
+      "enum": [
+        "factory",
+        "skill"
+      ],
+      "title": "LibraryKind",
+      "type": "string"
+    },
+    "LibraryListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "LibraryListCommand",
+      "type": "object"
+    },
+    "LibraryListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/LibraryEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "title": "LibraryListResult",
+      "type": "object"
+    },
+    "LibrarySkillReadCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "LibrarySkillReadCommand",
+      "type": "object"
+    },
+    "LibrarySource": {
+      "description": "Where a library entry came from.",
+      "enum": [
+        "shipped",
+        "written"
+      ],
+      "title": "LibrarySource",
+      "type": "string"
+    },
     "LifecycleOperationResult": {
       "additionalProperties": false,
       "properties": {
@@ -7763,6 +7847,38 @@
           ],
           "type": "object"
         },
+        "library.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibraryListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LibraryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "library.skill.read": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibrarySkillReadCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "manifest.get": {
           "additionalProperties": false,
           "properties": {
@@ -8581,6 +8697,8 @@
         "factory.run.send_back",
         "factory.run.approve",
         "factory.run.cancel",
+        "library.list",
+        "library.skill.read",
         "stats.summary"
       ],
       "type": "object"
