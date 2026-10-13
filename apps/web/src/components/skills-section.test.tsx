@@ -1,7 +1,13 @@
 import { CallError } from "@kinby/contract"
-import type { SkillListResult, SkillResult, SkillSummary } from "@kinby/contract"
+import type {
+  LibraryEntry,
+  SkillListResult,
+  SkillPick,
+  SkillResult,
+  SkillSummary,
+} from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -64,9 +70,13 @@ function openSection(answers: Answers) {
     "skill.list": () => listed,
     "skill.read": ({ name, tier }) => read[`${name} ${tier}`],
     "config.history": () => ({ changes: [] }),
+    "instance.picks.get": () => ({ picks: [], hash: null }),
+    "library.list": () => ({ entries: [] }),
     ...answers,
   })
-  render(<SkillsSection client={caller} clock={fakeClock()} />)
+  render(
+    <SkillsSection client={caller} caller={caller} clock={fakeClock()} instanceId="instance-1" />,
+  )
   return { caller, user: userEvent.setup() }
 }
 
@@ -305,5 +315,150 @@ describe("SkillsSection", () => {
       ),
     ).toBe("true")
     expect(screen.getByRole("button", { name: "Delete" })).toBeDefined()
+  })
+
+  describe("picks from the library", () => {
+    const tdd: SkillSummary = {
+      name: "tdd",
+      tier: "instance",
+      description: "Test first.",
+      shadowed_by: null,
+    }
+    const library: LibraryEntry[] = [
+      { kind: "factory", name: "software", description: null, source: "shipped" },
+      { kind: "skill", name: "tdd", description: "Test first.", source: "shipped" },
+      { kind: "skill", name: "unslop", description: "Cut AI tells.", source: "shipped" },
+    ]
+    const pickedTdd: SkillPick = { name: "tdd", source: "shipped" }
+
+    function openWithPicks(answers: Answers = {}) {
+      let picks = [pickedTdd]
+      let hash = "lock-1"
+      return openSection({
+        "skill.list": () => ({ skills: [planning, tdd], warnings: [] }),
+        "skill.read": ({ name, tier }) =>
+          name === "tdd"
+            ? { content: skillText("tdd", "Test first."), files: [], hash: "h-tdd" }
+            : read[`${name} ${tier}`],
+        "instance.picks.get": () => ({ picks, hash }),
+        "library.list": () => ({ entries: library }),
+        "instance.picks.set": ({ skills }) => {
+          picks = skills.map((name) => ({ name, source: "shipped" }))
+          hash = `lock-${skills.length + 2}`
+          return { picks, hash }
+        },
+        ...answers,
+      })
+    }
+
+    it("shows the picks apart from the agent's own skills", async () => {
+      openWithPicks()
+
+      const picks = await screen.findByRole("list", { name: "Picks" })
+      expect(within(picks).getByText("tdd")).toBeDefined()
+      const skills = screen.getByRole("list", { name: "Skills" })
+      expect(
+        within(skills)
+          .getAllByRole("button")
+          .map((item) => item.getAttribute("aria-label")),
+      ).toEqual(["planning, instance skill", "tdd, picked skill"])
+    })
+
+    it("offers the library's other skills and adds one to the picks", async () => {
+      const { caller, user } = openWithPicks()
+
+      const offered = await screen.findByRole("list", { name: "Library skills" })
+      expect(within(offered).queryByText("tdd")).toBeNull()
+      expect(within(offered).queryByText("software")).toBeNull()
+      await user.click(within(offered).getByRole("button", { name: "Add unslop" }))
+
+      expect(called(caller, "instance.picks.set")).toEqual([
+        { instance_id: "instance-1", skills: ["tdd", "unslop"], hash: "lock-1" },
+      ])
+      const picks = screen.getByRole("list", { name: "Picks" })
+      expect(await within(picks).findByText("unslop")).toBeDefined()
+      expect(called(caller, "skill.list").length).toBeGreaterThan(1)
+    })
+
+    it("drops a pick", async () => {
+      const { caller, user } = openWithPicks()
+
+      await user.click(await screen.findByRole("button", { name: "Drop tdd" }))
+
+      expect(called(caller, "instance.picks.set")).toEqual([
+        { instance_id: "instance-1", skills: [], hash: "lock-1" },
+      ])
+      expect(await screen.findByText("The instance has picked no library skill.")).toBeDefined()
+    })
+
+    it("says why the hub refused a pick", async () => {
+      const { user } = openWithPicks({
+        "instance.picks.set": () => {
+          throw new CallError({
+            code: "INVALID_ARGUMENT",
+            message: "Some values are invalid.",
+            retryable: false,
+            fields: { skills: 'The instance has its own skill "unslop".' },
+          })
+        },
+      })
+
+      await user.click(await screen.findByRole("button", { name: "Add unslop" }))
+
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        'The instance has its own skill "unslop".',
+      )
+    })
+
+    it("sends the hash of the picks the last set returned", async () => {
+      const { caller, user } = openWithPicks()
+
+      await user.click(await screen.findByRole("button", { name: "Add unslop" }))
+      await user.click(await screen.findByRole("button", { name: "Drop tdd" }))
+
+      expect(called(caller, "instance.picks.set").at(-1)).toEqual({
+        instance_id: "instance-1",
+        skills: ["unslop"],
+        hash: "lock-4",
+      })
+    })
+
+    it("offers to load the picks again when another tab changed them since", async () => {
+      let theirs = false
+      const { user } = openWithPicks({
+        "instance.picks.get": () =>
+          theirs
+            ? { picks: [pickedTdd, { name: "unslop", source: "shipped" }], hash: "lock-9" }
+            : { picks: [pickedTdd], hash: "lock-1" },
+        "instance.picks.set": () => {
+          theirs = true
+          throw new CallError({
+            code: "STALE",
+            message: "skills-lock.json changed since it was read. Read the picks again.",
+            retryable: false,
+          })
+        },
+      })
+
+      await user.click(await screen.findByRole("button", { name: "Drop tdd" }))
+      const alert = await screen.findByRole("alert")
+      expect(alert.textContent).toContain("Changed since you opened it")
+      await user.click(within(alert).getByRole("button", { name: "Load theirs" }))
+
+      const picks = screen.getByRole("list", { name: "Picks" })
+      expect(await within(picks).findByText("unslop")).toBeDefined()
+      expect(screen.queryByRole("alert")).toBeNull()
+    })
+
+    it("reads the picks again when a picked skill is deleted", async () => {
+      const { caller, user } = openWithPicks({
+        "skill.delete": () => ({ skills: [planning], warnings: [] }),
+      })
+
+      await user.click(await screen.findByRole("button", { name: "tdd, picked skill" }))
+      await user.click(await screen.findByRole("button", { name: "Delete" }))
+
+      await waitFor(() => expect(called(caller, "instance.picks.get")).toHaveLength(2))
+    })
   })
 })

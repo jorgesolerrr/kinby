@@ -53,6 +53,9 @@ from kinby.contracts.models import (
     InstanceLoginStartCommand,
     InstanceLogsCommand,
     InstanceLogsResult,
+    InstancePicksGetCommand,
+    InstancePicksResult,
+    InstancePicksSetCommand,
     InstanceProbeCommand,
     InstanceProbeResult,
     InstanceRecreateCommand,
@@ -373,6 +376,12 @@ LIBRARY_LIST = Method("library.list", Scope.HUB_READ, LibraryListCommand, Librar
 LIBRARY_SKILL_READ = Method(
     "library.skill.read", Scope.HUB_READ, LibrarySkillReadCommand, SkillResult
 )
+INSTANCE_PICKS_GET = Method(
+    "instance.picks.get", Scope.HUB_READ, InstancePicksGetCommand, InstancePicksResult
+)
+INSTANCE_PICKS_SET = Method(
+    "instance.picks.set", Scope.HUB_ADMIN, InstancePicksSetCommand, InstancePicksResult
+)
 #: The same time range and bucket size as stats.get, asked of every running instance.
 STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
 
@@ -459,6 +468,8 @@ METHODS = (
     FACTORY_RUN_CANCEL,
     LIBRARY_LIST,
     LIBRARY_SKILL_READ,
+    INSTANCE_PICKS_GET,
+    INSTANCE_PICKS_SET,
     STATS_SUMMARY,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE)

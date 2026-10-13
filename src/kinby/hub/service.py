@@ -44,6 +44,8 @@ from kinby.contracts import (
     INSTANCE_LIST,
     INSTANCE_LOGIN_START,
     INSTANCE_LOGS,
+    INSTANCE_PICKS_GET,
+    INSTANCE_PICKS_SET,
     INSTANCE_RECREATE,
     INSTANCE_REMOVE,
     INSTANCE_RESTORE,
@@ -85,6 +87,9 @@ from kinby.contracts import (
     InstanceLogsCommand,
     InstanceLogsResult,
     InstanceNotice,
+    InstancePicksGetCommand,
+    InstancePicksResult,
+    InstancePicksSetCommand,
     InstanceRecreateCommand,
     InstanceRemoveCommand,
     InstanceRestoreCommand,
@@ -469,6 +474,8 @@ class Hub:
             self.dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
             self.dispatcher.register(LIBRARY_LIST, self.library.list)
             self.dispatcher.register(LIBRARY_SKILL_READ, self.library.read_skill)
+            self.dispatcher.register(INSTANCE_PICKS_GET, self.picks)
+            self.dispatcher.register(INSTANCE_PICKS_SET, self.set_picks)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
         except BaseException:
             self._directory_lock.close()
@@ -1095,6 +1102,14 @@ class Hub:
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
             raise
+
+    async def picks(self, command: InstancePicksGetCommand) -> InstancePicksResult:
+        return self.library.picks(self._active_instance(command.instance_id).path)
+
+    async def set_picks(self, command: InstancePicksSetCommand) -> InstancePicksResult:
+        """Change the instance's picks in place. A running instance reads them at its next turn."""
+        record = self._active_instance(command.instance_id)
+        return self.library.pick(inspect_instance(record.path), command.skills, command.hash)
 
     async def stop(self, command: InstanceStopCommand) -> LifecycleOperationResult:
         """Stop the instance gracefully, or escalate the stop already running to a force stop."""

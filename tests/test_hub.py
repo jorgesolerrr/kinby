@@ -25,6 +25,8 @@ from kinby.contracts import (
     INSTANCE_DELETE_PREVIEW,
     INSTANCE_LIST,
     INSTANCE_LOGS,
+    INSTANCE_PICKS_GET,
+    INSTANCE_PICKS_SET,
     INSTANCE_RECREATE,
     INSTANCE_REMOVE,
     INSTANCE_RESTORE,
@@ -1383,6 +1385,7 @@ def test_no_scope_an_instance_grants_carries_hub_authority():
         INSTANCE_DELETE_PREVIEW.scope,
         OPERATION_GET.scope,
         IMAGE_DESCRIBE.scope,
+        INSTANCE_PICKS_GET.scope,
     } == {Scope.HUB_READ}
     assert {
         INSTANCE_CREATE.scope,
@@ -1393,6 +1396,7 @@ def test_no_scope_an_instance_grants_carries_hub_authority():
         INSTANCE_RESTORE.scope,
         INSTANCE_DELETE.scope,
         INSTANCE_SECRETS_SET.scope,
+        INSTANCE_PICKS_SET.scope,
         IMAGE_PREPARE.scope,
     } == {Scope.HUB_ADMIN}
     assert INSTANCE_UPDATE.scope is Scope.HUB_UPDATE

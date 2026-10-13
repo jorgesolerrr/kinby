@@ -2108,6 +2108,31 @@ class LibrarySkillReadCommand(ContractModel):
     name: SkillName
 
 
+class InstancePicksGetCommand(ContractModel):
+    instance_id: UUID
+
+
+class InstancePicksSetCommand(ContractModel):
+    instance_id: UUID
+    #: Every library skill the instance should hold. A pick left out is dropped.
+    skills: list[SkillName]
+    #: The lock's hash the client read. The set is refused as STALE when the picks changed since.
+    hash: FileHash | None
+
+
+class SkillPick(ContractModel):
+    name: SkillName
+    #: Where the library entry it was copied from came from.
+    source: LibrarySource
+
+
+class InstancePicksResult(ContractModel):
+    #: By name. A pick whose folder the instance deleted is no pick.
+    picks: list[SkillPick]
+    #: The hash of the instance's ``skills-lock.json``. Null when it has none.
+    hash: FileHash | None
+
+
 type StepId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
 #: The name of a value a work item carries or a step result declares, such as ``branch``.
 type ValueName = Annotated[str, Field(pattern=r"^[a-z_][a-z0-9_]*$")]
