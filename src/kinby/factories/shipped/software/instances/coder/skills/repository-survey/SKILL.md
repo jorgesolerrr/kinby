@@ -5,7 +5,7 @@ description: Propose and record the setup and checks lists of repository command
 
 The factory's `setup` step runs your `setup` list on the run's branch. Its `checks` step runs `setup` again, then `checks`. Each command runs in the workspace as one program and its arguments, without a shell, so a command holds no pipe, `&&`, redirect or `$VARIABLE`. An empty list is a valid one.
 
-Asked to change one list, take the steps below for that list alone, and try a `checks` list after the `setup` list.
+Asked to change one list, take the steps below for that list alone: propose and record it and leave the other as it is. Try a `checks` list after the `setup` list the coder holds.
 
 ## Process
 
@@ -22,6 +22,6 @@ Asked to change one list, take the steps below for that list alone, and try a `c
 
    Run each command from it, `cd /tmp/repository-survey && <command>`, the `setup` list first, and keep each exit code and the tail of any failure. Start a command that outlasts the bash tool's timeout in the background with its output and exit code in a log file, and read the log until it ends. A command that fails because it is wrong, such as a missing script or a bad flag, gets fixed and tried again; a failure in the repository's own code stays as it is. Then remove the worktree with `git worktree remove --force /tmp/repository-survey`. Done when every drafted command has an exit code and `git worktree list` shows only the workspace.
 
-4. **Propose both lists.** Reply with each command, its exit code, and the last lines of output of each that failed. Then list each toolchain or service the repository needs and the image lacks, such as a runtime CI installs or a database its tests reach, as text. You change no image and start no service; those are the user's to set up. Done when every drafted command appears with its exit code.
+4. **Propose the lists.** Reply with each command, its exit code, and the last lines of output of each that failed. Then list each toolchain or service the repository needs and the image lacks, such as a runtime CI installs or a database its tests reach, as text. You change no image and start no service; those are the user's to set up. Done when every drafted command appears with its exit code.
 
-5. **Record each list.** Call `repository_commands_write` once for `setup` and once for `checks`, each with the whole list. Its approval shows the user every command, and a refusal leaves the list as it was. Done when you have told the user which lists were recorded and which were refused.
+5. **Record each list.** Call `repository_commands_write` once for each list you proposed, with the whole list. Its approval shows the user every command, and a refusal leaves the list as it was. Done when you have told the user which lists were recorded and which were refused.
