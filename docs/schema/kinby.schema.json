@@ -1,5 +1,9 @@
 {
   "$defs": {
+    "CommandListName": {
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "type": "string"
+    },
     "FeedbackPolicy": {
       "description": "When kinby asks the user to rate a completed turn.",
       "enum": [
@@ -263,6 +267,14 @@
     "RawWorkspace": {
       "additionalProperties": false,
       "properties": {
+        "commands": {
+          "additionalProperties": false,
+          "propertyNames": {
+            "$ref": "#/$defs/CommandListName"
+          },
+          "title": "Commands",
+          "type": "object"
+        },
         "conventions": {
           "$ref": "#/$defs/RawConventions",
           "default": {
@@ -400,6 +412,7 @@
     "workspace": {
       "$ref": "#/$defs/RawWorkspace",
       "default": {
+        "commands": {},
         "conventions": {
           "enabled": false,
           "instructions": [

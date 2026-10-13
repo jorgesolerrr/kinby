@@ -24,6 +24,7 @@ from kinby.contracts import (
     FactoryName,
     HookName,
     ReasoningEffort,
+    RepositoryCommands,
     SetupField,
     SkillName,
     StepId,
@@ -141,12 +142,13 @@ class ClientStep(_Step):
 class CommandStep(_Step):
     """Commands in the instance's workspace, each run without a shell. Exit code zero passes.
 
-    A ``{{name}}`` in a command stands for the run's value of that name, as one argument.
+    A ``{{name}}`` in a command stands for the run's value of that name, as one argument. An
+    entry ``{ commands: <name> }`` runs the instance's list of repository commands of that name.
     """
 
     kind: Literal["command"]
     instance: InstanceName = Field(alias="in")
-    run: tuple[Annotated[str, Field(min_length=1)], ...] = Field(min_length=1)
+    run: tuple[Annotated[str, Field(min_length=1)] | RepositoryCommands, ...] = Field(min_length=1)
     #: Records the values the step declares, which commands alone hand on none of.
     hook: HookName | None = None
 
@@ -196,9 +198,12 @@ def run_value_name(expected: str | int) -> ValueName | None:
     return named[1] if named is not None else None
 
 
-def run_value_names(command: str) -> list[ValueName]:
-    """The run values a command names as ``{{name}}``."""
-    return _RUN_VALUE.findall(command)
+def run_value_names(step: CommandStep) -> list[ValueName]:
+    """The run values the step's own commands name as ``{{name}}``. A list of repository
+    commands takes none."""
+    return [
+        name for entry in step.run if isinstance(entry, str) for name in _RUN_VALUE.findall(entry)
+    ]
 
 
 def with_run_values(command: str, held: Mapping[ValueName, StepValue]) -> str:

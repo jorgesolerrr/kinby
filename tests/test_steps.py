@@ -29,6 +29,7 @@ from kinby.contracts import (
     InstanceDrainCommand,
     PlanLimit,
     ReasoningEffort,
+    RepositoryCommands,
     RoutineListResult,
     RoutineRunOutcome,
     StatsGetResult,
@@ -67,11 +68,17 @@ def step_instance(
     return booted(instance, runner or WaitingRunner()), workspace
 
 
-async def run_step(dispatcher: Dispatcher, *commands: str) -> ContractModel:
+async def run_step(dispatcher: Dispatcher, *commands: str | RepositoryCommands) -> ContractModel:
     command = StepRunCommand(
         step=CommandStepRun(run=list(commands)), origin=ORIGIN, work_item={"issue": 7}
     )
     return await call(dispatcher, "step.run", **command.model_dump(mode="json"))
+
+
+def hold_commands(instance: Path, lists: str) -> None:
+    """Write *lists*, a TOML table body, as the instance's repository commands."""
+    manifest = instance / "kinby.toml"
+    manifest.write_text(f"{manifest.read_text()}[workspace.commands]\n{lists}")
 
 
 def test_a_command_step_runs_each_command_in_the_workspace_without_a_shell(tmp_path):
@@ -134,6 +141,121 @@ def test_a_command_that_cannot_start_fails_the_step(tmp_path):
         assert isinstance(result, StepResult)
         assert result.ending is StepEnding.FAILED
         assert result.summary.startswith('"kinby-no-such-command --help" could not start: ')
+
+    asyncio.run(scenario())
+
+
+SETUP = RepositoryCommands(commands="setup")
+CHECKS = RepositoryCommands(commands="checks")
+
+
+def logged(name: str) -> str:
+    """A command that adds *name* to the workspace's ``order`` file."""
+    return f"sh -c 'echo {name} >> order'"
+
+
+def test_a_command_step_runs_the_lists_it_names_in_order_between_its_own_commands(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+    hold_commands(
+        tmp_path,
+        f'setup = ["{logged("install")}", "{logged("build")}"]\nchecks = ["{logged("test")}"]\n'
+        "unused = []\n",
+    )
+
+    async def scenario() -> None:
+        result = await run_step(runtime.dispatcher, logged("switch"), SETUP, CHECKS, logged("done"))
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.CLEAN
+        assert (workspace / "order").read_text().split() == [
+            "switch",
+            "install",
+            "build",
+            "test",
+            "done",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_an_empty_list_runs_nothing_and_the_step_goes_on(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+    hold_commands(tmp_path, "setup = []\n")
+
+    async def scenario() -> None:
+        result = await run_step(runtime.dispatcher, SETUP, "touch made")
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.CLEAN
+        assert (workspace / "made").is_file()
+
+    asyncio.run(scenario())
+
+
+def test_a_list_changed_between_two_attempts_is_read_fresh_on_the_second(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+    manifest = (tmp_path / "kinby.toml").read_text()
+    hold_commands(tmp_path, 'setup = ["false"]\n')
+
+    async def scenario() -> None:
+        first = await run_step(runtime.dispatcher, SETUP)
+        (tmp_path / "kinby.toml").write_text(manifest)
+        hold_commands(tmp_path, 'setup = ["touch made"]\n')
+        second = await run_step(runtime.dispatcher, SETUP)
+
+        assert isinstance(first, StepResult)
+        assert first.ending is StepEnding.FAILED
+        assert isinstance(second, StepResult)
+        assert second.ending is StepEnding.CLEAN
+        assert (workspace / "made").is_file()
+
+    asyncio.run(scenario())
+
+
+def test_a_step_naming_a_list_the_instance_lacks_needs_a_human_and_runs_nothing(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+    hold_commands(tmp_path, "setup = []\n")
+
+    async def scenario() -> None:
+        result = await run_step(runtime.dispatcher, "touch made", SETUP, CHECKS)
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.NEEDS_HUMAN
+        assert result.summary == (
+            'This instance holds no repository commands named "checks". '
+            "Ask it in a thread for a repository survey."
+        )
+        assert not (workspace / "made").exists()
+
+    asyncio.run(scenario())
+
+
+def test_a_step_naming_a_list_fails_when_the_manifest_no_longer_reads(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+    hold_commands(tmp_path, 'setup = [""]\n')
+
+    async def scenario() -> None:
+        result = await run_step(runtime.dispatcher, "touch made", SETUP)
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert result.summary.startswith("The repository commands cannot be read: ")
+        assert not (workspace / "made").exists()
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_command_from_a_list_reports_the_command_and_the_tail_of_its_output(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+    hold_commands(tmp_path, 'checks = ["sh -c \'echo broken >&2; exit 3\'", "touch never"]\n')
+
+    async def scenario() -> None:
+        result = await run_step(runtime.dispatcher, CHECKS)
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.FAILED
+        assert result.summary == "\"sh -c 'echo broken >&2; exit 3'\" exited with code 3.\nbroken"
+        assert not (workspace / "never").exists()
 
     asyncio.run(scenario())
 

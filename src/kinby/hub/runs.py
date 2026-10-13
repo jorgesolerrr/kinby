@@ -426,7 +426,10 @@ class FactoryRuns:
                     return client_run
                 asked, hook = client_run, step.hook
             case CommandStep():
-                commands = [with_run_values(command, held) for command in step.run]
+                commands = [
+                    with_run_values(entry, held) if isinstance(entry, str) else entry
+                    for entry in step.run
+                ]
                 timeout = duration_seconds(step.timeout) if step.timeout is not None else None
                 asked = CommandStepRun(run=commands, timeout_seconds=timeout)
                 hook = step.hook
@@ -851,10 +854,8 @@ def _unmet(
     that should have produced the value: the last earlier step that declares it in its results. A
     false work item value has no such step, so the requiring step itself fails.
     """
-    named = step.run if isinstance(step, CommandStep) else ()
-    lacking = _lacking(
-        held, (*step.requires, *(name for command in named for name in run_value_names(command)))
-    )
+    named = run_value_names(step) if isinstance(step, CommandStep) else ()
+    lacking = _lacking(held, (*step.requires, *named))
     if lacking is None:
         return None
     earlier = factory.steps[: factory.steps.index(step)]
@@ -882,7 +883,8 @@ def _settled(
     send the work back along an edge more than that edge's max. One that names an outcome the
     step does not declare fails. A failed result at a step that declares where its failures go
     records what failed as ``failure`` and goes there, up to that edge's max. Any other failed
-    result is tried again while the step's retries last, and a timed-out one never is.
+    result is tried again while the step's retries last. A timed-out one, or one that needs a
+    human, never is.
     """
     if result.ending is StepEnding.CLEAN:
         match _outcome(step, result.outcome):
@@ -909,7 +911,8 @@ def _settled(
             reason = f'Step "{step.id}" sent its failures back to "{back}" {most} times, its max.'
             return _noted(result, reason), FactoryRunStatus.NEEDS_HUMAN, step.id
         return result, FactoryRunStatus.QUEUED, back
-    if result.ending is StepEnding.TIMED_OUT or tally.failures[step.id] >= _retries(step):
+    never_again = result.ending in (StepEnding.TIMED_OUT, StepEnding.NEEDS_HUMAN)
+    if never_again or tally.failures[step.id] >= _retries(step):
         return result, FactoryRunStatus.NEEDS_HUMAN, step.id
     return result, FactoryRunStatus.QUEUED, step.id
 

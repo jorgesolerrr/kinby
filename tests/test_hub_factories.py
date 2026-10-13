@@ -478,6 +478,37 @@ def test_the_check_fails_a_command_naming_a_value_no_earlier_step_or_work_item_h
     ]
 
 
+def test_the_check_passes_a_command_step_naming_its_instances_lists(tmp_path):
+    factory = FACTORY.replace(
+        'run: ["uv run pytest"]',
+        'run: ["git switch {{branch}}", { commands: setup }, { commands: checks }]',
+    )
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == []
+
+
+@pytest.mark.parametrize(
+    ("entry", "failure"),
+    [
+        ('""', "steps.2.command.run.0.constrained-str: String should have at least 1 character"),
+        (
+            "{ commands: Set Up }",
+            "steps.2.command.run.0.RepositoryCommands.commands: "
+            "String should match pattern '^[a-z0-9][a-z0-9_-]*$'",
+        ),
+        (
+            "{ commands: setup, run: [make] }",
+            "steps.2.command.run.0.RepositoryCommands.run: Extra inputs are not permitted",
+        ),
+        ("{ list: setup }", "steps.2.command.run.0.RepositoryCommands.commands: Field required"),
+    ],
+)
+def test_the_check_fails_a_malformed_command_entry(tmp_path, entry, failure):
+    factory = FACTORY.replace('run: ["uv run pytest"]', f"run: [{entry}]")
+
+    assert f"factory.yaml: {failure}" in problems(tmp_path, FILES | {"factory.yaml": factory})
+
+
 def test_a_wait_filter_reads_only_the_routine_a_header_or_the_body(tmp_path):
     factory = FACTORY.replace("headers.X-GitHub-Event", "event").replace(
         "body.pull_request.number", "body"

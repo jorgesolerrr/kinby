@@ -16,6 +16,7 @@ from kinby.contracts import (
     Event,
     HookName,
     MessageDelta,
+    RepositoryCommands,
     RunDelegated,
     StepEnding,
     StepResult,
@@ -29,7 +30,7 @@ from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
 from kinby.core.prompt import render_client_message, render_step_message
 from kinby.core.turns import Turns
-from kinby.instance import Instance, ManifestError
+from kinby.instance import Instance, ManifestError, repository_commands
 from kinby.instance.permissions import PermissionsError
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hooks import HookResult, StepEnd, load_hooks
@@ -56,7 +57,7 @@ async def run_step(
         case ClientStepRun() as step:
             result = await _run_client_step(step, command, instance, log)
         case CommandStepRun() as step:
-            result = await run_command_step(step, instance.manifest.workspace.path)
+            result = await run_command_step(step, instance)
         case CodeStepRun() as step:
             result = await _run_code_step(step, command, instance)
     if command.hook is not None:
@@ -151,15 +152,19 @@ def _last_message(events: Sequence[Event]) -> str:
     return text.strip()
 
 
-async def run_command_step(step: CommandStepRun, workspace: Path) -> StepResult:
-    """Run each command in *workspace* without a shell. The first that exits non-zero fails.
+async def run_command_step(step: CommandStepRun, instance: Instance) -> StepResult:
+    """Run each command in the instance's workspace without a shell. The first that exits
+    non-zero fails.
 
     A command still running when the step's timeout passes is killed, and the step times out.
     """
+    commands = _commands(step, instance.path)
+    if isinstance(commands, StepResult):
+        return commands
     try:
         async with asyncio.timeout(step.timeout_seconds):
-            for command in step.run:
-                failed = await _run_command(command, workspace)
+            for command in commands:
+                failed = await _run_command(command, instance.manifest.workspace.path)
                 if failed is not None:
                     return failed
     except TimeoutError:
@@ -168,6 +173,35 @@ async def run_command_step(step: CommandStepRun, workspace: Path) -> StepResult:
             summary=f"The commands ran past the step's timeout of {step.timeout_seconds}s.",
         )
     return StepResult(ending=StepEnding.CLEAN, summary="Every command exited with code 0.")
+
+
+def _commands(step: CommandStepRun, instance: Path) -> list[str] | StepResult:
+    """The step's commands, with each list of repository commands it names read from the
+    instance now and put in its place.
+
+    A list the instance does not hold needs a human, since no retry or repair can supply it.
+    """
+    if all(isinstance(entry, str) for entry in step.run):
+        held = {}
+    else:
+        try:
+            held = repository_commands(instance)
+        except ManifestError as exc:
+            return _failed(f"The repository commands cannot be read: {exc}")
+    commands: list[str] = []
+    for entry in step.run:
+        match entry:
+            case str():
+                commands.append(entry)
+            case RepositoryCommands(commands=name) if name in held:
+                commands.extend(held[name])
+            case RepositoryCommands(commands=name):
+                return StepResult(
+                    ending=StepEnding.NEEDS_HUMAN,
+                    summary=f'This instance holds no repository commands named "{name}". '
+                    "Ask it in a thread for a repository survey.",
+                )
+    return commands
 
 
 async def _run_code_step(
