@@ -2,6 +2,7 @@ import { CallError } from "@kinby/contract"
 import type {
   ConfigChange,
   InstanceClient,
+  LibrarySource,
   SkillListResult,
   SkillResult,
   SkillSummary,
@@ -11,6 +12,13 @@ import type {
 import { latestChange, readWithChange } from "@/lib/config-changes"
 
 type Caller = Pick<InstanceClient, "call">
+
+/** Where a library entry came from. */
+export const LIBRARY_SOURCES: Record<LibrarySource, string> = {
+  shipped: "Shipped",
+  written: "Written",
+  git: "Git",
+}
 
 /** A skill as the instance has it, and, for an instance skill, the latest change to it. */
 export interface OpenedSkill {

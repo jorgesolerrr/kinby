@@ -10,7 +10,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field  # noqa: TID251 - the lock's file boundary
 from pydantic.alias_generators import to_camel
 
-from kinby.contracts import FileHash, LibrarySource, SkillName
+from kinby.contracts import FileHash, GitCommit, GitSource, LibrarySource, SkillName
 from kinby.instance.config_changes import file_hash
 from kinby.instance.layout import SKILLS_LOCK_NAME
 
@@ -32,11 +32,25 @@ class LockedSkill(BaseModel):
 
     source: str
     source_type: LibrarySource
+    #: For a pick from git, the branch or tag, the skill's folder in the repository, and the commit.
+    ref: str | None = None
+    skill_path: str | None = None
+    commit: GitCommit | None = None
     computed_hash: FileHash
 
     @classmethod
-    def of(cls, folder: Path, source: LibrarySource) -> LockedSkill:
-        """The entry for the skill copied into *folder* from a *source* library entry."""
+    def of(cls, folder: Path, source: LibrarySource | GitSource) -> LockedSkill:
+        """The entry for the skill copied into *folder* from a library entry that came from
+        *source*."""
+        if isinstance(source, GitSource):
+            return cls(
+                source=source.url,
+                source_type=LibrarySource.GIT,
+                ref=source.ref,
+                skill_path=source.path,
+                commit=source.commit,
+                computed_hash=skill_hash(folder),
+            )
         return cls(source=_SOURCES[source], source_type=source, computed_hash=skill_hash(folder))
 
 
@@ -62,7 +76,7 @@ def lock_hash(instance_path: Path) -> FileHash | None:
 def write_lock(instance_path: Path, lock: SkillsLock) -> None:
     ordered = SkillsLock(skills=dict(sorted(lock.skills.items())))
     (instance_path / SKILLS_LOCK_NAME).write_text(
-        ordered.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        ordered.model_dump_json(indent=2, exclude_none=True) + "\n", encoding="utf-8"
     )
 
 

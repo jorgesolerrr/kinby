@@ -72,7 +72,7 @@ export type ProcessState = "missing" | "created" | "starting" | "running" | "sto
 /**
  * Where a library entry came from.
  */
-export type LibrarySource = "shipped" | "written";
+export type LibrarySource = "shipped" | "written" | "git";
 /**
  * How a pick stands against its lock entry and the library.
  */
@@ -86,6 +86,7 @@ export type RecreateReason = "secrets";
  * How an instance's subscription login stands: not signed in yet, or how its last one ended.
  */
 export type LoginState = "pending" | "signed_in" | "failed";
+export type GitCommit = string;
 export type LibraryKind = "factory" | "skill";
 export type PriceSource = "shipped" | "manifest";
 /**
@@ -325,6 +326,14 @@ export interface Contract {
     "instance.update": {
       command: InstanceUpdateCommand;
       result: LifecycleOperationResult;
+    };
+    "library.git.add": {
+      command: LibraryGitAddCommand;
+      result: LibraryGitAddResult;
+    };
+    "library.git.preview": {
+      command: LibraryGitPreviewCommand;
+      result: LibraryGitPreviewResult;
     };
     "library.list": {
       command: LibraryListCommand;
@@ -1062,15 +1071,58 @@ export interface InstanceUpdateCommand {
   instance_id: string;
   revision: string;
 }
-export interface LibraryListCommand {}
-export interface LibraryListResult {
+/**
+ * Add skills a preview showed to the library.
+ */
+export interface LibraryGitAddCommand {
+  address: string;
+  commit: GitCommit;
+  /**
+   * @minItems 1
+   */
+  skills: [string, ...string[]];
+}
+export interface LibraryGitAddResult {
   entries: LibraryEntry[];
 }
 export interface LibraryEntry {
   description: string | null;
+  git?: GitSource | null;
   kind: LibraryKind;
   name: string;
   source: LibrarySource;
+}
+/**
+ * Where in which repository a library entry from git came from, as a Claude Code marketplace
+ * entry's git source records it.
+ */
+export interface GitSource {
+  commit: GitCommit;
+  path: string;
+  ref: string | null;
+  url: string;
+}
+/**
+ * Show the skills a git repository holds, and change nothing.
+ */
+export interface LibraryGitPreviewCommand {
+  address: string;
+}
+export interface LibraryGitPreviewResult {
+  commit: GitCommit;
+  ref: string | null;
+  skills: PreviewedSkill[];
+  url: string;
+}
+export interface PreviewedSkill {
+  content: string;
+  files: string[];
+  name: string;
+  path: string;
+}
+export interface LibraryListCommand {}
+export interface LibraryListResult {
+  entries: LibraryEntry[];
 }
 export interface LibrarySkillReadCommand {
   name: string;

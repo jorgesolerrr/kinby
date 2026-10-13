@@ -2089,6 +2089,24 @@ class LibrarySource(StrEnum):
     SHIPPED = "shipped"
     #: The user wrote it on the hub.
     WRITTEN = "written"
+    #: The user added it from a git repository, at a commit.
+    GIT = "git"
+
+
+#: A full commit hash.
+type GitCommit = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+
+
+class GitSource(ContractModel):
+    """Where in which repository a library entry from git came from, as a Claude Code marketplace
+    entry's git source records it."""
+
+    url: str
+    #: The entry's folder in the repository, ``.`` for its root.
+    path: str
+    #: The branch or tag the address named. None is the repository's default branch.
+    ref: str | None
+    commit: GitCommit
 
 
 class LibraryListCommand(ContractModel):
@@ -2101,6 +2119,8 @@ class LibraryEntry(ContractModel):
     #: A skill's, from its ``SKILL.md``. A factory declares none.
     description: str | None
     source: LibrarySource
+    #: Where an entry from git came from. None for any other entry.
+    git: GitSource | None = None
 
 
 class LibraryListResult(ContractModel):
@@ -2110,6 +2130,48 @@ class LibraryListResult(ContractModel):
 
 class LibrarySkillReadCommand(ContractModel):
     name: SkillName
+
+
+class LibraryGitPreviewCommand(ContractModel):
+    """Show the skills a git repository holds, and change nothing."""
+
+    #: In the ``skills`` CLI's syntax: ``owner/repo``, ``owner/repo/path`` or a URL, each with an
+    #: optional ``#ref``.
+    address: str
+
+
+class PreviewedSkill(ContractModel):
+    name: SkillName
+    #: Its folder in the repository, ``.`` for the root.
+    path: str
+    #: Its ``SKILL.md``.
+    content: str
+    #: Its other files, by their path in it.
+    files: list[str]
+
+
+class LibraryGitPreviewResult(ContractModel):
+    url: str
+    #: None is the repository's default branch.
+    ref: str | None
+    #: What the ref resolved to.
+    commit: GitCommit
+    #: By name.
+    skills: list[PreviewedSkill]
+
+
+class LibraryGitAddCommand(ContractModel):
+    """Add skills a preview showed to the library."""
+
+    address: str
+    #: The commit the preview resolved. It lands even when the ref has moved since.
+    commit: GitCommit
+    skills: list[SkillName] = Field(min_length=1)
+
+
+class LibraryGitAddResult(ContractModel):
+    #: The entries added, by name.
+    entries: list[LibraryEntry]
 
 
 class InstancePicksGetCommand(ContractModel):

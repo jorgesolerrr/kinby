@@ -37,6 +37,7 @@ import { lastChanged } from "@/lib/config-changes"
 import { type Pace, pace, retried } from "@/lib/operation"
 import {
   byName,
+  LIBRARY_SOURCES,
   type OpenedSkill,
   openSkill,
   removeSkill,
@@ -239,12 +240,6 @@ const TIERS: Record<SkillTier, string> = {
   workspace: "Workspace",
 }
 
-/** What a pick's library entry came from. */
-const SOURCES: Record<LibraryEntry["source"], string> = {
-  shipped: "Shipped",
-  written: "Written",
-}
-
 /** How a pick stands against its library entry, and what an instance update does to it. */
 const STATES: Record<SkillPick["state"], string> = {
   "up-to-date": "Up to date.",
@@ -331,7 +326,7 @@ function Picks({
                 <ItemContent>
                   <ItemTitle>
                     {each.name}
-                    <Badge variant="secondary">{SOURCES[each.source]}</Badge>
+                    <Badge variant="secondary">{LIBRARY_SOURCES[each.source]}</Badge>
                   </ItemTitle>
                   <ItemDescription>{STATES[each.state]}</ItemDescription>
                 </ItemContent>

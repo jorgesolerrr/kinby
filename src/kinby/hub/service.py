@@ -54,6 +54,8 @@ from kinby.contracts import (
     INSTANCE_STATUS,
     INSTANCE_STOP,
     INSTANCE_UPDATE,
+    LIBRARY_GIT_ADD,
+    LIBRARY_GIT_PREVIEW,
     LIBRARY_LIST,
     LIBRARY_SKILL_READ,
     OPERATION_GET,
@@ -476,6 +478,8 @@ class Hub:
             self.dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
             self.dispatcher.register(LIBRARY_LIST, self.library.list)
             self.dispatcher.register(LIBRARY_SKILL_READ, self.library.read_skill)
+            self.dispatcher.register(LIBRARY_GIT_PREVIEW, self.library.preview)
+            self.dispatcher.register(LIBRARY_GIT_ADD, self.library.add)
             self.dispatcher.register(INSTANCE_PICKS_GET, self.picks)
             self.dispatcher.register(INSTANCE_PICKS_SET, self.set_picks)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)

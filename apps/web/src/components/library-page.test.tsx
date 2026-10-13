@@ -1,4 +1,5 @@
-import type { LibraryListResult } from "@kinby/contract"
+import { CallError } from "@kinby/contract"
+import type { LibraryEntry, LibraryGitPreviewResult, LibraryListResult } from "@kinby/contract"
 import { fakeClock, stubCaller } from "@kinby/contract/testing"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -74,5 +75,88 @@ describe("LibraryPage", () => {
     const file = await screen.findByRole("textbox", { name: "factory.yaml" })
     expect((file as HTMLTextAreaElement).value).toBe("name: software\n")
     expect(screen.getByText("Other files: prompts/implement.md")).toBeTruthy()
+  })
+})
+
+const commit = "0123456789abcdef0123456789abcdef01234567"
+const grill = "---\nname: grill\ndescription: Ask why.\n---\nAsk why five times.\n"
+
+const shown: LibraryGitPreviewResult = {
+  url: "https://github.com/owner/repo.git",
+  ref: "main",
+  commit,
+  skills: [
+    { name: "caveman", path: "skills/caveman", content: "Talk short.\n", files: [] },
+    { name: "grill", path: "skills/grill", content: grill, files: ["references/questions.md"] },
+  ],
+}
+
+const added: LibraryEntry = {
+  kind: "skill",
+  name: "grill",
+  description: "Ask why.",
+  source: "git",
+  git: { url: shown.url, path: "skills/grill", ref: "main", commit },
+}
+
+function openGitPage(preview: () => LibraryGitPreviewResult) {
+  let entries = listed.entries
+  const caller = stubCaller({
+    "library.list": () => ({ entries }),
+    "library.git.preview": preview,
+    "library.git.add": () => {
+      entries = [...entries, added]
+      return { entries: [added] }
+    },
+  })
+  render(<LibraryPage client={caller} clock={fakeClock()} />)
+  return { caller, user: userEvent.setup() }
+}
+
+describe("LibraryPage, adding from git", () => {
+  it("walks the address, the preview and the confirm, then lists the entry with its commit", async () => {
+    const { caller, user } = openGitPage(() => shown)
+
+    await user.click(await screen.findByRole("button", { name: "Add from git" }))
+    await user.type(screen.getByRole("textbox", { name: "Address" }), "owner/repo#main")
+    await user.click(screen.getByRole("button", { name: "Preview" }))
+
+    expect(await screen.findByText(`At commit ${commit}`)).toBeTruthy()
+    const body = screen.getByRole("textbox", { name: "grill SKILL.md" })
+    expect((body as HTMLTextAreaElement).value).toBe(grill)
+    expect(screen.getByText("Other files: references/questions.md")).toBeTruthy()
+    expect(caller.calls.some((call) => call.method === "library.git.add")).toBe(false)
+
+    await user.click(screen.getByRole("checkbox", { name: "caveman" }))
+    await user.click(screen.getByRole("button", { name: "Add 1 skill" }))
+
+    expect(await screen.findByRole("button", { name: "grill, git skill" })).toBeTruthy()
+    expect(screen.getByText(`${shown.url} at ${commit}`)).toBeTruthy()
+    expect(caller.calls.filter((call) => call.method.startsWith("library.git"))).toEqual([
+      { method: "library.git.preview", params: { address: "owner/repo#main" } },
+      {
+        method: "library.git.add",
+        params: { address: "owner/repo#main", commit, skills: ["grill"] },
+      },
+    ])
+    expect(screen.queryByRole("textbox", { name: "Address" })).toBeNull()
+  })
+
+  it("shows why the hub refused an address", async () => {
+    const { user } = openGitPage(() => {
+      throw new CallError({
+        code: "INVALID_ARGUMENT",
+        message: "Some values are invalid.",
+        retryable: false,
+        fields: { address: "skills/grill/logo.png is a binary file. A skill holds only text." },
+      })
+    })
+
+    await user.click(await screen.findByRole("button", { name: "Add from git" }))
+    await user.type(screen.getByRole("textbox", { name: "Address" }), "owner/repo")
+    await user.click(screen.getByRole("button", { name: "Preview" }))
+
+    const alert = await screen.findByRole("alert")
+    expect(within(alert).getByText(/logo.png is a binary file/)).toBeTruthy()
   })
 })

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import shutil
+import threading
 from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -13,14 +15,20 @@ from kinby.contracts import (
     ConfigFile,
     FactoryListCommand,
     FileHash,
+    GitSource,
     InstancePicksResult,
     LibraryEntry,
+    LibraryGitAddCommand,
+    LibraryGitAddResult,
+    LibraryGitPreviewCommand,
+    LibraryGitPreviewResult,
     LibraryKind,
     LibraryListCommand,
     LibraryListResult,
     LibrarySkillReadCommand,
     LibrarySource,
     PickState,
+    PreviewedSkill,
     SkillName,
     SkillPick,
     SkillResult,
@@ -28,6 +36,7 @@ from kinby.contracts import (
 from kinby.core.config import skill_result
 from kinby.core.errors import InvalidConfig, SkillNotFound, StaleWrite
 from kinby.hub.factories import FactoryStore
+from kinby.hub.git_skills import Address, checked_out, found_skills, parse_address
 from kinby.hub.registry import HubRegistry
 from kinby.instance import Instance
 from kinby.instance.config_changes import directory_hash, file_hash, recorded_changes
@@ -68,6 +77,7 @@ class Library:
         self._directory = directory
         self._factories = factories
         self._registry = registry
+        self._adding = threading.Lock()
 
     def receive(self, shipped: Path) -> None:
         """Copy each skill kinby ships that the hub has never copied, and record its hash.
@@ -93,7 +103,6 @@ class Library:
 
     async def list(self, command: LibraryListCommand) -> LibraryListResult:
         factories = await self._factories.list(FactoryListCommand())
-        copied = self._registry.shipped_skills()
         return LibraryListResult(
             entries=[
                 *(
@@ -108,12 +117,7 @@ class Library:
                     for factory in factories.factories
                 ),
                 *(
-                    LibraryEntry(
-                        kind=LibraryKind.SKILL,
-                        name=name,
-                        description=load_skill_file(folder / SKILL_FILE).description,
-                        source=_source(name, copied),
-                    )
+                    self._entry(name, folder)
                     for name, folder in sorted(_skill_folders(self._directory).items())
                 ),
             ]
@@ -124,6 +128,58 @@ class Library:
         if folder is None:
             raise SkillNotFound(f'The library has no skill "{command.name}".')
         return skill_result(folder)
+
+    async def preview(self, command: LibraryGitPreviewCommand) -> LibraryGitPreviewResult:
+        return await asyncio.to_thread(self._preview, parse_address(command.address))
+
+    def _preview(self, address: Address) -> LibraryGitPreviewResult:
+        with checked_out(address.url, address.ref or "HEAD") as (commit, tree):
+            return LibraryGitPreviewResult(
+                url=address.url,
+                ref=address.ref,
+                commit=commit,
+                skills=[
+                    PreviewedSkill(
+                        name=name,
+                        path=str(path),
+                        content=(shown := skill_result(tree / path)).content,
+                        files=shown.files,
+                    )
+                    for name, path in sorted(found_skills(tree, address.path).items())
+                ],
+            )
+
+    async def add(self, command: LibraryGitAddCommand) -> LibraryGitAddResult:
+        """Add skills from git at the commit a preview resolved, whatever the ref names now."""
+        address = parse_address(command.address)
+        return await asyncio.to_thread(self._add, address, command)
+
+    def _add(self, address: Address, command: LibraryGitAddCommand) -> LibraryGitAddResult:
+        names = sorted(set(command.skills))
+        with checked_out(address.url, command.commit) as (commit, tree), self._adding:
+            found = found_skills(tree, address.path)
+            # Read under the lock, so a second add of the same name sees the first one's folder.
+            folders = _skill_folders(self._directory)
+            refusals = [
+                f'The library already holds a skill "{name}".'
+                if name in folders
+                else f'The repository holds no skill "{name}" at {commit}.'
+                for name in names
+                if name in folders or name not in found
+            ]
+            if refusals:
+                raise InvalidConfig({"skills": " ".join(refusals)})
+            for name in names:
+                _copy_in(tree / found[name], self._directory / name, self._directory)
+                self._registry.record_git_skill(
+                    name,
+                    GitSource(
+                        url=address.url, path=str(found[name]), ref=address.ref, commit=commit
+                    ),
+                )
+        return LibraryGitAddResult(
+            entries=[self._entry(name, self._directory / name) for name in names]
+        )
 
     def refusal(self, skills: Iterable[SkillName], own: Collection[SkillName]) -> str | None:
         """Why an instance whose own skills are *own* cannot pick *skills*, or None if it can."""
@@ -177,7 +233,6 @@ class Library:
             validate_name(name)
         if not added and not dropped:
             return self.picks(instance.path)
-        shipped = self._registry.shipped_skills()
         changed = [ConfigFile(f"{SKILLS_DIR}/{name}") for name in (*added, *dropped)]
         with TemporaryDirectory(prefix=".pick-", dir=instance.path) as temporary:
             staged, removed = Path(temporary) / "added", Path(temporary) / "dropped"
@@ -185,7 +240,7 @@ class Library:
             picked = {name: entry for name, entry in lock.skills.items() if name not in dropped}
             for name in added:
                 shutil.copytree(folders[name], staged / name)
-                picked[name] = LockedSkill.of(staged / name, _source(name, shipped))
+                picked[name] = LockedSkill.of(staged / name, self._origin(name))
             write_lock(Path(temporary), SkillsLock(skills=picked))
             with recorded_changes(
                 instance, (*changed, ConfigFile(SKILLS_LOCK_NAME)), ConfigActor.APP
@@ -208,7 +263,6 @@ class Library:
         """
         lock = read_lock(instance_path)
         folders = _skill_folders(self._directory)
-        shipped = self._registry.shipped_skills()
         held = instance_path / SKILLS_DIR
         written: list[SkillName] = []
         kept: list[SkillName] = []
@@ -225,7 +279,7 @@ class Library:
                     continue
                 _copy_in(library, held / name, instance_path)
                 written.append(name)
-            lock.skills[name] = LockedSkill.of(held / name, _source(name, shipped))
+            lock.skills[name] = LockedSkill.of(held / name, self._origin(name))
             relocked = True
         if relocked:
             write_lock(instance_path, lock)
@@ -270,6 +324,25 @@ class Library:
         return {
             path: entry for path, entry in baseline.items() if not path.startswith(prefixes)
         }, taken
+
+    def _entry(self, name: SkillName, folder: Path) -> LibraryEntry:
+        origin = self._origin(name)
+        return LibraryEntry(
+            kind=LibraryKind.SKILL,
+            name=name,
+            description=load_skill_file(folder / SKILL_FILE).description,
+            source=LibrarySource.GIT if isinstance(origin, GitSource) else origin,
+            git=origin if isinstance(origin, GitSource) else None,
+        )
+
+    def _origin(self, name: SkillName) -> LibrarySource | GitSource:
+        """Where the library's skill *name* came from: its git source, or shipped or written."""
+        git = self._registry.git_skills().get(name)
+        if git is not None:
+            return git
+        if name in self._registry.shipped_skills():
+            return LibrarySource.SHIPPED
+        return LibrarySource.WRITTEN
 
 
 def _refuse_links(instance_path: Path) -> None:
@@ -329,11 +402,6 @@ def _file_hashes(folder: Path, prefix: str) -> dict[str, FileHash]:
     }
 
 
-def _source(name: SkillName, copied: Collection[SkillName]) -> LibrarySource:
-    """Where the library's skill *name* came from, given the shipped skills the hub copied."""
-    return LibrarySource.SHIPPED if name in copied else LibrarySource.WRITTEN
-
-
 def _state(entry: LockedSkill, held: Path, name: SkillName, library: Path | None) -> PickState:
     """How the pick *name*, held in *held* and locked as *entry*, stands against *library*, its
     library entry's folder."""
@@ -367,10 +435,10 @@ def _linked(folder: Path) -> bool:
     return any(path.is_symlink() for path in folder.rglob("*"))
 
 
-def _copy_in(folder: Path, target: Path, instance_path: Path) -> None:
-    """Copy the library's *folder* to *target* in the instance in *instance_path*, replacing what
-    is there. The copy is staged, so the instance never reads half of one."""
-    with TemporaryDirectory(prefix=".pick-", dir=instance_path) as temporary:
+def _copy_in(folder: Path, target: Path, staging: Path) -> None:
+    """Copy *folder* to *target*, replacing what is there. The copy is staged in *staging*, so no
+    reader sees half of one."""
+    with TemporaryDirectory(prefix=".pick-", dir=staging) as temporary:
         staged = Path(temporary) / target.name
         shutil.copytree(folder, staged)
         if target.exists():
