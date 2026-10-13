@@ -1104,6 +1104,25 @@ def test_intake_refuses_a_work_item_while_its_instance_lacks_a_list_its_roles_st
     asyncio.run(scenario())
 
 
+def test_intake_refuses_a_work_item_while_its_instances_manifest_cannot_be_read(tmp_path):
+    runtime = FakeRuntime()
+    files = FILES | {"factory.yaml": LISTS_FACTORY}
+    hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, files)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        (hub.instances_directory / str(coder) / "kinby.toml").write_bytes(b"\xff\xfe")
+        refused = await intake_client(hub, coder).call(
+            FACTORY_RUN_INTAKE, FactoryRunIntakeCommand(routine="scan", work_item={"issue": 7})
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert '"setup", "checks"' in refused.message
+
+    asyncio.run(scenario())
+
+
 def test_intake_accepts_the_work_item_it_refused_once_every_list_is_held_an_empty_one_too(
     tmp_path,
 ):
