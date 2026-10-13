@@ -161,13 +161,27 @@ export function Onboarding({
     preparation?.state === "prepared" ? preparation.description : undefined
   const description = offer?.setup ?? declared ?? preparedDescription
   // A rebuilt image stores a new descriptor, then validate fails. Preparation still holds the
-  // fields the user was shown, and Prepare stays disabled, so read the stored descriptor.
+  // fields the user was shown, and Prepare stays disabled, so read the stored descriptor. A role
+  // edited since it was picked is refused the same way, so read its template's again.
   useEffect(() => {
     if (submitted === undefined || !setupWasRefused(creation)) return
     const request = ++declarationRead.current
-    void caller.call("image.describe", {}).then(
-      (next) => {
-        if (request === declarationRead.current) setDeclared(next)
+    const role = submitted.factory_role
+    const reread =
+      role == null
+        ? caller.call("image.describe", {}).then((next) => () => setDeclared(next))
+        : caller.call("factory.describe", { name: role.factory }).then(({ instances }) => () => {
+            const setup = instances[role.name]
+            if (setup === undefined) return
+            setOffer((current) =>
+              current !== undefined && roleKey(current.role) === roleKey(role)
+                ? { ...current, setup }
+                : current,
+            )
+          })
+    void reread.then(
+      (store) => {
+        if (request === declarationRead.current) store()
       },
       // Keep the fields already on the form if the hub cannot be read.
       () => {},

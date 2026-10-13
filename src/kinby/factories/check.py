@@ -45,7 +45,13 @@ from kinby.instance.layout import ROUTINE_FILE, ROUTINES_DIR
 from kinby.library import SHIPPED_SKILLS
 from kinby.plugins.hooks import load_hooks
 from kinby.plugins.registry import ToolRegistry
-from kinby.setup import BUILT_IN_FIELDS, readable_template_files, template_fields, value_problem
+from kinby.setup import (
+    BEHAVIOR_PROMPT_FIELD,
+    BUILT_IN_FIELDS,
+    readable_template_files,
+    template_fields,
+    value_problem,
+)
 
 _ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 #: A login's id names its Docker volume, so it takes the characters a volume name takes.
@@ -153,7 +159,12 @@ def _field_declaration_problems(fields: Iterable[SetupField]) -> Iterator[str]:
         seen.add(field.name)
         yield from _field_failures(field)
         overridden = built_in.get(field.name)
-        if overridden is None:
+        if field.name == BEHAVIOR_PROMPT_FIELD.name:
+            yield (
+                f'Setup field "{field.name}" is the behavior prompt, which starts from the '
+                "template's SYSTEM.md."
+            )
+        elif overridden is None:
             yield from _target_failures(field)
         else:
             yield from _override_failures(field, overridden)

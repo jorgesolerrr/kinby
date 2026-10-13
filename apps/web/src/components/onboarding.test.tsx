@@ -924,6 +924,52 @@ describe("the onboarding's role, skills and prompt steps", () => {
     })
   })
 
+  it("asks for the fields of a role edited since it was picked, once the hub refuses", async () => {
+    const token = {
+      name: "CLAUDE_CODE_OAUTH_TOKEN",
+      label: "Claude Code token",
+      description: "Signs Claude Code in.",
+      kind: "secret" as const,
+      type: "text" as const,
+      required: true,
+    }
+    let describes = 0
+    let creates = 0
+    const caller = softwareHub({
+      "factory.describe": () => {
+        describes += 1
+        const setup = describes === 1 ? coder : { setup_fields: [...coder.setup_fields, token] }
+        return { instances: { coder: setup }, suggested_picks: { coder: SUGGESTED } }
+      },
+      "instance.create": () => {
+        creates += 1
+        if (creates === 1) {
+          throw new CallError({
+            code: "INVALID_SETUP",
+            message: "Some setup values are missing or invalid.",
+            retryable: false,
+            fields: { CLAUDE_CODE_OAUTH_TOKEN: "Claude Code token is required." },
+          })
+        }
+        return { operation_id: "op-create", instance_id: "instance-2" }
+      },
+    })
+    const { user } = await openOnboarding(caller)
+    await pickCoder(user)
+    for (const _ of ["identity", "skills", "prompt"]) await next(user)
+    await fillCoderSetup(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    const refused = await screen.findByLabelText("Claude Code token")
+    expect(refused.getAttribute("aria-invalid")).toBe("true")
+    await user.type(refused, "claude-token")
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(sent(caller)[1]).toMatchObject({
+      secrets: { api_key: "sk-ant", GH_TOKEN: "ghp-test", CLAUDE_CODE_OAUTH_TOKEN: "claude-token" },
+    })
+  })
+
   it("creates a second coder on software once it has a name of its own", async () => {
     let creates = 0
     const caller = softwareHub({
