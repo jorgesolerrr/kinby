@@ -23,7 +23,7 @@ from pydantic import (
     field_validator,
 )
 
-from kinby.contracts import ManifestValues, NewModelPrice
+from kinby.contracts import CommandListName, ManifestValues, NewModelPrice
 from kinby.instance.dataclasses import (
     Budgets,
     Conventions,
@@ -95,6 +95,8 @@ class RawWorkspace(_Section):
     source: NonEmpty | None = None
     snapshots: bool = True
     conventions: RawConventions = RawConventions()
+    #: The instance's repository commands, by list name. A command step reads them when it runs.
+    commands: dict[CommandListName, list[NonEmpty]] = Field(default_factory=dict)
 
 
 class RawMemory(_Section):
@@ -327,20 +329,28 @@ def inspect_instance(
 ) -> Instance:
     """Read validated management metadata without loading instance secrets."""
     instance_path = Path(directory).resolve()
+    return Instance(
+        path=instance_path,
+        manifest=_manifest(instance_path, _read_manifest(instance_path), model_override),
+        matching_rule=matching_rule,
+    )
+
+
+def repository_commands(directory: Path) -> dict[CommandListName, list[str]]:
+    """The instance's repository commands as its manifest holds them now, by list name."""
+    return _read_manifest(Path(directory).resolve()).workspace.commands
+
+
+def _read_manifest(instance_path: Path) -> RawManifest:
     manifest_path = instance_path / MANIFEST_NAME
     try:
-        raw = parse_manifest(manifest_path.read_text(encoding="utf-8"))
+        return parse_manifest(manifest_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ManifestError(f"{MANIFEST_NAME}: not found in {instance_path}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise ManifestError(f"{MANIFEST_NAME}: {exc}") from exc
     except ValidationError as exc:
         raise _manifest_error(exc) from exc
-    return Instance(
-        path=instance_path,
-        manifest=_manifest(instance_path, raw, model_override),
-        matching_rule=matching_rule,
-    )
 
 
 def load_instance(

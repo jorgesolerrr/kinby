@@ -406,9 +406,13 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]*$",
       "type": "string"
     },
+    "CommandListName": {
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "type": "string"
+    },
     "CommandStep": {
       "additionalProperties": false,
-      "description": "Commands in the instance's workspace, each run without a shell. Exit code zero passes.\n\nA ``{{name}}`` in a command stands for the run's value of that name, as one argument.",
+      "description": "Commands in the instance's workspace, each run without a shell. Exit code zero passes.\n\nA ``{{name}}`` in a command stands for the run's value of that name, as one argument. An\nentry ``{ commands: <name> }`` runs the instance's list of repository commands of that name.",
       "properties": {
         "failed": {
           "anyOf": [
@@ -483,8 +487,15 @@
         },
         "run": {
           "items": {
-            "minLength": 1,
-            "type": "string"
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/RepositoryCommands"
+              }
+            ]
           },
           "minItems": 1,
           "title": "Run",
@@ -640,6 +651,20 @@
     "RecipeName": {
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
       "type": "string"
+    },
+    "RepositoryCommands": {
+      "additionalProperties": false,
+      "description": "The instance's list of repository commands named *commands*, in a command step's run.\n\nThe instance reads the list when the step runs. Its commands run as written, with no run\nvalues.",
+      "properties": {
+        "commands": {
+          "$ref": "#/$defs/CommandListName"
+        }
+      },
+      "required": [
+        "commands"
+      ],
+      "title": "RepositoryCommands",
+      "type": "object"
     },
     "RoutineName": {
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",

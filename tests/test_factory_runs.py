@@ -52,6 +52,7 @@ from kinby.contracts import (
     LifecycleOperationResult,
     OperationState,
     ReasoningEffort,
+    RepositoryCommands,
     StepEnding,
     StepResult,
     StepRunCommand,
@@ -1043,6 +1044,29 @@ def test_a_command_names_a_value_of_the_run_as_one_argument(tmp_path):
     asyncio.run(scenario())
 
 
+def test_the_hub_passes_a_list_a_command_step_names_to_its_instance_as_named(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    factory = FACTORY.replace(
+        'run: ["uv run pytest", "uv run ruff check ."]',
+        'run: ["make {{issue}}", { commands: setup }, "make check"]',
+    )
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+
+        [(_, test)] = control.steps
+        assert test.step == CommandStepRun(
+            run=["make 7", RepositoryCommands(commands="setup"), "make check"],
+            timeout_seconds=600,
+        )
+
+    asyncio.run(scenario())
+
+
 def test_a_value_a_command_names_is_required_of_the_step_that_should_have_produced_it(tmp_path):
     control = FakeControl()
     control.step_results = [
@@ -1275,6 +1299,28 @@ def test_a_failure_goes_back_where_its_step_sends_it_with_what_failed_up_to_its_
             '"pytest" exited with code 1.\n'
             'Step "review" sent its failures back to "fix" 2 times, its max.'
         )
+
+    asyncio.run(scenario())
+
+
+def test_a_step_that_needs_a_human_stops_the_run_even_where_its_failures_go_back(tmp_path):
+    control = FakeControl()
+    missing = 'This instance holds no repository commands named "checks".'
+    control.step_results = [FIXED, StepResult(ending=StepEnding.NEEDS_HUMAN, summary=missing)]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, REPAIR_FILES)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        stopped = await settled(hub, run.run_id)
+
+        assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "review")
+        assert [(a.step, a.ending) for a in stopped.attempts] == [
+            ("fix", StepEnding.CLEAN),
+            ("review", StepEnding.NEEDS_HUMAN),
+        ]
+        assert stopped.attempts[-1].summary == missing
 
     asyncio.run(scenario())
 

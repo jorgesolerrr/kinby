@@ -2281,6 +2281,23 @@ class StepEnding(StrEnum):
     TIMED_OUT = "timed-out"
     #: The hub stopped while the attempt ran, so it counts as failed.
     INTERRUPTED = "interrupted"
+    #: The step cannot run until the user supplies what it lacks. The run stops for them, and
+    #: never tries the step again or sends its work back.
+    NEEDS_HUMAN = "needs-human"
+
+
+#: One of an instance's lists of repository commands, by name.
+type CommandListName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
+
+
+class RepositoryCommands(ContractModel):
+    """The instance's list of repository commands named *commands*, in a command step's run.
+
+    The instance reads the list when the step runs. Its commands run as written, with no run
+    values.
+    """
+
+    commands: CommandListName
 
 
 class CommandStepRun(ContractModel):
@@ -2290,7 +2307,7 @@ class CommandStepRun(ContractModel):
     """
 
     kind: Literal["command"] = "command"
-    run: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+    run: list[Annotated[str, Field(min_length=1)] | RepositoryCommands] = Field(min_length=1)
     #: How long the commands may run in all before the step fails. None lets them run.
     timeout_seconds: int | None = Field(default=None, ge=1)
 

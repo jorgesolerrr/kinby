@@ -65,6 +65,22 @@ def test_manifest_schema_accepts_the_tools_table() -> None:
     validate(instance=manifest, schema=manifest_schema())
 
 
+def test_manifest_schema_accepts_repository_commands_and_refuses_malformed_ones() -> None:
+    def manifest(commands: object) -> dict[str, object]:
+        return {
+            "id": "coder",
+            "models": {"main": "openai:gpt-5"},
+            "workspace": {"commands": commands},
+        }
+
+    validate(
+        instance=manifest({"setup": ["uv sync --frozen"], "checks": []}), schema=manifest_schema()
+    )
+    for malformed in ({"Set Up": ["make"]}, {"setup": [""]}, {"setup": "make"}):
+        with pytest.raises(ValidationError):
+            validate(instance=manifest(malformed), schema=manifest_schema())
+
+
 def test_manifest_schema_names_and_accepts_the_budgets_section() -> None:
     schema = manifest_schema()
     manifest = {

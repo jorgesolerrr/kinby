@@ -442,6 +442,10 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/\\[\\]-]*$",
       "type": "string"
     },
+    "CommandListName": {
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "type": "string"
+    },
     "CommandStepRun": {
       "additionalProperties": false,
       "description": "Run each command in the instance's workspace without a shell, in order.\n\nThe step passes when every command exits with code zero, and stops at the first that does not.",
@@ -453,8 +457,15 @@
         },
         "run": {
           "items": {
-            "minLength": 1,
-            "type": "string"
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/RepositoryCommands"
+              }
+            ]
           },
           "minItems": 1,
           "type": "array"
@@ -4343,6 +4354,20 @@
       "title": "ReportedRun",
       "type": "object"
     },
+    "RepositoryCommands": {
+      "additionalProperties": false,
+      "description": "The instance's list of repository commands named *commands*, in a command step's run.\n\nThe instance reads the list when the step runs. Its commands run as written, with no run\nvalues.",
+      "properties": {
+        "commands": {
+          "$ref": "#/$defs/CommandListName"
+        }
+      },
+      "required": [
+        "commands"
+      ],
+      "title": "RepositoryCommands",
+      "type": "object"
+    },
     "ResultFrame": {
       "additionalProperties": false,
       "properties": {
@@ -5825,7 +5850,8 @@
         "clean",
         "failed",
         "timed-out",
-        "interrupted"
+        "interrupted",
+        "needs-human"
       ],
       "title": "StepEnding",
       "type": "string"

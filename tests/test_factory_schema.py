@@ -31,6 +31,18 @@ def test_the_schema_accepts_a_factory_file() -> None:
     validate(instance=yaml.safe_load(FACTORY), schema=factory_schema())
 
 
+def test_the_schema_accepts_a_list_name_in_a_command_steps_run() -> None:
+    factory = yaml.safe_load(FACTORY)
+    [step] = [step for step in factory["steps"] if step["kind"] == "command"]
+    step["run"] = ["git switch {{branch}}", {"commands": "setup"}]
+
+    validate(instance=factory, schema=factory_schema())
+    for malformed in ("", {"commands": "Set Up"}, {"commands": "setup", "run": ["make"]}):
+        step["run"] = [malformed]
+        with pytest.raises(ValidationError):
+            validate(instance=factory, schema=factory_schema())
+
+
 @pytest.mark.parametrize("kind", ["agent", "client"])
 def test_the_schema_requires_a_hook_on_agent_and_client_steps(kind: str) -> None:
     factory = yaml.safe_load(FACTORY)

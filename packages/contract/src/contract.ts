@@ -35,7 +35,7 @@ export type StepValue = boolean | number | string;
 /**
  * How one attempt at a step ended.
  */
-export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted";
+export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted" | "needs-human";
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
  */
@@ -143,6 +143,7 @@ export type CodingClient = "claude" | "codex";
  */
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CodingModel = string;
+export type CommandListName = string;
 export type ToolName = string;
 export type ApprovalDecision = "approve" | "deny";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
@@ -1760,8 +1761,17 @@ export interface CommandStepRun {
   /**
    * @minItems 1
    */
-  run: [string, ...string[]];
+  run: [string | RepositoryCommands, ...(string | RepositoryCommands)[]];
   timeout_seconds?: number | null;
+}
+/**
+ * The instance's list of repository commands named *commands*, in a command step's run.
+ *
+ * The instance reads the list when the step runs. Its commands run as written, with no run
+ * values.
+ */
+export interface RepositoryCommands {
+  commands: CommandListName;
 }
 /**
  * Call one of the instance's tools, with no model turn around it.

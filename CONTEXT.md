@@ -656,7 +656,7 @@ What a **step** hands on: a short summary plus the named values the **factory** 
 
 ### Step attempt
 
-One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or interrupted when the **hub** stopped while it ran. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. A failed or interrupted attempt is tried again under the step's retry; a timed-out one never is. A step that declares where its failures go sends a failed attempt back there instead, with what failed. After that the run is **needs human**.
+One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, interrupted when the **hub** stopped while it ran, or needing a human when the step lacks what only the user can supply, such as **repository commands** its instance does not hold. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. A failed or interrupted attempt is tried again under the step's retry; a timed-out one, or one needing a human, never is and is never sent back. A step that declares where its failures go sends a failed attempt back there instead, with what failed. After that the run is **needs human**.
 
 ### Hook
 
@@ -669,7 +669,7 @@ The **routine** that starts **factory runs**: it finds new **work items** and ha
 
 ### Needs human
 
-A **factory run** stopped for the user because a **step** ran out of retries or send-backs, or because the run's final check failed. Nothing it did is undone. The **factory** can say so where the **work item** came from, as the **software factory** labels its issue `ready-for-human`. The user retries the step, sends the run back, or cancels it.
+A **factory run** stopped for the user because a **step** ran out of retries or send-backs, lacked what only the user can supply, or because the run's final check failed. Nothing it did is undone. The **factory** can say so where the **work item** came from, as the **software factory** labels its issue `ready-for-human`. The user retries the step, sends the run back, or cancels it.
 
 ### Factory check
 
