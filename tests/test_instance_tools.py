@@ -15,15 +15,18 @@ from pydantic import JsonValue
 from kinby.contracts import (
     ApprovalDecision,
     ApprovalRequested,
+    CommandStepRun,
     Delivery,
     Event,
     GateDecider,
     GateOutcome,
     Payload,
     PermissionMode,
+    RepositoryCommands,
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
+    StepEnding,
     SystemPrompt,
     ToolCall,
     ToolGated,
@@ -31,6 +34,7 @@ from kinby.contracts import (
 )
 from kinby.core import LangGraphRunner
 from kinby.core.errors import RoutineNotFound, RoutinePending
+from kinby.core.steps import run_command_step
 from kinby.core.turns import (
     ApprovalAnswer,
     ParkedTurn,
@@ -38,12 +42,13 @@ from kinby.core.turns import (
     TurnContext,
     TurnOutcome,
 )
-from kinby.instance import load_instance
-from kinby.plugins import ToolContext
+from kinby.instance import Instance, load_instance, repository_commands
+from kinby.plugins import Tool, ToolContext
 from kinby.plugins.instance_tools import instance_tools
 from kinby.plugins.skills import load_skills
 from tests.test_routines import instance_at
 from tests.test_scheduler import FakeClock, call, runtime
+from tests.test_steps import hold_commands
 
 
 class ScriptedModel:
@@ -1352,6 +1357,7 @@ def test_instance_tool_metadata(tmp_path: Path) -> None:
     tools = {tool.name: tool for tool in instance_tools(instance)}
 
     assert set(tools) == {
+        "repository_commands_write",
         "routine_delete",
         "routine_list",
         "routine_read",
@@ -1362,6 +1368,7 @@ def test_instance_tool_metadata(tmp_path: Path) -> None:
     }
     assert not tools["routine_list"].write
     assert not tools["routine_read"].write
+    assert tools["repository_commands_write"].write
     assert tools["routine_delete"].write
     assert tools["routine_set_enabled"].write
     assert tools["routine_write"].write
@@ -1372,3 +1379,208 @@ def test_instance_tool_metadata(tmp_path: Path) -> None:
         "Write a SKILL.md with required name and description frontmatter keys.\n\n"
         "Its body is the instructions."
     )
+
+
+def commands_write(instance: Instance) -> Tool:
+    return next(
+        tool for tool in instance_tools(instance) if tool.name == "repository_commands_write"
+    )
+
+
+def test_a_command_step_runs_the_repository_commands_the_tool_records(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        result = await commands_write(instance).ainvoke(
+            {"name": "setup", "commands": ["touch installed", "touch built"]},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+        step = await run_command_step(
+            CommandStepRun(run=[RepositoryCommands(commands="setup")]), instance
+        )
+
+        assert result == 'Recorded the repository commands "setup", 2 commands.'
+        assert step.ending is StepEnding.CLEAN
+        assert (workspace / "installed").is_file()
+        assert (workspace / "built").is_file()
+
+    asyncio.run(scenario())
+
+
+def test_repository_commands_write_replaces_the_whole_list(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        hold_commands(tmp_path, 'setup = ["uv sync", "bun install"]\nchecks = ["bun run check"]\n')
+
+        await commands_write(instance).ainvoke(
+            {"name": "setup", "commands": ["npm ci"]},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert repository_commands(tmp_path) == {"setup": ["npm ci"], "checks": ["bun run check"]}
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "workspace",
+    [
+        'workspace = { path = "workspace" }\n',
+        'workspace = { commands = { checks = ["bun run check"] } }\n',
+        'workspace.path = "workspace"\n',
+        '[workspace]\ncommands = { checks = ["bun run check"] }\n',
+        "[workspace.conventions]\nenabled = true\n",
+    ],
+)
+def test_repository_commands_write_records_into_any_form_of_the_workspace_table(
+    tmp_path: Path, workspace: str
+) -> None:
+    async def scenario() -> None:
+        (tmp_path / "kinby.toml").write_text(
+            f'id = "test"\n{workspace}[models]\nmain = "openai:gpt-5"\n'
+            if workspace.startswith("workspace")
+            else f'id = "test"\n[models]\nmain = "openai:gpt-5"\n{workspace}'
+        )
+        instance = load_instance(tmp_path)
+        held = repository_commands(tmp_path)
+
+        await commands_write(instance).ainvoke(
+            {"name": "setup", "commands": ["uv sync"]},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert repository_commands(tmp_path) == {**held, "setup": ["uv sync"]}
+
+    asyncio.run(scenario())
+
+
+def test_repository_commands_write_records_an_empty_list(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+
+        result = await commands_write(instance).ainvoke(
+            {"name": "setup", "commands": []},
+            ToolContext(instance=instance, thread_id=uuid4()),
+        )
+
+        assert repository_commands(tmp_path) == {"setup": []}
+        assert result == 'Recorded the repository commands "setup", 0 commands.'
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (
+            {"name": "Setup", "commands": ["uv sync"]},
+            "lowercase letters, digits, hyphens, and underscores",
+        ),
+        ({"name": "../setup", "commands": ["uv sync"]}, "lowercase letters"),
+        ({"name": "setup", "commands": ["uv sync", " "]}, "Command 2 is empty"),
+    ],
+)
+def test_repository_commands_write_refuses_a_bad_name_or_an_empty_command(
+    tmp_path: Path, arguments: dict[str, JsonValue], message: str
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        hold_commands(tmp_path, 'setup = ["uv sync"]\n')
+        before = (tmp_path / "kinby.toml").read_text()
+
+        with pytest.raises(ValueError, match=message):
+            await commands_write(instance).ainvoke(
+                arguments, ToolContext(instance=instance, thread_id=uuid4())
+            )
+
+        assert (tmp_path / "kinby.toml").read_text() == before
+
+    asyncio.run(scenario())
+
+
+async def gated_commands_write(
+    instance: Instance, arguments: dict[str, JsonValue], decision: ApprovalDecision
+) -> list[Payload]:
+    """Run a turn whose model records *arguments*, and answer its approval with *decision*."""
+    model = ScriptedModel(
+        [
+            AIMessageChunk(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "repository_commands_write",
+                        "args": arguments,
+                        "id": "commands-write-1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessageChunk(content="Done."),
+        ]
+    )
+    runner = LangGraphRunner(instance, model_factory=lambda _: model)
+    preparation = runner.prepare_for_turn()
+    thread_id = uuid4()
+    turn_id = uuid4()
+    payloads: list[Payload] = []
+
+    async def emit(payload: Payload) -> Event:
+        payloads.append(payload)
+        return Event(
+            sequence=len(payloads),
+            thread_id=thread_id,
+            turn_id=turn_id,
+            payload=payload,
+            timestamp=datetime.now(UTC),
+        )
+
+    turn = PreparedTurnRequest(
+        thread_id=thread_id,
+        turn_id=turn_id,
+        message="Record the setup commands.",
+        model=preparation.model,
+        permission_mode=PermissionMode.ASK,
+        system_prompt=SystemPrompt("System prompt"),
+    )
+    context = TurnContext(preparation.budgets, emit)
+    assert isinstance(await runner.run(turn, context), ParkedTurn)
+    assert repository_commands(instance.path) == {"setup": ["uv sync"]}
+    assert isinstance(await runner.resume(turn, ApprovalAnswer(decision), context), TurnOutcome)
+    return payloads
+
+
+def test_the_approval_of_repository_commands_shows_the_name_and_every_command(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    hold_commands(tmp_path, 'setup = ["uv sync"]\n')
+    arguments: dict[str, JsonValue] = {
+        "name": "setup",
+        "commands": ["uv sync --frozen", "bun install --frozen-lockfile"],
+    }
+
+    payloads = asyncio.run(gated_commands_write(instance, arguments, ApprovalDecision.APPROVE))
+
+    approval = next(payload for payload in payloads if isinstance(payload, ApprovalRequested))
+    assert approval.name == "repository_commands_write"
+    assert approval.arguments == arguments
+    assert repository_commands(tmp_path) == {
+        "setup": ["uv sync --frozen", "bun install --frozen-lockfile"]
+    }
+
+
+def test_refused_repository_commands_leave_the_recorded_list(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    hold_commands(tmp_path, 'setup = ["uv sync"]\n')
+
+    payloads = asyncio.run(
+        gated_commands_write(
+            instance, {"name": "setup", "commands": ["rm -rf ."]}, ApprovalDecision.DENY
+        )
+    )
+
+    assert repository_commands(tmp_path) == {"setup": ["uv sync"]}
+    result = next(payload for payload in payloads if isinstance(payload, ToolResult))
+    assert result.error

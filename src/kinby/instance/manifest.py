@@ -22,6 +22,7 @@ from pydantic import (
     WithJsonSchema,
     field_validator,
 )
+from tomlkit.items import InlineTable
 
 from kinby.contracts import CommandListName, ManifestValues, NewModelPrice
 from kinby.instance.dataclasses import (
@@ -219,6 +220,21 @@ def edited_manifest(text: str, values: ManifestValues, prices: Mapping[str, NewM
             if model not in document["prices"]:
                 document["prices"][model] = tomlkit.table()
             document["prices"][model].update(price.model_dump())
+    edited = tomlkit.dumps(document)
+    parse_manifest(edited)
+    return edited
+
+
+def with_repository_commands(text: str, name: CommandListName, commands: list[str]) -> str:
+    """The text of ``kinby.toml`` with its list of repository commands *name* set to
+    *commands*, keeping its comments.
+
+    Raises ``ValidationError`` when the result is not a valid manifest.
+    """
+    document = tomlkit.parse(text)
+    workspace = document.setdefault("workspace", tomlkit.table())
+    table = tomlkit.inline_table() if isinstance(workspace, InlineTable) else tomlkit.table()
+    workspace.setdefault("commands", table)[name] = commands
     edited = tomlkit.dumps(document)
     parse_manifest(edited)
     return edited

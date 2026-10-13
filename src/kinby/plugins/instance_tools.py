@@ -1,4 +1,4 @@
-"""Expose routine and skill files as gated core tools."""
+"""Expose routine and skill files, and repository commands, as gated core tools."""
 
 import asyncio
 import json
@@ -13,17 +13,27 @@ from tempfile import TemporaryDirectory
 from typing import Literal
 
 from cronsim import CronSim
+from pydantic import TypeAdapter, ValidationError
 
-from kinby.contracts import ConfigActor, ConfigFile, CronSchedule, RoutineName, SkillName
+from kinby.contracts import (
+    CommandListName,
+    ConfigActor,
+    ConfigFile,
+    CronSchedule,
+    RoutineName,
+    SkillName,
+)
 from kinby.instance import Instance
 from kinby.instance.config_changes import recorded_change
 from kinby.instance.layout import (
+    MANIFEST_NAME,
     ROUTINE_CODE_FILE,
     ROUTINE_FILE,
     ROUTINES_DIR,
     SKILL_FILE,
     SKILLS_DIR,
 )
+from kinby.instance.manifest import with_repository_commands
 from kinby.instance.permissions import load_permissions
 from kinby.plugins.routines import (
     Routine,
@@ -36,8 +46,9 @@ from kinby.plugins.skills import describe_skill_shadow, load_skill_file
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 _INSTANCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+_COMMAND_LIST_NAME = TypeAdapter(CommandListName)
 
-#: Records what its body changes in one routine or skill directory, as one config change.
+#: Records what its body changes in one configuration file or directory, as one config change.
 type Recorder = Callable[[ConfigFile], AbstractContextManager[None]]
 
 
@@ -48,6 +59,29 @@ def validate_name(name: str) -> None:
             "A name must contain only letters, digits, hyphens, and underscores, "
             "and start with a letter or digit."
         )
+
+
+def write_repository_commands(
+    instance: Instance, name: str, commands: list[str], recorded: Recorder
+) -> None:
+    """Set the instance's list of repository commands *name* to *commands*, replacing the whole
+    list. Hold the config lock."""
+    try:
+        _COMMAND_LIST_NAME.validate_python(name)
+    except ValidationError as exc:
+        raise ValueError(
+            "A list name must contain only lowercase letters, digits, hyphens, and underscores, "
+            "and start with a letter or digit."
+        ) from exc
+    for number, command in enumerate(commands, start=1):
+        if not command.strip():
+            raise ValueError(f"Command {number} is empty. Give each command as one line to run.")
+    path = instance.path / MANIFEST_NAME
+    edited = with_repository_commands(path.read_text(encoding="utf-8"), name, commands)
+    with recorded(ConfigFile(MANIFEST_NAME)):
+        staging = path.with_name(f".{path.name}.staging")
+        staging.write_text(edited, encoding="utf-8")
+        staging.replace(path)
 
 
 def _next_firing(schedule: CronSchedule, instance: Instance) -> datetime:
@@ -326,7 +360,25 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         async with context.instance.skill_lock:
             return await asyncio.to_thread(_delete_skill, name, context)
 
+    @tool(write=True)
+    async def repository_commands_write(
+        name: str, commands: list[str], context: ToolContext
+    ) -> str:
+        """Set one of the instance's lists of repository commands, such as setup or checks,
+        replacing the whole list.
+
+        A command step runs each command in the workspace without a shell. An empty list is a
+        valid one.
+        """
+        recorded = partial(_recorded, context)
+        async with context.instance.config_lock:
+            await asyncio.to_thread(
+                write_repository_commands, context.instance, name, commands, recorded
+            )
+        return f'Recorded the repository commands "{name}", {len(commands)} commands.'
+
     return (
+        repository_commands_write,
         routine_list,
         routine_read,
         routine_write,
