@@ -268,7 +268,13 @@
       "additionalProperties": false,
       "properties": {
         "commands": {
-          "additionalProperties": false,
+          "additionalProperties": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
           "propertyNames": {
             "$ref": "#/$defs/CommandListName"
           },

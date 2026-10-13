@@ -96,9 +96,7 @@ class RawWorkspace(_Section):
     snapshots: bool = True
     conventions: RawConventions = RawConventions()
     #: The instance's repository commands, by list name. A command step reads them when it runs.
-    commands: dict[CommandListName, list[NonEmpty]] = Field(
-        default_factory=dict, json_schema_extra={"additionalProperties": False}
-    )
+    commands: dict[CommandListName, list[NonEmpty]] = Field(default_factory=dict)
 
 
 class RawMemory(_Section):
