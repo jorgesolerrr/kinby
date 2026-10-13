@@ -15,11 +15,12 @@ import pytest
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
     FACTORY_CHECK,
+    FACTORY_DESCRIBE,
     FACTORY_EDIT,
     FACTORY_GET,
-    FACTORY_INSTALL,
     FACTORY_RUN_INTAKE,
     FACTORY_RUN_LIST,
+    INSTANCE_CREATE,
     INSTANCE_START,
     AcceptedResult,
     ClientStepRun,
@@ -29,12 +30,13 @@ from kinby.contracts import (
     Event,
     FactoryCheckCommand,
     FactoryCheckResult,
+    FactoryDescribeCommand,
+    FactoryDescription,
     FactoryEditCommand,
     FactoryGetCommand,
-    FactoryInstallCommand,
-    FactoryInstallResult,
     FactoryInstanceSetup,
     FactoryResult,
+    FactoryRole,
     FactoryRun,
     FactoryRunDetail,
     FactoryRunIntakeCommand,
@@ -42,6 +44,7 @@ from kinby.contracts import (
     FactoryRunListResult,
     FactoryRunOrigin,
     FactoryRunStatus,
+    InstanceCreateCommand,
     InstanceStartCommand,
     LifecycleOperationResult,
     OperationState,
@@ -76,7 +79,17 @@ from tests.test_hub_server import served, url
 from tests.test_routines import RoutineModel, signal_runtime
 from tests.test_steps import CLAUDE_STREAM, recorded_calls, streaming, stub_client
 
-#: What the coder asks for at install: the repository, GitHub, Claude Code and a commit identity.
+SUGGESTED_PICKS = [
+    "adversarial-review",
+    "api-and-interface-design",
+    "codebase-design",
+    "no-comments",
+    "ponytail",
+    "pr",
+    "tdd",
+    "unslop",
+]
+#: What the coder asks for at creation: the repository, GitHub, Claude Code and a commit identity.
 CODER_SETUP = FactoryInstanceSetup(
     model="anthropic:claude-sonnet-5",
     config={"repository": "https://github.com/owner/project.git"},
@@ -104,36 +117,79 @@ def fresh_hub(
     )
 
 
-async def installed_coder(client: ContractClient) -> UUID:
+async def created_coder(client: ContractClient) -> UUID:
+    """Create an instance that picks the coder role, with every pick the role suggests."""
+    described = await client.call(FACTORY_DESCRIBE, FactoryDescribeCommand(name="software"))
+    assert isinstance(described, FactoryDescription), described
     accepted = await client.call(
-        FACTORY_INSTALL, FactoryInstallCommand(name="software", instances={"coder": CODER_SETUP})
+        INSTANCE_CREATE,
+        InstanceCreateCommand(
+            factory_role=FactoryRole(factory="software", name="coder"),
+            model=CODER_SETUP.model,
+            config=CODER_SETUP.config,
+            secrets=CODER_SETUP.secrets,
+            picks=described.suggested_picks["coder"],
+        ),
     )
-    assert isinstance(accepted, FactoryInstallResult), accepted
-    [creation] = accepted.instances.values()
-    assert (await finished_operation(client, creation)).state is OperationState.SUCCEEDED
-    return creation.instance_id
+    assert isinstance(accepted, LifecycleOperationResult), accepted
+    assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
+    return accepted.instance_id
 
 
-def test_the_software_factory_passes_the_factory_check_and_installs_on_a_fresh_hub(tmp_path):
+def test_the_software_factory_passes_the_factory_check_and_creates_a_coder_on_a_fresh_hub(
+    tmp_path,
+):
     hub = fresh_hub(tmp_path / "hub")
     client = hub_client(hub)
 
     async def scenario() -> None:
         checked = await client.call(FACTORY_CHECK, FactoryCheckCommand(name="software"))
-        coder = await installed_coder(client)
+        coder = await created_coder(client)
 
         assert isinstance(checked, FactoryCheckResult)
         assert checked.problems == []
         instance = inspect_instance(hub.instances_directory / str(coder))
         assert instance.manifest.workspace.source == "https://github.com/owner/project.git"
+        assert {
+            folder.name for folder in (instance.path / "skills").iterdir() if folder.is_dir()
+        } == {
+            *SUGGESTED_PICKS,
+            "implement-ticket",
+        }
 
     asyncio.run(scenario())
+
+
+def test_the_coder_role_suggests_the_eight_shipped_skills(tmp_path):
+    client = hub_client(fresh_hub(tmp_path / "hub"))
+
+    async def scenario() -> FactoryDescription:
+        described = await client.call(FACTORY_DESCRIBE, FactoryDescribeCommand(name="software"))
+        assert isinstance(described, FactoryDescription)
+        return described
+
+    assert asyncio.run(scenario()).suggested_picks == {"coder": SUGGESTED_PICKS}
+    template = SHIPPED_FACTORIES / "software" / "instances" / "coder" / "skills"
+    assert [folder.name for folder in template.iterdir() if folder.is_dir()] == ["implement-ticket"]
+
+
+def test_implement_ticket_names_no_skill_a_coder_may_not_have_picked():
+    skill = SHIPPED_FACTORIES / "software" / "instances" / "coder" / "skills" / "implement-ticket"
+    text = (skill / "SKILL.md").read_text(encoding="utf-8")
+
+    named = [
+        name
+        for name in SUGGESTED_PICKS
+        if re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w-])", text)
+    ]
+
+    assert named == []
 
 
 async def started_coder(hub: Hub, runtime: FakeRuntime) -> UUID:
     """Install the software factory and start its coder, which answers on its control endpoint."""
     client = hub_client(hub)
-    coder = await installed_coder(client)
+    coder = await created_coder(client)
     started = await client.call(INSTANCE_START, InstanceStartCommand(instance_id=coder))
     assert isinstance(started, LifecycleOperationResult)
     assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
@@ -681,7 +737,7 @@ def coder_at(tmp_path: Path) -> Instance:
     origin's main holds one commit.
     """
     hub = fresh_hub(tmp_path / "hub")
-    coder = asyncio.run(installed_coder(hub_client(hub)))
+    coder = asyncio.run(created_coder(hub_client(hub)))
     hub.close()
     instance = load_instance(hub.instances_directory / str(coder))
     origin = tmp_path / "origin.git"

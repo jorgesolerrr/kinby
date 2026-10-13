@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Collection, Sequence
-from pathlib import Path
+from collections.abc import Collection, Iterable, Sequence
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 from kinby.contracts import (
@@ -28,7 +28,7 @@ from kinby.core.errors import InvalidConfig, SkillNotFound, StaleWrite
 from kinby.hub.factories import FactoryStore
 from kinby.hub.registry import HubRegistry
 from kinby.instance import Instance
-from kinby.instance.config_changes import directory_hash, recorded_changes
+from kinby.instance.config_changes import directory_hash, file_hash, recorded_changes
 from kinby.instance.layout import SKILL_FILE, SKILLS_DIR, SKILLS_LOCK_NAME
 from kinby.instance.skills_lock import LockedSkill, SkillsLock, lock_hash, read_lock, write_lock
 from kinby.plugins.instance_tools import validate_name
@@ -99,6 +99,12 @@ class Library:
             raise SkillNotFound(f'The library has no skill "{command.name}".')
         return skill_result(folder)
 
+    def refusal(self, skills: Iterable[SkillName], own: Collection[SkillName]) -> str | None:
+        """Why an instance whose own skills are *own* cannot pick *skills*, or None if it can."""
+        folders = _skill_folders(self._directory)
+        refusals = [_refusal(name, folders.get(name), own=name in own) for name in skills]
+        return " ".join(filter(None, refusals)) or None
+
     def picks(self, instance_path: Path) -> InstancePicksResult:
         """The library skills the instance in *instance_path* picked, as its lock records them."""
         _refuse_links(instance_path)
@@ -128,9 +134,11 @@ class Library:
         folders = _skill_folders(self._directory)
         added = sorted(set(skills) - lock.skills.keys())
         dropped = sorted(lock.skills.keys() - set(skills))
-        refusals = [_refusal(name, folders.get(name), held) for name in added]
-        if any(refusals):
-            raise InvalidConfig({"skills": " ".join(filter(None, refusals))})
+        refusal = self.refusal(
+            added, {name for name in added if (held / name).exists(follow_symlinks=False)}
+        )
+        if refusal is not None:
+            raise InvalidConfig({"skills": refusal})
         # The lock is a file the agent can edit, so a name in it must stay inside skills/.
         for name in dropped:
             validate_name(name)
@@ -158,6 +166,46 @@ class Library:
                 (Path(temporary) / SKILLS_LOCK_NAME).replace(instance.path / SKILLS_LOCK_NAME)
         return self.picks(instance.path)
 
+    def take_supplied(
+        self, instance_path: Path, baseline: dict[str, FileHash], served: Iterable[str]
+    ) -> tuple[dict[str, FileHash], tuple[SkillName, ...]]:
+        """Make each shipped skill the template supplied, and serves no more, a pick of the
+        instance in *instance_path*, and give back *baseline* without it.
+
+        *served* is the paths of the template's files now. A pick's lock entry hashes the
+        instance's copy where it still matches *baseline*, and the library's otherwise, so a copy
+        the instance edited or linked out of its folder counts as edited locally. A skill an
+        interrupted update already made a pick leaves *baseline* too, keeping its lock entry.
+        """
+        lock = read_lock(instance_path)
+        folders = _skill_folders(self._directory)
+        shipped = self._registry.shipped_skills()
+        held = instance_path / SKILLS_DIR
+        dropped = skill_names(baseline) - skill_names(served)
+        taken = tuple(
+            sorted(
+                name
+                for name in dropped - lock.skills.keys()
+                if name in shipped
+                and name in folders
+                and (held / name).is_dir()
+                and not (held / name).is_symlink()
+            )
+        )
+        for name in taken:
+            prefix = f"{SKILLS_DIR}/{name}/"
+            supplied = {path: entry for path, entry in baseline.items() if path.startswith(prefix)}
+            untouched = not _linked(held / name) and _file_hashes(held / name, prefix) == supplied
+            lock.skills[name] = LockedSkill.of(
+                held / name if untouched else folders[name], LibrarySource.SHIPPED
+            )
+        if taken:
+            write_lock(instance_path, lock)
+        prefixes = tuple(f"{SKILLS_DIR}/{name}/" for name in dropped & lock.skills.keys())
+        return {
+            path: entry for path, entry in baseline.items() if not path.startswith(prefixes)
+        }, taken
+
 
 def _refuse_links(instance_path: Path) -> None:
     """Refuse an instance whose skills folder or lock is a link the hub would follow out of it."""
@@ -179,15 +227,41 @@ def _present(lock: SkillsLock, held: Path) -> SkillsLock:
     )
 
 
-def _refusal(name: SkillName, folder: Path | None, held: Path) -> str | None:
-    """Why the library's skill *name*, in *folder*, cannot become a pick, if it cannot."""
+def _refusal(name: SkillName, folder: Path | None, *, own: bool) -> str | None:
+    """Why the library's skill *name*, in *folder*, cannot become a pick, if it cannot.
+
+    *own* says the instance holds a skill of that name already.
+    """
     if folder is None:
         return f'The library has no skill "{name}".'
-    if (held / name).exists(follow_symlinks=False):
+    if own:
         return f'The instance has its own skill "{name}". Rename or delete it to pick this one.'
     if folder.is_symlink() or any(path.is_symlink() for path in folder.rglob("*")):
         return f'The library\'s skill "{name}" holds a link, so it cannot be picked.'
     return None
+
+
+def skill_names(paths: Iterable[str]) -> set[SkillName]:
+    """The skill folders among *paths*, each the path of a file in an instance."""
+    return {
+        SkillName(parts[1])
+        for parts in (PurePosixPath(path).parts for path in paths)
+        if len(parts) > 2 and parts[0] == SKILLS_DIR
+    }
+
+
+def _linked(folder: Path) -> bool:
+    """Whether *folder* holds a link, whose target the hub must never read."""
+    return any(path.is_symlink() for path in folder.rglob("*"))
+
+
+def _file_hashes(folder: Path, prefix: str) -> dict[str, FileHash]:
+    """The hash of each file in *folder*, by its path behind *prefix*."""
+    return {
+        f"{prefix}{path.relative_to(folder).as_posix()}": file_hash(path.read_bytes())
+        for path in folder.rglob("*")
+        if path.is_file()
+    }
 
 
 def _source(name: SkillName, copied: Collection[SkillName]) -> LibrarySource:

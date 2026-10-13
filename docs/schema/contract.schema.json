@@ -1067,10 +1067,20 @@
             "$ref": "#/$defs/DeclaredSetup"
           },
           "type": "object"
+        },
+        "suggested_picks": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "object"
         }
       },
       "required": [
-        "instances"
+        "instances",
+        "suggested_picks"
       ],
       "title": "FactoryDescription",
       "type": "object"
@@ -1866,6 +1876,12 @@
             }
           ],
           "default": null
+        },
+        "picks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "revision": {
           "default": "HEAD",

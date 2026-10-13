@@ -557,6 +557,14 @@
           },
           "title": "Setup Fields",
           "type": "array"
+        },
+        "suggested_picks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Suggested Picks",
+          "type": "array"
         }
       },
       "title": "InstanceDeclaration",

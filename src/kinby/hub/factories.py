@@ -23,6 +23,7 @@ from kinby.contracts import (
     FactorySource,
     FactorySummary,
     FileHash,
+    SkillName,
 )
 from kinby.core.errors import FactoryCheckFailed, FactoryNotFound, InvalidConfig, StaleWrite
 from kinby.factories.check import check_factory
@@ -49,6 +50,7 @@ class InstanceTemplate:
     setup: DeclaredSetup
     #: Every file of the template's folder, by its path there.
     files: dict[str, str]
+    suggested_picks: tuple[SkillName, ...]
 
     @property
     def baseline(self) -> dict[str, FileHash]:
@@ -105,10 +107,12 @@ class FactoryStore:
         return (folder / path).read_text(encoding="utf-8")
 
     async def describe(self, command: FactoryDescribeCommand) -> FactoryDescription:
+        templates = await self.templates(command.name)
         return FactoryDescription(
-            instances={
-                template.name: template.setup for template in await self.templates(command.name)
-            }
+            instances={template.name: template.setup for template in templates},
+            suggested_picks={
+                template.name: list(template.suggested_picks) for template in templates
+            },
         )
 
     async def templates(self, name: FactoryName) -> tuple[InstanceTemplate, ...]:
@@ -136,6 +140,7 @@ class FactoryStore:
                     logins=list(declared.logins),
                 ),
                 files=readable_template_files(folder / TEMPLATES_DIR / instance),
+                suggested_picks=declared.suggested_picks,
             )
             for instance, declared in read_factory_file(folder).instances.items()
         )

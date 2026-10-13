@@ -864,6 +864,8 @@ class InstanceCreateCommand(ContractModel):
     #: Values for its secret fields, and any other variables the instance should hold.
     secrets: dict[str, SecretStr] = Field(default_factory=dict)
     avatar: Avatar = DEFAULT_AVATAR
+    #: The library skills the instance picks, copied in after its template or kinby's defaults.
+    picks: list[SkillName] = Field(default_factory=list)
 
     @field_serializer("secrets", when_used="json")
     def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
@@ -2029,6 +2031,8 @@ class FactoryDescribeCommand(ContractModel):
 class FactoryDescription(ContractModel):
     #: What each instance template asks for, by the instance's name in the factory.
     instances: dict[str, DeclaredSetup]
+    #: The library skills each role suggests, which a client preselects, by the role's name.
+    suggested_picks: dict[str, list[SkillName]]
 
 
 class FactoryInstanceSetup(ContractModel):

@@ -579,6 +579,9 @@ export interface FactoryDescription {
   instances: {
     [k: string]: DeclaredSetup;
   };
+  suggested_picks: {
+    [k: string]: string[];
+  };
 }
 /**
  * The setup fields an instance asks for, the built-in fields first, and its logins.
@@ -852,6 +855,7 @@ export interface InstanceCreateCommand {
   manifest_id?: string | null;
   model: string;
   persona_name?: string | null;
+  picks?: string[];
   revision?: string;
   secrets?: {
     [k: string]: string;

@@ -33,6 +33,7 @@ from tests.test_hub_notices import (
 )
 
 OWN_SKILL = "---\nname: mine\ndescription: The agent's own.\n---\nMine.\n"
+HOUSE_STYLE = "---\nname: house-style\ndescription: Ours.\n---\nOurs.\n"
 
 
 class EditingImages(FakeImages):
@@ -106,7 +107,8 @@ def test_an_update_writes_the_template_while_the_container_is_down(tmp_path):
 
 def test_an_update_removes_a_file_the_factory_dropped_and_leaves_the_instances_own(tmp_path):
     async def scenario() -> None:
-        files = FILES | {"instances/coder/skills/ponytail/SKILL.md": SKILL}
+        # A skill the library does not hold, which an update would make a pick instead.
+        files = FILES | {"instances/coder/skills/house-style/SKILL.md": HOUSE_STYLE}
         client = hub_client(install_hub(tmp_path, files))
         coder = await _installed_coder(client)
         own = _directory(tmp_path, coder) / "skills" / "mine" / "SKILL.md"
@@ -116,8 +118,8 @@ def test_an_update_removes_a_file_the_factory_dropped_and_leaves_the_instances_o
 
         outcome = await _update(client, coder)
 
-        assert _template_step(outcome) == "Removed skills/ponytail/SKILL.md."
-        assert not (_directory(tmp_path, coder) / "skills" / "ponytail").exists()
+        assert _template_step(outcome) == "Removed skills/house-style/SKILL.md."
+        assert not (_directory(tmp_path, coder) / "skills" / "house-style").exists()
         assert own.read_text(encoding="utf-8") == OWN_SKILL
 
     asyncio.run(scenario())

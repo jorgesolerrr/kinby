@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import shutil
-from collections.abc import Collection, Coroutine, Iterable, Mapping
+from collections.abc import Collection, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -113,6 +113,7 @@ from kinby.contracts import (
     RecreateReason,
     RevisionBehind,
     SetupValue,
+    SkillName,
     StatsGetCommand,
     StatsGetResult,
     StatsSummaryResult,
@@ -153,7 +154,7 @@ from kinby.hub.control import (
     InstanceControl,
 )
 from kinby.hub.factories import FactoryStore, InstanceTemplate
-from kinby.hub.library import Library
+from kinby.hub.library import Library, skill_names
 from kinby.hub.models import (
     ContainerRuntime,
     ImageArtifact,
@@ -189,6 +190,7 @@ from kinby.instance import (
     inspect_instance,
 )
 from kinby.instance.layout import SYSTEM_NAME
+from kinby.instance.skills_lock import lock_hash
 from kinby.library import SHIPPED_SKILLS
 from kinby.plugins.intake import INTAKE_URL_VARIABLE
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
@@ -524,8 +526,8 @@ class Hub:
 
     async def create(self, command: InstanceCreateCommand) -> LifecycleOperationResult:
         """Accept a creation only once the whole request checks out: a vanilla instance's image is
-        prepared, a factory role's factory passes the check, the name is free, and the setup values
-        fit what the image or the role's template declares."""
+        prepared, a factory role's factory passes the check, the name is free, the setup values
+        fit what the image or the role's template declares, and the library holds each pick."""
         manifest_id = _instance_name(command)
         role = command.factory_role
         template: InstanceTemplate | None = None
@@ -546,6 +548,12 @@ class Hub:
         )
         if self._name_taken(manifest_id):
             errors["manifest_id"] = f'An instance named "{manifest_id}" exists already.'
+        picks = sorted(set(command.picks))
+        refusal = self.library.refusal(
+            picks, skill_names(template.files) if template is not None else ()
+        )
+        if refusal is not None:
+            errors["picks"] = refusal
         if errors:
             raise InvalidSetup(errors)
         record = self._new_record(
@@ -555,7 +563,7 @@ class Hub:
             avatar=command.avatar,
             factory=member,
         )
-        return self._begin_create(record, command.model, command.config, secrets, template)
+        return self._begin_create(record, command.model, command.config, secrets, template, picks)
 
     async def install_factory(self, command: FactoryInstallCommand) -> FactoryInstallResult:
         """Create each of the factory's instances from its template, once the check passes.
@@ -645,12 +653,13 @@ class Hub:
         config: Mapping[str, SetupValue],
         secrets: dict[str, str],
         template: InstanceTemplate | None = None,
+        picks: Sequence[SkillName] = (),
     ) -> LifecycleOperationResult:
         operation_id = uuid4()
         self.registry.begin_create(record, operation_id)
         self._schedule(
             self._collecting_after(
-                self._create(operation_id, record, model, config, secrets, template)
+                self._create(operation_id, record, model, config, secrets, template, picks)
             )
         )
         return LifecycleOperationResult(operation_id=operation_id, instance_id=record.instance_id)
@@ -663,8 +672,10 @@ class Hub:
         config: Mapping[str, SetupValue],
         secrets: dict[str, str],
         template: InstanceTemplate | None,
+        picks: Sequence[SkillName],
     ) -> None:
-        """Prepare the image, write the instance from its template or its image, and publish it."""
+        """Prepare the image, write the instance from its template or its image, copy in its
+        picks, and publish it."""
         staging = record.path.with_name(f"{record.path.name}.creating")
         unmounted: tuple[StorageItem, ...] = ()
         try:
@@ -680,6 +691,9 @@ class Hub:
                 declared = self._initialize_from_template(
                     operation_id, record, staging, template, model, config, secrets
                 )
+            if picks:
+                self._record(operation_id, "picks", f"Copying {', '.join(picks)} from the library.")
+                self.library.pick(inspect_instance(staging), picks, lock_hash(staging))
             self._record(
                 operation_id, "publish", "Creating the container and listing the instance."
             )
@@ -1444,12 +1458,17 @@ class Hub:
         self.registry.stage_candidate(record.instance_id, revision, artifact)
         await self._remove_container(record, PendingStop(operation_id, asyncio.Event()))
         if member is not None and template is not None:
+            baseline = member.baseline
+            if baseline is not None:
+                baseline, taken = self.library.take_supplied(record.path, baseline, template.files)
+                if taken:
+                    self._record(operation_id, "picks", f"Made {', '.join(taken)} picks.")
             self._record(
                 operation_id,
                 "template",
                 f'Bringing the files of template "{template.name}" up to the factory\'s.',
             )
-            sync = sync_template(template, record.path, member.baseline)
+            sync = sync_template(template, record.path, baseline)
             self.registry.record_template(record.instance_id, template.setup, sync.baseline)
             self.registry.succeed_step(operation_id, sync.detail)
         await self._create_container(operation_id, record, artifact.image_id)
