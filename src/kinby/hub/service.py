@@ -190,7 +190,7 @@ from kinby.instance import (
     inspect_instance,
 )
 from kinby.instance.layout import SYSTEM_NAME
-from kinby.instance.skills_lock import lock_hash
+from kinby.instance.skills_lock import lock_hash, read_lock
 from kinby.library import SHIPPED_SKILLS
 from kinby.plugins.intake import INTAKE_URL_VARIABLE
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
@@ -1457,12 +1457,17 @@ class Hub:
         )
         self.registry.stage_candidate(record.instance_id, revision, artifact)
         await self._remove_container(record, PendingStop(operation_id, asyncio.Event()))
-        if member is not None and template is not None:
-            baseline = member.baseline
-            if baseline is not None:
-                baseline, taken = self.library.take_supplied(record.path, baseline, template.files)
-                if taken:
-                    self._record(operation_id, "picks", f"Made {', '.join(taken)} picks.")
+        baseline = None if member is None else member.baseline
+        taken: tuple[SkillName, ...] = ()
+        if template is not None and baseline is not None:
+            baseline, taken = self.library.take_supplied(record.path, baseline, template.files)
+        if taken or read_lock(record.path).skills:
+            self._record(operation_id, "picks", "Bringing the picks up to the library's.")
+            detail = self.library.sync(record.path).detail
+            if taken:
+                detail = f"Made {', '.join(taken)} picks. {detail}"
+            self.registry.succeed_step(operation_id, detail)
+        if template is not None:
             self._record(
                 operation_id,
                 "template",

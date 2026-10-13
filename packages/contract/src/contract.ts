@@ -73,6 +73,10 @@ export type ProcessState = "missing" | "created" | "starting" | "running" | "sto
  * Where a library entry came from.
  */
 export type LibrarySource = "shipped" | "written";
+/**
+ * How a pick stands against its lock entry and the library.
+ */
+export type PickState = "up-to-date" | "behind" | "edited";
 export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "unknown";
 /**
  * A change a running instance applies only once it is recreated.
@@ -969,6 +973,7 @@ export interface InstancePicksResult {
 export interface SkillPick {
   name: string;
   source: LibrarySource;
+  state: PickState;
 }
 export interface InstancePicksSetCommand {
   hash: string | null;

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from collections.abc import Collection, Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
@@ -19,6 +20,7 @@ from kinby.contracts import (
     LibraryListResult,
     LibrarySkillReadCommand,
     LibrarySource,
+    PickState,
     SkillName,
     SkillPick,
     SkillResult,
@@ -30,9 +32,33 @@ from kinby.hub.registry import HubRegistry
 from kinby.instance import Instance
 from kinby.instance.config_changes import directory_hash, file_hash, recorded_changes
 from kinby.instance.layout import SKILL_FILE, SKILLS_DIR, SKILLS_LOCK_NAME
-from kinby.instance.skills_lock import LockedSkill, SkillsLock, lock_hash, read_lock, write_lock
+from kinby.instance.skills_lock import (
+    LockedSkill,
+    SkillsLock,
+    lock_hash,
+    read_lock,
+    skill_hash,
+    write_lock,
+)
 from kinby.plugins.instance_tools import validate_name
 from kinby.plugins.skills import load_skill_file
+
+
+@dataclass(frozen=True)
+class PickSync:
+    """The picks an update wrote from the library and kept, by name."""
+
+    written: tuple[SkillName, ...]
+    kept: tuple[SkillName, ...]
+
+    @property
+    def detail(self) -> str:
+        done = [
+            f"{verb} {', '.join(names)}."
+            for verb, names in (("Wrote", self.written), ("Kept the instance's own", self.kept))
+            if names
+        ]
+        return " ".join(done) or "No pick is behind the library."
 
 
 class Library:
@@ -106,12 +132,19 @@ class Library:
         return " ".join(filter(None, refusals)) or None
 
     def picks(self, instance_path: Path) -> InstancePicksResult:
-        """The library skills the instance in *instance_path* picked, as its lock records them."""
+        """The library skills the instance in *instance_path* picked, as its lock records them,
+        each with how it stands against the library."""
         _refuse_links(instance_path)
-        lock = _present(read_lock(instance_path), instance_path / SKILLS_DIR)
+        folders = _skill_folders(self._directory)
+        held = instance_path / SKILLS_DIR
+        lock = _present(read_lock(instance_path), held)
         return InstancePicksResult(
             picks=[
-                SkillPick(name=name, source=entry.source_type)
+                SkillPick(
+                    name=name,
+                    source=entry.source_type,
+                    state=_state(entry, held, name, folders.get(name)),
+                )
                 for name, entry in sorted(lock.skills.items())
             ],
             hash=lock_hash(instance_path),
@@ -165,6 +198,38 @@ class Library:
                     (staged / name).rename(held / name)
                 (Path(temporary) / SKILLS_LOCK_NAME).replace(instance.path / SKILLS_LOCK_NAME)
         return self.picks(instance.path)
+
+    def sync(self, instance_path: Path) -> PickSync:
+        """Bring each pick of the instance in *instance_path* up to the library's (ADR 0091).
+
+        A pick behind the library is written from it, unless the instance edited its copy, which
+        is kept. A pick the library no longer holds is left alone. A copy that already matches the
+        library, as an interrupted update leaves one, only takes its lock entry.
+        """
+        lock = read_lock(instance_path)
+        folders = _skill_folders(self._directory)
+        shipped = self._registry.shipped_skills()
+        held = instance_path / SKILLS_DIR
+        written: list[SkillName] = []
+        kept: list[SkillName] = []
+        relocked = False
+        for name, entry in sorted(lock.skills.items()):
+            library = folders.get(name)
+            latest = None if library is None else skill_hash(library)
+            if library is None or latest == entry.computed_hash:
+                continue
+            copy = _copy_hash(held, name)
+            if copy != latest:
+                if copy != entry.computed_hash:
+                    kept.append(name)
+                    continue
+                _copy_in(library, held / name, instance_path)
+                written.append(name)
+            lock.skills[name] = LockedSkill.of(held / name, _source(name, shipped))
+            relocked = True
+        if relocked:
+            write_lock(instance_path, lock)
+        return PickSync(written=tuple(written), kept=tuple(kept))
 
     def take_supplied(
         self, instance_path: Path, baseline: dict[str, FileHash], served: Iterable[str]
@@ -267,6 +332,50 @@ def _file_hashes(folder: Path, prefix: str) -> dict[str, FileHash]:
 def _source(name: SkillName, copied: Collection[SkillName]) -> LibrarySource:
     """Where the library's skill *name* came from, given the shipped skills the hub copied."""
     return LibrarySource.SHIPPED if name in copied else LibrarySource.WRITTEN
+
+
+def _state(entry: LockedSkill, held: Path, name: SkillName, library: Path | None) -> PickState:
+    """How the pick *name*, held in *held* and locked as *entry*, stands against *library*, its
+    library entry's folder."""
+    copy = _copy_hash(held, name)
+    latest = None if library is None else skill_hash(library)
+    if copy is not None and copy == latest:
+        return PickState.UP_TO_DATE
+    if copy != entry.computed_hash:
+        return PickState.EDITED
+    if latest is not None and latest != entry.computed_hash:
+        return PickState.BEHIND
+    return PickState.UP_TO_DATE
+
+
+def _copy_hash(held: Path, name: SkillName) -> FileHash | None:
+    """The hash of the instance's copy of the pick *name* in its skills folder *held*, or None
+    where the hub must not read or write it: the agent can write the lock and the folder, so a
+    name could lead out of *held*, and a link could lead out of the instance."""
+    try:
+        validate_name(name)
+    except ValueError:
+        return None
+    copy = held / name
+    if held.is_symlink() or copy.is_symlink() or _linked(copy):
+        return None
+    return skill_hash(copy)
+
+
+def _linked(folder: Path) -> bool:
+    """Whether *folder* holds a link, whose target the hub must never read."""
+    return any(path.is_symlink() for path in folder.rglob("*"))
+
+
+def _copy_in(folder: Path, target: Path, instance_path: Path) -> None:
+    """Copy the library's *folder* to *target* in the instance in *instance_path*, replacing what
+    is there. The copy is staged, so the instance never reads half of one."""
+    with TemporaryDirectory(prefix=".pick-", dir=instance_path) as temporary:
+        staged = Path(temporary) / target.name
+        shutil.copytree(folder, staged)
+        if target.exists():
+            shutil.rmtree(target)
+        staged.rename(target)
 
 
 def _skill_folders(directory: Path) -> dict[SkillName, Path]:

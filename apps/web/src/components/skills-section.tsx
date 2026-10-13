@@ -6,6 +6,7 @@ import type {
   InstancePicksResult,
   LibraryEntry,
   SkillListResult,
+  SkillPick,
   SkillSummary,
   SkillTier,
 } from "@kinby/contract"
@@ -95,6 +96,7 @@ export function SkillsSection({
     void load(pacing)
     return pacing.stop
   }, [clock, load])
+  // A saved or removed copy of a pick changes its state, so the picks load again after either.
   const loadPicks = useCallback(
     (pacing: Pace) =>
       retried(
@@ -137,10 +139,9 @@ export function SkillsSection({
   }
   const removed = (name: string, after: SkillListResult) => {
     setListed(after)
+    void loadPicks(pacing)
     const winner = byName(after.skills).find((group) => group.winner.name === name)?.winner
     setSelection(winner && { name, tier: winner.tier })
-    // A deleted pick is no pick any more, so the library offers it again.
-    if (pickedNames.has(name)) void loadPicks(pacing)
   }
 
   return (
@@ -221,7 +222,10 @@ export function SkillsSection({
             (group) => group.winner.name === selection.name && group.shadowed.length > 0,
           )}
           onCustomized={openInstanceSkill}
-          onSaved={() => void load(pacing)}
+          onSaved={() => {
+            void load(pacing)
+            void loadPicks(pacing)
+          }}
           onRemoved={removed}
         />
       )}
@@ -239,6 +243,13 @@ const TIERS: Record<SkillTier, string> = {
 const SOURCES: Record<LibraryEntry["source"], string> = {
   shipped: "Shipped",
   written: "Written",
+}
+
+/** How a pick stands against its library entry, and what an instance update does to it. */
+const STATES: Record<SkillPick["state"], string> = {
+  "up-to-date": "Up to date.",
+  behind: "Behind the library. An instance update brings it up.",
+  edited: "Edited locally. An instance update keeps this copy.",
 }
 
 /**
@@ -322,6 +333,7 @@ function Picks({
                     {each.name}
                     <Badge variant="secondary">{SOURCES[each.source]}</Badge>
                   </ItemTitle>
+                  <ItemDescription>{STATES[each.state]}</ItemDescription>
                 </ItemContent>
                 <ItemActions>
                   <Button

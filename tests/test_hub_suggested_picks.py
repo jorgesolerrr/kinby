@@ -21,6 +21,7 @@ from kinby.contracts import (
     LibrarySource,
     LifecycleOperationResult,
     OperationState,
+    PickState,
     SkillPick,
 )
 from kinby.instance.skills_lock import skill_hash
@@ -176,7 +177,7 @@ def test_an_update_makes_the_library_skills_an_older_template_supplied_picks(tmp
 
         assert _template_step(outcome) == "Removed skills/own/SKILL.md."
         [step] = [step for step in outcome.steps if step.name == "picks"]
-        assert step.detail == "Made tdd, unslop picks."
+        assert step.detail == "Made tdd, unslop picks. No pick is behind the library."
         assert _skills(directory) == {"tdd", "unslop"}
         assert (SHIPPED_SKILLS / "tdd" / "SKILL.md").read_bytes() == (
             directory / "skills" / "tdd" / "SKILL.md"
@@ -187,8 +188,8 @@ def test_an_update_makes_the_library_skills_an_older_template_supplied_picks(tmp
         assert lock["unslop"]["computedHash"] != skill_hash(directory / "skills" / "unslop")
         assert isinstance(picks, InstancePicksResult)
         assert picks.picks == [
-            SkillPick(name="tdd", source=LibrarySource.SHIPPED),
-            SkillPick(name="unslop", source=LibrarySource.SHIPPED),
+            SkillPick(name="tdd", source=LibrarySource.SHIPPED, state=PickState.UP_TO_DATE),
+            SkillPick(name="unslop", source=LibrarySource.SHIPPED, state=PickState.EDITED),
         ]
 
     asyncio.run(scenario())
