@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -27,6 +28,7 @@ from kinby.contracts import (
     CodeStepRun,
     CodingClient,
     CommandStepRun,
+    ErrorEnvelope,
     Event,
     FactoryCheckCommand,
     FactoryCheckResult,
@@ -48,6 +50,7 @@ from kinby.contracts import (
     LifecycleOperationResult,
     OperationState,
     ReasoningEffort,
+    RepositoryCommands,
     Scope,
     StepEnding,
     StepResult,
@@ -75,8 +78,16 @@ from tests.test_hub import (
     instance_environment,
 )
 from tests.test_hub_server import served, url
+from tests.test_hub_setup import setup_of
+from tests.test_hub_template_sync import _template_step, _update
 from tests.test_routines import RoutineModel, signal_runtime
-from tests.test_steps import CLAUDE_STREAM, recorded_calls, streaming, stub_client
+from tests.test_steps import (
+    CLAUDE_STREAM,
+    hold_commands,
+    recorded_calls,
+    streaming,
+    stub_client,
+)
 
 SUGGESTED_PICKS = [
     "adversarial-review",
@@ -88,6 +99,10 @@ SUGGESTED_PICKS = [
     "tdd",
     "unslop",
 ]
+#: The skills the coder's template supplies, beside its picks.
+TEMPLATE_SKILLS = {"implement-ticket", "repository-survey"}
+#: The repository commands a surveyed coder holds.
+SURVEYED = 'setup = ["uv sync --frozen"]\nchecks = ["bun run check"]\n'
 #: What the coder asks for at creation: the repository, GitHub, Claude Code and a commit identity.
 CODER_CREATE = InstanceCreateCommand(
     factory_role=FactoryRole(factory="software", name="coder"),
@@ -148,8 +163,9 @@ def test_the_software_factory_passes_the_factory_check_and_creates_a_coder_on_a_
             folder.name for folder in (instance.path / "skills").iterdir() if folder.is_dir()
         } == {
             *SUGGESTED_PICKS,
-            "implement-ticket",
+            *TEMPLATE_SKILLS,
         }
+        assert "`repository-survey`" in (instance.path / "SYSTEM.md").read_text(encoding="utf-8")
 
     asyncio.run(scenario())
 
@@ -164,11 +180,12 @@ def test_the_coder_role_suggests_the_eight_shipped_skills(tmp_path):
 
     assert asyncio.run(scenario()).suggested_picks == {"coder": SUGGESTED_PICKS}
     template = SHIPPED_FACTORIES / "software" / "instances" / "coder" / "skills"
-    assert [folder.name for folder in template.iterdir() if folder.is_dir()] == ["implement-ticket"]
+    assert {folder.name for folder in template.iterdir() if folder.is_dir()} == TEMPLATE_SKILLS
 
 
-def test_implement_ticket_names_no_skill_a_coder_may_not_have_picked():
-    skill = SHIPPED_FACTORIES / "software" / "instances" / "coder" / "skills" / "implement-ticket"
+@pytest.mark.parametrize("name", sorted(TEMPLATE_SKILLS))
+def test_a_template_skill_names_no_skill_a_coder_may_not_have_picked(name):
+    skill = SHIPPED_FACTORIES / "software" / "instances" / "coder" / "skills" / name
     text = (skill / "SKILL.md").read_text(encoding="utf-8")
 
     named = [
@@ -180,10 +197,13 @@ def test_implement_ticket_names_no_skill_a_coder_may_not_have_picked():
     assert named == []
 
 
-async def started_coder(hub: Hub, runtime: FakeRuntime) -> UUID:
-    """Install the software factory and start its coder, which answers on its control endpoint."""
+async def started_coder(hub: Hub, runtime: FakeRuntime, commands: str | None = SURVEYED) -> UUID:
+    """Create the software factory's coder holding *commands*, its repository commands as a TOML
+    table body, and start it, which answers on its control endpoint. None holds no list."""
     client = hub_client(hub)
     coder = await created_coder(client)
+    if commands is not None:
+        hold_commands(hub.instances_directory / str(coder), commands)
     started = await client.call(INSTANCE_START, InstanceStartCommand(instance_id=coder))
     assert isinstance(started, LifecycleOperationResult)
     assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
@@ -298,11 +318,7 @@ def test_the_software_factory_carries_an_issue_from_intake_to_a_pull_request_it_
             command for _, command in control.steps
         )
         assert prepare.step == CodeStepRun(call="prepare_branch")
-        installs = [
-            "git switch agent/7-add-dark-mode",
-            "uv sync --frozen",
-            "bun install --frozen-lockfile",
-        ]
+        installs = ["git switch agent/7-add-dark-mode", RepositoryCommands(commands="setup")]
         assert setup.step == CommandStepRun(run=installs)
         assert implement.step == coding("implement", 60)
         assert implement.hook == "check_implementation"
@@ -311,11 +327,65 @@ def test_the_software_factory_carries_an_issue_from_intake_to_a_pull_request_it_
         assert answer.hook == "check_answers"
         assert fix.step == coding("fix", 30, resume="claude-1")
         assert fix.hook == "check_implementation"
-        assert checks.step == CommandStepRun(run=[*installs, "bun run check"])
+        assert checks.step == CommandStepRun(run=[*installs, RepositoryCommands(commands="checks")])
         assert publish.step == CodeStepRun(call="publish_pull_request")
         assert publish.work_item == {"issue": 7}
         assert publish.results == PREPARED.values
         assert waiting.attempts[-2].values == {"pr": 42}
+
+    asyncio.run(scenario())
+
+
+def test_a_coder_that_holds_no_repository_commands_has_both_pending_and_takes_no_work(tmp_path):
+    runtime = FakeRuntime()
+    hub = fresh_hub(tmp_path / "hub", runtime=runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime, commands=None)
+        refused = await intake_client(hub, coder).call(
+            FACTORY_RUN_INTAKE, FactoryRunIntakeCommand(routine="scan", work_item={"issue": 7})
+        )
+
+        assert (await setup_of(hub, coder)).missing_commands == ["setup", "checks"]
+        assert isinstance(refused, ErrorEnvelope)
+        assert '"setup", "checks"' in refused.message
+
+    asyncio.run(scenario())
+
+
+def test_an_update_brings_the_repository_survey_to_a_coder_created_before_it(tmp_path):
+    older = tmp_path / "older"
+    shutil.copytree(SHIPPED_FACTORIES, older, ignore=shutil.ignore_patterns("__pycache__"))
+    template = older / "software" / "instances" / "coder"
+    shutil.rmtree(template / "skills" / "repository-survey")
+    system = template / "SYSTEM.md"
+    system.write_text(
+        "".join(
+            line
+            for line in system.read_text(encoding="utf-8").splitlines(keepends=True)
+            if "repository-survey" not in line
+        ),
+        encoding="utf-8",
+    )
+    before = Hub(
+        tmp_path / "hub",
+        runtime=FakeRuntime(),
+        images=FakeImages(),
+        control=FakeControl(),
+        shipped_factories=older,
+    )
+
+    async def scenario() -> None:
+        coder = await created_coder(hub_client(before))
+        before.close()
+
+        outcome = await _update(hub_client(fresh_hub(tmp_path / "hub")), coder)
+
+        assert _template_step(outcome) == "Wrote SYSTEM.md, skills/repository-survey/SKILL.md."
+        shipped = SHIPPED_FACTORIES / "software" / "instances" / "coder"
+        directory = tmp_path / "hub" / "instances" / str(coder)
+        for path in ("SYSTEM.md", "skills/repository-survey/SKILL.md"):
+            assert (directory / path).read_bytes() == (shipped / path).read_bytes()
 
     asyncio.run(scenario())
 
