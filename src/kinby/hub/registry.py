@@ -52,17 +52,17 @@ class StorageConflict:
 
 @dataclass(frozen=True)
 class FactoryMember:
-    """The factory an instance was installed from, and what its instance template declared."""
+    """The factory role an instance picked, and what its instance template declared."""
 
     factory: FactoryName
     #: The instance's name in the factory file.
     name: InstanceName
     #: The image recipe its template names. None is kinby's base image.
     recipe: RecipeName | None
-    #: As the install or the last update stored it, so an edit of the factory reaches the
+    #: As the creation or the last update stored it, so an edit of the factory reaches the
     #: instance's setup only through an update.
     setup: DeclaredSetup
-    #: The hash of each file the template supplied, by its path. None for an instance installed
+    #: The hash of each file the template supplied, by its path. None for an instance created
     #: before the hub recorded them.
     baseline: dict[str, FileHash] | None
 
@@ -1358,7 +1358,7 @@ class HubRegistry:
         return self.operation(UUID(row[0])) if row is not None else None
 
     def factory_members(self, factory: FactoryName) -> list[ManagedInstance]:
-        """The instances installed from this factory and not deleted, in creation order."""
+        """The instances holding a role of this factory and not deleted, in creation order."""
         with self._connect() as connection:
             ids = [
                 UUID(row[0])

@@ -31,13 +31,14 @@ from kinby.factories.file import (
     TEMPLATES_DIR,
     FactoryFile,
     FactoryPath,
+    InstanceDeclaration,
     InstanceName,
     RecipeName,
     read_factory_file,
 )
 from kinby.instance.config_changes import file_hash, files_hash
 from kinby.instance.layout import MANIFEST_NAME
-from kinby.setup import readable_template_files, with_built_in_fields
+from kinby.setup import behavior_prompt_field, readable_template_files, with_built_in_fields
 
 
 @dataclass(frozen=True)
@@ -132,15 +133,8 @@ class FactoryStore:
         if problems:
             raise FactoryCheckFailed(problems)
         return tuple(
-            InstanceTemplate(
-                name=instance,
-                recipe=declared.image,
-                setup=DeclaredSetup(
-                    setup_fields=with_built_in_fields(declared.setup_fields),
-                    logins=list(declared.logins),
-                ),
-                files=readable_template_files(folder / TEMPLATES_DIR / instance),
-                suggested_picks=declared.suggested_picks,
+            _template(
+                instance, declared, readable_template_files(folder / TEMPLATES_DIR / instance)
             )
             for instance, declared in read_factory_file(folder).instances.items()
         )
@@ -200,6 +194,25 @@ class FactoryStore:
         return _named_folders(self._shipped, FactorySource.SHIPPED) | _named_folders(
             self._directory, FactorySource.HUB
         )
+
+
+def _template(
+    name: InstanceName, declared: InstanceDeclaration, files: dict[str, str]
+) -> InstanceTemplate:
+    """The template's fields are the built-in ones, its own, then its behavior prompt."""
+    return InstanceTemplate(
+        name=name,
+        recipe=declared.image,
+        setup=DeclaredSetup(
+            setup_fields=[
+                *with_built_in_fields(declared.setup_fields),
+                behavior_prompt_field(files),
+            ],
+            logins=list(declared.logins),
+        ),
+        files=files,
+        suggested_picks=declared.suggested_picks,
+    )
 
 
 def _factory_files(folder: Path) -> dict[str, Path]:

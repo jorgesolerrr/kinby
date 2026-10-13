@@ -4,7 +4,7 @@ import { cn } from "cn"
 import { useCallback, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
-import { CreateWizard } from "@/components/create-wizard"
+import { Onboarding } from "@/components/onboarding"
 import { LibraryPage } from "@/components/library-page"
 import { MainPanel } from "@/components/main-panel"
 import { NavThreads } from "@/components/nav-threads"
@@ -98,7 +98,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           </header>
           <PageBoundary path={path}>
             {creating ? (
-              <CreateWizard caller={client} clock={clock} onPublished={listAgain} />
+              <Onboarding caller={client} clock={clock} onPublished={listAgain} />
             ) : usageOpen ? (
               <UsagePage client={client} clock={clock} />
             ) : libraryOpen ? (

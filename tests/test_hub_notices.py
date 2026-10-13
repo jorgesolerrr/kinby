@@ -20,7 +20,7 @@ from kinby.contracts import (
     RevisionBehind,
     TemplateBehind,
 )
-from tests.test_factory_install import install_hub, installed
+from tests.test_factory_templates import created_roles, factory_hub
 from tests.test_hub import FakeImages, created_instance, hub_at, hub_client, started_instance
 from tests.test_hub_factories import read
 
@@ -91,10 +91,10 @@ async def _edit(client: ContractClient, files: dict[str, str]) -> None:
     assert isinstance(edited, FactoryResult)
 
 
-def test_a_freshly_installed_factory_instance_has_no_notice(tmp_path):
+def test_a_freshly_created_factory_instance_has_no_notice(tmp_path):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        await installed(client)
+        client = hub_client(factory_hub(tmp_path))
+        await created_roles(client)
 
         assert await _notices_by_instance(client) == {"tickets-coder": [], "tickets-reviewer": []}
 
@@ -103,8 +103,8 @@ def test_a_freshly_installed_factory_instance_has_no_notice(tmp_path):
 
 def test_an_instance_whose_template_file_the_factory_changed_says_so(tmp_path):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        await installed(client)
+        client = hub_client(factory_hub(tmp_path))
+        await created_roles(client)
         await created_instance(client)
 
         await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues well.\n"})
@@ -128,8 +128,8 @@ def test_an_instance_whose_template_file_the_factory_changed_says_so(tmp_path):
 )
 def test_a_file_the_factory_added_or_changed_puts_its_instance_behind(tmp_path, files):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        await installed(client)
+        client = hub_client(factory_hub(tmp_path))
+        await created_roles(client)
 
         await _edit(client, files)
 
@@ -143,8 +143,8 @@ def test_a_file_the_factory_added_or_changed_puts_its_instance_behind(tmp_path, 
 
 def test_a_file_the_factory_dropped_puts_its_instance_behind(tmp_path):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        await installed(client)
+        client = hub_client(factory_hub(tmp_path))
+        await created_roles(client)
 
         (_folder(tmp_path) / "instances" / "coder" / "SYSTEM.md").unlink()
 
@@ -196,8 +196,8 @@ def _undecodable_template_file(folder: Path) -> None:
 )
 def test_an_instance_whose_factory_the_hub_does_not_serve_has_no_template_notice(tmp_path, unserve):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        await installed(client)
+        client = hub_client(factory_hub(tmp_path))
+        await created_roles(client)
         await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues well.\n"})
 
         unserve(_folder(tmp_path))
@@ -209,13 +209,13 @@ def test_an_instance_whose_factory_the_hub_does_not_serve_has_no_template_notice
 
 def test_a_factory_instance_from_before_baselines_says_the_hub_has_no_record(tmp_path):
     async def scenario() -> None:
-        hub = install_hub(tmp_path)
-        await installed(hub_client(hub))
+        hub = factory_hub(tmp_path)
+        await created_roles(hub_client(hub))
         hub.close()
         with sqlite3.connect(tmp_path / "hub" / "registry.sqlite") as connection:
             connection.execute("ALTER TABLE factory_members DROP COLUMN baseline")
 
-        client = hub_client(install_hub(tmp_path))
+        client = hub_client(factory_hub(tmp_path))
 
         assert await _notices_by_instance(client) == {
             "tickets-coder": [_no_record("coder")],
@@ -244,8 +244,8 @@ def test_a_template_file_the_hub_cannot_read_leaves_the_list_whole(tmp_path, mon
         return read_text(path, *args, **kwargs)
 
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        await installed(client)
+        client = hub_client(factory_hub(tmp_path))
+        await created_roles(client)
         await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues well.\n"})
 
         # The tests run as root, which reads past any file mode.

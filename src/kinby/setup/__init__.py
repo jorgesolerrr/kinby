@@ -14,6 +14,8 @@ from kinby.contracts import (
     SetupFieldType,
     SetupValue,
 )
+from kinby.instance.init import DEFAULT_BEHAVIOR_PROMPT
+from kinby.instance.layout import SYSTEM_NAME
 
 _EMAIL = re.compile(r"[^@\s]+@[^@\s.]+(\.[^@\s.]+)+")
 
@@ -36,21 +38,28 @@ API_KEY_FIELD = SetupField(
 )
 #: What every instance asks for, whatever it starts from. kinby writes these values itself.
 BUILT_IN_FIELDS = (MODEL_FIELD, API_KEY_FIELD)
-#: Only a vanilla instance asks for it. A template keeps the behavior prompt it ships.
+#: Every instance asks for it last, starting from kinby's default or its template's.
 BEHAVIOR_PROMPT_FIELD = SetupField(
     name="behavior_prompt",
     label="Behavior prompt",
-    description="Instructions the instance follows in every turn. Leave it empty to keep "
-    "kinby's default.",
+    description="Instructions the instance follows in every turn.",
     kind=SetupFieldKind.CONFIG,
     type=SetupFieldType.MULTILINE,
     required=False,
+    default=DEFAULT_BEHAVIOR_PROMPT,
 )
 
 
 def vanilla_description() -> DeclaredSetup:
     """What kinby's base image declares: the built-in fields and the behavior prompt."""
     return DeclaredSetup(setup_fields=[*BUILT_IN_FIELDS, BEHAVIOR_PROMPT_FIELD])
+
+
+def behavior_prompt_field(template: Mapping[str, str]) -> SetupField:
+    """The behavior prompt field of an instance template, starting from its ``SYSTEM.md``."""
+    return BEHAVIOR_PROMPT_FIELD.model_copy(
+        update={"default": template.get(SYSTEM_NAME, DEFAULT_BEHAVIOR_PROMPT)}
+    )
 
 
 def with_built_in_fields(own: Iterable[SetupField]) -> list[SetupField]:
@@ -141,6 +150,7 @@ __all__ = [
     "BEHAVIOR_PROMPT_FIELD",
     "BUILT_IN_FIELDS",
     "MODEL_FIELD",
+    "behavior_prompt_field",
     "readable_template_files",
     "resolved_values",
     "template_fields",

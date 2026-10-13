@@ -322,6 +322,11 @@ def _declaring(declarations: str) -> dict[str, str]:
             'Setup field "model" overrides a built-in field, so it keeps its kind and type.',
         ),
         (
+            _field("behavior_prompt", type="multiline", default="You draft.", target=None),
+            'Setup field "behavior_prompt" is the behavior prompt, which starts from the '
+            "template's SYSTEM.md.",
+        ),
+        (
             _field(type="boolean", default="1"),
             'Setup field "drafts" has a default that is not true or false.',
         ),
@@ -350,6 +355,7 @@ def _declaring(declarations: str) -> dict[str, str]:
         "target-on-a-secret",
         "target-on-a-built-in",
         "built-in-of-another-type",
+        "behavior-prompt",
         "boolean-default",
         "choice-default",
         "email-default",

@@ -1130,71 +1130,6 @@
       "title": "FactoryGetCommand",
       "type": "object"
     },
-    "FactoryInstallCommand": {
-      "additionalProperties": false,
-      "description": "Create each of the factory's instances from its template, once the factory check passes.",
-      "properties": {
-        "instances": {
-          "additionalProperties": {
-            "$ref": "#/$defs/FactoryInstanceSetup"
-          },
-          "type": "object"
-        },
-        "name": {
-          "$ref": "#/$defs/FactoryName"
-        }
-      },
-      "required": [
-        "name",
-        "instances"
-      ],
-      "title": "FactoryInstallCommand",
-      "type": "object"
-    },
-    "FactoryInstallResult": {
-      "additionalProperties": false,
-      "properties": {
-        "instances": {
-          "additionalProperties": {
-            "$ref": "#/$defs/LifecycleOperationResult"
-          },
-          "type": "object"
-        }
-      },
-      "required": [
-        "instances"
-      ],
-      "title": "FactoryInstallResult",
-      "type": "object"
-    },
-    "FactoryInstanceSetup": {
-      "additionalProperties": false,
-      "description": "The setup values for one of the factory's instances, checked against its template.",
-      "properties": {
-        "config": {
-          "additionalProperties": {
-            "$ref": "#/$defs/SetupValue"
-          },
-          "type": "object"
-        },
-        "model": {
-          "type": "string"
-        },
-        "secrets": {
-          "additionalProperties": {
-            "format": "password",
-            "type": "string",
-            "writeOnly": true
-          },
-          "type": "object"
-        }
-      },
-      "required": [
-        "model"
-      ],
-      "title": "FactoryInstanceSetup",
-      "type": "object"
-    },
     "FactoryListCommand": {
       "additionalProperties": false,
       "properties": {},
@@ -1220,27 +1155,6 @@
     "FactoryName": {
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "type": "string"
-    },
-    "FactoryRemoveCommand": {
-      "additionalProperties": false,
-      "description": "Remove the factory, which the hub refuses while an instance holds one of its roles.",
-      "properties": {
-        "name": {
-          "$ref": "#/$defs/FactoryName"
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "title": "FactoryRemoveCommand",
-      "type": "object"
-    },
-    "FactoryRemoveResult": {
-      "additionalProperties": false,
-      "description": "No instance holds one of the factory's roles.",
-      "properties": {},
-      "title": "FactoryRemoveResult",
-      "type": "object"
     },
     "FactoryResult": {
       "additionalProperties": false,
@@ -7805,22 +7719,6 @@
           ],
           "type": "object"
         },
-        "factory.install": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/FactoryInstallCommand"
-            },
-            "result": {
-              "$ref": "#/$defs/FactoryInstallResult"
-            }
-          },
-          "required": [
-            "command",
-            "result"
-          ],
-          "type": "object"
-        },
         "factory.list": {
           "additionalProperties": false,
           "properties": {
@@ -7829,22 +7727,6 @@
             },
             "result": {
               "$ref": "#/$defs/FactoryListResult"
-            }
-          },
-          "required": [
-            "command",
-            "result"
-          ],
-          "type": "object"
-        },
-        "factory.remove": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/FactoryRemoveCommand"
-            },
-            "result": {
-              "$ref": "#/$defs/FactoryRemoveResult"
             }
           },
           "required": [
@@ -9254,8 +9136,6 @@
         "factory.check",
         "factory.edit",
         "factory.describe",
-        "factory.install",
-        "factory.remove",
         "factory.run.intake",
         "factory.run.list",
         "factory.run.get",

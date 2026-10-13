@@ -37,6 +37,13 @@ from kinby.instance.recap import DEFAULT_RECAP_LENS
 
 PLACEHOLDER_MODEL = "provider:model"
 README_NAME = "README.md"
+#: The ``SYSTEM.md`` of an instance that starts from kinby's defaults.
+DEFAULT_BEHAVIOR_PROMPT = (
+    "<!-- SYSTEM.md is this instance's behavior prompt. "
+    "Edit it to change how the agent acts. -->\n"
+    "\n"
+    "You are a personal AI teammate.\n"
+)
 _PROTECTED_TEMPLATE_ROOTS = {STATE_DIR, WORKSPACE_DIR}
 _FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir")
 
@@ -190,15 +197,7 @@ def _write_starter_tree(directory: Path, model: str) -> None:
         ),
         encoding="utf-8",
     )
-    (directory / SYSTEM_NAME).write_text(
-        (
-            "<!-- SYSTEM.md is this instance's behavior prompt. "
-            "Edit it to change how the agent acts. -->\n"
-            "\n"
-            "You are a personal AI teammate.\n"
-        ),
-        encoding="utf-8",
-    )
+    (directory / SYSTEM_NAME).write_text(DEFAULT_BEHAVIOR_PROMPT, encoding="utf-8")
     (directory / RECAP_NAME).write_text(
         (
             "<!-- RECAP.md tells the recap model what to examine after each turn. "

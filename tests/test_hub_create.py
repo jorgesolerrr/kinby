@@ -33,7 +33,7 @@ from kinby.contracts import (
 from kinby.hub import BuiltImage, ImageArtifact, ImageSelection
 from kinby.instance import init_instance, inspect_instance
 from kinby.setup import vanilla_description, with_built_in_fields
-from tests.test_factory_install import FILES, install_hub, installed
+from tests.test_factory_templates import FILES, created_roles, factory_hub
 from tests.test_hub import (
     FakeImages,
     FakeRuntime,
@@ -438,11 +438,11 @@ def test_a_template_that_declares_serve_gets_the_hub_listen_address_in_that_one_
     async def scenario() -> None:
         served = '[serve]\nlisten = "127.0.0.1:9000"\n\n[budgets]\nsteps = 3\n'
         files = FILES | {"instances/coder/kinby.toml": served}
-        hub = install_hub(tmp_path, files)
+        hub = factory_hub(tmp_path, files)
 
-        accepted = await installed(hub_client(hub))
+        accepted = await created_roles(hub_client(hub))
 
-        coder = accepted.instances["coder"].instance_id
+        coder = accepted["coder"]
         written = (hub.instances_directory / str(coder) / "kinby.toml").read_text(encoding="utf-8")
         manifest = tomllib.loads(written)
         assert manifest["serve"] == {"listen": "0.0.0.0:8787"}

@@ -18,12 +18,8 @@ from kinby.contracts.models import (
     FactoryDescription,
     FactoryEditCommand,
     FactoryGetCommand,
-    FactoryInstallCommand,
-    FactoryInstallResult,
     FactoryListCommand,
     FactoryListResult,
-    FactoryRemoveCommand,
-    FactoryRemoveResult,
     FactoryResult,
     FactoryRun,
     FactoryRunApproveCommand,
@@ -355,12 +351,6 @@ FACTORY_CHECK = Method("factory.check", Scope.HUB_READ, FactoryCheckCommand, Fac
 FACTORY_DESCRIBE = Method(
     "factory.describe", Scope.HUB_READ, FactoryDescribeCommand, FactoryDescription
 )
-FACTORY_INSTALL = Method(
-    "factory.install", Scope.HUB_ADMIN, FactoryInstallCommand, FactoryInstallResult
-)
-FACTORY_REMOVE = Method(
-    "factory.remove", Scope.HUB_ADMIN, FactoryRemoveCommand, FactoryRemoveResult
-)
 FACTORY_RUN_INTAKE = Method(
     "factory.run.intake", Scope.FACTORY_INTAKE, FactoryRunIntakeCommand, FactoryRun
 )
@@ -485,8 +475,6 @@ METHODS = (
     FACTORY_CHECK,
     FACTORY_EDIT,
     FACTORY_DESCRIBE,
-    FACTORY_INSTALL,
-    FACTORY_REMOVE,
     FACTORY_RUN_INTAKE,
     FACTORY_RUN_LIST,
     FACTORY_RUN_GET,

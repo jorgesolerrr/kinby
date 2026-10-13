@@ -31,10 +31,10 @@ from tests.test_factory_runs import (
     detail,
     factory_hub,
     handed_in,
-    installed_coder,
     needing_human,
     run_events,
     settled,
+    started_coder,
 )
 from tests.test_hub import FakeControl, FakeImages, FakeRuntime, hub_client
 from tests.test_hub_server import served, url
@@ -141,7 +141,7 @@ def test_a_signal_matching_a_parked_wait_moves_its_run_on(tmp_path):
     hub = factory_hub(tmp_path / "hub", control, runtime, WAIT_FILES)
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         await parked(hub, run.run_id)
         waiting = await detail(hub, run.run_id)
@@ -205,7 +205,7 @@ def test_a_signal_that_does_not_match_or_the_instance_did_not_accept_leaves_the_
     hub = factory_hub(tmp_path / "hub", control, runtime, WAIT_FILES)
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         await parked(hub, run.run_id)
         status, received = await signalled(
@@ -235,7 +235,7 @@ def test_a_signal_that_lands_while_the_run_works_toward_its_wait_moves_it_on_onc
     hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": build_first})
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         await signalled(hub, runtime, coder, COMMENT)
         control.step_release.set()
@@ -286,7 +286,7 @@ def test_a_wait_with_several_filters_moves_on_when_a_signal_matches_any_one_of_t
     )
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         await parked(hub, run.run_id)
         await signalled(hub, runtime, coder, body, event=event)
@@ -307,7 +307,7 @@ def test_a_wait_never_matches_a_header_the_hub_does_not_forward_to_the_instance(
     hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": on_cookie})
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         await parked(hub, run.run_id)
         status, _ = await signalled(
@@ -332,7 +332,7 @@ def test_a_wait_whose_deadline_passes_fails_under_its_retry_then_needs_a_human(
     hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         await parked(hub, run.run_id)
         finished = await stopped(hub, run.run_id, timeout=attempts + 3)
@@ -359,7 +359,7 @@ def test_a_wait_whose_quiet_time_passes_moves_on_and_records_it(tmp_path):
     hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         await parked(hub, run.run_id)
         finished = await stopped(hub, run.run_id)
@@ -385,7 +385,7 @@ def test_cancelling_a_run_parked_at_a_wait_ends_it_and_drops_its_deadline(tmp_pa
     hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         await parked(hub, run.run_id)
         cancelled = await hub_client(hub).call(
@@ -410,7 +410,7 @@ def test_a_parked_wait_stays_parked_through_a_hub_restart_and_keeps_its_deadline
     hub = factory_hub(directory, control, runtime, FILES | {"factory.yaml": factory})
 
     async def before_the_restart() -> UUID:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         await parked(hub, run.run_id)
         return run.run_id
@@ -466,7 +466,7 @@ def test_approving_a_run_parked_at_an_approve_step_moves_it_on(tmp_path):
     hub = factory_hub(tmp_path / "hub", control, runtime, APPROVE_FILES)
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         waiting = await awaiting_approval(hub, run.run_id)
         needing = await needing_human(hub)
@@ -499,7 +499,7 @@ def test_sending_back_a_run_that_awaits_approval_runs_the_earlier_step_again(tmp
     hub = factory_hub(tmp_path / "hub", control, runtime, APPROVE_FILES)
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         await awaiting_approval(hub, run.run_id)
         sent = await hub_client(hub).call(
@@ -525,7 +525,7 @@ def test_only_a_run_parked_at_an_approve_step_is_approved_or_sent_back_from_ther
     hub = factory_hub(tmp_path / "hub", control, runtime, WAIT_FILES)
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         await parked(hub, run.run_id)
         before = await detail(hub, run.run_id)
@@ -560,7 +560,7 @@ def test_a_run_awaiting_approval_is_only_sent_back_to_an_earlier_step(tmp_path):
     hub = factory_hub(tmp_path / "hub", control, runtime, APPROVE_FILES)
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         run = await handed_in(hub, coder, 7)
         waiting = await awaiting_approval(hub, run.run_id)
         refused = await hub_client(hub).call(
@@ -580,7 +580,7 @@ def test_a_parked_run_never_blocks_another_runs_step_on_its_instance(tmp_path):
     hub = factory_hub(tmp_path / "hub", control, runtime, APPROVE_FILES)
 
     async def scenario() -> None:
-        coder = await installed_coder(hub, runtime)
+        coder = await started_coder(hub, runtime)
         first = await handed_in(hub, coder, 7)
         await awaiting_approval(hub, first.run_id)
         second = await handed_in(hub, coder, 8)

@@ -1,6 +1,7 @@
 import { CallError } from "@kinby/contract"
 import type {
   DeclaredSetup,
+  LibraryEntry,
   OperationGetResult,
   OperationStep,
   SubscriptionLogin,
@@ -10,7 +11,7 @@ import { act, render, screen, within } from "@testing-library/react"
 import userEvent, { type UserEvent } from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { CreateWizard } from "@/components/create-wizard"
+import { Onboarding } from "@/components/onboarding"
 
 const vanilla: DeclaredSetup = {
   setup_fields: [
@@ -37,6 +38,7 @@ const vanilla: DeclaredSetup = {
       kind: "config",
       type: "multiline",
       required: false,
+      default: "You are a personal AI teammate.\n",
     },
   ],
 }
@@ -122,14 +124,14 @@ function preparation(fields: Partial<OperationGetResult>): Answers {
 
 async function prepareImage(answers: Answers) {
   const clock = fakeClock()
-  render(<CreateWizard caller={stubCaller(answers)} clock={clock} />)
+  render(<Onboarding caller={stubCaller(answers)} clock={clock} />)
   await userEvent.setup().click(screen.getByRole("button", { name: "Prepare the image" }))
   await act(() => clock.advance(0))
 }
 
 const step = (name: string) => within(screen.getByRole("listitem", { name }))
 
-describe("the create wizard's image step", () => {
+describe("the onboarding's image step", () => {
   it("prepares the image and shows the step running", async () => {
     await prepareImage(
       preparation({
@@ -287,7 +289,7 @@ describe("the create wizard's image step", () => {
             },
     })
     const clock = fakeClock()
-    render(<CreateWizard caller={caller} clock={clock} />)
+    render(<Onboarding caller={caller} clock={clock} />)
     const user = userEvent.setup()
 
     await user.click(screen.getByRole("button", { name: "Prepare the image" }))
@@ -338,44 +340,59 @@ function operationAnswer(fields: Partial<OperationGetResult>): OperationGetResul
   }
 }
 
-/** A hub that prepared the image, and answers the create operation's polls with `created`. */
+/**
+ * A hub that prepared the image, with no factory and an empty library, and answers the create
+ * operation's polls with `created`.
+ */
 function hub(answers: Answers, created: OperationGetResult = creating) {
   return stubCaller({
     "image.prepare": () => ({ operation_id: "op-1" }),
     "image.describe": () => vanilla,
+    "factory.list": () => ({ factories: [] }),
+    "library.list": () => ({ entries: [] }),
     "instance.create": () => ({ operation_id: "op-create", instance_id: "instance-1" }),
     "operation.get": ({ operation_id }) => (operation_id === "op-1" ? prepared : created),
     ...answers,
   })
 }
 
-async function openWizard(caller: StubCaller, onPublished = () => {}) {
+/** Open the onboarding, prepare the image, and go on to the role step. */
+async function openOnboarding(caller: StubCaller, onPublished = () => {}) {
   const clock = fakeClock()
   const user = userEvent.setup()
-  render(<CreateWizard caller={caller} clock={clock} onPublished={onPublished} />)
+  render(<Onboarding caller={caller} clock={clock} onPublished={onPublished} />)
   await user.click(screen.getByRole("button", { name: "Prepare the image" }))
   await act(() => clock.advance(0))
   await user.click(await screen.findByRole("button", { name: "Continue" }))
   return { user, clock }
 }
 
-async function nameIt(user: UserEvent, name = "Ada") {
+const next = (user: UserEvent) => user.click(screen.getByRole("button", { name: "Continue" }))
+
+/** Pick no role, name the instance, keep the skills, and write a prompt, up to the setup step. */
+async function toSetup(user: UserEvent, name = "Ada") {
+  await next(user)
   await user.type(screen.getByLabelText("Name"), name)
-  await user.click(screen.getByRole("button", { name: "Continue" }))
+  await next(user)
+  await next(user)
+  const prompt = screen.getByLabelText("Behavior prompt")
+  await user.clear(prompt)
+  await user.type(prompt, "Answer in haiku.")
+  await next(user)
 }
 
 async function fillSetup(user: UserEvent) {
   await user.type(screen.getByLabelText("Model"), "openai:gpt-5")
   await user.type(screen.getByLabelText("API key"), "sk-private")
-  await user.type(screen.getByLabelText(/Behavior prompt/), "Answer in haiku.")
 }
 
-describe("the create wizard's identity step", () => {
+describe("the onboarding's identity step", () => {
   it("names the instance and draws the avatar picked for it", async () => {
-    const { user } = await openWizard(hub({}))
+    const { user } = await openOnboarding(hub({}))
+    await next(user)
 
-    const next = screen.getByRole("button", { name: "Continue" })
-    expect(next.hasAttribute("disabled")).toBe(true)
+    const onward = screen.getByRole("button", { name: "Continue" })
+    expect(onward.hasAttribute("disabled")).toBe(true)
     await user.type(screen.getByLabelText("Name"), "Ada")
     await user.click(screen.getByRole("button", { name: "Squircle" }))
     await user.click(screen.getByRole("button", { name: "Green" }))
@@ -385,11 +402,12 @@ describe("the create wizard's identity step", () => {
     expect(preview.querySelector("[data-slot=avatar-fallback]")?.getAttribute("data-variant")).toBe(
       "green",
     )
-    expect(next.hasAttribute("disabled")).toBe(false)
+    expect(onward.hasAttribute("disabled")).toBe(false)
   })
 
   it("starts from a circle in the palette's first color", async () => {
-    const { user } = await openWizard(hub({}))
+    const { user } = await openOnboarding(hub({}))
+    await next(user)
 
     await user.type(screen.getByLabelText("Name"), "Ada")
 
@@ -401,25 +419,30 @@ describe("the create wizard's identity step", () => {
   })
 })
 
-describe("the create wizard's setup step", () => {
+describe("the onboarding's setup step", () => {
   it("asks for each declared field, and never shows a secret it was given", async () => {
-    const { user } = await openWizard(hub({}))
-    await nameIt(user)
+    const { user } = await openOnboarding(hub({}))
+    await toSetup(user)
 
     const configuration = within(screen.getByRole("group", { name: "Configuration" }))
     const secrets = within(screen.getByRole("group", { name: "Secrets" }))
     expect(configuration.getByLabelText("Model").tagName).toBe("INPUT")
-    expect(configuration.getByLabelText(/Behavior prompt/).tagName).toBe("TEXTAREA")
+    expect(configuration.queryByLabelText(/Behavior prompt/)).toBeNull()
     expect(configuration.getByText("The model the instance calls.")).toBeDefined()
     expect(secrets.getByLabelText("API key").getAttribute("type")).toBe("password")
   })
 
   it("creates the instance from the values and the identity", async () => {
     const caller = hub({})
-    const { user } = await openWizard(caller)
+    const { user } = await openOnboarding(caller)
+    await next(user)
     await user.type(screen.getByLabelText("Name"), "Ada")
     await user.click(screen.getByRole("button", { name: "Square" }))
-    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await next(user)
+    await next(user)
+    await user.clear(screen.getByLabelText("Behavior prompt"))
+    await user.type(screen.getByLabelText("Behavior prompt"), "Answer in haiku.")
+    await next(user)
     await fillSetup(user)
 
     await user.click(screen.getByRole("button", { name: "Create instance" }))
@@ -431,6 +454,7 @@ describe("the create wizard's setup step", () => {
       config: { behavior_prompt: "Answer in haiku." },
       secrets: { api_key: "sk-private" },
       avatar: { shape: "square", color: "blue" },
+      picks: [],
     })
     const steps = within(await screen.findByRole("list", { name: "Creation steps" }))
     expect(steps.getByText("Preparing the selected image.")).toBeDefined()
@@ -460,8 +484,8 @@ describe("the create wizard's setup step", () => {
       ],
     }
     const caller = hub({ "image.describe": () => untouched })
-    const { user } = await openWizard(caller)
-    await nameIt(user)
+    const { user } = await openOnboarding(caller)
+    await toSetup(user)
     await fillSetup(user)
 
     expect(screen.getByRole("switch", { name: /Share/ }).getAttribute("aria-checked")).toBe("false")
@@ -474,6 +498,7 @@ describe("the create wizard's setup step", () => {
       config: { behavior_prompt: "Answer in haiku." },
       secrets: { api_key: "sk-private" },
       avatar: { shape: "circle", color: "blue" },
+      picks: [],
     })
   })
 
@@ -493,8 +518,8 @@ describe("the create wizard's setup step", () => {
       ],
     }
     const caller = hub({ "image.describe": () => untouched })
-    const { user } = await openWizard(caller)
-    await nameIt(user)
+    const { user } = await openOnboarding(caller)
+    await toSetup(user)
     await fillSetup(user)
 
     await user.click(screen.getByRole("switch", { name: /Share/ }))
@@ -506,8 +531,8 @@ describe("the create wizard's setup step", () => {
   })
 
   it("renders each field by its type, starting from its default", async () => {
-    const { user } = await openWizard(hub({ "image.describe": () => typed }))
-    await nameIt(user)
+    const { user } = await openOnboarding(hub({ "image.describe": () => typed }))
+    await toSetup(user)
 
     const configuration = within(screen.getByRole("group", { name: "Configuration" }))
     expect(configuration.getByRole("combobox", { name: "Tone" }).textContent).toContain("plain")
@@ -516,7 +541,6 @@ describe("the create wizard's setup step", () => {
     )
     const steps = configuration.getByRole("spinbutton", { name: /Steps per turn/ })
     expect((steps as HTMLInputElement).value).toBe("7")
-    expect(configuration.getByLabelText(/Behavior prompt/).tagName).toBe("TEXTAREA")
     const email = configuration.getByLabelText(/Commit email/) as HTMLInputElement
     expect(email.type).toBe("email")
     expect(email.value).toBe("kinby@example.com")
@@ -527,8 +551,8 @@ describe("the create wizard's setup step", () => {
 
   it("sends a picked choice, a switch, and a whole number as typed values", async () => {
     const caller = hub({ "image.describe": () => typed })
-    const { user } = await openWizard(caller)
-    await nameIt(user)
+    const { user } = await openOnboarding(caller)
+    await toSetup(user)
     await fillSetup(user)
 
     await user.click(screen.getByRole("combobox", { name: "Tone" }))
@@ -555,8 +579,8 @@ describe("the create wizard's setup step", () => {
         })
       },
     })
-    const { user } = await openWizard(caller)
-    await nameIt(user)
+    const { user } = await openOnboarding(caller)
+    await toSetup(user)
     await fillSetup(user)
 
     await user.click(screen.getByRole("button", { name: "Create instance" }))
@@ -586,8 +610,8 @@ describe("the create wizard's setup step", () => {
         })
       },
     })
-    const { user } = await openWizard(caller)
-    await nameIt(user)
+    const { user } = await openOnboarding(caller)
+    await toSetup(user)
     await fillSetup(user)
     const email = screen.getByLabelText(/Commit email/)
     const repository = screen.getByLabelText(/Repository/)
@@ -663,23 +687,23 @@ describe("the create wizard's setup step", () => {
       },
       "operation.get": ({ operation_id }) => (operation_id === "op-1" ? prepared : validateFailed),
     })
-    const { user } = await openWizard(caller)
-    await nameIt(user)
+    const { user } = await openOnboarding(caller)
+    await toSetup(user)
     await fillSetup(user)
 
     await user.click(screen.getByRole("button", { name: "Create instance" }))
     await user.click(await screen.findByRole("button", { name: "Back to setup" }))
 
     expect((await screen.findByLabelText("Search token")).getAttribute("type")).toBe("password")
-    await user.click(screen.getByRole("button", { name: "Back" }))
-    await user.click(screen.getByRole("button", { name: "Back" }))
+    for (const _ of ["prompt", "skills", "identity", "role", "image"]) {
+      await user.click(screen.getByRole("button", { name: "Back" }))
+    }
     const asked = within(screen.getByRole("list", { name: "Setup fields" }))
     expect(asked.getByRole("listitem", { name: "Search token" })).toBeDefined()
     expect(screen.getByRole("button", { name: "Prepare the image" }).hasAttribute("disabled")).toBe(
       true,
     )
-    await user.click(screen.getByRole("button", { name: "Continue" }))
-    await user.click(screen.getByRole("button", { name: "Continue" }))
+    for (const _ of ["role", "identity", "skills", "prompt", "setup"]) await next(user)
 
     await user.click(screen.getByRole("button", { name: "Create instance" }))
 
@@ -699,7 +723,297 @@ describe("the create wizard's setup step", () => {
   })
 })
 
-describe("the create wizard's start step", () => {
+/** The `coder` role's suggested picks in the shipped `software` factory. */
+const SUGGESTED = [
+  "adversarial-review",
+  "api-and-interface-design",
+  "codebase-design",
+  "no-comments",
+  "ponytail",
+  "pr",
+  "tdd",
+  "unslop",
+]
+
+const [modelField, apiKeyField] = vanilla.setup_fields
+
+/** What the coder asks for: the built-in fields, a repository and a GitHub token, its prompt. */
+const coder: DeclaredSetup = {
+  setup_fields: [
+    ...(modelField && apiKeyField ? [modelField, apiKeyField] : []),
+    {
+      name: "repository",
+      label: "Repository",
+      description: "The repository the coder works in.",
+      kind: "config",
+      type: "url",
+      required: true,
+    },
+    {
+      name: "GH_TOKEN",
+      label: "GitHub token",
+      description: "Opens pull requests.",
+      kind: "secret",
+      type: "text",
+      required: true,
+    },
+    {
+      name: "behavior_prompt",
+      label: "Behavior prompt",
+      description: "Instructions the instance follows in every turn.",
+      kind: "config",
+      type: "multiline",
+      required: false,
+      default: "You implement tickets.\n",
+    },
+  ],
+}
+
+function skill(name: string): LibraryEntry {
+  return { kind: "skill", name, description: `The ${name} skill.`, source: "shipped" }
+}
+
+/** A hub whose library holds the `software` factory, its suggested picks and one more skill. */
+function softwareHub(answers: Answers = {}) {
+  return hub({
+    "factory.list": () => ({ factories: [{ name: "software", source: "shipped" }] }),
+    "factory.describe": () => ({ instances: { coder }, suggested_picks: { coder: SUGGESTED } }),
+    "library.list": () => ({
+      entries: [
+        { kind: "factory", name: "software", description: null, source: "shipped" },
+        ...[...SUGGESTED, "house-style"].map(skill),
+      ],
+    }),
+    ...answers,
+  })
+}
+
+async function pickCoder(user: UserEvent) {
+  await user.click(await screen.findByRole("combobox", { name: "Factory role" }))
+  await user.click(await screen.findByRole("option", { name: "coder in software" }))
+  await next(user)
+}
+
+async function fillCoderSetup(user: UserEvent) {
+  await user.type(screen.getByLabelText("Model"), "anthropic:claude-sonnet-5")
+  await user.type(screen.getByLabelText("API key"), "sk-ant")
+  await user.type(screen.getByLabelText("Repository"), "https://github.com/owner/billing.git")
+  await user.type(screen.getByLabelText("GitHub token"), "ghp-test")
+}
+
+const sent = (caller: StubCaller) =>
+  caller.calls.filter((call) => call.method === "instance.create").map((call) => call.params)
+
+const ticked = (name: string) =>
+  screen.getByRole("checkbox", { name }).getAttribute("aria-checked") === "true"
+
+describe("the onboarding's role, skills and prompt steps", () => {
+  it("creates a vanilla instance with no role, the skills ticked and the prompt written", async () => {
+    const caller = hub({ "library.list": () => ({ entries: [skill("pr"), skill("tdd")] }) })
+    const { user } = await openOnboarding(caller)
+    await next(user)
+    await user.type(screen.getByLabelText("Name"), "Ada")
+    await next(user)
+
+    expect([ticked("pr"), ticked("tdd")]).toEqual([false, false])
+    await user.click(await screen.findByRole("checkbox", { name: "tdd" }))
+    await next(user)
+    const prompt = screen.getByLabelText("Behavior prompt") as HTMLTextAreaElement
+    expect(prompt.value).toBe("You are a personal AI teammate.\n")
+    await user.clear(prompt)
+    await user.type(prompt, "Answer in haiku.")
+    await next(user)
+    await fillSetup(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(sent(caller)).toEqual([
+      {
+        manifest_id: "Ada",
+        persona_name: "Ada",
+        model: "openai:gpt-5",
+        config: { behavior_prompt: "Answer in haiku." },
+        secrets: { api_key: "sk-private" },
+        avatar: { shape: "circle", color: "blue" },
+        picks: ["tdd"],
+      },
+    ])
+  })
+
+  it("preselects the coder's suggested picks and asks for its setup fields", async () => {
+    const { user } = await openOnboarding(softwareHub())
+    await pickCoder(user)
+    await next(user)
+
+    await screen.findByRole("checkbox", { name: "tdd" })
+    expect(SUGGESTED.filter(ticked)).toEqual(SUGGESTED)
+    expect(ticked("house-style")).toBe(false)
+    await next(user)
+    await next(user)
+    const configuration = within(screen.getByRole("group", { name: "Configuration" }))
+    const secrets = within(screen.getByRole("group", { name: "Secrets" }))
+    expect(configuration.getByLabelText("Repository")).toBeDefined()
+    expect(secrets.getByLabelText("GitHub token").getAttribute("type")).toBe("password")
+  })
+
+  it("creates a coder without a suggested pick the user unticked", async () => {
+    const caller = softwareHub()
+    const { user } = await openOnboarding(caller)
+    await pickCoder(user)
+    await next(user)
+
+    await user.click(await screen.findByRole("checkbox", { name: "tdd" }))
+    await next(user)
+    await next(user)
+    await fillCoderSetup(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(sent(caller)).toEqual([
+      {
+        manifest_id: "software-coder",
+        persona_name: "software-coder",
+        factory_role: { factory: "software", name: "coder" },
+        model: "anthropic:claude-sonnet-5",
+        config: {
+          repository: "https://github.com/owner/billing.git",
+          behavior_prompt: "You implement tickets.\n",
+        },
+        secrets: { api_key: "sk-ant", GH_TOKEN: "ghp-test" },
+        avatar: { shape: "circle", color: "blue" },
+        picks: SUGGESTED.filter((name) => name !== "tdd"),
+      },
+    ])
+  })
+
+  it("starts the prompt from the role's, and creates the coder with the edited text", async () => {
+    const caller = softwareHub()
+    const { user } = await openOnboarding(caller)
+    await pickCoder(user)
+    await next(user)
+    await next(user)
+
+    const prompt = screen.getByLabelText("Behavior prompt") as HTMLTextAreaElement
+    expect(prompt.value).toBe("You implement tickets.\n")
+    await user.type(prompt, "Keep each pull request small.")
+    await next(user)
+    await fillCoderSetup(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(sent(caller)[0]).toMatchObject({
+      config: { behavior_prompt: "You implement tickets.\nKeep each pull request small." },
+    })
+  })
+
+  it("proposes the factory and the role as the name, and takes another", async () => {
+    const caller = softwareHub()
+    const { user } = await openOnboarding(caller)
+    await pickCoder(user)
+
+    const name = screen.getByLabelText("Name") as HTMLInputElement
+    expect(name.value).toBe("software-coder")
+    await user.clear(name)
+    await user.type(name, "billing-coder")
+    await next(user)
+    await next(user)
+    await next(user)
+    await fillCoderSetup(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(sent(caller)[0]).toMatchObject({
+      manifest_id: "billing-coder",
+      persona_name: "billing-coder",
+    })
+  })
+
+  it("asks for the fields of a role edited since it was picked, once the hub refuses", async () => {
+    const token = {
+      name: "CLAUDE_CODE_OAUTH_TOKEN",
+      label: "Claude Code token",
+      description: "Signs Claude Code in.",
+      kind: "secret" as const,
+      type: "text" as const,
+      required: true,
+    }
+    let describes = 0
+    let creates = 0
+    const caller = softwareHub({
+      "factory.describe": () => {
+        describes += 1
+        const setup = describes === 1 ? coder : { setup_fields: [...coder.setup_fields, token] }
+        return { instances: { coder: setup }, suggested_picks: { coder: SUGGESTED } }
+      },
+      "instance.create": () => {
+        creates += 1
+        if (creates === 1) {
+          throw new CallError({
+            code: "INVALID_SETUP",
+            message: "Some setup values are missing or invalid.",
+            retryable: false,
+            fields: { CLAUDE_CODE_OAUTH_TOKEN: "Claude Code token is required." },
+          })
+        }
+        return { operation_id: "op-create", instance_id: "instance-2" }
+      },
+    })
+    const { user } = await openOnboarding(caller)
+    await pickCoder(user)
+    for (const _ of ["identity", "skills", "prompt"]) await next(user)
+    await fillCoderSetup(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    const refused = await screen.findByLabelText("Claude Code token")
+    expect(refused.getAttribute("aria-invalid")).toBe("true")
+    await user.type(refused, "claude-token")
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(sent(caller)[1]).toMatchObject({
+      secrets: { api_key: "sk-ant", GH_TOKEN: "ghp-test", CLAUDE_CODE_OAUTH_TOKEN: "claude-token" },
+    })
+  })
+
+  it("creates a second coder on software once it has a name of its own", async () => {
+    let creates = 0
+    const caller = softwareHub({
+      "instance.create": () => {
+        creates += 1
+        if (creates === 1) {
+          throw new CallError({
+            code: "INVALID_SETUP",
+            message: "Some setup values are missing or invalid.",
+            retryable: false,
+            fields: { manifest_id: 'An instance named "software-coder" exists already.' },
+          })
+        }
+        return { operation_id: "op-create", instance_id: "instance-2" }
+      },
+    })
+    const { user } = await openOnboarding(caller)
+    await pickCoder(user)
+    await next(user)
+    await next(user)
+    await next(user)
+    await fillCoderSetup(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(
+      await screen.findByText('An instance named "software-coder" exists already.'),
+    ).toBeDefined()
+    for (const _ of ["prompt", "skills", "identity"]) {
+      await user.click(screen.getByRole("button", { name: "Back" }))
+    }
+    await user.clear(screen.getByLabelText("Name"))
+    await user.type(screen.getByLabelText("Name"), "billing-coder")
+    for (const _ of ["identity", "skills", "prompt"]) await next(user)
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(sent(caller)).toMatchObject([
+      { manifest_id: "software-coder" },
+      { manifest_id: "billing-coder" },
+    ])
+    expect(await screen.findByRole("list", { name: "Creation steps" })).toBeDefined()
+  })
+})
+
+describe("the onboarding's start step", () => {
   const published = operationAnswer({
     operation_id: "op-create",
     instance_id: "instance-1",
@@ -711,8 +1025,8 @@ describe("the create wizard's start step", () => {
   beforeEach(() => window.history.replaceState(null, "", "/new"))
 
   async function createdAda(caller: StubCaller, onPublished = () => {}) {
-    const { user, clock } = await openWizard(caller, onPublished)
-    await nameIt(user)
+    const { user, clock } = await openOnboarding(caller, onPublished)
+    await toSetup(user)
     await fillSetup(user)
     await user.click(screen.getByRole("button", { name: "Create instance" }))
     await act(() => clock.advance(0))
@@ -812,7 +1126,7 @@ describe("the create wizard's start step", () => {
   })
 })
 
-describe("the create wizard's sign in step", () => {
+describe("the onboarding's sign in step", () => {
   const published = operationAnswer({
     operation_id: "op-create",
     instance_id: "instance-1",
@@ -855,8 +1169,8 @@ describe("the create wizard's sign in step", () => {
   }
 
   async function created(caller: StubCaller) {
-    const { user, clock } = await openWizard(caller)
-    await nameIt(user)
+    const { user, clock } = await openOnboarding(caller)
+    await toSetup(user)
     await fillSetup(user)
     await user.click(screen.getByRole("button", { name: "Create instance" }))
     await act(() => clock.advance(0))

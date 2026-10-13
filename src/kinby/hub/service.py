@@ -23,9 +23,7 @@ from kinby.contracts import (
     FACTORY_DESCRIBE,
     FACTORY_EDIT,
     FACTORY_GET,
-    FACTORY_INSTALL,
     FACTORY_LIST,
-    FACTORY_REMOVE,
     FACTORY_RUN_APPROVE,
     FACTORY_RUN_CANCEL,
     FACTORY_RUN_GET,
@@ -70,12 +68,7 @@ from kinby.contracts import (
     ControlToken,
     DeclaredSetup,
     DrainState,
-    FactoryInstallCommand,
-    FactoryInstallResult,
-    FactoryInstanceSetup,
     FactoryName,
-    FactoryRemoveCommand,
-    FactoryRemoveResult,
     FactoryRole,
     ImageDescribeCommand,
     ImagePrepareCommand,
@@ -136,7 +129,6 @@ from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import (
     AdoptionBlocked,
     FactoryCheckFailed,
-    FactoryHasInstances,
     FactoryNotFound,
     ImageNotPrepared,
     InvalidSetup,
@@ -323,30 +315,12 @@ def _member(factory: FactoryName, template: InstanceTemplate) -> FactoryMember:
     )
 
 
-def _install_errors(
-    templates: tuple[InstanceTemplate, ...],
-    instances: Mapping[str, FactoryInstanceSetup],
-) -> dict[str, str]:
-    """What is wrong with the setup values of each instance, as `<instance>.<field>`."""
-    declared = {template.name for template in templates}
-    errors = {
-        name: "The factory declares no instance by this name."
-        for name in instances
-        if name not in declared
-    }
-    for template in templates:
-        values = instances.get(template.name)
-        if values is None:
-            errors[template.name] = "Send this instance's setup values."
-            continue
-        found = setup_errors(
-            template.setup,
-            model=values.model,
-            config=values.config,
-            secrets={name: value.get_secret_value() for name, value in values.secrets.items()},
-        )
-        errors.update({f"{template.name}.{name}": message for name, message in found.items()})
-    return errors
+def _write_behavior_prompt(staging: Path, configured: Mapping[str, SetupValue]) -> None:
+    """Write the behavior prompt the creation resolved. A template's baseline keeps the hash of
+    its own, so an instance update keeps one the user changed."""
+    behavior_prompt = configured.get(BEHAVIOR_PROMPT_FIELD.name)
+    if isinstance(behavior_prompt, str):
+        (staging / SYSTEM_NAME).write_text(behavior_prompt, encoding="utf-8")
 
 
 def _instance_mount(storage: tuple[StorageItem, ...]) -> StorageItem | None:
@@ -473,8 +447,6 @@ class Hub:
             self.dispatcher.register(FACTORY_CHECK, self.factories.check)
             self.dispatcher.register(FACTORY_EDIT, self.factories.edit)
             self.dispatcher.register(FACTORY_DESCRIBE, self.factories.describe)
-            self.dispatcher.register(FACTORY_INSTALL, self.install_factory)
-            self.dispatcher.register(FACTORY_REMOVE, self.remove_factory)
             self.dispatcher.register(FACTORY_RUN_LIST, self.runs.list)
             self.dispatcher.register(FACTORY_RUN_GET, self.runs.get)
             self.dispatcher.register(FACTORY_RUN_RETRY, self.runs.retry)
@@ -578,51 +550,6 @@ class Hub:
             factory=member,
         )
         return self._begin_create(record, command.model, command.config, secrets, template, picks)
-
-    async def install_factory(self, command: FactoryInstallCommand) -> FactoryInstallResult:
-        """Create each of the factory's instances from its template, once the check passes.
-
-        The setup values of every instance check out before any of them is created.
-        """
-        templates = await self.factories.templates(command.name)
-        errors = _install_errors(templates, command.instances)
-        if errors:
-            raise InvalidSetup(errors)
-        if any(self._held(record) for record in self.registry.factory_members(command.name)):
-            raise FactoryHasInstances(
-                f'Factory "{command.name}" is installed already. Remove it before installing it.'
-            )
-        creations: dict[str, LifecycleOperationResult] = {}
-        for template in templates:
-            values = command.instances[template.name]
-            record = self._new_record(
-                f"{command.name}-{template.name}", factory=_member(command.name, template)
-            )
-            creations[template.name] = self._begin_create(
-                record,
-                values.model,
-                values.config,
-                {name: value.get_secret_value() for name, value in values.secrets.items()},
-                template,
-            )
-        return FactoryInstallResult(instances=creations)
-
-    async def remove_factory(self, command: FactoryRemoveCommand) -> FactoryRemoveResult:
-        """Refuse while an instance holds one of the factory's roles, and name each of them.
-
-        Removing an instance is the only removal that touches one (ADR 0090).
-        """
-        holders = [
-            record.manifest_id
-            for record in self.registry.factory_members(command.name)
-            if self._held(record)
-        ]
-        if holders:
-            raise FactoryHasInstances(
-                f'Factory "{command.name}" has instances {", ".join(holders)}. '
-                "Remove them before removing the factory."
-            )
-        return FactoryRemoveResult()
 
     def _held(self, record: ManagedInstance) -> bool:
         """Whether the hub lists the instance, or an operation is still at work on it."""
@@ -794,9 +721,7 @@ class Hub:
         model = str(configured[MODEL_FIELD.name])
         init_instance(staging, model=model)
         self._write_configuration(staging, record.manifest_id, record.persona_name)
-        behavior_prompt = configured.get(BEHAVIOR_PROMPT_FIELD.name)
-        if isinstance(behavior_prompt, str):
-            (staging / SYSTEM_NAME).write_text(behavior_prompt, encoding="utf-8")
+        _write_behavior_prompt(staging, configured)
         self._write_secrets(staging / ".env", self._instance_secrets(model, secrets))
         inspect_instance(staging)
         return description
@@ -811,7 +736,7 @@ class Hub:
         config: Mapping[str, SetupValue],
         secrets: dict[str, str],
     ) -> DeclaredSetup:
-        """Write a factory's instance from its template, whose setup the install checked."""
+        """Write a factory's instance from its template, whose setup the creation checked."""
         self._record(
             operation_id,
             "initialize",
@@ -826,6 +751,7 @@ class Hub:
             settings=manifest_settings(template.setup, configured),
         )
         self._write_configuration(staging, record.manifest_id, record.persona_name)
+        _write_behavior_prompt(staging, configured)
         self._write_secrets(
             staging / ".env", self._instance_secrets(model, secrets) | self._intake_url(record)
         )
@@ -2139,7 +2065,7 @@ class Hub:
         return ObservedProcess(process, readiness, self._redact(status.detail, secrets))
 
     def _declared_setup(self, record: ManagedInstance) -> DeclaredSetup | None:
-        """What the instance asks for: its template's as installed, or its image's."""
+        """What the instance asks for: its template's as created, or its image's."""
         if record.factory is not None:
             return record.factory.setup
         return self.registry.description()

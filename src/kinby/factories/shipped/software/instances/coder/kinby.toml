@@ -1,7 +1,7 @@
 # The software factory's coder. Secrets live in .env, never here.
 
 [workspace]
-# The repository the factory clones on first start and works in. Installing the factory sets it.
+# The repository the factory clones on first start and works in. Creating the coder sets it.
 # source = "https://github.com/<owner>/<repository>.git"
 
 [workspace.conventions]

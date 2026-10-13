@@ -11,8 +11,11 @@ import pytest
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
+    INSTANCE_CREATE,
     INSTANCE_STATUS,
     INSTANCE_UPDATE,
+    FactoryRole,
+    InstanceCreateCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
     InstanceUpdateCommand,
@@ -22,7 +25,7 @@ from kinby.contracts import (
     SecretSetup,
 )
 from kinby.hub import BuiltImage, ImageSelection
-from tests.test_factory_install import FILES, WITH_SETUP, install_hub, installed
+from tests.test_factory_templates import FILES, WITH_SETUP, created_roles, factory_hub
 from tests.test_hub import FakeImages, FakeRuntime, finished_operation, hub_client
 from tests.test_hub_notices import (
     CODER_BEHIND,
@@ -56,8 +59,8 @@ def _directory(tmp_path: Path, instance_id: UUID) -> Path:
     return tmp_path / "hub" / "instances" / str(instance_id)
 
 
-async def _installed_coder(client: ContractClient) -> UUID:
-    return (await installed(client)).instances["coder"].instance_id
+async def _created_coder(client: ContractClient) -> UUID:
+    return (await created_roles(client))["coder"]
 
 
 async def _update(client: ContractClient, instance_id: UUID) -> OperationGetResult:
@@ -76,8 +79,8 @@ def _template_step(outcome: OperationGetResult) -> str:
 
 def test_an_update_writes_a_file_the_factory_changed_and_clears_the_notice(tmp_path):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path))
+        coder = await _created_coder(client)
         await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues well.\n"})
 
         outcome = await _update(client, coder)
@@ -93,8 +96,8 @@ def test_an_update_writes_a_file_the_factory_changed_and_clears_the_notice(tmp_p
 
 def test_an_update_writes_the_template_while_the_container_is_down(tmp_path):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path))
+        coder = await _created_coder(client)
         await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues well.\n"})
 
         outcome = await _update(client, coder)
@@ -109,8 +112,8 @@ def test_an_update_removes_a_file_the_factory_dropped_and_leaves_the_instances_o
     async def scenario() -> None:
         # A skill the library does not hold, which an update would make a pick instead.
         files = FILES | {"instances/coder/skills/house-style/SKILL.md": HOUSE_STYLE}
-        client = hub_client(install_hub(tmp_path, files))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path, files))
+        coder = await _created_coder(client)
         own = _directory(tmp_path, coder) / "skills" / "mine" / "SKILL.md"
         own.parent.mkdir(parents=True)
         own.write_text(OWN_SKILL, encoding="utf-8")
@@ -127,8 +130,8 @@ def test_an_update_removes_a_file_the_factory_dropped_and_leaves_the_instances_o
 
 def test_an_update_keeps_a_file_the_instance_changed_and_the_notice_stays(tmp_path):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path))
+        coder = await _created_coder(client)
         system = _directory(tmp_path, coder) / "SYSTEM.md"
         system.write_text("You implement issues my way.\n", encoding="utf-8")
         await _edit(
@@ -150,10 +153,35 @@ def test_an_update_keeps_a_file_the_instance_changed_and_the_notice_stays(tmp_pa
     asyncio.run(scenario())
 
 
+def test_an_update_keeps_the_behavior_prompt_the_creation_was_given(tmp_path):
+    async def scenario() -> None:
+        client = hub_client(factory_hub(tmp_path))
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                factory_role=FactoryRole(factory="tickets", name="coder"),
+                model="openai:gpt-5",
+                config={"behavior_prompt": "You implement issues my way.\n"},
+                secrets={"api_key": "sk-test"},
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult), accepted
+        assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
+        await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues well.\n"})
+
+        outcome = await _update(client, accepted.instance_id)
+
+        assert _template_step(outcome) == "Kept the instance's own SYSTEM.md."
+        system = _directory(tmp_path, accepted.instance_id) / "SYSTEM.md"
+        assert system.read_text(encoding="utf-8") == "You implement issues my way.\n"
+
+    asyncio.run(scenario())
+
+
 def test_an_update_leaves_the_manifest_and_the_secrets_as_they_were(tmp_path):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path))
+        coder = await _created_coder(client)
         directory = _directory(tmp_path, coder)
         manifest = (directory / "kinby.toml").read_bytes()
         secrets = (directory / ".env").read_bytes()
@@ -176,8 +204,8 @@ def test_an_update_leaves_the_manifest_and_the_secrets_as_they_were(tmp_path):
 
 def test_an_instance_from_before_baselines_takes_every_template_file_once(tmp_path):
     async def scenario() -> None:
-        hub = install_hub(tmp_path)
-        coder = await _installed_coder(hub_client(hub))
+        hub = factory_hub(tmp_path)
+        coder = await _created_coder(hub_client(hub))
         hub.close()
         with sqlite3.connect(tmp_path / "hub" / "registry.sqlite") as connection:
             connection.execute("UPDATE factory_members SET baseline = NULL")
@@ -186,7 +214,7 @@ def test_an_instance_from_before_baselines_takes_every_template_file_once(tmp_pa
         own = directory / "skills" / "mine" / "SKILL.md"
         own.parent.mkdir(parents=True)
         own.write_text(OWN_SKILL, encoding="utf-8")
-        client = hub_client(install_hub(tmp_path))
+        client = hub_client(factory_hub(tmp_path))
 
         outcome = await _update(client, coder)
 
@@ -207,8 +235,8 @@ def test_an_instance_from_before_baselines_takes_every_template_file_once(tmp_pa
 def test_an_update_whose_factory_fails_its_check_leaves_the_container_alone(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
-        client = hub_client(install_hub(tmp_path, runtime=runtime))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path, runtime=runtime))
+        coder = await _created_coder(client)
         (_factory(tmp_path) / "factory.yaml").write_text("name: tickets\n", encoding="utf-8")
 
         outcome = await _update(client, coder)
@@ -222,8 +250,8 @@ def test_an_update_whose_factory_fails_its_check_leaves_the_container_alone(tmp_
 
 def test_an_update_stores_the_setup_the_template_asks_for_now(tmp_path):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path))
+        coder = await _created_coder(client)
         await _edit(client, {"factory.yaml": WITH_SETUP["factory.yaml"]})
 
         await _update(client, coder)
@@ -248,8 +276,8 @@ def test_an_update_stores_the_setup_the_template_asks_for_now(tmp_path):
 def test_an_update_never_writes_the_instances_memory(tmp_path):
     async def scenario() -> None:
         files = FILES | {"instances/coder/memory/profile.md": "Works on tickets.\n"}
-        client = hub_client(install_hub(tmp_path, files))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path, files))
+        coder = await _created_coder(client)
         await _edit(client, {"instances/coder/memory/profile.md": "Works on issues.\n"})
 
         outcome = await _update(client, coder)
@@ -264,8 +292,8 @@ def test_an_update_never_writes_the_instances_memory(tmp_path):
 def test_an_update_keeps_a_file_the_instance_changed_while_the_update_waited(tmp_path):
     async def scenario() -> None:
         images = EditingImages()
-        client = hub_client(install_hub(tmp_path, images=images))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path, images=images))
+        coder = await _created_coder(client)
         system = _directory(tmp_path, coder) / "SYSTEM.md"
         await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues well.\n"})
         images.during_build = lambda: system.write_text("Edited meanwhile.\n", encoding="utf-8")
@@ -294,8 +322,8 @@ def _link_folder(directory: Path, outside: Path) -> str:
 @pytest.mark.parametrize("link", [_link_file, _link_folder], ids=["file", "folder"])
 def test_an_update_never_writes_through_a_link_the_instance_made(tmp_path, link):
     async def scenario() -> None:
-        hub = install_hub(tmp_path)
-        coder = await _installed_coder(hub_client(hub))
+        hub = factory_hub(tmp_path)
+        coder = await _created_coder(hub_client(hub))
         hub.close()
         with sqlite3.connect(tmp_path / "hub" / "registry.sqlite") as connection:
             connection.execute("UPDATE factory_members SET baseline = NULL")
@@ -303,7 +331,7 @@ def test_an_update_never_writes_through_a_link_the_instance_made(tmp_path, link)
         outside.mkdir()
         linked = link(_directory(tmp_path, coder), outside)
         before = {path: path.read_bytes() for path in outside.rglob("*")}
-        client = hub_client(install_hub(tmp_path))
+        client = hub_client(factory_hub(tmp_path))
         await _edit(
             client,
             {
@@ -322,8 +350,8 @@ def test_an_update_never_writes_through_a_link_the_instance_made(tmp_path, link)
 
 def test_an_update_moves_a_file_the_template_turned_into_a_folder(tmp_path):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path, FILES | {"instances/coder/notes": "Notes.\n"}))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path, FILES | {"instances/coder/notes": "Notes.\n"}))
+        coder = await _created_coder(client)
         template = _factory(tmp_path) / "instances" / "coder"
         (template / "notes").unlink()
         (template / "notes").mkdir()
@@ -341,8 +369,8 @@ def test_an_update_moves_a_file_the_template_turned_into_a_folder(tmp_path):
 def test_an_update_moves_a_folder_the_template_turned_into_a_file(tmp_path):
     async def scenario() -> None:
         files = FILES | {"instances/coder/notes/today.md": "Today.\n"}
-        client = hub_client(install_hub(tmp_path, files))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path, files))
+        coder = await _created_coder(client)
         template = _factory(tmp_path) / "instances" / "coder"
         shutil.rmtree(template / "notes")
         (template / "notes").write_text("Notes.\n", encoding="utf-8")
@@ -359,8 +387,8 @@ def test_an_update_moves_a_folder_the_template_turned_into_a_file(tmp_path):
 def test_an_update_keeps_a_folder_of_the_instances_own_where_the_template_wants_a_file(tmp_path):
     async def scenario() -> None:
         files = FILES | {"instances/coder/notes/today.md": "Today.\n"}
-        client = hub_client(install_hub(tmp_path, files))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path, files))
+        coder = await _created_coder(client)
         mine = _directory(tmp_path, coder) / "notes" / "mine.md"
         mine.write_text("Mine.\n", encoding="utf-8")
         template = _factory(tmp_path) / "instances" / "coder"
@@ -379,8 +407,8 @@ def test_an_update_keeps_a_folder_where_the_template_dropped_its_file_and_the_no
     tmp_path,
 ):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path, FILES | {"instances/coder/notes": "Notes.\n"}))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path, FILES | {"instances/coder/notes": "Notes.\n"}))
+        coder = await _created_coder(client)
         notes = _directory(tmp_path, coder) / "notes"
         notes.unlink()
         notes.mkdir()
@@ -398,8 +426,8 @@ def test_an_update_keeps_a_folder_where_the_template_dropped_its_file_and_the_no
 
 def test_an_update_keeps_a_link_where_the_template_dropped_its_file(tmp_path):
     async def scenario() -> None:
-        client = hub_client(install_hub(tmp_path))
-        coder = await _installed_coder(client)
+        client = hub_client(factory_hub(tmp_path))
+        coder = await _created_coder(client)
         outside = tmp_path / "outside"
         outside.mkdir()
         system = _directory(tmp_path, coder) / "SYSTEM.md"

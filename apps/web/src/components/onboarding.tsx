@@ -5,17 +5,22 @@ import type {
   Client,
   Clock,
   DeclaredSetup,
+  FactoryRole,
   InstanceCreateCommand,
   SetupField,
   SubscriptionLogin,
 } from "@kinby/contract"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { CircleXIcon } from "lucide-react"
+import { useCallback, useEffect, useId, useRef, useState } from "react"
 
+import { Failure } from "@/components/config-alerts"
 import { InstanceAvatar } from "@/components/instance-avatar"
 import { Progress } from "@/components/operation-progress"
 import { SubscriptionLogins } from "@/components/subscription-logins"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Field,
   FieldContent,
@@ -43,11 +48,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useFollowing } from "@/hooks/use-following"
+import { useRead } from "@/hooks/use-read"
 import {
   type Creation,
   createCommand,
@@ -56,6 +63,10 @@ import {
   followStart,
   type Identity,
   initialInput,
+  offeredRoles,
+  PROMPT_FIELD,
+  proposedName,
+  type RoleOffer,
   type Starting,
 } from "@/lib/creation"
 import { followPreparation, type Preparation } from "@/lib/preparation"
@@ -81,12 +92,15 @@ const NEW_IDENTITY: Identity = { name: "", avatar: { shape: "circle", color: "bl
 
 const CREATING: Creation = { state: "creating", steps: [] }
 
-type Stage = "image" | "identity" | "setup"
+type Stage = "image" | "role" | "identity" | "skills" | "prompt" | "setup"
 
 const HINTS: Record<Stage | "create", string> = {
   image: "Image: prepare the image the instance runs on.",
+  role: "Factory role: pick the part the instance plays in a factory, or none.",
   identity: "Identity: name the instance and pick its avatar.",
-  setup: "Setup: fill in what the image asks for.",
+  skills: "Skills: pick the library skills the instance starts with.",
+  prompt: "Prompt: write the instructions the instance follows in every turn.",
+  setup: "Setup: fill in what the image or the role asks for.",
   create:
     "Create: the hub builds the instance. Sign in to what it declares, then start it or leave " +
     "it stopped.",
@@ -95,11 +109,12 @@ const HINTS: Record<Stage | "create", string> = {
 const noop = () => {}
 
 /**
- * Create an instance: prepare its image, name it, fill in its setup fields, create it, then start it.
- * `onPublished` lists the instances again. The wizard waits for the list that follows a start
- * before it opens the instance, so the page reads that instance as running.
+ * The onboarding: prepare the image, pick a factory role or none, name the instance, pick its
+ * skills, write its prompt, fill in its setup fields, create it, then start it. `onPublished`
+ * lists the instances again. It waits for the list that follows a start before it opens the
+ * instance, so the page reads that instance as running.
  */
-export function CreateWizard({
+export function Onboarding({
   caller,
   clock = browserClock,
   onPublished = noop,
@@ -111,6 +126,8 @@ export function CreateWizard({
   // Each click on Prepare counts, so preparing again after a failure follows a new preparation.
   const [attempt, setAttempt] = useState<number>()
   const [stage, setStage] = useState<Stage>("image")
+  const [offer, setOffer] = useState<RoleOffer>()
+  const [skills, setSkills] = useState<string[]>([])
   const [identity, setIdentity] = useState(NEW_IDENTITY)
   const [values, setValues] = useState<Record<string, FieldInput>>({})
   const [submitted, setSubmitted] = useState<InstanceCreateCommand>()
@@ -142,15 +159,29 @@ export function CreateWizard({
 
   const preparedDescription =
     preparation?.state === "prepared" ? preparation.description : undefined
-  const description = declared ?? preparedDescription
+  const description = offer?.setup ?? declared ?? preparedDescription
   // A rebuilt image stores a new descriptor, then validate fails. Preparation still holds the
-  // fields the user was shown, and Prepare stays disabled, so read the stored descriptor.
+  // fields the user was shown, and Prepare stays disabled, so read the stored descriptor. A role
+  // edited since it was picked is refused the same way, so read its template's again.
   useEffect(() => {
     if (submitted === undefined || !setupWasRefused(creation)) return
     const request = ++declarationRead.current
-    void caller.call("image.describe", {}).then(
-      (next) => {
-        if (request === declarationRead.current) setDeclared(next)
+    const role = submitted.factory_role
+    const reread =
+      role == null
+        ? caller.call("image.describe", {}).then((next) => () => setDeclared(next))
+        : caller.call("factory.describe", { name: role.factory }).then(({ instances }) => () => {
+            const setup = instances[role.name]
+            if (setup === undefined) return
+            setOffer((current) =>
+              current !== undefined && roleKey(current.role) === roleKey(role)
+                ? { ...current, setup }
+                : current,
+            )
+          })
+    void reread.then(
+      (store) => {
+        if (request === declarationRead.current) store()
       },
       // Keep the fields already on the form if the hub cannot be read.
       () => {},
@@ -159,6 +190,20 @@ export function CreateWizard({
   // A refused value sends the user back to the form, with each refusal on its field.
   const refused = creation?.state === "invalid" ? creation.fields : {}
   const creating = creation !== undefined && creation.state !== "invalid"
+
+  // Another role brings its own suggested picks, prompt and fields, and its name if the user
+  // kept the one proposed.
+  const pickRole = (next: RoleOffer | undefined) => {
+    setIdentity((current) =>
+      current.name === proposedName(offer?.role)
+        ? { ...current, name: proposedName(next?.role) }
+        : current,
+    )
+    setOffer(next)
+    setSkills(next?.suggestedPicks ?? [])
+    setValues({})
+  }
+  const promptField = description?.setup_fields.find((field) => field.name === PROMPT_FIELD)
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -178,19 +223,52 @@ export function CreateWizard({
         />
       ) : stage === "setup" && description !== undefined ? (
         <SetupStep
-          fields={description.setup_fields}
+          fields={description.setup_fields.filter((field) => field.name !== PROMPT_FIELD)}
           values={values}
           errors={refused}
           onChange={(name, value) => setValues((current) => ({ ...current, [name]: value }))}
+          onBack={() => setStage("prompt")}
+          onCreate={() =>
+            setSubmitted(
+              createCommand(description.setup_fields, values, identity, {
+                role: offer?.role,
+                skills,
+              }),
+            )
+          }
+        />
+      ) : stage === "prompt" ? (
+        <PromptStep
+          field={promptField}
+          value={values[PROMPT_FIELD]}
+          onChange={(value) => setValues((current) => ({ ...current, [PROMPT_FIELD]: value }))}
+          onBack={() => setStage("skills")}
+          onContinue={() => setStage("setup")}
+        />
+      ) : stage === "skills" ? (
+        <SkillsStep
+          caller={caller}
+          clock={clock}
+          picked={skills}
+          onChange={setSkills}
           onBack={() => setStage("identity")}
-          onCreate={() => setSubmitted(createCommand(description.setup_fields, values, identity))}
+          onContinue={() => setStage("prompt")}
         />
       ) : stage === "identity" ? (
         <IdentityStep
           identity={identity}
           onChange={setIdentity}
+          onBack={() => setStage("role")}
+          onContinue={() => setStage("skills")}
+        />
+      ) : stage === "role" ? (
+        <RoleStep
+          caller={caller}
+          clock={clock}
+          offer={offer}
+          onPick={pickRole}
           onBack={() => setStage("image")}
-          onContinue={() => setStage("setup")}
+          onContinue={() => setStage("identity")}
         />
       ) : (
         <ImageStep
@@ -203,7 +281,7 @@ export function CreateWizard({
             setDeclared(undefined)
             setAttempt((count) => (count ?? 0) + 1)
           }}
-          onContinue={() => setStage("identity")}
+          onContinue={() => setStage("role")}
         />
       )}
     </div>
@@ -343,6 +421,175 @@ function isColor(value: unknown): value is AvatarColor {
   return typeof value === "string" && Object.hasOwn(COLORS, value)
 }
 
+const NO_ROLE = "none"
+
+const roleKey = ({ factory, name }: FactoryRole) => `${factory}/${name}`
+
+/** Pick one role of a factory in the library, or none for a vanilla instance. */
+function RoleStep({
+  caller,
+  clock,
+  offer,
+  onPick,
+  onBack,
+  onContinue,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  offer: RoleOffer | undefined
+  onPick: (offer: RoleOffer | undefined) => void
+  onBack: () => void
+  onContinue: () => void
+}) {
+  const id = useId()
+  const read = useCallback(() => offeredRoles(caller), [caller])
+  const { value: offers = [], failure } = useRead(read, clock)
+  const items = [
+    { value: NO_ROLE, label: "None: a vanilla instance" },
+    ...offers.map(({ role }) => ({
+      value: roleKey(role),
+      label: `${role.name} in ${role.factory}`,
+    })),
+  ]
+  return (
+    <section className="flex max-w-md flex-col gap-6">
+      {failure !== undefined && <Failure error={failure} />}
+      <Field>
+        <FieldLabel htmlFor={id}>Factory role</FieldLabel>
+        <Select
+          items={items}
+          value={offer === undefined ? NO_ROLE : roleKey(offer.role)}
+          onValueChange={(picked) => onPick(offers.find(({ role }) => roleKey(role) === picked))}
+        >
+          <SelectTrigger id={id}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {items.map(({ value, label }) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <FieldDescription>
+          A role brings its factory&apos;s hooks, tools, intake and setup fields. The instance keeps
+          it for life.
+        </FieldDescription>
+      </Field>
+      <div className="flex gap-2">
+        <Button variant="outline" onClick={onBack}>
+          Back
+        </Button>
+        <Button onClick={onContinue}>Continue</Button>
+      </div>
+    </section>
+  )
+}
+
+/** Tick the library skills the instance copies in. A role's suggested picks start ticked. */
+function SkillsStep({
+  caller,
+  clock,
+  picked,
+  onChange,
+  onBack,
+  onContinue,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  picked: string[]
+  onChange: (picked: string[]) => void
+  onBack: () => void
+  onContinue: () => void
+}) {
+  const id = useId()
+  const read = useCallback(() => caller.call("library.list", {}), [caller])
+  const { value: listed, failure } = useRead(read, clock)
+  const offered = listed?.entries.filter((entry) => entry.kind === "skill") ?? []
+  return (
+    <section className="flex max-w-xl flex-col gap-6">
+      {failure !== undefined && <Failure error={failure} />}
+      {listed === undefined ? (
+        failure === undefined && <Skeleton className="h-48 w-full" />
+      ) : (
+        <FieldSet>
+          <FieldLegend>Skills</FieldLegend>
+          <FieldDescription>
+            {offered.length === 0
+              ? "The library holds no skill."
+              : "Each one ticked is copied into the instance."}
+          </FieldDescription>
+          <FieldGroup>
+            {offered.map(({ name, description }) => (
+              <Field key={name} orientation="horizontal">
+                <Checkbox
+                  id={`${id}-${name}`}
+                  checked={picked.includes(name)}
+                  onCheckedChange={(on) =>
+                    onChange(on ? [...picked, name] : picked.filter((each) => each !== name))
+                  }
+                />
+                <FieldContent>
+                  <FieldLabel htmlFor={`${id}-${name}`}>{name}</FieldLabel>
+                  {description !== null && <FieldDescription>{description}</FieldDescription>}
+                </FieldContent>
+              </Field>
+            ))}
+          </FieldGroup>
+        </FieldSet>
+      )}
+      <div className="flex gap-2">
+        <Button variant="outline" onClick={onBack}>
+          Back
+        </Button>
+        <Button onClick={onContinue}>Continue</Button>
+      </div>
+    </section>
+  )
+}
+
+/** The behavior prompt, starting from the role's or kinby's default, for the user to edit. */
+function PromptStep({
+  field,
+  value,
+  onChange,
+  onBack,
+  onContinue,
+}: {
+  field: SetupField | undefined
+  value: FieldInput | undefined
+  onChange: (value: string) => void
+  onBack: () => void
+  onContinue: () => void
+}) {
+  const id = useId()
+  const start = field === undefined ? "" : initialInput(field)
+  const text = value ?? start
+  return (
+    <section className="flex max-w-2xl flex-col gap-6">
+      <Field>
+        <FieldLabel htmlFor={id}>Behavior prompt</FieldLabel>
+        <Textarea
+          id={id}
+          className="min-h-72"
+          value={typeof text === "string" ? text : ""}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <FieldDescription>{field?.description}</FieldDescription>
+      </Field>
+      <div className="flex gap-2">
+        <Button variant="outline" onClick={onBack}>
+          Back
+        </Button>
+        <Button onClick={onContinue}>Continue</Button>
+      </div>
+    </section>
+  )
+}
+
 function SetupStep({
   fields,
   values,
@@ -370,8 +617,19 @@ function SetupStep({
           onChange={(value) => onChange(field.name, value)}
         />
       ))
+  // A refusal of no field shown here, such as a name another instance holds.
+  const others = Object.entries(errors)
+    .filter(([name]) => !fields.some((field) => field.name === name))
+    .map(([, message]) => message)
   return (
     <section className="flex max-w-xl flex-col gap-6">
+      {others.length > 0 && (
+        <Alert variant="destructive">
+          <CircleXIcon />
+          <AlertTitle>The hub refused it</AlertTitle>
+          <AlertDescription>{others.join(" ")}</AlertDescription>
+        </Alert>
+      )}
       <FieldGroup>
         <FieldSet>
           <FieldLegend>Configuration</FieldLegend>

@@ -132,8 +132,8 @@ export function openHome(): void {
   navigate("/")
 }
 
-/** Open the create wizard the same way. */
-export function openCreateWizard(): void {
+/** Open the onboarding the same way. */
+export function openOnboarding(): void {
   navigate(CREATE_PATH)
 }
 
@@ -192,7 +192,7 @@ export function useStatsOpen(): boolean {
   return useSyncExternalStore(subscribe, statsOpen)
 }
 
-/** Whether the URL opens the create wizard. */
+/** Whether the URL opens the onboarding. */
 export function useCreating(): boolean {
   return useSyncExternalStore(subscribe, () => window.location.pathname === CREATE_PATH)
 }

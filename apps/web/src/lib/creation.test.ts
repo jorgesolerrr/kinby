@@ -13,6 +13,7 @@ import {
 } from "@/lib/creation"
 
 const identity = { name: "Ada", avatar: { shape: "circle" as const, color: "blue" as const } }
+const vanilla = { role: undefined, skills: [] }
 
 function field(
   declared: Pick<SetupField, "name" | "label" | "type"> & Partial<SetupField>,
@@ -44,6 +45,7 @@ describe("the create command", () => {
       ],
       { model: "openai:gpt-5", api_key: "sk-private", DRAFT_TOKEN: "   " },
       identity,
+      vanilla,
     )
 
     expect(command.secrets).toEqual({ api_key: "sk-private" })
@@ -57,6 +59,7 @@ describe("the create command", () => {
       [model, apiKey, share],
       { model: "openai:gpt-5", api_key: "sk-private" },
       identity,
+      vanilla,
     )
 
     expect(initialInput(share)).toBeUndefined()
@@ -71,6 +74,7 @@ describe("the create command", () => {
       [model, apiKey, share, review],
       { model: "openai:gpt-5", api_key: "sk-private", share: false },
       identity,
+      vanilla,
     )
 
     expect(command.config).toMatchObject({ share: false, review: true })

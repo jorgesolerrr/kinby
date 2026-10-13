@@ -434,10 +434,10 @@ class FactoryRuns:
                 asked, hook = CodeStepRun(call=step.call), None
             case WaitStep() | ApproveStep():
                 return step
-        instance_id = self._installed(run, step.instance)
+        instance_id = self._holder(run, step.instance)
         if instance_id is None:
             return _Refused(
-                step.id, f'Instance "{step.instance}" of factory "{run.factory}" is not installed.'
+                step.id, f'No instance holds role "{step.instance}" of factory "{run.factory}".'
             )
         command = StepRunCommand(
             step=asked,
@@ -448,7 +448,7 @@ class FactoryRuns:
         )
         return instance_id, _QueuedStep(run.run_id, step.id, command)
 
-    def _installed(self, run: FactoryRun, instance: InstanceName) -> UUID | None:
+    def _holder(self, run: FactoryRun, instance: InstanceName) -> UUID | None:
         """The id of the instance that holds role *instance* for the run, or None when none does.
 
         The instance that handed the run in holds its own role for it, and no other instance of
@@ -742,10 +742,10 @@ class FactoryRuns:
 
     def _put_report(self, report: _QueuedReport) -> None:
         factory = report.command.origin.factory
-        instance_id = self._installed(self._existing(report.run_id), report.instance)
+        instance_id = self._holder(self._existing(report.run_id), report.instance)
         if instance_id is None:
             _logger.warning(
-                "Factory run %s needs a human, and instance %s of factory %s is not installed "
+                "Factory run %s needs a human, and no instance holds role %s of factory %s "
                 "to report it.",
                 report.run_id,
                 report.instance,
