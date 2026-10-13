@@ -190,6 +190,7 @@ from kinby.instance import (
     inspect_instance,
 )
 from kinby.instance.layout import SYSTEM_NAME
+from kinby.instance.skills_lock import lock_hash
 from kinby.library import SHIPPED_SKILLS
 from kinby.plugins.intake import INTAKE_URL_VARIABLE
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
@@ -692,7 +693,7 @@ class Hub:
                 )
             if picks:
                 self._record(operation_id, "picks", f"Copying {', '.join(picks)} from the library.")
-                self.library.pick(inspect_instance(staging), picks)
+                self.library.pick(inspect_instance(staging), picks, lock_hash(staging))
             self._record(
                 operation_id, "publish", "Creating the container and listing the instance."
             )

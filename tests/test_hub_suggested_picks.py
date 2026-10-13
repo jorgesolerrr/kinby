@@ -185,12 +185,11 @@ def test_an_update_makes_the_library_skills_an_older_template_supplied_picks(tmp
         lock = _lock(directory)
         assert lock["tdd"]["computedHash"] == skill_hash(directory / "skills" / "tdd")
         assert lock["unslop"]["computedHash"] != skill_hash(directory / "skills" / "unslop")
-        assert picks == InstancePicksResult(
-            picks=[
-                SkillPick(name="tdd", source=LibrarySource.SHIPPED),
-                SkillPick(name="unslop", source=LibrarySource.SHIPPED),
-            ]
-        )
+        assert isinstance(picks, InstancePicksResult)
+        assert picks.picks == [
+            SkillPick(name="tdd", source=LibrarySource.SHIPPED),
+            SkillPick(name="unslop", source=LibrarySource.SHIPPED),
+        ]
 
     asyncio.run(scenario())
 
