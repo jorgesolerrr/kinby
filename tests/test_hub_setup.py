@@ -13,10 +13,12 @@ from kinby.contracts import (
     InstanceSetup,
     InstanceStartCommand,
     InstanceStatusCommand,
+    InstanceStatusResult,
     LifecycleOperationResult,
     LoginSetup,
     LoginState,
     OperationState,
+    RepositoryCommandList,
     SecretSetup,
     SetupField,
     SetupFieldKind,
@@ -67,12 +69,16 @@ def setup_hub(tmp_path, images: FakeImages, runtime: FakeRuntime | None = None) 
     )
 
 
-async def setup_of(hub: Hub, instance_id: UUID) -> InstanceSetup:
+async def status_of(hub: Hub, instance_id: UUID) -> InstanceStatusResult:
     status = await hub_client(hub).call(
         INSTANCE_STATUS, InstanceStatusCommand(instance_id=instance_id)
     )
     assert not isinstance(status, ErrorEnvelope)
-    return status.setup
+    return status
+
+
+async def setup_of(hub: Hub, instance_id: UUID) -> InstanceSetup:
+    return (await status_of(hub, instance_id)).setup
 
 
 def test_a_created_instance_reads_its_logins_pending_and_which_secrets_are_set(tmp_path):
@@ -446,5 +452,38 @@ def test_an_instance_whose_factory_names_no_list_has_no_commands_pending(tmp_pat
 
         assert (await setup_of(hub, coder)).missing_commands == []
         assert await pending_by_instance(hub) == {coder: False}
+
+    asyncio.run(scenario())
+
+
+def test_status_carries_each_list_an_instance_holds_when_its_factory_role_needs_any(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        files = FILES | {"factory.yaml": LISTS_FACTORY}
+        hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, files)
+        coder = await started_coder(hub, runtime)
+        none_held = await status_of(hub, coder)
+        hold_commands(
+            hub.instances_directory / str(coder),
+            'checks = ["uv run ruff check .", "uv run pytest"]\nsetup = []\n',
+        )
+
+        assert none_held.repository_commands == []
+        assert (await status_of(hub, coder)).repository_commands == [
+            RepositoryCommandList(name="checks", commands=["uv run ruff check .", "uv run pytest"]),
+            RepositoryCommandList(name="setup", commands=[]),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_status_carries_no_list_when_the_instances_factory_role_needs_none(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = factory_hub(tmp_path / "hub", FakeControl(), runtime)
+        coder = await started_coder(hub, runtime)
+        hold_commands(hub.instances_directory / str(coder), 'setup = ["uv sync"]\n')
+
+        assert (await status_of(hub, coder)).repository_commands == []
 
     asyncio.run(scenario())
