@@ -188,6 +188,7 @@ class DockerRuntime:
             mounts=mounts,
             network=self._network,
             restart_policy={"Name": "unless-stopped"},
+            init=True,
             healthcheck={
                 "test": ["CMD", "curl", "--fail", f"http://localhost:{spec.port}/health"],
                 "interval": 30_000_000_000,

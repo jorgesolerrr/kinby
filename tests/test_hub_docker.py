@@ -242,6 +242,15 @@ def test_docker_runtime_mounts_the_recorded_storage_and_offloads_creation(tmp_pa
     assert client.containers.options["restart_policy"] == {"Name": "unless-stopped"}
 
 
+def test_an_instance_container_runs_an_init_that_reaps_orphaned_processes():
+    client = FakeDockerClient()
+    runtime = DockerRuntime("hub-id", network="kinby_private", client=cast(DockerClient, client))
+
+    asyncio.run(runtime.create(InstanceSpec(instance_id="abc", image="sha256:selected")))
+
+    assert client.containers.options["init"] is True
+
+
 class FakeInspectionContainer:
     """An inspection container that prints its output and exits, or one Docker cannot start."""
 
