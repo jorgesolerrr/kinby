@@ -1,6 +1,6 @@
 # The playground box
 
-The deployed hub and the coders run on the playground box (netcup, Debian 13), served at `kinby.jorgesolerrr.dev`. Read this before you debug any of them. Paths were checked on the box on 2026-10-12.
+The deployed hub and the coders run on the playground box (netcup, Debian 13), served at `kinby.jorgesolerrr.dev`. Read this before you debug any of them. Paths were checked on the box on 2026-10-13.
 
 ## Reaching it
 
@@ -19,7 +19,8 @@ The deployed hub and the coders run on the playground box (netcup, Debian 13), s
 | Caddy | `kinby-caddy-1` |
 | Instances | One container per instance, named after its hub instance ID, a UUID. Data is in `/home/jorge/kinby-hub/instances/<id>`, mounted at `/instance`. Files there are root-owned. `hub.sh instances` maps each ID to its name. |
 | kinby's coder | The instance `hub.sh instances` lists as `software-coder`, from the shipped `software` factory. Its workspace is `/instance/workspace`, a Docker volume of its own. |
-| CEC-Agent's coder | The instance listed as `cec-agent-coder`, from the hub's `cec-agent` factory in `/home/jorge/kinby-hub/factories/cec-agent`. `deploy/kinby/factory` in `pb-cec/CEC-Agent` builds that factory. |
+| CEC-Agent's coder | The instance listed as `cec-coder`, from the shipped `software` factory. It holds its own repository commands. |
+| PB-CEC-LandingPage's coder | The instance listed as `landing-coder`, from the shipped `software` factory. |
 | CEC-Agent's test services | `cec-agent-test-postgres` and `cec-agent-test-minio`, from `/home/jorge/cec-agent-kinby/compose.yaml` |
 | Hub registry | `/home/jorge/kinby-hub/registry.sqlite`, which is `/hub/registry.sqlite` in the hub |
 | Hub access token | `/home/jorge/kinby-hub/access-token`. Pipe it and never print it. See `.claude/skills/e2e-pass/SKILL.md`. |
