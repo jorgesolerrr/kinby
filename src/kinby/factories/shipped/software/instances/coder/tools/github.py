@@ -43,6 +43,8 @@ _COMMAND_TIMEOUT = 900
 _TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 #: The review apps whose feedback babysitting answers, whatever their association (ADR 0079).
 _TRUSTED_APPS = frozenset({"greptile-apps", "chatgpt-codex-connector"})
+#: The apps whose ticket text the coding client reads, whatever their association (ADR 0094).
+_TICKET_APPS = frozenset({"linear-code"})
 #: The conclusions of a finished check run that leave a pull request merge-ready.
 _PASSED = frozenset({"success", "neutral", "skipped", "stale"})
 #: The conclusions of a failed check run that a coding session can repair.
@@ -90,7 +92,8 @@ class MissingPullRequestBody(RuntimeError):
 
 
 class UntrustedTicket(RuntimeError):
-    """Someone other than the repository's owner, a member or a collaborator wrote ticket text."""
+    """Someone other than the repository's owner, a member, a collaborator or a ticket app wrote
+    ticket text."""
 
 
 class UntrustedFeedback(RuntimeError):
@@ -102,7 +105,7 @@ class Issue:
     number: int
     title: str
     parent: int | None
-    #: Its author, when not the repository's owner, a member or a collaborator.
+    #: Its author, when not the repository's owner, a member, a collaborator or a ticket app.
     untrusted_author: str | None
     labels: frozenset[str]
 
@@ -579,12 +582,16 @@ def _parent(value: dict) -> int | None:
 
 def _untrusted_author(written: dict) -> str | None:
     """Who wrote an issue or a comment, when the repository does not trust them."""
-    return None if written["author_association"] in _TRUSTED else written["user"]["login"]
+    user = written["user"]
+    app = _bot_app(user["login"], user["type"])
+    if written["author_association"] in _TRUSTED or app in _TICKET_APPS:
+        return None
+    return user["login"]
 
 
 def _untrusted_authors(workspace: Path, issue: Issue) -> list[str]:
     """Who wrote the ticket text the coding client reads, the issue and its parent with their
-    comments, without being the repository's owner, a member or a collaborator."""
+    comments, without being the repository's owner, a member, a collaborator or a ticket app."""
     issues = [issue] if issue.parent is None else [issue, _issue(workspace, issue.parent)]
     authors = {found.untrusted_author for found in issues}
     for found in issues:

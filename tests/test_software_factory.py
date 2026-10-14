@@ -1132,7 +1132,7 @@ def issue(
         "html_url": f"https://github.com/owner/project/issues/{number}",
         "state": "open",
         "labels": [{"name": label} for label in labels],
-        "user": {"login": author},
+        "user": {"login": author, "type": "User"},
         "author_association": association,
         "parent_issue_url": (
             None
@@ -1142,8 +1142,12 @@ def issue(
     }
 
 
-def comment(author: str, association: str) -> dict[str, object]:
-    return {"body": "A note.", "user": {"login": author}, "author_association": association}
+def comment(author: str, association: str, kind: str = "User") -> dict[str, object]:
+    return {
+        "body": "A note.",
+        "user": {"login": author, "type": kind},
+        "author_association": association,
+    }
 
 
 def pull_request(
@@ -1247,6 +1251,44 @@ def test_prepare_fails_on_ticket_text_an_untrusted_author_wrote_before_any_branc
             "Ticket text from untrusted authors needs a human: stranger."
         )
         assert git(workspace, "branch", "--show-current") == "main"
+
+    asyncio.run(scenario())
+
+
+def test_prepare_trusts_a_comment_linears_github_app_wrote(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(7, "Add dark mode"), [comment("linear-code[bot]", "NONE", "Bot")])
+    github.answer("repo", "view", output=REPOSITORY)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await prepared(dispatcher, 7)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.values == {"branch": "agent/7-add-dark-mode", "base": "main"}
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("author", "kind"), [("dependabot[bot]", "Bot"), ("linear-code", "User")])
+def test_prepare_fails_on_a_comment_by_another_bot_or_a_user_named_like_linears_app(
+    tmp_path, monkeypatch, author, kind
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(7, "Add dark mode"), [comment(author, "NONE", kind)])
+    github.answer("repo", "view", output=REPOSITORY)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await prepared(dispatcher, 7)
+
+        assert result.ending is StepEnding.FAILED
+        assert result.summary == (
+            'Tool "prepare_branch" failed: UntrustedTicket: '
+            f"Ticket text from untrusted authors needs a human: {author}."
+        )
 
     asyncio.run(scenario())
 
