@@ -1,7 +1,8 @@
 """The hub calls an e2e pass makes, run inside the playground's hub container by `hub.sh`.
 
     hub.py instances                           list the active instances
-    hub.py update <revision> [<instance-id>]   update instances not yet on that revision
+    hub.py update <revision> [<instance-id>]   update instances behind that revision or their
+                                               factory's template
     hub.py secrets <instance-id>               NAME=value lines on stdin, then recreate
     hub.py cancel <run-id>                     end a factory run that is parked or needs a human
 
@@ -40,6 +41,7 @@ from kinby.contracts import (
     LifecycleOperationResult,
     Method,
     OperationGetCommand,
+    TemplateBehind,
 )
 
 HUB_URL = "ws://localhost:8080/ws"
@@ -77,7 +79,8 @@ async def show_instances(client: ContractClient) -> int:
 
 
 async def update(client: ContractClient, revision: str, chosen: list[UUID]) -> int:
-    """Update each chosen instance, or every active one, that runs another revision."""
+    """Update each chosen instance, or every active one, that runs another revision or whose
+    template is behind its factory's."""
     failures = 0
     instances = await _instances(client)
     for unknown in set(chosen) - {instance.instance_id for instance in instances}:
@@ -87,7 +90,8 @@ async def update(client: ContractClient, revision: str, chosen: list[UUID]) -> i
         name = instance.persona_name or instance.manifest_id
         if chosen and instance.instance_id not in chosen:
             continue
-        if instance.source_revision == revision:
+        template_behind = any(isinstance(n, TemplateBehind) for n in instance.notices)
+        if instance.source_revision == revision and not template_behind:
             print(f"{instance.instance_id} {name}: already on {revision[:12]}")
             continue
         print(f"{instance.instance_id} {name}: updating to {revision[:12]}", flush=True)
