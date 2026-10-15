@@ -1029,8 +1029,11 @@ export interface InstanceRestoreCommand {
  * Replace the named values in one instance's secrets. The result carries none of them back.
  */
 export interface InstanceSecretsSetCommand {
+  hub_secrets?: {
+    [k: string]: HubSecretName;
+  };
   instance_id: string;
-  secrets: {
+  secrets?: {
     [k: string]: string;
   };
 }

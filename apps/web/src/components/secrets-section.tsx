@@ -1,6 +1,7 @@
 import type { Client, Clock, InstanceSetup, SecretSetup } from "@kinby/contract"
 import { useCallback, useId, useState } from "react"
 
+import { HubSecretPicker } from "@/components/hub-secret-picker"
 import { SubscriptionLogins } from "@/components/subscription-logins"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -18,6 +19,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
+import { useRead } from "@/hooks/use-read"
 import { type Followed, followOperation } from "@/lib/operation"
 import { CircleCheckIcon } from "lucide-react"
 
@@ -78,8 +80,9 @@ export function SecretsSection({
 }
 
 /**
- * One row per secret the instance declares, with whether it holds a value, and Set or Replace.
- * No value is ever read back. `onSet` hears each value the hub wrote, and must keep its identity.
+ * One row per secret the instance declares, with whether it holds a value, the hub secret it
+ * links, and Set or Replace, by typing a value or picking a hub secret. No value is ever read
+ * back. `onSet` hears each value the hub wrote, and must keep its identity.
  */
 export function Secrets({
   caller,
@@ -94,6 +97,8 @@ export function Secrets({
   secrets: SecretSetup[]
   onSet: () => void
 }) {
+  const read = useCallback(() => caller.call("hub.secret.list", {}), [caller])
+  const kept = useRead(read, clock).value?.secrets.map(({ name }) => name) ?? []
   return (
     <ItemGroup aria-label="Secrets">
       {secrets.map((secret) => (
@@ -103,6 +108,7 @@ export function Secrets({
           clock={clock}
           instanceId={instanceId}
           secret={secret}
+          kept={kept}
           onSet={onSet}
         />
       ))}
@@ -115,27 +121,33 @@ function SecretRow({
   clock,
   instanceId,
   secret,
+  kept,
   onSet,
 }: {
   caller: Caller
   clock: Clock
   instanceId: string
   secret: SecretSetup
+  kept: string[]
   onSet: () => void
 }) {
   const id = useId()
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState("")
+  const [hubSecret, setHubSecret] = useState<string>()
   // A new object for each save, so saving again follows a new operation.
-  const [request, setRequest] = useState<{ value: string }>()
+  const [request, setRequest] = useState<Source>()
   const follow = useCallback(
-    (asked: { value: string }, report: (followed: Followed) => void) =>
+    (asked: Source, report: (followed: Followed) => void) =>
       followOperation(
         caller,
         () =>
           caller.call("instance.secrets.set", {
             instance_id: instanceId,
-            secrets: { [secret.name]: asked.value },
+            // A typed value unlinks the field.
+            ...("hubSecret" in asked
+              ? { hub_secrets: { [secret.name]: asked.hubSecret } }
+              : { secrets: { [secret.name]: asked.value } }),
           }),
         (followed) => {
           report(followed)
@@ -143,6 +155,7 @@ function SecretRow({
           // The value leaves the page once the hub holds it.
           setEditing(false)
           setValue("")
+          setHubSecret(undefined)
           setRequest(undefined)
           onSet()
         },
@@ -155,8 +168,10 @@ function SecretRow({
   const close = () => {
     setEditing(false)
     setValue("")
+    setHubSecret(undefined)
     setRequest(undefined)
   }
+  const failed = followed?.state === "failed" || undefined
   return (
     <Item render={<li />} aria-label={secret.label} variant="outline" size="sm">
       <ItemContent>
@@ -164,6 +179,11 @@ function SecretRow({
         {secret.variable !== null && (
           <ItemDescription>
             <code className="font-mono">{secret.variable}</code>
+          </ItemDescription>
+        )}
+        {secret.hub_secret != null && (
+          <ItemDescription>
+            From the hub secret <code className="font-mono">{secret.hub_secret}</code>
           </ItemDescription>
         )}
       </ItemContent>
@@ -189,26 +209,44 @@ function SecretRow({
             className="flex w-full flex-col gap-3"
             onSubmit={(event) => {
               event.preventDefault()
-              setRequest({ value })
+              setRequest(hubSecret === undefined ? { value } : { hubSecret })
             }}
           >
-            <Field data-invalid={followed?.state === "failed" || undefined}>
-              <FieldLabel htmlFor={id}>New value for {secret.label}</FieldLabel>
-              <Input
-                id={id}
-                type="password"
-                autoComplete="off"
-                value={value}
-                readOnly={saving}
-                aria-invalid={followed?.state === "failed" || undefined}
-                onChange={(event) => setValue(event.target.value)}
-              />
+            <Field data-invalid={failed}>
+              {kept.length > 0 && (
+                <HubSecretPicker
+                  id={`${id}-hub`}
+                  label={secret.label}
+                  kept={kept}
+                  picked={hubSecret}
+                  invalid={failed}
+                  onPick={setHubSecret}
+                />
+              )}
+              {hubSecret === undefined && (
+                <>
+                  <FieldLabel htmlFor={id}>New value for {secret.label}</FieldLabel>
+                  <Input
+                    id={id}
+                    type="password"
+                    autoComplete="off"
+                    value={value}
+                    readOnly={saving}
+                    aria-invalid={failed}
+                    onChange={(event) => setValue(event.target.value)}
+                  />
+                </>
+              )}
               {followed?.state === "failed" && (
                 <FieldError errors={[{ message: followed.detail }]} />
               )}
             </Field>
             <div className="flex gap-2">
-              <Button type="submit" size="sm" disabled={saving || value === ""}>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={saving || (hubSecret === undefined && value === "")}
+              >
                 {saving && <Spinner data-icon="inline-start" />}
                 Save
               </Button>
@@ -222,3 +260,6 @@ function SecretRow({
     </Item>
   )
 }
+
+/** What a save sends: a typed value, or the hub secret the field takes. */
+type Source = { value: string } | { hubSecret: string }

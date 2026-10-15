@@ -660,9 +660,19 @@ class HubRegistry:
                 ],
             )
 
-    def link_secrets(self, instance_id: UUID, links: Mapping[str, HubSecretName]) -> None:
-        """Link each variable the instance holds to the hub secret it took."""
+    def link_secrets(
+        self,
+        instance_id: UUID,
+        links: Mapping[str, HubSecretName],
+        unlinked: Collection[str] = (),
+    ) -> None:
+        """Link each variable the instance holds to the hub secret it took, and drop the link of
+        each variable in `unlinked`."""
         with self._connect() as connection:
+            connection.executemany(
+                "DELETE FROM secret_links WHERE instance_id = ? AND variable = ?",
+                [(str(instance_id), variable) for variable in unlinked],
+            )
             connection.executemany(
                 """
                 INSERT OR REPLACE INTO secret_links (instance_id, variable, hub_secret)

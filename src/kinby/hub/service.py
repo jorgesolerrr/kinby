@@ -7,7 +7,7 @@ import fcntl
 import logging
 import re
 import shutil
-from collections.abc import Collection, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -1022,7 +1022,8 @@ class Hub:
         raise ValueError(f"This instance has no volume at {login.volume} for {login.label}.")
 
     async def set_secrets(self, command: InstanceSecretsSetCommand) -> LifecycleOperationResult:
-        """Replace the named values in this instance's secrets. No value travels back out."""
+        """Replace the named values in this instance's secrets, typed or taken from the hub secrets
+        each field links. A typed value unlinks its field. No value travels back out."""
         record = self._active_instance(command.instance_id)
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
         operation_id = uuid4()
@@ -1032,7 +1033,9 @@ class Hub:
             OperationKind.SECRETS,
             "Secret replacement queued.",
         )
-        self._schedule(self._set_secrets(operation_id, record.instance_id, secrets))
+        self._schedule(
+            self._set_secrets(operation_id, record.instance_id, secrets, command.hub_secrets)
+        )
         return LifecycleOperationResult(
             operation_id=operation_id,
             instance_id=record.instance_id,
@@ -1043,6 +1046,7 @@ class Hub:
         operation_id: UUID,
         instance_id: UUID,
         secrets: dict[str, str],
+        hub_secrets: dict[str, HubSecretName],
     ) -> None:
         try:
             # The lock serializes this write against every other lifecycle mutation.
@@ -1057,20 +1061,22 @@ class Hub:
                     "secrets",
                     "Replacing the instance's secrets.",
                 )
+                linked: dict[str, str] = {}
                 try:
-                    self._validate_secret_names(secrets)
-                    if API_KEY_FIELD.name in secrets:
-                        model = inspect_instance(record.path).manifest.models.main
-                        secrets = held_secrets(model, secrets)
-                    self._replace_secrets(record.path, secrets)
+                    linked = self._linked_values(secrets, hub_secrets)
+                    values = secrets | linked
+                    self._validate_secret_names(values)
+                    held = self._held_by(record, values)
+                    self._replace_secrets(record.path, held(values))
                 except Exception as exc:
                     self._fail(
                         operation_id,
                         record,
                         str(exc) or type(exc).__name__,
-                        secrets.values(),
+                        [*secrets.values(), *linked.values()],
                     )
                     return
+                self.registry.link_secrets(instance_id, held(hub_secrets), unlinked=held(secrets))
                 self.registry.finish_operation(
                     operation_id,
                     OperationState.SUCCEEDED,
@@ -1079,6 +1085,29 @@ class Hub:
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
             raise
+
+    def _linked_values(
+        self, secrets: Mapping[str, str], hub_secrets: Mapping[str, HubSecretName]
+    ) -> dict[str, str]:
+        """The value of the hub secret each field takes, by field name."""
+        kept = self.secrets.values()
+        for field, name in hub_secrets.items():
+            if field in secrets:
+                raise ValueError(f"{field} takes a typed value or a hub secret, not both.")
+            if name not in kept:
+                raise ValueError(f'The hub keeps no secret named "{name}".')
+        return {field: kept[name] for field, name in hub_secrets.items()}
+
+    @staticmethod
+    def _held_by(
+        record: ManagedInstance, fields: Mapping[str, str]
+    ) -> Callable[[Mapping[str, str]], dict[str, str]]:
+        """Renames a map by field name to the variables the instance holds them under. Only the
+        API key needs the instance's model, so only then is its manifest read."""
+        if API_KEY_FIELD.name not in fields:
+            return dict
+        model = inspect_instance(record.path).manifest.models.main
+        return partial(held_secrets, model)
 
     async def set_hub_secret(self, command: HubSecretSetCommand) -> HubSecretSetResult:
         """Create or replace one hub secret. No value travels back out."""

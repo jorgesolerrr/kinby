@@ -2309,6 +2309,12 @@
       "additionalProperties": false,
       "description": "Replace the named values in one instance's secrets. The result carries none of them back.",
       "properties": {
+        "hub_secrets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/HubSecretName"
+          },
+          "type": "object"
+        },
         "instance_id": {
           "format": "uuid",
           "type": "string"
@@ -2319,13 +2325,11 @@
             "type": "string",
             "writeOnly": true
           },
-          "minProperties": 1,
           "type": "object"
         }
       },
       "required": [
-        "instance_id",
-        "secrets"
+        "instance_id"
       ],
       "title": "InstanceSecretsSetCommand",
       "type": "object"
