@@ -143,6 +143,13 @@ def held_secrets(model: ModelName, secrets: Mapping[str, str]) -> dict[str, str]
     }
 
 
+def secret_field(model: ModelName | None, variable: str) -> str:
+    """The secret field the instance holds under the variable, the way `held_secrets` names it."""
+    if model is not None and variable == api_key_variable(model):
+        return API_KEY_FIELD.name
+    return variable
+
+
 def instance_setup(
     description: DeclaredSetup | None,
     *,

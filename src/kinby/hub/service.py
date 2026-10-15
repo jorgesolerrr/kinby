@@ -72,6 +72,12 @@ from kinby.contracts import (
     DrainState,
     FactoryName,
     FactoryRole,
+    HubSecret,
+    HubSecretDeleteCommand,
+    HubSecretDeleteResult,
+    HubSecretLink,
+    HubSecretListCommand,
+    HubSecretListResult,
     HubSecretName,
     HubSecretSetCommand,
     HubSecretSetResult,
@@ -183,6 +189,7 @@ from kinby.hub.setup import (
     instance_setup,
     link_errors,
     manifest_settings,
+    secret_field,
     setup_errors,
 )
 from kinby.hub.template_sync import sync_template
@@ -190,6 +197,7 @@ from kinby.hub.usage import Uncounted, summed_usage
 from kinby.instance import (
     Instance,
     ManifestError,
+    ModelName,
     init_from_template,
     init_instance,
     inspect_instance,
@@ -428,6 +436,7 @@ class Hub:
             self.runs = FactoryRuns(self.registry, self.factories, self._run_step)
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
+            self._hub_secrets_lock = asyncio.Lock()
             self._stopping: dict[UUID, PendingStop] = {}
             self._tasks: set[asyncio.Task[None]] = set()
             self.dispatcher = Dispatcher()
@@ -472,9 +481,9 @@ class Hub:
             self.dispatcher.register(LIBRARY_GIT_ADD, self.library.add)
             self.dispatcher.register(INSTANCE_PICKS_GET, self.picks)
             self.dispatcher.register(INSTANCE_PICKS_SET, self.set_picks)
-            self.dispatcher.register(HUB_SECRET_LIST, self.secrets.list)
+            self.dispatcher.register(HUB_SECRET_LIST, self.list_hub_secrets)
             self.dispatcher.register(HUB_SECRET_SET, self.set_hub_secret)
-            self.dispatcher.register(HUB_SECRET_DELETE, self.secrets.delete)
+            self.dispatcher.register(HUB_SECRET_DELETE, self.delete_hub_secret)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
         except BaseException:
             self._directory_lock.close()
@@ -504,8 +513,9 @@ class Hub:
         except Exception as exc:
             return StepResult(ending=StepEnding.FAILED, summary=str(exc) or type(exc).__name__)
 
-    def _schedule(self, work: Coroutine[object, object, None]) -> None:
-        task = asyncio.create_task(work)
+    def _schedule(self, work: Coroutine[object, object, None], *, eager: bool = False) -> None:
+        """An eager task runs up to its first wait before the call that scheduled it returns."""
+        task = asyncio.create_task(work, eager_start=eager)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -1113,35 +1123,143 @@ class Hub:
         model = inspect_instance(record.path).manifest.models.main
         return partial(held_secrets, model)
 
+    async def list_hub_secrets(self, command: HubSecretListCommand) -> HubSecretListResult:
+        """Every hub secret by name, with the instance fields linked to it. Never a value."""
+        return HubSecretListResult(
+            secrets=[
+                HubSecret(name=name, links=self._links(name))
+                for name in sorted(self.secrets.values())
+            ]
+        )
+
+    def _links(self, name: HubSecretName) -> tuple[HubSecretLink, ...]:
+        linked = self.registry.linked_to(name)
+        return tuple(
+            HubSecretLink(
+                instance_id=record.instance_id,
+                manifest_id=record.manifest_id,
+                field=secret_field(self._model(record), variable),
+            )
+            for record in self.registry.managed_instances()
+            if record.active
+            for variable in linked.get(record.instance_id, [])
+        )
+
     async def set_hub_secret(self, command: HubSecretSetCommand) -> HubSecretSetResult:
-        """Create or replace one hub secret. No value travels back out."""
+        """Create or replace one hub secret. A replacement reaches the instances linked to it.
+        No value travels back out."""
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id, None, OperationKind.HUB_SECRET, "Hub secret queued."
         )
-        self._schedule(
-            self._set_hub_secret(operation_id, command.name, command.value.get_secret_value())
-        )
+        # Eager, so the write takes its place in the queue before a later delete can.
+        self._schedule(self._set_hub_secret(operation_id, command), eager=True)
         return HubSecretSetResult(operation_id=operation_id)
 
-    async def _set_hub_secret(self, operation_id: UUID, name: HubSecretName, value: str) -> None:
+    async def _set_hub_secret(self, operation_id: UUID, command: HubSecretSetCommand) -> None:
+        name = command.name
+        value = command.value.get_secret_value()
         try:
-            self.registry.advance_operation(operation_id, "secret", f'Saving "{name}".')
-            try:
-                self.secrets.save(name, value)
-            except Exception as exc:
-                self.registry.finish_operation(
-                    operation_id,
-                    OperationState.FAILED,
-                    self._redact(str(exc) or type(exc).__name__, [value]),
-                )
-                return
-            self.registry.finish_operation(
-                operation_id, OperationState.SUCCEEDED, f'Hub secret "{name}" saved.'
-            )
+            # One hub secret write or delete at a time, in the order they were asked for.
+            async with self._hub_secrets_lock:
+                self.registry.advance_operation(operation_id, "secret", f'Saving "{name}".')
+                previous = self.secrets.values().get(name)
+                try:
+                    self.secrets.save(name, value)
+                    try:
+                        rewritten, unlinked = await self._rewrite_links(
+                            operation_id, name, previous, value
+                        )
+                    except Exception:
+                        # A retry then compares each linked field against the previous value again.
+                        if previous is None:
+                            self.secrets.delete(name)
+                        else:
+                            self.secrets.save(name, previous)
+                        raise
+                except Exception as exc:
+                    self.registry.finish_operation(
+                        operation_id,
+                        OperationState.FAILED,
+                        self._redact(str(exc) or type(exc).__name__, [value, previous or ""]),
+                    )
+                    return
+                for record in rewritten:
+                    if record.instance_id in command.recreate:
+                        await self._queue_recreation(operation_id, record)
+                detail = f'Hub secret "{name}" saved.'
+                if unlinked:
+                    detail += (
+                        f" Unlinked {', '.join(unlinked)}: each held another value, and keeps it."
+                    )
+                self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, detail)
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
             raise
+
+    async def _rewrite_links(
+        self,
+        operation_id: UUID,
+        name: HubSecretName,
+        previous: str | None,
+        value: str,
+    ) -> tuple[Sequence[ManagedInstance], Sequence[str]]:
+        """Write the new value into each linked field that still holds the previous one. A field
+        that holds anything else was set on purpose, so it is unlinked and left as it is (ADR
+        0095). A failed write puts the previous value back into each field already rewritten.
+
+        Returns the instances that took the new value, and the names of those with a field
+        unlinked.
+        """
+        rewritten: list[tuple[ManagedInstance, list[str]]] = []
+        unlinked: list[str] = []
+        try:
+            for instance_id in self.registry.linked_to(name):
+                # The lock serializes this write against every other lifecycle mutation.
+                async with self._locks.setdefault(instance_id, asyncio.Lock()):
+                    record = self.registry.instance(instance_id)
+                    linked = self.registry.secret_links(instance_id)
+                    variables = [variable for variable, hub in linked.items() if hub == name]
+                    if record is None or not record.active or not variables:
+                        continue
+                    environment = self._environment(record.path)
+                    held = [v for v in variables if environment.get(v) in (previous, value)]
+                    drifted = [v for v in variables if v not in held]
+                    if held:
+                        self._record(
+                            operation_id,
+                            f"instance {record.manifest_id}",
+                            f"Writing the new value into {record.manifest_id}'s secrets.",
+                        )
+                        self._replace_secrets(record.path, dict.fromkeys(held, value))
+                        rewritten.append((record, held))
+                    if drifted:
+                        self.registry.link_secrets(instance_id, {}, unlinked=drifted)
+                        unlinked.append(record.manifest_id)
+        except Exception:
+            if previous is not None:
+                for record, held in rewritten:
+                    async with self._locks.setdefault(record.instance_id, asyncio.Lock()):
+                        self._replace_secrets(record.path, dict.fromkeys(held, previous))
+            raise
+        return [record for record, _ in rewritten], unlinked
+
+    async def _queue_recreation(self, operation_id: UUID, record: ManagedInstance) -> None:
+        step = f"recreate {record.manifest_id}"
+        try:
+            await self.recreate(InstanceRecreateCommand(instance_id=record.instance_id))
+        except LifecycleOperationInFlight as exc:
+            self._record(operation_id, step, f"{record.manifest_id} was not recreated. {exc}")
+            return
+        self._record(operation_id, step, f"Recreating {record.manifest_id}.")
+
+    async def delete_hub_secret(self, command: HubSecretDeleteCommand) -> HubSecretDeleteResult:
+        """Delete one hub secret and every link to it. Each instance keeps the value it holds."""
+        async with self._hub_secrets_lock:
+            unlinked = self._links(command.name)
+            self.secrets.delete(command.name)
+            self.registry.unlink_hub_secret(command.name)
+        return HubSecretDeleteResult(unlinked=unlinked)
 
     async def picks(self, command: InstancePicksGetCommand) -> InstancePicksResult:
         return self.library.picks(self._active_instance(command.instance_id).path)
@@ -1581,6 +1699,9 @@ class Hub:
         self.registry.set_intended_state(record.instance_id, IntendedState.STOPPED)
         await self._remove_container(record, pending)
         self.registry.set_intended_state(record.instance_id, IntendedState.REMOVED)
+        self.registry.link_secrets(
+            record.instance_id, {}, unlinked=self.registry.secret_links(record.instance_id)
+        )
 
     async def restore(self, command: InstanceRestoreCommand) -> LifecycleOperationResult:
         """Bring a removed instance back from its retained record, and leave it stopped."""
@@ -2157,13 +2278,16 @@ class Hub:
             return record.factory.setup
         return self.registry.description()
 
+    @staticmethod
+    def _model(record: ManagedInstance) -> ModelName | None:
+        try:
+            return inspect_instance(record.path).manifest.models.main
+        except ManifestError:
+            return None
+
     def _setup(self, record: ManagedInstance) -> InstanceSetup:
         """The logins and secrets the instance's stored descriptor declares, how they stand, and
         the lists of repository commands it is missing."""
-        try:
-            model = inspect_instance(record.path).manifest.models.main
-        except ManifestError:
-            model = None
         description = self._declared_setup(record)
         declared = description.logins if description is not None else []
         running = {
@@ -2177,7 +2301,7 @@ class Hub:
             running=running,
             secrets=self._environment(record.path),
             links=self.registry.secret_links(record.instance_id),
-            model=model,
+            model=self._model(record),
             missing_commands=self.runs.missing_commands(record),
         )
 

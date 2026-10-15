@@ -236,7 +236,7 @@ export interface Contract {
     };
     "hub.secret.delete": {
       command: HubSecretDeleteCommand;
-      result: HubSecretListResult;
+      result: HubSecretDeleteResult;
     };
     "hub.secret.list": {
       command: HubSecretListCommand;
@@ -776,6 +776,18 @@ export interface FactoryRunSendBackCommand {
 export interface HubSecretDeleteCommand {
   name: HubSecretName;
 }
+export interface HubSecretDeleteResult {
+  unlinked: HubSecretLink[];
+}
+/**
+ * An instance's secret field that takes a hub secret.
+ */
+export interface HubSecretLink {
+  field: string;
+  instance_id: string;
+  manifest_id: string;
+}
+export interface HubSecretListCommand {}
 export interface HubSecretListResult {
   secrets: HubSecret[];
 }
@@ -783,14 +795,15 @@ export interface HubSecretListResult {
  * A hub secret as the hub shows it: by name, never its value.
  */
 export interface HubSecret {
+  links?: HubSecretLink[];
   name: HubSecretName;
 }
-export interface HubSecretListCommand {}
 /**
  * Create or replace one hub secret. The result carries no value back.
  */
 export interface HubSecretSetCommand {
   name: HubSecretName;
+  recreate?: string[];
   value: string;
 }
 export interface HubSecretSetResult {

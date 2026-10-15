@@ -4,13 +4,7 @@ import json
 import os
 from pathlib import Path
 
-from kinby.contracts import (
-    HubSecret,
-    HubSecretDeleteCommand,
-    HubSecretListCommand,
-    HubSecretListResult,
-    HubSecretName,
-)
+from kinby.contracts import HubSecretName
 from kinby.core.errors import HubSecretNotFound
 
 
@@ -22,13 +16,18 @@ def write_protected(path: Path, body: str) -> None:
     path.chmod(0o600)
 
 
+def staging_path(path: Path) -> Path:
+    """Where a replacement of *path* is written before its rename."""
+    return path.with_name(f"{path.name}.replacing")
+
+
 def replace_protected(path: Path, body: str) -> None:
     """Replace the file through one rename.
 
     A failure leaves the previous file in place and removes the staging file,
     so the values are not left in a second copy.
     """
-    staging = path.with_name(f"{path.name}.replacing")
+    staging = staging_path(path)
     try:
         write_protected(staging, body)
         staging.replace(path)
@@ -42,25 +41,23 @@ class HubSecrets:
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        # A replacement the process died in the middle of leaves its values in a second copy.
+        staging_path(path).unlink(missing_ok=True)
 
     def values(self) -> dict[HubSecretName, str]:
         if not self._path.exists():
             return {}
         return json.loads(self._path.read_text(encoding="utf-8"))
 
-    async def list(self, command: HubSecretListCommand) -> HubSecretListResult:
-        return HubSecretListResult(secrets=[HubSecret(name=name) for name in sorted(self.values())])
-
     def save(self, name: HubSecretName, value: str) -> None:
         """Create or replace one hub secret."""
         self._write(self.values() | {name: value})
 
-    async def delete(self, command: HubSecretDeleteCommand) -> HubSecretListResult:
+    def delete(self, name: HubSecretName) -> None:
         secrets = self.values()
-        if secrets.pop(command.name, None) is None:
-            raise HubSecretNotFound(f'Hub secret "{command.name}" was not found.')
+        if secrets.pop(name, None) is None:
+            raise HubSecretNotFound(f'Hub secret "{name}" was not found.')
         self._write(secrets)
-        return await self.list(HubSecretListCommand())
 
     def _write(self, secrets: dict[HubSecretName, str]) -> None:
         replace_protected(self._path, json.dumps(secrets))

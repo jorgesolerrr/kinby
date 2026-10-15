@@ -18,6 +18,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     HubSecretDeleteCommand,
+    HubSecretDeleteResult,
     HubSecretListCommand,
     HubSecretListResult,
     HubSecretSetCommand,
@@ -62,12 +63,12 @@ def test_hub_secrets_are_set_listed_replaced_and_deleted_by_name(tmp_path):
         assert hub.secrets.values() == {"ANTHROPIC_API_KEY": "sk-test", "GITHUB_TOKEN": _SENTINEL}
         assert _SENTINEL not in listed.model_dump_json()
 
-        remaining = await client.call(
+        deleted = await client.call(
             HUB_SECRET_DELETE, HubSecretDeleteCommand(name="ANTHROPIC_API_KEY")
         )
 
-        assert isinstance(remaining, HubSecretListResult)
-        assert [secret.name for secret in remaining.secrets] == ["GITHUB_TOKEN"]
+        assert isinstance(deleted, HubSecretDeleteResult)
+        assert deleted.unlinked == []
         assert await _names(client) == ["GITHUB_TOKEN"]
         assert hub.secrets.values() == {"GITHUB_TOKEN": _SENTINEL}
 
@@ -118,7 +119,7 @@ def test_no_hub_secret_value_reaches_sqlite_the_operation_record_or_the_hub_envi
     "payload",
     [
         {"name": "GITHUB_TOKEN", "value": [_SENTINEL]},
-        {"name": "GITHUB_TOKEN", "value": _SENTINEL, "recreate": _SENTINEL},
+        {"name": "GITHUB_TOKEN", "value": _SENTINEL, "unknown": _SENTINEL},
         {"name": "  ", "value": _SENTINEL},
         {"name": "GITHUB_TOKEN", "value": ""},
     ],
@@ -193,3 +194,41 @@ def test_a_failed_write_keeps_the_previous_hub_secrets_whole(tmp_path, monkeypat
         assert [path.name for path in hub.directory.iterdir() if "replacing" in path.name] == []
 
     asyncio.run(scenario())
+
+
+def test_a_delete_asked_right_after_a_write_waits_for_it(tmp_path):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub", images=FakeImages())
+        client = hub_client(hub)
+        await set_hub_secret(client, "GITHUB_TOKEN", "first-value")
+
+        replaced = await hub.dispatcher.dispatch(
+            HUB_SECRET_SET.name, {"name": "GITHUB_TOKEN", "value": _SENTINEL}, {Scope.HUB_ADMIN}
+        )
+        created = await hub.dispatcher.dispatch(
+            HUB_SECRET_SET.name, {"name": "OTHER", "value": _SENTINEL}, {Scope.HUB_ADMIN}
+        )
+        deleted = [
+            await hub.dispatcher.dispatch(HUB_SECRET_DELETE.name, {"name": name}, {Scope.HUB_ADMIN})
+            for name in ("GITHUB_TOKEN", "OTHER")
+        ]
+        assert isinstance(replaced, HubSecretSetResult)
+        assert isinstance(created, HubSecretSetResult)
+        await finished_operation(client, replaced)
+        await finished_operation(client, created)
+
+        assert all(isinstance(result, HubSecretDeleteResult) for result in deleted)
+        assert hub.secrets.values() == {}
+
+    asyncio.run(scenario())
+
+
+def test_the_hub_removes_a_replacement_its_last_run_left_unfinished(tmp_path):
+    staging = tmp_path / "hub" / "hub-secrets.json.replacing"
+    staging.parent.mkdir()
+    staging.write_text(f'{{"GITHUB_TOKEN": "{_SENTINEL}"}}', encoding="utf-8")
+
+    hub = hub_at(tmp_path / "hub", images=FakeImages())
+
+    assert not staging.exists()
+    assert hub.secrets.values() == {}

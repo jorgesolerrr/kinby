@@ -1629,6 +1629,12 @@
       "additionalProperties": false,
       "description": "A hub secret as the hub shows it: by name, never its value.",
       "properties": {
+        "links": {
+          "items": {
+            "$ref": "#/$defs/HubSecretLink"
+          },
+          "type": "array"
+        },
         "name": {
           "$ref": "#/$defs/HubSecretName"
         }
@@ -1650,6 +1656,45 @@
         "name"
       ],
       "title": "HubSecretDeleteCommand",
+      "type": "object"
+    },
+    "HubSecretDeleteResult": {
+      "additionalProperties": false,
+      "properties": {
+        "unlinked": {
+          "items": {
+            "$ref": "#/$defs/HubSecretLink"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "unlinked"
+      ],
+      "title": "HubSecretDeleteResult",
+      "type": "object"
+    },
+    "HubSecretLink": {
+      "additionalProperties": false,
+      "description": "An instance's secret field that takes a hub secret.",
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "manifest_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id",
+        "manifest_id",
+        "field"
+      ],
+      "title": "HubSecretLink",
       "type": "object"
     },
     "HubSecretListCommand": {
@@ -1684,6 +1729,13 @@
       "properties": {
         "name": {
           "$ref": "#/$defs/HubSecretName"
+        },
+        "recreate": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
         },
         "value": {
           "format": "password",
@@ -8031,7 +8083,7 @@
               "$ref": "#/$defs/HubSecretDeleteCommand"
             },
             "result": {
-              "$ref": "#/$defs/HubSecretListResult"
+              "$ref": "#/$defs/HubSecretDeleteResult"
             }
           },
           "required": [
