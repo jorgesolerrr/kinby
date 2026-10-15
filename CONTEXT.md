@@ -108,6 +108,11 @@ The single-user service that manages **instances** and provides their shared ent
 
 The hub's record of the **instances** it manages, their identities, storage locations, selected versions, and intended running states. Each instance's **manifest** remains the source of its behavior configuration.
 
+### Home instance
+
+The one **instance** the **hub** creates for itself and the user talks to about kinby: it builds inside kinby on the user's behalf and does personal work itself. The **instance registry** marks it, never its own **manifest**. Its **persona name** defaults to "Kinby". It can be stopped and renamed, never removed, and the role never moves to another instance.
+_Avoid_: system agent, main instance, Kinby (as a term)
+
 ### Hub instance ID
 
 The stable identity of one entry in the **instance registry**. It is distinct from the instance's own manifest ID and **persona name**, so adoption preserves both.
@@ -499,7 +504,7 @@ _Avoid_: auth cookie, login token
 
 ### Control token
 
-The secret a **hub** presents to one **instance**'s **contract server**. Each instance has its own. It reaches that instance only, and grants no hub **scope**.
+The secret a **hub** presents to one **instance**'s **contract server**. Each instance has its own. It reaches that instance only. Presented back to the hub, it proves which instance is calling, and holds only the **scopes** the **instance registry** grants that instance.
 
 ### Update token
 
@@ -584,6 +589,11 @@ The core, read-only **tool** that returns an available **skill** body by name. I
 A core write **tool** through which the agent changes its own **instance**, such as a **routine** or a **skill**, under the **gate** like any other write. Workspace file tools never reach the instance.
 _Avoid_: self-modification tool, config tool
 
+### Hub tool
+
+A **tool** only the **home instance** holds, through which it reads the **hub** and other **instances**, or asks the hub to change something the hub owns or another instance's setup. One that writes asks in every **permission mode**, and the hub runs it only after seeing the user approve that exact call. Hub tools are present only on turns the user starts.
+_Avoid_: admin tool, system tool
+
 ### Behavior prompt
 
 The instance's own instructions to the model (`SYSTEM.md`). One of the sources assembled into the system prompt, alongside the **profile**, workspace **conventions**, the skill list, and the harness-owned environment block.
@@ -614,7 +624,7 @@ The start of a **turn** by anything other than the user typing. Every wake carri
 
 ### Origin
 
-What started a **turn**: the user, a **routine**, or a **step** of a **factory run**. A routine turn also records its trigger: scheduled, manual, catch-up, or a **signal**'s delivery. A step's turn records its factory, run and step.
+What started a **turn**: the user, a **routine**, a **step** of a **factory run**, or the **home instance**. A routine turn also records its trigger: scheduled, manual, catch-up, or a **signal**'s delivery. A step's turn records its factory, run and step.
 
 ### Routine
 
