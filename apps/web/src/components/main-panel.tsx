@@ -5,6 +5,7 @@ import type * as React from "react"
 import { ConfigPanel } from "@/components/config-panel"
 import { InstancePage } from "@/components/instance-page"
 import { MemoryPage } from "@/components/memory-page"
+import { OpenHome } from "@/components/open-home"
 import { StatsPage } from "@/components/stats-page"
 import { ThreadListPage } from "@/components/thread-list-page"
 import { ThreadPanel } from "@/components/thread-panel"
@@ -18,7 +19,7 @@ import { CirclePauseIcon, MousePointerClickIcon, ServerIcon } from "lucide-react
  * memory page, or the stats page opens once `instanceClient` reaches its instance. The config panel
  * opens only on an instance meant to run, which is the one the hub relays to, and stays open while
  * an update restarts the container. The thread list, memory and stats pages need a running
- * instance. `onChanged` lists the instances again.
+ * instance. With none selected, it opens the home instance. `onChanged` lists the instances again.
  */
 export function MainPanel({
   caller,
@@ -33,7 +34,7 @@ export function MainPanel({
   instanceClient,
   onChanged,
 }: {
-  caller: Pick<Client, "call">
+  caller: Pick<Client, "call" | "instance">
   clock?: Clock
   instances: InstanceSummary[] | undefined
   selected: InstanceSummary | undefined
@@ -136,6 +137,8 @@ export function MainPanel({
       />
     )
   }
+  const home = instances.find((instance) => instance.home)
+  if (home !== undefined) return <OpenHome client={caller} home={home} />
   if (instances.length === 0) {
     return (
       <EmptyState icon={<ServerIcon />} title="No instances yet">

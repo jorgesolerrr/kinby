@@ -71,7 +71,8 @@ import {
  * its memory, and its stats, offers Stop, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
  * all are. Outside the setup card, an instance whose factory role needs repository commands shows
  * them.
- * Running or stopped, its ⋯ menu offers Remove, and a removal that succeeds goes home.
+ * Running or stopped, its ⋯ menu offers Remove, and a removal that succeeds goes home. The home
+ * instance is never removed, so it has no ⋯ menu.
  * `onChanged` hears a sign-in, a start, a stop or a removal end, so the instances are listed again,
  * and must keep its identity. The hub marks the instance stopped before it drains, so a stop asked
  * here keeps the running view, and its Force stop, until the stop succeeds.
@@ -100,20 +101,24 @@ export function InstancePage({
   }, [onChanged])
   const { status, waiting } = useStatus(caller, instance)
   const name = instanceName(instance)
+  const removeMenu = !instance.home && (
+    <RemoveMenu
+      caller={caller}
+      clock={clock}
+      instanceId={instance.instance_id}
+      name={name}
+      onRemoved={removed}
+    />
+  )
   const intended = stopping ? "running" : instance.intended_state
   const onSetup = openedOnSetup && intended === "stopped"
 
   if (onSetup) {
     if (status === undefined) return null
     return (
-      <SetupCard
-        caller={caller}
-        clock={clock}
-        name={name}
-        status={status}
-        onChanged={onChanged}
-        onRemoved={removed}
-      />
+      <SetupCard caller={caller} clock={clock} name={name} status={status} onChanged={onChanged}>
+        {removeMenu}
+      </SetupCard>
     )
   }
   const commands = status !== undefined && hasCommands(status) && (
@@ -128,8 +133,9 @@ export function InstancePage({
           instance={instance}
           name={name}
           onChanged={onChanged}
-          onRemoved={removed}
-        />
+        >
+          {removeMenu}
+        </Stopped>
         {commands}
       </>
     )
@@ -161,13 +167,7 @@ export function InstancePage({
             onStopping={() => setStopping(true)}
             onStopped={stopped}
           />
-          <RemoveMenu
-            caller={caller}
-            clock={clock}
-            instanceId={instance.instance_id}
-            name={name}
-            onRemoved={removed}
-          />
+          {removeMenu}
         </div>
         <ProcessAlert instance={instance} name={name} />
         {logins.length > 0 && (
@@ -495,14 +495,15 @@ function SetupCard({
   name,
   status,
   onChanged,
-  onRemoved,
+  children,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   name: string
   status: InstanceStatusResult
   onChanged: () => void
-  onRemoved: () => void
+  /** Beside Start. */
+  children: ReactNode
 }) {
   const titleId = useId()
   const { logins, secrets, missing_commands: missing } = status.setup
@@ -561,13 +562,7 @@ function SetupCard({
             instanceId={status.instance_id}
             onStarted={onChanged}
           >
-            <RemoveMenu
-              caller={caller}
-              clock={clock}
-              instanceId={status.instance_id}
-              name={name}
-              onRemoved={onRemoved}
-            />
+            {children}
           </StartButton>
         </CardFooter>
       </Card>
@@ -649,14 +644,15 @@ function Stopped({
   instance,
   name,
   onChanged,
-  onRemoved,
+  children,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   instance: InstanceSummary
   name: string
   onChanged: () => void
-  onRemoved: () => void
+  /** Beside Start. */
+  children: ReactNode
 }) {
   const titleId = useId()
   return (
@@ -679,13 +675,7 @@ function Stopped({
             instanceId={instance.instance_id}
             onStarted={onChanged}
           >
-            <RemoveMenu
-              caller={caller}
-              clock={clock}
-              instanceId={instance.instance_id}
-              name={name}
-              onRemoved={onRemoved}
-            />
+            {children}
           </StartButton>
         </EmptyContent>
       </Empty>

@@ -463,7 +463,8 @@ def test_a_deletion_interrupted_by_a_restart_is_inspectable_and_finishes_on_retr
 
         assert retried.state is OperationState.SUCCEEDED
         assert runtime.deleted_volumes == [workspace, workspace, codex]
-        assert again.instances == ()
+        assert recovery.home is not None
+        assert [instance.instance_id for instance in again.instances] == [recovery.home.instance_id]
         assert await listed(client, removed=True) == []
         for refused in (
             await client.call(

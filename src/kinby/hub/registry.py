@@ -84,6 +84,8 @@ class ManagedInstance:
     storage: tuple[StorageItem, ...]
     avatar: Avatar = DEFAULT_AVATAR
     factory: FactoryMember | None = None
+    #: The instance registry marks it the home instance (ADR 0096). Never its manifest.
+    home: bool = False
 
     @property
     def active(self) -> bool:
@@ -516,6 +518,13 @@ class HubRegistry:
                         member.setup.model_dump_json(),
                         None if member.baseline is None else json.dumps(member.baseline),
                     ),
+                )
+            if instance.home:
+                # The hub creates a home instance only while it holds none, so this replaces
+                # only the mark of one whose creation failed.
+                connection.execute(
+                    "INSERT OR REPLACE INTO hub_metadata (key, value) VALUES ('home_instance', ?)",
+                    (str(instance.instance_id),),
                 )
             self._insert_operation(
                 connection,
@@ -1310,7 +1319,11 @@ class HubRegistry:
                 """
                 SELECT id, path, manifest_id, persona_name, requested_revision,
                        source_revision, image_id, intended_state, runtime_id, prepared,
-                       avatar_shape, avatar_color
+                       avatar_shape, avatar_color,
+                       EXISTS (
+                           SELECT 1 FROM hub_metadata
+                           WHERE key = 'home_instance' AND value = instances.id
+                       )
                 FROM instances WHERE id = ?
                 """,
                 (str(instance_id),),
@@ -1368,6 +1381,7 @@ class HubRegistry:
                 if member is not None
                 else None
             ),
+            home=bool(row[12]),
         )
 
     def managed_instances(self) -> list[ManagedInstance]:

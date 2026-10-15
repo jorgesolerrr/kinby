@@ -110,7 +110,7 @@ The hub's record of the **instances** it manages, their identities, storage loca
 
 ### Home instance
 
-The one **instance** the **hub** creates for itself and the user talks to about kinby: it builds inside kinby on the user's behalf and does personal work itself. The **instance registry** marks it, never its own **manifest**. Its **persona name** defaults to "Kinby". It can be stopped and renamed, never removed, and the role never moves to another instance.
+The one **instance** the **hub** creates for itself and the user talks to about kinby: it builds inside kinby on the user's behalf and does personal work itself. The hub creates it on start whenever it holds none, as a **vanilla instance** whose API key waits as **pending setup**. The **instance registry** marks it, never its own **manifest**. Its **persona name** defaults to "Kinby". It can be stopped and renamed, never removed, and the role never moves to another instance. The web app lists it first and opens on its newest thread.
 _Avoid_: system agent, main instance, Kinby (as a term)
 
 ### Hub instance ID

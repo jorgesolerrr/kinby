@@ -799,7 +799,9 @@ def test_a_start_accepted_during_a_removal_does_not_hide_the_running_container(t
             assert "Remove the instance again" in recovery.instances[0].detail
             assert restarted.started == []
             assert again.state is OperationState.SUCCEEDED
-            assert [summary.instance_id for summary in await listed(hub_client(reopened))] == []
+            assert created.instance_id not in [
+                summary.instance_id for summary in await listed(hub_client(reopened))
+            ]
         finally:
             await _drop_scheduled_work(hub, reopened)
 
@@ -928,11 +930,12 @@ def test_a_removal_interrupted_after_the_container_went_is_recorded_not_repeated
 
         assert [instance.state for instance in recovery.instances] == [RecoveredState.REMOVED]
         assert "Removal reached" in recovery.instances[0].detail
-        assert [instance.state for instance in again.instances] == [RecoveredState.REMOVED]
+        assert again.instances[0].instance_id == created.instance_id
+        assert again.instances[0].state is RecoveredState.REMOVED
         assert "retained" in again.instances[0].detail
         assert not isinstance(failed, ErrorEnvelope)
         assert failed.state is OperationState.FAILED
-        assert await listed(client) == []
+        assert created.instance_id not in [summary.instance_id for summary in await listed(client)]
         assert [summary.instance_id for summary in await listed(client, removed=True)] == [
             created.instance_id
         ]
@@ -965,8 +968,8 @@ def test_a_restoration_interrupted_before_its_container_is_reported_and_repeatab
         assert [instance.state for instance in recovery.instances] == [RecoveredState.REMOVED]
         assert "Restore the instance again" in recovery.instances[0].detail
         assert outcome.state is OperationState.SUCCEEDED
-        assert len(runtime.created) == 2
-        assert [summary.instance_id for summary in await listed(client)] == [created.instance_id]
+        assert [spec.instance_id for spec in runtime.created].count(str(created.instance_id)) == 2
+        assert created.instance_id in [summary.instance_id for summary in await listed(client)]
 
     asyncio.run(scenario())
 

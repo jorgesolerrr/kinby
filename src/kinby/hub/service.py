@@ -8,7 +8,7 @@ import logging
 import re
 import shutil
 from collections.abc import Callable, Collection, Coroutine, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import IO
@@ -143,6 +143,7 @@ from kinby.core.errors import (
     AdoptionBlocked,
     FactoryCheckFailed,
     FactoryNotFound,
+    HomeInstanceKept,
     ImageNotPrepared,
     InvalidSetup,
     LifecycleOperationInFlight,
@@ -197,6 +198,7 @@ from kinby.hub.setup import (
 from kinby.hub.template_sync import sync_template
 from kinby.hub.usage import Uncounted, summed_usage
 from kinby.instance import (
+    PLACEHOLDER_MODEL,
     Instance,
     ManifestError,
     ModelName,
@@ -235,6 +237,8 @@ _ALREADY_STOPPED = frozenset({"absent", "created", "stopped"})
 _INTERRUPTED_OPERATION = "The hub stopped before this operation finished."
 #: What an image preparation builds on: the hub's own checkout, as `instance.create` defaults to.
 _PREPARED_REVISION = "HEAD"
+_HOME_NAME = "home"
+_HOME_PERSONA_NAME = "Kinby"
 #: How long a login waits for the user to sign in before its code counts as expired.
 LOGIN_SECONDS = 15 * 60
 #: Colors and cursor moves a command prints around its URL and code.
@@ -611,6 +615,7 @@ class Hub:
         revision: str = _PREPARED_REVISION,
         avatar: Avatar = DEFAULT_AVATAR,
         factory: FactoryMember | None = None,
+        home: bool = False,
     ) -> ManagedInstance:
         instance_id = uuid4()
         return ManagedInstance(
@@ -627,6 +632,7 @@ class Hub:
             storage=(),
             avatar=avatar,
             factory=factory,
+            home=home,
         )
 
     def _begin_create(
@@ -1659,7 +1665,13 @@ class Hub:
 
     async def remove(self, command: InstanceRemoveCommand) -> LifecycleOperationResult:
         """Drain and remove the container. The data and the record stay for a restoration."""
-        record = self._not_signing_in(self._claimed(self._active_instance(command.instance_id)))
+        record = self._active_instance(command.instance_id)
+        if record.home:
+            raise HomeInstanceKept(
+                f"{record.persona_name or record.manifest_id} is the home instance, "
+                "so the hub never removes it."
+            )
+        record = self._not_signing_in(self._claimed(record))
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id,
@@ -2172,8 +2184,9 @@ class Hub:
             )
 
     async def recover(self) -> LifecycleRecovery:
-        """Reconcile every managed instance against what the container runtime still has, then
-        pick factory runs up where the previous process left them.
+        """Reconcile every managed instance against what the container runtime still has, pick
+        factory runs up where the previous process left them, and create a home instance when
+        the hub holds none.
 
         Setup containers from a login the previous process did not finish go first, so
         they are not still holding a login volume when recovery looks at the instances.
@@ -2183,7 +2196,15 @@ class Hub:
         recovery = await recover_lifecycle(self.registry, self._runtime, self._restore_start)
         self._schedule(self._collect_images())
         self.runs.resume()
-        return recovery
+        if any(record.home and self._held(record) for record in self.registry.managed_instances()):
+            return recovery
+        return replace(recovery, home=self._create_home())
+
+    def _create_home(self) -> LifecycleOperationResult:
+        """Create a vanilla instance and mark it home, through the ordinary creation. Its API
+        key stays pending setup, and the image is built if no preparation built it yet."""
+        record = self._new_record(_HOME_NAME, persona_name=_HOME_PERSONA_NAME, home=True)
+        return self._begin_create(record, PLACEHOLDER_MODEL, {}, {})
 
     async def _restore_start(self, instance_id: UUID) -> OperationState:
         """Start one instance again under its own lifecycle operation, so the attempt is visible."""
@@ -2241,6 +2262,7 @@ class Hub:
             storage=list(record.storage),
             avatar=record.avatar,
             setup_pending=self._setup(record).pending,
+            home=record.home,
             factory_role=(
                 FactoryRole(factory=record.factory.factory, name=record.factory.name)
                 if record.factory is not None
@@ -2258,6 +2280,7 @@ class Hub:
             process=observed.process,
             readiness=observed.readiness,
             setup=self._setup(record),
+            home=record.home,
             detail=observed.detail,
             active_operation_id=self.registry.active_operation(record.instance_id),
             recreate_reasons=[*await self._recreate_reasons(record, observed.process)],

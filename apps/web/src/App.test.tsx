@@ -1,5 +1,5 @@
 import { createClient } from "@kinby/contract"
-import type { InstanceSummary } from "@kinby/contract"
+import type { InstanceSummary, ThreadSummary } from "@kinby/contract"
 import { ACCESS_TOKEN, fakeClock, fakeHub, instanceSummary } from "@kinby/contract/testing"
 import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -11,12 +11,14 @@ function openApp({
   signedIn,
   instances = [],
   removed = [],
+  threads = {},
 }: {
   signedIn: boolean
   instances?: InstanceSummary[]
   removed?: InstanceSummary[]
+  threads?: Record<string, ThreadSummary[]>
 }) {
-  const hub = fakeHub({ signedIn, instances, removed })
+  const hub = fakeHub({ signedIn, instances, removed, threads })
   const clock = fakeClock()
   render(<App client={createClient("http://hub.test", hub.transport, clock)} clock={clock} />)
   return { hub, clock }
@@ -628,5 +630,58 @@ describe("creating an instance", () => {
     expect(window.location.pathname).toBe("/new")
     expect((await instanceLink("New instance")).getAttribute("aria-current")).toBe("page")
     expect((await instanceLink("Ada")).getAttribute("aria-current")).toBeNull()
+  })
+})
+
+describe("the home instance", () => {
+  beforeEach(() => window.history.replaceState(null, "", "/"))
+
+  const kinby = instanceSummary({ instance_id: "hub-kinby", persona_name: "Kinby", home: true })
+  const thread = (id: string, last_activity_at: string): ThreadSummary => ({
+    id,
+    title: null,
+    created_at: "2026-10-01T10:00:00Z",
+    last_activity_at,
+    status: "idle",
+    mode: "ask",
+    mode_pinned: false,
+    archived: false,
+    origin: { kind: "user" },
+  })
+
+  it("opens on its newest thread when no instance is selected", async () => {
+    openApp({
+      signedIn: true,
+      instances: [ada, kinby],
+      threads: {
+        "hub-kinby": [thread("t2", "2026-10-15T09:00:00Z"), thread("t1", "2026-10-14T09:00:00Z")],
+      },
+    })
+
+    await waitFor(() => expect(window.location.pathname).toBe("/instances/hub-kinby/threads/t2"))
+    expect((await instanceLink("Kinby")).getAttribute("aria-current")).toBe("page")
+  })
+
+  it("opens on its page when it has no thread yet", async () => {
+    openApp({ signedIn: true, instances: [ada, kinby], threads: { "hub-kinby": [] } })
+
+    await waitFor(() => expect(window.location.pathname).toBe("/instances/hub-kinby"))
+  })
+
+  it("opens on its page when it is not running", async () => {
+    const stopped = { ...kinby, intended_state: "stopped", process: "stopped" } as const
+    openApp({ signedIn: true, instances: [ada, stopped] })
+
+    expect(await screen.findByText("Kinby is stopped")).toBeDefined()
+    expect(window.location.pathname).toBe("/instances/hub-kinby")
+  })
+
+  it("leaves the instance the URL selects", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+
+    openApp({ signedIn: true, instances: [ada, kinby], threads: { "hub-kinby": [] } })
+
+    expect(await screen.findByText("Nothing here yet")).toBeDefined()
+    expect(window.location.pathname).toBe("/instances/hub-ada")
   })
 })

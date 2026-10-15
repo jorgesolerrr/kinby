@@ -196,9 +196,11 @@ def test_recovery_distinguishes_an_unhealthy_instance_from_an_unavailable_runtim
                 detail="The container is running and the instance reports itself unhealthy.",
             ),
         )
-        assert [instance.state for instance in unreachable.instances] == [
-            RecoveredState.UNAVAILABLE
-        ]
+        assert [
+            instance.state
+            for instance in unreachable.instances
+            if instance.instance_id == created.instance_id
+        ] == [RecoveredState.UNAVAILABLE]
         assert "Docker daemon unavailable" in unreachable.instances[0].detail
         assert runtime.started == [str(created.instance_id)]
 

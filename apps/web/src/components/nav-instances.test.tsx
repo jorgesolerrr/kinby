@@ -119,6 +119,21 @@ function needsYou(row: ReturnType<typeof rowOf>) {
   return row.queryByText("Threads that need you:")?.parentElement?.textContent
 }
 
+describe("the instances in the sidebar", () => {
+  it("lists the home instance first, then the others in the hub's order", () => {
+    const listed = [
+      instanceSummary({ instance_id: "instance-1", persona_name: "Ada" }),
+      instanceSummary({ instance_id: "instance-2", manifest_id: "research" }),
+      instanceSummary({ instance_id: "instance-3", persona_name: "Kinby", home: true }),
+    ]
+    render(sidebar(fakeHub({}), fakeClock(), listed))
+
+    const links = screen.getAllByRole("link")
+    const named = ["Kinby", "Ada", "research"].map((name) => screen.getByRole("link", { name }))
+    expect(named.map((link) => links.indexOf(link))).toEqual([0, 1, 2])
+  })
+})
+
 describe("an instance's badge in the sidebar", () => {
   it.each([
     ["stopped", {}, "stopped"],
