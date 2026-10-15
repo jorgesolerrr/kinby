@@ -1900,6 +1900,12 @@
           ],
           "default": null
         },
+        "hub_secrets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/HubSecretName"
+          },
+          "type": "object"
+        },
         "manifest_id": {
           "anyOf": [
             {
@@ -1937,6 +1943,12 @@
           "default": "HEAD",
           "minLength": 1,
           "type": "string"
+        },
+        "save_to_hub": {
+          "additionalProperties": {
+            "$ref": "#/$defs/HubSecretName"
+          },
+          "type": "object"
         },
         "secrets": {
           "additionalProperties": {
@@ -5033,6 +5045,17 @@
       "additionalProperties": false,
       "description": "One secret field an instance declares, and whether it holds a value. Never the value.",
       "properties": {
+        "hub_secret": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HubSecretName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "is_set": {
           "type": "boolean"
         },

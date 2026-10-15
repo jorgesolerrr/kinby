@@ -181,6 +181,7 @@ from kinby.hub.setup import (
     configuration,
     held_secrets,
     instance_setup,
+    link_errors,
     manifest_settings,
     setup_errors,
 )
@@ -523,7 +524,8 @@ class Hub:
     async def create(self, command: InstanceCreateCommand) -> LifecycleOperationResult:
         """Accept a creation only once the whole request checks out: a vanilla instance's image is
         prepared, a factory role's factory passes the check, the name is free, the setup values
-        fit what the image or the role's template declares, and the library holds each pick."""
+        fit what the image or the role's template declares, the hub keeps each hub secret a field
+        takes, and the library holds each pick. Typed values to save to the hub are saved first."""
         manifest_id = _instance_name(command)
         role = command.factory_role
         template: InstanceTemplate | None = None
@@ -536,12 +538,14 @@ class Hub:
                 )
             member = _member(role.factory, template)
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
+        kept = self.secrets.values()
+        linked = {field: kept[name] for field, name in command.hub_secrets.items() if name in kept}
         errors = setup_errors(
             self._prepared_description() if template is None else template.setup,
             model=command.model,
             config=command.config,
-            secrets=secrets,
-        )
+            secrets=secrets | linked,
+        ) | link_errors(secrets, command.hub_secrets, command.save_to_hub, kept)
         if self._name_taken(manifest_id):
             errors["manifest_id"] = f'An instance named "{manifest_id}" exists already.'
         picks = sorted(set(command.picks))
@@ -552,6 +556,8 @@ class Hub:
             errors["picks"] = refusal
         if errors:
             raise InvalidSetup(errors)
+        for field, name in command.save_to_hub.items():
+            self.secrets.save(name, secrets[field])
         record = self._new_record(
             manifest_id,
             persona_name=command.persona_name,
@@ -559,7 +565,14 @@ class Hub:
             avatar=command.avatar,
             factory=member,
         )
-        return self._begin_create(record, command.model, command.config, secrets, template, picks)
+        accepted = self._begin_create(
+            record, command.model, command.config, secrets | linked, template, picks
+        )
+        self.registry.link_secrets(
+            record.instance_id,
+            held_secrets(command.model, command.hub_secrets | command.save_to_hub),
+        )
+        return accepted
 
     def _held(self, record: ManagedInstance) -> bool:
         """Whether the hub lists the instance, or an operation is still at work on it."""
@@ -2130,6 +2143,7 @@ class Hub:
             logins=self.registry.login_states(record.instance_id),
             running=running,
             secrets=self._environment(record.path),
+            links=self.registry.secret_links(record.instance_id),
             model=model,
             missing_commands=self.runs.missing_commands(record),
         )

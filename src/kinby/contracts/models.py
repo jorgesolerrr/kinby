@@ -719,6 +719,10 @@ class StorageItem(ContractModel):
 type FactoryName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
 
 
+#: A hub secret's name: free text, unique on the hub.
+type HubSecretName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
 class SetupFieldKind(StrEnum):
     """Where a setup field's value lands: the instance's configuration, or its secrets."""
 
@@ -863,6 +867,12 @@ class InstanceCreateCommand(ContractModel):
     config: dict[str, SetupValue] = Field(default_factory=dict)
     #: Values for its secret fields, and any other variables the instance should hold.
     secrets: dict[str, SecretStr] = Field(default_factory=dict)
+    #: The hub secret each secret field takes and stays linked to, by field name. A field takes
+    #: a typed value or a hub secret, not both.
+    hub_secrets: dict[str, HubSecretName] = Field(default_factory=dict)
+    #: The name each typed secret is saved under as a hub secret, by field name. The field then
+    #: links it.
+    save_to_hub: dict[str, HubSecretName] = Field(default_factory=dict)
     avatar: Avatar = DEFAULT_AVATAR
     #: The library skills the instance picks, copied in after its template or kinby's defaults.
     picks: list[SkillName] = Field(default_factory=list)
@@ -1090,6 +1100,8 @@ class SecretSetup(ContractModel):
     label: str
     required: bool
     is_set: bool
+    #: The hub secret the field is linked to, if any.
+    hub_secret: HubSecretName | None = None
 
 
 class InstanceSetup(ContractModel):
@@ -2238,10 +2250,6 @@ class InstancePicksResult(ContractModel):
     picks: list[SkillPick]
     #: The hash of the instance's ``skills-lock.json``. Null when it has none.
     hash: FileHash | None
-
-
-#: A hub secret's name: free text, unique on the hub.
-type HubSecretName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class HubSecretListCommand(ContractModel):

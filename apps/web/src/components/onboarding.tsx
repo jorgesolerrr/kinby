@@ -61,12 +61,16 @@ import {
   type FieldInput,
   followCreation,
   followStart,
+  heldVariable,
   type Identity,
   initialInput,
+  MODEL_FIELD,
   offeredRoles,
   PROMPT_FIELD,
   proposedName,
   type RoleOffer,
+  type SecretSource,
+  secretSource,
   type Starting,
 } from "@/lib/creation"
 import { followPreparation, type Preparation } from "@/lib/preparation"
@@ -130,6 +134,7 @@ export function Onboarding({
   const [skills, setSkills] = useState<string[]>([])
   const [identity, setIdentity] = useState(NEW_IDENTITY)
   const [values, setValues] = useState<Record<string, FieldInput>>({})
+  const [sources, setSources] = useState<Record<string, SecretSource>>({})
   const [submitted, setSubmitted] = useState<InstanceCreateCommand>()
   const [declared, setDeclared] = useState<DeclaredSetup>()
   // A later read wins. The one from the failed validate can still be in flight when
@@ -202,6 +207,7 @@ export function Onboarding({
     setOffer(next)
     setSkills(next?.suggestedPicks ?? [])
     setValues({})
+    setSources({})
   }
   const promptField = description?.setup_fields.find((field) => field.name === PROMPT_FIELD)
 
@@ -223,17 +229,24 @@ export function Onboarding({
         />
       ) : stage === "setup" && description !== undefined ? (
         <SetupStep
+          caller={caller}
+          clock={clock}
           fields={description.setup_fields.filter((field) => field.name !== PROMPT_FIELD)}
           values={values}
+          sources={sources}
           errors={refused}
           onChange={(name, value) => setValues((current) => ({ ...current, [name]: value }))}
+          onSource={(name, source) => setSources((current) => ({ ...current, [name]: source }))}
           onBack={() => setStage("prompt")}
-          onCreate={() =>
+          onCreate={(resolved) =>
             setSubmitted(
-              createCommand(description.setup_fields, values, identity, {
-                role: offer?.role,
-                skills,
-              }),
+              createCommand(
+                description.setup_fields,
+                values,
+                identity,
+                { role: offer?.role, skills },
+                resolved,
+              ),
             )
           }
         />
@@ -590,33 +603,70 @@ function PromptStep({
   )
 }
 
+/**
+ * The setup fields. Each secret field takes the hub secret named after the variable it is held
+ * under until the user picks another source.
+ */
 function SetupStep({
+  caller,
+  clock,
   fields,
   values,
+  sources,
   errors,
   onChange,
+  onSource,
   onBack,
   onCreate,
 }: {
+  caller: Pick<Client, "call">
+  clock: Clock
   fields: SetupField[]
   values: Record<string, FieldInput>
+  sources: Record<string, SecretSource>
   errors: Record<string, string>
   onChange: (name: string, value: FieldInput) => void
+  onSource: (name: string, source: SecretSource) => void
   onBack: () => void
-  onCreate: () => void
+  onCreate: (sources: Record<string, SecretSource>) => void
 }) {
+  const read = useCallback(() => caller.call("hub.secret.list", {}), [caller])
+  const kept = useRead(read, clock).value?.secrets.map(({ name }) => name) ?? []
+  const model = values[MODEL_FIELD]
+  const variable = (field: SetupField) =>
+    heldVariable(field, typeof model === "string" ? model : "")
+  const resolved = Object.fromEntries(
+    fields
+      .filter((field) => field.kind === "secret")
+      .map((field) => [field.name, secretSource(sources[field.name], variable(field), kept)]),
+  )
+  const unnamed = Object.values(resolved).some(unnamedSave)
   const inputs = (kind: SetupField["kind"]) =>
     fields
       .filter((field) => field.kind === kind)
-      .map((field) => (
-        <SetupInput
-          key={field.name}
-          field={field}
-          value={values[field.name] ?? initialInput(field)}
-          error={errors[field.name]}
-          onChange={(value) => onChange(field.name, value)}
-        />
-      ))
+      .map((field) =>
+        kind === "secret" ? (
+          <SecretInput
+            key={field.name}
+            field={field}
+            value={values[field.name] ?? initialInput(field)}
+            error={errors[field.name]}
+            kept={kept}
+            variable={variable(field)}
+            source={resolved[field.name] ?? {}}
+            onChange={(value) => onChange(field.name, value)}
+            onSource={(source) => onSource(field.name, source)}
+          />
+        ) : (
+          <SetupInput
+            key={field.name}
+            field={field}
+            value={values[field.name] ?? initialInput(field)}
+            error={errors[field.name]}
+            onChange={(value) => onChange(field.name, value)}
+          />
+        ),
+      )
   // A refusal of no field shown here, such as a name another instance holds.
   const others = Object.entries(errors)
     .filter(([name]) => !fields.some((field) => field.name === name))
@@ -638,7 +688,8 @@ function SetupStep({
         <FieldSet>
           <FieldLegend>Secrets</FieldLegend>
           <FieldDescription>
-            Write-only. The hub keeps them with the instance and never sends them back.
+            Write-only. The hub keeps them with the instance and never sends them back. A field can
+            take a hub secret instead.
           </FieldDescription>
           {inputs("secret")}
         </FieldSet>
@@ -647,9 +698,20 @@ function SetupStep({
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
-        <Button onClick={onCreate}>Create instance</Button>
+        <Button disabled={unnamed} onClick={() => onCreate(resolved)}>
+          Create instance
+        </Button>
       </div>
     </section>
+  )
+}
+
+function SetupLabel({ field, htmlFor }: { field: SetupField; htmlFor: string }) {
+  return (
+    <FieldLabel htmlFor={htmlFor}>
+      {field.label}
+      {!field.required && <span className="text-muted-foreground">(optional)</span>}
+    </FieldLabel>
   )
 }
 
@@ -666,12 +728,7 @@ function SetupInput({
 }) {
   const id = `setup-${field.name}`
   const invalid = error !== undefined || undefined
-  const label = (
-    <FieldLabel htmlFor={id}>
-      {field.label}
-      {!field.required && <span className="text-muted-foreground">(optional)</span>}
-    </FieldLabel>
-  )
+  const label = <SetupLabel field={field} htmlFor={id} />
   if (field.type === "boolean") {
     return (
       <Field orientation="horizontal" data-invalid={invalid}>
@@ -700,6 +757,111 @@ function SetupInput({
         invalid={invalid}
         onChange={(next) => onChange(next)}
       />
+      <FieldDescription>{field.description}</FieldDescription>
+      <FieldError>{error}</FieldError>
+    </Field>
+  )
+}
+
+// No hub secret has an empty name, so it stands for typing a value.
+const TYPED = ""
+
+const unnamedSave = (source: SecretSource) => source.save?.trim() === ""
+
+/**
+ * A secret field: a hub secret it takes, or a value typed, which can be saved to the hub under a
+ * name that starts as the field's variable.
+ */
+function SecretInput({
+  field,
+  value,
+  error,
+  kept,
+  variable,
+  source,
+  onChange,
+  onSource,
+}: {
+  field: SetupField
+  value: FieldInput | undefined
+  error: string | undefined
+  kept: string[]
+  variable: string
+  source: SecretSource
+  onChange: (value: FieldInput) => void
+  onSource: (source: SecretSource) => void
+}) {
+  const id = `setup-${field.name}`
+  const invalid = error !== undefined || undefined
+  const items = [
+    { value: TYPED, label: "Type a value" },
+    ...kept.map((name) => ({ value: name, label: name })),
+  ]
+  return (
+    <Field data-invalid={invalid}>
+      <SetupLabel field={field} htmlFor={source.hubSecret === undefined ? id : `${id}-hub`} />
+      {kept.length > 0 && (
+        <Select
+          items={items}
+          value={source.hubSecret ?? TYPED}
+          onValueChange={(picked) => onSource(picked ? { hubSecret: picked } : {})}
+        >
+          <SelectTrigger
+            id={`${id}-hub`}
+            aria-label={`Hub secret for ${field.label}`}
+            aria-invalid={invalid}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {items.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      )}
+      {source.hubSecret === undefined && (
+        <>
+          <SetupControl
+            id={id}
+            field={field}
+            value={typeof value === "string" ? value : ""}
+            invalid={invalid}
+            onChange={(next) => {
+              onChange(next)
+              // Hub secrets read later must not take over a field the user typed into.
+              onSource(source)
+            }}
+          />
+          <Field orientation="horizontal">
+            <Checkbox
+              id={`${id}-save`}
+              checked={source.save !== undefined}
+              onCheckedChange={(on) => onSource(on ? { save: variable } : {})}
+            />
+            <FieldLabel htmlFor={`${id}-save`}>Save to the hub</FieldLabel>
+          </Field>
+          {source.save !== undefined && (
+            <Field data-invalid={unnamedSave(source) || undefined}>
+              <FieldLabel htmlFor={`${id}-name`}>Name on the hub</FieldLabel>
+              <Input
+                id={`${id}-name`}
+                autoComplete="off"
+                value={source.save}
+                aria-invalid={unnamedSave(source) || undefined}
+                onChange={(event) => onSource({ save: event.target.value })}
+              />
+              <FieldError>
+                {unnamedSave(source) ? "Name the hub secret to save it under." : undefined}
+              </FieldError>
+            </Field>
+          )}
+        </>
+      )}
       <FieldDescription>{field.description}</FieldDescription>
       <FieldError>{error}</FieldError>
     </Field>
