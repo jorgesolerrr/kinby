@@ -937,6 +937,53 @@ describe("the onboarding's secret fields and hub secrets", () => {
 
     expect(secretsSent(caller)).toEqual({ secrets: {}, hub_secrets: {}, save_to_hub: {} })
   })
+
+  it("asks for a name before it saves a typed value to the hub", async () => {
+    const caller = keeping()
+    const user = await toSecrets(caller, "openai:gpt-5")
+
+    await user.type(screen.getByLabelText("API key"), "sk-private")
+    await user.click(secretField("API key").getByRole("checkbox", { name: "Save to the hub" }))
+    await user.clear(secretField("API key").getByLabelText("Name on the hub"))
+
+    expect(secretField("API key").getByRole("alert").textContent).toBe(
+      "Name the hub secret to save it under.",
+    )
+    const create = screen.getByRole("button", { name: "Create instance" })
+    expect(create.hasAttribute("disabled")).toBe(true)
+    await user.click(create)
+    expect(sent(caller)).toEqual([])
+  })
+
+  it("keeps a value typed before the hub secrets arrive", async () => {
+    let arrived = false
+    const caller = hub({
+      "image.describe": () => withToken,
+      "hub.secret.list": () => {
+        if (!arrived) {
+          throw new CallError({ code: "CONNECTION_LOST", message: "dropped", retryable: false })
+        }
+        return { secrets: [{ name: "OPENAI_API_KEY" }] }
+      },
+    })
+    const { user, clock } = await openOnboarding(caller)
+    await toSetup(user)
+    await user.type(screen.getByLabelText("Model"), "openai:gpt-5")
+
+    await user.type(screen.getByLabelText("API key"), "sk-private")
+    arrived = true
+    await act(() => clock.advance(5_000))
+
+    expect(screen.getByRole("combobox", { name: "Hub secret for API key" }).textContent).toContain(
+      "Type a value",
+    )
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    expect(secretsSent(caller)).toEqual({
+      secrets: { api_key: "sk-private" },
+      hub_secrets: {},
+      save_to_hub: {},
+    })
+  })
 })
 
 describe("the onboarding's role, skills and prompt steps", () => {

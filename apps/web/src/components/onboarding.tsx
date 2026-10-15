@@ -640,6 +640,7 @@ function SetupStep({
       .filter((field) => field.kind === "secret")
       .map((field) => [field.name, secretSource(sources[field.name], variable(field), kept)]),
   )
+  const unnamed = Object.values(resolved).some(unnamedSave)
   const inputs = (kind: SetupField["kind"]) =>
     fields
       .filter((field) => field.kind === kind)
@@ -697,7 +698,9 @@ function SetupStep({
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
-        <Button onClick={() => onCreate(resolved)}>Create instance</Button>
+        <Button disabled={unnamed} onClick={() => onCreate(resolved)}>
+          Create instance
+        </Button>
       </div>
     </section>
   )
@@ -763,6 +766,8 @@ function SetupInput({
 // No hub secret has an empty name, so it stands for typing a value.
 const TYPED = ""
 
+const unnamedSave = (source: SecretSource) => source.save?.trim() === ""
+
 /**
  * A secret field: a hub secret it takes, or a value typed, which can be saved to the hub under a
  * name that starts as the field's variable.
@@ -826,7 +831,11 @@ function SecretInput({
             field={field}
             value={typeof value === "string" ? value : ""}
             invalid={invalid}
-            onChange={(next) => onChange(next)}
+            onChange={(next) => {
+              onChange(next)
+              // Hub secrets read later must not take over a field the user typed into.
+              onSource(source)
+            }}
           />
           <Field orientation="horizontal">
             <Checkbox
@@ -837,14 +846,18 @@ function SecretInput({
             <FieldLabel htmlFor={`${id}-save`}>Save to the hub</FieldLabel>
           </Field>
           {source.save !== undefined && (
-            <Field>
+            <Field data-invalid={unnamedSave(source) || undefined}>
               <FieldLabel htmlFor={`${id}-name`}>Name on the hub</FieldLabel>
               <Input
                 id={`${id}-name`}
                 autoComplete="off"
                 value={source.save}
+                aria-invalid={unnamedSave(source) || undefined}
                 onChange={(event) => onSource({ save: event.target.value })}
               />
+              <FieldError>
+                {unnamedSave(source) ? "Name the hub secret to save it under." : undefined}
+              </FieldError>
             </Field>
           )}
         </>

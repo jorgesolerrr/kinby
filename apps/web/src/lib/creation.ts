@@ -157,8 +157,7 @@ export function createCommand(
       const text = String(value)
       if (text.trim() === "") continue
       secrets[field.name] = text
-      const saved = source.save?.trim()
-      if (saved) saveToHub[field.name] = saved
+      if (source.save !== undefined) saveToHub[field.name] = source.save
     } else config[field.name] = value
   }
   // The name is both the instance's manifest id and the persona it answers as.

@@ -156,8 +156,29 @@ def test_save_to_the_hub_stores_the_typed_value_and_links_the_field_to_it(tmp_pa
             {"GITHUB_TOKEN": "GITHUB_TOKEN"},
             {"GITHUB_TOKEN": "Type a value to save it to the hub."},
         ),
+        (
+            {"api_key": "sk-typed"},
+            {"GITHUB_TOKEN": "GITHUB_TOKEN"},
+            {"api_key": "GITHUB_TOKEN"},
+            {"api_key": 'The hub keeps a secret named "GITHUB_TOKEN" already.'},
+        ),
+        (
+            {"api_key": "sk-typed", "GITHUB_TOKEN": "ghp-typed"},
+            {},
+            {"api_key": "SHARED", "GITHUB_TOKEN": "SHARED"},
+            {
+                "api_key": 'Another field saves to "SHARED" too.',
+                "GITHUB_TOKEN": 'Another field saves to "SHARED" too.',
+            },
+        ),
     ],
-    ids=["unknown-hub-secret", "typed-and-linked", "nothing-to-save"],
+    ids=[
+        "unknown-hub-secret",
+        "typed-and-linked",
+        "nothing-to-save",
+        "saved-under-a-kept-name",
+        "two-saves-under-one-name",
+    ],
 )
 def test_a_link_or_save_that_does_not_fit_is_refused_on_its_field_and_creates_nothing(
     tmp_path, secrets, hub_secrets, save_to_hub, fields

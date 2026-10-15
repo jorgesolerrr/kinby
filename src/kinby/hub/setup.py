@@ -4,6 +4,7 @@ how much of that setup an instance has done."""
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from uuid import UUID
 
@@ -87,9 +88,21 @@ def link_errors(
     kept: Collection[HubSecretName],
 ) -> dict[str, str]:
     """What is wrong with each field's hub secret, or with saving its typed value to the hub, by
-    field name. Blank text counts as nothing typed, the way creation reads it."""
+    field name. Blank text counts as nothing typed, the way creation reads it.
+
+    A save never replaces a hub secret: replacing one rewrites the instances linked to it
+    (ADR 0095), which a creation does not do.
+    """
     typed = {name for name, value in secrets.items() if value.strip()}
-    errors = dict.fromkeys(save_to_hub.keys() - typed, "Type a value to save it to the hub.")
+    saved = Counter(save_to_hub.values())
+    errors: dict[str, str] = {}
+    for name, hub_secret in save_to_hub.items():
+        if name not in typed:
+            errors[name] = "Type a value to save it to the hub."
+        elif hub_secret in kept:
+            errors[name] = f'The hub keeps a secret named "{hub_secret}" already.'
+        elif saved[hub_secret] > 1:
+            errors[name] = f'Another field saves to "{hub_secret}" too.'
     for name, hub_secret in hub_secrets.items():
         if name in typed:
             errors[name] = "Type a value or take a hub secret, not both."
