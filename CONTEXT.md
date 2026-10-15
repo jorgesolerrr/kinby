@@ -117,6 +117,11 @@ The stable identity of one entry in the **instance registry**. It is distinct fr
 The environment values one managed **instance** holds, kept in a protected file beside that instance and never in the **instance registry** or the **hub**'s own environment. A container reads them once, when it is created, so replacing them changes nothing until a **container recreation**.
 _Avoid_: credentials, env vars
 
+### Hub secret
+
+A named value the **hub** keeps so that several **instances** can take it for a secret **setup field** instead of the user typing it again. The hub keeps it in a protected file of its own, never in the **instance registry** or its own environment, and never shows it back. An instance that takes one stays linked to it: the value is written into that instance's **instance secrets**, and replacing the hub secret rewrites them, which reaches the instance as a **recreate reason**.
+_Avoid_: secret repository, vault, credentials
+
 ### Lifecycle operation
 
 One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. An **image preparation** is one too, and it belongs to no instance. A **subscription login** is one too, and it runs beside the instance's other operations. Its identity and outcome remain available after the requesting client disconnects.
