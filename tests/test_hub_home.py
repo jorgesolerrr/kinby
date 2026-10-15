@@ -17,10 +17,11 @@ from kinby.contracts import (
     LifecycleOperationResult,
     OperationState,
 )
-from kinby.hub import Hub
+from kinby.hub import Hub, RuntimeStatus
 from tests.test_hub import (
     FakeImages,
     FakeRuntime,
+    UnavailableRuntime,
     created_instance,
     finished_operation,
     hub_at,
@@ -128,6 +129,38 @@ def test_a_home_instance_whose_creation_failed_is_created_again_on_the_next_star
 
         [kinby] = (await _listed(reopened)).instances
         assert kinby.instance_id == home.instance_id
+        assert kinby.home
+        reopened.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_home_creation_interrupted_after_its_container_is_kept_while_the_runtime_is_away(
+    tmp_path,
+):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        runtime.create_failure = asyncio.CancelledError()
+        hub = hub_at(tmp_path / "hub", runtime=runtime)
+        interrupted = (await hub.recover()).home
+        assert interrupted is not None
+        while not runtime.created:
+            await asyncio.sleep(0.01)
+        hub.close()
+        # Docker made the container before the hub stopped.
+        runtime.states[str(interrupted.instance_id)] = RuntimeStatus("created", None)
+        runtime.create_failure = None
+
+        unavailable = hub_at(tmp_path / "hub", runtime=UnavailableRuntime())
+        while_away = await unavailable.recover()
+        unavailable.close()
+        reopened = hub_at(tmp_path / "hub", runtime=runtime)
+        back = await reopened.recover()
+
+        assert while_away.home is None
+        assert back.home is None
+        [kinby] = (await _listed(reopened)).instances
+        assert kinby.instance_id == interrupted.instance_id
         assert kinby.home
         reopened.close()
 

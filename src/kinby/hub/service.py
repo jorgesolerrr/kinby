@@ -176,6 +176,7 @@ from kinby.hub.models import (
     InstanceSpec,
     InstanceUnreachable,
     LifecycleRecovery,
+    RecoveredState,
     RuntimeStatus,
     SetupSpec,
     Signal,
@@ -2196,9 +2197,21 @@ class Hub:
         recovery = await recover_lifecycle(self.registry, self._runtime, self._restore_start)
         self._schedule(self._collect_images())
         self.runs.resume()
-        if any(record.home and self._held(record) for record in self.registry.managed_instances()):
+        if not self._home_lost(recovery):
             return recovery
         return replace(recovery, home=self._create_home())
+
+    def _home_lost(self, recovery: LifecycleRecovery) -> bool:
+        """Whether no instance is marked home, or recovery found the marked one's creation never
+        reached its container. One recovery could not look at stays marked for a later start."""
+        home = next((record for record in self.registry.managed_instances() if record.home), None)
+        if home is None:
+            return True
+        return any(
+            recovered.instance_id == home.instance_id
+            and recovered.state is RecoveredState.INCOMPLETE
+            for recovered in recovery.instances
+        )
 
     def _create_home(self) -> LifecycleOperationResult:
         """Create a vanilla instance and mark it home, through the ordinary creation. Its API
