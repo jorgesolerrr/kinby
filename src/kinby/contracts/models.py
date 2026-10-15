@@ -2265,10 +2265,21 @@ class HubSecretListCommand(ContractModel):
     pass
 
 
+class HubSecretLink(ContractModel):
+    """An instance's secret field that takes a hub secret."""
+
+    instance_id: UUID
+    manifest_id: str
+    #: The secret setup field, by name.
+    field: str
+
+
 class HubSecret(ContractModel):
     """A hub secret as the hub shows it: by name, never its value."""
 
     name: HubSecretName
+    #: In instance creation order.
+    links: list[HubSecretLink] = Field(default_factory=list)
 
 
 class HubSecretListResult(ContractModel):
@@ -2283,6 +2294,8 @@ class HubSecretSetCommand(ContractModel):
 
     name: HubSecretName
     value: Annotated[SecretStr, Field(min_length=1)]
+    #: The linked running instances to recreate once their secrets hold the new value.
+    recreate: list[UUID] = Field(default_factory=list)
 
     @field_serializer("value", when_used="json")
     def serialize_value(self, value: SecretStr) -> str:
@@ -2295,6 +2308,11 @@ class HubSecretSetResult(ContractModel):
 
 class HubSecretDeleteCommand(ContractModel):
     name: HubSecretName
+
+
+class HubSecretDeleteResult(ContractModel):
+    #: Each instance's field keeps the value it held.
+    unlinked: list[HubSecretLink]
 
 
 type StepId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]

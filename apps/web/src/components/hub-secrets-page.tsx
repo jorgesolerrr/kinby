@@ -1,4 +1,4 @@
-import type { Client, Clock, HubSecret } from "@kinby/contract"
+import type { Client, Clock, HubSecret, HubSecretLink, HubSecretSetCommand } from "@kinby/contract"
 import { CircleXIcon, Trash2Icon } from "lucide-react"
 import { type FormEvent, useCallback, useId, useState } from "react"
 
@@ -16,6 +16,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogClose,
@@ -32,6 +33,7 @@ import {
   Item,
   ItemActions,
   ItemContent,
+  ItemDescription,
   ItemFooter,
   ItemGroup,
   ItemTitle,
@@ -44,9 +46,28 @@ import { type Followed, followOperation, reason } from "@/lib/operation"
 
 type Caller = Pick<Client, "call">
 
-/** The hub secrets by name, to add, replace or delete. No value is ever read back. */
+/** The instances linked to a hub secret, each with the field it links. */
+function linkedNames(links: HubSecretLink[]): string {
+  return links.map((link) => `${link.manifest_id} (${link.field})`).join(", ")
+}
+
+/**
+ * The hub secrets by name with the instances linked to them, to add, replace or delete. No value
+ * is ever read back.
+ */
 export function HubSecretsPage({ client, clock }: { client: Caller; clock: Clock }) {
-  const list = useCallback(() => client.call("hub.secret.list", {}), [client])
+  const list = useCallback(async () => {
+    const [{ secrets }, { instances }] = await Promise.all([
+      client.call("hub.secret.list", {}),
+      client.call("instance.list", {}),
+    ])
+    const running = new Set(
+      instances
+        .filter((instance) => instance.intended_state === "running")
+        .map((instance) => instance.instance_id),
+    )
+    return { secrets, running }
+  }, [client])
   const { value: listed, failure, readAgain } = useRead(list, clock)
 
   return (
@@ -71,6 +92,7 @@ export function HubSecretsPage({ client, clock }: { client: Caller; clock: Clock
               caller={client}
               clock={clock}
               secret={secret}
+              running={listed.running}
               onChanged={readAgain}
             />
           ))}
@@ -84,14 +106,16 @@ function SecretItem({
   caller,
   clock,
   secret,
+  running,
   onChanged,
 }: {
   caller: Caller
   clock: Clock
   secret: HubSecret
+  running: ReadonlySet<string>
   onChanged: () => void
 }) {
-  const { name } = secret
+  const { name, links = [] } = secret
   const [deleting, setDeleting] = useState(false)
   const [failure, setFailure] = useState<unknown>()
 
@@ -112,9 +136,15 @@ function SecretItem({
     <Item render={<li />} aria-label={name} variant="outline" size="sm">
       <ItemContent>
         <ItemTitle>{name}</ItemTitle>
+        {links.length > 0 && <ItemDescription>Linked to {linkedNames(links)}</ItemDescription>}
       </ItemContent>
       <ItemActions>
-        <SetDialog caller={caller} clock={clock} replacing={name} onSet={onChanged} />
+        <SetDialog
+          caller={caller}
+          clock={clock}
+          replacing={{ name, links, running }}
+          onSet={onChanged}
+        />
         <AlertDialog>
           <AlertDialogTrigger render={<Button variant="outline" size="sm" disabled={deleting} />}>
             {deleting ? (
@@ -129,6 +159,8 @@ function SecretItem({
               <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
               <AlertDialogDescription>
                 The hub deletes its copy. A token stays valid at its provider.
+                {links.length > 0 &&
+                  ` It unlinks ${linkedNames(links)}, which keep the value they hold.`}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -153,14 +185,17 @@ function SecretItem({
   )
 }
 
-interface SetRequest {
+/** The hub secret a dialog replaces, the instances linked to it, and which instances run. */
+interface Replacing {
   name: string
-  value: string
+  links: HubSecretLink[]
+  running: ReadonlySet<string>
 }
 
 /**
- * Add a hub secret from its name and value, or replace the value of the one named `replacing`.
- * The value leaves the page once the hub holds it. `onSet` must keep its identity.
+ * Add a hub secret from its name and value, or replace the value of the one in `replacing`. A
+ * replacement offers to recreate the running linked instances. The value leaves the page once the
+ * hub holds it. `onSet` must keep its identity.
  */
 function SetDialog({
   caller,
@@ -170,26 +205,35 @@ function SetDialog({
 }: {
   caller: Caller
   clock: Clock
-  replacing?: string
+  replacing?: Replacing
   onSet: () => void
 }) {
   const id = useId()
+  const replaced = replacing?.name
   const [open, setOpen] = useState(false)
-  const [name, setName] = useState(replacing ?? "")
+  const [name, setName] = useState(replaced ?? "")
   const [value, setValue] = useState("")
+  const [recreating, setRecreating] = useState(true)
   // A new object for each save, so saving again follows a new operation.
-  const [request, setRequest] = useState<SetRequest>()
+  const [request, setRequest] = useState<HubSecretSetCommand>()
   const reset = useCallback(
     (opened: boolean) => {
       setOpen(opened)
-      setName(replacing ?? "")
+      setName(replaced ?? "")
       setValue("")
+      setRecreating(true)
       setRequest(undefined)
     },
-    [replacing],
+    [replaced],
   )
+  const runningLinked =
+    replacing === undefined
+      ? []
+      : [...new Set(replacing.links.map((link) => link.instance_id))].filter((instanceId) =>
+          replacing.running.has(instanceId),
+        )
   const follow = useCallback(
-    (asked: SetRequest, report: (followed: Followed) => void) =>
+    (asked: HubSecretSetCommand, report: (followed: Followed) => void) =>
       followOperation(
         caller,
         () => caller.call("hub.secret.set", asked),
@@ -209,7 +253,11 @@ function SetDialog({
 
   const save = (event: FormEvent) => {
     event.preventDefault()
-    setRequest({ name, value })
+    setRequest(
+      replacing === undefined
+        ? { name, value }
+        : { name, value, recreate: recreating ? runningLinked : [] },
+    )
   }
 
   return (
@@ -221,12 +269,14 @@ function SetDialog({
         <form className="flex flex-col gap-4" onSubmit={save}>
           <DialogHeader>
             <DialogTitle>
-              {replacing === undefined ? "Add a hub secret" : `Replace ${replacing}`}
+              {replacing === undefined ? "Add a hub secret" : `Replace ${replaced}`}
             </DialogTitle>
             <DialogDescription>
               {replacing === undefined
                 ? "Its name is how you pick it. Its value is never shown back."
-                : "The new value takes the old one's place."}
+                : replacing.links.length === 0
+                  ? "The new value takes the old one's place."
+                  : `The new value takes the old one's place in ${linkedNames(replacing.links)}.`}
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
@@ -257,6 +307,17 @@ function SetDialog({
               />
               {failed !== undefined && <FieldError errors={[{ message: failed }]} />}
             </Field>
+            {runningLinked.length > 0 && (
+              <Field orientation="horizontal">
+                <Checkbox
+                  id={`${id}-recreate`}
+                  checked={recreating}
+                  disabled={saving}
+                  onCheckedChange={setRecreating}
+                />
+                <FieldLabel htmlFor={`${id}-recreate`}>Recreate the running ones now</FieldLabel>
+              </Field>
+            )}
           </FieldGroup>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="outline" disabled={saving} />}>

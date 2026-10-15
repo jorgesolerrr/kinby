@@ -4,13 +4,7 @@ import json
 import os
 from pathlib import Path
 
-from kinby.contracts import (
-    HubSecret,
-    HubSecretDeleteCommand,
-    HubSecretListCommand,
-    HubSecretListResult,
-    HubSecretName,
-)
+from kinby.contracts import HubSecretName
 from kinby.core.errors import HubSecretNotFound
 
 
@@ -48,19 +42,15 @@ class HubSecrets:
             return {}
         return json.loads(self._path.read_text(encoding="utf-8"))
 
-    async def list(self, command: HubSecretListCommand) -> HubSecretListResult:
-        return HubSecretListResult(secrets=[HubSecret(name=name) for name in sorted(self.values())])
-
     def save(self, name: HubSecretName, value: str) -> None:
         """Create or replace one hub secret."""
         self._write(self.values() | {name: value})
 
-    async def delete(self, command: HubSecretDeleteCommand) -> HubSecretListResult:
+    def delete(self, name: HubSecretName) -> None:
         secrets = self.values()
-        if secrets.pop(command.name, None) is None:
-            raise HubSecretNotFound(f'Hub secret "{command.name}" was not found.')
+        if secrets.pop(name, None) is None:
+            raise HubSecretNotFound(f'Hub secret "{name}" was not found.')
         self._write(secrets)
-        return await self.list(HubSecretListCommand())
 
     def _write(self, secrets: dict[HubSecretName, str]) -> None:
         replace_protected(self._path, json.dumps(secrets))

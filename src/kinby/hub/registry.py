@@ -698,6 +698,23 @@ class HubRegistry:
             ).fetchall()
         return dict(rows)
 
+    def linked_to(self, hub_secret: HubSecretName) -> dict[UUID, list[str]]:
+        """The variables linked to the hub secret, by instance."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT instance_id, variable FROM secret_links WHERE hub_secret = ? "
+                "ORDER BY variable",
+                (hub_secret,),
+            ).fetchall()
+        linked: dict[UUID, list[str]] = {}
+        for instance_id, variable in rows:
+            linked.setdefault(UUID(instance_id), []).append(variable)
+        return linked
+
+    def unlink_hub_secret(self, hub_secret: HubSecretName) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM secret_links WHERE hub_secret = ?", (hub_secret,))
+
     def record_template(
         self, instance_id: UUID, setup: DeclaredSetup, baseline: dict[str, FileHash]
     ) -> None:

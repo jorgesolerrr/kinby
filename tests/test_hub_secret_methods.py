@@ -18,6 +18,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     HubSecretDeleteCommand,
+    HubSecretDeleteResult,
     HubSecretListCommand,
     HubSecretListResult,
     HubSecretSetCommand,
@@ -62,12 +63,12 @@ def test_hub_secrets_are_set_listed_replaced_and_deleted_by_name(tmp_path):
         assert hub.secrets.values() == {"ANTHROPIC_API_KEY": "sk-test", "GITHUB_TOKEN": _SENTINEL}
         assert _SENTINEL not in listed.model_dump_json()
 
-        remaining = await client.call(
+        deleted = await client.call(
             HUB_SECRET_DELETE, HubSecretDeleteCommand(name="ANTHROPIC_API_KEY")
         )
 
-        assert isinstance(remaining, HubSecretListResult)
-        assert [secret.name for secret in remaining.secrets] == ["GITHUB_TOKEN"]
+        assert isinstance(deleted, HubSecretDeleteResult)
+        assert deleted.unlinked == []
         assert await _names(client) == ["GITHUB_TOKEN"]
         assert hub.secrets.values() == {"GITHUB_TOKEN": _SENTINEL}
 
@@ -118,7 +119,7 @@ def test_no_hub_secret_value_reaches_sqlite_the_operation_record_or_the_hub_envi
     "payload",
     [
         {"name": "GITHUB_TOKEN", "value": [_SENTINEL]},
-        {"name": "GITHUB_TOKEN", "value": _SENTINEL, "recreate": _SENTINEL},
+        {"name": "GITHUB_TOKEN", "value": _SENTINEL, "unknown": _SENTINEL},
         {"name": "  ", "value": _SENTINEL},
         {"name": "GITHUB_TOKEN", "value": ""},
     ],

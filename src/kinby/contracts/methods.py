@@ -33,6 +33,7 @@ from kinby.contracts.models import (
     FactoryRunSendBackCommand,
     FactoryRunSubscribeCommand,
     HubSecretDeleteCommand,
+    HubSecretDeleteResult,
     HubSecretListCommand,
     HubSecretListResult,
     HubSecretSetCommand,
@@ -410,7 +411,7 @@ HUB_SECRET_LIST = Method(
 )
 HUB_SECRET_SET = Method("hub.secret.set", Scope.HUB_ADMIN, HubSecretSetCommand, HubSecretSetResult)
 HUB_SECRET_DELETE = Method(
-    "hub.secret.delete", Scope.HUB_ADMIN, HubSecretDeleteCommand, HubSecretListResult
+    "hub.secret.delete", Scope.HUB_ADMIN, HubSecretDeleteCommand, HubSecretDeleteResult
 )
 #: The same time range and bucket size as stats.get, asked of every running instance.
 STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
