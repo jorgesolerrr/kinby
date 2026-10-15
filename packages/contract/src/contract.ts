@@ -306,6 +306,10 @@ export interface Contract {
       command: InstanceRecreateCommand;
       result: LifecycleOperationResult;
     };
+    "instance.relay.read": {
+      command: InstanceRelayReadCommand;
+      result: InstanceRelayReadResult;
+    };
     "instance.remove": {
       command: InstanceRemoveCommand;
       result: LifecycleOperationResult;
@@ -1026,6 +1030,21 @@ export interface InstanceProbeResult {
 }
 export interface InstanceRecreateCommand {
   instance_id: string;
+}
+/**
+ * One read of an instance, which the hub makes with that instance's control token.
+ */
+export interface InstanceRelayReadCommand {
+  instance_id: string;
+  method: string;
+  params?: {
+    [k: string]: JsonValue;
+  };
+}
+export interface InstanceRelayReadResult {
+  result: {
+    [k: string]: JsonValue;
+  };
 }
 /**
  * Drain and remove one instance's container. Its data and its record stay behind.

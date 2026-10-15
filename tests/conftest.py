@@ -1,13 +1,13 @@
 import pytest
 
-from kinby.plugins.intake import HUB_URL_VARIABLE
+from kinby.plugins.hub import HUB_URL_VARIABLE
 
 
 @pytest.fixture(autouse=True)
-def _outside_a_factory(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run every test as an instance outside any factory, even inside a factory's container.
+def _without_a_hub_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run every test as an instance without a hub route, even inside a factory's container.
 
-    The hub gives each factory instance a hub URL, and with it the model gets the
-    `hand_to_factory` tool. A test that wants it sets the variable itself.
+    The hub gives a factory's instances and the home instance a hub URL, and with it the model
+    gets `hand_to_factory` and `hub_read`. A test that wants them sets the variable itself.
     """
     monkeypatch.delenv(HUB_URL_VARIABLE, raising=False)

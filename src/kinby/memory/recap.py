@@ -42,6 +42,7 @@ from kinby.instance import Instance, RecapPolicy, reload_manifest
 from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR
 from kinby.instance.recap import load_recap_lens
 from kinby.memory.facade import Episode, Memory, new_node_id
+from kinby.plugins.hub import hub_read
 
 if TYPE_CHECKING:
     from kinby.contracts import Event
@@ -420,7 +421,10 @@ def _render_turn(events: list[Event], calls: list[ToolCall]) -> str:
     for call in calls:
         result = results.get(call.call_id)
         rendered_result = "No result was recorded."
-        if result is not None:
+        if call.name == hub_read.name:
+            # What another instance holds stays out of this instance's memory.
+            rendered_result = "Withheld: it was read through the hub."
+        elif result is not None:
             rendered_result = _truncate_result(result.output)
             if result.error:
                 rendered_result = f"Error: {rendered_result}"

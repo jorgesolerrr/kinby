@@ -61,6 +61,8 @@ from kinby.contracts.models import (
     InstanceProbeCommand,
     InstanceProbeResult,
     InstanceRecreateCommand,
+    InstanceRelayReadCommand,
+    InstanceRelayReadResult,
     InstanceRemoveCommand,
     InstanceRestoreCommand,
     InstanceSecretsSetCommand,
@@ -337,6 +339,9 @@ INSTANCE_STATUS = Method(
     "instance.status", Scope.HUB_READ, InstanceStatusCommand, InstanceStatusResult
 )
 INSTANCE_LOGS = Method("instance.logs", Scope.HUB_READ, InstanceLogsCommand, InstanceLogsResult)
+INSTANCE_RELAY_READ = Method(
+    "instance.relay.read", Scope.HUB_HOME, InstanceRelayReadCommand, InstanceRelayReadResult
+)
 INSTANCE_LOGIN_START = Method(
     "instance.login.start", Scope.HUB_ADMIN, InstanceLoginStartCommand, LifecycleOperationResult
 )
@@ -479,6 +484,7 @@ METHODS = (
     INSTANCE_LIST,
     INSTANCE_STATUS,
     INSTANCE_LOGS,
+    INSTANCE_RELAY_READ,
     INSTANCE_LOGIN_START,
     OPERATION_GET,
     IMAGE_PREPARE,
@@ -511,6 +517,25 @@ METHODS = (
     STATS_SUMMARY,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE)
+
+#: The methods of an instance the hub relays to the home instance: reads only.
+RELAYED_READS = frozenset(
+    method.name
+    for method in (
+        MEMORY_LIST,
+        MEMORY_OPEN,
+        THREAD_LIST,
+        THREAD_TURN_LIST,
+        ROUTINE_LIST,
+        ROUTINE_READ,
+        USAGE_GET,
+        STATS_GET,
+        PROMPT_GET,
+        MANIFEST_GET,
+        PERMISSIONS_GET,
+        CONFIG_HISTORY,
+    )
+)
 
 #: What a result or an item arrives as, by wire name, so a client off the socket parses it once.
 RESULT_MODELS: Mapping[str, type[ContractModel]] = {

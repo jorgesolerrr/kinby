@@ -358,6 +358,57 @@ def test_recap_model_receives_the_turn_frame_as_a_user_message(tmp_path: Path) -
     asyncio.run(scenario())
 
 
+def test_what_the_home_instance_reads_through_the_hub_stays_out_of_its_recap(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        model = ScriptedRecapModel(
+            RecapDraft(
+                keep=True,
+                description="Read alice's memory",
+                subjects=("alice",),
+                happened="Read alice's memory.",
+                decided="Nothing.",
+                retrospective="Nothing.",
+            ),
+            input_tokens=3,
+            output_tokens=1,
+        )
+        recap = RecapWriter(
+            event_log,
+            GraphStore(tmp_path),
+            _instance(tmp_path, policy="every-turn"),
+            model_factory=lambda _: model,
+        )
+        thread_id, turn_id = uuid4(), uuid4()
+        for payload in (
+            TurnStarted(message="What does alice know about my dentist?", model="openai:main"),
+            ToolCall(
+                call_id="read-1",
+                name="hub_read",
+                arguments={"method": "memory.open", "params": {"node": "dentist"}},
+            ),
+            ToolResult(
+                call_id="read-1",
+                name="hub_read",
+                output='{"body": "The dentist is Dr. Ruiz."}',
+                error=False,
+            ),
+            TurnCompleted(input_tokens=4, output_tokens=2),
+        ):
+            await event_log.append(thread_id, turn_id, payload)
+
+        recap.schedule(thread_id, turn_id)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        (message,) = model.calls[0]
+        assert "Dr. Ruiz" not in message.text
+        assert '"node": "dentist"' in message.text
+
+    asyncio.run(scenario())
+
+
 def test_discarded_draft_writes_marker_without_episode(tmp_path: Path) -> None:
     async def scenario() -> None:
         state_dir = tmp_path / ".state"

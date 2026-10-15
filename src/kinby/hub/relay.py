@@ -1,4 +1,4 @@
-"""Carry public traffic to one instance's private routes, without reading what it carries."""
+"""Carry traffic to one instance's private routes: a client's socket and a webhook travel unread."""
 
 from __future__ import annotations
 
@@ -9,8 +9,18 @@ from urllib.parse import quote
 import aiohttp
 from aiohttp import WSMsgType, web
 from multidict import CIMultiDict
+from pydantic import JsonValue
 
+from kinby.contracts import (
+    CallFrame,
+    ErrorEnvelope,
+    ErrorFrame,
+    FrameId,
+    ResultFrame,
+    parse_server_frame,
+)
 from kinby.core.contract_server import HEARTBEAT_SECONDS
+from kinby.core.errors import InstanceRefused, InstanceUnavailable
 from kinby.hub.models import InstanceEndpoint, InstanceUnreachable
 
 #: Headers that describe the connection ending at the hub, plus the ones the next hop rewrites.
@@ -61,6 +71,36 @@ async def relay_socket(request: web.Request, endpoint: InstanceEndpoint) -> web.
         await upstream.close()
         await session.close()
     return downstream
+
+
+async def relayed_call(
+    endpoint: InstanceEndpoint, method: str, params: dict[str, JsonValue]
+) -> dict[str, JsonValue]:
+    """Make one call on the instance's socket, the one the relay carries a client to, and return
+    what the instance answered."""
+    call = CallFrame(id=FrameId("1"), method=method, params=params)
+    try:
+        async with (
+            aiohttp.ClientSession(
+                headers={"Authorization": f"Bearer {endpoint.control_token}"}
+            ) as session,
+            session.ws_connect(f"{endpoint.url}/ws", heartbeat=HEARTBEAT_SECONDS) as socket,
+        ):
+            await socket.send_str(call.model_dump_json())
+            answer = await socket.receive_str()
+    except (aiohttp.ClientError, aiohttp.WSMessageTypeError, TimeoutError) as exc:
+        raise InstanceUnavailable(
+            f'Instance "{endpoint.instance_id}" did not answer "{method}": {exc}'
+        ) from exc
+    match parse_server_frame(answer):
+        case ResultFrame(result=result):
+            return result
+        case ErrorFrame(error=error) | (ErrorEnvelope() as error):
+            raise InstanceRefused(error)
+        case other:
+            raise InstanceUnavailable(
+                f'Instance "{endpoint.instance_id}" answered "{method}" with "{other.type.value}".'
+            )
 
 
 async def forward_signal(

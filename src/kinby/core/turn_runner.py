@@ -99,6 +99,7 @@ from kinby.instance.permissions import (
 )
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
+from kinby.plugins.hub import hub_tools
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
 from kinby.plugins.routines import (
     Routine,
@@ -484,6 +485,8 @@ class LangGraphRunner:
         permission_mode = turn.permission_mode
         message = turn.message
         payload = None
+        if not isinstance(turn.origin, UserOrigin):
+            tools = ToolSnapshot(tuple(tool for tool in tools.tools if tool not in hub_tools()))
         if isinstance(turn.origin, RoutineOrigin):
             routines, warnings = load_routines(self._instance, policy=self._gate_policy)
             for warning in warnings:
