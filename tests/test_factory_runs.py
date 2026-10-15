@@ -21,9 +21,9 @@ from kinby.contracts import (
     FACTORY_RUN_SUBSCRIBE,
     INSTANCE_CREATE,
     INSTANCE_LIST,
+    INSTANCE_RECREATE,
     INSTANCE_REMOVE,
     INSTANCE_START,
-    INTAKE_SCOPES,
     AgentStepRun,
     ClientStepRun,
     CodeStepRun,
@@ -47,6 +47,7 @@ from kinby.contracts import (
     InstanceCreateCommand,
     InstanceListCommand,
     InstanceListResult,
+    InstanceRecreateCommand,
     InstanceRemoveCommand,
     InstanceStartCommand,
     LifecycleOperationResult,
@@ -61,11 +62,12 @@ from kinby.contracts import (
 )
 from kinby.hub import ControlConnectionLost, ControlUndelivered, ControlUnreachable, Hub
 from kinby.hub.registry import HubRegistry
-from kinby.plugins.intake import intake_tools
+from kinby.plugins.intake import hand_to_factory, intake_tools
 from tests.test_hub import (
     FakeControl,
     FakeImages,
     FakeRuntime,
+    created_instance,
     finished_operation,
     hub_client,
     instance_environment,
@@ -150,9 +152,9 @@ async def started(
 
 
 def intake_client(hub: Hub, instance_id: UUID) -> ContractClient:
-    """What one instance holds on the hub: its own intake route."""
-    dispatcher = hub.intake(instance_id)
-    return ContractClient(dispatcher.dispatch, dispatcher.subscribe, INTAKE_SCOPES)
+    """What one instance holds on the hub: its own hub route."""
+    scopes, dispatcher = hub.hub_route(instance_id)
+    return ContractClient(dispatcher.dispatch, dispatcher.subscribe, scopes)
 
 
 async def handed_in(hub: Hub, instance_id: UUID, issue: int, routine: str = "scan") -> FactoryRun:
@@ -829,7 +831,7 @@ def test_the_intake_routines_tool_hands_its_work_item_to_the_hub_over_its_own_ro
         environment = instance_environment(hub, coder)
         monkeypatch.setenv("KINBY_CONTROL_TOKEN", environment["KINBY_CONTROL_TOKEN"])
         async with served(hub) as address:
-            monkeypatch.setenv("KINBY_INTAKE_URL", url(address, f"/instances/{coder}/intake"))
+            monkeypatch.setenv("KINBY_HUB_URL", url(address, f"/instances/{coder}/hub"))
             events = await fire(instance, RoutineModel())
             monkeypatch.setenv("KINBY_CONTROL_TOKEN", "another instance's token")
             refused = await fire(instance, RoutineModel())
@@ -837,7 +839,8 @@ def test_the_intake_routines_tool_hands_its_work_item_to_the_hub_over_its_own_ro
             FACTORY_RUN_LIST, FactoryRunListCommand(factory="checks")
         )
 
-        assert environment["KINBY_INTAKE_URL"] == f"http://hub:8080/instances/{coder}/intake"
+        assert environment["KINBY_HUB_URL"] == f"http://hub:8080/instances/{coder}/hub"
+        assert "KINBY_INTAKE_URL" not in environment
         assert isinstance(listed, FactoryRunListResult)
         [run] = listed.runs
         assert run.work_item == {"issue": 7}
@@ -850,10 +853,49 @@ def test_the_intake_routines_tool_hands_its_work_item_to_the_hub_over_its_own_ro
     asyncio.run(scenario())
 
 
-def test_an_instance_the_hub_gave_no_intake_url_has_no_intake_tool(monkeypatch):
-    monkeypatch.delenv("KINBY_INTAKE_URL", raising=False)
+def test_an_instance_the_registry_grants_no_scope_gets_no_hub_url(tmp_path):
+    hub = factory_hub(tmp_path / "hub", FakeControl(), FakeRuntime())
 
-    assert intake_tools() == ()
+    async def scenario() -> None:
+        created = await created_instance(hub_client(hub))
+
+        assert "KINBY_HUB_URL" not in instance_environment(hub, created.instance_id)
+
+    asyncio.run(scenario())
+
+
+def test_a_factory_instance_created_before_its_hub_route_gets_it_on_recreation(tmp_path):
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", FakeControl(), runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        environment = instance_environment(hub, coder)
+        del environment["KINBY_HUB_URL"]
+        (hub.instances_directory / str(coder) / ".env").write_text(
+            "".join(f"{name}='{value}'\n" for name, value in environment.items())
+        )
+        client = hub_client(hub)
+        recreated = await client.call(INSTANCE_RECREATE, InstanceRecreateCommand(instance_id=coder))
+        assert isinstance(recreated, LifecycleOperationResult)
+        assert (await finished_operation(client, recreated)).state is OperationState.SUCCEEDED
+
+        hub_url = f"http://hub:8080/instances/{coder}/hub"
+        assert instance_environment(hub, coder)["KINBY_HUB_URL"] == hub_url
+        assert runtime.created[-1].env["KINBY_HUB_URL"] == hub_url
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("variable", "tools"),
+    [("KINBY_HUB_URL", (hand_to_factory,)), ("KINBY_INTAKE_URL", ())],
+    ids=["hub-url", "intake-url"],
+)
+def test_only_an_instance_the_hub_gave_a_hub_url_has_the_intake_tool(monkeypatch, variable, tools):
+    monkeypatch.setenv(variable, "http://hub:8080/instances/x/hub")
+
+    assert intake_tools() == tools
 
 
 HANDOFF = """\

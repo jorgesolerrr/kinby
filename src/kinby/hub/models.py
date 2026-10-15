@@ -16,6 +16,7 @@ from kinby.contracts import (
     ControlToken,
     DeclaredSetup,
     RoutineName,
+    Scope,
     StorageItem,
 )
 
@@ -87,8 +88,9 @@ class InstanceRouting(Protocol):
     def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
         """The instance authenticated the signal and recorded it as a new delivery."""
 
-    def intake(self, instance_id: UUID) -> Dispatcher:
-        """What the instance may call on the hub, once its control token checks out."""
+    def hub_route(self, instance_id: UUID) -> tuple[frozenset[Scope], Dispatcher]:
+        """The scopes the instance holds on its hub route, once its control token checks out,
+        and what it may call there."""
 
 
 type RuntimeState = Literal["absent", "created", "starting", "running", "stopped", "failed"]

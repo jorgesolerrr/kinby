@@ -13,7 +13,6 @@ from aiohttp import web
 from kinby.contracts import (
     CONTRACT_VERSION,
     HUB_SCOPES,
-    INTAKE_SCOPES,
     AccessToken,
     RoutineName,
     Scope,
@@ -79,8 +78,8 @@ class HubContractServer:
             self._instance_signal,
         )
         application.router.add_get(
-            "/instances/{instance_id}/intake",
-            self._intake_socket,
+            "/instances/{instance_id}/hub",
+            self._hub_socket,
             allow_head=False,
         )
         application.router.add_post("/signals/{routine}", self._aliased_signal)
@@ -133,7 +132,7 @@ class HubContractServer:
         """Webhooks carry their own signature, so the hub authenticates none of them."""
         return await self._signal(request, await self._reach(request))
 
-    async def _intake_socket(self, request: web.Request) -> web.WebSocketResponse:
+    async def _hub_socket(self, request: web.Request) -> web.WebSocketResponse:
         """An instance calls the hub with the control token the hub gave it, and nothing else."""
         try:
             instance_id = UUID(request.match_info["instance_id"])
@@ -144,7 +143,8 @@ class HubContractServer:
             request.headers.get("Authorization", ""), f"Bearer {endpoint.control_token}"
         ):
             raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
-        return await serve_contract(request, self._routing.intake(instance_id), INTAKE_SCOPES)
+        scopes, dispatcher = self._routing.hub_route(instance_id)
+        return await serve_contract(request, dispatcher, scopes)
 
     async def _aliased_signal(self, request: web.Request) -> web.Response:
         """The path a webhook was registered with before the hub existed."""

@@ -41,7 +41,7 @@ class Scope(StrEnum):
     HUB_READ = "hub:read"
     HUB_ADMIN = "hub:admin"
     HUB_UPDATE = "hub:update"
-    #: Hand a factory a work item. Only an instance holds it, on its own intake route.
+    #: Hand a factory a work item. Only an instance holds it, on its own hub route.
     FACTORY_INTAKE = "factory:intake"
 
 
@@ -58,7 +58,7 @@ INSTANCE_SCOPES = frozenset(
 )
 CONTROL_SCOPES = INSTANCE_SCOPES | {Scope.INSTANCE_LIFECYCLE}
 
-#: What an instance holds on the hub's intake route, with the control token the hub gave it.
+#: What a factory's instance holds on its hub route, with the control token the hub gave it.
 INTAKE_SCOPES = frozenset({Scope.FACTORY_INTAKE})
 #: What a client authenticated against the hub holds: a hub has one user.
 HUB_SCOPES = frozenset(Scope) - INTAKE_SCOPES
