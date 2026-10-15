@@ -32,6 +32,11 @@ from kinby.contracts.models import (
     FactoryRunRetryCommand,
     FactoryRunSendBackCommand,
     FactoryRunSubscribeCommand,
+    HubSecretDeleteCommand,
+    HubSecretListCommand,
+    HubSecretListResult,
+    HubSecretSetCommand,
+    HubSecretSetResult,
     ImageDescribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
@@ -400,6 +405,13 @@ INSTANCE_PICKS_GET = Method(
 INSTANCE_PICKS_SET = Method(
     "instance.picks.set", Scope.HUB_ADMIN, InstancePicksSetCommand, InstancePicksResult
 )
+HUB_SECRET_LIST = Method(
+    "hub.secret.list", Scope.HUB_READ, HubSecretListCommand, HubSecretListResult
+)
+HUB_SECRET_SET = Method("hub.secret.set", Scope.HUB_ADMIN, HubSecretSetCommand, HubSecretSetResult)
+HUB_SECRET_DELETE = Method(
+    "hub.secret.delete", Scope.HUB_ADMIN, HubSecretDeleteCommand, HubSecretListResult
+)
 #: The same time range and bucket size as stats.get, asked of every running instance.
 STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
 
@@ -492,6 +504,9 @@ METHODS = (
     LIBRARY_GIT_ADD,
     INSTANCE_PICKS_GET,
     INSTANCE_PICKS_SET,
+    HUB_SECRET_LIST,
+    HUB_SECRET_SET,
+    HUB_SECRET_DELETE,
     STATS_SUMMARY,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE)

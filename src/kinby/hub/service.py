@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import logging
-import os
 import re
 import shutil
 from collections.abc import Collection, Coroutine, Iterable, Mapping, Sequence
@@ -32,6 +31,9 @@ from kinby.contracts import (
     FACTORY_RUN_RETRY,
     FACTORY_RUN_SEND_BACK,
     FACTORY_RUN_SUBSCRIBE,
+    HUB_SECRET_DELETE,
+    HUB_SECRET_LIST,
+    HUB_SECRET_SET,
     IMAGE_DESCRIBE,
     IMAGE_PREPARE,
     INSTANCE_ADOPT,
@@ -70,6 +72,9 @@ from kinby.contracts import (
     DrainState,
     FactoryName,
     FactoryRole,
+    HubSecretName,
+    HubSecretSetCommand,
+    HubSecretSetResult,
     ImageDescribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
@@ -170,6 +175,7 @@ from kinby.hub.models import (
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
 from kinby.hub.runs import FactoryRuns, UndeliveredCall
+from kinby.hub.secrets import HubSecrets, replace_protected, write_protected
 from kinby.hub.setup import (
     ENVIRONMENT_NAME,
     configuration,
@@ -417,6 +423,7 @@ class Hub:
                 self.directory / "skills", shipped_skills, self.factories, self.registry
             )
             self.library.receive()
+            self.secrets = HubSecrets(self.directory / "hub-secrets.json")
             self.runs = FactoryRuns(self.registry, self.factories, self._run_step)
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
@@ -464,6 +471,9 @@ class Hub:
             self.dispatcher.register(LIBRARY_GIT_ADD, self.library.add)
             self.dispatcher.register(INSTANCE_PICKS_GET, self.picks)
             self.dispatcher.register(INSTANCE_PICKS_SET, self.set_picks)
+            self.dispatcher.register(HUB_SECRET_LIST, self.secrets.list)
+            self.dispatcher.register(HUB_SECRET_SET, self.set_hub_secret)
+            self.dispatcher.register(HUB_SECRET_DELETE, self.secrets.delete)
             self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
         except BaseException:
             self._directory_lock.close()
@@ -1053,6 +1063,36 @@ class Hub:
                     OperationState.SUCCEEDED,
                     "Secrets replaced. Recreate the container to apply them.",
                 )
+        except asyncio.CancelledError:
+            self._fail_if_unfinished(operation_id)
+            raise
+
+    async def set_hub_secret(self, command: HubSecretSetCommand) -> HubSecretSetResult:
+        """Create or replace one hub secret. No value travels back out."""
+        operation_id = uuid4()
+        self.registry.record_operation(
+            operation_id, None, OperationKind.HUB_SECRET, "Hub secret queued."
+        )
+        self._schedule(
+            self._set_hub_secret(operation_id, command.name, command.value.get_secret_value())
+        )
+        return HubSecretSetResult(operation_id=operation_id)
+
+    async def _set_hub_secret(self, operation_id: UUID, name: HubSecretName, value: str) -> None:
+        try:
+            self.registry.advance_operation(operation_id, "secret", f'Saving "{name}".')
+            try:
+                self.secrets.save(name, value)
+            except Exception as exc:
+                self.registry.finish_operation(
+                    operation_id,
+                    OperationState.FAILED,
+                    self._redact(str(exc) or type(exc).__name__, [value]),
+                )
+                return
+            self.registry.finish_operation(
+                operation_id, OperationState.SUCCEEDED, f'Hub secret "{name}" saved.'
+            )
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
             raise
@@ -2237,28 +2277,17 @@ class Hub:
         return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
     @classmethod
+    def _dotenv(cls, secrets: dict[str, str]) -> str:
+        return "".join(f"{name}={cls._dotenv_value(value)}\n" for name, value in secrets.items())
+
+    @classmethod
     def _write_secrets(cls, path: Path, secrets: dict[str, str]) -> None:
-        """Close the file to everyone else before the first secret byte lands in it."""
-        body = "".join(f"{name}={cls._dotenv_value(value)}\n" for name, value in secrets.items())
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(body)
-        path.chmod(0o600)
+        write_protected(path, cls._dotenv(secrets))
 
     @classmethod
     def _replace_secrets(cls, directory: Path, secrets: dict[str, str]) -> None:
-        """Merge the submitted values in through one rename.
-
-        A failure leaves the previous secrets in place and removes the staging file,
-        so the values are not left in a second copy.
-        """
-        staging = directory / ".env.replacing"
-        try:
-            cls._write_secrets(staging, cls._environment(directory) | secrets)
-            staging.replace(directory / ".env")
-        except OSError:
-            staging.unlink(missing_ok=True)
-            raise
+        """Merge the submitted values in through one rename."""
+        replace_protected(directory / ".env", cls._dotenv(cls._environment(directory) | secrets))
 
     @staticmethod
     def _toml_string(value: str) -> str:

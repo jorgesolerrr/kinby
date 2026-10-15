@@ -24,6 +24,7 @@ export function AppSidebar({
   removedOpen,
   usageOpen,
   libraryOpen,
+  secretsOpen,
   threadsOpen,
   client,
   clock,
@@ -39,6 +40,7 @@ export function AppSidebar({
   removedOpen: boolean
   usageOpen: boolean
   libraryOpen: boolean
+  secretsOpen: boolean
   threadsOpen: boolean
   /** Reaches the instances that are not selected, to count their threads that need the user. */
   client: Pick<Client, "instance">
@@ -63,6 +65,7 @@ export function AppSidebar({
         <NavMain
           usageOpen={usageOpen}
           libraryOpen={libraryOpen}
+          secretsOpen={secretsOpen}
           threadsOpen={threadsOpen}
           instanceId={selected?.instance_id}
         />

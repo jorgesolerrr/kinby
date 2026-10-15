@@ -46,6 +46,7 @@ from kinby.contracts import (
     ErrorEnvelope,
     ErrorFrame,
     FrameId,
+    HubSecretSetResult,
     ImageDescribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
@@ -327,7 +328,7 @@ def _client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
 
 async def finished_operation(
     client: ContractClient,
-    accepted: LifecycleOperationResult | ImagePrepareResult,
+    accepted: LifecycleOperationResult | ImagePrepareResult | HubSecretSetResult,
 ) -> OperationGetResult:
     for _ in range(100):
         result = await client.call(

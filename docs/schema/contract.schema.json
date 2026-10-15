@@ -1625,6 +1625,94 @@
       "minLength": 1,
       "type": "string"
     },
+    "HubSecret": {
+      "additionalProperties": false,
+      "description": "A hub secret as the hub shows it: by name, never its value.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/HubSecretName"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "HubSecret",
+      "type": "object"
+    },
+    "HubSecretDeleteCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/HubSecretName"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "HubSecretDeleteCommand",
+      "type": "object"
+    },
+    "HubSecretListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "HubSecretListCommand",
+      "type": "object"
+    },
+    "HubSecretListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "secrets": {
+          "items": {
+            "$ref": "#/$defs/HubSecret"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "secrets"
+      ],
+      "title": "HubSecretListResult",
+      "type": "object"
+    },
+    "HubSecretName": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "HubSecretSetCommand": {
+      "additionalProperties": false,
+      "description": "Create or replace one hub secret. The result carries no value back.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/HubSecretName"
+        },
+        "value": {
+          "format": "password",
+          "minLength": 1,
+          "type": "string",
+          "writeOnly": true
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "title": "HubSecretSetCommand",
+      "type": "object"
+    },
+    "HubSecretSetResult": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "title": "HubSecretSetResult",
+      "type": "object"
+    },
     "ImageDescribeCommand": {
       "additionalProperties": false,
       "description": "Read what the prepared image declares. It never builds.",
@@ -3892,7 +3980,8 @@
         "restore",
         "delete",
         "prepare",
-        "login"
+        "login",
+        "hub-secret"
       ],
       "title": "OperationKind",
       "type": "string"
@@ -7908,6 +7997,54 @@
           ],
           "type": "object"
         },
+        "hub.secret.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/HubSecretDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/HubSecretListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "hub.secret.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/HubSecretListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/HubSecretListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "hub.secret.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/HubSecretSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/HubSecretSetResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "image.describe": {
           "additionalProperties": false,
           "properties": {
@@ -9214,6 +9351,9 @@
         "library.git.add",
         "instance.picks.get",
         "instance.picks.set",
+        "hub.secret.list",
+        "hub.secret.set",
+        "hub.secret.delete",
         "stats.summary"
       ],
       "type": "object"
