@@ -806,8 +806,11 @@ def test_a_reports_delivery_only_marks_reported_its_own_stop(tmp_path):
     assert registry.unreported_runs() == []
 
 
+@pytest.mark.parametrize(
+    "route", ["hub", "intake"], ids=["hub-route", "route-of-a-container-from-before-it"]
+)
 def test_the_intake_routines_tool_hands_its_work_item_to_the_hub_over_its_own_route(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, route
 ):
     runtime = FakeRuntime()
     factory = FACTORY.replace("routine: scan", "routine: news")
@@ -831,7 +834,7 @@ def test_the_intake_routines_tool_hands_its_work_item_to_the_hub_over_its_own_ro
         environment = instance_environment(hub, coder)
         monkeypatch.setenv("KINBY_CONTROL_TOKEN", environment["KINBY_CONTROL_TOKEN"])
         async with served(hub) as address:
-            monkeypatch.setenv("KINBY_HUB_URL", url(address, f"/instances/{coder}/hub"))
+            monkeypatch.setenv("KINBY_HUB_URL", url(address, f"/instances/{coder}/{route}"))
             events = await fire(instance, RoutineModel())
             monkeypatch.setenv("KINBY_CONTROL_TOKEN", "another instance's token")
             refused = await fire(instance, RoutineModel())

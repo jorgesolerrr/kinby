@@ -82,6 +82,12 @@ class HubContractServer:
             self._hub_socket,
             allow_head=False,
         )
+        # A container created before the hub route still holds the intake route's address.
+        application.router.add_get(
+            "/instances/{instance_id}/intake",
+            self._hub_socket,
+            allow_head=False,
+        )
         application.router.add_post("/signals/{routine}", self._aliased_signal)
         if self._web_app.is_dir():
             _add_web_app(application, self._web_app)
