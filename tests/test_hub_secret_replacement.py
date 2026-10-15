@@ -1,6 +1,8 @@
 """Replacing or deleting a hub secret reaches the instances linked to it (ADR 0095)."""
 
 import asyncio
+import os
+from pathlib import Path
 from uuid import UUID
 
 from kinby.cli.client import ContractClient
@@ -297,5 +299,45 @@ def test_removing_or_deleting_an_instance_drops_its_links_and_keeps_the_hub_secr
         assert await _github_link(client, back.instance_id) is None
         assert instance_environment(hub, back.instance_id)["GITHUB_TOKEN"] == "ghp-first"
         assert hub.secrets.values() == {"GITHUB_TOKEN": "ghp-first"}
+
+    asyncio.run(scenario())
+
+
+def test_a_replacement_that_fails_a_write_rolls_back_so_a_retry_rewrites_every_instance(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        hub = _hub(tmp_path)
+        client = hub_client(hub)
+        await set_hub_secret(client, "GITHUB_TOKEN", "ghp-first")
+        instances = [await _linked(client, hub, name) for name in ("first", "second")]
+        original = os.open
+        writes = 0
+
+        def refuse_the_second_write(path: object, *arguments: object, **options: object) -> int:
+            """Stand in for the disk failing under the second instance's write."""
+            nonlocal writes
+            if isinstance(path, str | Path) and Path(path).name == ".env.replacing":
+                writes += 1
+                if writes == 2:
+                    raise OSError(f"no space left on device while writing {_SENTINEL}")
+            return original(path, *arguments, **options)  # ty: ignore[invalid-argument-type]
+
+        monkeypatch.setattr(os, "open", refuse_the_second_write)
+        failed = await _replaced(client, hub, _SENTINEL)
+        monkeypatch.undo()
+
+        assert failed.state is OperationState.FAILED
+        assert _SENTINEL not in failed.model_dump_json()
+        assert hub.secrets.values() == {"GITHUB_TOKEN": "ghp-first"}
+        for instance in instances:
+            assert instance_environment(hub, instance.instance_id)["GITHUB_TOKEN"] == "ghp-first"
+
+        retried = await _replaced(client, hub, "ghp-second")
+
+        assert retried.state is OperationState.SUCCEEDED
+        for instance in instances:
+            assert instance_environment(hub, instance.instance_id)["GITHUB_TOKEN"] == "ghp-second"
+            assert await _github_link(client, instance.instance_id) == "GITHUB_TOKEN"
 
     asyncio.run(scenario())

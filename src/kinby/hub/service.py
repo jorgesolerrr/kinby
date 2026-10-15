@@ -1161,9 +1161,17 @@ class Hub:
             previous = self.secrets.values().get(name)
             try:
                 self.secrets.save(name, value)
-                unlinked = await self._rewrite_links(
-                    operation_id, name, previous, value, command.recreate
-                )
+                try:
+                    rewritten, unlinked = await self._rewrite_links(
+                        operation_id, name, previous, value
+                    )
+                except Exception:
+                    # A retry then compares each linked field against the previous value again.
+                    if previous is None:
+                        self.secrets.delete(name)
+                    else:
+                        self.secrets.save(name, previous)
+                    raise
             except Exception as exc:
                 self.registry.finish_operation(
                     operation_id,
@@ -1171,6 +1179,9 @@ class Hub:
                     self._redact(str(exc) or type(exc).__name__, [value, previous or ""]),
                 )
                 return
+            for record in rewritten:
+                if record.instance_id in command.recreate:
+                    await self._queue_recreation(operation_id, record)
             detail = f'Hub secret "{name}" saved.'
             if unlinked:
                 detail += f" Unlinked {', '.join(unlinked)}: each held another value, and keeps it."
@@ -1185,39 +1196,46 @@ class Hub:
         name: HubSecretName,
         previous: str | None,
         value: str,
-        recreate: Collection[UUID],
-    ) -> Sequence[str]:
-        """Write the new value into each linked field that still holds the previous one, and
-        queue a recreation of each instance in `recreate` that took it. A field that holds
-        anything else was set on purpose, so it is unlinked and left as it is (ADR 0095).
+    ) -> tuple[Sequence[ManagedInstance], Sequence[str]]:
+        """Write the new value into each linked field that still holds the previous one. A field
+        that holds anything else was set on purpose, so it is unlinked and left as it is (ADR
+        0095). A failed write puts the previous value back into each field already rewritten.
 
-        Returns the names of the instances with a field unlinked.
+        Returns the instances that took the new value, and the names of those with a field
+        unlinked.
         """
+        rewritten: list[tuple[ManagedInstance, list[str]]] = []
         unlinked: list[str] = []
-        for instance_id in self.registry.linked_to(name):
-            # The lock serializes this write against every other lifecycle mutation.
-            async with self._locks.setdefault(instance_id, asyncio.Lock()):
-                record = self.registry.instance(instance_id)
-                linked = self.registry.secret_links(instance_id)
-                variables = [variable for variable, hub in linked.items() if hub == name]
-                if record is None or not record.active or not variables:
-                    continue
-                environment = self._environment(record.path)
-                held = [v for v in variables if environment.get(v) in (previous, value)]
-                drifted = [v for v in variables if v not in held]
-                if held:
-                    self._record(
-                        operation_id,
-                        f"instance {record.manifest_id}",
-                        f"Writing the new value into {record.manifest_id}'s secrets.",
-                    )
-                    self._replace_secrets(record.path, dict.fromkeys(held, value))
-                if drifted:
-                    self.registry.link_secrets(instance_id, {}, unlinked=drifted)
-                    unlinked.append(record.manifest_id)
-                if held and instance_id in recreate:
-                    await self._queue_recreation(operation_id, record)
-        return unlinked
+        try:
+            for instance_id in self.registry.linked_to(name):
+                # The lock serializes this write against every other lifecycle mutation.
+                async with self._locks.setdefault(instance_id, asyncio.Lock()):
+                    record = self.registry.instance(instance_id)
+                    linked = self.registry.secret_links(instance_id)
+                    variables = [variable for variable, hub in linked.items() if hub == name]
+                    if record is None or not record.active or not variables:
+                        continue
+                    environment = self._environment(record.path)
+                    held = [v for v in variables if environment.get(v) in (previous, value)]
+                    drifted = [v for v in variables if v not in held]
+                    if held:
+                        self._record(
+                            operation_id,
+                            f"instance {record.manifest_id}",
+                            f"Writing the new value into {record.manifest_id}'s secrets.",
+                        )
+                        self._replace_secrets(record.path, dict.fromkeys(held, value))
+                        rewritten.append((record, held))
+                    if drifted:
+                        self.registry.link_secrets(instance_id, {}, unlinked=drifted)
+                        unlinked.append(record.manifest_id)
+        except Exception:
+            if previous is not None:
+                for record, held in rewritten:
+                    async with self._locks.setdefault(record.instance_id, asyncio.Lock()):
+                        self._replace_secrets(record.path, dict.fromkeys(held, previous))
+            raise
+        return [record for record, _ in rewritten], unlinked
 
     async def _queue_recreation(self, operation_id: UUID, record: ManagedInstance) -> None:
         step = f"recreate {record.manifest_id}"
