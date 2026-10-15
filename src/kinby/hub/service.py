@@ -1061,13 +1061,16 @@ class Hub:
                     "secrets",
                     "Replacing the instance's secrets.",
                 )
+                typed: dict[str, str] = {}
+                links: dict[str, HubSecretName] = {}
                 linked: dict[str, str] = {}
                 try:
-                    linked = self._linked_values(secrets, hub_secrets)
-                    values = secrets | linked
+                    held = self._held_by(record, secrets | hub_secrets)
+                    typed, links = held(secrets), held(hub_secrets)
+                    linked = self._linked_values(typed, links)
+                    values = typed | linked
                     self._validate_secret_names(values)
-                    held = self._held_by(record, values)
-                    self._replace_secrets(record.path, held(values))
+                    self._replace_secrets(record.path, values)
                 except Exception as exc:
                     self._fail(
                         operation_id,
@@ -1076,7 +1079,7 @@ class Hub:
                         [*secrets.values(), *linked.values()],
                     )
                     return
-                self.registry.link_secrets(instance_id, held(hub_secrets), unlinked=held(secrets))
+                self.registry.link_secrets(instance_id, links, unlinked=typed)
                 self.registry.finish_operation(
                     operation_id,
                     OperationState.SUCCEEDED,
@@ -1089,14 +1092,15 @@ class Hub:
     def _linked_values(
         self, secrets: Mapping[str, str], hub_secrets: Mapping[str, HubSecretName]
     ) -> dict[str, str]:
-        """The value of the hub secret each field takes, by field name."""
+        """The value of the hub secret each variable takes. Both maps are keyed by the variable
+        the instance holds a value under, so the API key collides with its provider's variable."""
         kept = self.secrets.values()
-        for field, name in hub_secrets.items():
-            if field in secrets:
-                raise ValueError(f"{field} takes a typed value or a hub secret, not both.")
+        for variable, name in hub_secrets.items():
+            if variable in secrets:
+                raise ValueError(f"{variable} takes a typed value or a hub secret, not both.")
             if name not in kept:
                 raise ValueError(f'The hub keeps no secret named "{name}".')
-        return {field: kept[name] for field, name in hub_secrets.items()}
+        return {variable: kept[name] for variable, name in hub_secrets.items()}
 
     @staticmethod
     def _held_by(

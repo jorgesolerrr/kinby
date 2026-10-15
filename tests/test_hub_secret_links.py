@@ -430,8 +430,13 @@ def test_a_stopped_instance_applies_a_linked_value_when_it_starts(tmp_path):
             {"GITHUB_TOKEN": "GITHUB_TOKEN"},
             "GITHUB_TOKEN takes a typed value or a hub secret, not both.",
         ),
+        (
+            {"OPENAI_API_KEY": "sk-typed"},
+            {"api_key": "OPENAI_API_KEY"},
+            "OPENAI_API_KEY takes a typed value or a hub secret, not both.",
+        ),
     ],
-    ids=["unknown-hub-secret", "typed-and-linked"],
+    ids=["unknown-hub-secret", "typed-and-linked", "api-key-typed-under-its-variable-and-linked"],
 )
 def test_a_link_that_does_not_fit_fails_the_operation_and_changes_nothing(
     tmp_path, secrets, hub_secrets, detail
