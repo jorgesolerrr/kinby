@@ -14,6 +14,7 @@ from kinby.contracts import (
     IMAGE_DESCRIBE,
     INSTANCE_CREATE,
     INSTANCE_LIST,
+    INSTANCE_STATUS,
     Avatar,
     AvatarColor,
     AvatarShape,
@@ -23,6 +24,8 @@ from kinby.contracts import (
     ImageDescribeCommand,
     InstanceCreateCommand,
     InstanceListCommand,
+    InstanceStatusCommand,
+    InstanceStatusResult,
     LifecycleOperationResult,
     OperationState,
     SetupField,
@@ -78,13 +81,7 @@ def test_creating_before_the_image_is_prepared_is_refused_and_records_nothing(tm
     [
         (
             InstanceCreateCommand(manifest_id="ada", model=""),
-            {"model": "Model is required.", "api_key": "API key is required."},
-        ),
-        (
-            InstanceCreateCommand(
-                manifest_id="ada", model="openai:gpt-5", secrets={"api_key": "  "}
-            ),
-            {"api_key": "API key is required."},
+            {"model": "Model is required."},
         ),
         (
             InstanceCreateCommand(
@@ -105,7 +102,7 @@ def test_creating_before_the_image_is_prepared_is_refused_and_records_nothing(tm
             },
         ),
     ],
-    ids=["missing", "blank-secret", "invalid-model", "undeclared-and-malformed-names"],
+    ids=["missing", "invalid-model", "undeclared-and-malformed-names"],
 )
 def test_missing_or_invalid_setup_values_are_refused_by_field_and_create_nothing(
     tmp_path, command, fields
@@ -201,7 +198,7 @@ def test_a_vanilla_creation_without_a_behavior_prompt_keeps_the_default_one(tmp_
 
 
 class RebuiltImages(FakeImages):
-    """Every build after the first makes a new image that asks for one more secret."""
+    """Every build after the first makes a new image that asks for one more setting."""
 
     async def build(self, selection: ImageSelection) -> BuiltImage:
         built = await super().build(selection)
@@ -214,10 +211,10 @@ class RebuiltImages(FakeImages):
         if artifact.image_id != "sha256:rebuilt-image":
             return description
         extra = SetupField(
-            name="SEARCH_TOKEN",
-            label="Search token",
-            description="Reaches the search service.",
-            kind=SetupFieldKind.SECRET,
+            name="search_region",
+            label="Search region",
+            description="Where the search service runs.",
+            kind=SetupFieldKind.CONFIG,
             type=SetupFieldType.TEXT,
             required=True,
         )
@@ -246,14 +243,14 @@ def test_values_the_rebuilt_image_does_not_take_fail_validation_and_publish_noth
             ("image", OperationState.SUCCEEDED),
             ("validate", OperationState.FAILED),
         ]
-        assert "SEARCH_TOKEN: Search token is required." in outcome.detail
+        assert "search_region: Search region is required." in outcome.detail
         assert runtime.created == []
         assert list(hub.instances_directory.iterdir()) == []
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
         assert not isinstance(listed, ErrorEnvelope)
         assert listed.instances == []
         assert not isinstance(described, ErrorEnvelope)
-        assert described.setup_fields[-1].name == "SEARCH_TOKEN"
+        assert described.setup_fields[-1].name == "search_region"
 
     asyncio.run(scenario())
 
@@ -281,10 +278,10 @@ def test_a_creation_refused_by_an_image_described_before_shows_that_images_field
             setup_fields=with_built_in_fields(
                 [
                     SetupField(
-                        name="SEARCH_TOKEN",
-                        label="Search token",
-                        description="Reaches the search service.",
-                        kind=SetupFieldKind.SECRET,
+                        name="search_region",
+                        label="Search region",
+                        description="Where the search service runs.",
+                        kind=SetupFieldKind.CONFIG,
                         type=SetupFieldType.TEXT,
                         required=True,
                     )
@@ -312,7 +309,7 @@ def test_a_creation_refused_by_an_image_described_before_shows_that_images_field
         described = await client.call(IMAGE_DESCRIBE, ImageDescribeCommand())
 
         assert outcome.state is OperationState.FAILED
-        assert "SEARCH_TOKEN: Search token is required." in outcome.detail
+        assert "search_region: Search region is required." in outcome.detail
         assert [artifact.image_id for artifact in images.described] == [
             "sha256:searching",
             "sha256:plain",
@@ -430,6 +427,96 @@ def test_a_blank_optional_secret_stays_unset(tmp_path):
         assert environment["OPENAI_API_KEY"] == "sk-private"
         assert "DRAFT_TOKEN" not in environment
         assert "" not in environment.values()
+
+    asyncio.run(scenario())
+
+
+def _secret_field(name: str, label: str, type: SetupFieldType) -> SetupField:
+    return SetupField(
+        name=name,
+        label=label,
+        description=f"{label}.",
+        kind=SetupFieldKind.SECRET,
+        type=type,
+        required=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "secrets",
+    [{}, {"api_key": "  ", "SEARCH_TOKEN": ""}],
+    ids=["missing", "blank"],
+)
+def test_a_required_secret_left_empty_is_created_pending_setup(tmp_path, secrets):
+    async def scenario() -> None:
+        images = declaring(_secret_field("SEARCH_TOKEN", "Search token", SetupFieldType.TEXT))
+        hub = hub_at(tmp_path / "hub", images=images)
+        client = hub_client(hub)
+        await prepared(client)
+
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(manifest_id="ada", model="openai:gpt-5", secrets=secrets),
+        )
+        assert isinstance(accepted, LifecycleOperationResult), accepted
+        assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
+        status = await client.call(
+            INSTANCE_STATUS, InstanceStatusCommand(instance_id=accepted.instance_id)
+        )
+
+        assert isinstance(status, InstanceStatusResult)
+        assert status.setup.pending
+        assert [(secret.name, secret.is_set) for secret in status.setup.secrets] == [
+            ("api_key", False),
+            ("SEARCH_TOKEN", False),
+        ]
+        environment = instance_environment(hub, accepted.instance_id)
+        assert "OPENAI_API_KEY" not in environment
+        assert "SEARCH_TOKEN" not in environment
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            _secret_field("GIT_USER_EMAIL", "Commit email", SetupFieldType.EMAIL),
+            "not-an-email",
+            "Commit email is not an email address, like someone@example.com.",
+        ),
+        (
+            _secret_field("WEBHOOK_URL", "Webhook", SetupFieldType.URL),
+            "owner/name",
+            "Webhook is not a URL with a scheme and a host, like https://example.com.",
+        ),
+    ],
+    ids=["email", "url"],
+)
+def test_a_present_secret_of_the_wrong_type_is_refused_on_its_field(
+    tmp_path, field, value, message
+):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=declaring(field))
+        client = hub_client(hub)
+        await prepared(client)
+
+        refused = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="coder",
+                model="openai:gpt-5",
+                secrets={"api_key": "sk-private", field.name: value},
+            ),
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_SETUP
+        assert refused.fields == {field.name: message}
+        assert value not in refused.model_dump_json()
+        assert runtime.created == []
+        assert list(hub.instances_directory.iterdir()) == []
 
     asyncio.run(scenario())
 
