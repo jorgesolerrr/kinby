@@ -430,6 +430,7 @@ describe("the instances", () => {
     expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual([
       "Usage",
       "Library",
+      "Secrets",
       "New instance",
     ])
   })

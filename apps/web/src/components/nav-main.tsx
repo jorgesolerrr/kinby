@@ -7,12 +7,14 @@ import {
 import {
   LIBRARY_PATH,
   openLibrary,
+  openSecrets,
   openThreads,
   openUsage,
+  SECRETS_PATH,
   threadsPath,
   USAGE_PATH,
 } from "@/lib/selection"
-import { ChartColumnIcon, LibraryIcon, MessagesSquareIcon } from "lucide-react"
+import { ChartColumnIcon, KeyRoundIcon, LibraryIcon, MessagesSquareIcon } from "lucide-react"
 
 /**
  * The hub's own pages, above the instances, and the selected instance's thread list. With no
@@ -21,11 +23,13 @@ import { ChartColumnIcon, LibraryIcon, MessagesSquareIcon } from "lucide-react"
 export function NavMain({
   usageOpen,
   libraryOpen,
+  secretsOpen,
   threadsOpen,
   instanceId,
 }: {
   usageOpen: boolean
   libraryOpen: boolean
+  secretsOpen: boolean
   threadsOpen: boolean
   instanceId: string | undefined
 }) {
@@ -62,6 +66,23 @@ export function NavMain({
               <a href={LIBRARY_PATH}>
                 <LibraryIcon />
                 <span>Library</span>
+              </a>
+            }
+          />
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            tooltip="Secrets"
+            isActive={secretsOpen}
+            aria-current={secretsOpen ? "page" : undefined}
+            onClick={(event) => {
+              event.preventDefault()
+              openSecrets()
+            }}
+            render={
+              <a href={SECRETS_PATH}>
+                <KeyRoundIcon />
+                <span>Secrets</span>
               </a>
             }
           />

@@ -1227,6 +1227,8 @@ class OperationKind(StrEnum):
     PREPARE = "prepare"
     #: A subscription login. It runs beside the instance's other operations, not after them.
     LOGIN = "login"
+    #: Setting a hub secret. It belongs to no instance.
+    HUB_SECRET = "hub-secret"
 
 
 class OperationState(StrEnum):
@@ -1255,7 +1257,7 @@ class OperationStep(ContractModel):
 
 class OperationGetResult(ContractModel):
     operation_id: UUID
-    #: None for an image preparation, which runs before any instance exists.
+    #: None for an operation that belongs to no instance, such as an image preparation.
     instance_id: UUID | None
     kind: OperationKind
     state: OperationState
@@ -2236,6 +2238,46 @@ class InstancePicksResult(ContractModel):
     picks: list[SkillPick]
     #: The hash of the instance's ``skills-lock.json``. Null when it has none.
     hash: FileHash | None
+
+
+#: A hub secret's name: free text, unique on the hub.
+type HubSecretName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class HubSecretListCommand(ContractModel):
+    pass
+
+
+class HubSecret(ContractModel):
+    """A hub secret as the hub shows it: by name, never its value."""
+
+    name: HubSecretName
+
+
+class HubSecretListResult(ContractModel):
+    #: By name.
+    secrets: list[HubSecret]
+
+
+class HubSecretSetCommand(ContractModel):
+    """Create or replace one hub secret. The result carries no value back."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    name: HubSecretName
+    value: Annotated[SecretStr, Field(min_length=1)]
+
+    @field_serializer("value", when_used="json")
+    def serialize_value(self, value: SecretStr) -> str:
+        return value.get_secret_value()
+
+
+class HubSecretSetResult(ContractModel):
+    operation_id: UUID
+
+
+class HubSecretDeleteCommand(ContractModel):
+    name: HubSecretName
 
 
 type StepId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]

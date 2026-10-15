@@ -512,11 +512,12 @@ class HubRegistry:
     def record_operation(
         self,
         operation_id: UUID,
-        instance_id: UUID,
+        instance_id: UUID | None,
         kind: OperationKind,
         detail: str,
     ) -> None:
-        """Open this operation on its own, even while another one is unfinished."""
+        """Open this operation on its own, even while another one is unfinished. One that
+        belongs to no instance has no *instance_id*."""
         with self._connect() as connection:
             self._insert_operation(connection, operation_id, instance_id, kind, detail)
 
@@ -524,7 +525,7 @@ class HubRegistry:
     def _insert_operation(
         connection: sqlite3.Connection,
         operation_id: UUID,
-        instance_id: UUID,
+        instance_id: UUID | None,
         kind: OperationKind,
         detail: str,
     ) -> None:
@@ -535,7 +536,7 @@ class HubRegistry:
             """,
             (
                 str(operation_id),
-                str(instance_id),
+                str(instance_id) if instance_id is not None else None,
                 kind.value,
                 OperationState.PENDING.value,
                 detail,

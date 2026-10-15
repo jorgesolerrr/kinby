@@ -159,6 +159,10 @@ class ManagedInstanceNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class HubSecretNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
 class AdoptionBlocked(CoreError):
     """The adoption preflight found something the operator has to settle first."""
 

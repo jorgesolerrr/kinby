@@ -36,6 +36,7 @@ export type StepValue = boolean | number | string;
  * How one attempt at a step ended.
  */
 export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted" | "needs-human";
+export type HubSecretName = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
  */
@@ -115,7 +116,8 @@ export type OperationKind =
   | "restore"
   | "delete"
   | "prepare"
-  | "login";
+  | "login"
+  | "hub-secret";
 export type OperationState = "pending" | "running" | "succeeded" | "failed";
 export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
 /**
@@ -231,6 +233,18 @@ export interface Contract {
     "factory.run.send_back": {
       command: FactoryRunSendBackCommand;
       result: FactoryRun;
+    };
+    "hub.secret.delete": {
+      command: HubSecretDeleteCommand;
+      result: HubSecretListResult;
+    };
+    "hub.secret.list": {
+      command: HubSecretListCommand;
+      result: HubSecretListResult;
+    };
+    "hub.secret.set": {
+      command: HubSecretSetCommand;
+      result: HubSecretSetResult;
     };
     "image.describe": {
       command: ImageDescribeCommand;
@@ -758,6 +772,29 @@ export interface FactoryRunRetryCommand {
 export interface FactoryRunSendBackCommand {
   run_id: string;
   step: StepId;
+}
+export interface HubSecretDeleteCommand {
+  name: HubSecretName;
+}
+export interface HubSecretListResult {
+  secrets: HubSecret[];
+}
+/**
+ * A hub secret as the hub shows it: by name, never its value.
+ */
+export interface HubSecret {
+  name: HubSecretName;
+}
+export interface HubSecretListCommand {}
+/**
+ * Create or replace one hub secret. The result carries no value back.
+ */
+export interface HubSecretSetCommand {
+  name: HubSecretName;
+  value: string;
+}
+export interface HubSecretSetResult {
+  operation_id: string;
 }
 /**
  * Read what the prepared image declares. It never builds.

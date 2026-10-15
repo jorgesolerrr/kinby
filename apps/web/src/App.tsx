@@ -4,6 +4,7 @@ import { cn } from "cn"
 import { useCallback, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { HubSecretsPage } from "@/components/hub-secrets-page"
 import { Onboarding } from "@/components/onboarding"
 import { LibraryPage } from "@/components/library-page"
 import { MainPanel } from "@/components/main-panel"
@@ -24,6 +25,7 @@ import {
   useMemoryOpen,
   usePath,
   useRemovedOpen,
+  useSecretsOpen,
   useSelectedInstanceId,
   useSelectedThreadId,
   useStatsOpen,
@@ -49,6 +51,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const statsOpen = useStatsOpen()
   const usageOpen = useUsageOpen()
   const libraryOpen = useLibraryOpen()
+  const secretsOpen = useSecretsOpen()
   const removedOpen = useRemovedOpen()
   const threadsOpen = useThreadsOpen()
   const path = usePath()
@@ -74,6 +77,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           removedOpen={removedOpen}
           usageOpen={usageOpen}
           libraryOpen={libraryOpen}
+          secretsOpen={secretsOpen}
           threadsOpen={threadsOpen}
           client={client}
           clock={clock}
@@ -103,6 +107,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
               <UsagePage client={client} clock={clock} />
             ) : libraryOpen ? (
               <LibraryPage client={client} clock={clock} />
+            ) : secretsOpen ? (
+              <HubSecretsPage client={client} clock={clock} />
             ) : removedOpen ? (
               <RemovedInstancesPage
                 caller={client}
