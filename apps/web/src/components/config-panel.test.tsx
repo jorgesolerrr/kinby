@@ -662,6 +662,67 @@ describe("ConfigPanel", () => {
       expect(within(section("Secrets and login")).getByText("Recreate to apply")).toBeDefined()
     })
 
+    const linked: InstanceSetup = {
+      ...setup,
+      secrets: setup.secrets.map((each) =>
+        each.name === "GH_TOKEN" ? { ...each, is_set: true, hub_secret: "WORK_TOKEN" } : each,
+      ),
+    }
+
+    it("names the hub secret a linked field takes", async () => {
+      await openSecrets({ "instance.status": () => status({ setup: linked }) })
+
+      expect(secret("GitHub token").getByText("WORK_TOKEN")).toBeDefined()
+      expect(secret("API key").queryByText(/hub secret/)).toBeNull()
+    })
+
+    it("links a field to the hub secret picked beside its input", async () => {
+      const { user, clock, caller } = await openSecrets({
+        "hub.secret.list": () => ({ secrets: [{ name: "GH_TOKEN" }, { name: "WORK_TOKEN" }] }),
+        "instance.secrets.set": () => ({ operation_id: "op-secret", instance_id: "instance-1" }),
+        "operation.get": () => operation({ kind: "secrets", state: "succeeded" }),
+      })
+
+      await user.click(secret("GitHub token").getByRole("button", { name: "Set" }))
+      await user.click(
+        secret("GitHub token").getByRole("combobox", { name: "Hub secret for GitHub token" }),
+      )
+      await user.click(await screen.findByRole("option", { name: "WORK_TOKEN" }))
+      expect(secret("GitHub token").queryByLabelText("New value for GitHub token")).toBeNull()
+      await user.click(secret("GitHub token").getByRole("button", { name: "Save" }))
+      await act(() => clock.advance(0))
+
+      expect(caller.calls.find((call) => call.method === "instance.secrets.set")?.params).toEqual({
+        instance_id: "instance-1",
+        hub_secrets: { GH_TOKEN: "WORK_TOKEN" },
+      })
+    })
+
+    it("unlinks a linked field the user types a value into", async () => {
+      let typed = false
+      const { user, clock, caller } = await openSecrets({
+        "instance.status": () =>
+          status({ setup: typed ? { ...linked, secrets: setup.secrets } : linked }),
+        "hub.secret.list": () => ({ secrets: [{ name: "WORK_TOKEN" }] }),
+        "instance.secrets.set": () => {
+          typed = true
+          return { operation_id: "op-secret", instance_id: "instance-1" }
+        },
+        "operation.get": () => operation({ kind: "secrets", state: "succeeded" }),
+      })
+
+      await user.click(secret("GitHub token").getByRole("button", { name: "Replace" }))
+      await user.type(secret("GitHub token").getByLabelText("New value for GitHub token"), "ghp-2")
+      await user.click(secret("GitHub token").getByRole("button", { name: "Save" }))
+      await act(() => clock.advance(0))
+
+      expect(caller.calls.find((call) => call.method === "instance.secrets.set")?.params).toEqual({
+        instance_id: "instance-1",
+        secrets: { GH_TOKEN: "ghp-2" },
+      })
+      expect(secret("GitHub token").queryByText("WORK_TOKEN")).toBeNull()
+    })
+
     it("signs an expired login in again and shows its URL and code", async () => {
       const { user, clock, caller } = await openSecrets({
         "instance.login.start": () => ({ operation_id: "op-login", instance_id: "instance-1" }),

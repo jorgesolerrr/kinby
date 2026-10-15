@@ -301,6 +301,45 @@ describe("the setup card", () => {
     expect(card().getByText(/A secret you set applies when Ada starts/)).toBeDefined()
   })
 
+  it("fills a secret from a picked hub secret, then names the one it takes", async () => {
+    let linked = false
+    const { user, clock, caller, relist } = await openPage({
+      "instance.status": () =>
+        status({
+          setup: {
+            ...setup,
+            secrets: setup.secrets.map((each) =>
+              linked && each.name === "GH_TOKEN"
+                ? { ...each, is_set: true, hub_secret: "GITHUB_TOKEN" }
+                : each,
+            ),
+          },
+        }),
+      "hub.secret.list": () => ({ secrets: [{ name: "GITHUB_TOKEN" }] }),
+      "instance.secrets.set": () => {
+        linked = true
+        return { operation_id: "op-secret", instance_id: "instance-1" }
+      },
+      "operation.get": () => operation({ kind: "secrets", state: "succeeded" }),
+    })
+
+    await user.click(secret("GitHub token").getByRole("button", { name: "Set" }))
+    await user.click(
+      secret("GitHub token").getByRole("combobox", { name: "Hub secret for GitHub token" }),
+    )
+    await user.click(await screen.findByRole("option", { name: "GITHUB_TOKEN" }))
+    await user.click(secret("GitHub token").getByRole("button", { name: "Save" }))
+    await act(() => clock.advance(0))
+
+    expect(caller.calls.find((call) => call.method === "instance.secrets.set")?.params).toEqual({
+      instance_id: "instance-1",
+      hub_secrets: { GH_TOKEN: "GITHUB_TOKEN" },
+    })
+    relist({ ...stopped })
+    await act(() => clock.advance(0))
+    expect(secret("GitHub token").getByText("GITHUB_TOKEN")).toBeDefined()
+  })
+
   it("says why a secret was not set, and keeps what was typed", async () => {
     const { user, clock, onChanged } = await openPage({
       "instance.secrets.set": () => ({ operation_id: "op-secret", instance_id: "instance-1" }),

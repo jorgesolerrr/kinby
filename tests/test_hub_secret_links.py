@@ -1,4 +1,5 @@
-"""Creating an instance whose secret fields take hub secrets, or save typed values as new ones."""
+"""Linking an instance's secret fields to hub secrets: at creation, where a typed value can be
+saved as a new one, and afterwards from its secrets."""
 
 import asyncio
 import os
@@ -8,25 +9,35 @@ import pytest
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
     INSTANCE_CREATE,
+    INSTANCE_SECRETS_SET,
+    INSTANCE_START,
     INSTANCE_STATUS,
     ErrorCode,
     ErrorEnvelope,
     InstanceCreateCommand,
+    InstanceSecretsSetCommand,
+    InstanceStartCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
     LifecycleOperationResult,
+    OperationGetResult,
     OperationState,
+    RecreateReason,
     SetupField,
     SetupFieldKind,
     SetupFieldType,
 )
 from tests.test_hub import (
+    FakeControl,
+    FakeImages,
     FakeRuntime,
+    created_instance,
     finished_operation,
     hub_at,
     hub_client,
     instance_environment,
     prepared,
+    started_instance,
 )
 from tests.test_hub_create import declaring
 from tests.test_hub_secret_methods import set_hub_secret
@@ -273,5 +284,194 @@ def test_no_linked_or_saved_value_reaches_sqlite_or_the_operation_record(tmp_pat
         for registry in hub.directory.glob("registry.sqlite*"):
             assert _SENTINEL not in registry.read_bytes().decode("utf-8", errors="ignore")
         assert _SENTINEL not in "".join(os.environ.values())
+
+    asyncio.run(scenario())
+
+
+async def _secrets_set(
+    client: ContractClient, command: InstanceSecretsSetCommand
+) -> OperationGetResult:
+    accepted = await client.call(INSTANCE_SECRETS_SET, command)
+    assert isinstance(accepted, LifecycleOperationResult), accepted
+    return await finished_operation(client, accepted)
+
+
+async def _linked(client: ContractClient, instance_id) -> list[tuple[str, bool, str | None]]:
+    status = await client.call(INSTANCE_STATUS, InstanceStatusCommand(instance_id=instance_id))
+    assert isinstance(status, InstanceStatusResult)
+    return [(secret.name, secret.is_set, secret.hub_secret) for secret in status.setup.secrets]
+
+
+def test_linking_a_field_of_an_existing_instance_writes_the_value_and_status_shows_it(tmp_path):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub", images=declaring(_GITHUB_TOKEN))
+        client = hub_client(hub)
+        created = await created_instance(client, secrets={"GITHUB_TOKEN": "ghp-typed"})
+        await set_hub_secret(client, "OPENAI_API_KEY", "sk-hub")
+        await set_hub_secret(client, "WORK_GITHUB_TOKEN", "ghp-work")
+
+        outcome = await _secrets_set(
+            client,
+            InstanceSecretsSetCommand(
+                instance_id=created.instance_id,
+                hub_secrets={"api_key": "OPENAI_API_KEY", "GITHUB_TOKEN": "WORK_GITHUB_TOKEN"},
+            ),
+        )
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert await _linked(client, created.instance_id) == [
+            ("api_key", True, "OPENAI_API_KEY"),
+            ("GITHUB_TOKEN", True, "WORK_GITHUB_TOKEN"),
+        ]
+        environment = instance_environment(hub, created.instance_id)
+        assert environment["OPENAI_API_KEY"] == "sk-hub"
+        assert environment["GITHUB_TOKEN"] == "ghp-work"
+
+    asyncio.run(scenario())
+
+
+def test_a_typed_value_for_a_linked_field_replaces_it_and_unlinks_the_field(tmp_path):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub", images=declaring(_GITHUB_TOKEN))
+        client = hub_client(hub)
+        await prepared(client)
+        await set_hub_secret(client, "OPENAI_API_KEY", "sk-hub")
+        await set_hub_secret(client, "GITHUB_TOKEN", "ghp-hub")
+        status = await _status(
+            client,
+            InstanceCreateCommand(
+                manifest_id="coder",
+                model="openai:gpt-5",
+                hub_secrets={"api_key": "OPENAI_API_KEY", "GITHUB_TOKEN": "GITHUB_TOKEN"},
+            ),
+        )
+
+        outcome = await _secrets_set(
+            client,
+            InstanceSecretsSetCommand(
+                instance_id=status.instance_id,
+                secrets={"api_key": "sk-typed", "GITHUB_TOKEN": "ghp-typed"},
+            ),
+        )
+
+        assert outcome.state is OperationState.SUCCEEDED
+        assert await _linked(client, status.instance_id) == [
+            ("api_key", True, None),
+            ("GITHUB_TOKEN", True, None),
+        ]
+        environment = instance_environment(hub, status.instance_id)
+        assert environment["OPENAI_API_KEY"] == "sk-typed"
+        assert environment["GITHUB_TOKEN"] == "ghp-typed"
+
+    asyncio.run(scenario())
+
+
+def test_linking_a_field_of_a_running_instance_asks_for_a_recreation(tmp_path):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub", images=FakeImages(), control=FakeControl())
+        client = hub_client(hub)
+        created = await started_instance(client, hub, secrets={"PROVIDER_TOKEN": "first"})
+        await set_hub_secret(client, "PROVIDER_TOKEN", "from-the-hub")
+
+        await _secrets_set(
+            client,
+            InstanceSecretsSetCommand(
+                instance_id=created.instance_id, hub_secrets={"PROVIDER_TOKEN": "PROVIDER_TOKEN"}
+            ),
+        )
+        status = await client.call(
+            INSTANCE_STATUS, InstanceStatusCommand(instance_id=created.instance_id)
+        )
+
+        assert isinstance(status, InstanceStatusResult)
+        assert status.recreate_reasons == [RecreateReason.SECRETS]
+
+    asyncio.run(scenario())
+
+
+def test_a_stopped_instance_applies_a_linked_value_when_it_starts(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages())
+        client = hub_client(hub)
+        created = await created_instance(client, secrets={"PROVIDER_TOKEN": "first"})
+        await set_hub_secret(client, "PROVIDER_TOKEN", "from-the-hub")
+        await _secrets_set(
+            client,
+            InstanceSecretsSetCommand(
+                instance_id=created.instance_id, hub_secrets={"PROVIDER_TOKEN": "PROVIDER_TOKEN"}
+            ),
+        )
+
+        accepted = await client.call(
+            INSTANCE_START, InstanceStartCommand(instance_id=created.instance_id)
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+
+        assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
+        assert [spec.env["PROVIDER_TOKEN"] for spec in runtime.created] == [
+            "first",
+            "from-the-hub",
+        ]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("secrets", "hub_secrets", "detail"),
+    [
+        (
+            {"api_key": "sk-typed"},
+            {"GITHUB_TOKEN": "MISSING"},
+            'The hub keeps no secret named "MISSING".',
+        ),
+        (
+            {"GITHUB_TOKEN": "ghp-typed"},
+            {"GITHUB_TOKEN": "GITHUB_TOKEN"},
+            "GITHUB_TOKEN takes a typed value or a hub secret, not both.",
+        ),
+        (
+            {"OPENAI_API_KEY": "sk-typed"},
+            {"api_key": "OPENAI_API_KEY"},
+            "OPENAI_API_KEY takes a typed value or a hub secret, not both.",
+        ),
+    ],
+    ids=["unknown-hub-secret", "typed-and-linked", "api-key-typed-under-its-variable-and-linked"],
+)
+def test_a_link_that_does_not_fit_fails_the_operation_and_changes_nothing(
+    tmp_path, secrets, hub_secrets, detail
+):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub", images=declaring(_GITHUB_TOKEN))
+        client = hub_client(hub)
+        await prepared(client)
+        await set_hub_secret(client, "GITHUB_TOKEN", f"{_SENTINEL}-hub")
+        await set_hub_secret(client, "OPENAI_API_KEY", "sk-hub")
+        status = await _status(
+            client,
+            InstanceCreateCommand(
+                manifest_id="coder",
+                model="openai:gpt-5",
+                secrets={"GITHUB_TOKEN": "ghp-first"},
+                hub_secrets={"api_key": "OPENAI_API_KEY"},
+            ),
+        )
+        before = instance_environment(hub, status.instance_id)
+
+        outcome = await _secrets_set(
+            client,
+            InstanceSecretsSetCommand(
+                instance_id=status.instance_id, secrets=secrets, hub_secrets=hub_secrets
+            ),
+        )
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == detail
+        assert _SENTINEL not in outcome.model_dump_json()
+        assert instance_environment(hub, status.instance_id) == before
+        assert await _linked(client, status.instance_id) == [
+            ("api_key", True, "OPENAI_API_KEY"),
+            ("GITHUB_TOKEN", True, None),
+        ]
 
     asyncio.run(scenario())

@@ -14,6 +14,7 @@ import { CircleXIcon } from "lucide-react"
 import { useCallback, useEffect, useId, useRef, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
+import { HubSecretPicker } from "@/components/hub-secret-picker"
 import { InstanceAvatar } from "@/components/instance-avatar"
 import { Progress } from "@/components/operation-progress"
 import { SubscriptionLogins } from "@/components/subscription-logins"
@@ -763,9 +764,6 @@ function SetupInput({
   )
 }
 
-// No hub secret has an empty name, so it stands for typing a value.
-const TYPED = ""
-
 const unnamedSave = (source: SecretSource) => source.save?.trim() === ""
 
 /**
@@ -793,36 +791,18 @@ function SecretInput({
 }) {
   const id = `setup-${field.name}`
   const invalid = error !== undefined || undefined
-  const items = [
-    { value: TYPED, label: "Type a value" },
-    ...kept.map((name) => ({ value: name, label: name })),
-  ]
   return (
     <Field data-invalid={invalid}>
       <SetupLabel field={field} htmlFor={source.hubSecret === undefined ? id : `${id}-hub`} />
       {kept.length > 0 && (
-        <Select
-          items={items}
-          value={source.hubSecret ?? TYPED}
-          onValueChange={(picked) => onSource(picked ? { hubSecret: picked } : {})}
-        >
-          <SelectTrigger
-            id={`${id}-hub`}
-            aria-label={`Hub secret for ${field.label}`}
-            aria-invalid={invalid}
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {items.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
+        <HubSecretPicker
+          id={`${id}-hub`}
+          label={field.label}
+          kept={kept}
+          picked={source.hubSecret}
+          invalid={invalid}
+          onPick={(picked) => onSource(picked === undefined ? {} : { hubSecret: picked })}
+        />
       )}
       {source.hubSecret === undefined && (
         <>

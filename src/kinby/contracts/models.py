@@ -954,7 +954,16 @@ class InstanceSecretsSetCommand(ContractModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
     instance_id: UUID
-    secrets: Annotated[dict[str, SecretStr], Field(min_length=1)]
+    #: Typed values, by field name. A typed value for a linked field removes its link.
+    secrets: dict[str, SecretStr] = Field(default_factory=dict)
+    #: The hub secret each field takes and stays linked to, by field name.
+    hub_secrets: dict[str, HubSecretName] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _names_a_field(self) -> Self:
+        if not self.secrets and not self.hub_secrets:
+            raise ValueError("Name at least one secret to set or link.")
+        return self
 
     @field_serializer("secrets", when_used="json")
     def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
