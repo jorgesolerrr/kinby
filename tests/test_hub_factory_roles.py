@@ -154,17 +154,19 @@ def test_a_create_with_a_role_is_checked_whole_before_anything_is_created(tmp_pa
     client = hub_client(hub)
 
     async def scenario() -> None:
-        missing = await client.call(
+        invalid = await client.call(
             INSTANCE_CREATE,
-            InstanceCreateCommand(factory_role=CODER, model="", secrets={"api_key": "sk-test"}),
+            InstanceCreateCommand(
+                factory_role=CODER, model="", config={"steps": "many"}, secrets=CODER_SECRETS
+            ),
         )
         unknown = await client.call(
             INSTANCE_CREATE, create_command(FactoryRole(factory="tickets", name="tester"))
         )
 
-        assert isinstance(missing, ErrorEnvelope)
-        assert missing.code is ErrorCode.INVALID_SETUP
-        assert missing.fields == {"GITHUB_TOKEN": "GitHub token is required."}
+        assert isinstance(invalid, ErrorEnvelope)
+        assert invalid.code is ErrorCode.INVALID_SETUP
+        assert invalid.fields == {"steps": "Step budget is not a whole number."}
         assert isinstance(unknown, ErrorEnvelope)
         assert unknown.fields == {"factory_role": 'Factory "tickets" has no role "tester".'}
         assert hub.registry.managed_instances() == []

@@ -44,7 +44,8 @@ def setup_errors(
 
     A secret the image does not declare is still an environment variable the instance may hold.
     A configuration value it does not declare has nowhere to land. The model travels as the
-    command's own `model`, so it is never a configuration value.
+    command's own `model`, so it is never a configuration value. A required secret left empty
+    is pending setup, filled after creation, so only a configuration field can be missing.
     """
     errors: dict[str, str] = {}
     declared = {
@@ -69,7 +70,7 @@ def setup_errors(
             continue
         value = values.get(field.name)
         if value is None:
-            if field.required:
+            if field.required and field.kind is SetupFieldKind.CONFIG:
                 errors[field.name] = f"{field.label} is required."
         elif (problem := value_problem(field, value)) is not None:
             errors[field.name] = f"{field.label} {problem}."

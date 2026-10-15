@@ -644,10 +644,10 @@ describe("the onboarding's setup step", () => {
       setup_fields: [
         ...vanilla.setup_fields,
         {
-          name: "SEARCH_TOKEN",
-          label: "Search token",
-          description: "Reaches the search service.",
-          kind: "secret",
+          name: "search_region",
+          label: "Search region",
+          description: "Where the search service runs.",
+          kind: "config",
           type: "text",
           required: true,
         },
@@ -657,7 +657,8 @@ describe("the onboarding's setup step", () => {
       operation_id: "op-create",
       kind: "create",
       state: "failed",
-      detail: "The image asks for other setup values now. SEARCH_TOKEN: Search token is required.",
+      detail:
+        "The image asks for other setup values now. search_region: Search region is required.",
       steps: [
         { name: "image", state: "succeeded", detail: "Preparing the selected image." },
         {
@@ -680,7 +681,7 @@ describe("the onboarding's setup step", () => {
             code: "INVALID_SETUP",
             message: "Some setup values are missing or invalid.",
             retryable: false,
-            fields: { SEARCH_TOKEN: "Search token is required." },
+            fields: { search_region: "Search region is required." },
           })
         }
         return { operation_id: "op-create-2", instance_id: "instance-2" }
@@ -694,12 +695,12 @@ describe("the onboarding's setup step", () => {
     await user.click(screen.getByRole("button", { name: "Create instance" }))
     await user.click(await screen.findByRole("button", { name: "Back to setup" }))
 
-    expect((await screen.findByLabelText("Search token")).getAttribute("type")).toBe("password")
+    expect(await screen.findByLabelText("Search region")).toBeDefined()
     for (const _ of ["prompt", "skills", "identity", "role", "image"]) {
       await user.click(screen.getByRole("button", { name: "Back" }))
     }
     const asked = within(screen.getByRole("list", { name: "Setup fields" }))
-    expect(asked.getByRole("listitem", { name: "Search token" })).toBeDefined()
+    expect(asked.getByRole("listitem", { name: "Search region" })).toBeDefined()
     expect(screen.getByRole("button", { name: "Prepare the image" }).hasAttribute("disabled")).toBe(
       true,
     )
@@ -707,18 +708,18 @@ describe("the onboarding's setup step", () => {
 
     await user.click(screen.getByRole("button", { name: "Create instance" }))
 
-    const refused = await screen.findByLabelText("Search token")
-    const secrets = within(screen.getByRole("group", { name: "Secrets" }))
+    const refused = await screen.findByLabelText("Search region")
+    const configuration = within(screen.getByRole("group", { name: "Configuration" }))
     expect(refused.getAttribute("aria-invalid")).toBe("true")
-    expect(secrets.getByRole("alert").textContent).toBe("Search token is required.")
+    expect(configuration.getByRole("alert").textContent).toBe("Search region is required.")
 
-    await user.type(refused, "search-token")
+    await user.type(refused, "eu")
     await user.click(screen.getByRole("button", { name: "Create instance" }))
 
     const sent = caller.calls.filter((call) => call.method === "instance.create")
     expect(sent).toHaveLength(3)
     expect(sent[2]?.params).toMatchObject({
-      secrets: { api_key: "sk-private", SEARCH_TOKEN: "search-token" },
+      config: { search_region: "eu" },
     })
   })
 })
@@ -925,11 +926,11 @@ describe("the onboarding's role, skills and prompt steps", () => {
   })
 
   it("asks for the fields of a role edited since it was picked, once the hub refuses", async () => {
-    const token = {
-      name: "CLAUDE_CODE_OAUTH_TOKEN",
-      label: "Claude Code token",
-      description: "Signs Claude Code in.",
-      kind: "secret" as const,
+    const prefix = {
+      name: "branch_prefix",
+      label: "Branch prefix",
+      description: "Starts the name of each branch.",
+      kind: "config" as const,
       type: "text" as const,
       required: true,
     }
@@ -938,7 +939,7 @@ describe("the onboarding's role, skills and prompt steps", () => {
     const caller = softwareHub({
       "factory.describe": () => {
         describes += 1
-        const setup = describes === 1 ? coder : { setup_fields: [...coder.setup_fields, token] }
+        const setup = describes === 1 ? coder : { setup_fields: [...coder.setup_fields, prefix] }
         return { instances: { coder: setup }, suggested_picks: { coder: SUGGESTED } }
       },
       "instance.create": () => {
@@ -948,7 +949,7 @@ describe("the onboarding's role, skills and prompt steps", () => {
             code: "INVALID_SETUP",
             message: "Some setup values are missing or invalid.",
             retryable: false,
-            fields: { CLAUDE_CODE_OAUTH_TOKEN: "Claude Code token is required." },
+            fields: { branch_prefix: "Branch prefix is required." },
           })
         }
         return { operation_id: "op-create", instance_id: "instance-2" }
@@ -960,13 +961,13 @@ describe("the onboarding's role, skills and prompt steps", () => {
     await fillCoderSetup(user)
     await user.click(screen.getByRole("button", { name: "Create instance" }))
 
-    const refused = await screen.findByLabelText("Claude Code token")
+    const refused = await screen.findByLabelText("Branch prefix")
     expect(refused.getAttribute("aria-invalid")).toBe("true")
-    await user.type(refused, "claude-token")
+    await user.type(refused, "agent/")
     await user.click(screen.getByRole("button", { name: "Create instance" }))
 
     expect(sent(caller)[1]).toMatchObject({
-      secrets: { api_key: "sk-ant", GH_TOKEN: "ghp-test", CLAUDE_CODE_OAUTH_TOKEN: "claude-token" },
+      config: { branch_prefix: "agent/" },
     })
   })
 
@@ -1122,6 +1123,28 @@ describe("the onboarding's start step", () => {
     await user.click(await screen.findByRole("button", { name: "Leave it stopped" }))
 
     expect(caller.calls.some((call) => call.method === "instance.start")).toBe(false)
+    expect(window.location.pathname).toBe("/instances/instance-1")
+  })
+
+  it("creates the instance with a required secret left empty, and opens it stopped", async () => {
+    const caller = hub({}, published)
+    const { user, clock } = await openOnboarding(caller)
+    await toSetup(user)
+    await user.type(screen.getByLabelText("Model"), "openai:gpt-5")
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await act(() => clock.advance(0))
+
+    await user.click(await screen.findByRole("button", { name: "Leave it stopped" }))
+
+    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toEqual({
+      manifest_id: "Ada",
+      persona_name: "Ada",
+      model: "openai:gpt-5",
+      config: { behavior_prompt: "Answer in haiku." },
+      secrets: {},
+      avatar: { shape: "circle", color: "blue" },
+      picks: [],
+    })
     expect(window.location.pathname).toBe("/instances/instance-1")
   })
 })
