@@ -1,6 +1,7 @@
 import { CallError } from "@kinby/contract"
 import type {
   DeclaredSetup,
+  InstanceCreateCommand,
   LibraryEntry,
   OperationGetResult,
   OperationStep,
@@ -352,6 +353,7 @@ function hub(answers: Answers, created: OperationGetResult = creating) {
     "library.list": () => ({ entries: [] }),
     "instance.create": () => ({ operation_id: "op-create", instance_id: "instance-1" }),
     "operation.get": ({ operation_id }) => (operation_id === "op-1" ? prepared : created),
+    "hub.secret.list": () => ({ secrets: [] }),
     ...answers,
   })
 }
@@ -453,6 +455,8 @@ describe("the onboarding's setup step", () => {
       model: "openai:gpt-5",
       config: { behavior_prompt: "Answer in haiku." },
       secrets: { api_key: "sk-private" },
+      hub_secrets: {},
+      save_to_hub: {},
       avatar: { shape: "square", color: "blue" },
       picks: [],
     })
@@ -497,6 +501,8 @@ describe("the onboarding's setup step", () => {
       model: "openai:gpt-5",
       config: { behavior_prompt: "Answer in haiku." },
       secrets: { api_key: "sk-private" },
+      hub_secrets: {},
+      save_to_hub: {},
       avatar: { shape: "circle", color: "blue" },
       picks: [],
     })
@@ -808,6 +814,131 @@ const sent = (caller: StubCaller) =>
 const ticked = (name: string) =>
   screen.getByRole("checkbox", { name }).getAttribute("aria-checked") === "true"
 
+describe("the onboarding's secret fields and hub secrets", () => {
+  const withToken: DeclaredSetup = {
+    ...vanilla,
+    setup_fields: [
+      ...vanilla.setup_fields,
+      {
+        name: "GITHUB_TOKEN",
+        label: "GitHub token",
+        description: "A token that can push.",
+        kind: "secret",
+        type: "text",
+        required: true,
+      },
+    ],
+  }
+
+  const keeping = (...names: string[]) =>
+    hub({
+      "image.describe": () => withToken,
+      "hub.secret.list": () => ({ secrets: names.map((name) => ({ name })) }),
+    })
+
+  /** The secret field whose value input has *label*, with its save to the hub. */
+  const secretField = (label: string) => {
+    const field = screen.getByLabelText(label).closest<HTMLElement>("[data-slot=field]")
+    if (field === null) throw new Error(`No field holds ${label}.`)
+    return within(field)
+  }
+
+  /** What the create command carries for the secret fields: typed, linked and saved. */
+  const secretsSent = (caller: StubCaller) => {
+    const [{ secrets, hub_secrets, save_to_hub }] = sent(caller) as InstanceCreateCommand[]
+    return { secrets, hub_secrets, save_to_hub }
+  }
+
+  async function toSecrets(caller: StubCaller, model: string) {
+    const { user } = await openOnboarding(caller)
+    await toSetup(user)
+    await user.type(screen.getByLabelText("Model"), model)
+    return user
+  }
+
+  it("preselects the hub secret named after each field's variable, the API key's provider's", async () => {
+    const caller = keeping("ANTHROPIC_API_KEY", "GITHUB_TOKEN", "OPENAI_API_KEY")
+    const user = await toSecrets(caller, "anthropic:claude-opus-5-5")
+
+    expect(screen.getByRole("combobox", { name: "Hub secret for API key" }).textContent).toContain(
+      "ANTHROPIC_API_KEY",
+    )
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(secretsSent(caller)).toEqual({
+      secrets: {},
+      hub_secrets: { api_key: "ANTHROPIC_API_KEY", GITHUB_TOKEN: "GITHUB_TOKEN" },
+      save_to_hub: {},
+    })
+  })
+
+  it("takes another hub secret for one field, and a typed value for another", async () => {
+    const caller = keeping("OPENAI_API_KEY", "GITHUB_TOKEN", "WORK_TOKEN")
+    const user = await toSecrets(caller, "openai:gpt-5")
+
+    await user.click(screen.getByRole("combobox", { name: "Hub secret for GitHub token" }))
+    await user.click(await screen.findByRole("option", { name: "WORK_TOKEN" }))
+    await user.click(screen.getByRole("combobox", { name: "Hub secret for API key" }))
+    await user.click(await screen.findByRole("option", { name: "Type a value" }))
+    await user.type(screen.getByLabelText("API key"), "sk-private")
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(secretsSent(caller)).toEqual({
+      secrets: { api_key: "sk-private" },
+      hub_secrets: { GITHUB_TOKEN: "WORK_TOKEN" },
+      save_to_hub: {},
+    })
+  })
+
+  it("types a value where no hub secret has the variable's name", async () => {
+    const caller = keeping("WORK_TOKEN")
+    const user = await toSecrets(caller, "openai:gpt-5")
+
+    await user.type(screen.getByLabelText("API key"), "sk-private")
+    await user.type(screen.getByLabelText("GitHub token"), "ghp-typed")
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(secretsSent(caller)).toEqual({
+      secrets: { api_key: "sk-private", GITHUB_TOKEN: "ghp-typed" },
+      hub_secrets: {},
+      save_to_hub: {},
+    })
+  })
+
+  it("saves a typed value to the hub under the variable's name, or the one given", async () => {
+    const caller = keeping()
+    const user = await toSecrets(caller, "openai:gpt-5")
+
+    expect(screen.queryByRole("combobox", { name: "Hub secret for API key" })).toBeNull()
+    await user.type(screen.getByLabelText("API key"), "sk-private")
+    await user.click(secretField("API key").getByRole("checkbox", { name: "Save to the hub" }))
+    const keyName = secretField("API key").getByLabelText("Name on the hub") as HTMLInputElement
+    expect(keyName.value).toBe("OPENAI_API_KEY")
+    await user.type(screen.getByLabelText("GitHub token"), "ghp-typed")
+    await user.click(secretField("GitHub token").getByRole("checkbox", { name: "Save to the hub" }))
+    const tokenName = secretField("GitHub token").getByLabelText("Name on the hub")
+    await user.clear(tokenName)
+    await user.type(tokenName, "PERSONAL_TOKEN")
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(secretsSent(caller)).toEqual({
+      secrets: { api_key: "sk-private", GITHUB_TOKEN: "ghp-typed" },
+      hub_secrets: {},
+      save_to_hub: { api_key: "OPENAI_API_KEY", GITHUB_TOKEN: "PERSONAL_TOKEN" },
+    })
+  })
+
+  it("saves nothing for a field left empty", async () => {
+    const caller = keeping()
+    const user = await toSecrets(caller, "openai:gpt-5")
+
+    await user.click(secretField("API key").getByRole("checkbox", { name: "Save to the hub" }))
+    await user.click(screen.getByRole("button", { name: "Create instance" }))
+
+    expect(secretsSent(caller)).toEqual({ secrets: {}, hub_secrets: {}, save_to_hub: {} })
+  })
+})
+
 describe("the onboarding's role, skills and prompt steps", () => {
   it("creates a vanilla instance with no role, the skills ticked and the prompt written", async () => {
     const caller = hub({ "library.list": () => ({ entries: [skill("pr"), skill("tdd")] }) })
@@ -834,6 +965,8 @@ describe("the onboarding's role, skills and prompt steps", () => {
         model: "openai:gpt-5",
         config: { behavior_prompt: "Answer in haiku." },
         secrets: { api_key: "sk-private" },
+        hub_secrets: {},
+        save_to_hub: {},
         avatar: { shape: "circle", color: "blue" },
         picks: ["tdd"],
       },
@@ -879,6 +1012,8 @@ describe("the onboarding's role, skills and prompt steps", () => {
           behavior_prompt: "You implement tickets.\n",
         },
         secrets: { api_key: "sk-ant", GH_TOKEN: "ghp-test" },
+        hub_secrets: {},
+        save_to_hub: {},
         avatar: { shape: "circle", color: "blue" },
         picks: SUGGESTED.filter((name) => name !== "tdd"),
       },
@@ -1142,6 +1277,8 @@ describe("the onboarding's start step", () => {
       model: "openai:gpt-5",
       config: { behavior_prompt: "Answer in haiku." },
       secrets: {},
+      hub_secrets: {},
+      save_to_hub: {},
       avatar: { shape: "circle", color: "blue" },
       picks: [],
     })

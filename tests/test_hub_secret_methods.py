@@ -32,7 +32,7 @@ from tests.test_hub import FakeImages, finished_operation, hub_at, hub_client
 _SENTINEL = "sentinel-hub-secret-value"
 
 
-async def _set(client: ContractClient, name: str, value: str) -> OperationGetResult:
+async def set_hub_secret(client: ContractClient, name: str, value: str) -> OperationGetResult:
     accepted = await client.call(HUB_SECRET_SET, HubSecretSetCommand(name=name, value=value))
     assert isinstance(accepted, HubSecretSetResult)
     return await finished_operation(client, accepted)
@@ -49,9 +49,9 @@ def test_hub_secrets_are_set_listed_replaced_and_deleted_by_name(tmp_path):
         hub = hub_at(tmp_path / "hub", images=FakeImages())
         client = hub_client(hub)
 
-        created = await _set(client, "GITHUB_TOKEN", "first-value")
-        await _set(client, "ANTHROPIC_API_KEY", "sk-test")
-        replaced = await _set(client, "GITHUB_TOKEN", _SENTINEL)
+        created = await set_hub_secret(client, "GITHUB_TOKEN", "first-value")
+        await set_hub_secret(client, "ANTHROPIC_API_KEY", "sk-test")
+        replaced = await set_hub_secret(client, "GITHUB_TOKEN", _SENTINEL)
         listed = await client.call(HUB_SECRET_LIST, HubSecretListCommand())
 
         assert created.kind is OperationKind.HUB_SECRET
@@ -78,7 +78,7 @@ def test_deleting_a_hub_secret_the_hub_does_not_keep_is_not_found(tmp_path):
     async def scenario() -> None:
         hub = hub_at(tmp_path / "hub", images=FakeImages())
         client = hub_client(hub)
-        await _set(client, "GITHUB_TOKEN", "first-value")
+        await set_hub_secret(client, "GITHUB_TOKEN", "first-value")
 
         refused = await client.call(HUB_SECRET_DELETE, HubSecretDeleteCommand(name="OTHER"))
 
@@ -94,7 +94,7 @@ def test_no_hub_secret_value_reaches_sqlite_the_operation_record_or_the_hub_envi
         hub = hub_at(tmp_path / "hub", images=FakeImages())
         client = hub_client(hub)
 
-        outcome = await _set(client, "GITHUB_TOKEN", _SENTINEL)
+        outcome = await set_hub_secret(client, "GITHUB_TOKEN", _SENTINEL)
         listed = await client.call(HUB_SECRET_LIST, HubSecretListCommand())
 
         assert _SENTINEL not in outcome.model_dump_json()
@@ -156,7 +156,7 @@ def test_the_update_token_and_instance_tokens_are_refused_on_every_write(
 ):
     async def scenario() -> None:
         hub = hub_at(tmp_path / "hub", images=FakeImages())
-        await _set(hub_client(hub), "GITHUB_TOKEN", "first-value")
+        await set_hub_secret(hub_client(hub), "GITHUB_TOKEN", "first-value")
 
         refused = await hub.dispatcher.dispatch(method, payload, scopes)
 
@@ -172,7 +172,7 @@ def test_a_failed_write_keeps_the_previous_hub_secrets_whole(tmp_path, monkeypat
     async def scenario() -> None:
         hub = hub_at(tmp_path / "hub", images=FakeImages())
         client = hub_client(hub)
-        await _set(client, "GITHUB_TOKEN", "first-value")
+        await set_hub_secret(client, "GITHUB_TOKEN", "first-value")
         original = os.open
 
         def refuse_to_write(path: object, *arguments: object, **options: object) -> int:
@@ -183,7 +183,7 @@ def test_a_failed_write_keeps_the_previous_hub_secrets_whole(tmp_path, monkeypat
             return original(path, *arguments, **options)  # ty: ignore[invalid-argument-type]
 
         monkeypatch.setattr(os, "open", refuse_to_write)
-        outcome = await _set(client, "GITHUB_TOKEN", _SENTINEL)
+        outcome = await set_hub_secret(client, "GITHUB_TOKEN", _SENTINEL)
         monkeypatch.undo()
 
         assert outcome.state is OperationState.FAILED

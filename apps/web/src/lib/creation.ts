@@ -31,7 +31,10 @@ const CREATE_LOST =
   "the instance shows in the sidebar once it is published."
 
 /** The built-in field whose value travels as the command's own model, not in its config. */
-const MODEL_FIELD = "model"
+export const MODEL_FIELD = "model"
+
+/** The built-in secret field the instance holds under its provider's variable. */
+const API_KEY_FIELD = "api_key"
 
 /** What a field's control holds: the text typed or picked, or whether a switch is on. */
 export type FieldInput = string | boolean
@@ -52,6 +55,31 @@ function setupValue(field: SetupField, input: FieldInput): SetupValue {
   if (field.type !== "integer" || typeof input !== "string" || input.trim() === "") return input
   const number = Number(input)
   return Number.isInteger(number) ? number : input
+}
+
+/**
+ * Where a secret field's value comes from: the hub secret the field links, when one is set, or
+ * else the text typed, saved to the hub under `save` when that is set.
+ */
+export interface SecretSource {
+  hubSecret?: string
+  save?: string
+}
+
+/** The variable a secret field's value is held under. The API key's is its provider's. */
+export function heldVariable(field: SetupField, model: string): string {
+  if (field.name !== API_KEY_FIELD) return field.name
+  const [provider = ""] = model.split(":")
+  return `${provider.toUpperCase()}_API_KEY`
+}
+
+/** The source the user chose, else the hub secret named after the variable, else typing. */
+export function secretSource(
+  chosen: SecretSource | undefined,
+  variable: string,
+  kept: string[],
+): SecretSource {
+  return chosen ?? (kept.includes(variable) ? { hubSecret: variable } : {})
 }
 
 /** The field the onboarding asks for in its own step, starting from kinby's or the role's. */
@@ -99,24 +127,38 @@ export function proposedName(role: FactoryRole | undefined): string {
   return role === undefined ? "" : `${role.factory}-${role.name}`
 }
 
-/** The create command for the prepared image or the role, with each field's value by its kind. */
+/**
+ * The create command for the prepared image or the role, with each field's value by its kind,
+ * and each secret field's from its source.
+ */
 export function createCommand(
   fields: SetupField[],
   inputs: Record<string, FieldInput>,
   { name, avatar }: Identity,
   { role, skills }: Picks,
+  sources: Record<string, SecretSource> = {},
 ): InstanceCreateCommand {
   const config: Record<string, SetupValue> = {}
   const secrets: Record<string, string> = {}
+  const hubSecrets: Record<string, string> = {}
+  const saveToHub: Record<string, string> = {}
   let model = ""
   for (const field of fields) {
+    const source = sources[field.name] ?? {}
+    if (field.kind === "secret" && source.hubSecret !== undefined) {
+      hubSecrets[field.name] = source.hubSecret
+      continue
+    }
     const input = inputs[field.name] ?? initialInput(field)
     if (input === undefined) continue
     const value = setupValue(field, input)
     if (field.name === MODEL_FIELD) model = String(value)
     else if (field.kind === "secret") {
       const text = String(value)
-      if (text.trim() !== "") secrets[field.name] = text
+      if (text.trim() === "") continue
+      secrets[field.name] = text
+      const saved = source.save?.trim()
+      if (saved) saveToHub[field.name] = saved
     } else config[field.name] = value
   }
   // The name is both the instance's manifest id and the persona it answers as.
@@ -128,6 +170,8 @@ export function createCommand(
     model,
     config,
     secrets,
+    hub_secrets: hubSecrets,
+    save_to_hub: saveToHub,
     avatar,
     picks: skills,
   }

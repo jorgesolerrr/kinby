@@ -4,7 +4,7 @@ how much of that setup an instance has done."""
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from uuid import UUID
 
 from pydantic import TypeAdapter, ValidationError
@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 from kinby.contracts import (
     CommandListName,
     DeclaredSetup,
+    HubSecretName,
     InstanceSetup,
     LoginSetup,
     LoginState,
@@ -79,6 +80,24 @@ def setup_errors(
     return errors
 
 
+def link_errors(
+    secrets: Mapping[str, str],
+    hub_secrets: Mapping[str, HubSecretName],
+    save_to_hub: Mapping[str, HubSecretName],
+    kept: Collection[HubSecretName],
+) -> dict[str, str]:
+    """What is wrong with each field's hub secret, or with saving its typed value to the hub, by
+    field name. Blank text counts as nothing typed, the way creation reads it."""
+    typed = {name for name, value in secrets.items() if value.strip()}
+    errors = dict.fromkeys(save_to_hub.keys() - typed, "Type a value to save it to the hub.")
+    for name, hub_secret in hub_secrets.items():
+        if name in typed:
+            errors[name] = "Type a value or take a hub secret, not both."
+        elif hub_secret not in kept:
+            errors[name] = f'The hub keeps no secret named "{hub_secret}".'
+    return errors
+
+
 def configuration(
     description: DeclaredSetup,
     *,
@@ -117,13 +136,15 @@ def instance_setup(
     logins: Mapping[str, LoginState],
     running: Mapping[str, UUID],
     secrets: Mapping[str, str],
+    links: Mapping[str, HubSecretName],
     model: ModelName | None,
     missing_commands: Sequence[CommandListName],
 ) -> InstanceSetup:
     """Each login and secret field the instance's stored descriptor declares, and how it stands,
     and the lists of repository commands it is missing.
 
-    `running` names the sign-in each login has running, by login id.
+    `running` names the sign-in each login has running, by login id. `links` names the hub
+    secret each linked variable took.
 
     A login the hub never tracked belongs to an instance created before it tracked logins, and
     reads as signed in. The API key is held under its provider's variable, so it takes the model.
@@ -140,6 +161,10 @@ def instance_setup(
     def is_set(field: SetupField) -> bool:
         held = variable(field)
         return held is not None and bool(secrets.get(held, "").strip())
+
+    def hub_secret(field: SetupField) -> HubSecretName | None:
+        held = variable(field)
+        return None if held is None else links.get(held)
 
     return InstanceSetup(
         logins=[
@@ -159,6 +184,7 @@ def instance_setup(
                 label=field.label,
                 required=field.required,
                 is_set=is_set(field),
+                hub_secret=hub_secret(field),
             )
             for field in description.setup_fields
             if field.kind is SetupFieldKind.SECRET

@@ -875,11 +875,17 @@ export interface InstanceCreateCommand {
     [k: string]: SetupValue;
   };
   factory_role?: FactoryRole | null;
+  hub_secrets?: {
+    [k: string]: HubSecretName;
+  };
   manifest_id?: string | null;
   model: string;
   persona_name?: string | null;
   picks?: string[];
   revision?: string;
+  save_to_hub?: {
+    [k: string]: HubSecretName;
+  };
   secrets?: {
     [k: string]: string;
   };
@@ -1073,6 +1079,7 @@ export interface LoginSetup {
  * One secret field an instance declares, and whether it holds a value. Never the value.
  */
 export interface SecretSetup {
+  hub_secret?: HubSecretName | null;
   is_set: boolean;
   label: string;
   name: string;

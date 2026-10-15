@@ -21,6 +21,7 @@ from kinby.contracts import (
     FactoryRunStatus,
     FileHash,
     GitSource,
+    HubSecretName,
     IntendedState,
     LoginPrompt,
     LoginState,
@@ -150,6 +151,13 @@ class HubRegistry:
                     prompt_url TEXT,
                     prompt_code TEXT,
                     PRIMARY KEY (operation_id, name)
+                );
+                -- Names only: the value lives in the instance's .env (ADR 0095).
+                CREATE TABLE IF NOT EXISTS secret_links (
+                    instance_id TEXT NOT NULL REFERENCES instances(id),
+                    variable TEXT NOT NULL,
+                    hub_secret TEXT NOT NULL,
+                    PRIMARY KEY (instance_id, variable)
                 );
                 CREATE TABLE IF NOT EXISTS logins (
                     instance_id TEXT NOT NULL REFERENCES instances(id),
@@ -651,6 +659,26 @@ class HubRegistry:
                     for login_id in login_ids
                 ],
             )
+
+    def link_secrets(self, instance_id: UUID, links: Mapping[str, HubSecretName]) -> None:
+        """Link each variable the instance holds to the hub secret it took."""
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT OR REPLACE INTO secret_links (instance_id, variable, hub_secret)
+                VALUES (?, ?, ?)
+                """,
+                [(str(instance_id), variable, name) for variable, name in links.items()],
+            )
+
+    def secret_links(self, instance_id: UUID) -> dict[str, HubSecretName]:
+        """The hub secret each linked variable of the instance took, by variable."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT variable, hub_secret FROM secret_links WHERE instance_id = ?",
+                (str(instance_id),),
+            ).fetchall()
+        return dict(rows)
 
     def record_template(
         self, instance_id: UUID, setup: DeclaredSetup, baseline: dict[str, FileHash]
