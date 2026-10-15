@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import json
 import os
 import socket
@@ -997,6 +998,31 @@ def test_list_carries_the_observed_process_and_lists_an_instance_it_cannot_read(
         assert summary.detail == "Docker daemon unavailable"
 
     asyncio.run(scenario())
+
+
+def test_the_hub_holds_its_registry_open_only_during_a_call(tmp_path):
+    """An unclosed sqlite connection outlives its call until a garbage collection, and enough of
+    them at once run the process out of file descriptors."""
+
+    def registry_files() -> list[str]:
+        descriptors = Path("/proc/self/fd")
+        return [
+            target
+            for descriptor in descriptors.iterdir()
+            if (target := os.path.realpath(descriptor)).startswith(str(tmp_path / "hub"))
+            and "registry.sqlite" in target
+        ]
+
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        hub = hub_at(tmp_path / "hub", images=FakeImages())
+        asyncio.run(created_instance(hub_client(hub)))
+
+        assert registry_files() == []
+    finally:
+        if collecting:
+            gc.enable()
 
 
 def test_metadata_for_two_created_instances_never_changes_process_environment(tmp_path):
