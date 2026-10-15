@@ -16,13 +16,18 @@ def write_protected(path: Path, body: str) -> None:
     path.chmod(0o600)
 
 
+def staging_path(path: Path) -> Path:
+    """Where a replacement of *path* is written before its rename."""
+    return path.with_name(f"{path.name}.replacing")
+
+
 def replace_protected(path: Path, body: str) -> None:
     """Replace the file through one rename.
 
     A failure leaves the previous file in place and removes the staging file,
     so the values are not left in a second copy.
     """
-    staging = path.with_name(f"{path.name}.replacing")
+    staging = staging_path(path)
     try:
         write_protected(staging, body)
         staging.replace(path)
@@ -36,6 +41,8 @@ class HubSecrets:
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        # A replacement the process died in the middle of leaves its values in a second copy.
+        staging_path(path).unlink(missing_ok=True)
 
     def values(self) -> dict[HubSecretName, str]:
         if not self._path.exists():

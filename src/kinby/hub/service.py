@@ -436,6 +436,7 @@ class Hub:
             self.runs = FactoryRuns(self.registry, self.factories, self._run_step)
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
+            self._hub_secrets_lock = asyncio.Lock()
             self._stopping: dict[UUID, PendingStop] = {}
             self._tasks: set[asyncio.Task[None]] = set()
             self.dispatcher = Dispatcher()
@@ -512,8 +513,9 @@ class Hub:
         except Exception as exc:
             return StepResult(ending=StepEnding.FAILED, summary=str(exc) or type(exc).__name__)
 
-    def _schedule(self, work: Coroutine[object, object, None]) -> None:
-        task = asyncio.create_task(work)
+    def _schedule(self, work: Coroutine[object, object, None], *, eager: bool = False) -> None:
+        """An eager task runs up to its first wait before the call that scheduled it returns."""
+        task = asyncio.create_task(work, eager_start=eager)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -1150,42 +1152,47 @@ class Hub:
         self.registry.record_operation(
             operation_id, None, OperationKind.HUB_SECRET, "Hub secret queued."
         )
-        self._schedule(self._set_hub_secret(operation_id, command))
+        # Eager, so the write takes its place in the queue before a later delete can.
+        self._schedule(self._set_hub_secret(operation_id, command), eager=True)
         return HubSecretSetResult(operation_id=operation_id)
 
     async def _set_hub_secret(self, operation_id: UUID, command: HubSecretSetCommand) -> None:
         name = command.name
         value = command.value.get_secret_value()
         try:
-            self.registry.advance_operation(operation_id, "secret", f'Saving "{name}".')
-            previous = self.secrets.values().get(name)
-            try:
-                self.secrets.save(name, value)
+            # One hub secret write or delete at a time, in the order they were asked for.
+            async with self._hub_secrets_lock:
+                self.registry.advance_operation(operation_id, "secret", f'Saving "{name}".')
+                previous = self.secrets.values().get(name)
                 try:
-                    rewritten, unlinked = await self._rewrite_links(
-                        operation_id, name, previous, value
+                    self.secrets.save(name, value)
+                    try:
+                        rewritten, unlinked = await self._rewrite_links(
+                            operation_id, name, previous, value
+                        )
+                    except Exception:
+                        # A retry then compares each linked field against the previous value again.
+                        if previous is None:
+                            self.secrets.delete(name)
+                        else:
+                            self.secrets.save(name, previous)
+                        raise
+                except Exception as exc:
+                    self.registry.finish_operation(
+                        operation_id,
+                        OperationState.FAILED,
+                        self._redact(str(exc) or type(exc).__name__, [value, previous or ""]),
                     )
-                except Exception:
-                    # A retry then compares each linked field against the previous value again.
-                    if previous is None:
-                        self.secrets.delete(name)
-                    else:
-                        self.secrets.save(name, previous)
-                    raise
-            except Exception as exc:
-                self.registry.finish_operation(
-                    operation_id,
-                    OperationState.FAILED,
-                    self._redact(str(exc) or type(exc).__name__, [value, previous or ""]),
-                )
-                return
-            for record in rewritten:
-                if record.instance_id in command.recreate:
-                    await self._queue_recreation(operation_id, record)
-            detail = f'Hub secret "{name}" saved.'
-            if unlinked:
-                detail += f" Unlinked {', '.join(unlinked)}: each held another value, and keeps it."
-            self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, detail)
+                    return
+                for record in rewritten:
+                    if record.instance_id in command.recreate:
+                        await self._queue_recreation(operation_id, record)
+                detail = f'Hub secret "{name}" saved.'
+                if unlinked:
+                    detail += (
+                        f" Unlinked {', '.join(unlinked)}: each held another value, and keeps it."
+                    )
+                self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, detail)
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
             raise
@@ -1248,9 +1255,10 @@ class Hub:
 
     async def delete_hub_secret(self, command: HubSecretDeleteCommand) -> HubSecretDeleteResult:
         """Delete one hub secret and every link to it. Each instance keeps the value it holds."""
-        unlinked = self._links(command.name)
-        self.secrets.delete(command.name)
-        self.registry.unlink_hub_secret(command.name)
+        async with self._hub_secrets_lock:
+            unlinked = self._links(command.name)
+            self.secrets.delete(command.name)
+            self.registry.unlink_hub_secret(command.name)
         return HubSecretDeleteResult(unlinked=unlinked)
 
     async def picks(self, command: InstancePicksGetCommand) -> InstancePicksResult:
