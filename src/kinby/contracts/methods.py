@@ -399,14 +399,15 @@ LIBRARY_SKILL_DELETE = Method(
     "library.skill.delete", Scope.HUB_ADMIN, LibrarySkillDeleteCommand, LibraryListResult
 )
 LIBRARY_SKILL_CHECK = Method(
-    "library.skill.check", Scope.HUB_ADMIN, LibrarySkillCheckCommand, LibrarySkillCheckResult
+    "library.skill.check", Scope.HUB_READ, LibrarySkillCheckCommand, LibrarySkillCheckResult
 )
 LIBRARY_SKILL_MOVE = Method(
     "library.skill.move", Scope.HUB_ADMIN, LibrarySkillMoveCommand, LibraryListResult
 )
-#: Admin only: the hub fetches whatever the address names, a path on the hub included.
+#: The hub fetches whatever the address names, a path on the hub included. Only the user and the
+#: home instance hold hub:read.
 LIBRARY_GIT_PREVIEW = Method(
-    "library.git.preview", Scope.HUB_ADMIN, LibraryGitPreviewCommand, LibraryGitPreviewResult
+    "library.git.preview", Scope.HUB_READ, LibraryGitPreviewCommand, LibraryGitPreviewResult
 )
 LIBRARY_GIT_ADD = Method(
     "library.git.add", Scope.HUB_ADMIN, LibraryGitAddCommand, LibraryGitAddResult

@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -14,6 +14,7 @@ import pytest
 from langchain_core.messages import AIMessageChunk
 
 from kinby.contracts import (
+    LIBRARY_GIT_ADD,
     ApprovalRequested,
     CallFrame,
     ControlToken,
@@ -24,7 +25,11 @@ from kinby.contracts import (
     GateRule,
     HomeInstanceOrigin,
     ItemFrame,
+    LibraryGitAddCommand,
+    LibraryGitAddResult,
+    LibrarySkillCheckResult,
     LifecycleOperationResult,
+    NewerVersion,
     OperationKind,
     OperationState,
     Payload,
@@ -56,14 +61,16 @@ from tests.test_hub import (
     instance_environment,
     started_instance,
 )
+from tests.test_hub_factories import FILES, renamed
 from tests.test_hub_home_reads import answers, as_the_home_instance, error_code
+from tests.test_hub_library_git import commit, head, repository, skill
 from tests.test_hub_routing import control_token, instance_served
 from tests.test_hub_server import frame, served, url
 from tests.test_routines import instance_at
 from tests.test_scheduler import FakeClock
 from tests.test_scheduler import runtime as instance_runtime
 
-Script = Callable[[UUID], Sequence[AIMessageChunk]]
+Script = Callable[[UUID], Iterable[AIMessageChunk]]
 
 
 @dataclass(frozen=True)
@@ -493,6 +500,189 @@ def test_the_home_instance_never_sets_another_instances_permissions_or_manifest(
 
         assert error_code(relayed_write) == ErrorCode.PERMISSION_DENIED.value
         assert error_code(hub_write) == ErrorCode.PERMISSION_DENIED.value
+
+    asyncio.run(scenario())
+
+
+def library_names(answer: dict[str, object]) -> list[str]:
+    assert isinstance(answer["result"], dict), answer
+    entries = answer["result"]["entries"]
+    assert isinstance(entries, list)
+    return [entry["name"] for entry in entries]
+
+
+def test_kinby_writes_a_factory_that_passes_the_check_and_never_one_that_fails_it(
+    tmp_path, monkeypatch
+):
+    named = renamed(FILES, "broken")
+    broken = named | {
+        "factory.yaml": named["factory.yaml"].replace("prompts/review.md", "prompts/check.md")
+    }
+
+    def script(_: UUID) -> list[AIMessageChunk]:
+        return [
+            calling(
+                "tickets-1", "factory_write", {"name": "tickets", "files": FILES, "hash": None}
+            ),
+            calling("broken-1", "factory_write", {"name": "broken", "files": broken, "hash": None}),
+            AIMessageChunk(content="The tickets factory is written."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            payloads = await relayed_turn(kinby, approvals=2)
+            tickets, refused = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                ("factory.get", {"name": "tickets"}),
+                ("factory.get", {"name": "broken"}),
+            )
+
+        results = {
+            payload.call_id: payload for payload in payloads if isinstance(payload, ToolResult)
+        }
+        assert not results["tickets-1"].error, results["tickets-1"].output
+        assert results["broken-1"].error
+        assert 'names prompt "prompts/check.md"' in results["broken-1"].output
+        assert isinstance(tickets["result"], dict), tickets
+        assert tickets["result"]["files"] == FILES
+        assert error_code(refused) == ErrorCode.NOT_FOUND.value
+
+    asyncio.run(scenario())
+
+
+def test_kinby_writes_a_skill_into_the_library_once_the_user_approves(tmp_path, monkeypatch):
+    def script(_: UUID) -> list[AIMessageChunk]:
+        grill = {"name": "grill", "content": skill("grill"), "hash": None}
+        return [
+            calling("grill-1", "library_skill_write", grill),
+            AIMessageChunk(content="Grill is in the library."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            payloads = await relayed_turn(kinby)
+            [listed] = await answers(
+                kinby.route(kinby.home), kinby.home_token, ("library.list", {})
+            )
+
+        tool_results(payloads)
+        assert [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)] == [
+            "library_skill_write"
+        ]
+        assert "grill" in library_names(listed)
+
+    asyncio.run(scenario())
+
+
+def test_kinby_previews_a_repository_and_adds_its_skill_once_the_user_approves(
+    tmp_path, monkeypatch
+):
+    source = repository(tmp_path / "skills", {"skills/grill/SKILL.md": skill("grill")})
+
+    def script(_: UUID) -> list[AIMessageChunk]:
+        add = {"address": str(source), "commit": head(source), "skills": ["grill"]}
+        return [
+            calling("add-1", "library_git_add", add),
+            AIMessageChunk(content="Grill is in the library."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            [previewed] = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                ("library.git.preview", {"address": str(source)}),
+            )
+            tool_results(await relayed_turn(kinby))
+            [listed] = await answers(
+                kinby.route(kinby.home), kinby.home_token, ("library.list", {})
+            )
+
+        assert isinstance(previewed["result"], dict), previewed
+        assert previewed["result"]["commit"] == head(source)
+        assert "grill" in library_names(listed)
+
+    asyncio.run(scenario())
+
+
+def test_kinby_moves_a_library_skill_only_with_the_diff_the_move_brings_in_its_approval(
+    tmp_path, monkeypatch
+):
+    source = repository(tmp_path / "skills", {"skills/grill/SKILL.md": skill("grill")})
+    landed = head(source)
+    commit(source, {"skills/grill/SKILL.md": skill("grill", "Ask why five times.")})
+    checked: list[NewerVersion] = []
+
+    def script(_: UUID) -> Iterator[AIMessageChunk]:
+        # Read once the turn starts, after the test checked the skill.
+        [shown] = checked
+        move = {"name": "grill", "hash": shown.hash, "commit": shown.commit, "overwrite": False}
+        yield calling("forged-1", "library_move", {**move, "diff": "+Nothing changes.\n"})
+        yield calling("move-1", "library_move", {**move, "diff": shown.diff})
+        yield AIMessageChunk(content="Grill moved.")
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            added = await hub_client(kinby.hub).call(
+                LIBRARY_GIT_ADD,
+                LibraryGitAddCommand(address=str(source), commit=landed, skills=["grill"]),
+            )
+            assert isinstance(added, LibraryGitAddResult), added
+            [read] = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                ("library.skill.check", {"name": "grill"}),
+            )
+            assert isinstance(read["result"], dict), read
+            newer = LibrarySkillCheckResult.model_validate(read["result"]).newer
+            assert newer is not None
+            checked.append(newer)
+            payloads = await relayed_turn(kinby, approvals=2)
+            [skill_read] = await answers(
+                kinby.route(kinby.home), kinby.home_token, ("library.skill.read", {"name": "grill"})
+            )
+
+        approvals = [payload for payload in payloads if isinstance(payload, ApprovalRequested)]
+        assert [approval.arguments["diff"] for approval in approvals] == [
+            "+Nothing changes.\n",
+            newer.diff,
+        ]
+        results = {
+            payload.call_id: payload for payload in payloads if isinstance(payload, ToolResult)
+        }
+        assert results["forged-1"].error
+        assert not results["move-1"].error, results["move-1"].output
+        assert isinstance(skill_read["result"], dict), skill_read
+        assert skill_read["result"]["content"] == skill("grill", "Ask why five times.")
+
+    asyncio.run(scenario())
+
+
+def test_the_home_instance_never_deletes_a_library_skill(tmp_path, monkeypatch):
+    def script(_: UUID) -> list[AIMessageChunk]:
+        grill = {"name": "grill", "content": skill("grill"), "hash": None}
+        return [calling("grill-1", "library_skill_write", grill), AIMessageChunk(content="Done.")]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            tool_results(await relayed_turn(kinby))
+            [grill] = await answers(
+                kinby.route(kinby.home), kinby.home_token, ("library.skill.read", {"name": "grill"})
+            )
+            assert isinstance(grill["result"], dict), grill
+            delete = {"name": "grill", "hash": grill["result"]["hash"]}
+            deleted, hub_deleted, listed = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                ("library.skill.delete", delete),
+                written(uuid4(), "library.skill.delete", delete),
+                ("library.list", {}),
+            )
+
+        assert error_code(deleted) == ErrorCode.PERMISSION_DENIED.value
+        assert error_code(hub_deleted) == ErrorCode.PERMISSION_DENIED.value
+        assert "grill" in library_names(listed)
 
     asyncio.run(scenario())
 

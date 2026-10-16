@@ -19,15 +19,21 @@ from kinby.contracts import (
     CallFrame,
     ContractModel,
     ErrorFrame,
+    FactoryEditCommand,
+    FactoryName,
     FactoryRole,
     FileHash,
     FrameId,
+    GitCommit,
     HubSecretName,
     HubWriteCommand,
     HubWriteResult,
     InstanceCreateCommand,
     InstancePicksSetCommand,
     InstanceRelayReadResult,
+    LibraryGitAddCommand,
+    LibrarySkillMoveCommand,
+    LibrarySkillWriteCommand,
     PromptName,
     PromptSetCommand,
     ResultFrame,
@@ -71,6 +77,10 @@ def hub_tools() -> tuple[Tool, ...]:
         instance_routine_run,
         instance_routine_delete,
         instance_ask,
+        library_skill_write,
+        library_git_add,
+        library_move,
+        factory_write,
     )
 
 
@@ -79,7 +89,8 @@ async def hub_read(method: str, params: dict[str, JsonValue]) -> str:
     """Read the hub or one of its instances, and return the answer as JSON.
 
     Hub reads include instance.list, instance.status, instance.logs, instance.picks.get,
-    stats.summary, factory.list, factory.run.list, library.list and hub.secret.list. An
+    stats.summary, factory.list, factory.get, factory.check, factory.run.list, library.list,
+    library.skill.read, library.skill.check, library.git.preview and hub.secret.list. An
     instance's own reads are memory.list, memory.open, thread.list, thread.turn.list,
     routine.list, routine.read, usage.get, stats.get, prompt.get, manifest.get,
     permissions.get and config.history: name the instance in params as instance_id, beside the
@@ -213,6 +224,64 @@ async def instance_ask(instance_id: UUID, message: str, context: ToolContext) ->
     accepted = AcceptedResult.model_validate(await _written(instance_ask, arguments, context))
     link = f"/instances/{instance_id}/threads/{accepted.thread_id}"
     return json.dumps({**accepted.model_dump(mode="json"), "link": link}, ensure_ascii=False)
+
+
+@tool(write=True, hub=True)
+async def library_skill_write(
+    name: SkillName, content: str, hash: FileHash | None, context: ToolContext
+) -> str:
+    """Write a library skill's SKILL.md, and return the skill as JSON.
+
+    hash is the one library.skill.read returned, or null to add a new skill to the library.
+    """
+    command = LibrarySkillWriteCommand(name=name, content=content, hash=hash)
+    return await _write(library_skill_write, command.model_dump(mode="json"), context)
+
+
+@tool(write=True, hub=True)
+async def library_git_add(
+    address: str, commit: GitCommit, skills: list[SkillName], context: ToolContext
+) -> str:
+    """Add skills from a git repository to the library, and return their entries as JSON.
+
+    address and commit are the ones library.git.preview took and returned, and skills names the
+    previewed skills to add.
+    """
+    command = LibraryGitAddCommand(address=address, commit=commit, skills=skills)
+    return await _write(library_git_add, command.model_dump(mode="json"), context)
+
+
+@tool(write=True, hub=True)
+async def library_move(
+    name: SkillName,
+    hash: FileHash,
+    commit: GitCommit | None,
+    diff: str,
+    context: ToolContext,
+    *,
+    overwrite: bool = False,
+) -> str:
+    """Move a library skill to its newer version, and return the library as JSON.
+
+    hash, commit and diff are the ones library.skill.check returned: the user approves the move
+    reading the diff. overwrite replaces edits the user made to the skill since it landed.
+    """
+    command = LibrarySkillMoveCommand(name=name, hash=hash, commit=commit, overwrite=overwrite)
+    return await _write(library_move, {**command.model_dump(mode="json"), "diff": diff}, context)
+
+
+@tool(write=True, hub=True)
+async def factory_write(
+    name: FactoryName, files: dict[str, str], hash: FileHash | None, context: ToolContext
+) -> str:
+    """Write a factory's files, each whole, and return the factory as JSON.
+
+    files holds each file to write by its path in the factory's folder; the others stay. hash
+    is the one factory.get returned, or null to create a new factory. The hub keeps the write
+    only if the factory check passes.
+    """
+    command = FactoryEditCommand(name=name, files=files, hash=hash)
+    return await _write(factory_write, command.model_dump(mode="json"), context)
 
 
 async def _relayed_write(
