@@ -165,6 +165,24 @@ class ManagedInstanceNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class InstanceUnavailable(CoreError):
+    """The hub cannot reach the instance: it is not running, or did not answer."""
+
+    retryable = True
+
+
+class InstanceRefused(CoreError):
+    """The instance answered a call the hub made for another with an error, which that caller
+    hears as the instance said it."""
+
+    def __init__(self, error: ErrorEnvelope) -> None:
+        super().__init__(error.message)
+        self.error = error
+
+    def envelope(self) -> ErrorEnvelope:
+        return self.error
+
+
 class HubSecretNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 

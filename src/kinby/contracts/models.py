@@ -43,6 +43,8 @@ class Scope(StrEnum):
     HUB_UPDATE = "hub:update"
     #: Hand a factory a work item. Only an instance holds it, on its own hub route.
     FACTORY_INTAKE = "factory:intake"
+    #: Read another instance through the hub. Only the home instance holds it, on its hub route.
+    HUB_HOME = "hub:home"
 
 
 #: What a client driving one instance holds. Lifecycle is granted by the control route alone.
@@ -60,8 +62,11 @@ CONTROL_SCOPES = INSTANCE_SCOPES | {Scope.INSTANCE_LIFECYCLE}
 
 #: What a factory's instance holds on its hub route, with the control token the hub gave it.
 INTAKE_SCOPES = frozenset({Scope.FACTORY_INTAKE})
+#: What the home instance holds on its hub route: the hub's reads, and the reads of an instance
+#: the hub relays to it.
+HOME_SCOPES = frozenset({Scope.HUB_READ, Scope.HUB_HOME})
 #: What a client authenticated against the hub holds: a hub has one user.
-HUB_SCOPES = frozenset(Scope) - INTAKE_SCOPES
+HUB_SCOPES = frozenset(Scope) - INTAKE_SCOPES - {Scope.HUB_HOME}
 #: What the update token holds: run an instance update and follow its operation.
 UPDATE_SCOPES = frozenset({Scope.HUB_UPDATE})
 
@@ -973,6 +978,20 @@ class InstanceSecretsSetCommand(ContractModel):
 class InstanceLogsCommand(ContractModel):
     instance_id: UUID
     tail: Annotated[int, Field(gt=0)] | None = None
+
+
+class InstanceRelayReadCommand(ContractModel):
+    """One read of an instance, which the hub makes with that instance's control token."""
+
+    instance_id: UUID
+    #: An instance method among the hub's relayed reads, such as "routine.list".
+    method: str
+    params: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class InstanceRelayReadResult(ContractModel):
+    #: What the instance answered the read with.
+    result: dict[str, JsonValue]
 
 
 class InstanceLoginStartCommand(ContractModel):

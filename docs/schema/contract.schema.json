@@ -2327,6 +2327,47 @@
       "title": "InstanceRecreateCommand",
       "type": "object"
     },
+    "InstanceRelayReadCommand": {
+      "additionalProperties": false,
+      "description": "One read of an instance, which the hub makes with that instance's control token.",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "instance_id",
+        "method"
+      ],
+      "title": "InstanceRelayReadCommand",
+      "type": "object"
+    },
+    "InstanceRelayReadResult": {
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "InstanceRelayReadResult",
+      "type": "object"
+    },
     "InstanceRemoveCommand": {
       "additionalProperties": false,
       "description": "Drain and remove one instance's container. Its data and its record stay behind.",
@@ -8372,6 +8413,22 @@
           ],
           "type": "object"
         },
+        "instance.relay.read": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceRelayReadCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstanceRelayReadResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "instance.remove": {
           "additionalProperties": false,
           "properties": {
@@ -9412,6 +9469,7 @@
         "instance.list",
         "instance.status",
         "instance.logs",
+        "instance.relay.read",
         "instance.login.start",
         "operation.get",
         "image.prepare",

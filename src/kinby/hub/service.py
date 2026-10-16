@@ -31,6 +31,7 @@ from kinby.contracts import (
     FACTORY_RUN_RETRY,
     FACTORY_RUN_SEND_BACK,
     FACTORY_RUN_SUBSCRIBE,
+    HOME_SCOPES,
     HUB_SECRET_DELETE,
     HUB_SECRET_LIST,
     HUB_SECRET_SET,
@@ -47,6 +48,7 @@ from kinby.contracts import (
     INSTANCE_PICKS_GET,
     INSTANCE_PICKS_SET,
     INSTANCE_RECREATE,
+    INSTANCE_RELAY_READ,
     INSTANCE_REMOVE,
     INSTANCE_RESTORE,
     INSTANCE_SECRETS_SET,
@@ -64,6 +66,7 @@ from kinby.contracts import (
     LIBRARY_SKILL_READ,
     LIBRARY_SKILL_WRITE,
     OPERATION_GET,
+    RELAYED_READS,
     STATS_SUMMARY,
     Avatar,
     Capability,
@@ -102,6 +105,8 @@ from kinby.contracts import (
     InstancePicksResult,
     InstancePicksSetCommand,
     InstanceRecreateCommand,
+    InstanceRelayReadCommand,
+    InstanceRelayReadResult,
     InstanceRemoveCommand,
     InstanceRestoreCommand,
     InstanceSecretsSetCommand,
@@ -145,12 +150,14 @@ from kinby.core.errors import (
     FactoryNotFound,
     HomeInstanceKept,
     ImageNotPrepared,
+    InstanceUnavailable,
     InvalidSetup,
     LifecycleOperationInFlight,
     LifecycleOperationNotFound,
     LoginNotFound,
     ManagedInstanceNotFound,
     NameTaken,
+    PermissionDenied,
 )
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.factories.file import InstanceName
@@ -184,6 +191,7 @@ from kinby.hub.models import (
 )
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
+from kinby.hub.relay import relayed_call
 from kinby.hub.runs import FactoryRuns, UndeliveredCall
 from kinby.hub.secrets import HubSecrets, replace_protected, write_protected
 from kinby.hub.setup import (
@@ -210,7 +218,7 @@ from kinby.instance import (
 from kinby.instance.layout import SYSTEM_NAME
 from kinby.instance.skills_lock import lock_hash, read_lock
 from kinby.library import SHIPPED_SKILLS
-from kinby.plugins.intake import HUB_URL_VARIABLE
+from kinby.plugins.hub import HUB_URL_VARIABLE
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
 
 _logger = logging.getLogger(__name__)
@@ -447,51 +455,7 @@ class Hub:
             self._stopping: dict[UUID, PendingStop] = {}
             self._tasks: set[asyncio.Task[None]] = set()
             self.dispatcher = Dispatcher()
-            self.dispatcher.register(INSTANCE_CREATE, self.create)
-            self.dispatcher.register(INSTANCE_START, self.start)
-            self.dispatcher.register(INSTANCE_STOP, self.stop)
-            self.dispatcher.register(INSTANCE_RECREATE, self.recreate)
-            self.dispatcher.register(INSTANCE_REMOVE, self.remove)
-            self.dispatcher.register(INSTANCE_RESTORE, self.restore)
-            self.dispatcher.register(INSTANCE_DELETE_PREVIEW, self.delete_preview)
-            self.dispatcher.register(INSTANCE_DELETE, self.delete)
-            self.dispatcher.register(INSTANCE_UPDATE, self.update)
-            self.dispatcher.register(INSTANCE_SECRETS_SET, self.set_secrets)
-            self.dispatcher.register(INSTANCE_ADOPT_PREVIEW, self.adopt_preview)
-            self.dispatcher.register(INSTANCE_ADOPT, self.adopt)
-            self.dispatcher.register(INSTANCE_LIST, self.list)
-            self.dispatcher.register(INSTANCE_STATUS, self.status)
-            self.dispatcher.register(INSTANCE_LOGS, self.logs)
-            self.dispatcher.register(INSTANCE_LOGIN_START, self.start_login)
-            self.dispatcher.register(OPERATION_GET, self.operation)
-            self.dispatcher.register(IMAGE_PREPARE, self.prepare_image)
-            self.dispatcher.register(IMAGE_DESCRIBE, self.describe_image)
-            self.dispatcher.register(FACTORY_LIST, self.factories.list)
-            self.dispatcher.register(FACTORY_GET, self.factories.get)
-            self.dispatcher.register(FACTORY_CHECK, self.factories.check)
-            self.dispatcher.register(FACTORY_EDIT, self.factories.edit)
-            self.dispatcher.register(FACTORY_DESCRIBE, self.factories.describe)
-            self.dispatcher.register(FACTORY_RUN_LIST, self.runs.list)
-            self.dispatcher.register(FACTORY_RUN_GET, self.runs.get)
-            self.dispatcher.register(FACTORY_RUN_RETRY, self.runs.retry)
-            self.dispatcher.register(FACTORY_RUN_SEND_BACK, self.runs.send_back)
-            self.dispatcher.register(FACTORY_RUN_APPROVE, self.runs.approve)
-            self.dispatcher.register(FACTORY_RUN_CANCEL, self.runs.cancel)
-            self.dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
-            self.dispatcher.register(LIBRARY_LIST, self.library.list)
-            self.dispatcher.register(LIBRARY_SKILL_READ, self.library.read_skill)
-            self.dispatcher.register(LIBRARY_SKILL_WRITE, self.library.write_skill)
-            self.dispatcher.register(LIBRARY_SKILL_DELETE, self.library.delete_skill)
-            self.dispatcher.register(LIBRARY_SKILL_CHECK, self.library.check)
-            self.dispatcher.register(LIBRARY_SKILL_MOVE, self.library.move)
-            self.dispatcher.register(LIBRARY_GIT_PREVIEW, self.library.preview)
-            self.dispatcher.register(LIBRARY_GIT_ADD, self.library.add)
-            self.dispatcher.register(INSTANCE_PICKS_GET, self.picks)
-            self.dispatcher.register(INSTANCE_PICKS_SET, self.set_picks)
-            self.dispatcher.register(HUB_SECRET_LIST, self.list_hub_secrets)
-            self.dispatcher.register(HUB_SECRET_SET, self.set_hub_secret)
-            self.dispatcher.register(HUB_SECRET_DELETE, self.delete_hub_secret)
-            self.dispatcher.register(STATS_SUMMARY, self.stats_summary)
+            self._serve_hub(self.dispatcher)
         except BaseException:
             self._directory_lock.close()
             raise
@@ -500,10 +464,62 @@ class Hub:
         """Release this directory so another process can own it."""
         self._directory_lock.close()
 
+    def _serve_hub(self, dispatcher: Dispatcher) -> None:
+        """Register every hub method. A caller reaches the ones its scopes admit."""
+        dispatcher.register(INSTANCE_CREATE, self.create)
+        dispatcher.register(INSTANCE_START, self.start)
+        dispatcher.register(INSTANCE_STOP, self.stop)
+        dispatcher.register(INSTANCE_RECREATE, self.recreate)
+        dispatcher.register(INSTANCE_REMOVE, self.remove)
+        dispatcher.register(INSTANCE_RESTORE, self.restore)
+        dispatcher.register(INSTANCE_DELETE_PREVIEW, self.delete_preview)
+        dispatcher.register(INSTANCE_DELETE, self.delete)
+        dispatcher.register(INSTANCE_UPDATE, self.update)
+        dispatcher.register(INSTANCE_SECRETS_SET, self.set_secrets)
+        dispatcher.register(INSTANCE_ADOPT_PREVIEW, self.adopt_preview)
+        dispatcher.register(INSTANCE_ADOPT, self.adopt)
+        dispatcher.register(INSTANCE_LIST, self.list)
+        dispatcher.register(INSTANCE_STATUS, self.status)
+        dispatcher.register(INSTANCE_LOGS, self.logs)
+        dispatcher.register(INSTANCE_LOGIN_START, self.start_login)
+        dispatcher.register(OPERATION_GET, self.operation)
+        dispatcher.register(IMAGE_PREPARE, self.prepare_image)
+        dispatcher.register(IMAGE_DESCRIBE, self.describe_image)
+        dispatcher.register(FACTORY_LIST, self.factories.list)
+        dispatcher.register(FACTORY_GET, self.factories.get)
+        dispatcher.register(FACTORY_CHECK, self.factories.check)
+        dispatcher.register(FACTORY_EDIT, self.factories.edit)
+        dispatcher.register(FACTORY_DESCRIBE, self.factories.describe)
+        dispatcher.register(FACTORY_RUN_LIST, self.runs.list)
+        dispatcher.register(FACTORY_RUN_GET, self.runs.get)
+        dispatcher.register(FACTORY_RUN_RETRY, self.runs.retry)
+        dispatcher.register(FACTORY_RUN_SEND_BACK, self.runs.send_back)
+        dispatcher.register(FACTORY_RUN_APPROVE, self.runs.approve)
+        dispatcher.register(FACTORY_RUN_CANCEL, self.runs.cancel)
+        dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
+        dispatcher.register(LIBRARY_LIST, self.library.list)
+        dispatcher.register(LIBRARY_SKILL_READ, self.library.read_skill)
+        dispatcher.register(LIBRARY_SKILL_WRITE, self.library.write_skill)
+        dispatcher.register(LIBRARY_SKILL_DELETE, self.library.delete_skill)
+        dispatcher.register(LIBRARY_SKILL_CHECK, self.library.check)
+        dispatcher.register(LIBRARY_SKILL_MOVE, self.library.move)
+        dispatcher.register(LIBRARY_GIT_PREVIEW, self.library.preview)
+        dispatcher.register(LIBRARY_GIT_ADD, self.library.add)
+        dispatcher.register(INSTANCE_PICKS_GET, self.picks)
+        dispatcher.register(INSTANCE_PICKS_SET, self.set_picks)
+        dispatcher.register(HUB_SECRET_LIST, self.list_hub_secrets)
+        dispatcher.register(HUB_SECRET_SET, self.set_hub_secret)
+        dispatcher.register(HUB_SECRET_DELETE, self.delete_hub_secret)
+        dispatcher.register(STATS_SUMMARY, self.stats_summary)
+
     def instance_scopes(self, instance_id: UUID) -> frozenset[Scope]:
         """The scopes the registry grants one of the hub's instances on its hub route."""
         record = self.registry.instance(instance_id)
-        return INTAKE_SCOPES if record is not None and record.factory is not None else frozenset()
+        if record is None:
+            return frozenset()
+        return (INTAKE_SCOPES if record.factory is not None else frozenset()) | (
+            HOME_SCOPES if record.home else frozenset()
+        )
 
     def hub_route(self, instance_id: UUID) -> tuple[frozenset[Scope], Dispatcher]:
         """What one of the hub's instances may call on the hub, built from its scopes."""
@@ -511,7 +527,24 @@ class Hub:
         dispatcher = Dispatcher()
         if Scope.FACTORY_INTAKE in scopes:
             dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
+        if Scope.HUB_HOME in scopes:
+            self._serve_hub(dispatcher)
+            dispatcher.register(INSTANCE_RELAY_READ, self.relay_read)
         return scopes, dispatcher
+
+    async def relay_read(self, command: InstanceRelayReadCommand) -> InstanceRelayReadResult:
+        """Read an instance with its own control token, as the relay reaches it."""
+        if command.method not in RELAYED_READS:
+            raise PermissionDenied(f'"{command.method}" is not a read the hub relays.')
+        endpoint = await self.endpoint(command.instance_id)
+        match endpoint:
+            case InstanceUnreachable.MISSING:
+                raise ManagedInstanceNotFound(f'Instance "{command.instance_id}" was not found.')
+            case InstanceUnreachable.UNAVAILABLE:
+                raise InstanceUnavailable(f'Instance "{command.instance_id}" is not running.')
+        return InstanceRelayReadResult(
+            result=await relayed_call(endpoint, command.method, command.params)
+        )
 
     async def _run_step(
         self, instance_id: UUID, command: StepRunCommand

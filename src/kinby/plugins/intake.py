@@ -5,25 +5,16 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
-import aiohttp
-
 from kinby.contracts import (
     FACTORY_RUN_INTAKE,
-    CallFrame,
-    ErrorFrame,
     FactoryRun,
     FactoryRunIntakeCommand,
-    FrameId,
-    ResultFrame,
     RoutineName,
     StepValue,
     ValueName,
-    parse_server_frame,
 )
+from kinby.plugins.hub import HUB_URL_VARIABLE, call_hub
 from kinby.plugins.tools import Tool, ToolContext, tool
-
-#: This instance's route on its hub. A hub sets it only in an instance its registry grants a scope.
-HUB_URL_VARIABLE = "KINBY_HUB_URL"
 
 
 def intake_tools() -> tuple[Tool, ...]:
@@ -49,30 +40,6 @@ async def hand_over(routine: RoutineName, work_item: Mapping[ValueName, StepValu
 
     A work item that matches a run still open returns that run.
     """
-    # kinby.core imports the plugins, so the server's names load on first use.
-    from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
-
-    call = CallFrame(
-        id=FrameId("1"),
-        method=FACTORY_RUN_INTAKE.name,
-        params=FactoryRunIntakeCommand(routine=routine, work_item=dict(work_item)).model_dump(
-            mode="json"
-        ),
-    )
-    headers = {"Authorization": f"Bearer {os.environ.get(CONTROL_TOKEN_VARIABLE, '')}"}
-    try:
-        async with (
-            aiohttp.ClientSession(headers=headers) as session,
-            session.ws_connect(os.environ[HUB_URL_VARIABLE]) as socket,
-        ):
-            await socket.send_str(call.model_dump_json())
-            answer = await socket.receive_str()
-    except aiohttp.ClientError as exc:
-        raise ConnectionError(f"The hub refused the intake: {exc}") from exc
-    match parse_server_frame(answer):
-        case ResultFrame(result=result):
-            return FactoryRun.model_validate(result)
-        case ErrorFrame(error=error):
-            raise ValueError(f"The hub refused the intake: {error.message}")
-        case other:
-            raise ConnectionError(f"The hub answered the intake with {other!r}.")
+    command = FactoryRunIntakeCommand(routine=routine, work_item=dict(work_item))
+    run = await call_hub(FACTORY_RUN_INTAKE.name, command.model_dump(mode="json"), "the intake")
+    return FactoryRun.model_validate(run)
