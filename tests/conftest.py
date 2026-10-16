@@ -1,6 +1,6 @@
 import pytest
 
-from kinby.plugins.hub import HUB_URL_VARIABLE
+from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
 
 
 @pytest.fixture(autouse=True)
@@ -11,3 +11,4 @@ def _without_a_hub_route(monkeypatch: pytest.MonkeyPatch) -> None:
     gets `hand_to_factory` and `hub_read`. A test that wants them sets the variable itself.
     """
     monkeypatch.delenv(HUB_URL_VARIABLE, raising=False)
+    monkeypatch.delenv(HUB_SCOPES_VARIABLE, raising=False)

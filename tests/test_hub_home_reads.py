@@ -94,6 +94,12 @@ async def answers(
         return received
 
 
+def as_the_home_instance(monkeypatch: pytest.MonkeyPatch, hub_url: str) -> None:
+    """Hold what the hub writes into the home instance: its hub route and the scopes it grants."""
+    monkeypatch.setenv("KINBY_HUB_URL", hub_url)
+    monkeypatch.setenv("KINBY_HUB_SCOPES", "hub:home,hub:read")
+
+
 def error_code(answer: dict[str, object]) -> object:
     assert answer["type"] == FrameType.ERROR.value, answer
     assert isinstance(answer["error"], dict)
@@ -192,7 +198,7 @@ def hub_read_call(call_id: str, method: str, params: dict[str, object]) -> dict[
 def test_kinby_reads_the_hub_and_another_instance_without_asking(tmp_path, monkeypatch):
     async def scenario() -> None:
         async with home_hub(tmp_path) as hub:
-            monkeypatch.setenv("KINBY_HUB_URL", hub.route(hub.home))
+            as_the_home_instance(monkeypatch, hub.route(hub.home))
             monkeypatch.setenv("KINBY_CONTROL_TOKEN", hub.home_token)
             model = ScriptedModel(
                 [
@@ -241,7 +247,7 @@ def test_kinby_reads_the_hub_and_another_instance_without_asking(tmp_path, monke
 def test_hub_tools_are_on_turns_the_user_starts_only(
     tmp_path, monkeypatch, origin: Origin, present
 ):
-    monkeypatch.setenv("KINBY_HUB_URL", "http://hub:8080/instances/x/hub")
+    as_the_home_instance(monkeypatch, "http://hub:8080/instances/x/hub")
     instance = instance_at(tmp_path)
     routine_file(instance, "description: News")
     model = RoutineModel()

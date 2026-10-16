@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -13,10 +14,14 @@ from langchain_core.messages import AIMessageChunk
 
 from kinby.contracts import (
     ApprovalRequested,
+    CallFrame,
     ControlToken,
     ErrorCode,
     Event,
+    FrameId,
     FrameType,
+    GateRule,
+    ItemFrame,
     LifecycleOperationResult,
     OperationKind,
     OperationState,
@@ -31,13 +36,22 @@ from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.turns import ParkedTurn
 from kinby.hub import Hub
+from kinby.hub.approvals import HomeApprovals
 from kinby.instance import Serve
 from kinby.instance.permissions import GatePolicy
-from kinby.plugins.hub import HUB_URL_VARIABLE
-from tests.test_factory_runs import started
+from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, hub_tools
+from tests.test_factory_runs import factory_hub, started, started_coder
 from tests.test_gate import ScriptedModel, _instance, _run_turn
-from tests.test_hub import FakeRuntime, finished_operation, hub_at, hub_client, started_instance
-from tests.test_hub_home_reads import answers, error_code
+from tests.test_hub import (
+    FakeControl,
+    FakeRuntime,
+    finished_operation,
+    hub_at,
+    hub_client,
+    instance_environment,
+    started_instance,
+)
+from tests.test_hub_home_reads import answers, as_the_home_instance, error_code
 from tests.test_hub_routing import control_token, instance_served
 from tests.test_hub_server import frame, served, url
 
@@ -87,7 +101,7 @@ async def kinby_hub(
     async with served(hub) as address, instance_served(dispatcher, home_token) as private:
         runtime.addresses[str(home)] = f"http://{private.host}:{private.port}"
         kinby = KinbyHub(hub, runtime, address, access_token, home, home_token, alice)
-        monkeypatch.setenv(HUB_URL_VARIABLE, kinby.route(home))
+        as_the_home_instance(monkeypatch, kinby.route(home))
         monkeypatch.setenv("KINBY_CONTROL_TOKEN", home_token)
         yield kinby
     hub.close()
@@ -277,7 +291,7 @@ def lifecycle_runner(tmp_path: Path, policy: GatePolicy | None = None) -> LangGr
 
 
 def test_a_hub_write_parks_in_full_access(tmp_path, monkeypatch):
-    monkeypatch.setenv(HUB_URL_VARIABLE, "http://hub:8080/instances/x/hub")
+    as_the_home_instance(monkeypatch, "http://hub:8080/instances/x/hub")
     runner = lifecycle_runner(tmp_path, GatePolicy(mode=PermissionMode.FULL_ACCESS))
 
     result, payloads = asyncio.run(_run_turn(runner))
@@ -289,7 +303,7 @@ def test_a_hub_write_parks_in_full_access(tmp_path, monkeypatch):
 
 
 def test_an_allow_rule_in_permissions_does_not_lower_a_hub_writes_ask(tmp_path, monkeypatch):
-    monkeypatch.setenv(HUB_URL_VARIABLE, "http://hub:8080/instances/x/hub")
+    as_the_home_instance(monkeypatch, "http://hub:8080/instances/x/hub")
     runner = lifecycle_runner(tmp_path)
     (tmp_path / "instance" / "permissions.toml").write_text(
         'mode = "full-access"\n\n[tools]\ninstance_lifecycle = "allow"\n', encoding="utf-8"
@@ -302,7 +316,7 @@ def test_an_allow_rule_in_permissions_does_not_lower_a_hub_writes_ask(tmp_path, 
 
 
 def test_read_only_denies_a_hub_write(tmp_path, monkeypatch):
-    monkeypatch.setenv(HUB_URL_VARIABLE, "http://hub:8080/instances/x/hub")
+    as_the_home_instance(monkeypatch, "http://hub:8080/instances/x/hub")
     runner = lifecycle_runner(tmp_path, GatePolicy(mode=PermissionMode.READ_ONLY))
 
     result, payloads = asyncio.run(_run_turn(runner))
@@ -311,3 +325,70 @@ def test_read_only_denies_a_hub_write(tmp_path, monkeypatch):
     assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
     [gated] = [payload for payload in payloads if isinstance(payload, ToolGated)]
     assert gated.action.value == "deny"
+
+
+def test_the_hub_writes_each_instance_the_scopes_its_hub_route_grants(tmp_path):
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", FakeControl(), runtime)
+
+    async def scenario() -> tuple[UUID, UUID]:
+        recovery = await hub.recover()
+        assert recovery.home is not None
+        return await started(hub_client(hub), runtime, recovery.home), await started_coder(
+            hub, runtime
+        )
+
+    home, coder = asyncio.run(scenario())
+
+    assert instance_environment(hub, home)[HUB_SCOPES_VARIABLE] == "hub:home,hub:read"
+    assert instance_environment(hub, coder)[HUB_SCOPES_VARIABLE] == "factory:intake"
+
+
+@pytest.mark.parametrize(
+    ("scopes", "tools"),
+    [
+        ("hub:home,hub:read", {"hub_read", "instance_create", "instance_lifecycle"}),
+        ("factory:intake", set()),
+    ],
+    ids=["home", "factory"],
+)
+def test_only_an_instance_its_hub_grants_hub_home_has_hub_tools(monkeypatch, scopes, tools):
+    monkeypatch.setenv(HUB_URL_VARIABLE, "http://hub:8080/instances/x/hub")
+    monkeypatch.setenv(HUB_SCOPES_VARIABLE, scopes)
+
+    assert {tool.name for tool in hub_tools()} == tools
+
+
+def test_a_replayed_request_keeps_the_approval_the_user_gave():
+    approvals = HomeApprovals()
+    thread_id = uuid4()
+    request = ApprovalRequested(
+        approval_id=uuid4(),
+        name="instance_lifecycle",
+        arguments={"instance_id": str(uuid4()), "action": "stop"},
+        rule=GateRule("hub.write"),
+    )
+    event = Event(
+        sequence=3,
+        thread_id=thread_id,
+        turn_id=uuid4(),
+        payload=request,
+        timestamp=datetime.now(UTC),
+    )
+    requested = ItemFrame(id=FrameId("events"), item=event.model_dump(mode="json"))
+    approved = CallFrame(
+        id=FrameId("respond"),
+        method="thread.approval.respond",
+        params={
+            "thread_id": str(thread_id),
+            "approval_id": str(request.approval_id),
+            "decision": "approve",
+        },
+    )
+
+    approvals.instance_sent(requested.model_dump_json())
+    approvals.client_sent(approved.model_dump_json())
+    # Another tab subscribes from the start of the thread and sees the request again.
+    approvals.instance_sent(requested.model_dump_json())
+
+    assert approvals.approved(request.approval_id) == request

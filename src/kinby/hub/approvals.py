@@ -35,7 +35,8 @@ class HomeApprovals:
 
     def __init__(self) -> None:
         self._witnessed: dict[UUID, _Witnessed] = {}
-        #: A client that subscribes again sees each request again, and a used one stays used.
+        #: A client that subscribes again sees each request again. One approved stays approved,
+        #: and one used stays used.
         self._used: set[UUID] = set()
 
     def instance_sent(self, message: str) -> None:
@@ -48,9 +49,10 @@ class HomeApprovals:
             case _:
                 return
         if isinstance(event.payload, ApprovalRequested):
-            if event.payload.approval_id in self._used:
-                return
-            self._witnessed[event.payload.approval_id] = _Witnessed(event.turn_id, event.payload)
+            if event.payload.approval_id not in self._used:
+                self._witnessed.setdefault(
+                    event.payload.approval_id, _Witnessed(event.turn_id, event.payload)
+                )
         elif is_turn_closing(event.payload):
             self._witnessed = {
                 approval_id: witnessed

@@ -223,7 +223,7 @@ from kinby.instance import (
 from kinby.instance.layout import SYSTEM_NAME
 from kinby.instance.skills_lock import lock_hash, read_lock
 from kinby.library import SHIPPED_SKILLS
-from kinby.plugins.hub import HUB_URL_VARIABLE
+from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
 
 _logger = logging.getLogger(__name__)
@@ -875,15 +875,19 @@ class Hub:
         return template.setup
 
     def _write_hub_url(self, record: ManagedInstance) -> None:
-        """Give an instance its hub route before a container reads its environment, when the
-        registry grants it a scope and the hub has an address.
+        """Give an instance its hub route, and the scopes it holds there, before a container reads
+        its environment, when the registry grants it a scope and the hub has an address.
 
         An instance created before its route reaches the hub from its next container on.
         """
-        if self._private_url is None or not self.instance_scopes(record.instance_id):
+        scopes = self.instance_scopes(record.instance_id)
+        if self._private_url is None or not scopes:
             return
         hub_url = f"{self._private_url}/instances/{record.instance_id}/hub"
-        self._replace_secrets(record.path, {HUB_URL_VARIABLE: hub_url})
+        self._replace_secrets(
+            record.path,
+            {HUB_URL_VARIABLE: hub_url, HUB_SCOPES_VARIABLE: ",".join(sorted(scopes))},
+        )
 
     async def prepare_image(self, command: ImagePrepareCommand) -> ImagePrepareResult:
         """Build or reuse kinby's base image before any instance exists, and describe it."""

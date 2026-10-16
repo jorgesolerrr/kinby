@@ -25,6 +25,7 @@ from kinby.contracts import (
     InstanceCreateCommand,
     InstanceRelayReadResult,
     ResultFrame,
+    Scope,
     SetupValue,
     SkillName,
     parse_server_frame,
@@ -33,6 +34,8 @@ from kinby.plugins.tools import Tool, ToolContext, tool
 
 #: This instance's route on its hub. A hub sets it only in an instance its registry grants a scope.
 HUB_URL_VARIABLE = "KINBY_HUB_URL"
+#: The scopes the hub grants this instance on that route, comma-separated.
+HUB_SCOPES_VARIABLE = "KINBY_HUB_SCOPES"
 
 
 class LifecycleAction(StrEnum):
@@ -42,8 +45,9 @@ class LifecycleAction(StrEnum):
 
 
 def hub_tools() -> tuple[Tool, ...]:
-    """The hub tools, in an instance its hub gave a hub route."""
-    if not os.environ.get(HUB_URL_VARIABLE):
+    """The hub tools, in the instance its hub grants hub:home on its hub route."""
+    granted = os.environ.get(HUB_SCOPES_VARIABLE, "").split(",")
+    if not os.environ.get(HUB_URL_VARIABLE) or Scope.HUB_HOME not in granted:
         return ()
     return (hub_read, instance_create, instance_lifecycle)
 
