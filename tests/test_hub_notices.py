@@ -315,6 +315,23 @@ def test_a_factory_instance_without_its_hub_route_says_so_until_an_update(tmp_pa
     asyncio.run(scenario())
 
 
+def test_an_instance_whose_factory_the_hub_does_not_serve_has_no_hub_route_notice(tmp_path):
+    runtime = FakeRuntime()
+    hub = routed_hub(tmp_path / "hub", FakeControl(), runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        environment = instance_environment(hub, coder)
+        del environment["KINBY_HUB_URL"]
+        _rewrite_environment(hub, coder, environment)
+
+        shutil.rmtree(tmp_path / "hub" / "factories" / "checks")
+
+        assert await _notices(hub_client(hub)) == []
+
+    asyncio.run(scenario())
+
+
 def test_an_instance_holding_other_scopes_than_the_registry_grants_says_so(tmp_path):
     runtime = FakeRuntime()
     hub = routed_hub(tmp_path / "hub", FakeControl(), runtime)

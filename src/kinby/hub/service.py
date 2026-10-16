@@ -303,10 +303,15 @@ def _notices(
     the template the factory moved past, if any.
 
     *served* holds each template the hub serves now, by its factory and name. *route* is what the
-    hub writes into the instance's *environment* when it creates a container.
+    hub writes into the instance's *environment* when it creates a container. An update refuses a
+    factory's instance whose template the hub does not serve, so its route notice waits until the
+    hub serves the template again.
     """
     notices: list[InstanceNotice] = []
-    if any(environment.get(name) != value for name, value in route.items()):
+    member = record.factory
+    template = None if member is None else served.get((member.factory, member.name))
+    updatable = member is None or template is not None
+    if updatable and any(environment.get(name) != value for name, value in route.items()):
         notices.append(
             HubRouteMissing(
                 message=(
@@ -327,11 +332,7 @@ def _notices(
                 hub_revision=hub_revision,
             )
         )
-    member = record.factory
-    if member is None:
-        return notices
-    template = served.get((member.factory, member.name))
-    if template is not None and template.baseline != member.baseline:
+    if member is not None and template is not None and template.baseline != member.baseline:
         found = (
             f'The hub kept no record of the files template "{member.name}" '
             f'of factory "{member.factory}" supplied.'
