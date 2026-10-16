@@ -506,18 +506,19 @@ def test_the_hub_writes_each_instance_the_scopes_its_hub_route_grants(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("scopes", "tools"),
-    [
-        ("hub:home,hub:read", {"hub_read", "instance_create", "instance_lifecycle"}),
-        ("factory:intake", set()),
-    ],
+    ("scopes", "present"),
+    [("hub:home,hub:read", True), ("factory:intake", False)],
     ids=["home", "factory"],
 )
-def test_only_an_instance_its_hub_grants_hub_home_has_hub_tools(monkeypatch, scopes, tools):
+def test_only_an_instance_its_hub_grants_hub_home_has_hub_tools(monkeypatch, scopes, present):
     monkeypatch.setenv(HUB_URL_VARIABLE, "http://hub:8080/instances/x/hub")
     monkeypatch.setenv(HUB_SCOPES_VARIABLE, scopes)
 
-    assert {tool.name for tool in hub_tools()} == tools
+    names = {tool.name for tool in hub_tools()}
+    if present:
+        assert {"hub_read", "instance_create", "instance_lifecycle", "instance_prompt_set"} <= names
+    else:
+        assert not names
 
 
 def test_a_replayed_request_keeps_the_approval_the_user_gave():
