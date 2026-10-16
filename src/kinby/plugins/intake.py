@@ -22,13 +22,13 @@ from kinby.contracts import (
 )
 from kinby.plugins.tools import Tool, ToolContext, tool
 
-#: Where the hub takes this instance's work items. A hub sets it only in a factory's instances.
-INTAKE_URL_VARIABLE = "KINBY_INTAKE_URL"
+#: This instance's route on its hub. A hub sets it only in an instance its registry grants a scope.
+HUB_URL_VARIABLE = "KINBY_HUB_URL"
 
 
 def intake_tools() -> tuple[Tool, ...]:
-    """The intake tool, in an instance its hub gave an intake route."""
-    return (hand_to_factory,) if os.environ.get(INTAKE_URL_VARIABLE) else ()
+    """The intake tool, in an instance its hub gave a hub route."""
+    return (hand_to_factory,) if os.environ.get(HUB_URL_VARIABLE) else ()
 
 
 @tool(write=True)
@@ -45,7 +45,7 @@ async def hand_to_factory(work_item: dict[str, StepValue], context: ToolContext)
 
 
 async def hand_over(routine: RoutineName, work_item: Mapping[ValueName, StepValue]) -> FactoryRun:
-    """Hand a work item to the factory *routine* is the intake of, on this instance's intake route.
+    """Hand a work item to the factory *routine* is the intake of, on this instance's hub route.
 
     A work item that matches a run still open returns that run.
     """
@@ -63,7 +63,7 @@ async def hand_over(routine: RoutineName, work_item: Mapping[ValueName, StepValu
     try:
         async with (
             aiohttp.ClientSession(headers=headers) as session,
-            session.ws_connect(os.environ[INTAKE_URL_VARIABLE]) as socket,
+            session.ws_connect(os.environ[HUB_URL_VARIABLE]) as socket,
         ):
             await socket.send_str(call.model_dump_json())
             answer = await socket.receive_str()

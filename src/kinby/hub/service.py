@@ -54,6 +54,7 @@ from kinby.contracts import (
     INSTANCE_STATUS,
     INSTANCE_STOP,
     INSTANCE_UPDATE,
+    INTAKE_SCOPES,
     LIBRARY_GIT_ADD,
     LIBRARY_GIT_PREVIEW,
     LIBRARY_LIST,
@@ -122,6 +123,7 @@ from kinby.contracts import (
     Readiness,
     RecreateReason,
     RevisionBehind,
+    Scope,
     SetupValue,
     SkillName,
     StatsGetCommand,
@@ -205,7 +207,7 @@ from kinby.instance import (
 from kinby.instance.layout import SYSTEM_NAME
 from kinby.instance.skills_lock import lock_hash, read_lock
 from kinby.library import SHIPPED_SKILLS
-from kinby.plugins.intake import INTAKE_URL_VARIABLE
+from kinby.plugins.intake import HUB_URL_VARIABLE
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
 
 _logger = logging.getLogger(__name__)
@@ -493,11 +495,18 @@ class Hub:
         """Release this directory so another process can own it."""
         self._directory_lock.close()
 
-    def intake(self, instance_id: UUID) -> Dispatcher:
-        """What one of the hub's instances may call on the hub: hand its factory a work item."""
+    def instance_scopes(self, instance_id: UUID) -> frozenset[Scope]:
+        """The scopes the registry grants one of the hub's instances on its hub route."""
+        record = self.registry.instance(instance_id)
+        return INTAKE_SCOPES if record is not None and record.factory is not None else frozenset()
+
+    def hub_route(self, instance_id: UUID) -> tuple[frozenset[Scope], Dispatcher]:
+        """What one of the hub's instances may call on the hub, built from its scopes."""
+        scopes = self.instance_scopes(instance_id)
         dispatcher = Dispatcher()
-        dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
-        return dispatcher
+        if Scope.FACTORY_INTAKE in scopes:
+            dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
+        return scopes, dispatcher
 
     async def _run_step(
         self, instance_id: UUID, command: StepRunCommand
@@ -676,6 +685,7 @@ class Hub:
                 raise FileExistsError(f"Instance directory already exists: {record.path}")
             staging.replace(record.path)
             unmounted = storage
+            self._write_hub_url(record)
             self.registry.record_preparation(record.instance_id, artifact, storage)
             await self._runtime.create(
                 InstanceSpec(
@@ -785,17 +795,20 @@ class Hub:
         )
         self._write_configuration(staging, record.manifest_id, record.persona_name)
         _write_behavior_prompt(staging, configured)
-        self._write_secrets(
-            staging / ".env", self._instance_secrets(model, secrets) | self._intake_url(record)
-        )
+        self._write_secrets(staging / ".env", self._instance_secrets(model, secrets))
         inspect_instance(staging)
         return template.setup
 
-    def _intake_url(self, record: ManagedInstance) -> dict[str, str]:
-        """Where a factory's instance hands the hub its work items, when the hub has an address."""
-        if self._private_url is None:
-            return {}
-        return {INTAKE_URL_VARIABLE: f"{self._private_url}/instances/{record.instance_id}/intake"}
+    def _write_hub_url(self, record: ManagedInstance) -> None:
+        """Give an instance its hub route before a container reads its environment, when the
+        registry grants it a scope and the hub has an address.
+
+        An instance created before its route reaches the hub from its next container on.
+        """
+        if self._private_url is None or not self.instance_scopes(record.instance_id):
+            return
+        hub_url = f"{self._private_url}/instances/{record.instance_id}/hub"
+        self._replace_secrets(record.path, {HUB_URL_VARIABLE: hub_url})
 
     async def prepare_image(self, command: ImagePrepareCommand) -> ImagePrepareResult:
         """Build or reuse kinby's base image before any instance exists, and describe it."""
@@ -1525,6 +1538,7 @@ class Hub:
         image: str,
     ) -> None:
         self._record(operation_id, "create", f"Creating the container from image {image}.")
+        self._write_hub_url(record)
         await self._runtime.create(
             InstanceSpec(
                 instance_id=record.runtime_id,
