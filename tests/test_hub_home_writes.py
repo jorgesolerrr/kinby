@@ -27,6 +27,7 @@ from kinby.contracts import (
     OperationState,
     Payload,
     PermissionMode,
+    RoutineListResult,
     ToolGated,
     ToolResult,
     is_turn_closing,
@@ -38,6 +39,7 @@ from kinby.core.turns import ParkedTurn
 from kinby.hub import Hub
 from kinby.hub.approvals import HomeApprovals
 from kinby.instance import Serve
+from kinby.instance.config_changes import file_hash
 from kinby.instance.permissions import GatePolicy
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, hub_tools
 from tests.test_factory_runs import factory_hub, started, started_coder
@@ -54,13 +56,17 @@ from tests.test_hub import (
 from tests.test_hub_home_reads import answers, as_the_home_instance, error_code
 from tests.test_hub_routing import control_token, instance_served
 from tests.test_hub_server import frame, served, url
+from tests.test_routines import instance_at
+from tests.test_scheduler import FakeClock
+from tests.test_scheduler import runtime as instance_runtime
 
 Script = Callable[[UUID], Sequence[AIMessageChunk]]
 
 
 @dataclass(frozen=True)
 class KinbyHub:
-    """A served hub whose home instance runs in this process, beside a running alice."""
+    """A served hub whose home instance runs in this process, beside alice, which runs in this
+    process too."""
 
     hub: Hub
     runtime: FakeRuntime
@@ -79,7 +85,8 @@ async def kinby_hub(
     directory: Path, monkeypatch: pytest.MonkeyPatch, script: Script
 ) -> AsyncIterator[KinbyHub]:
     """Serve a hub and its home instance behind the relay, whose model answers with *script*,
-    given alice's id. The home instance calls the hub on its own hub route."""
+    given alice's id. The home instance calls the hub on its own hub route. Alice lives in
+    *directory*/alice."""
     runtime = FakeRuntime()
     hub = hub_at(directory / "hub", runtime=runtime)
     recovery = await hub.recover()
@@ -98,8 +105,17 @@ async def kinby_hub(
         event_log=log,
         turns=TurnConfig(runner.prepare_for_turn, runner.permission_ceiling, runner),
     )
-    async with served(hub) as address, instance_served(dispatcher, home_token) as private:
+    (directory / "alice").mkdir()
+    alice_dispatcher = instance_runtime(
+        instance_at(directory / "alice"), FakeClock(datetime(2026, 10, 16, tzinfo=UTC))
+    )
+    async with (
+        served(hub) as address,
+        instance_served(dispatcher, home_token) as private,
+        instance_served(alice_dispatcher, control_token(hub, str(alice))) as alices,
+    ):
         runtime.addresses[str(home)] = f"http://{private.host}:{private.port}"
+        runtime.addresses[str(alice)] = f"http://{alices.host}:{alices.port}"
         kinby = KinbyHub(hub, runtime, address, access_token, home, home_token, alice)
         as_the_home_instance(monkeypatch, kinby.route(home))
         monkeypatch.setenv("KINBY_CONTROL_TOKEN", home_token)
@@ -274,6 +290,151 @@ def test_the_hub_refuses_an_approved_creation_that_carries_a_secret(
         assert error_code(refused) == ErrorCode.PERMISSION_DENIED.value
         assert isinstance(listed["result"], dict), listed
         assert "bob" not in [instance["manifest_id"] for instance in listed["result"]["instances"]]
+
+    asyncio.run(scenario())
+
+
+def tool_results(payloads: Sequence[Payload]) -> dict[str, ToolResult]:
+    results = {payload.call_id: payload for payload in payloads if isinstance(payload, ToolResult)}
+    for result in results.values():
+        assert not result.error, result.output
+    return results
+
+
+def relayed_read(instance_id: UUID, method: str, **params: object) -> tuple[str, dict[str, object]]:
+    return (
+        "instance.relay.read",
+        {"instance_id": str(instance_id), "method": method, "params": params},
+    )
+
+
+def relayed(answer: dict[str, object]) -> dict[str, object]:
+    assert isinstance(answer["result"], dict), answer
+    result = answer["result"]["result"]
+    assert isinstance(result, dict)
+    return result
+
+
+JOBS = "---\ndescription: Job applications\n---\nCheck my job applications.\n"
+
+
+def test_kinby_writes_a_routine_into_another_instance_and_runs_it_once(tmp_path, monkeypatch):
+    def script(alice: UUID) -> list[AIMessageChunk]:
+        jobs = {"instance_id": str(alice), "name": "jobs"}
+        return [
+            calling("write-1", "instance_routine_write", {**jobs, "content": JOBS, "hash": None}),
+            calling("run-1", "instance_routine_run", jobs),
+            AIMessageChunk(content="The routine ran once."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            payloads = await relayed_turn(kinby, approvals=2)
+            tool_results(payloads)
+            async with asyncio.timeout(5):
+                while True:
+                    [listed] = await answers(
+                        kinby.route(kinby.home),
+                        kinby.home_token,
+                        relayed_read(kinby.alice, "routine.list"),
+                    )
+                    [routine] = RoutineListResult.model_validate(relayed(listed)).routines
+                    if routine.last_run is not None:
+                        break
+                    await asyncio.sleep(0.01)
+
+        assert [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)] == [
+            "instance_routine_write",
+            "instance_routine_run",
+        ]
+        written = tmp_path / "alice" / "routines" / "jobs" / "ROUTINE.md"
+        assert written.read_text(encoding="utf-8") == JOBS
+
+    asyncio.run(scenario())
+
+
+def test_kinby_sets_another_instances_picks_and_prompt_once_the_user_approves(
+    tmp_path, monkeypatch
+):
+    def script(alice: UUID) -> list[AIMessageChunk]:
+        prompt = {"name": "behavior", "content": "Be brief.", "hash": file_hash(b"")}
+        return [
+            calling(
+                "picks-1",
+                "instance_picks_set",
+                {"instance_id": str(alice), "skills": ["tdd"], "hash": None},
+            ),
+            calling("prompt-1", "instance_prompt_set", {"instance_id": str(alice), **prompt}),
+            AIMessageChunk(content="Alice is set up."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            tool_results(await relayed_turn(kinby, approvals=2))
+            picks, prompt = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                ("instance.picks.get", {"instance_id": str(kinby.alice)}),
+                relayed_read(kinby.alice, "prompt.get", name="behavior"),
+            )
+
+        assert isinstance(picks["result"], dict), picks
+        assert [pick["name"] for pick in picks["result"]["picks"]] == ["tdd"]
+        assert relayed(prompt)["content"] == "Be brief."
+
+    asyncio.run(scenario())
+
+
+def test_the_hub_refuses_picks_and_a_prompt_without_an_approval(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, lambda _: []) as kinby:
+            alice = str(kinby.alice)
+            picked, prompted, picks, prompt = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                written(
+                    uuid4(),
+                    "instance_picks_set",
+                    {"instance_id": alice, "skills": ["tdd"], "hash": None},
+                ),
+                written(
+                    uuid4(),
+                    "instance_prompt_set",
+                    {
+                        "instance_id": alice,
+                        "name": "behavior",
+                        "content": "Be brief.",
+                        "hash": file_hash(b""),
+                    },
+                ),
+                ("instance.picks.get", {"instance_id": alice}),
+                relayed_read(kinby.alice, "prompt.get", name="behavior"),
+            )
+
+        assert error_code(picked) == ErrorCode.PERMISSION_DENIED.value
+        assert error_code(prompted) == ErrorCode.PERMISSION_DENIED.value
+        assert isinstance(picks["result"], dict), picks
+        assert picks["result"]["picks"] == []
+        assert relayed(prompt)["content"] != "Be brief."
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("method", ["permissions.set", "manifest.set"])
+def test_the_home_instance_never_sets_another_instances_permissions_or_manifest(
+    tmp_path, monkeypatch, method: str
+):
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, lambda _: []) as kinby:
+            relayed_write, hub_write = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                relayed_read(kinby.alice, method),
+                written(uuid4(), method, {"instance_id": str(kinby.alice)}),
+            )
+
+        assert error_code(relayed_write) == ErrorCode.PERMISSION_DENIED.value
+        assert error_code(hub_write) == ErrorCode.PERMISSION_DENIED.value
 
     asyncio.run(scenario())
 

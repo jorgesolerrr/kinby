@@ -15,6 +15,7 @@ from typing import IO
 from uuid import UUID, uuid4
 
 from dotenv import dotenv_values
+from pydantic import JsonValue
 
 from kinby.contracts import (
     DEFAULT_AVATAR,
@@ -177,7 +178,7 @@ from kinby.hub.control import (
     InstanceControl,
 )
 from kinby.hub.factories import FactoryStore, InstanceTemplate
-from kinby.hub.home import home_write
+from kinby.hub.home import RelayedWrite, home_write
 from kinby.hub.library import Library, skill_names
 from kinby.hub.models import (
     ContainerRuntime,
@@ -560,21 +561,33 @@ class Hub:
                 result = await self.stop(write, requester=home)
             case InstanceRecreateCommand():
                 result = await self.recreate(write, requester=home)
+            case InstancePicksSetCommand():
+                result = await self.set_picks(write)
+            case RelayedWrite():
+                params = write.command.model_dump(mode="json")
+                return HubWriteResult(
+                    result=await self._relayed(write.instance_id, write.method.name, params)
+                )
         return HubWriteResult(result=result.model_dump(mode="json"))
 
     async def relay_read(self, command: InstanceRelayReadCommand) -> InstanceRelayReadResult:
-        """Read an instance with its own control token, as the relay reaches it."""
         if command.method not in RELAYED_READS:
             raise PermissionDenied(f'"{command.method}" is not a read the hub relays.')
-        endpoint = await self.endpoint(command.instance_id)
+        return InstanceRelayReadResult(
+            result=await self._relayed(command.instance_id, command.method, command.params)
+        )
+
+    async def _relayed(
+        self, instance_id: UUID, method: str, params: dict[str, JsonValue]
+    ) -> dict[str, JsonValue]:
+        """Call an instance with its own control token, as the relay reaches it."""
+        endpoint = await self.endpoint(instance_id)
         match endpoint:
             case InstanceUnreachable.MISSING:
-                raise ManagedInstanceNotFound(f'Instance "{command.instance_id}" was not found.')
+                raise ManagedInstanceNotFound(f'Instance "{instance_id}" was not found.')
             case InstanceUnreachable.UNAVAILABLE:
-                raise InstanceUnavailable(f'Instance "{command.instance_id}" is not running.')
-        return InstanceRelayReadResult(
-            result=await relayed_call(endpoint, command.method, command.params)
-        )
+                raise InstanceUnavailable(f'Instance "{instance_id}" is not running.')
+        return await relayed_call(endpoint, method, params)
 
     async def _run_step(
         self, instance_id: UUID, command: StepRunCommand

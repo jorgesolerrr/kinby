@@ -270,7 +270,17 @@ def test_hub_tools_are_on_turns_the_user_starts_only(
 
     asyncio.run(scenario())
 
-    hub_tools = {"hub_read", "instance_create", "instance_lifecycle"}
+    hub_tools = {
+        "hub_read",
+        "instance_create",
+        "instance_lifecycle",
+        "instance_picks_set",
+        "instance_prompt_set",
+        "instance_routine_write",
+        "instance_routine_set_enabled",
+        "instance_routine_run",
+        "instance_routine_delete",
+    }
     if present:
         assert hub_tools <= set(model.tools)
     else:

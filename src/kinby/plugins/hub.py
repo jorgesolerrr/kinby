@@ -16,15 +16,25 @@ from kinby.contracts import (
     INSTANCE_RELAY_READ,
     RELAYED_READS,
     CallFrame,
+    ContractModel,
     ErrorFrame,
     FactoryRole,
+    FileHash,
     FrameId,
     HubSecretName,
     HubWriteCommand,
     HubWriteResult,
     InstanceCreateCommand,
+    InstancePicksSetCommand,
     InstanceRelayReadResult,
+    PromptName,
+    PromptSetCommand,
     ResultFrame,
+    RoutineDeleteCommand,
+    RoutineName,
+    RoutineRunCommand,
+    RoutineSetEnabledCommand,
+    RoutineWriteCommand,
     Scope,
     SetupValue,
     SkillName,
@@ -49,18 +59,29 @@ def hub_tools() -> tuple[Tool, ...]:
     granted = os.environ.get(HUB_SCOPES_VARIABLE, "").split(",")
     if not os.environ.get(HUB_URL_VARIABLE) or Scope.HUB_HOME not in granted:
         return ()
-    return (hub_read, instance_create, instance_lifecycle)
+    return (
+        hub_read,
+        instance_create,
+        instance_lifecycle,
+        instance_picks_set,
+        instance_prompt_set,
+        instance_routine_write,
+        instance_routine_set_enabled,
+        instance_routine_run,
+        instance_routine_delete,
+    )
 
 
 @tool(write=False, hub=True)
 async def hub_read(method: str, params: dict[str, JsonValue]) -> str:
     """Read the hub or one of its instances, and return the answer as JSON.
 
-    Hub reads include instance.list, instance.status, instance.logs, stats.summary,
-    factory.list, factory.run.list, library.list and hub.secret.list. An instance's own reads
-    are memory.list, memory.open, thread.list, thread.turn.list, routine.list, routine.read,
-    usage.get, stats.get, prompt.get, manifest.get, permissions.get and config.history: name
-    the instance in params as instance_id, beside the read's own params.
+    Hub reads include instance.list, instance.status, instance.logs, instance.picks.get,
+    stats.summary, factory.list, factory.run.list, library.list and hub.secret.list. An
+    instance's own reads are memory.list, memory.open, thread.list, thread.turn.list,
+    routine.list, routine.read, usage.get, stats.get, prompt.get, manifest.get,
+    permissions.get and config.history: name the instance in params as instance_id, beside the
+    read's own params.
     """
     if method not in RELAYED_READS:
         return json.dumps(await call_hub(method, params, "the read"), ensure_ascii=False)
@@ -112,6 +133,78 @@ async def instance_lifecycle(
     """Start, stop or recreate an instance, and return its lifecycle operation as JSON."""
     arguments: dict[str, JsonValue] = {"instance_id": str(instance_id), "action": action.value}
     return await _write(instance_lifecycle, arguments, context)
+
+
+@tool(write=True, hub=True)
+async def instance_picks_set(
+    instance_id: UUID, skills: list[SkillName], hash: FileHash | None, context: ToolContext
+) -> str:
+    """Set the library skills an instance picks, and return its picks as JSON.
+
+    skills names every pick the instance should hold: one left out is dropped. hash is the one
+    instance.picks.get returned.
+    """
+    command = InstancePicksSetCommand(instance_id=instance_id, skills=skills, hash=hash)
+    return await _write(instance_picks_set, command.model_dump(mode="json"), context)
+
+
+@tool(write=True, hub=True)
+async def instance_prompt_set(
+    instance_id: UUID, name: PromptName, content: str, hash: FileHash, context: ToolContext
+) -> str:
+    """Set one of an instance's prompts, and return it as JSON.
+
+    hash is the one prompt.get returned for that prompt.
+    """
+    command = PromptSetCommand(name=name, content=content, hash=hash)
+    return await _relayed_write(instance_prompt_set, instance_id, command, context)
+
+
+@tool(write=True, hub=True)
+async def instance_routine_write(
+    instance_id: UUID, name: RoutineName, content: str, hash: FileHash | None, context: ToolContext
+) -> str:
+    """Write a routine's ROUTINE.md into an instance, and return the routine file as JSON.
+
+    hash is the one routine.read returned, or null to create the routine.
+    """
+    command = RoutineWriteCommand(name=name, content=content, hash=hash)
+    return await _relayed_write(instance_routine_write, instance_id, command, context)
+
+
+@tool(write=True, hub=True)
+async def instance_routine_set_enabled(
+    instance_id: UUID, name: RoutineName, *, enabled: bool, context: ToolContext
+) -> str:
+    """Enable or disable one of an instance's routines, and return the routine file as JSON."""
+    command = RoutineSetEnabledCommand(name=name, enabled=enabled)
+    return await _relayed_write(instance_routine_set_enabled, instance_id, command, context)
+
+
+@tool(write=True, hub=True)
+async def instance_routine_run(instance_id: UUID, name: RoutineName, context: ToolContext) -> str:
+    """Run one of an instance's routines once, now, in that instance."""
+    command = RoutineRunCommand(name=name)
+    return await _relayed_write(instance_routine_run, instance_id, command, context)
+
+
+@tool(write=True, hub=True)
+async def instance_routine_delete(
+    instance_id: UUID, name: RoutineName, hash: FileHash, context: ToolContext
+) -> str:
+    """Delete one of an instance's routines.
+
+    hash is the one routine.read returned.
+    """
+    command = RoutineDeleteCommand(name=name, hash=hash)
+    return await _relayed_write(instance_routine_delete, instance_id, command, context)
+
+
+async def _relayed_write(
+    write: Tool, instance_id: UUID, command: ContractModel, context: ToolContext
+) -> str:
+    arguments = {"instance_id": str(instance_id), **command.model_dump(mode="json")}
+    return await _write(write, arguments, context)
 
 
 async def _write(write: Tool, arguments: dict[str, JsonValue], context: ToolContext) -> str:
