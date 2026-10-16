@@ -24,7 +24,7 @@ Done when every instance the hub lists is either counted or named as stopped or 
 
 ## 3. Report
 
-- What needs the user, each with where to act: the thread link `/instances/<instance_id>/threads/<thread_id>` for an approval or a failure, the factory run for a run that needs a human.
+- What needs the user, each with where to act: for an approval or a failure, a Markdown link to the thread, `[a short label](/instances/<instance_id>/threads/<thread_id>)`, never the path as code; for a run that needs a human, the factory run.
 - What is broken and the likely cause, in one line each.
 - Usage for the period: cost, the runs each subscription made per plan window, and each subscription in `limits`, with the time it resets. A subscription that is not in `limits` has no limit you can see, so leave out how close it is to one.
 - Everything else in a sentence, such as "the other four instances ran their routines and need nothing".

@@ -1,5 +1,6 @@
 import type { InstanceClient, JsonValue } from "@kinby/contract"
 import {
+  type ComponentProps,
   type ReactNode,
   type Ref,
   useEffect,
@@ -9,7 +10,7 @@ import {
   useSyncExternalStore,
 } from "react"
 import { code } from "@streamdown/code"
-import { defaultRehypePlugins, Streamdown, type StreamdownProps } from "streamdown"
+import { defaultRehypePlugins, type ExtraProps, Streamdown, type StreamdownProps } from "streamdown"
 
 import { ThreadHeader } from "@/components/thread-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -43,7 +44,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { reason } from "@/lib/operation"
-import { nodePath, openNode, useSelectedTurnId } from "@/lib/selection"
+import { navigate, nodePath, openNode, useSelectedTurnId } from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
 import type { ParkedApproval, Recap, ToolStep, TurnBlock, TurnEnd } from "@/lib/timeline"
 import {
@@ -479,7 +480,7 @@ function Turn({ turn, instanceId, name }: { turn: TurnBlock; instanceId: string;
 /** How Streamdown renders a reply, built once so its memoization holds while a reply streams. */
 const replyOptions = {
   // Streamdown draws bold as a styled span. A reply's bold stays a `strong`.
-  components: { strong: "strong" },
+  components: { strong: "strong", a: ReplyLink },
   // Streamdown renders raw HTML through its `raw` plugin. Without it, HTML in a reply stays text.
   rehypePlugins: Object.entries(defaultRehypePlugins)
     .filter(([name]) => name !== "raw")
@@ -487,13 +488,44 @@ const replyOptions = {
   // An image would load its URL the moment the thread opens, so a reply can't carry one.
   disallowedElements: ["img"],
   plugins: { code },
-  // Links open straight in a new tab, without Streamdown's confirmation dialog.
+  // Links open straight, without Streamdown's confirmation dialog.
   linkSafety: { enabled: false },
 } satisfies StreamdownProps
 
 /** What the instance wrote, as the Markdown it writes in. */
 function Reply({ text }: { text: string }) {
   return <Streamdown {...replyOptions}>{text}</Streamdown>
+}
+
+/**
+ * A link in a reply. A page of the app opens in place, like the sidebar's links, and any other link
+ * in a new tab.
+ */
+function ReplyLink({ href, title, children }: ComponentProps<"a"> & ExtraProps) {
+  const className = "wrap-anywhere font-medium text-primary underline"
+  // Streamdown's link hardening has already made a path like `//host` one on this origin.
+  if (!href?.startsWith("/")) {
+    return (
+      <a className={className} href={href} title={title} rel="noreferrer" target="_blank">
+        {children}
+      </a>
+    )
+  }
+  return (
+    <a
+      className={className}
+      href={href}
+      title={title}
+      onClick={(event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+          return
+        event.preventDefault()
+        navigate(href)
+      }}
+    >
+      {children}
+    </a>
+  )
 }
 
 function ToolMarker({

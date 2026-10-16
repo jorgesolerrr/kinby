@@ -955,6 +955,44 @@ describe("a thread's panel", () => {
       expect(link.getAttribute("href")).toBe("https://kinby.dev/docs")
       expect(link.getAttribute("target")).toBe("_blank")
     })
+
+    describe("a link to a page of the app", () => {
+      const page = "/instances/hub-bo/threads/t9"
+
+      beforeEach(() => window.history.replaceState(null, "", "/instances/hub-ada/threads/t1"))
+
+      it("opens the page in place, as a new history entry", async () => {
+        await replied("Ask Bo", `Bo is on it in [the thread](${page}).`)
+        const link = screen.getByRole("link", { name: "the thread" })
+        const entries = window.history.length
+
+        await userEvent.click(link)
+
+        expect(link.getAttribute("href")).toBe(page)
+        expect(link.getAttribute("target")).toBeNull()
+        expect(window.location.pathname).toBe(page)
+        expect(window.history.length).toBe(entries + 1)
+      })
+
+      it("leaves a modified click to the browser", async () => {
+        await replied("Ask Bo", `Bo is on it in [the thread](${page}).`)
+        const link = screen.getByRole("link", { name: "the thread" })
+
+        // jsdom cannot follow the link, so the window drops the click once the app has passed it on.
+        const prevented: boolean[] = []
+        const drop = (event: MouseEvent) => {
+          prevented.push(event.defaultPrevented)
+          event.preventDefault()
+        }
+        window.addEventListener("click", drop)
+        onTestFinished(() => window.removeEventListener("click", drop))
+
+        fireEvent.click(link, { ctrlKey: true })
+
+        expect(prevented).toEqual([false])
+        expect(window.location.pathname).toBe("/instances/hub-ada/threads/t1")
+      })
+    })
   })
 
   it("says why a thread it cannot follow did not load", async () => {

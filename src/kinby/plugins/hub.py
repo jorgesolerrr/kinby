@@ -218,7 +218,7 @@ async def instance_ask(instance_id: UUID, message: str, context: ToolContext) ->
     """Start a turn in an instance, on a new thread, with a request for it to work on there.
 
     Ask for work that needs that instance's own judgment or memory. Returns the thread and the
-    turn as JSON, with the thread's link in the web app to give the user.
+    turn as JSON, with the thread's link in the web app to give the user as a Markdown link.
     """
     arguments: dict[str, JsonValue] = {"instance_id": str(instance_id), "message": message}
     accepted = AcceptedResult.model_validate(await _written(instance_ask, arguments, context))

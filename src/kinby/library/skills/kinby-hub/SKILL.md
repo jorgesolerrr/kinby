@@ -38,7 +38,7 @@ Each write is its own tool, and each one asks the user every time, in every perm
 
 - Instances: `instance_create`, `instance_lifecycle` (start, stop, recreate).
 - Another instance's setup: `instance_picks_set`, `instance_prompt_set`, `instance_routine_write`, `instance_routine_set_enabled`, `instance_routine_run`, `instance_routine_delete`.
-- Work in another instance: `instance_ask` starts a turn there on a new thread. Use it for work that needs that instance's own judgment or memory, and give the user the link it returns.
+- Work in another instance: `instance_ask` starts a turn there on a new thread. Use it for work that needs that instance's own judgment or memory, and give the user the link it returns as a Markdown link, `[a short label](<link>)`, never as code, so the web app opens the thread on a click.
 - Library: `library_skill_write` writes a skill's whole `SKILL.md`, whose frontmatter `name` is the skill's name. `library_git_add` takes the address and commit `library.git.preview` returned. `library_move` takes the hash, commit and diff `library.skill.check` returned, so the approval shows the user the diff.
 - Factories: `factory_write`.
 
