@@ -1,7 +1,8 @@
 import { CircleXIcon } from "lucide-react"
 import { Component, type ReactNode } from "react"
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 import { reason } from "@/lib/operation"
 
 interface Props {
@@ -38,7 +39,15 @@ export class PageBoundary extends Component<Props, State> {
         <Alert variant="destructive">
           <CircleXIcon />
           <AlertTitle>This page could not be shown</AlertTitle>
-          <AlertDescription>{this.state.failure}</AlertDescription>
+          <AlertDescription>
+            <p>{this.state.failure}</p>
+            <p>Reload to try again, or open another page from the sidebar.</p>
+          </AlertDescription>
+          <AlertAction>
+            <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+              Reload
+            </Button>
+          </AlertAction>
         </Alert>
       </div>
     )

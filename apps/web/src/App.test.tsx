@@ -47,7 +47,9 @@ describe("the app", () => {
 
     await signIn("a-guessed-token")
 
-    expect((await screen.findByRole("alert")).textContent).toBe("Could not sign in.")
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Could not sign in. Check the token and sign in again.",
+    )
     expect(screen.getAllByRole("alert")).toHaveLength(1)
     expect(screen.queryByRole("button", { name: /You/ })).toBeNull()
   })
@@ -166,7 +168,7 @@ describe("the instances", () => {
     expect((await instanceLink("Ada")).getAttribute("aria-current")).toBe("page")
     expect((await instanceLink("research")).getAttribute("aria-current")).toBeNull()
     expect(window.location.pathname).toBe("/instances/hub-ada")
-    expect(await screen.findByText("Nothing here yet")).toBeDefined()
+    expect(await screen.findByText(/^Start a thread with/)).toBeDefined()
   })
 
   it("restores the selection from the URL on a reload or an opened link", async () => {
@@ -175,7 +177,7 @@ describe("the instances", () => {
     openApp({ signedIn: true, instances: [ada, unnamed] })
 
     expect((await instanceLink("Ada")).getAttribute("aria-current")).toBe("page")
-    expect(await screen.findByText("Nothing here yet")).toBeDefined()
+    expect(await screen.findByText(/^Start a thread with/)).toBeDefined()
   })
 
   it("opens a running instance's threads beside it, and follows the selected one in the main panel", async () => {
@@ -196,7 +198,7 @@ describe("the instances", () => {
       }),
     )
     expect(screen.getByRole("status", { name: "Loading the thread" })).toBeDefined()
-    expect(screen.queryByText("Nothing here yet")).toBeNull()
+    expect(screen.queryByText(/^Start a thread with/)).toBeNull()
   })
 
   it("opens a running instance's config panel from its page, and puts it in the URL", async () => {
@@ -260,7 +262,7 @@ describe("the instances", () => {
 
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect(await screen.findByText("Start it to see its memory.")).toBeDefined()
+    expect(await screen.findByText("Start it from its page to see its memory.")).toBeDefined()
     expect(screen.queryByRole("tab", { name: "Knowledge graph" })).toBeNull()
     expect(hub.sockets.map((socket) => socket.url)).not.toContain(
       "ws://hub.test/instances/hub-unnamed/ws",
@@ -313,7 +315,10 @@ describe("the instances", () => {
 
     openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect(await screen.findByText("Start it to see its threads.")).toBeDefined()
+    expect(await screen.findByText("Start it from its page to see its threads.")).toBeDefined()
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open research" }))
+    expect(window.location.pathname).toBe("/instances/hub-unnamed")
+    expect(await screen.findByRole("button", { name: "Start" })).toBeDefined()
   })
 
   it("asks to start a stopped instance to see its stats", async () => {
@@ -321,7 +326,7 @@ describe("the instances", () => {
 
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect(await screen.findByText("Start it to see its stats.")).toBeDefined()
+    expect(await screen.findByText("Start it from its page to see its stats.")).toBeDefined()
     expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull()
     expect(hub.sockets.map((socket) => socket.url)).not.toContain(
       "ws://hub.test/instances/hub-unnamed/ws",
@@ -334,7 +339,7 @@ describe("the instances", () => {
     openApp({ signedIn: true, instances: [ada, unnamed] })
 
     expect(await screen.findByRole("navigation", { name: "Config sections" })).toBeDefined()
-    expect(screen.queryByText("Nothing here yet")).toBeNull()
+    expect(screen.queryByText(/^Start a thread with/)).toBeNull()
   })
 
   it("keeps the config panel and its connection while an update restarts the instance", async () => {
@@ -369,7 +374,7 @@ describe("the instances", () => {
     openApp({ signedIn: true, instances: [ada, unnamed] })
 
     expect(await screen.findByText("No instance selected")).toBeDefined()
-    expect(screen.queryByText("Nothing here yet")).toBeNull()
+    expect(screen.queryByText(/^Start a thread with/)).toBeNull()
     for (const link of screen.getAllByRole("link")) {
       expect(link.getAttribute("aria-current")).toBeNull()
     }
@@ -609,6 +614,7 @@ describe("a page that breaks", () => {
     act(() => relayed?.receive({ type: "result", id: listed?.id, result: {} }))
 
     expect((await screen.findByRole("alert")).textContent).toContain("This page could not be shown")
+    expect(screen.getByRole("button", { name: "Reload" })).toBeDefined()
     expect(await instanceLink("Ada")).toBeDefined()
     await user.click(await screen.findByRole("link", { name: "Usage" }))
     expect(await screen.findByRole("heading", { name: "Usage" })).toBeDefined()
@@ -682,7 +688,7 @@ describe("the home instance", () => {
 
     openApp({ signedIn: true, instances: [ada, kinby], threads: { "hub-kinby": [] } })
 
-    expect(await screen.findByText("Nothing here yet")).toBeDefined()
+    expect(await screen.findByText(/^Start a thread with/)).toBeDefined()
     expect(window.location.pathname).toBe("/instances/hub-ada")
   })
 })

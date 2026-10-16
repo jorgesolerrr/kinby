@@ -107,7 +107,7 @@ describe("a thread's header", () => {
       true,
     ])
     expect(
-      modes.map((mode) => mode.textContent?.includes("Above this instance's ceiling")),
+      modes.map((mode) => mode.textContent?.includes("Above the ceiling. Raise it in Configure.")),
     ).toEqual([false, false, true, true])
   })
 

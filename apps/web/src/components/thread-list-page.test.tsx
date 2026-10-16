@@ -86,7 +86,7 @@ describe("the thread list page", () => {
     const listed = await rows()
 
     expect(listed.map((cells) => cells.slice(0, 3))).toEqual([
-      ["Morning news", "news", "failed"],
+      ["Morning news", "Routine news", "failed"],
       ["Deploy notes", "You", "idle"],
     ])
     expect(listed[0]?.[3]).toMatch(/Sep 28, 2026/)

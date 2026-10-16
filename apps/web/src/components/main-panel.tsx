@@ -9,8 +9,17 @@ import { OpenHome } from "@/components/open-home"
 import { StatsPage } from "@/components/stats-page"
 import { ThreadListPage } from "@/components/thread-list-page"
 import { ThreadPanel } from "@/components/thread-panel"
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Button } from "@/components/ui/button"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { instanceName } from "@/lib/instances"
+import { selectInstance } from "@/lib/selection"
 import { CirclePauseIcon, MousePointerClickIcon, ServerIcon } from "lucide-react"
 
 /**
@@ -61,11 +70,7 @@ export function MainPanel({
   }
   if (selected !== undefined && threadsOpen) {
     if (selected.process !== "running") {
-      return (
-        <EmptyState icon={<CirclePauseIcon />} title={`${instanceName(selected)} is not running`}>
-          Start it to see its threads.
-        </EmptyState>
-      )
+      return <NotRunning instance={selected} what="threads" />
     }
     if (instanceClient === undefined) return null
     return (
@@ -92,11 +97,7 @@ export function MainPanel({
   }
   if (selected !== undefined && memoryOpen) {
     if (selected.process !== "running") {
-      return (
-        <EmptyState icon={<CirclePauseIcon />} title={`${instanceName(selected)} is not running`}>
-          Start it to see its memory.
-        </EmptyState>
-      )
+      return <NotRunning instance={selected} what="memory" />
     }
     if (instanceClient === undefined) return null
     return (
@@ -110,11 +111,7 @@ export function MainPanel({
   }
   if (selected !== undefined && statsOpen) {
     if (selected.process !== "running") {
-      return (
-        <EmptyState icon={<CirclePauseIcon />} title={`${instanceName(selected)} is not running`}>
-          Start it to see its stats.
-        </EmptyState>
-      )
+      return <NotRunning instance={selected} what="stats" />
     }
     if (instanceClient === undefined) return null
     return (
@@ -153,14 +150,30 @@ export function MainPanel({
   )
 }
 
+/** A page that needs a running instance, sending the user to the instance's page, which has Start. */
+function NotRunning({ instance, what }: { instance: InstanceSummary; what: string }) {
+  const name = instanceName(instance)
+  return (
+    <EmptyState
+      icon={<CirclePauseIcon />}
+      title={`${name} is not running`}
+      action={<Button onClick={() => selectInstance(instance.instance_id)}>Open {name}</Button>}
+    >
+      Start it from its page to see its {what}.
+    </EmptyState>
+  )
+}
+
 function EmptyState({
   icon,
   title,
   children,
+  action,
 }: {
   icon: React.ReactNode
   title: string
   children: React.ReactNode
+  action?: React.ReactNode
 }) {
   return (
     <Empty>
@@ -169,6 +182,7 @@ function EmptyState({
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{children}</EmptyDescription>
       </EmptyHeader>
+      {action !== undefined && <EmptyContent>{action}</EmptyContent>}
     </Empty>
   )
 }

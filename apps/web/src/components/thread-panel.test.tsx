@@ -164,7 +164,7 @@ describe("a thread's panel", () => {
       "write notes.md · denied by policy: read-only mode denies writes",
       "edit runtime.py · approved by you · running",
       "Done · 3 steps · 1,500 tokens",
-      "Failed: The steps budget ran out. (BUDGET_EXCEEDED)",
+      "Failed: The steps budget ran out. (BUDGET_EXCEEDED). Send a message to try again.",
       "Stopped",
       "read deploy.log · running",
       "bash make deploy · waiting for you",
@@ -242,9 +242,11 @@ describe("a thread's panel", () => {
 
     const variant = (text: string) =>
       screen.getByText(text).closest("[data-slot=marker]")?.getAttribute("data-variant")
-    expect(variant("Failed: The turn exceeded the steps budget of 1. (BUDGET_EXCEEDED)")).toBe(
-      "destructive",
-    )
+    expect(
+      variant(
+        "Failed: The turn exceeded the steps budget of 1. (BUDGET_EXCEEDED). Send a message to try again.",
+      ),
+    ).toBe("destructive")
     expect(variant("Done · 0 steps · 1,500 tokens")).toBe("default")
   })
 
@@ -629,7 +631,9 @@ describe("a thread's panel", () => {
     it("puts focus in the reason when the thread opens on it", async () => {
       await reopenParked()
 
-      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reason" }))
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
+      )
     })
 
     /** The instance's thread list, so the header shows t1's title. */
@@ -683,10 +687,15 @@ describe("a thread's panel", () => {
 
       await user.keyboard("x{Enter}")
       expect(sent()).toEqual([])
-      expect(screen.getByRole("textbox", { name: "Reason" })).toHaveProperty("value", "")
+      expect(screen.getByRole("textbox", { name: "Reason to deny (optional)" })).toHaveProperty(
+        "value",
+        "",
+      )
 
       await user.tab()
-      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reason" }))
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
+      )
       await user.tab()
       expect(document.activeElement).toBe(screen.getByRole("button", { name: "Approve" }))
     })
@@ -718,7 +727,10 @@ describe("a thread's panel", () => {
       const { sent } = await reopenParked()
       const user = userEvent.setup()
 
-      await user.type(screen.getByRole("textbox", { name: "Reason" }), "  Use staging instead ")
+      await user.type(
+        screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
+        "  Use staging instead ",
+      )
       await user.click(screen.getByRole("button", { name: "Deny" }))
 
       expect(sent()).toEqual([
@@ -739,7 +751,10 @@ describe("a thread's panel", () => {
 
       await userEvent
         .setup()
-        .type(screen.getByRole("textbox", { name: "Reason" }), "Use staging instead{Enter}{Enter}")
+        .type(
+          screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
+          "Use staging instead{Enter}{Enter}",
+        )
 
       expect(sent()).toEqual([
         {
@@ -757,7 +772,7 @@ describe("a thread's panel", () => {
     it("does not deny while an input method is composing the reason", async () => {
       const { sent } = await reopenParked()
 
-      fireEvent.keyDown(screen.getByRole("textbox", { name: "Reason" }), {
+      fireEvent.keyDown(screen.getByRole("textbox", { name: "Reason to deny (optional)" }), {
         key: "Enter",
         isComposing: true,
       })
