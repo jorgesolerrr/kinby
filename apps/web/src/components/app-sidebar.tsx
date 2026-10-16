@@ -1,6 +1,7 @@
 import type { Client, Clock, InstanceSummary } from "@kinby/contract"
 import type * as React from "react"
 
+import { KinbyMark } from "@/components/kinby-mark"
 import { NavInstances } from "@/components/nav-instances"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
@@ -14,7 +15,6 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
-import { SparklesIcon } from "lucide-react"
 
 export function AppSidebar({
   instances,
@@ -55,8 +55,8 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg">
-              <SparklesIcon />
-              <span className="font-medium">kinby</span>
+              <KinbyMark />
+              <span className="font-heading text-base font-semibold">kinby</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
