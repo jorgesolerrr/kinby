@@ -3,23 +3,67 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from uuid import UUID
 
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from kinby.contracts import (
+    PROMPT_SET,
+    ROUTINE_DELETE,
+    ROUTINE_RUN,
+    ROUTINE_SET_ENABLED,
+    ROUTINE_WRITE,
     ContractModel,
     InstanceCreateCommand,
+    InstancePicksSetCommand,
     InstanceRecreateCommand,
     InstanceStartCommand,
     InstanceStopCommand,
+    Method,
 )
 from kinby.core.errors import PermissionDenied
-from kinby.plugins.hub import LifecycleAction, instance_create, instance_lifecycle
+from kinby.plugins.hub import (
+    LifecycleAction,
+    instance_create,
+    instance_lifecycle,
+    instance_picks_set,
+    instance_prompt_set,
+    instance_routine_delete,
+    instance_routine_run,
+    instance_routine_set_enabled,
+    instance_routine_write,
+)
+
+
+@dataclass(frozen=True)
+class RelayedWrite:
+    """An instance method the hub calls on the target with the target's own control token."""
+
+    instance_id: UUID
+    method: Method
+    command: ContractModel
+
 
 type HomeWrite = (
-    InstanceCreateCommand | InstanceStartCommand | InstanceStopCommand | InstanceRecreateCommand
+    InstanceCreateCommand
+    | InstanceStartCommand
+    | InstanceStopCommand
+    | InstanceRecreateCommand
+    | InstancePicksSetCommand
+    | RelayedWrite
 )
+
+#: The hub tools whose write runs in the target instance, and the instance method each calls.
+_RELAYED_WRITES: Mapping[str, Method] = {
+    instance_prompt_set.name: PROMPT_SET,
+    instance_routine_write.name: ROUTINE_WRITE,
+    instance_routine_set_enabled.name: ROUTINE_SET_ENABLED,
+    instance_routine_run.name: ROUTINE_RUN,
+    instance_routine_delete.name: ROUTINE_DELETE,
+}
+
+_INSTANCE_ID = TypeAdapter(UUID)
 
 
 class _LifecycleCall(ContractModel):
@@ -47,6 +91,16 @@ def home_write(tool: str, arguments: Mapping[str, JsonValue]) -> HomeWrite:
                         return InstanceStopCommand(instance_id=call.instance_id)
                     case LifecycleAction.RECREATE:
                         return InstanceRecreateCommand(instance_id=call.instance_id)
+            case instance_picks_set.name:
+                return InstancePicksSetCommand.model_validate(arguments)
+            case _ if tool in _RELAYED_WRITES:
+                method = _RELAYED_WRITES[tool]
+                own = {name: value for name, value in arguments.items() if name != "instance_id"}
+                return RelayedWrite(
+                    _INSTANCE_ID.validate_python(arguments.get("instance_id")),
+                    method,
+                    method.command.model_validate(own),
+                )
     except ValidationError as exc:
         raise PermissionDenied(f'The hub cannot run "{tool}" with these arguments: {exc}') from exc
     raise PermissionDenied(f'"{tool}" is not a write the hub runs for the home instance.')
