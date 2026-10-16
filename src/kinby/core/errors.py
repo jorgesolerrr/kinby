@@ -80,6 +80,12 @@ class NameTaken(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class HomeInstanceKept(CoreError):
+    """The home instance is never removed."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class FactoryRunNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 

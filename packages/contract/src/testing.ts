@@ -11,7 +11,7 @@ import {
   type SubscriptionMethod,
   type Transport,
 } from "./client"
-import type { InstanceSummary, OperationGetResult } from "./contract"
+import type { InstanceSummary, OperationGetResult, ThreadSummary } from "./contract"
 
 /** The one token the fake hub accepts at its login route. */
 export const ACCESS_TOKEN = "the-access-token"
@@ -38,22 +38,27 @@ export interface FakeHub {
   instances: InstanceSummary[]
   /** What `instance.list` answers with when asked for the removed instances. */
   removed: InstanceSummary[]
+  /** What `thread.list` answers with on an instance's connection, newest first, by instance. */
+  threads: Record<string, ThreadSummary[]>
 }
 
 /**
  * A hub that answers like the real one: the socket upgrades only while the browser session is open.
  * A removal or a restoration moves the instance between the lists at once, and a deletion drops
  * it from the removed list. Their operations have already succeeded when first read. A deletion
- * previews the instance's directory under /srv/kinby/instances.
+ * previews the instance's directory under /srv/kinby/instances. An instance's connection answers
+ * `thread.list` for an instance `threads` names.
  */
 export function fakeHub({
   signedIn = true,
   instances = [],
   removed = [],
+  threads = {},
 }: {
   signedIn?: boolean
   instances?: InstanceSummary[]
   removed?: InstanceSummary[]
+  threads?: Record<string, ThreadSummary[]>
 } = {}): FakeHub {
   const operations = new Map<string, OperationGetResult>()
   const finished = (kind: "remove" | "restore" | "delete", instanceId: string) => {
@@ -73,10 +78,16 @@ export function fakeHub({
     reachable: true,
     instances,
     removed,
+    threads,
     sockets: [],
     transport: {
       openSocket(url, events) {
+        const [, instanceId] = /\/instances\/([^/]+)\/ws$/.exec(url) ?? []
         const socket = fakeSocket(url, events, (method, params) => {
+          const listed = instanceId && hub.threads[decodeURIComponent(instanceId)]
+          if (method === "thread.list" && listed) {
+            return { threads: listed, ceiling: "full-access", cursor: null }
+          }
           if (method === "instance.list") {
             return { instances: isRecord(params) && params.removed ? hub.removed : hub.instances }
           }
@@ -128,6 +139,7 @@ export function fakeHub({
               process: "created",
               readiness: "not-running",
               setup: { logins: [], secrets: [], missing_commands: [] },
+              home: false,
               recreate_reasons: [],
               repository_commands: [],
             }
@@ -260,6 +272,7 @@ export function instanceSummary(
 ): InstanceSummary {
   return {
     avatar: { shape: "circle", color: "blue" },
+    home: false,
     image_id: "sha256:image",
     intended_state: "running",
     manifest_id: fields.instance_id,

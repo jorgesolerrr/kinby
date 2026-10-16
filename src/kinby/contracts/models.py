@@ -1071,6 +1071,8 @@ class InstanceSummary(ContractModel):
     notices: list[InstanceNotice]
     #: The factory runs stopped for the user, or awaiting approval, at one of the instance's steps.
     needs_human: int
+    #: Whether the instance registry marks it the home instance.
+    home: bool
     #: The factory role the instance picked at creation, if any.
     factory_role: FactoryRole | None = None
     #: The runtime's word for the process, such as "restarting" beside `starting`.
@@ -1144,6 +1146,8 @@ class InstanceStatusResult(ContractModel):
     process: ProcessState
     readiness: Readiness
     setup: InstanceSetup
+    #: Whether the instance registry marks it the home instance.
+    home: bool
     detail: str = ""
     #: The lifecycle operation still running, so a client that lost its response finds it again.
     active_operation_id: UUID | None = None

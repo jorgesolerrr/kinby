@@ -2464,6 +2464,9 @@
           "default": "",
           "type": "string"
         },
+        "home": {
+          "type": "boolean"
+        },
         "instance_id": {
           "format": "uuid",
           "type": "string"
@@ -2495,6 +2498,7 @@
         "process",
         "readiness",
         "setup",
+        "home",
         "recreate_reasons",
         "repository_commands"
       ],
@@ -2539,6 +2543,9 @@
             }
           ],
           "default": null
+        },
+        "home": {
+          "type": "boolean"
         },
         "image_id": {
           "type": "string"
@@ -2618,7 +2625,8 @@
         "avatar",
         "setup_pending",
         "notices",
-        "needs_human"
+        "needs_human",
+        "home"
       ],
       "title": "InstanceSummary",
       "type": "object"

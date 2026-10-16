@@ -230,6 +230,7 @@ describe("following a start", () => {
         process: "starting",
         readiness: "starting",
         setup: { logins: [], secrets: [], missing_commands: [] },
+        home: false,
         active_operation_id: "op-2",
         recreate_reasons: [],
         repository_commands: [],

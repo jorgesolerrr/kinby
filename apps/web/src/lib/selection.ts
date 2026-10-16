@@ -128,6 +128,16 @@ export function openStats(instanceId: string): void {
   navigate(statsPath(instanceId))
 }
 
+/**
+ * Open an instance, or one of its threads, in place of the current history entry, so Back skips the
+ * page that opened it.
+ */
+export function landOn(instanceId: string, threadId?: string): void {
+  const path = threadId === undefined ? instancePath(instanceId) : threadPath(instanceId, threadId)
+  window.history.replaceState(null, "", path)
+  changed()
+}
+
 /** Go to the home route, where no instance is selected, the same way. */
 export function openHome(): void {
   navigate("/")

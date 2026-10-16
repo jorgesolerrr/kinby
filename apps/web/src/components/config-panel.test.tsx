@@ -62,6 +62,7 @@ function status(fields: Partial<InstanceStatusResult> = {}): InstanceStatusResul
     process: "running",
     readiness: "ready",
     setup,
+    home: false,
     recreate_reasons: [],
     repository_commands: [],
     ...fields,

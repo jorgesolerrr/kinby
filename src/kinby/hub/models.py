@@ -15,6 +15,7 @@ from kinby.contracts import (
     ContainerOwner,
     ControlToken,
     DeclaredSetup,
+    LifecycleOperationResult,
     RoutineName,
     Scope,
     StorageItem,
@@ -193,10 +194,12 @@ class RecoveredInstance:
 
 @dataclass(frozen=True)
 class LifecycleRecovery:
-    """One pass of lifecycle recovery: what each instance came back as, and what is not ours."""
+    """One pass of lifecycle recovery: what each instance came back as, what is not ours, and
+    the creation of a home instance when the hub had none."""
 
     instances: tuple[RecoveredInstance, ...]
     unknown_containers: tuple[str, ...]
+    home: LifecycleOperationResult | None = None
 
 
 @dataclass(frozen=True)

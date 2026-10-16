@@ -353,7 +353,7 @@ def test_an_interruption_between_the_removal_and_the_create_stays_visible_and_is
         assert failed.steps[-1].state is OperationState.FAILED
         assert outcome.state is OperationState.SUCCEEDED
         assert [step.name for step in outcome.steps] == ["validate", "create"]
-        assert len(runtime.created) == 2
+        assert [spec.instance_id for spec in runtime.created].count(str(created.instance_id)) == 2
 
     asyncio.run(scenario())
 

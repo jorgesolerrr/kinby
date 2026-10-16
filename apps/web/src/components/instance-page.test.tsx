@@ -73,6 +73,7 @@ function status(fields: Partial<InstanceStatusResult> = {}): InstanceStatusResul
     process: "created",
     readiness: "not-running",
     setup,
+    home: false,
     recreate_reasons: [],
     repository_commands: [],
     ...fields,
@@ -804,6 +805,17 @@ describe("removing an instance", () => {
     await user.click(screen.getByRole("button", { name: "More actions" }))
 
     expect(await screen.findByRole("menuitem", { name: "Remove" })).toBeDefined()
+  })
+
+  it.each([
+    ["running", running],
+    ["stopped", complete],
+    ["stopped with setup pending", stopped],
+  ] as const)("offers no Remove for the home instance when it is %s", async (_state, instance) => {
+    await openPage({}, { ...instance, home: true })
+
+    expect(screen.getByRole("button", { name: /Start|Stop/ })).toBeDefined()
+    expect(screen.queryByRole("button", { name: "More actions" })).toBeNull()
   })
 
   it("asks first, and makes no call when the removal is cancelled", async () => {

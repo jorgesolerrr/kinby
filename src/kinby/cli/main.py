@@ -546,11 +546,14 @@ async def _run_hub(
 
 
 def _announce_recovery(recovery: LifecycleRecovery) -> None:
-    """Print what this hub found for each managed instance, and what it does not own."""
+    """Print what this hub found for each managed instance, what it does not own, and the home
+    instance it creates."""
     for instance in recovery.instances:
         print(f"recovered: {instance.instance_id} {instance.state.value}: {instance.detail}")
     for runtime_id in recovery.unknown_containers:
         print(f"unowned container: {runtime_id}")
+    if recovery.home is not None:
+        print(f"home instance: creating {recovery.home.instance_id}")
 
 
 def _announce(token: AccessToken | None) -> None:

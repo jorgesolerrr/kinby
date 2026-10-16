@@ -956,6 +956,7 @@ export interface InstanceSummary {
   avatar: Avatar;
   detail?: string;
   factory_role?: FactoryRole | null;
+  home: boolean;
   image_id: string;
   instance_id: string;
   intended_state: IntendedState;
@@ -1059,6 +1060,7 @@ export interface InstanceStatusCommand {
 export interface InstanceStatusResult {
   active_operation_id?: string | null;
   detail?: string;
+  home: boolean;
   instance_id: string;
   process: ProcessState;
   readiness: Readiness;

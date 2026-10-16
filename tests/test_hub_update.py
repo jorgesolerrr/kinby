@@ -332,7 +332,7 @@ def test_an_interruption_around_the_replacement_is_visible_and_the_update_can_be
         assert before.instances[0].image_id == "sha256:HEAD-image"
         assert outcome.state is OperationState.SUCCEEDED
         assert [step.name for step in outcome.steps] == ["validate", "image", "replace", "create"]
-        assert len(runtime.created) == 2
+        assert [spec.instance_id for spec in runtime.created].count(str(created.instance_id)) == 2
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
         assert isinstance(listed, InstanceListResult)
         assert listed.instances[0].image_id == "sha256:v0.2.0-image"

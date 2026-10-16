@@ -47,11 +47,13 @@ export function NavInstances({
   /** Shown in the selected instance's row, in place of its state. */
   threads: React.ReactNode
 }) {
+  const home = instances.filter((instance) => instance.home)
+  const others = instances.filter((instance) => !instance.home)
   return (
     <SidebarGroup>
       <SidebarGroupLabel>Instances</SidebarGroupLabel>
       <SidebarMenu>
-        {instances.map((instance) => {
+        {[...home, ...others].map((instance) => {
           const name = instanceName(instance)
           const isSelected = instance === selected
           return (
