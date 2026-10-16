@@ -134,6 +134,7 @@ from kinby.contracts.models import (
     StepRunCommand,
     ThreadApprovalRespondCommand,
     ThreadArchiveCommand,
+    ThreadAskCommand,
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListCommand,
@@ -249,6 +250,8 @@ INSTANCE_DRAIN = Method(
 )
 #: The hub runs one step of a factory run in the instance, as it would run a turn.
 STEP_RUN = Method("step.run", Scope.INSTANCE_LIFECYCLE, StepRunCommand, StepResult)
+#: The hub starts a turn on a new thread for the home instance, which is that turn's origin.
+THREAD_ASK = Method("thread.ask", Scope.INSTANCE_LIFECYCLE, ThreadAskCommand, AcceptedResult)
 
 ROUTINE_LIST = Method("routine.list", Scope.INSTANCE_READ, RoutineListCommand, RoutineListResult)
 ROUTINE_RUN = Method("routine.run", Scope.INSTANCE_ADMIN, RoutineRunCommand, AcceptedResult)
@@ -445,6 +448,7 @@ METHODS = (
     INSTANCE_PROBE,
     INSTANCE_DRAIN,
     STEP_RUN,
+    THREAD_ASK,
     ROUTINE_LIST,
     ROUTINE_RUN,
     ROUTINE_READ,

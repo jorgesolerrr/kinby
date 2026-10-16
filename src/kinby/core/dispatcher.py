@@ -46,6 +46,7 @@ from kinby.contracts import (
     STEP_RUN,
     THREAD_APPROVAL_RESPOND,
     THREAD_ARCHIVE,
+    THREAD_ASK,
     THREAD_CREATE,
     THREAD_LIST,
     THREAD_MODE_SET,
@@ -484,6 +485,7 @@ def build_dispatcher(
         dispatcher.register(ROUTINE_RUN, scheduler.run)
     if turn_service is not None:
         dispatcher.register(THREAD_TURN_START, turn_service.start)
+        dispatcher.register(THREAD_ASK, turn_service.ask)
         dispatcher.register(THREAD_TURN_DIFF, turn_service.diff)
         dispatcher.register(THREAD_TURN_REVERT, turn_service.revert)
         dispatcher.register(THREAD_TURN_REVERT_PREVIEW, turn_service.preview_revert)

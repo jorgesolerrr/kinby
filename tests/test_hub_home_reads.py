@@ -19,6 +19,7 @@ from kinby.contracts import (
     ErrorCode,
     FactoryRunOrigin,
     FrameType,
+    HomeInstanceOrigin,
     Origin,
     RoutineName,
     RoutineOrigin,
@@ -241,8 +242,9 @@ def test_kinby_reads_the_hub_and_another_instance_without_asking(tmp_path, monke
             ),
             False,
         ),
+        (HomeInstanceOrigin(), False),
     ],
-    ids=["user", "routine", "factory-step"],
+    ids=["user", "routine", "factory-step", "home-instance"],
 )
 def test_hub_tools_are_on_turns_the_user_starts_only(
     tmp_path, monkeypatch, origin: Origin, present
@@ -280,6 +282,7 @@ def test_hub_tools_are_on_turns_the_user_starts_only(
         "instance_routine_set_enabled",
         "instance_routine_run",
         "instance_routine_delete",
+        "instance_ask",
     }
     if present:
         assert hub_tools <= set(model.tools)

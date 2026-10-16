@@ -19,6 +19,7 @@ from kinby.contracts import (
     ErrorCode,
     Event,
     FactoryRunOrigin,
+    HomeInstanceOrigin,
     ModelCompleted,
     ModePinned,
     Origin,
@@ -28,6 +29,7 @@ from kinby.contracts import (
     RoutineOrigin,
     SystemPrompt,
     ThreadApprovalRespondCommand,
+    ThreadAskCommand,
     ThreadModeSetCommand,
     ThreadTurnDiffCommand,
     ThreadTurnDiffResult,
@@ -566,7 +568,12 @@ class Turns:
         self.require_available(origin)
         return await self._wake(lambda: thread_id, message, origin, turn_id)
 
-    async def wake_new_thread(self, title: str, message: str, origin: Origin) -> AcceptedResult:
+    async def ask(self, command: ThreadAskCommand) -> AcceptedResult:
+        return await self.wake_new_thread(None, command.message, HomeInstanceOrigin())
+
+    async def wake_new_thread(
+        self, title: str | None, message: str, origin: Origin
+    ) -> AcceptedResult:
         self.require_available(origin)
         return await self._wake(lambda: self._store.create(title).id, message, origin, uuid4())
 

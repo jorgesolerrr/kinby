@@ -25,6 +25,7 @@ export interface TurnBlock {
     | { kind: "user" }
     | { kind: "routine"; name: string }
     | { kind: "factory-run"; factory: string; step: string }
+    | { kind: "home-instance" }
   startedAt: string
   request: string
   steps: Step[]
@@ -196,6 +197,8 @@ function startedBy(origin: TurnStarted["origin"]): TurnBlock["startedBy"] {
       return { kind: "routine", name: origin.name }
     case "factory-run":
       return { kind: "factory-run", factory: origin.factory, step: origin.step }
+    case "home-instance":
+      return { kind: "home-instance" }
     default:
       return { kind: "user" }
   }

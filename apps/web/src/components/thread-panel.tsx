@@ -54,6 +54,7 @@ import {
   CircleAlertIcon,
   CircleStopIcon,
   FactoryIcon,
+  HouseIcon,
   MinusIcon,
   RepeatIcon,
   ShieldAlertIcon,
@@ -414,6 +415,7 @@ const STARTED_BY_ICONS: Record<TurnBlock["startedBy"]["kind"], ReactNode> = {
   user: <UserIcon />,
   routine: <RepeatIcon />,
   "factory-run": <FactoryIcon />,
+  "home-instance": <HouseIcon />,
 }
 
 function starter(startedBy: TurnBlock["startedBy"]): string {
@@ -424,6 +426,8 @@ function starter(startedBy: TurnBlock["startedBy"]): string {
       return `Routine ${startedBy.name}`
     case "factory-run":
       return `Factory ${startedBy.factory} · ${startedBy.step}`
+    case "home-instance":
+      return "Home instance"
   }
 }
 

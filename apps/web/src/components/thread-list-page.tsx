@@ -309,5 +309,7 @@ function originName(origin: ThreadSummary["origin"]): string {
       return origin.name
     case "factory-run":
       return `${origin.factory} · ${origin.step}`
+    case "home-instance":
+      return "Home instance"
   }
 }

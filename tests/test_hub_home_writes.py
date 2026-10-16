@@ -1,6 +1,7 @@
 """A hub write asks the user, and the hub runs it only for the approval it saw the user give."""
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from kinby.contracts import (
     FrameId,
     FrameType,
     GateRule,
+    HomeInstanceOrigin,
     ItemFrame,
     LifecycleOperationResult,
     OperationKind,
@@ -28,6 +30,7 @@ from kinby.contracts import (
     Payload,
     PermissionMode,
     RoutineListResult,
+    ThreadListResult,
     ToolGated,
     ToolResult,
     is_turn_closing,
@@ -416,6 +419,61 @@ def test_the_hub_refuses_picks_and_a_prompt_without_an_approval(tmp_path, monkey
         assert isinstance(picks["result"], dict), picks
         assert picks["result"]["picks"] == []
         assert relayed(prompt)["content"] != "Be brief."
+
+    asyncio.run(scenario())
+
+
+def test_kinby_starts_a_turn_in_another_instance_whose_origin_is_the_home_instance(
+    tmp_path, monkeypatch
+):
+    def script(alice: UUID) -> list[AIMessageChunk]:
+        ask = {"instance_id": str(alice), "message": "Check my job applications."}
+        return [
+            calling("ask-1", "instance_ask", ask),
+            AIMessageChunk(content="Alice is on it."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            payloads = await relayed_turn(kinby)
+            asked = json.loads(tool_results(payloads)["ask-1"].output)
+            [listed] = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                relayed_read(kinby.alice, "thread.list", filter="all"),
+            )
+
+        [approval] = [payload for payload in payloads if isinstance(payload, ApprovalRequested)]
+        assert approval.name == "instance_ask"
+        [thread] = ThreadListResult.model_validate(relayed(listed)).threads
+        assert isinstance(thread.origin, HomeInstanceOrigin)
+        assert asked["link"] == f"/instances/{kinby.alice}/threads/{thread.id}"
+
+    asyncio.run(scenario())
+
+
+def test_a_client_on_the_relay_never_starts_a_turn_as_the_home_instance(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, lambda _: []) as kinby:
+            claimed, asked, listed = await answers(
+                url(kinby.address, f"/instances/{kinby.alice}/ws"),
+                ControlToken(kinby.access_token),
+                (
+                    "thread.turn.start",
+                    {
+                        "thread_id": str(uuid4()),
+                        "message": "Check my job applications.",
+                        "origin": {"kind": "home-instance"},
+                    },
+                ),
+                ("thread.ask", {"message": "Check my job applications."}),
+                ("thread.list", {"filter": "all"}),
+            )
+
+        assert error_code(claimed) == ErrorCode.INVALID_ARGUMENT.value
+        assert error_code(asked) == ErrorCode.PERMISSION_DENIED.value
+        assert isinstance(listed["result"], dict), listed
+        assert listed["result"]["threads"] == []
 
     asyncio.run(scenario())
 

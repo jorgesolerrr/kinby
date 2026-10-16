@@ -12,6 +12,7 @@ from pathlib import Path
 
 from kinby.contracts import (
     FactoryRunOrigin,
+    HomeInstanceOrigin,
     Origin,
     PromptVersion,
     RoutineTrigger,
@@ -147,6 +148,8 @@ def render_wake(origin: Origin, message: str, payload: str | None = None) -> str
         return message
     if isinstance(origin, FactoryRunOrigin):
         return f"[Factory {origin.factory}, step {origin.step}]\n\n{message}"
+    if isinstance(origin, HomeInstanceOrigin):
+        return f"[Asked by the home instance, for the user]\n\n{message}"
     restriction = "You must not create, list, or change routines unless explicitly instructed."
     if origin.trigger is RoutineTrigger.SIGNAL:
         rendered = f"[Routine: {origin.name}, woken by a signal]\n{restriction}\n\n{message}"
