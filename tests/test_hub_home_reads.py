@@ -152,10 +152,10 @@ def test_the_home_instance_is_refused_what_is_not_a_read(tmp_path):
     asyncio.run(scenario())
 
 
-def test_another_instances_control_token_reads_nothing_on_the_hub(tmp_path):
+def test_another_instances_control_token_gets_nothing_on_the_hub(tmp_path):
     async def scenario() -> None:
         async with home_hub(tmp_path) as hub:
-            listed, relayed = await answers(
+            listed, relayed, written = await answers(
                 hub.route(hub.alice),
                 hub.alice_token,
                 ("instance.list", {}),
@@ -163,10 +163,19 @@ def test_another_instances_control_token_reads_nothing_on_the_hub(tmp_path):
                     "instance.relay.read",
                     {"instance_id": str(hub.home), "method": "routine.list", "params": {}},
                 ),
+                (
+                    "hub.write",
+                    {
+                        "approval_id": "00000000-0000-0000-0000-000000000001",
+                        "tool": "instance_lifecycle",
+                        "arguments": {"instance_id": str(hub.home), "action": "stop"},
+                    },
+                ),
             )
 
         assert error_code(listed) == ErrorCode.NOT_FOUND.value
         assert error_code(relayed) == ErrorCode.NOT_FOUND.value
+        assert error_code(written) == ErrorCode.NOT_FOUND.value
 
     asyncio.run(scenario())
 
@@ -229,7 +238,9 @@ def test_kinby_reads_the_hub_and_another_instance_without_asking(tmp_path, monke
     ],
     ids=["user", "routine", "factory-step"],
 )
-def test_hub_read_is_on_turns_the_user_starts_only(tmp_path, monkeypatch, origin: Origin, present):
+def test_hub_tools_are_on_turns_the_user_starts_only(
+    tmp_path, monkeypatch, origin: Origin, present
+):
     monkeypatch.setenv("KINBY_HUB_URL", "http://hub:8080/instances/x/hub")
     instance = instance_at(tmp_path)
     routine_file(instance, "description: News")
@@ -253,7 +264,11 @@ def test_hub_read_is_on_turns_the_user_starts_only(tmp_path, monkeypatch, origin
 
     asyncio.run(scenario())
 
-    assert ("hub_read" in model.tools) is present
+    hub_tools = {"hub_read", "instance_create", "instance_lifecycle"}
+    if present:
+        assert hub_tools <= set(model.tools)
+    else:
+        assert hub_tools.isdisjoint(model.tools)
 
 
 @asynccontextmanager

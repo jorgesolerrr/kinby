@@ -44,7 +44,13 @@ def evaluate(
     tool: Tool | None,
     workspace: Path,
 ) -> GateDecision:
-    """Evaluate one call without running the tool or changing state."""
+    """Evaluate one call without running the tool or changing state.
+
+    A hub tool's write asks in every mode but read-only, ahead of any rule (ADR 0096).
+    """
+    if tool is not None and tool.hub and tool.write:
+        action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ASK
+        return GateDecision(action, GateRule("hub.write"))
     if (
         mode is not PermissionMode.READ_ONLY
         and call.name == "bash"

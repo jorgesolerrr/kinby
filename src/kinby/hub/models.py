@@ -23,6 +23,7 @@ from kinby.contracts import (
 
 if TYPE_CHECKING:
     from kinby.core.dispatcher import Dispatcher
+    from kinby.hub.approvals import HomeApprovals
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,9 @@ class InstanceRouting(Protocol):
     def hub_route(self, instance_id: UUID) -> tuple[frozenset[Scope], Dispatcher]:
         """The scopes the instance holds on its hub route, once its control token checks out,
         and what it may call there."""
+
+    def home_approvals(self, instance_id: UUID) -> HomeApprovals | None:
+        """What the hub witnesses on the instance's relay: the home instance's approvals only."""
 
 
 type RuntimeState = Literal["absent", "created", "starting", "running", "stopped", "failed"]

@@ -1,9 +1,10 @@
-"""Carry traffic to one instance's private routes: a client's socket and a webhook travel unread."""
+"""Carry traffic to one instance's private routes: a client's socket and a webhook travel unread,
+but for the approvals on the home instance's socket."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from urllib.parse import quote
 
 import aiohttp
@@ -21,6 +22,7 @@ from kinby.contracts import (
 )
 from kinby.core.contract_server import HEARTBEAT_SECONDS
 from kinby.core.errors import InstanceRefused, InstanceUnavailable
+from kinby.hub.approvals import HomeApprovals
 from kinby.hub.models import InstanceEndpoint, InstanceUnreachable
 
 #: Headers that describe the connection ending at the hub, plus the ones the next hop rewrites.
@@ -53,8 +55,11 @@ def unreachable(reason: InstanceUnreachable) -> web.HTTPException:
     return web.HTTPServiceUnavailable(reason="the instance is not running")
 
 
-async def relay_socket(request: web.Request, endpoint: InstanceEndpoint) -> web.WebSocketResponse:
-    """Carry frames both ways unparsed, so the hub knows no instance method."""
+async def relay_socket(
+    request: web.Request, endpoint: InstanceEndpoint, approvals: HomeApprovals | None = None
+) -> web.WebSocketResponse:
+    """Carry frames both ways unparsed, so the hub knows no instance method. On the home
+    instance's socket, *approvals* sees each frame first."""
     session = aiohttp.ClientSession()
     try:
         upstream = await session.ws_connect(
@@ -68,7 +73,7 @@ async def relay_socket(request: web.Request, endpoint: InstanceEndpoint) -> web.
     downstream = web.WebSocketResponse(heartbeat=HEARTBEAT_SECONDS)
     await downstream.prepare(request)
     try:
-        await _carry(downstream, upstream)
+        await _carry(downstream, upstream, approvals)
     finally:
         await upstream.close()
         await session.close()
@@ -145,10 +150,15 @@ def forwarded_headers(headers: Mapping[str, str]) -> CIMultiDict[str]:
 async def _carry(
     downstream: web.WebSocketResponse,
     upstream: aiohttp.ClientWebSocketResponse,
+    approvals: HomeApprovals | None,
 ) -> None:
     both = (
-        asyncio.create_task(_pump(downstream, upstream)),
-        asyncio.create_task(_pump(upstream, downstream)),
+        asyncio.create_task(
+            _pump(downstream, upstream, approvals.client_sent if approvals else _unseen)
+        ),
+        asyncio.create_task(
+            _pump(upstream, downstream, approvals.instance_sent if approvals else _unseen)
+        ),
     )
     _, pending = await asyncio.wait(both, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
@@ -159,10 +169,16 @@ async def _carry(
 async def _pump(
     source: web.WebSocketResponse | aiohttp.ClientWebSocketResponse,
     sink: web.WebSocketResponse | aiohttp.ClientWebSocketResponse,
+    seen: Callable[[str], None],
 ) -> None:
     async for message in source:
         if message.type is WSMsgType.TEXT:
+            seen(message.data)
             await sink.send_str(message.data)
         elif message.type is WSMsgType.BINARY:
             await sink.send_bytes(message.data)
     await sink.close()
+
+
+def _unseen(message: str) -> None:
+    pass

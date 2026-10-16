@@ -35,6 +35,7 @@ from kinby.contracts import (
     HUB_SECRET_DELETE,
     HUB_SECRET_LIST,
     HUB_SECRET_SET,
+    HUB_WRITE,
     IMAGE_DESCRIBE,
     IMAGE_PREPARE,
     INSTANCE_ADOPT,
@@ -85,6 +86,8 @@ from kinby.contracts import (
     HubSecretName,
     HubSecretSetCommand,
     HubSecretSetResult,
+    HubWriteCommand,
+    HubWriteResult,
     ImageDescribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
@@ -163,6 +166,7 @@ from kinby.factories import SHIPPED_FACTORIES
 from kinby.factories.file import InstanceName
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
+from kinby.hub.approvals import HomeApprovals
 from kinby.hub.control import (
     ControlConnectionLost,
     ControlEndpoint,
@@ -173,6 +177,7 @@ from kinby.hub.control import (
     InstanceControl,
 )
 from kinby.hub.factories import FactoryStore, InstanceTemplate
+from kinby.hub.home import home_write
 from kinby.hub.library import Library, skill_names
 from kinby.hub.models import (
     ContainerRuntime,
@@ -449,6 +454,7 @@ class Hub:
             self.library.receive()
             self.secrets = HubSecrets(self.directory / "hub-secrets.json")
             self.runs = FactoryRuns(self.registry, self.factories, self._run_step)
+            self.approvals = HomeApprovals()
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
@@ -530,7 +536,31 @@ class Hub:
         if Scope.HUB_HOME in scopes:
             self._serve_hub(dispatcher)
             dispatcher.register(INSTANCE_RELAY_READ, self.relay_read)
+            dispatcher.register(HUB_WRITE, partial(self.write_for_home, instance_id))
         return scopes, dispatcher
+
+    def home_approvals(self, instance_id: UUID) -> HomeApprovals | None:
+        """What the hub witnesses on the instance's relay: the home instance's approvals only."""
+        record = self.registry.instance(instance_id)
+        return self.approvals if record is not None and record.home else None
+
+    async def write_for_home(self, home: UUID, command: HubWriteCommand) -> HubWriteResult:
+        """Run a hub tool's write once, for the approval the hub saw the user give that call."""
+        write = home_write(command.tool, command.arguments)
+        approved = self.approvals.approved(command.approval_id)
+        if approved.name != command.tool or home_write(approved.name, approved.arguments) != write:
+            raise PermissionDenied(f'Approval "{command.approval_id}" is for another call.')
+        self.approvals.use(command.approval_id)
+        match write:
+            case InstanceCreateCommand():
+                result = await self.create(write, requester=home)
+            case InstanceStartCommand():
+                result = await self.start(write, requester=home)
+            case InstanceStopCommand():
+                result = await self.stop(write, requester=home)
+            case InstanceRecreateCommand():
+                result = await self.recreate(write, requester=home)
+        return HubWriteResult(result=result.model_dump(mode="json"))
 
     async def relay_read(self, command: InstanceRelayReadCommand) -> InstanceRelayReadResult:
         """Read an instance with its own control token, as the relay reaches it."""
@@ -578,11 +608,15 @@ class Hub:
         except Exception:
             _logger.exception("Could not collect unreferenced images")
 
-    async def create(self, command: InstanceCreateCommand) -> LifecycleOperationResult:
+    async def create(
+        self, command: InstanceCreateCommand, requester: UUID | None = None
+    ) -> LifecycleOperationResult:
         """Accept a creation only once the whole request checks out: a vanilla instance's image is
         prepared, a factory role's factory passes the check, the name is free, the setup values
         fit what the image or the role's template declares, the hub keeps each hub secret a field
-        takes, and the library holds each pick. Typed values to save to the hub are saved first."""
+        takes, and the library holds each pick. Typed values to save to the hub are saved first.
+
+        *requester* is the instance that asked for it through the hub, if one did."""
         manifest_id = _instance_name(command)
         role = command.factory_role
         template: InstanceTemplate | None = None
@@ -623,7 +657,7 @@ class Hub:
             factory=member,
         )
         accepted = self._begin_create(
-            record, command.model, command.config, secrets | linked, template, picks
+            record, command.model, command.config, secrets | linked, template, picks, requester
         )
         self.registry.link_secrets(
             record.instance_id,
@@ -677,9 +711,10 @@ class Hub:
         secrets: dict[str, str],
         template: InstanceTemplate | None = None,
         picks: Sequence[SkillName] = (),
+        requester: UUID | None = None,
     ) -> LifecycleOperationResult:
         operation_id = uuid4()
-        self.registry.begin_create(record, operation_id)
+        self.registry.begin_create(record, operation_id, requester)
         self._schedule(
             self._collecting_after(
                 self._create(operation_id, record, model, config, secrets, template, picks)
@@ -904,7 +939,9 @@ class Hub:
             raise ImageNotPrepared("The image has not been prepared. Prepare it first.")
         return description
 
-    async def start(self, command: InstanceStartCommand) -> LifecycleOperationResult:
+    async def start(
+        self, command: InstanceStartCommand, requester: UUID | None = None
+    ) -> LifecycleOperationResult:
         record = self._active_instance(command.instance_id)
         operation_id = uuid4()
         opened = self.registry.begin_operation(
@@ -912,6 +949,7 @@ class Hub:
             record.instance_id,
             OperationKind.START,
             "Start queued.",
+            requester,
         )
         if opened == operation_id:
             self._schedule(self._start(operation_id, record.instance_id))
@@ -1322,7 +1360,9 @@ class Hub:
         record = self._active_instance(command.instance_id)
         return self.library.pick(inspect_instance(record.path), command.skills, command.hash)
 
-    async def stop(self, command: InstanceStopCommand) -> LifecycleOperationResult:
+    async def stop(
+        self, command: InstanceStopCommand, requester: UUID | None = None
+    ) -> LifecycleOperationResult:
         """Stop the instance gracefully, or escalate the stop already running to a force stop."""
         record = self._active_instance(command.instance_id)
         pending = self._stopping.get(record.instance_id)
@@ -1333,6 +1373,7 @@ class Hub:
                 record.instance_id,
                 OperationKind.STOP,
                 "Stop queued.",
+                requester,
             )
             pending = PendingStop(opened, asyncio.Event())
             self._stopping[record.instance_id] = pending
@@ -1477,7 +1518,9 @@ class Hub:
         self._record(operation_id, "interrupt", "The previous runtime cannot drain. Stopping it.")
         await self._halt_container(record.runtime_id)
 
-    async def recreate(self, command: InstanceRecreateCommand) -> LifecycleOperationResult:
+    async def recreate(
+        self, command: InstanceRecreateCommand, requester: UUID | None = None
+    ) -> LifecycleOperationResult:
         """Replace this instance's container from the image and secrets already recorded for it."""
         record = self._claimed(self._active_instance(command.instance_id))
         operation_id = uuid4()
@@ -1486,6 +1529,7 @@ class Hub:
             record.instance_id,
             OperationKind.RECREATE,
             "Recreation queued.",
+            requester,
         )
         self._schedule(self._recreate(operation_id, record.instance_id))
         return LifecycleOperationResult(
