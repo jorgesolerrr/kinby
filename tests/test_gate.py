@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -30,7 +30,7 @@ _MODEL = "openai:gpt-5"
 
 
 class ScriptedModel:
-    def __init__(self, responses: Sequence[AIMessageChunk]) -> None:
+    def __init__(self, responses: Iterable[AIMessageChunk]) -> None:
         self._responses = iter(responses)
 
     def bind_tools(self, tools: Sequence[StructuredTool]) -> ScriptedModel:

@@ -77,6 +77,7 @@ from kinby.contracts import (
     ControlToken,
     DeclaredSetup,
     DrainState,
+    FactoryEditCommand,
     FactoryName,
     FactoryRole,
     HubSecret,
@@ -123,8 +124,13 @@ from kinby.contracts import (
     InstanceSummary,
     InstanceUpdateCommand,
     IntendedState,
+    LibraryGitAddCommand,
+    LibraryListResult,
+    LibrarySkillCheckCommand,
+    LibrarySkillWriteCommand,
     LifecycleOperationResult,
     LoginPrompt,
+    NewerVersion,
     OperationGetCommand,
     OperationGetResult,
     OperationKind,
@@ -180,7 +186,7 @@ from kinby.hub.control import (
     InstanceControl,
 )
 from kinby.hub.factories import FactoryStore, InstanceTemplate
-from kinby.hub.home import InstanceAsk, RelayedWrite, home_write
+from kinby.hub.home import InstanceAsk, LibraryMove, RelayedWrite, home_write
 from kinby.hub.library import Library, skill_names
 from kinby.hub.models import (
     ContainerRuntime,
@@ -565,6 +571,14 @@ class Hub:
                 result = await self.recreate(write, requester=home)
             case InstancePicksSetCommand():
                 result = await self.set_picks(write)
+            case LibrarySkillWriteCommand():
+                result = await self.library.write_skill(write)
+            case LibraryGitAddCommand():
+                result = await self.library.add(write)
+            case LibraryMove():
+                result = await self._move(write)
+            case FactoryEditCommand():
+                result = await self.factories.edit(write)
             case RelayedWrite():
                 params = write.command.model_dump(mode="json")
                 return HubWriteResult(
@@ -573,6 +587,15 @@ class Hub:
             case InstanceAsk():
                 return HubWriteResult(result=await self._ask(write))
         return HubWriteResult(result=result.model_dump(mode="json"))
+
+    async def _move(self, move: LibraryMove) -> LibraryListResult:
+        checked = await self.library.check(LibrarySkillCheckCommand(name=move.name))
+        if checked.newer != NewerVersion(commit=move.commit, hash=move.hash, diff=move.diff):
+            raise PermissionDenied(
+                f'The move of "{move.name}" brings another diff than the approval showed. '
+                "Check the skill again."
+            )
+        return await self.library.move(move)
 
     async def _ask(self, ask: InstanceAsk) -> dict[str, JsonValue]:
         # Only the control socket admits thread.ask, so no client of the relay claims the origin.

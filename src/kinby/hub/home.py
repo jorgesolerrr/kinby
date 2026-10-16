@@ -15,16 +15,21 @@ from kinby.contracts import (
     ROUTINE_SET_ENABLED,
     ROUTINE_WRITE,
     ContractModel,
+    FactoryEditCommand,
     InstanceCreateCommand,
     InstancePicksSetCommand,
     InstanceRecreateCommand,
     InstanceStartCommand,
     InstanceStopCommand,
+    LibraryGitAddCommand,
+    LibrarySkillMoveCommand,
+    LibrarySkillWriteCommand,
     Method,
 )
 from kinby.core.errors import PermissionDenied
 from kinby.plugins.hub import (
     LifecycleAction,
+    factory_write,
     instance_ask,
     instance_create,
     instance_lifecycle,
@@ -34,6 +39,9 @@ from kinby.plugins.hub import (
     instance_routine_run,
     instance_routine_set_enabled,
     instance_routine_write,
+    library_git_add,
+    library_move,
+    library_skill_write,
 )
 
 
@@ -53,6 +61,12 @@ class InstanceAsk(ContractModel):
     message: str
 
 
+class LibraryMove(LibrarySkillMoveCommand):
+    """A move the hub runs only when it brings the diff the user approved."""
+
+    diff: str
+
+
 type HomeWrite = (
     InstanceCreateCommand
     | InstanceStartCommand
@@ -61,6 +75,10 @@ type HomeWrite = (
     | InstancePicksSetCommand
     | RelayedWrite
     | InstanceAsk
+    | LibrarySkillWriteCommand
+    | LibraryGitAddCommand
+    | LibraryMove
+    | FactoryEditCommand
 )
 
 #: The hub tools whose write runs in the target instance, and the instance method each calls.
@@ -104,6 +122,14 @@ def home_write(tool: str, arguments: Mapping[str, JsonValue]) -> HomeWrite:
                 return InstancePicksSetCommand.model_validate(arguments)
             case instance_ask.name:
                 return InstanceAsk.model_validate(arguments)
+            case library_skill_write.name:
+                return LibrarySkillWriteCommand.model_validate(arguments)
+            case library_git_add.name:
+                return LibraryGitAddCommand.model_validate(arguments)
+            case library_move.name:
+                return LibraryMove.model_validate(arguments)
+            case factory_write.name:
+                return FactoryEditCommand.model_validate(arguments)
             case _ if tool in _RELAYED_WRITES:
                 method = _RELAYED_WRITES[tool]
                 own = {name: value for name, value in arguments.items() if name != "instance_id"}
