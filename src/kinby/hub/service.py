@@ -231,7 +231,7 @@ from kinby.instance import (
 )
 from kinby.instance.layout import SYSTEM_NAME
 from kinby.instance.skills_lock import lock_hash, read_lock
-from kinby.library import SHIPPED_SKILLS
+from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
 
@@ -2351,9 +2351,11 @@ class Hub:
 
     def _create_home(self) -> LifecycleOperationResult:
         """Create a vanilla instance and mark it home, through the ordinary creation. Its API
-        key stays pending setup, and the image is built if no preparation built it yet."""
+        key stays pending setup, and the image is built if no preparation built it yet. It picks
+        each home skill the library still holds."""
         record = self._new_record(_HOME_NAME, persona_name=_HOME_PERSONA_NAME, home=True)
-        return self._begin_create(record, PLACEHOLDER_MODEL, {}, {})
+        picks = [name for name in HOME_SKILLS if self.library.refusal([name], ()) is None]
+        return self._begin_create(record, PLACEHOLDER_MODEL, {}, {}, picks=picks)
 
     async def _restore_start(self, instance_id: UUID) -> OperationState:
         """Start one instance again under its own lifecycle operation, so the attempt is visible."""

@@ -1,19 +1,24 @@
 """The home instance: the hub creates and marks one on start, and never removes it."""
 
 import asyncio
+import shutil
 
 from kinby.contracts import (
     INSTANCE_LIST,
+    INSTANCE_PICKS_GET,
     INSTANCE_REMOVE,
     INSTANCE_STATUS,
     ErrorCode,
     ErrorEnvelope,
     InstanceListCommand,
     InstanceListResult,
+    InstancePicksGetCommand,
+    InstancePicksResult,
     InstanceRemoveCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
     IntendedState,
+    LibrarySource,
     LifecycleOperationResult,
     OperationState,
 )
@@ -43,6 +48,14 @@ async def _home_created(hub: Hub) -> LifecycleOperationResult:
         OperationState.SUCCEEDED
     )
     return recovery.home
+
+
+async def _picks(hub: Hub, home: LifecycleOperationResult) -> InstancePicksResult:
+    picks = await hub_client(hub).call(
+        INSTANCE_PICKS_GET, InstancePicksGetCommand(instance_id=home.instance_id)
+    )
+    assert isinstance(picks, InstancePicksResult), picks
+    return picks
 
 
 def test_starting_a_hub_with_no_home_instance_creates_kinby_and_marks_it(tmp_path):
@@ -185,6 +198,42 @@ def test_the_hub_refuses_to_remove_the_home_instance(tmp_path):
             home.instance_id
         ]
         assert runtime.removed == []
+        hub.close()
+
+    asyncio.run(scenario())
+
+
+def test_the_home_instance_picks_the_five_skills_kinby_ships_for_it(tmp_path):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+
+        picks = await _picks(hub, await _home_created(hub))
+
+        assert [(pick.name, pick.source) for pick in picks.picks] == [
+            ("create-instance", LibrarySource.SHIPPED),
+            ("hub-report", LibrarySource.SHIPPED),
+            ("kinby-hub", LibrarySource.SHIPPED),
+            ("write-factory", LibrarySource.SHIPPED),
+            ("write-routine", LibrarySource.SHIPPED),
+        ]
+        hub.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_home_skill_the_user_deleted_from_the_library_is_left_out_of_the_home_picks(tmp_path):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        shutil.rmtree(hub.directory / "skills" / "hub-report")
+
+        picks = await _picks(hub, await _home_created(hub))
+
+        assert [pick.name for pick in picks.picks] == [
+            "create-instance",
+            "kinby-hub",
+            "write-factory",
+            "write-routine",
+        ]
         hub.close()
 
     asyncio.run(scenario())
