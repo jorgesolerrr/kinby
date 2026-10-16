@@ -80,6 +80,7 @@ from kinby.contracts import (
     FactoryEditCommand,
     FactoryName,
     FactoryRole,
+    HubRouteMissing,
     HubSecret,
     HubSecretDeleteCommand,
     HubSecretDeleteResult,
@@ -295,12 +296,25 @@ def _notices(
     record: ManagedInstance,
     hub_revision: str,
     served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
+    route: Mapping[str, str],
+    environment: Mapping[str, str],
 ) -> list[InstanceNotice]:
-    """The kinby revision the hub moved past, and the template the factory moved past, if they did.
+    """The hub route the instance's environment lacks, the kinby revision the hub moved past, and
+    the template the factory moved past, if any.
 
-    *served* holds each template the hub serves now, by its factory and name.
+    *served* holds each template the hub serves now, by its factory and name. *route* is what the
+    hub writes into the instance's *environment* when it creates a container.
     """
     notices: list[InstanceNotice] = []
+    if any(environment.get(name) != value for name, value in route.items()):
+        notices.append(
+            HubRouteMissing(
+                message=(
+                    "The instance cannot reach the hub with the scopes it holds, "
+                    f"{route[HUB_SCOPES_VARIABLE]}. An instance update gives it the route."
+                )
+            )
+        )
     instance_revision = record.source_revision
     if instance_revision and instance_revision != hub_revision:
         notices.append(
@@ -929,20 +943,24 @@ class Hub:
         inspect_instance(staging)
         return template.setup
 
+    def _hub_route(self, record: ManagedInstance) -> dict[str, str]:
+        """The hub route, and the scopes an instance holds there, as its environment carries them:
+        none unless the registry grants it a scope and the hub has an address."""
+        scopes = self.instance_scopes(record.instance_id)
+        if self._private_url is None or not scopes:
+            return {}
+        return {
+            HUB_URL_VARIABLE: f"{self._private_url}/instances/{record.instance_id}/hub",
+            HUB_SCOPES_VARIABLE: ",".join(sorted(scopes)),
+        }
+
     def _write_hub_url(self, record: ManagedInstance) -> None:
-        """Give an instance its hub route, and the scopes it holds there, before a container reads
-        its environment, when the registry grants it a scope and the hub has an address.
+        """Give an instance its hub route before a container reads its environment.
 
         An instance created before its route reaches the hub from its next container on.
         """
-        scopes = self.instance_scopes(record.instance_id)
-        if self._private_url is None or not scopes:
-            return
-        hub_url = f"{self._private_url}/instances/{record.instance_id}/hub"
-        self._replace_secrets(
-            record.path,
-            {HUB_URL_VARIABLE: hub_url, HUB_SCOPES_VARIABLE: ",".join(sorted(scopes))},
-        )
+        if route := self._hub_route(record):
+            self._replace_secrets(record.path, route)
 
     async def prepare_image(self, command: ImagePrepareCommand) -> ImagePrepareResult:
         """Build or reuse kinby's base image before any instance exists, and describe it."""
@@ -2419,7 +2437,13 @@ class Hub:
                 if record.factory is not None
                 else None
             ),
-            notices=_notices(record, hub_revision, served),
+            notices=_notices(
+                record,
+                hub_revision,
+                served,
+                self._hub_route(record),
+                self._environment(record.path),
+            ),
             needs_human=self.runs.needing_human(record),
         )
 

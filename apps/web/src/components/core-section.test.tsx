@@ -7,6 +7,9 @@ import { describe, expect, it, vi } from "vitest"
 import { CoreSection } from "@/components/core-section"
 
 const HUB = "b".repeat(40)
+const ROUTE_MISSING =
+  "The instance cannot reach the hub with the scopes it holds, factory:intake. " +
+  "An instance update gives it the route."
 
 const behind = instanceSummary({
   instance_id: "hub-ada",
@@ -79,6 +82,19 @@ describe("CoreSection", () => {
       screen.getByText('Factory "software" changed template "coder" since the hub copied it.'),
     ).toBeDefined()
     expect(screen.queryByText("Behind the hub")).toBeNull()
+  })
+
+  it("shows the notice that the instance's environment lacks its hub route", () => {
+    openSection(
+      instanceSummary({
+        instance_id: "hub-ada",
+        notices: [{ code: "hub_route_missing", message: ROUTE_MISSING }],
+      }),
+    )
+
+    expect(screen.getByText("No hub route")).toBeDefined()
+    expect(screen.getByText(ROUTE_MISSING)).toBeDefined()
+    expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
   })
 
   it("shows no notice for an instance on the hub's revision", () => {

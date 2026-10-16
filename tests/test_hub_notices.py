@@ -1,10 +1,11 @@
-"""What an instance's summary tells the user to look at: a kinby revision behind the hub's, or
-files behind its factory's template."""
+"""What an instance's summary tells the user to look at: a kinby revision behind the hub's,
+files behind its factory's template, or an environment without the hub route it holds."""
 
 import asyncio
 import shutil
 import sqlite3
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -12,16 +13,34 @@ from kinby.cli.client import ContractClient
 from kinby.contracts import (
     FACTORY_EDIT,
     INSTANCE_LIST,
+    INSTANCE_UPDATE,
     FactoryEditCommand,
     FactoryResult,
+    HubRouteMissing,
     InstanceListCommand,
     InstanceListResult,
     InstanceNotice,
+    InstanceUpdateCommand,
+    LifecycleOperationResult,
+    OperationState,
     RevisionBehind,
     TemplateBehind,
 )
+from kinby.hub import Hub
+from tests.test_factory_runs import factory_hub as routed_hub
+from tests.test_factory_runs import started_coder
 from tests.test_factory_templates import created_roles, factory_hub
-from tests.test_hub import FakeImages, created_instance, hub_at, hub_client, started_instance
+from tests.test_hub import (
+    FakeControl,
+    FakeImages,
+    FakeRuntime,
+    created_instance,
+    finished_operation,
+    hub_at,
+    hub_client,
+    instance_environment,
+    started_instance,
+)
 from tests.test_hub_factories import read
 
 #: The revision FakeImages builds, which is the hub's own until a test moves the hub on.
@@ -252,5 +271,75 @@ def test_a_template_file_the_hub_cannot_read_leaves_the_list_whole(tmp_path, mon
         monkeypatch.setattr(Path, "read_text", denied)
 
         assert await _notices_by_instance(client) == {"tickets-coder": [], "tickets-reviewer": []}
+
+    asyncio.run(scenario())
+
+
+ROUTE_MISSING = HubRouteMissing(
+    message=(
+        "The instance cannot reach the hub with the scopes it holds, factory:intake. "
+        "An instance update gives it the route."
+    )
+)
+
+
+def _rewrite_environment(hub: Hub, instance_id: UUID, environment: dict[str, str]) -> None:
+    (hub.instances_directory / str(instance_id) / ".env").write_text(
+        "".join(f"{name}='{value}'\n" for name, value in environment.items())
+    )
+
+
+def test_a_factory_instance_without_its_hub_route_says_so_until_an_update(tmp_path):
+    runtime = FakeRuntime()
+    hub = routed_hub(tmp_path / "hub", FakeControl(), runtime)
+
+    async def scenario() -> None:
+        client = hub_client(hub)
+        coder = await started_coder(hub, runtime)
+        environment = instance_environment(hub, coder)
+        del environment["KINBY_HUB_URL"]
+        _rewrite_environment(hub, coder, environment)
+
+        assert await _notices(client) == [ROUTE_MISSING]
+
+        updated = await client.call(
+            INSTANCE_UPDATE, InstanceUpdateCommand(instance_id=coder, revision=BUILT)
+        )
+        assert isinstance(updated, LifecycleOperationResult)
+        assert (await finished_operation(client, updated)).state is OperationState.SUCCEEDED
+
+        assert await _notices(client) == []
+        hub_url = f"http://hub:8080/instances/{coder}/hub"
+        assert instance_environment(hub, coder)["KINBY_HUB_URL"] == hub_url
+
+    asyncio.run(scenario())
+
+
+def test_an_instance_holding_other_scopes_than_the_registry_grants_says_so(tmp_path):
+    runtime = FakeRuntime()
+    hub = routed_hub(tmp_path / "hub", FakeControl(), runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        environment = instance_environment(hub, coder)
+        _rewrite_environment(hub, coder, environment | {"KINBY_HUB_SCOPES": "hub:read"})
+
+        assert await _notices(hub_client(hub)) == [ROUTE_MISSING]
+
+    asyncio.run(scenario())
+
+
+def test_an_instance_the_registry_grants_no_scope_has_no_hub_route_notice(tmp_path):
+    hub = routed_hub(tmp_path / "hub", FakeControl(), FakeRuntime())
+
+    async def scenario() -> None:
+        client = hub_client(hub)
+        created = await created_instance(client)
+        environment = instance_environment(hub, created.instance_id)
+        _rewrite_environment(
+            hub, created.instance_id, environment | {"KINBY_HUB_SCOPES": "factory:intake"}
+        )
+
+        assert await _notices(client) == []
 
     asyncio.run(scenario())
