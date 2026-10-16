@@ -15,6 +15,7 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
+import { openHome } from "@/lib/selection"
 
 export function AppSidebar({
   instances,
@@ -54,10 +55,22 @@ export function AppSidebar({
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg">
-              <KinbyMark />
-              <span className="font-heading text-base font-semibold">kinby</span>
-            </SidebarMenuButton>
+            <SidebarMenuButton
+              size="lg"
+              tooltip="kinby"
+              onClick={(event) => {
+                event.preventDefault()
+                openHome()
+              }}
+              render={
+                <a href="/">
+                  <span className="flex size-8 shrink-0 items-center justify-center">
+                    <KinbyMark className="size-7!" />
+                  </span>
+                  <span className="font-heading text-lg font-semibold tracking-tight">kinby</span>
+                </a>
+              }
+            />
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>

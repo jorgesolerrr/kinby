@@ -13,6 +13,7 @@ import { ArchiveButton } from "@/components/archive-button"
 import { Failure, OlderCoreAlert } from "@/components/config-alerts"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -58,7 +59,7 @@ const FILTERS: { value: Shown; label: string }[] = [
 const STATUS_BADGES: Record<ThreadStatus, ReactNode> = {
   idle: <Badge variant="outline">idle</Badge>,
   running: <Badge variant="secondary">working</Badge>,
-  awaiting_approval: <Badge>needs you</Badge>,
+  awaiting_approval: <Badge variant="attention">needs you</Badge>,
   failed: <Badge variant="destructive">failed</Badge>,
 }
 
@@ -153,7 +154,7 @@ export function ThreadListPage({
         <div className="flex flex-wrap items-center gap-2">
           <Input
             type="search"
-            className="w-64"
+            className="w-full sm:w-64"
             aria-label="Search titles"
             placeholder="Search titles"
             value={query}
@@ -168,7 +169,13 @@ export function ThreadListPage({
         ) : (
           <Failure error={failure} />
         ))}
-      {listed === undefined && failure === undefined && <Skeleton className="h-72 w-full" />}
+      {listed === undefined && failure === undefined && (
+        <output aria-label="Loading the threads" className="flex flex-col gap-2">
+          {[0, 1, 2, 3, 4].map((row) => (
+            <Skeleton key={row} className="h-10 w-full" />
+          ))}
+        </output>
+      )}
       {listed !== undefined && (
         <>
           <ThreadTable
@@ -176,6 +183,20 @@ export function ThreadListPage({
             threads={matching(listed.threads, query)}
             onToggleArchive={toggleArchive}
           />
+          {matching(listed.threads, query).length === 0 && (
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>
+                  {query.trim() === ""
+                    ? "No threads here yet"
+                    : `No loaded thread matches "${query.trim()}"`}
+                </EmptyTitle>
+                {query.trim() !== "" && listed.cursor !== null && (
+                  <EmptyDescription>Load more to search older threads.</EmptyDescription>
+                )}
+              </EmptyHeader>
+            </Empty>
+          )}
           {listed.cursor !== null && (
             <Button variant="ghost" size="sm" onClick={() => void loadMore(listed)}>
               Load more
@@ -263,9 +284,10 @@ function ThreadTable({
       <TableHeader>
         <TableRow>
           <TableHead>Title</TableHead>
-          <TableHead>Origin</TableHead>
+          {/* A narrow screen keeps the title and its status, and drops the rest. */}
+          <TableHead className="hidden md:table-cell">Origin</TableHead>
           <TableHead>Status</TableHead>
-          <TableHead>Last activity</TableHead>
+          <TableHead className="hidden sm:table-cell">Last activity</TableHead>
           <TableHead>
             <span className="sr-only">Archive</span>
           </TableHead>
@@ -281,16 +303,23 @@ function ThreadTable({
             <TableCell className="w-full max-w-0">
               {/* The row opens the thread, so the link only keeps the browser from loading it. */}
               <a
-                className="block truncate"
+                className="block truncate font-medium"
+                title={threadTitle(thread)}
                 href={threadPath(instanceId, thread.id)}
                 onClick={(event) => event.preventDefault()}
               >
                 {threadTitle(thread)}
               </a>
             </TableCell>
-            <TableCell>{originName(thread.origin)}</TableCell>
+            <TableCell className="hidden md:table-cell">
+              <span className="text-muted-foreground">{originName(thread.origin)}</span>
+            </TableCell>
             <TableCell>{STATUS_BADGES[thread.status]}</TableCell>
-            <TableCell>{when(thread.last_activity_at)}</TableCell>
+            <TableCell className="hidden sm:table-cell">
+              <span className="text-muted-foreground tabular-nums">
+                {when(thread.last_activity_at)}
+              </span>
+            </TableCell>
             <TableCell onClick={(event) => event.stopPropagation()}>
               <ArchiveButton archived={thread.archived} onToggle={() => onToggleArchive(thread)} />
             </TableCell>

@@ -396,12 +396,8 @@ describe("a thread's panel", () => {
         subscription().subscribed(events.length)
         for (const event of events) subscription().deliver(event)
       })
-      expect(screen.queryByText(/TimeoutError/)).toBeNull()
-
-      await userEvent.hover(screen.getByRole("button", { name: "Recap failed" }))
-
       expect(
-        await screen.findByText("The turn recap failed: TimeoutError: the model did not answer"),
+        screen.getByText("The turn recap failed: TimeoutError: the model did not answer"),
       ).toBeDefined()
     })
   })

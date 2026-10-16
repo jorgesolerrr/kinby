@@ -37,7 +37,11 @@ function PlanBadge({
     .map((use) => `${use.runs} in ${windowLabel(use.duration_seconds)}`)
     .join(" · ")
   return (
-    <Badge variant={limit === undefined ? "outline" : "destructive"}>
+    <Badge
+      variant={limit === undefined ? "outline" : "destructive"}
+      // A long line of windows wraps on a phone instead of losing its end, the reset time.
+      className="h-auto min-h-5 text-left whitespace-normal"
+    >
       {limit === undefined ? (
         <ClockIcon data-icon="inline-start" />
       ) : (
