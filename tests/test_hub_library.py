@@ -19,7 +19,7 @@ from kinby.contracts import (
     SkillResult,
 )
 from kinby.hub import Hub
-from kinby.library import SHIPPED_SKILLS
+from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
 from tests.test_hub import FakeImages, FakeRuntime, hub_client
 from tests.test_hub_factories import FILES, factory_hub, renamed, write_factory
 
@@ -27,11 +27,16 @@ SHIPPED = [
     "adversarial-review",
     "api-and-interface-design",
     "codebase-design",
+    "create-instance",
+    "hub-report",
+    "kinby-hub",
     "no-comments",
     "ponytail",
     "pr",
     "tdd",
     "unslop",
+    "write-factory",
+    "write-routine",
 ]
 
 
@@ -114,7 +119,7 @@ def test_a_copy_cut_short_before_its_record_is_recorded_on_the_next_open(tmp_pat
     assert "tdd" not in skills(hub)
 
 
-@pytest.mark.parametrize("name", SHIPPED)
+@pytest.mark.parametrize("name", [name for name in SHIPPED if name not in HOME_SKILLS])
 def test_a_shipped_skill_reads_with_its_body_credits_and_licence(tmp_path, name):
     hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
 
