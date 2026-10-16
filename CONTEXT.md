@@ -129,7 +129,7 @@ _Avoid_: secret repository, vault, credentials
 
 ### Lifecycle operation
 
-One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. An **image preparation** is one too, and it belongs to no instance. A **subscription login** is one too, and it runs beside the instance's other operations. Its identity and outcome remain available after the requesting client disconnects.
+One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. An **image preparation** is one too, and it belongs to no instance. A **subscription login** is one too, and it runs beside the instance's other operations. Its identity and outcome remain available after the requesting client disconnects. One the **home instance** asked for records it as the operation's requester.
 
 ### Operation step
 

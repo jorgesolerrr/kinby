@@ -38,6 +38,8 @@ from kinby.contracts.models import (
     HubSecretListResult,
     HubSecretSetCommand,
     HubSecretSetResult,
+    HubWriteCommand,
+    HubWriteResult,
     ImageDescribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
@@ -342,6 +344,7 @@ INSTANCE_LOGS = Method("instance.logs", Scope.HUB_READ, InstanceLogsCommand, Ins
 INSTANCE_RELAY_READ = Method(
     "instance.relay.read", Scope.HUB_HOME, InstanceRelayReadCommand, InstanceRelayReadResult
 )
+HUB_WRITE = Method("hub.write", Scope.HUB_HOME, HubWriteCommand, HubWriteResult)
 INSTANCE_LOGIN_START = Method(
     "instance.login.start", Scope.HUB_ADMIN, InstanceLoginStartCommand, LifecycleOperationResult
 )
@@ -485,6 +488,7 @@ METHODS = (
     INSTANCE_STATUS,
     INSTANCE_LOGS,
     INSTANCE_RELAY_READ,
+    HUB_WRITE,
     INSTANCE_LOGIN_START,
     OPERATION_GET,
     IMAGE_PREPARE,

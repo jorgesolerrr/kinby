@@ -29,6 +29,8 @@ class ToolContext:
     turn_id: UUID | None = None
     #: The routine whose turn the tool runs in. None in a turn the user started.
     routine: RoutineName | None = None
+    #: The approval the user gave this call. None for a call the gate let through on its own.
+    approval_id: UUID | None = None
     run_reporter: RunReporter | None = field(default=None, repr=False)
 
     @property
@@ -54,6 +56,8 @@ class Tool:
     source: Path
     runnable: StructuredTool
     paths: tuple[str, ...] = ()
+    #: A hub tool, which reaches past the instance into the hub (ADR 0096).
+    hub: bool = False
     context_parameter: str | None = field(default=None, repr=False)
 
     async def ainvoke(
@@ -97,7 +101,9 @@ class Tool:
         return resolved
 
 
-def tool(*, write: bool, paths: tuple[str, ...] = ()) -> Callable[[ToolFunction], Tool]:
+def tool(
+    *, write: bool, paths: tuple[str, ...] = (), hub: bool = False
+) -> Callable[[ToolFunction], Tool]:
     """Build a structured tool from a function signature and docstring."""
 
     def decorate(function: ToolFunction) -> Tool:
@@ -123,6 +129,7 @@ def tool(*, write: bool, paths: tuple[str, ...] = ()) -> Callable[[ToolFunction]
             source=Path(source_file).resolve(),
             runnable=runnable,
             paths=paths,
+            hub=hub,
             context_parameter=context_parameter,
         )
 

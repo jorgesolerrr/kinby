@@ -246,6 +246,10 @@ export interface Contract {
       command: HubSecretSetCommand;
       result: HubSecretSetResult;
     };
+    "hub.write": {
+      command: HubWriteCommand;
+      result: HubWriteResult;
+    };
     "image.describe": {
       command: ImageDescribeCommand;
       result: DeclaredSetup;
@@ -814,6 +818,21 @@ export interface HubSecretSetResult {
   operation_id: string;
 }
 /**
+ * One hub tool's write, which the hub runs once it saw the user approve that exact call.
+ */
+export interface HubWriteCommand {
+  approval_id: string;
+  arguments?: {
+    [k: string]: JsonValue;
+  };
+  tool: string;
+}
+export interface HubWriteResult {
+  result: {
+    [k: string]: JsonValue;
+  };
+}
+/**
  * Read what the prepared image declares. It never builds.
  */
 export interface ImageDescribeCommand {}
@@ -1359,6 +1378,7 @@ export interface OperationGetResult {
   instance_id: string | null;
   kind: OperationKind;
   operation_id: string;
+  requester?: string | null;
   state: OperationState;
   steps?: OperationStep[];
 }

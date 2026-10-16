@@ -43,7 +43,8 @@ class Scope(StrEnum):
     HUB_UPDATE = "hub:update"
     #: Hand a factory a work item. Only an instance holds it, on its own hub route.
     FACTORY_INTAKE = "factory:intake"
-    #: Read another instance through the hub. Only the home instance holds it, on its hub route.
+    #: Read another instance through the hub, and run the hub writes the user approved. Only the
+    #: home instance holds it, on its hub route.
     HUB_HOME = "hub:home"
 
 
@@ -994,6 +995,21 @@ class InstanceRelayReadResult(ContractModel):
     result: dict[str, JsonValue]
 
 
+class HubWriteCommand(ContractModel):
+    """One hub tool's write, which the hub runs once it saw the user approve that exact call."""
+
+    approval_id: UUID
+    #: The hub tool the user approved, such as "instance_create".
+    tool: str
+    #: The call's arguments, as the user approved them.
+    arguments: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class HubWriteResult(ContractModel):
+    #: What the hub answered the write with.
+    result: dict[str, JsonValue]
+
+
 class InstanceLoginStartCommand(ContractModel):
     """Run one of the instance's subscription logins in a setup container."""
 
@@ -1307,6 +1323,8 @@ class OperationGetResult(ContractModel):
     state: OperationState
     detail: str
     steps: list[OperationStep] = Field(default_factory=list)
+    #: The instance that asked the hub for the operation. None for one the user started.
+    requester: UUID | None = None
 
 
 class UsageGetCommand(ContractModel):

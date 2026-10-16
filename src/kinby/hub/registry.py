@@ -279,7 +279,8 @@ class HubRegistry:
         self._let_operations_stand_alone()
         # After the rebuild, which copies only the columns operations had before preparations.
         with self._connect() as connection:
-            self._add_columns(connection, "operations", {"login_id": "TEXT"})
+            # The instance that asked the hub for the operation. Null for one the user started.
+            self._add_columns(connection, "operations", {"login_id": "TEXT", "requester": "TEXT"})
             self._drop_packages(connection)
 
     def _let_operations_stand_alone(self) -> None:
@@ -481,6 +482,7 @@ class HubRegistry:
         self,
         instance: ManagedInstance,
         operation_id: UUID,
+        requester: UUID | None = None,
     ) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -532,6 +534,7 @@ class HubRegistry:
                 instance.instance_id,
                 OperationKind.CREATE,
                 "Creation queued.",
+                requester,
             )
 
     def record_operation(
@@ -540,11 +543,12 @@ class HubRegistry:
         instance_id: UUID | None,
         kind: OperationKind,
         detail: str,
+        requester: UUID | None = None,
     ) -> None:
         """Open this operation on its own, even while another one is unfinished. One that
         belongs to no instance has no *instance_id*."""
         with self._connect() as connection:
-            self._insert_operation(connection, operation_id, instance_id, kind, detail)
+            self._insert_operation(connection, operation_id, instance_id, kind, detail, requester)
 
     @staticmethod
     def _insert_operation(
@@ -553,11 +557,12 @@ class HubRegistry:
         instance_id: UUID | None,
         kind: OperationKind,
         detail: str,
+        requester: UUID | None = None,
     ) -> None:
         connection.execute(
             """
-            INSERT INTO operations (id, instance_id, kind, state, detail)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO operations (id, instance_id, kind, state, detail, requester)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 str(operation_id),
@@ -565,6 +570,7 @@ class HubRegistry:
                 kind.value,
                 OperationState.PENDING.value,
                 detail,
+                str(requester) if requester is not None else None,
             ),
         )
 
@@ -795,6 +801,7 @@ class HubRegistry:
         instance_id: UUID,
         kind: OperationKind,
         detail: str,
+        requester: UUID | None = None,
     ) -> UUID:
         """Open this operation, or return the unfinished one of the same kind.
 
@@ -819,7 +826,7 @@ class HubRegistry:
             ).fetchone()
             if existing is not None:
                 return UUID(existing[0])
-            self._insert_operation(connection, operation_id, instance_id, kind, detail)
+            self._insert_operation(connection, operation_id, instance_id, kind, detail, requester)
         return operation_id
 
     def advance_operation(self, operation_id: UUID, step: str, detail: str) -> None:
@@ -926,7 +933,10 @@ class HubRegistry:
     def operation(self, operation_id: UUID) -> OperationGetResult | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT id, instance_id, kind, state, detail FROM operations WHERE id = ?",
+                """
+                SELECT id, instance_id, kind, state, detail, requester FROM operations
+                WHERE id = ?
+                """,
                 (str(operation_id),),
             ).fetchone()
             steps = connection.execute(
@@ -944,6 +954,7 @@ class HubRegistry:
             kind=OperationKind(row[2]),
             state=OperationState(row[3]),
             detail=row[4],
+            requester=UUID(row[5]) if row[5] is not None else None,
             steps=[
                 OperationStep(
                     name=name,

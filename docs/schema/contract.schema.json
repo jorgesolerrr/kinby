@@ -1765,6 +1765,47 @@
       "title": "HubSecretSetResult",
       "type": "object"
     },
+    "HubWriteCommand": {
+      "additionalProperties": false,
+      "description": "One hub tool's write, which the hub runs once it saw the user approve that exact call.",
+      "properties": {
+        "approval_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "tool"
+      ],
+      "title": "HubWriteCommand",
+      "type": "object"
+    },
+    "HubWriteResult": {
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "HubWriteResult",
+      "type": "object"
+    },
     "ImageDescribeCommand": {
       "additionalProperties": false,
       "description": "Read what the prepared image declares. It never builds.",
@@ -4063,6 +4104,18 @@
         "operation_id": {
           "format": "uuid",
           "type": "string"
+        },
+        "requester": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "state": {
           "$ref": "#/$defs/OperationState"
@@ -8173,6 +8226,22 @@
           ],
           "type": "object"
         },
+        "hub.write": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/HubWriteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/HubWriteResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "image.describe": {
           "additionalProperties": false,
           "properties": {
@@ -9470,6 +9539,7 @@
         "instance.status",
         "instance.logs",
         "instance.relay.read",
+        "hub.write",
         "instance.login.start",
         "operation.get",
         "image.prepare",

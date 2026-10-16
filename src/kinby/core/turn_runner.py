@@ -99,7 +99,6 @@ from kinby.instance.permissions import (
 )
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
-from kinby.plugins.hub import hub_tools
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
 from kinby.plugins.routines import (
     Routine,
@@ -175,6 +174,8 @@ class ModelContext:
 class ToolCallResolution:
     call: ToolCall
     gate: ToolGated
+    #: The approval the user gave the call, which a hub tool shows the hub.
+    approval_id: UUID | None
 
 
 @dataclass(frozen=True)
@@ -486,7 +487,7 @@ class LangGraphRunner:
         message = turn.message
         payload = None
         if not isinstance(turn.origin, UserOrigin):
-            tools = ToolSnapshot(tuple(tool for tool in tools.tools if tool not in hub_tools()))
+            tools = ToolSnapshot(tuple(tool for tool in tools.tools if not tool.hub))
         if isinstance(turn.origin, RoutineOrigin):
             routines, warnings = load_routines(self._instance, policy=self._gate_policy)
             for warning in warnings:
@@ -768,10 +769,13 @@ class LangGraphRunner:
                 selected,
                 runtime.context.tool_context.workspace,
             )
+            approval_id = None
             if gate_decision.action is GateAction.ASK:
+                # The node runs again on resume, so the id must come out the same both times.
+                approval_id = uuid5(state.turn.turn_id, f"approval:{call_id}")
                 answer: ApprovalAnswer = interrupt(
                     ApprovalRequested(
-                        approval_id=uuid4(),
+                        approval_id=approval_id,
                         name=name,
                         arguments=arguments,
                         rule=gate_decision.rule,
@@ -794,7 +798,7 @@ class LangGraphRunner:
                     rule=gate_decision.rule,
                     decided_by=GateDecider.POLICY,
                 )
-            calls.append(ToolCallResolution(call, gate))
+            calls.append(ToolCallResolution(call, gate, approval_id))
 
         messages: list[AnyMessage] = []
         for resolution in calls:
@@ -823,6 +827,7 @@ class LangGraphRunner:
                 call.name,
                 call.arguments,
                 runtime,
+                resolution.approval_id,
             )
             await runtime.context.emit(result)
             messages.append(
@@ -874,6 +879,7 @@ class LangGraphRunner:
         name: str,
         arguments: dict[str, JsonValue],
         runtime: Runtime[ModelContext],
+        approval_id: UUID | None,
     ) -> ToolResult:
         selected = runtime.context.tools.get(name)
         if selected is None:
@@ -886,7 +892,9 @@ class LangGraphRunner:
         started_at = asyncio.get_running_loop().time()
         try:
             # A tool is user code. Turn its failures into model-visible tool errors.
-            output = await selected.ainvoke(arguments, runtime.context.tool_context)
+            output = await selected.ainvoke(
+                arguments, replace(runtime.context.tool_context, approval_id=approval_id)
+            )
         except Exception as exc:
             return ToolResult(
                 call_id=call_id,

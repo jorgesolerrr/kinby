@@ -132,7 +132,10 @@ class HubContractServer:
         """Relay to the instance's own ``/ws``, which grants no lifecycle authority."""
         if self._scopes(request) != HUB_SCOPES:
             raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
-        return await relay_socket(request, await self._reach(request))
+        endpoint = await self._reach(request)
+        return await relay_socket(
+            request, endpoint, self._routing.home_approvals(endpoint.instance_id)
+        )
 
     async def _instance_signal(self, request: web.Request) -> web.Response:
         """Webhooks carry their own signature, so the hub authenticates none of them."""
