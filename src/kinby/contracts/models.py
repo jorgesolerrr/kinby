@@ -222,7 +222,16 @@ class FactoryRunOrigin(ContractModel):
     step: StepId
 
 
-Origin = Annotated[UserOrigin | RoutineOrigin | FactoryRunOrigin, Field(discriminator="kind")]
+class HomeInstanceOrigin(ContractModel):
+    """The home instance, which asked the hub to start the turn after the user approved it."""
+
+    kind: Literal["home-instance"] = "home-instance"
+
+
+Origin = Annotated[
+    UserOrigin | RoutineOrigin | FactoryRunOrigin | HomeInstanceOrigin,
+    Field(discriminator="kind"),
+]
 
 
 class TurnStarted(ContractModel):
@@ -500,6 +509,10 @@ class ThreadSubscribeCommand(ContractModel):
 class ThreadTurnStartCommand(ContractModel):
     thread_id: UUID
     message: str
+    #: The home instance's, when the hub starts the turn for it.
+    origin: Annotated[UserOrigin | HomeInstanceOrigin, Field(discriminator="kind")] = Field(
+        default_factory=UserOrigin
+    )
 
 
 class ThreadTurnDiffCommand(ContractModel):

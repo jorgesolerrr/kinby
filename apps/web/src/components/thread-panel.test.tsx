@@ -176,6 +176,27 @@ describe("a thread's panel", () => {
     expect(screen.getByText(/^Routine nightly-digest ·/)).toBeDefined()
   })
 
+  it("marks a turn the home instance started", async () => {
+    const events = thread([
+      "turn-1",
+      {
+        type: "turn.started",
+        message: "Check my job applications.",
+        model: "claude",
+        origin: { kind: "home-instance" },
+      },
+    ])
+    const { subscription } = openThread()
+
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+
+    expect(screen.getByText(/^Home instance ·/)).toBeDefined()
+    expect(screen.queryByText(/^You ·/)).toBeNull()
+  })
+
   it("names the browser's zone in the time a turn started", async () => {
     vi.stubEnv("TZ", "America/Bogota")
     onTestFinished(() => void vi.unstubAllEnvs())

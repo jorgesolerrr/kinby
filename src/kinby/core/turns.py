@@ -387,7 +387,7 @@ class Turns:
         return accepted(event)
 
     async def start(self, command: ThreadTurnStartCommand) -> AcceptedResult:
-        started = await self.wake(command.thread_id, command.message, UserOrigin())
+        started = await self.wake(command.thread_id, command.message, command.origin)
         # A thread the user goes back to returns to the sidebar.
         self._store.unarchive(command.thread_id)
         return started

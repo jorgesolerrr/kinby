@@ -9,6 +9,7 @@ import type {
   ErrorFrame,
   Event,
   FactoryRunOrigin,
+  HomeInstanceOrigin,
   InstanceListResult,
   ItemFrame,
   OriginUse,
@@ -122,7 +123,7 @@ test("stats.get carries each turn's origin, or null when the log has no start fo
   type Stats = Contract["methods"]["stats.get"]["result"]
 
   expectTypeOf<Stats["records"][number]["origin"]>().toEqualTypeOf<
-    UserOrigin | RoutineOrigin | FactoryRunOrigin | null
+    UserOrigin | RoutineOrigin | FactoryRunOrigin | HomeInstanceOrigin | null
   >()
 })
 
@@ -185,10 +186,12 @@ test("thread.list takes a routine and pages by cursor", () => {
   expectTypeOf<List["result"]["cursor"]>().toEqualTypeOf<Cursor | null>()
 })
 
-test("each listed thread names its origin: the user, a routine run, or a factory run's step", () => {
+test("each listed thread names its origin: the user, a routine run, a factory run's step, or the home instance", () => {
   type Listed = Contract["methods"]["thread.list"]["result"]["threads"][number]
 
-  expectTypeOf<Listed["origin"]>().toEqualTypeOf<UserOrigin | RoutineOrigin | FactoryRunOrigin>()
+  expectTypeOf<Listed["origin"]>().toEqualTypeOf<
+    UserOrigin | RoutineOrigin | FactoryRunOrigin | HomeInstanceOrigin
+  >()
 })
 
 test("thread.archive and thread.unarchive take a thread and return its summary", () => {

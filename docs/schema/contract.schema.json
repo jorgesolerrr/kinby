@@ -1621,6 +1621,22 @@
       "title": "GitSource",
       "type": "object"
     },
+    "HomeInstanceOrigin": {
+      "additionalProperties": false,
+      "description": "The home instance, which asked the hub to start the turn after the user approved it.",
+      "properties": {
+        "kind": {
+          "const": "home-instance",
+          "default": "home-instance",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "HomeInstanceOrigin",
+      "type": "object"
+    },
     "HookName": {
       "minLength": 1,
       "type": "string"
@@ -6770,6 +6786,7 @@
           "discriminator": {
             "mapping": {
               "factory-run": "#/$defs/FactoryRunOrigin",
+              "home-instance": "#/$defs/HomeInstanceOrigin",
               "routine": "#/$defs/RoutineOrigin",
               "user": "#/$defs/UserOrigin"
             },
@@ -6784,6 +6801,9 @@
             },
             {
               "$ref": "#/$defs/FactoryRunOrigin"
+            },
+            {
+              "$ref": "#/$defs/HomeInstanceOrigin"
             }
           ]
         },
@@ -7010,6 +7030,23 @@
       "properties": {
         "message": {
           "type": "string"
+        },
+        "origin": {
+          "discriminator": {
+            "mapping": {
+              "home-instance": "#/$defs/HomeInstanceOrigin",
+              "user": "#/$defs/UserOrigin"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/UserOrigin"
+            },
+            {
+              "$ref": "#/$defs/HomeInstanceOrigin"
+            }
+          ]
         },
         "thread_id": {
           "format": "uuid",
@@ -7545,6 +7582,7 @@
               "discriminator": {
                 "mapping": {
                   "factory-run": "#/$defs/FactoryRunOrigin",
+                  "home-instance": "#/$defs/HomeInstanceOrigin",
                   "routine": "#/$defs/RoutineOrigin",
                   "user": "#/$defs/UserOrigin"
                 },
@@ -7559,6 +7597,9 @@
                 },
                 {
                   "$ref": "#/$defs/FactoryRunOrigin"
+                },
+                {
+                  "$ref": "#/$defs/HomeInstanceOrigin"
                 }
               ]
             },
@@ -7695,6 +7736,7 @@
           "discriminator": {
             "mapping": {
               "factory-run": "#/$defs/FactoryRunOrigin",
+              "home-instance": "#/$defs/HomeInstanceOrigin",
               "routine": "#/$defs/RoutineOrigin",
               "user": "#/$defs/UserOrigin"
             },
@@ -7709,6 +7751,9 @@
             },
             {
               "$ref": "#/$defs/FactoryRunOrigin"
+            },
+            {
+              "$ref": "#/$defs/HomeInstanceOrigin"
             }
           ]
         },

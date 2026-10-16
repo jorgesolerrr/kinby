@@ -70,6 +70,8 @@ from kinby.contracts import (
     OPERATION_GET,
     RELAYED_READS,
     STATS_SUMMARY,
+    THREAD_CREATE,
+    THREAD_TURN_START,
     Avatar,
     Capability,
     ContainerOwner,
@@ -78,6 +80,7 @@ from kinby.contracts import (
     DrainState,
     FactoryName,
     FactoryRole,
+    HomeInstanceOrigin,
     HubSecret,
     HubSecretDeleteCommand,
     HubSecretDeleteResult,
@@ -145,6 +148,8 @@ from kinby.contracts import (
     StorageKind,
     SubscriptionLogin,
     TemplateBehind,
+    ThreadCreateResult,
+    ThreadTurnStartCommand,
 )
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
@@ -178,7 +183,7 @@ from kinby.hub.control import (
     InstanceControl,
 )
 from kinby.hub.factories import FactoryStore, InstanceTemplate
-from kinby.hub.home import RelayedWrite, home_write
+from kinby.hub.home import InstanceAsk, RelayedWrite, home_write
 from kinby.hub.library import Library, skill_names
 from kinby.hub.models import (
     ContainerRuntime,
@@ -568,7 +573,20 @@ class Hub:
                 return HubWriteResult(
                     result=await self._relayed(write.instance_id, write.method.name, params)
                 )
+            case InstanceAsk():
+                return HubWriteResult(result=await self._ask(write))
         return HubWriteResult(result=result.model_dump(mode="json"))
+
+    async def _ask(self, ask: InstanceAsk) -> dict[str, JsonValue]:
+        created = ThreadCreateResult.model_validate(
+            await self._relayed(ask.instance_id, THREAD_CREATE.name, {})
+        )
+        start = ThreadTurnStartCommand(
+            thread_id=created.id, message=ask.message, origin=HomeInstanceOrigin()
+        )
+        return await self._relayed(
+            ask.instance_id, THREAD_TURN_START.name, start.model_dump(mode="json")
+        )
 
     async def relay_read(self, command: InstanceRelayReadCommand) -> InstanceRelayReadResult:
         if command.method not in RELAYED_READS:

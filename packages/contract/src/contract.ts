@@ -1695,7 +1695,7 @@ export interface TurnMetrics {
   memory_tokens: number;
   model: string | null;
   navigation?: Navigation;
-  origin: (UserOrigin | RoutineOrigin | FactoryRunOrigin) | null;
+  origin: (UserOrigin | RoutineOrigin | FactoryRunOrigin | HomeInstanceOrigin) | null;
   outcome?: CompletionOutcome;
   output_tokens: number;
   prompt_version: string | null;
@@ -1763,6 +1763,12 @@ export interface FactoryRunOrigin {
   kind: "factory-run";
   run_id: string;
   step: StepId;
+}
+/**
+ * The home instance, which asked the hub to start the turn after the user approved it.
+ */
+export interface HomeInstanceOrigin {
+  kind: "home-instance";
 }
 export interface TurnRated {
   reason?: string | null;
@@ -1922,7 +1928,7 @@ export interface ThreadSummary {
   last_activity_at: string;
   mode: PermissionMode;
   mode_pinned: boolean;
-  origin: UserOrigin | RoutineOrigin | FactoryRunOrigin;
+  origin: UserOrigin | RoutineOrigin | FactoryRunOrigin | HomeInstanceOrigin;
   status: ThreadStatus;
   title: string | null;
 }
@@ -2005,6 +2011,7 @@ export interface ThreadTurnRevertPreviewResult {
 }
 export interface ThreadTurnStartCommand {
   message: string;
+  origin?: UserOrigin | HomeInstanceOrigin;
   thread_id: string;
 }
 export interface ThreadTurnTargetListCommand {
@@ -2139,7 +2146,7 @@ export interface ModePinned {
 export interface TurnStarted {
   message: string;
   model: string;
-  origin?: UserOrigin | RoutineOrigin | FactoryRunOrigin;
+  origin?: UserOrigin | RoutineOrigin | FactoryRunOrigin | HomeInstanceOrigin;
   permission_mode?: PermissionMode | null;
   prompt_version?: string | null;
   snapshot?: string | null;

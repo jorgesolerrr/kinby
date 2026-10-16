@@ -25,6 +25,7 @@ from kinby.contracts import (
 from kinby.core.errors import PermissionDenied
 from kinby.plugins.hub import (
     LifecycleAction,
+    instance_ask,
     instance_create,
     instance_lifecycle,
     instance_picks_set,
@@ -45,6 +46,13 @@ class RelayedWrite:
     command: ContractModel
 
 
+class InstanceAsk(ContractModel):
+    """A turn the hub starts in the target, on a new thread, with the home instance as origin."""
+
+    instance_id: UUID
+    message: str
+
+
 type HomeWrite = (
     InstanceCreateCommand
     | InstanceStartCommand
@@ -52,6 +60,7 @@ type HomeWrite = (
     | InstanceRecreateCommand
     | InstancePicksSetCommand
     | RelayedWrite
+    | InstanceAsk
 )
 
 #: The hub tools whose write runs in the target instance, and the instance method each calls.
@@ -93,6 +102,8 @@ def home_write(tool: str, arguments: Mapping[str, JsonValue]) -> HomeWrite:
                         return InstanceRecreateCommand(instance_id=call.instance_id)
             case instance_picks_set.name:
                 return InstancePicksSetCommand.model_validate(arguments)
+            case instance_ask.name:
+                return InstanceAsk.model_validate(arguments)
             case _ if tool in _RELAYED_WRITES:
                 method = _RELAYED_WRITES[tool]
                 own = {name: value for name, value in arguments.items() if name != "instance_id"}

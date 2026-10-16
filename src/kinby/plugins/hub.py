@@ -15,6 +15,7 @@ from kinby.contracts import (
     HUB_WRITE,
     INSTANCE_RELAY_READ,
     RELAYED_READS,
+    AcceptedResult,
     CallFrame,
     ContractModel,
     ErrorFrame,
@@ -69,6 +70,7 @@ def hub_tools() -> tuple[Tool, ...]:
         instance_routine_set_enabled,
         instance_routine_run,
         instance_routine_delete,
+        instance_ask,
     )
 
 
@@ -200,6 +202,19 @@ async def instance_routine_delete(
     return await _relayed_write(instance_routine_delete, instance_id, command, context)
 
 
+@tool(write=True, hub=True)
+async def instance_ask(instance_id: UUID, message: str, context: ToolContext) -> str:
+    """Start a turn in an instance, on a new thread, with a request for it to work on there.
+
+    Ask for work that needs that instance's own judgment or memory. Returns the thread and the
+    turn as JSON, with the thread's link in the web app to give the user.
+    """
+    arguments: dict[str, JsonValue] = {"instance_id": str(instance_id), "message": message}
+    accepted = AcceptedResult.model_validate(await _written(instance_ask, arguments, context))
+    link = f"/instances/{instance_id}/threads/{accepted.thread_id}"
+    return json.dumps({**accepted.model_dump(mode="json"), "link": link}, ensure_ascii=False)
+
+
 async def _relayed_write(
     write: Tool, instance_id: UUID, command: ContractModel, context: ToolContext
 ) -> str:
@@ -208,12 +223,18 @@ async def _relayed_write(
 
 
 async def _write(write: Tool, arguments: dict[str, JsonValue], context: ToolContext) -> str:
+    return json.dumps(await _written(write, arguments, context), ensure_ascii=False)
+
+
+async def _written(
+    write: Tool, arguments: dict[str, JsonValue], context: ToolContext
+) -> dict[str, JsonValue]:
     """Ask the hub to run the call, with the approval the user gave it."""
     if context.approval_id is None:
         raise PermissionError(f"The hub runs {write.name} only with the user's approval.")
     command = HubWriteCommand(approval_id=context.approval_id, tool=write.name, arguments=arguments)
     written = await call_hub(HUB_WRITE.name, command.model_dump(mode="json"), "the write")
-    return json.dumps(HubWriteResult.model_validate(written).result, ensure_ascii=False)
+    return HubWriteResult.model_validate(written).result
 
 
 async def call_hub(method: str, params: dict[str, JsonValue], named: str) -> dict[str, JsonValue]:
