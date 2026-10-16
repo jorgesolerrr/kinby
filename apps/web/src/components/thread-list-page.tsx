@@ -37,6 +37,7 @@ import {
 import { usePace } from "@/hooks/use-pace"
 import { when } from "@/lib/config-changes"
 import { pace, retried } from "@/lib/operation"
+import { originLabel } from "@/lib/origin"
 import { openCore, selectThread, threadPath } from "@/lib/selection"
 import { threadList, threadTitle } from "@/lib/thread-list"
 
@@ -312,7 +313,7 @@ function ThreadTable({
               </a>
             </TableCell>
             <TableCell className="hidden md:table-cell">
-              <span className="text-muted-foreground">{originName(thread.origin)}</span>
+              <span className="text-muted-foreground">{originLabel(thread.origin)}</span>
             </TableCell>
             <TableCell>{STATUS_BADGES[thread.status]}</TableCell>
             <TableCell className="hidden sm:table-cell">
@@ -328,17 +329,4 @@ function ThreadTable({
       </TableBody>
     </Table>
   )
-}
-
-function originName(origin: ThreadSummary["origin"]): string {
-  switch (origin.kind) {
-    case "user":
-      return "You"
-    case "routine":
-      return origin.name
-    case "factory-run":
-      return `${origin.factory} · ${origin.step}`
-    case "home-instance":
-      return "Home instance"
-  }
 }

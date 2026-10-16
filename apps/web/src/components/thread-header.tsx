@@ -230,7 +230,7 @@ function ModePicker({
               <span className="flex flex-col">
                 {entry.label}
                 <span className="text-xs text-muted-foreground">
-                  {index > allowed ? "Above this instance's ceiling" : entry.hint}
+                  {index > allowed ? "Above the ceiling. Raise it in Configure." : entry.hint}
                 </span>
               </span>
             </SelectItem>

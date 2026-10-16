@@ -34,7 +34,9 @@ export function SignIn({ onSignIn }: { onSignIn: (token: string) => Promise<bool
                   required
                   aria-invalid={failed || undefined}
                 />
-                {failed && <FieldError>Could not sign in.</FieldError>}
+                {failed && (
+                  <FieldError>Could not sign in. Check the token and sign in again.</FieldError>
+                )}
               </Field>
               <Button type="submit" disabled={pending}>
                 Sign in
