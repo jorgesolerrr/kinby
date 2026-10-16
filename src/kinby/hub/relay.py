@@ -42,6 +42,8 @@ _NOT_FORWARDED = frozenset(
 )
 #: A webhook sender waits on its own clock, so a hung instance must fail rather than hold it.
 _SIGNAL_TIMEOUT_SECONDS = 30
+#: A turn waits on a relayed read, so a hung instance must fail rather than hold the turn open.
+RELAYED_CALL_SECONDS = 30
 
 
 def unreachable(reason: InstanceUnreachable) -> web.HTTPException:
@@ -81,6 +83,7 @@ async def relayed_call(
     call = CallFrame(id=FrameId("1"), method=method, params=params)
     try:
         async with (
+            asyncio.timeout(RELAYED_CALL_SECONDS),
             aiohttp.ClientSession(
                 headers={"Authorization": f"Bearer {endpoint.control_token}"}
             ) as session,
@@ -90,7 +93,8 @@ async def relayed_call(
             answer = await socket.receive_str()
     except (aiohttp.ClientError, aiohttp.WSMessageTypeError, TimeoutError) as exc:
         raise InstanceUnavailable(
-            f'Instance "{endpoint.instance_id}" did not answer "{method}": {exc}'
+            f'Instance "{endpoint.instance_id}" did not answer "{method}": '
+            f"{exc or type(exc).__name__}"
         ) from exc
     match parse_server_frame(answer):
         case ResultFrame(result=result):

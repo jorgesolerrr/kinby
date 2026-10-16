@@ -10,6 +10,7 @@ from uuid import UUID
 
 import aiohttp
 import pytest
+from aiohttp import web
 from langchain_core.messages import AIMessageChunk
 
 from kinby.contracts import (
@@ -27,9 +28,12 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core import LangGraphRunner
+from kinby.core.errors import InstanceUnavailable
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 from kinby.core.turns import Turns
+from kinby.hub import relay
+from kinby.hub.models import InstanceEndpoint
 from kinby.instance import Serve
 from tests.test_factory_runs import started
 from tests.test_gate import ScriptedModel, _instance, _run
@@ -250,3 +254,42 @@ def test_hub_read_is_on_turns_the_user_starts_only(tmp_path, monkeypatch, origin
     asyncio.run(scenario())
 
     assert ("hub_read" in model.tools) is present
+
+
+@asynccontextmanager
+async def silent_instance() -> AsyncIterator[Serve]:
+    """An instance that takes calls on its socket and answers none, until the caller leaves."""
+
+    async def socket(request: web.Request) -> web.WebSocketResponse:
+        response = web.WebSocketResponse()
+        await response.prepare(request)
+        async for _ in response:
+            pass
+        return response
+
+    application = web.Application()
+    application.router.add_get("/ws", socket)
+    runner = web.AppRunner(application)
+    await runner.setup()
+    try:
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        yield Serve("127.0.0.1", site.port)
+    finally:
+        await runner.cleanup()
+
+
+def test_a_relayed_read_the_instance_never_answers_ends_unavailable(monkeypatch):
+    monkeypatch.setattr(relay, "RELAYED_CALL_SECONDS", 0.1)
+
+    async def scenario() -> None:
+        async with silent_instance() as address:
+            endpoint = InstanceEndpoint(
+                instance_id=UUID(int=1),
+                url=f"http://{address.host}:{address.port}",
+                control_token=ControlToken("token"),
+            )
+            with pytest.raises(InstanceUnavailable):
+                await asyncio.wait_for(relay.relayed_call(endpoint, "routine.list", {}), 5)
+
+    asyncio.run(scenario())
