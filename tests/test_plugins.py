@@ -916,7 +916,7 @@ def _ends(pid: int) -> bool:
 def _running(pid: int) -> bool:
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
-    # A process reaped between the open and the read fails the read with ESRCH.
+    # A process reaped between opening its stat and reading it raises ProcessLookupError.
     except FileNotFoundError, ProcessLookupError:
         return False
     return stat.rsplit(")", 1)[1].split()[0] != "Z"
