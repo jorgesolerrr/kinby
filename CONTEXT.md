@@ -30,7 +30,7 @@ The life wiki: entities, episodes, and time-stamped facts about the user's life 
 
 ### Episode
 
-One distilled record in the **knowledge graph** of a single **turn**: what happened, what was decided, what should have gone differently, and the tools and path the agent used. Written by the **recap** and lets later work reuse or improve that path. Episodes are the raw material **dreaming** turns into **facts**: a search returns them only when it is bounded by date or no fact matches, and an old episode is **pruned** once it is **covered** and no fact cites it. A **turn** with **no work** writes none.
+One distilled record in the **knowledge graph** of a single **turn** or **factory run**: what happened, what was decided, what should have gone differently, and the tools and path the agent used. Written by the **recap** and lets later work reuse or improve that path. Episodes are the raw material **dreaming** turns into **facts**: a search returns them only when it is bounded by date or no fact matches, and an old episode is **pruned** once it is **covered** and no fact cites it. A **turn** with **no work** writes none. A factory run writes one when it ends, and its steps write none of their own.
 
 ### Fact
 
@@ -42,7 +42,11 @@ The user replacing a **fact** they judge wrong: a new fact, dated the day of the
 
 ### Dreaming
 
-The consolidation that reviews uncovered **episodes** and writes a **fact** for a lesson or detail they repeat, citing them as its **source episodes**. It never rewrites, merges or tombstones an episode, and it never writes back a fact the user forgot.
+The consolidation that reviews uncovered **episodes** and writes a **fact** for a lesson or detail they repeat, or an **area fact** for an area they share, citing them as its **source episodes**. It never rewrites, merges or tombstones an episode, and it never writes back a fact the user forgot.
+
+### Area fact
+
+A **fact** **dreaming** writes about one area of the work, such as a feature of a repository: where it lives and what was decided about it, and why. When a later **episode** touches the area, a new area fact citing the old sources and the new one takes its place.
 
 ### Source episode
 
@@ -407,7 +411,11 @@ The part of the runtime that produces the agent's response and the turn's events
 
 ### Recap
 
-The retrospective work that runs after a **turn** ends. It records the tool path and may use a model to distill the turn into an **episode**; it never delays the next turn or writes **facts**.
+The retrospective work that runs after a **turn** or a **factory run** ends. It records the tool path and may use a model to distill the turn into an **episode**; it never delays the next turn or writes **facts**.
+
+### Session digest
+
+What the **recap** of a **factory run** reads from a **coding run**'s session: the files read and changed, the commands that failed, and the client's own prose. Tool outputs and file contents are left out.
 
 ### Recap policy
 
