@@ -6550,6 +6550,19 @@
       "title": "ThreadArchiveCommand",
       "type": "object"
     },
+    "ThreadAskCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "title": "ThreadAskCommand",
+      "type": "object"
+    },
     "ThreadCreateCommand": {
       "additionalProperties": false,
       "properties": {
@@ -7030,23 +7043,6 @@
       "properties": {
         "message": {
           "type": "string"
-        },
-        "origin": {
-          "discriminator": {
-            "mapping": {
-              "home-instance": "#/$defs/HomeInstanceOrigin",
-              "user": "#/$defs/UserOrigin"
-            },
-            "propertyName": "kind"
-          },
-          "oneOf": [
-            {
-              "$ref": "#/$defs/UserOrigin"
-            },
-            {
-              "$ref": "#/$defs/HomeInstanceOrigin"
-            }
-          ]
         },
         "thread_id": {
           "format": "uuid",
@@ -9279,6 +9275,22 @@
           ],
           "type": "object"
         },
+        "thread.ask": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadAskCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "thread.create": {
           "additionalProperties": false,
           "properties": {
@@ -9541,6 +9553,7 @@
         "instance.probe",
         "instance.drain",
         "step.run",
+        "thread.ask",
         "routine.list",
         "routine.run",
         "routine.read",

@@ -452,6 +452,32 @@ def test_kinby_starts_a_turn_in_another_instance_whose_origin_is_the_home_instan
     asyncio.run(scenario())
 
 
+def test_a_client_on_the_relay_never_starts_a_turn_as_the_home_instance(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, lambda _: []) as kinby:
+            claimed, asked, listed = await answers(
+                url(kinby.address, f"/instances/{kinby.alice}/ws"),
+                ControlToken(kinby.access_token),
+                (
+                    "thread.turn.start",
+                    {
+                        "thread_id": str(uuid4()),
+                        "message": "Check my job applications.",
+                        "origin": {"kind": "home-instance"},
+                    },
+                ),
+                ("thread.ask", {"message": "Check my job applications."}),
+                ("thread.list", {"filter": "all"}),
+            )
+
+        assert error_code(claimed) == ErrorCode.INVALID_ARGUMENT.value
+        assert error_code(asked) == ErrorCode.PERMISSION_DENIED.value
+        assert isinstance(listed["result"], dict), listed
+        assert listed["result"]["threads"] == []
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("method", ["permissions.set", "manifest.set"])
 def test_the_home_instance_never_sets_another_instances_permissions_or_manifest(
     tmp_path, monkeypatch, method: str

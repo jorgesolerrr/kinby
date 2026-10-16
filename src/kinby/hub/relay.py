@@ -81,10 +81,14 @@ async def relay_socket(
 
 
 async def relayed_call(
-    endpoint: InstanceEndpoint, method: str, params: dict[str, JsonValue]
+    endpoint: InstanceEndpoint,
+    method: str,
+    params: dict[str, JsonValue],
+    *,
+    socket_path: str = "/ws",
 ) -> dict[str, JsonValue]:
-    """Make one call on the instance's socket, the one the relay carries a client to, and return
-    what the instance answered."""
+    """Make one call on the instance's socket, the one the relay carries a client to unless
+    *socket_path* names another, and return what the instance answered."""
     call = CallFrame(id=FrameId("1"), method=method, params=params)
     try:
         async with (
@@ -92,7 +96,9 @@ async def relayed_call(
             aiohttp.ClientSession(
                 headers={"Authorization": f"Bearer {endpoint.control_token}"}
             ) as session,
-            session.ws_connect(f"{endpoint.url}/ws", heartbeat=HEARTBEAT_SECONDS) as socket,
+            session.ws_connect(
+                f"{endpoint.url}{socket_path}", heartbeat=HEARTBEAT_SECONDS
+            ) as socket,
         ):
             await socket.send_str(call.model_dump_json())
             answer = await socket.receive_str()

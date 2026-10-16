@@ -498,6 +498,10 @@ export interface Contract {
       command: ThreadArchiveCommand;
       result: ThreadSummary;
     };
+    "thread.ask": {
+      command: ThreadAskCommand;
+      result: AcceptedResult;
+    };
     "thread.create": {
       command: ThreadCreateCommand;
       result: ThreadCreateResult;
@@ -1932,6 +1936,9 @@ export interface ThreadSummary {
   status: ThreadStatus;
   title: string | null;
 }
+export interface ThreadAskCommand {
+  message: string;
+}
 export interface ThreadCreateCommand {
   title?: string | null;
 }
@@ -2011,7 +2018,6 @@ export interface ThreadTurnRevertPreviewResult {
 }
 export interface ThreadTurnStartCommand {
   message: string;
-  origin?: UserOrigin | HomeInstanceOrigin;
   thread_id: string;
 }
 export interface ThreadTurnTargetListCommand {

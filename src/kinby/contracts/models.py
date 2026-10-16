@@ -509,10 +509,10 @@ class ThreadSubscribeCommand(ContractModel):
 class ThreadTurnStartCommand(ContractModel):
     thread_id: UUID
     message: str
-    #: The home instance's, when the hub starts the turn for it.
-    origin: Annotated[UserOrigin | HomeInstanceOrigin, Field(discriminator="kind")] = Field(
-        default_factory=UserOrigin
-    )
+
+
+class ThreadAskCommand(ContractModel):
+    message: str
 
 
 class ThreadTurnDiffCommand(ContractModel):

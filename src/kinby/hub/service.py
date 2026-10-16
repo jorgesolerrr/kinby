@@ -70,8 +70,7 @@ from kinby.contracts import (
     OPERATION_GET,
     RELAYED_READS,
     STATS_SUMMARY,
-    THREAD_CREATE,
-    THREAD_TURN_START,
+    THREAD_ASK,
     Avatar,
     Capability,
     ContainerOwner,
@@ -80,7 +79,6 @@ from kinby.contracts import (
     DrainState,
     FactoryName,
     FactoryRole,
-    HomeInstanceOrigin,
     HubSecret,
     HubSecretDeleteCommand,
     HubSecretDeleteResult,
@@ -148,8 +146,7 @@ from kinby.contracts import (
     StorageKind,
     SubscriptionLogin,
     TemplateBehind,
-    ThreadCreateResult,
-    ThreadTurnStartCommand,
+    ThreadAskCommand,
 )
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
@@ -578,14 +575,13 @@ class Hub:
         return HubWriteResult(result=result.model_dump(mode="json"))
 
     async def _ask(self, ask: InstanceAsk) -> dict[str, JsonValue]:
-        created = ThreadCreateResult.model_validate(
-            await self._relayed(ask.instance_id, THREAD_CREATE.name, {})
-        )
-        start = ThreadTurnStartCommand(
-            thread_id=created.id, message=ask.message, origin=HomeInstanceOrigin()
-        )
+        # Only the control socket admits thread.ask, so no client of the relay claims the origin.
+        command = ThreadAskCommand(message=ask.message)
         return await self._relayed(
-            ask.instance_id, THREAD_TURN_START.name, start.model_dump(mode="json")
+            ask.instance_id,
+            THREAD_ASK.name,
+            command.model_dump(mode="json"),
+            socket_path="/control",
         )
 
     async def relay_read(self, command: InstanceRelayReadCommand) -> InstanceRelayReadResult:
@@ -596,7 +592,12 @@ class Hub:
         )
 
     async def _relayed(
-        self, instance_id: UUID, method: str, params: dict[str, JsonValue]
+        self,
+        instance_id: UUID,
+        method: str,
+        params: dict[str, JsonValue],
+        *,
+        socket_path: str = "/ws",
     ) -> dict[str, JsonValue]:
         """Call an instance with its own control token, as the relay reaches it."""
         endpoint = await self.endpoint(instance_id)
@@ -605,7 +606,7 @@ class Hub:
                 raise ManagedInstanceNotFound(f'Instance "{instance_id}" was not found.')
             case InstanceUnreachable.UNAVAILABLE:
                 raise InstanceUnavailable(f'Instance "{instance_id}" is not running.')
-        return await relayed_call(endpoint, method, params)
+        return await relayed_call(endpoint, method, params, socket_path=socket_path)
 
     async def _run_step(
         self, instance_id: UUID, command: StepRunCommand
