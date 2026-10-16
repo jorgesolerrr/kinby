@@ -62,6 +62,8 @@ export function NavInstances({
                 size="lg"
                 tooltip={name}
                 isActive={isSelected}
+                // A state word is wider than a count, so the name stops short of it.
+                className="group-has-data-[sidebar=menu-badge]/menu-item:pr-16"
                 aria-current={isSelected ? "page" : undefined}
                 onClick={(event) => {
                   event.preventDefault()
@@ -181,7 +183,7 @@ function NeedsYou({ count, instance }: { count: number; instance: InstanceSummar
   if (count === 0) return <StateBadge instance={instance} />
   return (
     <SidebarMenuBadge>
-      <Badge>
+      <Badge variant="attention">
         <span className="sr-only">Threads that need you:</span> {count}
       </Badge>
     </SidebarMenuBadge>
@@ -191,7 +193,7 @@ function NeedsYou({ count, instance }: { count: number; instance: InstanceSummar
 function StateBadge({ instance }: { instance: InstanceSummary }) {
   return (
     <SidebarMenuBadge>
-      <span className="flex items-center gap-1">
+      <span className="flex items-center gap-1 font-normal text-muted-foreground">
         {instance.setup_pending && (
           <>
             <CircleAlertIcon aria-hidden className="size-3.5" />

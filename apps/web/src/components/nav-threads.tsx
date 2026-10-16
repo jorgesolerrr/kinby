@@ -20,7 +20,7 @@ const LIST_INTERVAL_MS = 5_000
 const STATUS_BADGES: Record<ThreadStatus, ReactNode> = {
   idle: null,
   running: <Badge variant="secondary">working</Badge>,
-  awaiting_approval: <Badge>needs you</Badge>,
+  awaiting_approval: <Badge variant="attention">needs you</Badge>,
   failed: <Badge variant="destructive">failed</Badge>,
 }
 
@@ -71,7 +71,9 @@ export function NavThreads({
                     selectThread(instanceId, thread.id)
                   }}
                 >
-                  <span className="min-w-0 truncate">{threadTitle(thread)}</span>
+                  <span className="min-w-0 truncate" title={threadTitle(thread)}>
+                    {threadTitle(thread)}
+                  </span>
                   {STATUS_BADGES[thread.status]}
                 </SidebarMenuSubButton>
               </SidebarMenuSubItem>

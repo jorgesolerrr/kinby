@@ -84,8 +84,8 @@
   --muted-foreground: oklch(0.5 0.02 160);
   --accent: oklch(0.94 0.03 160);
   --accent-foreground: oklch(0.3 0.06 162);
-  --destructive: oklch(0.55 0.19 32);
-  --success: oklch(0.52 0.13 150);
+  --destructive: oklch(0.52 0.19 32);
+  --success: oklch(0.48 0.13 150);
   --border: oklch(0.9 0.012 155);
   --input: oklch(0.62 0.02 155);
   --ring: var(--kin);
@@ -106,49 +106,67 @@
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--kin);
   --sidebar-primary-foreground: var(--primary-foreground);
-  --sidebar-accent: var(--accent);
+  --sidebar-accent: oklch(0.925 0.035 160);
   --sidebar-accent-foreground: var(--accent-foreground);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
 }
 
-/* In dark, kin turns pale, so text on primary turns dark. */
+/* In dark, kin turns pale, so text on primary turns dark. The surfaces are near-black neutrals, so kin and ember carry the color. */
 .dark {
   --kin: oklch(0.78 0.11 160);
   --ember: oklch(0.82 0.14 78);
   --on-ember: oklch(0.25 0.04 60);
-  --background: oklch(0.17 0.012 165);
-  --foreground: oklch(0.95 0.008 150);
-  --card: oklch(0.21 0.014 165);
+  --background: oklch(0.145 0.002 165);
+  --foreground: oklch(0.95 0.004 150);
+  --card: oklch(0.185 0.003 165);
   --primary-foreground: oklch(0.2 0.03 165);
-  --secondary: oklch(0.26 0.014 165);
-  --muted-foreground: oklch(0.72 0.015 155);
-  --accent: oklch(0.29 0.03 162);
-  --accent-foreground: oklch(0.92 0.03 160);
+  --secondary: oklch(0.235 0.004 165);
+  --muted-foreground: oklch(0.71 0.005 155);
+  --accent: oklch(0.255 0.006 162);
+  --accent-foreground: oklch(0.95 0.004 150);
   --destructive: oklch(0.7 0.17 30);
   --success: oklch(0.78 0.15 150);
-  --border: oklch(0.3 0.014 165);
-  --input: oklch(0.52 0.015 160);
+  --border: oklch(0.3 0.004 165);
+  --input: oklch(0.5 0.006 160);
   --chart-3: oklch(0.72 0.09 240);
   --chart-4: oklch(0.6 0.06 150);
   --chart-5: oklch(0.7 0.1 320);
-  --avatar-blue: oklch(0.623 0.188 259.8);
-  --avatar-violet: oklch(0.606 0.219 292.7);
-  --avatar-green: oklch(0.596 0.145 163.2);
-  --avatar-amber: oklch(0.666 0.157 58.3);
-  --avatar-red: oklch(0.637 0.208 25.3);
-  --avatar-gray: oklch(0.556 0 0);
-  --sidebar: oklch(0.2 0.014 165);
+  --sidebar: oklch(0.165 0.003 165);
+  --sidebar-accent: var(--accent);
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring;
   }
   body {
     @apply bg-background text-foreground;
   }
   html {
     @apply font-sans;
+  }
+  /* Every heading takes kinby's heading face, page titles and reply headings alike. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-heading text-balance;
+  }
+}
+
+/* Motion stops when the reader asks for less. A spinner keeps a slow turn, since it alone says the app is busy. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  [data-slot="spinner"] {
+    animation-duration: 1.5s !important;
+    animation-iteration-count: infinite !important;
   }
 }
