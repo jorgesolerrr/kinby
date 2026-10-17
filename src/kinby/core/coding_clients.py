@@ -72,6 +72,7 @@ async def run_coding_client(
     prompt: str,
     workspace: Path,
     *,
+    instance: Path,
     state_dir: Path,
     resume: CodingSessionId | None,
     timeout_seconds: int,
@@ -79,6 +80,8 @@ async def run_coding_client(
     effort: ReasoningEffort | None,
 ) -> CodingRun:
     """Run *client* in *workspace* with *prompt* on its input, continuing *resume* if given.
+
+    A `kinby` command the client runs finds *instance*, wherever the workspace is.
 
     Claude keeps its sessions in *state_dir*, which outlives the container. When Claude no
     longer has *resume*, the prompt runs once more in a new session, and that run is the one
@@ -91,6 +94,7 @@ async def run_coding_client(
         client,
         prompt,
         workspace,
+        instance=instance,
         state_dir=state_dir,
         timeout_seconds=timeout_seconds,
         deadline=asyncio.get_running_loop().time() + timeout_seconds,
@@ -117,6 +121,7 @@ async def _run(
     workspace: Path,
     resume: CodingSessionId | None,
     *,
+    instance: Path,
     state_dir: Path,
     timeout_seconds: int,
     deadline: float,
@@ -133,7 +138,7 @@ async def _run(
             process = await asyncio.create_subprocess_exec(
                 *_command(client, workspace, resume, model, effort),
                 cwd=workspace,
-                env=_environment(client, state_dir, timeout_seconds),
+                env=_environment(client, instance, state_dir, timeout_seconds),
                 stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
@@ -231,11 +236,14 @@ def _command(
             return ("codex", "exec", "resume", *options, resume, "-")
 
 
-def _environment(client: CodingClient, state_dir: Path, timeout_seconds: int) -> Mapping[str, str]:
+def _environment(
+    client: CodingClient, instance: Path, state_dir: Path, timeout_seconds: int
+) -> Mapping[str, str]:
     """A client runs on its subscription login, never on an API key the instance holds."""
     environment = {
         name: value for name, value in os.environ.items() if name not in _API_KEYS[client]
     }
+    environment["KINBY_INSTANCE"] = str(instance)
     if client is CodingClient.CLAUDE:
         environment["CLAUDE_CONFIG_DIR"] = str(state_dir / "claude")
         # `claude -p` exits when its turn ends, with whatever it left in the background still

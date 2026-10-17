@@ -8,7 +8,7 @@ from datetime import date
 
 from kinby.contracts import NodeId
 from kinby.core.clock import utc_today
-from kinby.memory.facade import Episode, Fact, Memory, MemoryNode, new_node_id
+from kinby.memory.facade import Episode, Fact, Memory, new_node_id
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 
@@ -30,22 +30,12 @@ def memory_tools(
         A search with an inclusive after or before date also returns the episodes in that range,
         and a search no fact matches returns the matching episodes instead.
         """
-        return json.dumps(
-            [
-                {
-                    "node": hit.node,
-                    "date": hit.date.isoformat(),
-                    "description": hit.description,
-                }
-                for hit in memory.recall(query, after=after, before=before)
-            ],
-            ensure_ascii=False,
-        )
+        return search_memory(memory, query, after=after, before=before)
 
     @tool(write=False)
     def memory_open(node: NodeId) -> str:
         """Open one memory node by the id returned from memory_search."""
-        return json.dumps(_opened(memory.open(node)), ensure_ascii=False)
+        return open_memory(memory, node)
 
     @tool(write=True)
     def remember(
@@ -77,12 +67,35 @@ def memory_tools(
     return memory_search, memory_open, remember, forget
 
 
-def _opened(memory: MemoryNode) -> dict[str, object]:
+def search_memory(
+    memory: Memory,
+    query: str,
+    *,
+    after: date | None = None,
+    before: date | None = None,
+) -> str:
+    """The hits of a memory search as JSON, for the model and for a coding session's shell."""
+    return json.dumps(
+        [
+            {
+                "node": hit.node,
+                "date": hit.date.isoformat(),
+                "description": hit.description,
+            }
+            for hit in memory.recall(query, after=after, before=before)
+        ],
+        ensure_ascii=False,
+    )
+
+
+def open_memory(memory: Memory, node: NodeId) -> str:
+    """One memory node's body as JSON, for the model and for a coding session's shell."""
+    found = memory.open(node)
     opened: dict[str, object] = {
-        "node": memory.node,
-        "body": memory.body,
+        "node": found.node,
+        "body": found.body,
     }
-    if isinstance(memory, Episode):
-        opened["turn"] = str(memory.turn)
-        opened["tools"] = list(memory.tools)
-    return opened
+    if isinstance(found, Episode):
+        opened["turn"] = str(found.turn)
+        opened["tools"] = list(found.tools)
+    return json.dumps(opened, ensure_ascii=False)

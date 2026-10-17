@@ -1069,7 +1069,7 @@ def test_a_client_steps_prompt_ends_with_the_skills_catalogue_each_skill_from_it
         await run_in(dispatcher, client_step("Implement it."))
 
         [called] = recorded_calls(calls)
-        _, catalogue = called.stdin.split("</factory-run-data>\n\n# Skills\n")
+        _, catalogue = called.stdin.split("\n\n# Skills\n")
         listed = {line.split(" ")[1] for line in catalogue.splitlines() if line.startswith("- ")}
         carried = {skill.parent.name for skill in (instance.path / "skills").glob("*/SKILL.md")}
         assert carried <= listed
