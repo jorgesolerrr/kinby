@@ -28,13 +28,17 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     FactoryRunOrigin,
+    FactoryRunStatus,
     InstanceDrainCommand,
     PlanLimit,
     ReasoningEffort,
     RepositoryCommands,
     RoutineListResult,
     RoutineRunOutcome,
+    RunStop,
+    RunStopped,
     StatsGetResult,
+    StepAttempt,
     StepEnding,
     StepResult,
     StepRunCommand,
@@ -350,6 +354,57 @@ def test_a_step_a_draining_instance_refuses_is_undelivered(tmp_path):
                 )
 
         assert not (workspace / "made").exists()
+
+    asyncio.run(scenario())
+
+
+def stop_of(generation: int, attempts: Sequence[StepAttempt] = ()) -> RunStop:
+    return RunStop(
+        run_id=ORIGIN.run_id,
+        factory="checks",
+        work_item={"issue": 7},
+        status=FactoryRunStatus.NEEDS_HUMAN,
+        generation=generation,
+        attempts=list(attempts),
+    )
+
+
+def test_the_instance_records_each_stop_of_its_run_once_under_the_run(tmp_path):
+    runtime, _ = step_instance(tmp_path)
+    started = datetime(2026, 10, 17, 9, tzinfo=UTC)
+    attempt = StepAttempt(
+        step="test",
+        attempt=1,
+        ending=StepEnding.FAILED,
+        outcome=None,
+        values={"failure": "Tests failed."},
+        summary="Tests failed.",
+        session="claude-1",
+        started_at=started,
+        ended_at=started,
+    )
+    first, second = stop_of(1, [attempt]), stop_of(2)
+
+    async def scenario() -> None:
+        async with served_dispatcher(runtime.dispatcher) as address:
+            endpoint = ControlEndpoint(f"http://{address.host}:{address.port}", TOKEN)
+            told = [
+                await HttpInstanceControl().run_stopped(endpoint, stop)
+                for stop in (first, first, second)
+            ]
+
+        stopped = [
+            event
+            for event in EventLog(tmp_path / STATE_DIR).all_events()
+            if isinstance(event.payload, RunStopped)
+        ]
+        assert [(event.thread_id, event.payload) for event in stopped] == [
+            (ORIGIN.run_id, RunStopped(stop=first)),
+            (ORIGIN.run_id, RunStopped(stop=second)),
+        ]
+        assert [answer.sequence for answer in told] == [stopped[0].sequence] * 2 + [
+            stopped[1].sequence
+        ]
 
     asyncio.run(scenario())
 

@@ -694,6 +694,10 @@ The **routine** that starts **factory runs**: it finds new **work items** and ha
 
 A **factory run** stopped for the user because a **step** ran out of retries or send-backs, lacked what only the user can supply, or because the run's final check failed. Nothing it did is undone. The **factory** can say so where the **work item** came from, as the **software factory** labels its issue `ready-for-human`. The user retries the step, sends the run back, or cancels it.
 
+### Run stop
+
+A **factory run** moving to done, cancelled or **needs human**. The **hub** tells the **instance** that handed the run in about each stop once, with the **step attempts** since the run's previous stop. A run that is retried or sent back after needing a human can stop again.
+
 ### Factory check
 
 kinby's validation of a **factory** as a whole, its file, its **instance templates**, and the **tools** and **hooks** they name, before anything changes. A broken factory keeps its last good version.
