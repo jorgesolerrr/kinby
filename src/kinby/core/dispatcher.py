@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import cast, overload
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
@@ -37,6 +37,7 @@ from kinby.contracts import (
     ROUTINE_RUN,
     ROUTINE_SET_ENABLED,
     ROUTINE_WRITE,
+    RUN_STOPPED,
     SKILL_CUSTOMIZE,
     SKILL_DELETE,
     SKILL_LIST,
@@ -73,6 +74,8 @@ from kinby.contracts import (
     InstanceProbeResult,
     Method,
     PermissionMode,
+    RunStop,
+    RunStopped,
     Scope,
     StatsGetCommand,
     StatsGetResult,
@@ -421,6 +424,21 @@ def build_dispatcher(
         )
         return accepted(event)
 
+    async def record_run_stop(command: RunStop) -> AcceptedResult:
+        """Append the stop under its run once, however often the hub tells it."""
+        recorded = next(
+            (
+                event
+                for event in event_log.stored(command.run_id)
+                if isinstance(event.payload, RunStopped)
+                and event.payload.stop.generation == command.generation
+            ),
+            None,
+        )
+        if recorded is None:
+            recorded = await event_log.append(command.run_id, uuid4(), RunStopped(stop=command))
+        return accepted(recorded)
+
     async def subscribe_to_thread(command: ThreadSubscribeCommand) -> Stream[Event]:
         return await event_log.subscribe(command.thread_id, command.after_sequence)
 
@@ -443,6 +461,7 @@ def build_dispatcher(
     dispatcher.register(STATS_GET, get_stats)
     dispatcher.register(INSTANCE_PROBE, probe)
     dispatcher.register(THREAD_TURN_RATE, rate_turn)
+    dispatcher.register(RUN_STOPPED, record_run_stop)
     dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe_to_thread)
     if config is not None:
         dispatcher.register(PROMPT_GET, config.get_prompt)

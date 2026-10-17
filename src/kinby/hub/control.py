@@ -10,8 +10,10 @@ from pydantic import ValidationError
 
 from kinby.contracts import (
     INSTANCE_DRAIN,
+    RUN_STOPPED,
     STATS_GET,
     STEP_RUN,
+    AcceptedResult,
     CallFrame,
     Capability,
     ContractModel,
@@ -25,6 +27,7 @@ from kinby.contracts import (
     InstanceProbeResult,
     Method,
     ResultFrame,
+    RunStop,
     StatsGetCommand,
     StatsGetResult,
     StepResult,
@@ -80,6 +83,8 @@ class InstanceControl(Protocol):
 
     async def run_step(self, endpoint: ControlEndpoint, command: StepRunCommand) -> StepResult: ...
 
+    async def run_stopped(self, endpoint: ControlEndpoint, stop: RunStop) -> AcceptedResult: ...
+
 
 class HttpInstanceControl:
     """Speak the contract to an instance over its own HTTP server, one connection per call."""
@@ -113,6 +118,10 @@ class HttpInstanceControl:
     async def run_step(self, endpoint: ControlEndpoint, command: StepRunCommand) -> StepResult:
         """Run one factory step in the instance and wait for its result, however long it takes."""
         return await _call(endpoint, STEP_RUN, command, "the step")
+
+    async def run_stopped(self, endpoint: ControlEndpoint, stop: RunStop) -> AcceptedResult:
+        """Tell the instance that handed the run in that it stopped."""
+        return await _call(endpoint, RUN_STOPPED, stop, "the run's stop")
 
 
 async def _call[Command: ContractModel, Result: ContractModel](

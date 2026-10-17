@@ -458,6 +458,10 @@ export interface Contract {
       command: RoutineWriteCommand;
       result: RoutineFile;
     };
+    "run.stopped": {
+      command: RunStop;
+      result: AcceptedResult;
+    };
     "skill.customize": {
       command: SkillCustomizeCommand;
       result: SkillResult;
@@ -1546,6 +1550,20 @@ export interface RoutineWriteCommand {
   name: string;
 }
 /**
+ * A factory run that moved to done, cancelled or needs human, with what it did since its
+ * previous stop.
+ */
+export interface RunStop {
+  attempts: StepAttempt[];
+  factory: FactoryName;
+  generation: number;
+  run_id: string;
+  status: FactoryRunStatus;
+  work_item: {
+    [k: string]: StepValue;
+  };
+}
+/**
  * Copy the skill the model reads into the instance, where it can be edited.
  */
 export interface SkillCustomizeCommand {
@@ -2143,6 +2161,7 @@ export interface Event {
     | TurnInterrupted
     | TurnRated
     | RunDelegated
+    | RunStopped
     | MemoryRecapped
     | RoutineFailureHandled
     | RoutineFailuresReset
@@ -2244,6 +2263,13 @@ export interface TurnInterrupted {
 export interface RunDelegated {
   run: DelegatedRun;
   type: "run.delegated";
+}
+/**
+ * A factory run this instance handed in stopped, as the hub told it.
+ */
+export interface RunStopped {
+  stop: RunStop;
+  type: "run.stopped";
 }
 export interface MemoryRecapped {
   cache_creation_tokens?: number;
