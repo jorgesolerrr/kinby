@@ -23,6 +23,7 @@ from kinby.contracts import (
     MemoryRecapped,
     MessageDelta,
     ModelCompleted,
+    Payload,
     PermissionMode,
     RunStop,
     RunStopped,
@@ -1871,5 +1872,59 @@ def test_a_failed_run_recap_warns_and_the_next_start_retries_it(tmp_path: Path) 
         await retry.catch_up()
         await asyncio.wait_for(retry.drain(), timeout=1)
         assert len(_run_markers(event_log)) == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_run_stop_writes_its_episode_even_from_a_draft_not_kept(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        model = ScriptedRecapModel(
+            _RUN_DRAFT.model_copy(update={"keep": False}), input_tokens=3, output_tokens=1
+        )
+        recap, dispatcher = _run_recap(tmp_path, event_log, "every-turn", model)
+
+        await _tell(dispatcher, _REVIEWED_RUN)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        [marker] = _run_markers(event_log)
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload.node is not None
+        assert GraphStore(tmp_path).open(marker.payload.node).description == (
+            _RUN_DRAFT.description
+        )
+
+    asyncio.run(scenario())
+
+
+class MarkerLosingEventLog(EventLog):
+    """Fails to append a recap marker, as a process stopping right after the episode would."""
+
+    async def append(self, thread_id: UUID, turn_id: UUID, payload: Payload) -> Event:
+        if isinstance(payload, MemoryRecapped):
+            raise OSError("stopped before the marker")
+        return await super().append(thread_id, turn_id, payload)
+
+
+def test_a_run_recap_retried_after_a_lost_marker_replaces_its_episode(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        state_dir = tmp_path / ".state"
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        lost, dispatcher = _run_recap(
+            tmp_path, MarkerLosingEventLog(state_dir), "every-turn", model
+        )
+        await _tell(dispatcher, _REVIEWED_RUN)
+        await asyncio.wait_for(lost.drain(), timeout=1)
+        assert len(list((tmp_path / "memory" / "graph").glob("*.md"))) == 1
+
+        event_log = EventLog(state_dir)
+        retry, _ = _run_recap(tmp_path, event_log, "every-turn", model)
+        await retry.catch_up()
+        await asyncio.wait_for(retry.drain(), timeout=1)
+
+        [episode] = (tmp_path / "memory" / "graph").glob("*.md")
+        [marker] = _run_markers(event_log)
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload.node == episode.stem
 
     asyncio.run(scenario())
