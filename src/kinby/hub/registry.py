@@ -280,6 +280,22 @@ class HubRegistry:
                     "instance_id": "TEXT",
                 },
             )
+            # A run that stopped before stops were recorded gets its latest stop as told, so its
+            # next stop tells only the attempts after it.
+            connection.execute(
+                """
+                INSERT INTO run_stops (run_id, generation, status, last_attempt, told)
+                SELECT id, stop_generation, status, (
+                    SELECT COALESCE(MAX(rowid), 0) FROM step_attempts
+                    WHERE step_attempts.run_id = factory_runs.id
+                ), 1
+                FROM factory_runs
+                WHERE stop_generation > 0
+                    AND NOT EXISTS (
+                        SELECT 1 FROM run_stops WHERE run_stops.run_id = factory_runs.id
+                    )
+                """
+            )
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
             self._add_columns(connection, "factory_members", {"baseline": "TEXT"})
             # Null for a git skill added before the hub recorded the hash it landed with.
