@@ -2,6 +2,7 @@
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["eslint", "typescript", "unicorn", "oxc", "react", "jsx-a11y", "import"],
   "jsPlugins": ["@shadcn/lint", "./lint/explicit-locale.js"],
+  "ignorePatterns": ["src/prototype/**"],
   "categories": { "correctness": "error" },
   "options": { "typeAware": true },
   "rules": {
