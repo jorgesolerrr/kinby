@@ -30,7 +30,7 @@ To explore a new variant, compose the existing component and pass token utilitie
 
 - `styles.css` and the compiled `_ds_bundle.css`: every token is defined in `:root` and `.dark` there. Read it before inventing a color.
 - `components/general/<Name>/<Name>.prompt.md` for usage examples and `<Name>.d.ts` for props. Variants are props (`variant`, `size`, `align`), listed in each `.d.ts`.
-- Compound components are flat exports: `Card` + `CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter`; `Dialog` + `DialogContent`, `DialogHeader`, `DialogTitle`, ...; `Message` + `MessageContent` + `Bubble` + `BubbleContent` for chat.
+- Compound components are flat exports: `Card` + `CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter`; `Dialog` + `DialogContent`, `DialogHeader`, `DialogTitle`, ...; `BubbleGroup` + `Bubble` + `BubbleContent` + `BubbleReactions` for chat.
 
 ## Charts
 

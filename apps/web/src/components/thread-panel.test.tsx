@@ -555,6 +555,23 @@ describe("a thread's panel", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDefined()
   })
 
+  it("interrupts the running turn on Escape, unless Escape cancels an IME composition", async () => {
+    const { sent, subscription } = openThread({
+      "thread.turn.interrupt": () => ({ sequence: 2, thread_id: "t1", turn_id: "turn-1" }),
+    })
+    await act(async () => {
+      subscription().subscribed(0)
+      subscription().deliver(thread(["turn-1", started("Deploy it")])[0] as Event)
+    })
+    const field = screen.getByRole("textbox", { name: "Message Ada" })
+
+    fireEvent.keyDown(field, { key: "Escape", isComposing: true })
+    expect(sent()).toEqual([])
+
+    fireEvent.keyDown(field, { key: "Escape" })
+    expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
+  })
+
   describe("a waiting approval", () => {
     const parked = thread(
       ["turn-1", started("Deploy it")],

@@ -221,7 +221,7 @@ function Composer({
           aria-invalid={failure !== undefined || undefined}
           onChange={(event) => setMessage(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Escape" && running) {
+            if (event.key === "Escape" && running && !event.nativeEvent.isComposing) {
               event.preventDefault()
               void stop()
               return
