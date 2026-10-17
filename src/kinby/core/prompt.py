@@ -182,17 +182,30 @@ def render_step_message(
     )
 
 
+_CLIENT_MEMORY = (
+    "# Memory\n"
+    "Your instance remembers its earlier work. Two read-only commands look it up from your shell. "
+    "`kinby memory search <query> [--after DATE] [--before DATE]` prints, as JSON, the facts whose "
+    "description or subjects hold every word of the query, each with its node id and date. "
+    "A date bound adds the episodes of earlier work in that range, and a query no fact matches "
+    "returns the matching episodes instead. `kinby memory open <node>` prints one node's body "
+    "as JSON."
+)
+
+
 def render_client_message(
     prompt: str,
     work_item: Mapping[ValueName, StepValue],
     results: Mapping[ValueName, StepValue],
     skills: Sequence[Skill],
 ) -> str:
-    """A client step's message, then the skills catalogue with the path of each skill's file.
+    """A client step's message, how to search memory, then the skills catalogue with the path of
+    each skill's file.
 
-    A coding client has no `skill` tool, so it reads a skill from its path.
+    A coding client has no kinby tools, so it searches memory from its shell and reads a skill
+    from its path.
     """
-    message = render_step_message(prompt, work_item, results)
+    message = f"{render_step_message(prompt, work_item, results)}\n\n{_CLIENT_MEMORY}"
     if not skills:
         return message
     catalogue = "\n".join(
