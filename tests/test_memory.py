@@ -14,6 +14,7 @@ from kinby.memory import (
     MemoryNodeError,
     NodeId,
     NodeNotFound,
+    RecappedTurn,
 )
 
 _THREAD_ID = UUID("11111111-1111-1111-1111-111111111111")
@@ -135,8 +136,7 @@ def test_episode_is_searchable_and_opens_with_its_trace(tmp_path: Path) -> None:
     assert opened == Episode(
         node=node,
         date=date(2026, 8, 30),
-        thread=_THREAD_ID,
-        turn=_TURN_ID,
+        recaps=RecappedTurn(thread=_THREAD_ID, turn=_TURN_ID),
         description="Fixed the deployment",
         subjects=("kinby", "deployment"),
         tools=("grep", "bash", "edit"),

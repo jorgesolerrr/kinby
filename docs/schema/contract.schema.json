@@ -3677,6 +3677,17 @@
         "node": {
           "type": "string"
         },
+        "run": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "source": {
           "$ref": "#/$defs/NodeSource"
         },
@@ -3732,6 +3743,7 @@
         "body",
         "thread",
         "turn",
+        "run",
         "tools"
       ],
       "title": "MemoryOpenResult",

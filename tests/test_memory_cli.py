@@ -10,7 +10,7 @@ import pytest
 from kinby.cli import main
 from kinby.core.runtime_lock import runtime_lock
 from kinby.instance import Instance, init_instance, load_instance
-from kinby.memory import Episode, Fact, GraphStore, NodeId, memory_tools
+from kinby.memory import Episode, Fact, GraphStore, NodeId, RecappedTurn, memory_tools
 from kinby.plugins import ToolContext
 
 _THREAD = UUID("11111111-1111-1111-1111-111111111111")
@@ -25,8 +25,7 @@ _FACT = Fact(
 _EPISODE = Episode(
     node=NodeId("2026-08-30-fixed-the-deployment"),
     date=date(2026, 8, 30),
-    thread=_THREAD,
-    turn=UUID("22222222-2222-2222-2222-222222222222"),
+    recaps=RecappedTurn(thread=_THREAD, turn=UUID("22222222-2222-2222-2222-222222222222")),
     description="Fixed the deployment",
     subjects=("deployment",),
     tools=("bash",),
