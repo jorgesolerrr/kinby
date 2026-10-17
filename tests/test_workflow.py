@@ -25,7 +25,7 @@ def test_ci_runs_the_four_checks():
         "uv run ruff check .",
         "uv run ruff format --check .",
         "uv run ty check",
-        "uv run pytest",
+        "uv run pytest -n auto",
     ]
 
 

@@ -5,7 +5,7 @@ description: Push the ticket branch and open a pull request that closes the tick
 
 Open the pull request for the branch you are on. Done when `gh pr view` shows an open PR for this branch.
 
-1. **Check.** Run the checks the repo's coding standards list (for kinby: `uv run ruff check .`, `uv run ruff format --check .`, `uv run ty check`, `uv run pytest`). Fix and amend nothing: a failing check means another commit on the branch, then run the checks again.
+1. **Check.** Run the checks the repo's coding standards list (for kinby: `uv run ruff check .`, `uv run ruff format --check .`, `uv run ty check`, `uv run pytest -n auto`). Fix and amend nothing: a failing check means another commit on the branch, then run the checks again.
 
 2. **Push.** `git push -u origin <branch>`. Never push to the default branch.
 
