@@ -196,11 +196,11 @@ export function InstancePage({
           </section>
         )}
         {commands}
-        {logins.length === 0 && !commands && <NothingHereYet name={name} />}
+        {logins.length === 0 && !commands && <ReadyForWork name={name} />}
       </>
     )
   }
-  return <NothingHereYet name={name} />
+  return null
 }
 
 /**
@@ -290,7 +290,10 @@ function StopButton({
         <Alert variant="destructive" className="max-w-2xl basis-full">
           <CircleXIcon />
           <AlertTitle>The stop failed</AlertTitle>
-          <AlertDescription>{followed.detail}</AlertDescription>
+          <AlertDescription>
+            <p>{followed.detail}</p>
+            <p>Stop it again, or Force stop to end its work now.</p>
+          </AlertDescription>
         </Alert>
       )}
     </>
@@ -416,7 +419,10 @@ function RemoveMenu({
         <Alert variant="destructive" className="max-w-2xl basis-full">
           <CircleXIcon />
           <AlertTitle>The removal failed</AlertTitle>
-          <AlertDescription>{followed.detail}</AlertDescription>
+          <AlertDescription>
+            <p>{followed.detail}</p>
+            <p>Remove it again from the ⋯ menu.</p>
+          </AlertDescription>
         </Alert>
       )}
     </>
@@ -435,24 +441,31 @@ function ProcessAlert({ instance, name }: { instance: InstanceSummary; name: str
           {state === "restarting" ? `${name} is restarting` : `${name} failed`}
         </AlertTitle>
         <AlertDescription>
-          {state === "restarting"
-            ? "Its container keeps stopping, and the runtime keeps starting it again."
-            : instance.detail}
+          <p>
+            {state === "restarting"
+              ? "Its container keeps stopping, and the runtime keeps starting it again."
+              : instance.detail}
+          </p>
+          <p>Stop it, then check its settings in Configure before you start it again.</p>
         </AlertDescription>
       </Alert>
     </div>
   )
 }
 
-function NothingHereYet({ name }: { name: string }) {
+/** A running instance with nothing to set up, pointing to where its work happens. */
+function ReadyForWork({ name }: { name: string }) {
   return (
     <Empty>
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <BotIcon />
         </EmptyMedia>
-        <EmptyTitle>Nothing here yet</EmptyTitle>
-        <EmptyDescription>What {name} does will show here.</EmptyDescription>
+        <EmptyTitle>{name} is running</EmptyTitle>
+        <EmptyDescription>
+          Start a thread with + beside {name} in the sidebar, or open Configure to change what it
+          does.
+        </EmptyDescription>
       </EmptyHeader>
     </Empty>
   )
@@ -729,7 +742,10 @@ function StartButton({
         <Alert variant="destructive">
           <CircleXIcon />
           <AlertTitle>The start failed</AlertTitle>
-          <AlertDescription>{starting.detail}</AlertDescription>
+          <AlertDescription>
+            <p>{starting.detail}</p>
+            <p>Start it again to retry.</p>
+          </AlertDescription>
         </Alert>
       )}
       <div className="flex flex-wrap items-center gap-2">

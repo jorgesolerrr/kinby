@@ -12,7 +12,7 @@ import { code } from "@streamdown/code"
 import { defaultRehypePlugins, Streamdown, type StreamdownProps } from "streamdown"
 
 import { ThreadHeader } from "@/components/thread-header"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -47,6 +47,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { reason } from "@/lib/operation"
+import { originLabel } from "@/lib/origin"
 import { nodePath, openNode, useSelectedTurnId } from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
 import type { ParkedApproval, Recap, ToolStep, TurnBlock, TurnEnd } from "@/lib/timeline"
@@ -106,7 +107,15 @@ export function ThreadPanel({
         <Alert variant="destructive">
           <CircleAlertIcon />
           <AlertTitle>The thread did not load</AlertTitle>
-          <AlertDescription>{failure}</AlertDescription>
+          <AlertDescription>
+            <p>{failure}</p>
+            <p>Reload to try again.</p>
+          </AlertDescription>
+          <AlertAction>
+            <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+              Reload
+            </Button>
+          </AlertAction>
         </Alert>
       </div>
     )
@@ -311,11 +320,11 @@ function ApprovalPanel({
               {JSON.stringify(approval.arguments, null, 2)}
             </pre>
             <Field data-invalid={failure !== undefined || undefined}>
-              <FieldLabel htmlFor={reasonId}>Reason</FieldLabel>
+              <FieldLabel htmlFor={reasonId}>Reason to deny (optional)</FieldLabel>
               <Input
                 ref={reasonField}
                 id={reasonId}
-                placeholder="Optional: why not, or what to do instead"
+                placeholder="Use the staging database instead"
                 value={typed}
                 disabled={busy}
                 aria-invalid={failure !== undefined || undefined}
@@ -441,19 +450,6 @@ const STARTED_BY_ICONS: Record<TurnBlock["startedBy"]["kind"], ReactNode> = {
   "home-instance": <HouseIcon />,
 }
 
-function starter(startedBy: TurnBlock["startedBy"]): string {
-  switch (startedBy.kind) {
-    case "user":
-      return "You"
-    case "routine":
-      return `Routine ${startedBy.name}`
-    case "factory-run":
-      return `Factory ${startedBy.factory} · ${startedBy.step}`
-    case "home-instance":
-      return "Home instance"
-  }
-}
-
 function Turn({ turn, instanceId, name }: { turn: TurnBlock; instanceId: string; name: string }) {
   const { startedBy } = turn
   return (
@@ -461,7 +457,8 @@ function Turn({ turn, instanceId, name }: { turn: TurnBlock; instanceId: string;
       <Marker variant="border">
         <MarkerIcon>{STARTED_BY_ICONS[startedBy.kind]}</MarkerIcon>
         <MarkerContent>
-          {starter(startedBy)} · <time dateTime={turn.startedAt}>{startedAt(turn.startedAt)}</time>
+          {originLabel(startedBy)} ·{" "}
+          <time dateTime={turn.startedAt}>{startedAt(turn.startedAt)}</time>
         </MarkerContent>
       </Marker>
       <Message align="end">
@@ -609,7 +606,7 @@ function turnOutcome({ end, steps }: TurnBlock): {
     case "failed":
       return {
         icon: <CircleAlertIcon />,
-        outcome: `Failed: ${end.message} (${end.code})`,
+        outcome: `Failed: ${end.message} (${end.code}). Send a message to try again.`,
         variant: "destructive",
       }
     case "stopped":
