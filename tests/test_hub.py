@@ -38,6 +38,7 @@ from kinby.contracts import (
     INSTANCE_STOP,
     INSTANCE_UPDATE,
     OPERATION_GET,
+    AcceptedResult,
     Capability,
     ContainerOwner,
     ControlToken,
@@ -65,6 +66,7 @@ from kinby.contracts import (
     OperationKind,
     OperationState,
     Readiness,
+    RunStop,
     Scope,
     SetupField,
     SetupFieldKind,
@@ -382,6 +384,10 @@ class FakeControl:
         self.step_release.set()
         self.steps_running = 0
         self.most_steps_running = 0
+        #: Each run stop the hub told, and the endpoint it told it on.
+        self.stops: list[tuple[ControlEndpoint, RunStop]] = []
+        #: What telling the next run stops raises, in order. A stop past them is taken.
+        self.stop_failures: list[Exception] = []
 
     async def probe(self, endpoint: ControlEndpoint) -> InstanceProbeResult:
         self.endpoints.append(endpoint)
@@ -424,6 +430,12 @@ class FakeControl:
         if isinstance(answer, Exception):
             raise answer
         return answer
+
+    async def run_stopped(self, endpoint: ControlEndpoint, stop: RunStop) -> AcceptedResult:
+        self.stops.append((endpoint, stop))
+        if self.stop_failures:
+            raise self.stop_failures.pop(0)
+        return AcceptedResult(thread_id=stop.run_id, turn_id=uuid4(), sequence=1)
 
     async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
         self.stats_asked.append(command)

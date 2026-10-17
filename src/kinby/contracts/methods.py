@@ -119,6 +119,7 @@ from kinby.contracts.models import (
     RoutineRunCommand,
     RoutineSetEnabledCommand,
     RoutineWriteCommand,
+    RunStop,
     Scope,
     SkillCustomizeCommand,
     SkillDeleteCommand,
@@ -250,6 +251,8 @@ INSTANCE_DRAIN = Method(
 )
 #: The hub runs one step of a factory run in the instance, as it would run a turn.
 STEP_RUN = Method("step.run", Scope.INSTANCE_LIFECYCLE, StepRunCommand, StepResult)
+#: The hub tells the instance that handed a factory run in that the run stopped.
+RUN_STOPPED = Method("run.stopped", Scope.INSTANCE_LIFECYCLE, RunStop, AcceptedResult)
 #: The hub starts a turn on a new thread for the home instance, which is that turn's origin.
 THREAD_ASK = Method("thread.ask", Scope.INSTANCE_LIFECYCLE, ThreadAskCommand, AcceptedResult)
 
@@ -449,6 +452,7 @@ METHODS = (
     INSTANCE_PROBE,
     INSTANCE_DRAIN,
     STEP_RUN,
+    RUN_STOPPED,
     THREAD_ASK,
     ROUTINE_LIST,
     ROUTINE_RUN,

@@ -49,6 +49,7 @@ from kinby.contracts import (
     FactoryRunStatus,
     FactoryRunSubscribeCommand,
     RepositoryCommandList,
+    RunStop,
     StepAttempt,
     StepEnding,
     StepId,
@@ -94,7 +95,7 @@ from kinby.factories.file import (
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.models import Signal
-from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
+from kinby.hub.registry import STOPS, FactoryMember, HubRegistry, ManagedInstance
 from kinby.instance import ManifestError, repository_commands
 
 
@@ -107,6 +108,17 @@ class UndeliveredCall:
 
 #: Run one step in the instance with this id, and return its result or why it went undelivered.
 type StepCaller = Callable[[UUID, StepRunCommand], Awaitable[StepResult | UndeliveredCall]]
+
+
+@dataclass(frozen=True)
+class Untold:
+    """Why the instance did not take a run's stop, which the hub tells it again."""
+
+    reason: str
+
+
+#: Tell the instance with this id that a run it handed in stopped. None once it took the stop.
+type StopTeller = Callable[[UUID, RunStop], Awaitable[Untold | None]]
 
 _logger = logging.getLogger(__name__)
 
@@ -152,17 +164,33 @@ class _QueuedReport:
     waited: float = 0.0
 
 
+@dataclass(frozen=True)
+class _QueuedStop:
+    """A run's stop, waiting to be told to the instance that handed the run in."""
+
+    stop: RunStop
+    waited: float = 0.0
+
+
+type _Queued = _QueuedStep | _QueuedReport | _QueuedStop
+
+
 class FactoryRuns:
     """Start runs from intake, queue their steps per instance, and record every attempt."""
 
     def __init__(
-        self, registry: HubRegistry, factories: FactoryStore, run_step: StepCaller
+        self,
+        registry: HubRegistry,
+        factories: FactoryStore,
+        run_step: StepCaller,
+        tell_stop: StopTeller,
     ) -> None:
         self._registry = registry
         self._factories = factories
         self._run_step = run_step
-        #: The steps and needs_human calls waiting for each instance, by instance id.
-        self._queues: dict[UUID, asyncio.Queue[_QueuedStep | _QueuedReport]] = {}
+        self._tell_stop = tell_stop
+        #: The steps, needs_human calls and run stops waiting for each instance, by instance id.
+        self._queues: dict[UUID, asyncio.Queue[_Queued]] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         #: The quiet time or deadline of each run parked at a wait that has one, by run id.
         self._deadlines: dict[UUID, asyncio.Task[None]] = {}
@@ -288,9 +316,7 @@ class FactoryRuns:
             self._registry.end_attempt(run.run_id, cancelled)
         else:
             _needing_human(run)
-        moved = self._registry.move_run(run.run_id, FactoryRunStatus.CANCELLED, run.step)
-        self._publish(moved)
-        return moved
+        return self._move(run.run_id, FactoryRunStatus.CANCELLED, run.step)
 
     async def subscribe(self, command: FactoryRunSubscribeCommand) -> Stream[FactoryRun]:
         """Each run as it changes from now on."""
@@ -307,14 +333,15 @@ class FactoryRuns:
         """Pick the runs up where the previous process left them.
 
         An attempt it left running counts as failed, and its run follows the step's retry. A run
-        parked at a wait keeps its deadline, counted from when it parked. A needs_human report
-        queued but not delivered before the hub stopped is queued again.
+        parked at a wait keeps its deadline, counted from when it parked. A needs_human report or
+        a run's stop queued but not delivered before the hub stopped is queued again.
 
-        The runs still unreported from before this pass are collected first, so settling an
-        unfinished attempt into needs_human below, which queues that fresh stop's own report,
-        never queues a second one for the same stop.
+        The runs still unreported and the stops still untold from before this pass are collected
+        first, so settling an unfinished attempt into a stop below, which queues that fresh
+        stop's own report and telling, never queues a second one for the same stop.
         """
         pending = self._registry.unreported_runs()
+        untold = self._registry.untold_stops()
         for run_id in self._registry.unfinished_attempts():
             self._settle(run_id, _INTERRUPTED)
         for run in self._registry.runs_in(FactoryRunStatus.QUEUED):
@@ -332,6 +359,8 @@ class FactoryRuns:
                 attempts = self._registry.attempts(run.run_id)
                 summary = attempts[-1].summary if attempts else ""
                 self._report(factory, factory.needs_human, run, summary)
+        for stop in untold:
+            self._put_stop(_QueuedStop(stop))
 
     def needing_human(self, record: ManagedInstance) -> int:
         """How many runs of the instance's factory need the user at a step in that instance.
@@ -426,7 +455,7 @@ class FactoryRuns:
         instance_id, queued = placed
         self._queue(instance_id).put_nowait(queued)
 
-    def _queue(self, instance_id: UUID) -> asyncio.Queue[_QueuedStep | _QueuedReport]:
+    def _queue(self, instance_id: UUID) -> asyncio.Queue[_Queued]:
         """The instance's queue, with the worker that empties it."""
         queue = self._queues.get(instance_id)
         if queue is None:
@@ -614,9 +643,7 @@ class FactoryRuns:
             start(starting)
         return {name: value for name, (_, value) in recorded.items()}
 
-    async def _work(
-        self, instance_id: UUID, queue: asyncio.Queue[_QueuedStep | _QueuedReport]
-    ) -> None:
+    async def _work(self, instance_id: UUID, queue: asyncio.Queue[_Queued]) -> None:
         """Run the instance's queued work one at a time, in the order it was queued."""
         while True:
             match await queue.get():
@@ -624,6 +651,8 @@ class FactoryRuns:
                     await self._deliver(instance_id, queued)
                 case _QueuedReport() as report:
                     await self._send_report(instance_id, report)
+                case _QueuedStop() as stop:
+                    await self._send_stop(instance_id, stop)
 
     async def _deliver(self, instance_id: UUID, queued: _QueuedStep) -> None:
         backoff = 0.0
@@ -753,14 +782,13 @@ class FactoryRuns:
             result = _checked_types(step, result)
         if factory is None or step is None:
             self._registry.end_attempt(run_id, result)
-            moved = self._registry.move_run(run_id, FactoryRunStatus.NEEDS_HUMAN, run.step)
+            moved = self._move(run_id, FactoryRunStatus.NEEDS_HUMAN, run.step)
         else:
             held = run.work_item | self._results(run_id, factory)
             tally = _tally(factory, self._registry.counted_attempts(run_id))
             result, status, to = _settled(factory, step, result, held, tally)
             self._registry.end_attempt(run_id, result)
-            moved = self._registry.move_run(run_id, status, to)
-        self._publish(moved)
+            moved = self._move(run_id, status, to)
         if (
             moved.status is FactoryRunStatus.NEEDS_HUMAN
             and factory is not None
@@ -768,6 +796,46 @@ class FactoryRuns:
         ):
             self._report(factory, factory.needs_human, moved, result.summary)
         return moved
+
+    def _move(self, run_id: UUID, status: FactoryRunStatus, step: StepId | None) -> FactoryRun:
+        """Put the run in *status* at *step*, and tell the instance that handed it in when that
+        stops it."""
+        moved = self._registry.move_run(run_id, status, step)
+        self._publish(moved)
+        if moved.status in STOPS:
+            stop = self._registry.run_stop(run_id, self._registry.stop_generation(run_id))
+            self._put_stop(_QueuedStop(stop))
+        return moved
+
+    def _put_stop(self, queued: _QueuedStop) -> None:
+        owner = self._registry.instance(self._existing(queued.stop.run_id).instance_id)
+        if owner is None or not owner.active:
+            _logger.warning(
+                "Factory run %s stopped, and the instance that handed it in is gone.",
+                queued.stop.run_id,
+            )
+            return
+        self._queue(owner.instance_id).put_nowait(queued)
+
+    async def _send_stop(self, instance_id: UUID, queued: _QueuedStop) -> None:
+        stop = queued.stop
+        untold = await self._tell_stop(instance_id, stop)
+        if untold is None:
+            self._registry.mark_told(stop.run_id, stop.generation)
+            return
+        backoff = _next_backoff(queued.waited)
+        _logger.warning(
+            "The stop of factory run %s did not reach its instance, telling it again in %s "
+            "seconds: %s",
+            stop.run_id,
+            backoff,
+            untold.reason,
+        )
+        self._spawn(self._tell_later(replace(queued, waited=backoff)))
+
+    async def _tell_later(self, queued: _QueuedStop) -> None:
+        await asyncio.sleep(queued.waited)
+        self._put_stop(queued)
 
     def _report(
         self, factory: FactoryFile, call: NeedsHumanCall, run: FactoryRun, summary: str

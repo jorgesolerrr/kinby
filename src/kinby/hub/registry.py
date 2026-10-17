@@ -30,6 +30,7 @@ from kinby.contracts import (
     OperationKind,
     OperationState,
     OperationStep,
+    RunStop,
     SkillName,
     StepAttempt,
     StepEnding,
@@ -231,6 +232,18 @@ class HubRegistry:
                     ended_at TEXT,
                     PRIMARY KEY (run_id, step, attempt)
                 );
+                -- Each time a run moved to done, cancelled or needs_human, for the hub to tell the
+                -- instance that handed it in.
+                CREATE TABLE IF NOT EXISTS run_stops (
+                    run_id TEXT NOT NULL REFERENCES factory_runs(id),
+                    generation INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    -- The rowid of the run's last attempt by then. The next stop tells the ones
+                    -- after it.
+                    last_attempt INTEGER NOT NULL,
+                    told INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (run_id, generation)
+                );
                 -- Kept when the user deletes the skill, so the hub never copies it again.
                 CREATE TABLE IF NOT EXISTS shipped_skills (
                     name TEXT PRIMARY KEY,
@@ -261,11 +274,27 @@ class HubRegistry:
                     # Whether the run's needs_human report was delivered. Reset each time the
                     # run moves to needs_human, so a restart resends only an undelivered report.
                     "reported": "INTEGER NOT NULL DEFAULT 0",
-                    # Bumped each time the run moves to needs_human, so a report still in
-                    # flight for an earlier stop can never mark a later stop as reported.
+                    # Bumped each time the run stops, so a report still in flight for an
+                    # earlier stop can never mark a later stop as reported.
                     "stop_generation": "INTEGER NOT NULL DEFAULT 0",
                     "instance_id": "TEXT",
                 },
+            )
+            # A run that stopped before stops were recorded gets its latest stop as told, so its
+            # next stop tells only the attempts after it.
+            connection.execute(
+                """
+                INSERT INTO run_stops (run_id, generation, status, last_attempt, told)
+                SELECT id, stop_generation, status, (
+                    SELECT COALESCE(MAX(rowid), 0) FROM step_attempts
+                    WHERE step_attempts.run_id = factory_runs.id
+                ), 1
+                FROM factory_runs
+                WHERE stop_generation > 0
+                    AND NOT EXISTS (
+                        SELECT 1 FROM run_stops WHERE run_stops.run_id = factory_runs.id
+                    )
+                """
             )
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
             self._add_columns(connection, "factory_members", {"baseline": "TEXT"})
@@ -1745,29 +1774,40 @@ class HubRegistry:
     def move_run(self, run_id: UUID, status: FactoryRunStatus, step: StepId | None) -> FactoryRun:
         """Put the run in *status* at *step*.
 
-        Moving into needs_human resets its reported flag and bumps its stop generation, so this
-        fresh stop gets its own report and an earlier stop's report can no longer claim it.
+        Moving it to done, cancelled or needs_human is a stop: it bumps the run's stop generation
+        and records the stop for its instance, so each stop is told once and an earlier stop's
+        report can no longer claim it. A move to needs_human also resets its reported flag, so
+        this fresh stop gets its own report.
         """
         with self._connect() as connection:
+            connection.execute(
+                "UPDATE factory_runs SET status = ?, step = ?, updated_at = ? WHERE id = ?",
+                (status.value, step, _now(), str(run_id)),
+            )
             if status is FactoryRunStatus.NEEDS_HUMAN:
                 connection.execute(
-                    """
-                    UPDATE factory_runs
-                    SET status = ?, step = ?, updated_at = ?, reported = 0,
-                        stop_generation = stop_generation + 1
-                    WHERE id = ?
-                    """,
-                    (status.value, step, _now(), str(run_id)),
+                    "UPDATE factory_runs SET reported = 0 WHERE id = ?", (str(run_id),)
                 )
-            else:
+            if status in STOPS:
                 connection.execute(
-                    "UPDATE factory_runs SET status = ?, step = ?, updated_at = ? WHERE id = ?",
-                    (status.value, step, _now(), str(run_id)),
+                    "UPDATE factory_runs SET stop_generation = stop_generation + 1 WHERE id = ?",
+                    (str(run_id),),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO run_stops (run_id, generation, status, last_attempt)
+                    SELECT id, stop_generation, status, (
+                        SELECT COALESCE(MAX(rowid), 0) FROM step_attempts
+                        WHERE step_attempts.run_id = factory_runs.id
+                    )
+                    FROM factory_runs WHERE id = ?
+                    """,
+                    (str(run_id),),
                 )
         return self._existing_run(run_id)
 
     def stop_generation(self, run_id: UUID) -> int:
-        """How many times the run has moved to needs_human, to tie a report to that stop."""
+        """How many times the run has stopped, which names its latest stop."""
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT stop_generation FROM factory_runs WHERE id = ?", (str(run_id),)
@@ -1798,6 +1838,49 @@ class HubRegistry:
                 (FactoryRunStatus.NEEDS_HUMAN.value,),
             ).fetchall()
         return [_factory_run(row) for row in rows]
+
+    def run_stop(self, run_id: UUID, generation: int) -> RunStop:
+        """The run's stop of *generation*, with the attempts since the stop before it."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT factory, work_item, run_stops.status, last_attempt, (
+                    SELECT COALESCE(MAX(earlier.last_attempt), 0) FROM run_stops AS earlier
+                    WHERE earlier.run_id = run_stops.run_id
+                        AND earlier.generation < run_stops.generation
+                )
+                FROM run_stops JOIN factory_runs ON factory_runs.id = run_stops.run_id
+                WHERE run_stops.run_id = ? AND run_stops.generation = ?
+                """,
+                (str(run_id), generation),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f'Factory run "{run_id}" has no stop {generation}.')
+        factory, work_item, status, last_attempt, after = row
+        return RunStop(
+            run_id=run_id,
+            factory=factory,
+            work_item=json.loads(work_item),
+            status=FactoryRunStatus(status),
+            generation=generation,
+            attempts=self._attempts_after(run_id, after, last_attempt),
+        )
+
+    def mark_told(self, run_id: UUID, generation: int) -> None:
+        """Record that the run's instance took its stop of *generation*."""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE run_stops SET told = 1 WHERE run_id = ? AND generation = ?",
+                (str(run_id), generation),
+            )
+
+    def untold_stops(self) -> list[RunStop]:
+        """The stops no instance took yet, in the order the runs stopped."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT run_id, generation FROM run_stops WHERE told = 0 ORDER BY rowid"
+            ).fetchall()
+        return [self.run_stop(UUID(run_id), generation) for run_id, generation in rows]
 
     def restart_run(self, run_id: UUID, step: StepId | None) -> FactoryRun:
         """Queue the run at *step* for the user, its retries and send-backs counted afresh."""
@@ -1886,16 +1969,21 @@ class HubRegistry:
             ).fetchone()
         return self._attempts_after(run_id, row[0] if row is not None else 0)
 
-    def _attempts_after(self, run_id: UUID, after: int) -> list[StepAttempt]:
+    def _attempts_after(
+        self, run_id: UUID, after: int, through: int | None = None
+    ) -> list[StepAttempt]:
+        """The run's attempts whose rowid is past *after*, and up to *through* when given."""
         with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT
                     step, attempt, ending, outcome, result_values, summary, session, started_at,
                     ended_at
-                FROM step_attempts WHERE run_id = ? AND rowid > ? ORDER BY rowid
+                FROM step_attempts
+                WHERE run_id = ? AND rowid > ? AND (? IS NULL OR rowid <= ?)
+                ORDER BY rowid
                 """,
-                (str(run_id), after),
+                (str(run_id), after, through, through),
             ).fetchall()
         return [
             StepAttempt(
@@ -1949,6 +2037,8 @@ class HubRegistry:
 _RUN_COLUMNS = "id, factory, instance_id, work_item, status, step, created_at, updated_at"
 #: The statuses a run never leaves.
 _FINISHED = (FactoryRunStatus.DONE.value, FactoryRunStatus.CANCELLED.value)
+#: The statuses a run stops in, which the hub tells the instance that handed it in.
+STOPS = (FactoryRunStatus.DONE, FactoryRunStatus.CANCELLED, FactoryRunStatus.NEEDS_HUMAN)
 
 
 def _now() -> str:

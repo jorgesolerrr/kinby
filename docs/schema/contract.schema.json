@@ -928,6 +928,7 @@
               "routine.failure.handled": "#/$defs/RoutineFailureHandled",
               "routine.failures.reset": "#/$defs/RoutineFailuresReset",
               "run.delegated": "#/$defs/RunDelegated",
+              "run.stopped": "#/$defs/RunStopped",
               "signal.received": "#/$defs/SignalReceived",
               "tool.call": "#/$defs/ToolCall",
               "tool.gated": "#/$defs/ToolGated",
@@ -984,6 +985,9 @@
             },
             {
               "$ref": "#/$defs/RunDelegated"
+            },
+            {
+              "$ref": "#/$defs/RunStopped"
             },
             {
               "$ref": "#/$defs/MemoryRecapped"
@@ -5239,6 +5243,70 @@
       "title": "RunDelegated",
       "type": "object"
     },
+    "RunStop": {
+      "additionalProperties": false,
+      "description": "A factory run that moved to done, cancelled or needs human, with what it did since its\nprevious stop.",
+      "properties": {
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/StepAttempt"
+          },
+          "type": "array"
+        },
+        "factory": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/FactoryRunStatus"
+        },
+        "work_item": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StepValue"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "run_id",
+        "factory",
+        "work_item",
+        "status",
+        "generation",
+        "attempts"
+      ],
+      "title": "RunStop",
+      "type": "object"
+    },
+    "RunStopped": {
+      "additionalProperties": false,
+      "description": "A factory run this instance handed in stopped, as the hub told it.",
+      "properties": {
+        "stop": {
+          "$ref": "#/$defs/RunStop"
+        },
+        "type": {
+          "const": "run.stopped",
+          "default": "run.stopped",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stop",
+        "type"
+      ],
+      "title": "RunStopped",
+      "type": "object"
+    },
     "SecretSetup": {
       "additionalProperties": false,
       "description": "One secret field an instance declares, and whether it holds a value. Never the value.",
@@ -9139,6 +9207,22 @@
           ],
           "type": "object"
         },
+        "run.stopped": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RunStop"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "skill.customize": {
           "additionalProperties": false,
           "properties": {
@@ -9577,6 +9661,7 @@
         "instance.probe",
         "instance.drain",
         "step.run",
+        "run.stopped",
         "thread.ask",
         "routine.list",
         "routine.run",

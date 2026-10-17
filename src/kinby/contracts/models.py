@@ -158,6 +158,7 @@ class EventType(StrEnum):
     TURN_INTERRUPTED = "turn.interrupted"
     TURN_RATED = "turn.rated"
     RUN_DELEGATED = "run.delegated"
+    RUN_STOPPED = "run.stopped"
     MEMORY_RECAPPED = "memory.recapped"
     ROUTINE_FAILURE_HANDLED = "routine.failure.handled"
     ROUTINE_FAILURES_RESET = "routine.failures.reset"
@@ -391,6 +392,13 @@ class RunDelegated(ContractModel):
     run: DelegatedRun
 
 
+class RunStopped(ContractModel):
+    """A factory run this instance handed in stopped, as the hub told it."""
+
+    type: Literal[EventType.RUN_STOPPED] = EventType.RUN_STOPPED
+    stop: RunStop
+
+
 class ReportedRun(ContractModel):
     """A delegated run and the time it was recorded, which places it in a time range."""
 
@@ -476,6 +484,7 @@ Payload = Annotated[
     | TurnInterrupted
     | TurnRated
     | RunDelegated
+    | RunStopped
     | MemoryRecapped
     | RoutineFailureHandled
     | RoutineFailuresReset
@@ -2566,6 +2575,20 @@ class StepAttempt(ContractModel):
     session: CodingSessionId | None = None
     started_at: AwareDatetime
     ended_at: AwareDatetime | None
+
+
+class RunStop(ContractModel):
+    """A factory run that moved to done, cancelled or needs human, with what it did since its
+    previous stop."""
+
+    run_id: UUID
+    factory: FactoryName
+    work_item: dict[ValueName, StepValue]
+    status: FactoryRunStatus
+    #: Grows with each stop of the run, so the instance records each stop once.
+    generation: int
+    #: The attempts since the run's previous stop, in the order they started.
+    attempts: list[StepAttempt]
 
 
 class FactoryRunIntakeCommand(ContractModel):
