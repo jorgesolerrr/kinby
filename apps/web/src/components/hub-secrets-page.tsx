@@ -77,7 +77,7 @@ export function HubSecretsPage({ client, clock }: { client: Caller; clock: Clock
           <Table aria-label="Hub secrets">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-72">Name</TableHead>
+                <TableHead className="md:w-72">Name</TableHead>
                 <TableHead>Linked to</TableHead>
                 <TableHead>
                   <span className="sr-only">Actions</span>
