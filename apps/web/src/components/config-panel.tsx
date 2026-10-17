@@ -298,8 +298,8 @@ function linkedSection(routine: string | undefined): string {
 }
 
 /**
- * Why each section needs the user, by its label: a change that waits on a recreate, or a core
- * behind the hub's or files behind the factory's.
+ * Why each section needs the user, by its label: a change that waits on a recreate, a core
+ * behind the hub's, files behind the factory's, or an environment without its hub route.
  */
 function needsOf(
   instance: InstanceSummary,
@@ -309,10 +309,10 @@ function needsOf(
   for (const { label, reason } of SECTIONS) {
     if (reason !== undefined && reasons.includes(reason)) needs[label] = "Recreate to apply"
   }
-  if (behind(instance)) needs[CORE] = "behind the hub"
-  else if (instance.notices.some((notice) => notice.code === "template_behind")) {
-    needs[CORE] = "behind the factory"
-  }
+  const codes = new Set(instance.notices.map((notice) => notice.code))
+  if (codes.has("revision_behind")) needs[CORE] = "behind the hub"
+  else if (codes.has("template_behind")) needs[CORE] = "behind the factory"
+  else if (codes.has("hub_route_missing")) needs[CORE] = "no hub route"
   return needs
 }
 

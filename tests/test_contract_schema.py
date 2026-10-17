@@ -379,6 +379,7 @@ def test_an_instance_summary_carries_its_notices() -> None:
     assert _object(notice)["oneOf"] == [
         {"$ref": "#/$defs/RevisionBehind"},
         {"$ref": "#/$defs/TemplateBehind"},
+        {"$ref": "#/$defs/HubRouteMissing"},
     ]
     assert set(cast(list[str], _object(definitions["RevisionBehind"])["required"])) == {
         "code",
@@ -387,6 +388,10 @@ def test_an_instance_summary_carries_its_notices() -> None:
         "hub_revision",
     }
     assert set(cast(list[str], _object(definitions["TemplateBehind"])["required"])) == {
+        "code",
+        "message",
+    }
+    assert set(cast(list[str], _object(definitions["HubRouteMissing"])["required"])) == {
         "code",
         "message",
     }

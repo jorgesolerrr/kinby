@@ -9,6 +9,7 @@ import type {
 } from "@kinby/contract"
 import { type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
+import { InstanceAvatar } from "@/components/instance-avatar"
 import { Secrets } from "@/components/secrets-section"
 import { SubscriptionLogins } from "@/components/subscription-logins"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -146,29 +147,38 @@ export function InstancePage({
     const logins = status?.setup.logins ?? []
     return (
       <>
-        <div className="flex flex-wrap items-center gap-2 px-6 pt-6">
-          <Button variant="outline" onClick={() => openConfig(instance.instance_id)}>
-            <SlidersHorizontalIcon data-icon="inline-start" />
-            Configure
-          </Button>
-          <Button variant="outline" onClick={() => openMemory(instance.instance_id)}>
-            <BrainIcon data-icon="inline-start" />
-            Memory
-          </Button>
-          <Button variant="outline" onClick={() => openStats(instance.instance_id)}>
-            <ChartColumnIcon data-icon="inline-start" />
-            Stats
-          </Button>
-          <StopButton
-            caller={caller}
-            clock={clock}
-            instanceId={instance.instance_id}
-            name={name}
-            onStopping={() => setStopping(true)}
-            onStopped={stopped}
-          />
-          {removeMenu}
-        </div>
+        <header className="flex flex-col gap-4 px-6 pt-6">
+          <h1 className="flex min-w-0 items-center gap-3 text-xl font-semibold">
+            <InstanceAvatar avatar={instance.avatar} name={name} />
+            <span className="truncate">{name}</span>
+          </h1>
+          {/* Its pages on the left, and what starts or ends the instance apart on the right. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={() => openConfig(instance.instance_id)}>
+              <SlidersHorizontalIcon data-icon="inline-start" />
+              Configure
+            </Button>
+            <Button variant="outline" onClick={() => openMemory(instance.instance_id)}>
+              <BrainIcon data-icon="inline-start" />
+              Memory
+            </Button>
+            <Button variant="outline" onClick={() => openStats(instance.instance_id)}>
+              <ChartColumnIcon data-icon="inline-start" />
+              Stats
+            </Button>
+            <div className="ml-auto flex items-center gap-2">
+              <StopButton
+                caller={caller}
+                clock={clock}
+                instanceId={instance.instance_id}
+                name={name}
+                onStopping={() => setStopping(true)}
+                onStopped={stopped}
+              />
+              {removeMenu}
+            </div>
+          </div>
+        </header>
         <ProcessAlert instance={instance} name={name} />
         {logins.length > 0 && (
           <section className="flex max-w-2xl flex-col gap-3 p-6">
@@ -186,11 +196,13 @@ export function InstancePage({
           </section>
         )}
         {commands}
-        {logins.length === 0 && !commands && <NothingHereYet name={name} />}
+        {logins.length === 0 && !commands && observedState(instance) === "running" && (
+          <ReadyForWork name={name} />
+        )}
       </>
     )
   }
-  return <NothingHereYet name={name} />
+  return null
 }
 
 /**
@@ -280,7 +292,10 @@ function StopButton({
         <Alert variant="destructive" className="max-w-2xl basis-full">
           <CircleXIcon />
           <AlertTitle>The stop failed</AlertTitle>
-          <AlertDescription>{followed.detail}</AlertDescription>
+          <AlertDescription>
+            <p>{followed.detail}</p>
+            <p>Stop it again, or Force stop to end its work now.</p>
+          </AlertDescription>
         </Alert>
       )}
     </>
@@ -406,7 +421,10 @@ function RemoveMenu({
         <Alert variant="destructive" className="max-w-2xl basis-full">
           <CircleXIcon />
           <AlertTitle>The removal failed</AlertTitle>
-          <AlertDescription>{followed.detail}</AlertDescription>
+          <AlertDescription>
+            <p>{followed.detail}</p>
+            <p>Remove it again from the ⋯ menu.</p>
+          </AlertDescription>
         </Alert>
       )}
     </>
@@ -425,24 +443,33 @@ function ProcessAlert({ instance, name }: { instance: InstanceSummary; name: str
           {state === "restarting" ? `${name} is restarting` : `${name} failed`}
         </AlertTitle>
         <AlertDescription>
-          {state === "restarting"
-            ? "Its container keeps stopping, and the runtime keeps starting it again."
-            : instance.detail}
+          <p>
+            {state === "restarting"
+              ? "Its container keeps stopping, and the runtime keeps starting it again."
+              : instance.detail}
+          </p>
+          <p>
+            Check its settings in Configure before you stop it. A stopped instance has no Configure.
+          </p>
         </AlertDescription>
       </Alert>
     </div>
   )
 }
 
-function NothingHereYet({ name }: { name: string }) {
+/** A running instance with nothing to set up, pointing to where its work happens. */
+function ReadyForWork({ name }: { name: string }) {
   return (
     <Empty>
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <BotIcon />
         </EmptyMedia>
-        <EmptyTitle>Nothing here yet</EmptyTitle>
-        <EmptyDescription>What {name} does will show here.</EmptyDescription>
+        <EmptyTitle>{name} is running</EmptyTitle>
+        <EmptyDescription>
+          Start a thread with + beside {name} in the sidebar, or open Configure to change what it
+          does.
+        </EmptyDescription>
       </EmptyHeader>
     </Empty>
   )
@@ -719,7 +746,10 @@ function StartButton({
         <Alert variant="destructive">
           <CircleXIcon />
           <AlertTitle>The start failed</AlertTitle>
-          <AlertDescription>{starting.detail}</AlertDescription>
+          <AlertDescription>
+            <p>{starting.detail}</p>
+            <p>Start it again to retry.</p>
+          </AlertDescription>
         </Alert>
       )}
       <div className="flex flex-wrap items-center gap-2">

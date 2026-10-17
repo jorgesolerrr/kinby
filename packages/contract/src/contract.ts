@@ -989,7 +989,7 @@ export interface InstanceSummary {
   intended_state: IntendedState;
   manifest_id: string;
   needs_human: number;
-  notices: (RevisionBehind | TemplateBehind)[];
+  notices: (RevisionBehind | TemplateBehind | HubRouteMissing)[];
   persona_name: string | null;
   process: ProcessState;
   runtime_id: string;
@@ -1012,6 +1012,14 @@ export interface RevisionBehind {
  */
 export interface TemplateBehind {
   code: "template_behind";
+  message: string;
+}
+/**
+ * The instance's environment lacks the hub route or scopes the registry grants it, or holds
+ * others, so an update is there.
+ */
+export interface HubRouteMissing {
+  code: "hub_route_missing";
   message: string;
 }
 /**

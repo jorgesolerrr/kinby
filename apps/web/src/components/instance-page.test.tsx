@@ -491,6 +491,8 @@ describe("a running instance", () => {
     const alert = within(screen.getByRole("alert"))
     expect(alert.getByText("Ada failed")).toBeDefined()
     expect(alert.getByText("exited (1)")).toBeDefined()
+    expect(alert.getByText(/^Check its settings in Configure before you stop it/)).toBeDefined()
+    expect(screen.queryByText(/is running$/)).toBeNull()
   })
 
   it("follows a sign-in that runs when the page loads", async () => {
@@ -565,7 +567,7 @@ describe("a running instance", () => {
     )
 
     expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
-    expect(screen.getByText("Nothing here yet")).toBeDefined()
+    expect(screen.getByText(/^Start a thread with/)).toBeDefined()
   })
 
   it("says there is nothing here when the status cannot be read", async () => {
@@ -576,7 +578,7 @@ describe("a running instance", () => {
     render(<InstancePage caller={caller} clock={clock} instance={running} onChanged={vi.fn()} />)
     await act(() => clock.advance(0))
 
-    expect(screen.getByText("Nothing here yet")).toBeDefined()
+    expect(screen.getByText(/^Start a thread with/)).toBeDefined()
     expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
   })
 
@@ -588,7 +590,7 @@ describe("a running instance", () => {
       <InstancePage caller={caller} clock={fakeClock()} instance={running} onChanged={vi.fn()} />,
     )
 
-    expect(screen.queryByText("Nothing here yet")).toBeNull()
+    expect(screen.queryByText(/^Start a thread with/)).toBeNull()
     expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
   })
 })
@@ -616,7 +618,7 @@ describe("the repository commands", () => {
     ).toEqual(["uv run ruff check .", "uv run pytest"])
     expect(list("setup").getByText("Empty")).toBeDefined()
     expect(list("deploy").getByText("Missing")).toBeDefined()
-    expect(screen.queryByText("Nothing here yet")).toBeNull()
+    expect(screen.queryByText(/^Start a thread with/)).toBeNull()
   })
 
   it("offers no way to edit a list, and says to ask the instance", async () => {

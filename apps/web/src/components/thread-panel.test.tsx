@@ -22,7 +22,13 @@ function instanceClient(answers: Answers = {}) {
 /** Open thread t1 of Ada's instance, from a client that answers from `answers`. */
 function openThread(answers: Answers = {}, client = instanceClient(answers)) {
   const rendered = render(
-    <ThreadPanel client={client} instanceId="hub-ada" threadId="t1" name="Ada" />,
+    <ThreadPanel
+      client={client}
+      instanceId="hub-ada"
+      threadId="t1"
+      name="Ada"
+      avatar={{ shape: "circle", color: "blue" }}
+    />,
   )
   const subscription = () => {
     const latest = client.subscriptions.at(-1)
@@ -164,7 +170,7 @@ describe("a thread's panel", () => {
       "write notes.md · denied by policy: read-only mode denies writes",
       "edit runtime.py · approved by you · running",
       "Done · 3 steps · 1,500 tokens",
-      "Failed: The steps budget ran out. (BUDGET_EXCEEDED)",
+      "Failed: The steps budget ran out. (BUDGET_EXCEEDED). Send a message to try again.",
       "Stopped",
       "read deploy.log · running",
       "bash make deploy · waiting for you",
@@ -242,9 +248,11 @@ describe("a thread's panel", () => {
 
     const variant = (text: string) =>
       screen.getByText(text).closest("[data-slot=marker]")?.getAttribute("data-variant")
-    expect(variant("Failed: The turn exceeded the steps budget of 1. (BUDGET_EXCEEDED)")).toBe(
-      "destructive",
-    )
+    expect(
+      variant(
+        "Failed: The turn exceeded the steps budget of 1. (BUDGET_EXCEEDED). Send a message to try again.",
+      ),
+    ).toBe("destructive")
     expect(variant("Done · 0 steps · 1,500 tokens")).toBe("default")
   })
 
@@ -396,12 +404,8 @@ describe("a thread's panel", () => {
         subscription().subscribed(events.length)
         for (const event of events) subscription().deliver(event)
       })
-      expect(screen.queryByText(/TimeoutError/)).toBeNull()
-
-      await userEvent.hover(screen.getByRole("button", { name: "Recap failed" }))
-
       expect(
-        await screen.findByText("The turn recap failed: TimeoutError: the model did not answer"),
+        screen.getByText("The turn recap failed: TimeoutError: the model did not answer"),
       ).toBeDefined()
     })
   })
@@ -483,6 +487,17 @@ describe("a thread's panel", () => {
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message Ada" }))
   })
 
+  it("puts focus back in the composer when the field around it is clicked", async () => {
+    const { subscription } = openThread()
+    await act(async () => subscription().subscribed(0))
+    const composer = screen.getByRole("textbox", { name: "Message Ada" })
+    composer.blur()
+
+    fireEvent.click(screen.getByText("›"))
+
+    expect(document.activeElement).toBe(composer)
+  })
+
   it("lines up the instance's name the same in a turn of only tool steps as in one with text", async () => {
     const events = thread(
       ["turn-1", started("List the repo")],
@@ -495,14 +510,11 @@ describe("a thread's panel", () => {
       subscription().subscribed(events.length)
       for (const event of events) subscription().deliver(event)
     })
-    // jsdom has no Tailwind, so read the paddings the header's classes can resolve to.
-    const paddings = (header: HTMLElement) =>
-      new Set([...header.classList].flatMap((name) => /(?:^|:)px-(.+)$/.exec(name)?.[1] ?? []))
-
+    // jsdom has no Tailwind, so compare the classes the two names are drawn with.
     const [toolsOnly, withText] = screen.getAllByText("Ada")
 
-    expect(paddings(toolsOnly as HTMLElement)).toEqual(new Set(["0"]))
-    expect(paddings(withText as HTMLElement)).toEqual(new Set(["0"]))
+    expect(toolsOnly?.className).toBe(withText?.className)
+    expect(toolsOnly?.parentElement?.className).toBe(withText?.parentElement?.className)
   })
 
   it("starts a turn with the message when Enter is pressed", async () => {
@@ -541,6 +553,23 @@ describe("a thread's panel", () => {
     await act(async () => subscription().deliver(events[1] as Event))
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull()
     expect(screen.getByRole("button", { name: "Send" })).toBeDefined()
+  })
+
+  it("interrupts the running turn on Escape, unless Escape cancels an IME composition", async () => {
+    const { sent, subscription } = openThread({
+      "thread.turn.interrupt": () => ({ sequence: 2, thread_id: "t1", turn_id: "turn-1" }),
+    })
+    await act(async () => {
+      subscription().subscribed(0)
+      subscription().deliver(thread(["turn-1", started("Deploy it")])[0] as Event)
+    })
+    const field = screen.getByRole("textbox", { name: "Message Ada" })
+
+    fireEvent.keyDown(field, { key: "Escape", isComposing: true })
+    expect(sent()).toEqual([])
+
+    fireEvent.keyDown(field, { key: "Escape" })
+    expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
   })
 
   describe("a waiting approval", () => {
@@ -633,7 +662,9 @@ describe("a thread's panel", () => {
     it("puts focus in the reason when the thread opens on it", async () => {
       await reopenParked()
 
-      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reason" }))
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
+      )
     })
 
     /** The instance's thread list, so the header shows t1's title. */
@@ -687,10 +718,15 @@ describe("a thread's panel", () => {
 
       await user.keyboard("x{Enter}")
       expect(sent()).toEqual([])
-      expect(screen.getByRole("textbox", { name: "Reason" })).toHaveProperty("value", "")
+      expect(screen.getByRole("textbox", { name: "Reason to deny (optional)" })).toHaveProperty(
+        "value",
+        "",
+      )
 
       await user.tab()
-      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reason" }))
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
+      )
       await user.tab()
       expect(document.activeElement).toBe(screen.getByRole("button", { name: "Approve" }))
     })
@@ -722,7 +758,10 @@ describe("a thread's panel", () => {
       const { sent } = await reopenParked()
       const user = userEvent.setup()
 
-      await user.type(screen.getByRole("textbox", { name: "Reason" }), "  Use staging instead ")
+      await user.type(
+        screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
+        "  Use staging instead ",
+      )
       await user.click(screen.getByRole("button", { name: "Deny" }))
 
       expect(sent()).toEqual([
@@ -743,7 +782,10 @@ describe("a thread's panel", () => {
 
       await userEvent
         .setup()
-        .type(screen.getByRole("textbox", { name: "Reason" }), "Use staging instead{Enter}{Enter}")
+        .type(
+          screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
+          "Use staging instead{Enter}{Enter}",
+        )
 
       expect(sent()).toEqual([
         {
@@ -761,7 +803,7 @@ describe("a thread's panel", () => {
     it("does not deny while an input method is composing the reason", async () => {
       const { sent } = await reopenParked()
 
-      fireEvent.keyDown(screen.getByRole("textbox", { name: "Reason" }), {
+      fireEvent.keyDown(screen.getByRole("textbox", { name: "Reason to deny (optional)" }), {
         key: "Enter",
         isComposing: true,
       })

@@ -1,0 +1,19 @@
+/* The stylesheet Claude Design receives: kinby's own index.css, compiled by Tailwind.
+   It scans the ui components and the authored previews, and adds every kinby token as a
+   ready utility so the design agent can compose new variants from the real palette. */
+@import "../apps/web/src/index.css";
+
+@source "../apps/web/src/components";
+@source "./previews";
+
+@source inline("{hover:,}{bg,text,border,ring,fill,stroke,outline,from,to,via}-{background,foreground,card,card-foreground,popover,popover-foreground,primary,primary-foreground,secondary,secondary-foreground,muted,muted-foreground,accent,accent-foreground,destructive,success,border,input,ring,kin,ember,on-ember,sidebar,sidebar-foreground,sidebar-primary,sidebar-primary-foreground,sidebar-accent,sidebar-accent-foreground,sidebar-border,chart-1,chart-2,chart-3,chart-4,chart-5,avatar-blue,avatar-violet,avatar-green,avatar-amber,avatar-red,avatar-gray,avatar-foreground}");
+@source inline("{hover:,}{bg,text,border}-{primary,secondary,muted,accent,destructive,success,kin,ember,foreground,background,card}/{5,10,15,20,30,40,50,60,70,80,90}");
+/* Layout scales, so designs that explore new layouts find the utilities they reach for. */
+@source inline("{w,h,size,min-w,min-h,max-h}-{0,0.5,1,1.5,2,2.5,3,3.5,4,5,6,7,8,9,10,11,12,14,16,20,24,28,32,36,40,44,48,52,56,60,64,72,80,96,full,fit,auto,screen,px}");
+@source inline("max-w-{xs,sm,md,lg,xl,2xl,3xl,4xl,5xl,6xl,7xl,full,prose}");
+@source inline("{p,px,py,pt,pb,pl,pr,m,mx,my,mt,mb,ml,mr,gap,gap-x,gap-y,space-x,space-y}-{0,0.5,1,1.5,2,2.5,3,3.5,4,5,6,7,8,9,10,11,12,14,16,20,24}");
+@source inline("{grid-cols,col-span}-{1,2,3,4,5,6,7,8,9,10,11,12}");
+@source inline("{md:,lg:,}{flex,grid,hidden,block,flex-row,flex-col,grid-cols-2,grid-cols-3,grid-cols-4}");
+@source inline("text-{xs,sm,base,lg,xl,2xl,3xl,4xl,5xl}");
+@source inline("rounded{,-sm,-md,-lg,-xl,-2xl,-3xl,-4xl,-full}");
+@source inline("font-{heading,sans,mono}");

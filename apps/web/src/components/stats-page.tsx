@@ -18,7 +18,7 @@ import { RangeHeader } from "@/components/range-header"
 import { Origins } from "@/components/stats-origin"
 import { Quality } from "@/components/stats-quality"
 import { Spend, UnpricedNotice } from "@/components/stats-spend"
-import { Tile } from "@/components/tile"
+import { Tile, TileStrip } from "@/components/tile"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -236,7 +236,7 @@ function Notices({ unpricedModels, mismatches }: { unpricedModels: string[]; mis
 function Tiles({ total }: { total: StatsSummary }) {
   const rated = total.good_ratings + total.bad_ratings > 0
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <TileStrip className="grid-cols-2 lg:grid-cols-4">
       <Tile
         title="Turns"
         value={String(turnCount(total))}
@@ -259,7 +259,7 @@ function Tiles({ total }: { total: StatsSummary }) {
         value={rated ? `${total.good_ratings} good` : "—"}
         note={rated ? `${total.bad_ratings} bad` : "No ratings"}
       />
-    </div>
+    </TileStrip>
   )
 }
 

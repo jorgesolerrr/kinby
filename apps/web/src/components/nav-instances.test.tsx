@@ -114,9 +114,9 @@ function showPage(visibility: DocumentVisibilityState) {
   })
 }
 
-/** What the row's needs-you count reads, its screen reader label included. */
+/** What the row's needs-you count reads, the description of its link. */
 function needsYou(row: ReturnType<typeof rowOf>) {
-  return row.queryByText("Threads that need you:")?.parentElement?.textContent
+  return row.queryByText(/ waiting for you$/)?.textContent
 }
 
 describe("the instances in the sidebar", () => {
@@ -176,8 +176,8 @@ describe("the needs-you count on an instance that is not selected", () => {
       thread({ id: "t5", status: "awaiting_approval" }),
     ])
 
-    await row.findByText("Threads that need you:")
-    expect(needsYou(row)).toBe("Threads that need you: 3")
+    await row.findByText(/ waiting for you$/)
+    expect(needsYou(row)).toBe("3 waiting for you")
     expect(row.queryByText("running")).toBeNull()
   })
 
@@ -187,8 +187,8 @@ describe("the needs-you count on an instance that is not selected", () => {
       thread({ id: "t2", status: "failed", archived: true }),
     ])
 
-    await row.findByText("Threads that need you:")
-    expect(needsYou(row)).toBe("Threads that need you: 1")
+    await row.findByText(/ waiting for you$/)
+    expect(needsYou(row)).toBe("1 waiting for you")
   })
 
   it("counts its factory runs that need a human with its threads", async () => {
@@ -196,14 +196,14 @@ describe("the needs-you count on an instance that is not selected", () => {
       thread({ id: "t1", status: "failed" }),
     ])
 
-    await row.findByText("Threads that need you:")
-    expect(needsYou(row)).toBe("Threads that need you: 3")
+    await row.findByText(/ waiting for you$/)
+    expect(needsYou(row)).toBe("3 waiting for you")
   })
 
   it("counts its factory runs that need a human while it is not running", async () => {
     const { row, hub } = adaRow({ process: "stopped", needs_human: 2 }, [])
 
-    expect(needsYou(row)).toBe("Threads that need you: 2")
+    expect(needsYou(row)).toBe("2 waiting for you")
     expect(hub.opened).toEqual([])
   })
 
@@ -223,7 +223,7 @@ describe("the needs-you count on an instance that is not selected", () => {
     const { row } = adaRow({ process: "running" }, [
       thread({ id: "t1", status: "awaiting_approval" }),
     ])
-    await row.findByText("Threads that need you:")
+    await row.findByText(/ waiting for you$/)
 
     await userEvent.setup().click(screen.getByRole("link", { name: "Ada" }))
 
@@ -239,12 +239,12 @@ describe("the needs-you count on an instance that is not selected", () => {
     await act(() => clock.advance(4_000))
     expect(row.getByText("running")).toBeDefined()
     await act(() => clock.advance(1_000))
-    expect(needsYou(row)).toBe("Threads that need you: 1")
+    expect(needsYou(row)).toBe("1 waiting for you")
 
     showPage("hidden")
     hub.threads["instance-1"] = []
     await act(() => clock.advance(60_000))
-    expect(needsYou(row)).toBe("Threads that need you: 1")
+    expect(needsYou(row)).toBe("1 waiting for you")
 
     showPage("visible")
     await act(() => clock.advance(5_000))

@@ -14,6 +14,7 @@ import { RemovedInstancesPage } from "@/components/removed-instances-page"
 import { SignIn } from "@/components/sign-in"
 import { UsagePage } from "@/components/usage-page"
 import { Badge } from "@/components/ui/badge"
+import { KinbyMark } from "@/components/kinby-mark"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useInstanceClient } from "@/hooks/use-instance-client"
@@ -37,7 +38,14 @@ export default function App({ client, clock = browserClock }: { client: Client; 
   const state = useSyncExternalStore(client.onStateChange, client.state)
 
   if (state === "signed-out") return <SignIn onSignIn={client.signIn} />
-  if (state === "connecting") return null
+  // A slow connection shows the mark, and a fast one shows nothing at all.
+  if (state === "connecting") {
+    return (
+      <main className="grid min-h-svh place-items-center">
+        <KinbyMark className="size-10 animate-in delay-300 fill-mode-backwards fade-in" />
+      </main>
+    )
+  }
   return <Shell client={client} clock={clock} connected={state === "connected"} />
 }
 
@@ -96,9 +104,10 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
             (threadId !== undefined || configOpen || memoryOpen || statsOpen) && "h-svh",
           )}
         >
-          <header className="flex h-12 items-center gap-2 px-2">
+          <header className="flex h-12 shrink-0 items-center gap-2 px-3">
             <SidebarTrigger />
-            {!connected && <Badge variant="destructive">Reconnecting</Badge>}
+            {/* Mounted throughout, so a screen reader hears the connection drop. */}
+            <output>{!connected && <Badge variant="destructive">Reconnecting</Badge>}</output>
           </header>
           <PageBoundary path={path}>
             {creating ? (

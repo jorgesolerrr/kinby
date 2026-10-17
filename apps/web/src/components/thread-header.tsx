@@ -72,35 +72,41 @@ export function ThreadHeader({
   }
 
   return (
-    <Field data-invalid={failure !== undefined || undefined} className="mx-4 my-2 w-auto">
-      <div className="flex items-center gap-2">
-        <ThreadTitle
-          thread={thread}
-          invalid={failure !== undefined}
-          onRename={(title) =>
-            change(() => client.call("thread.rename", { thread_id: threadId, title }))
-          }
-        />
-        <ModePicker
-          mode={thread.mode}
-          ceiling={listed.ceiling}
-          onPick={(mode) =>
-            change(() => client.call("thread.mode.set", { thread_id: threadId, mode }))
-          }
-        />
-        <ArchiveButton
-          archived={thread.archived}
-          onToggle={() =>
-            change(() =>
-              client.call(thread.archived ? "thread.unarchive" : "thread.archive", {
-                thread_id: threadId,
-              }),
-            )
-          }
-        />
-      </div>
-      {failure !== undefined && <FieldError>{failure}</FieldError>}
-    </Field>
+    // Sits on the transcript's column, so the title lines up with the turns under it.
+    <div className="px-4">
+      <Field
+        data-invalid={failure !== undefined || undefined}
+        className="mx-auto my-2 w-full max-w-3xl"
+      >
+        <div className="flex items-center gap-2">
+          <ThreadTitle
+            thread={thread}
+            invalid={failure !== undefined}
+            onRename={(title) =>
+              change(() => client.call("thread.rename", { thread_id: threadId, title }))
+            }
+          />
+          <ModePicker
+            mode={thread.mode}
+            ceiling={listed.ceiling}
+            onPick={(mode) =>
+              change(() => client.call("thread.mode.set", { thread_id: threadId, mode }))
+            }
+          />
+          <ArchiveButton
+            archived={thread.archived}
+            onToggle={() =>
+              change(() =>
+                client.call(thread.archived ? "thread.unarchive" : "thread.archive", {
+                  thread_id: threadId,
+                }),
+              )
+            }
+          />
+        </div>
+        {failure !== undefined && <FieldError>{failure}</FieldError>}
+      </Field>
+    </div>
   )
 }
 
@@ -138,9 +144,12 @@ function ThreadTitle({
           ref={titleButton}
           variant="ghost"
           className="max-w-full"
+          title={threadTitle(thread)}
           onClick={() => setDraft(thread.title ?? "")}
         >
-          <span className="truncate">{threadTitle(thread)}</span>
+          <span className="truncate font-heading text-base font-semibold">
+            {threadTitle(thread)}
+          </span>
           <PencilIcon data-icon="inline-end" />
         </Button>
       </h1>
@@ -221,7 +230,7 @@ function ModePicker({
               <span className="flex flex-col">
                 {entry.label}
                 <span className="text-xs text-muted-foreground">
-                  {index > allowed ? "Above this instance's ceiling" : entry.hint}
+                  {index > allowed ? "Above the ceiling. Raise it in Configure." : entry.hint}
                 </span>
               </span>
             </SelectItem>

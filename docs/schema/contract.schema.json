@@ -1641,6 +1641,26 @@
       "minLength": 1,
       "type": "string"
     },
+    "HubRouteMissing": {
+      "additionalProperties": false,
+      "description": "The instance's environment lacks the hub route or scopes the registry grants it, or holds\nothers, so an update is there.",
+      "properties": {
+        "code": {
+          "const": "hub_route_missing",
+          "default": "hub_route_missing",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "code"
+      ],
+      "title": "HubRouteMissing",
+      "type": "object"
+    },
     "HubSecret": {
       "additionalProperties": false,
       "description": "A hub secret as the hub shows it: by name, never its value.",
@@ -2665,6 +2685,7 @@
           "items": {
             "discriminator": {
               "mapping": {
+                "hub_route_missing": "#/$defs/HubRouteMissing",
                 "revision_behind": "#/$defs/RevisionBehind",
                 "template_behind": "#/$defs/TemplateBehind"
               },
@@ -2676,6 +2697,9 @@
               },
               {
                 "$ref": "#/$defs/TemplateBehind"
+              },
+              {
+                "$ref": "#/$defs/HubRouteMissing"
               }
             ]
           },
