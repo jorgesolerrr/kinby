@@ -886,6 +886,40 @@ def test_a_run_that_stops_again_after_needing_a_human_tells_only_its_new_attempt
     asyncio.run(scenario())
 
 
+def test_a_run_stopped_before_run_stops_were_recorded_tells_only_attempts_after_that_stop(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="Tests failed.")]
+    runtime = FakeRuntime()
+    directory = tmp_path / "hub"
+    hub = factory_hub(directory, control, runtime)
+
+    async def before_the_upgrade() -> UUID:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+        await told(control, 1)
+        return run.run_id
+
+    run_id = asyncio.run(before_the_upgrade())
+    hub.close()
+    with sqlite3.connect(directory / "registry.sqlite") as connection:
+        connection.execute("DROP TABLE run_stops")
+    control.stops.clear()
+    upgraded = factory_hub(directory, control, runtime)
+
+    async def after_the_upgrade() -> None:
+        await upgraded.recover()
+        await hub_client(upgraded).call(FACTORY_RUN_RETRY, FactoryRunRetryCommand(run_id=run_id))
+        finished = await settled(upgraded, run_id)
+        [stop] = await told(control, 1)
+
+        assert (stop.status, stop.generation) == (FactoryRunStatus.DONE, 2)
+        assert stop.attempts == finished.attempts[1:]
+        upgraded.close()
+
+    asyncio.run(after_the_upgrade())
+
+
 def test_a_run_stop_not_told_before_the_hub_stopped_is_told_after_a_restart(tmp_path, monkeypatch):
     monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 60)
     control = FakeControl()
