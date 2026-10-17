@@ -38,6 +38,10 @@
         "jsx-a11y/click-events-have-key-events": "off",
         "jsx-a11y/no-noninteractive-element-interactions": "off"
       }
+    },
+    {
+      "files": ["src/prototype/**"],
+      "rules": { "shadcn/no-restyle": "off", "react/only-export-components": "off" }
     }
   ]
 }
