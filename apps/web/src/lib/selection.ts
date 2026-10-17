@@ -233,7 +233,8 @@ export function useSecretsOpen(): boolean {
   return useSyncExternalStore(subscribe, () => window.location.pathname === SECRETS_PATH)
 }
 
-function navigate(path: string): void {
+/** Open a page of the app by its path, without reloading the page, as a new history entry. */
+export function navigate(path: string): void {
   window.history.pushState(null, "", path)
   changed()
 }

@@ -217,8 +217,9 @@ must be running.
    target. The routine's `last_run` holds its outcome and the `thread_id` of the
    run. While the outcome is `running`, read again later. On `failed`, read
    that thread's turns, fix the file and run it again. On `work` or `no-work`,
-   tell the user what the run did, with a link to the run's thread at
-   `/instances/<instance_id>/threads/<thread_id>`.
+   tell the user what the run did, with a Markdown link to the run's thread,
+   `[a short label](/instances/<instance_id>/threads/<thread_id>)`, never the
+   path as code.
 
 Done when the routine is written in the target, a run of it ended in `work` or
 `no-work`, and the user has its next firing time or its signal path.
