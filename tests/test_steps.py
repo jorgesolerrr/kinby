@@ -936,7 +936,8 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
         "               'config_dir': os.environ.get('CLAUDE_CONFIG_DIR'),\n"
         "               'no_background':\n"
         "                   os.environ.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'),\n"
-        "               'command_limit': os.environ.get('BASH_MAX_TIMEOUT_MS')},\n"
+        "               'command_limit': os.environ.get('BASH_MAX_TIMEOUT_MS'),\n"
+        "               'instance': os.environ.get('KINBY_INSTANCE')},\n"
         "              calls)\n"
         "    calls.write('\\n')\n"
         f"{then}\n"
@@ -971,6 +972,8 @@ class ClientCall:
     no_background: str | None
     #: The longest Claude may wait for one command, in milliseconds.
     command_limit: str | None
+    #: The instance a `kinby` command in the client's shell finds.
+    instance: str | None
 
 
 def recorded_calls(calls: Path) -> list[ClientCall]:
@@ -1073,6 +1076,7 @@ def test_a_client_steps_prompt_has_no_skills_catalogue_when_the_instance_has_no_
 def test_a_client_steps_prompt_says_how_to_search_the_instances_memory(tmp_path, monkeypatch):
     runtime, _ = step_instance(tmp_path)
     calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    monkeypatch.setenv("KINBY_INSTANCE", str(tmp_path / "another"))
 
     async def scenario() -> None:
         await run_client_step(runtime.dispatcher, "claude")
@@ -1080,6 +1084,7 @@ def test_a_client_steps_prompt_says_how_to_search_the_instances_memory(tmp_path,
         [called] = recorded_calls(calls)
         assert "kinby memory search" in called.stdin
         assert "kinby memory open" in called.stdin
+        assert called.instance == str(tmp_path)
 
     asyncio.run(scenario())
 
