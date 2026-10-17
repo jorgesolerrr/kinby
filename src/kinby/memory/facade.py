@@ -85,8 +85,11 @@ class Memory(Protocol):
     def forget(self, node: NodeId) -> None: ...
 
 
-def new_node_id(recorded_on: date, description: str) -> NodeId:
-    """Create a readable, chronologically sortable graph node id."""
+def new_node_id(recorded_on: date, description: str, key: UUID | None = None) -> NodeId:
+    """Create a readable, chronologically sortable graph node id.
+
+    The same *key* and *description* give the same id, so a node written again replaces itself.
+    """
     slug = re.sub(r"[^a-z0-9]+", "-", description.casefold()).strip("-")
     readable = (slug or "fact")[:64].rstrip("-")
-    return NodeId(f"{recorded_on.isoformat()}-{uuid7().hex}-{readable}")
+    return NodeId(f"{recorded_on.isoformat()}-{(key or uuid7()).hex}-{readable}")

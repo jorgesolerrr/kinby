@@ -271,6 +271,7 @@ class RecapWriter:
         if manifest.memory.recap is RecapPolicy.TRACE_ONLY:
             episode = _run_episode(
                 request,
+                stop,
                 description=_shorten(_run_description(stop), _TRACE_DESCRIPTION_MAX_CHARS),
                 subjects=(),
                 body=f"## What happened\nThe run stopped as {stop.status}.",
@@ -286,16 +287,14 @@ class RecapWriter:
             _run_frame(stop, _send_backs(stop, reached), lens.text),
             manifest.models.recap,
         )
-        episode = (
-            _run_episode(
-                request,
-                description=draft.description,
-                subjects=draft.subjects,
-                body=_narrative(draft),
-                recorded_on=recorded_on,
-            )
-            if draft.keep
-            else None
+        # A run stop always leaves an episode, whatever the shared draft says about keeping it.
+        episode = _run_episode(
+            request,
+            stop,
+            description=draft.description,
+            subjects=draft.subjects,
+            body=_narrative(draft),
+            recorded_on=recorded_on,
         )
         await self._finish(request, episode, usage, manifest.models.recap)
 
@@ -451,14 +450,16 @@ def _episode(
 
 def _run_episode(
     request: _RunRecap,
+    stop: RunStop,
     *,
     description: str,
     subjects: tuple[str, ...],
     body: str,
     recorded_on: date,
 ) -> Episode:
+    """The episode of *stop*, under an id a retried recap of the stop writes again."""
     return Episode(
-        node=new_node_id(recorded_on, description),
+        node=new_node_id(recorded_on, _run_description(stop), request.turn_id),
         date=recorded_on,
         description=description,
         subjects=subjects,
