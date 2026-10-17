@@ -54,7 +54,7 @@ function InputGroupAddon({
         if ((e.target as HTMLElement).closest("button")) {
           return
         }
-        e.currentTarget.parentElement?.querySelector("input")?.focus()
+        e.currentTarget.parentElement?.querySelector<HTMLElement>("input, textarea")?.focus()
       }}
       {...props}
     />
@@ -121,14 +121,31 @@ function InputGroupInput({ className, ...props }: React.ComponentProps<"input">)
   )
 }
 
-function InputGroupTextarea({ className, ...props }: React.ComponentProps<"textarea">) {
+const inputGroupTextareaVariants = cva(
+  "flex-1 resize-none rounded-none border-0 bg-transparent py-2 shadow-none ring-0 focus-visible:ring-0 disabled:bg-transparent aria-invalid:ring-0 dark:bg-transparent dark:disabled:bg-transparent",
+  {
+    variants: {
+      variant: {
+        default: "",
+        // A command line: what you type to the instance, in the mono face of ids and commands.
+        prompt: "min-h-0 font-mono",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+)
+
+function InputGroupTextarea({
+  className,
+  variant = "default",
+  ...props
+}: React.ComponentProps<"textarea"> & VariantProps<typeof inputGroupTextareaVariants>) {
   return (
     <Textarea
       data-slot="input-group-control"
-      className={cn(
-        "flex-1 resize-none rounded-none border-0 bg-transparent py-2 shadow-none ring-0 focus-visible:ring-0 disabled:bg-transparent aria-invalid:ring-0 dark:bg-transparent dark:disabled:bg-transparent",
-        className,
-      )}
+      className={cn(inputGroupTextareaVariants({ variant }), className)}
       {...props}
     />
   )

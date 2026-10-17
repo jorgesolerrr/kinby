@@ -14,7 +14,7 @@ import { BucketAxes } from "@/components/bucket-axes"
 import { Failure } from "@/components/config-alerts"
 import { PlansStrip } from "@/components/plans-strip"
 import { RangeHeader } from "@/components/range-header"
-import { Tile } from "@/components/tile"
+import { Tile, TileStrip } from "@/components/tile"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -200,7 +200,7 @@ function Totals({ usage }: { usage: StatsSummaryResult }) {
           {counted} of {asked} instances counted.
         </p>
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <TileStrip className="grid-cols-1 sm:grid-cols-3">
         <Tile
           title="Turns"
           value={String(turnsIn(buckets))}
@@ -218,7 +218,7 @@ function Totals({ usage }: { usage: StatsSummaryResult }) {
             .map((use) => `${SOURCE_LABELS[use.usage_source]} ${use.runs ?? 0}`)
             .join(" · ")}
         />
-      </div>
+      </TileStrip>
     </section>
   )
 }

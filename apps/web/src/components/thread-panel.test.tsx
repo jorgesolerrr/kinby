@@ -22,7 +22,13 @@ function instanceClient(answers: Answers = {}) {
 /** Open thread t1 of Ada's instance, from a client that answers from `answers`. */
 function openThread(answers: Answers = {}, client = instanceClient(answers)) {
   const rendered = render(
-    <ThreadPanel client={client} instanceId="hub-ada" threadId="t1" name="Ada" />,
+    <ThreadPanel
+      client={client}
+      instanceId="hub-ada"
+      threadId="t1"
+      name="Ada"
+      avatar={{ shape: "circle", color: "blue" }}
+    />,
   )
   const subscription = () => {
     const latest = client.subscriptions.at(-1)
@@ -481,6 +487,17 @@ describe("a thread's panel", () => {
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message Ada" }))
   })
 
+  it("puts focus back in the composer when the field around it is clicked", async () => {
+    const { subscription } = openThread()
+    await act(async () => subscription().subscribed(0))
+    const composer = screen.getByRole("textbox", { name: "Message Ada" })
+    composer.blur()
+
+    fireEvent.click(screen.getByText("›"))
+
+    expect(document.activeElement).toBe(composer)
+  })
+
   it("lines up the instance's name the same in a turn of only tool steps as in one with text", async () => {
     const events = thread(
       ["turn-1", started("List the repo")],
@@ -493,14 +510,11 @@ describe("a thread's panel", () => {
       subscription().subscribed(events.length)
       for (const event of events) subscription().deliver(event)
     })
-    // jsdom has no Tailwind, so read the paddings the header's classes can resolve to.
-    const paddings = (header: HTMLElement) =>
-      new Set([...header.classList].flatMap((name) => /(?:^|:)px-(.+)$/.exec(name)?.[1] ?? []))
-
+    // jsdom has no Tailwind, so compare the classes the two names are drawn with.
     const [toolsOnly, withText] = screen.getAllByText("Ada")
 
-    expect(paddings(toolsOnly as HTMLElement)).toEqual(new Set(["0"]))
-    expect(paddings(withText as HTMLElement)).toEqual(new Set(["0"]))
+    expect(toolsOnly?.className).toBe(withText?.className)
+    expect(toolsOnly?.parentElement?.className).toBe(withText?.parentElement?.className)
   })
 
   it("starts a turn with the message when Enter is pressed", async () => {
@@ -539,6 +553,23 @@ describe("a thread's panel", () => {
     await act(async () => subscription().deliver(events[1] as Event))
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull()
     expect(screen.getByRole("button", { name: "Send" })).toBeDefined()
+  })
+
+  it("interrupts the running turn on Escape, unless Escape cancels an IME composition", async () => {
+    const { sent, subscription } = openThread({
+      "thread.turn.interrupt": () => ({ sequence: 2, thread_id: "t1", turn_id: "turn-1" }),
+    })
+    await act(async () => {
+      subscription().subscribed(0)
+      subscription().deliver(thread(["turn-1", started("Deploy it")])[0] as Event)
+    })
+    const field = screen.getByRole("textbox", { name: "Message Ada" })
+
+    fireEvent.keyDown(field, { key: "Escape", isComposing: true })
+    expect(sent()).toEqual([])
+
+    fireEvent.keyDown(field, { key: "Escape" })
+    expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
   })
 
   describe("a waiting approval", () => {

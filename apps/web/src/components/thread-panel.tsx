@@ -1,4 +1,4 @@
-import type { InstanceClient, JsonValue } from "@kinby/contract"
+import type { Avatar as AvatarChoice, InstanceClient, JsonValue } from "@kinby/contract"
 import {
   type ReactNode,
   type Ref,
@@ -11,20 +11,13 @@ import {
 import { code } from "@streamdown/code"
 import { defaultRehypePlugins, Streamdown, type StreamdownProps } from "streamdown"
 
+import { InstanceAvatar } from "@/components/instance-avatar"
 import { ThreadHeader } from "@/components/thread-header"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
@@ -34,7 +27,6 @@ import {
   InputGroupTextarea,
 } from "@/components/ui/input-group"
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
-import { Message, MessageContent, MessageHeader } from "@/components/ui/message"
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -52,12 +44,12 @@ import { nodePath, openNode, useSelectedTurnId } from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
 import type { ParkedApproval, Recap, ToolStep, TurnBlock, TurnEnd } from "@/lib/timeline"
 import {
-  ArrowUpIcon,
   BanIcon,
   BrainIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleStopIcon,
+  CornerDownLeftIcon,
   FactoryIcon,
   HouseIcon,
   MinusIcon,
@@ -68,6 +60,7 @@ import {
   UserIcon,
   WrenchIcon,
   XIcon,
+  type LucideIcon,
 } from "lucide-react"
 
 /** A thread's turns as a timeline, followed live once its history has loaded. */
@@ -76,6 +69,7 @@ export function ThreadPanel({
   instanceId,
   threadId,
   name,
+  avatar,
 }: {
   client: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange">
   /** The hub's ID for the instance, which its pages' links name. */
@@ -83,7 +77,10 @@ export function ThreadPanel({
   threadId: string
   /** What the instance is called. */
   name: string
+  /** The instance's avatar, beside what it says. */
+  avatar: AvatarChoice
 }) {
+  const speaker = { name, avatar }
   const store = threadStore(client, threadId)
   useEffect(() => store.follow(), [store])
   const { timeline, replayed, failure } = useSyncExternalStore(store.onChange, store.view)
@@ -126,7 +123,7 @@ export function ThreadPanel({
       {/* Half a history must not pass for all of it. */}
       {replayed ? (
         <>
-          <Transcript turns={timeline.turns} instanceId={instanceId} name={name} />
+          <Transcript turns={timeline.turns} instanceId={instanceId} speaker={speaker} />
           <div className="mx-auto w-full max-w-3xl px-6 pb-6">
             {/* Nothing else is sent while the turn waits on the user. */}
             {approval === undefined ? (
@@ -144,6 +141,7 @@ export function ThreadPanel({
                 client={client}
                 threadId={threadId}
                 approval={approval}
+                speaker={speaker}
               />
             )}
           </div>
@@ -155,9 +153,15 @@ export function ThreadPanel({
   )
 }
 
+/** The instance as the transcript and the approval panel show it. */
+interface Speaker {
+  name: string
+  avatar: AvatarChoice
+}
+
 /**
  * Enter sends the message as a new turn, and Shift+Enter starts a new line. While a turn runs,
- * Send becomes Stop.
+ * Send becomes Stop, and Escape stops it too.
  */
 function Composer({
   client,
@@ -202,42 +206,50 @@ function Composer({
       {/* Send sits inside the field, and a long draft scrolls in it instead of pushing the
           transcript away. */}
       <InputGroup>
+        <InputGroupAddon align="inline-start">
+          <span aria-hidden className="font-mono text-kin">
+            ›
+          </span>
+        </InputGroupAddon>
         <InputGroupTextarea
           ref={field}
+          variant="prompt"
           className="max-h-48"
           aria-label={`Message ${name}`}
-          placeholder={`Message ${name}`}
+          placeholder={running ? `${name} is working…` : `Message ${name}`}
           value={message}
           aria-invalid={failure !== undefined || undefined}
           onChange={(event) => setMessage(event.target.value)}
           onKeyDown={(event) => {
+            if (event.key === "Escape" && running && !event.nativeEvent.isComposing) {
+              event.preventDefault()
+              void stop()
+              return
+            }
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return
             event.preventDefault()
             void send()
           }}
         />
-        <InputGroupAddon align="block-end">
+        <InputGroupAddon align="inline-end">
           {running ? (
-            <InputGroupButton
-              size="icon-sm"
-              variant="default"
-              className="ml-auto"
-              aria-label="Stop"
-              onClick={() => void stop()}
-            >
-              <SquareIcon className="fill-current" />
+            <InputGroupButton size="sm" variant="outline" onClick={() => void stop()}>
+              <SquareIcon data-icon="inline-start" className="fill-current" />
+              Stop
+              <kbd aria-hidden className="font-mono text-xs text-muted-foreground">
+                Esc
+              </kbd>
             </InputGroupButton>
           ) : (
             <InputGroupButton
-              size="icon-sm"
+              size="sm"
               variant="default"
-              className="ml-auto"
-              aria-label="Send"
               // aria-disabled, so an empty draft leaves the field looking ready to type in.
               aria-disabled={text === "" || sending}
               onClick={() => void send()}
             >
-              <ArrowUpIcon />
+              Send
+              <CornerDownLeftIcon data-icon="inline-end" />
             </InputGroupButton>
           )}
         </InputGroupAddon>
@@ -260,12 +272,14 @@ function ApprovalPanel({
   client,
   threadId,
   approval,
+  speaker,
 }: {
   ref: Ref<HTMLElement>
   reasonField: Ref<HTMLInputElement>
   client: Pick<InstanceClient, "call">
   threadId: string
   approval: ParkedApproval
+  speaker: Speaker
 }) {
   const reasonId = useId()
   const [typed, setTyped] = useState("")
@@ -304,19 +318,21 @@ function ApprovalPanel({
       ref={ref}
       tabIndex={-1}
       aria-label={`Approve ${call}?`}
-      className="rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+      className="flex gap-3 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
     >
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>{call}</CardTitle>
-          <CardDescription>Waiting for your answer</CardDescription>
-          <CardAction>
-            <Badge variant="outline">{approval.rule}</Badge>
-          </CardAction>
-        </CardHeader>
+      {/* The instance asks in its own voice, beside the avatar it speaks with in the transcript. */}
+      <InstanceAvatar avatar={speaker.avatar} name={speaker.name} />
+      <Card className="min-w-0 flex-1">
         <CardContent>
-          <div className="flex flex-col gap-3">
-            <pre className="max-h-40 overflow-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1">
+              <h2 className="text-lg font-semibold">Can I run {approval.name}?</h2>
+              <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
+                <ShieldAlertIcon aria-hidden className="size-3.5" />
+                {approval.rule}
+              </p>
+            </div>
+            <pre className="max-h-40 overflow-auto rounded-lg bg-muted p-4 font-mono text-xs whitespace-pre-wrap">
               {JSON.stringify(approval.arguments, null, 2)}
             </pre>
             <Field data-invalid={failure !== undefined || undefined}>
@@ -337,47 +353,51 @@ function ApprovalPanel({
               />
               {failure !== undefined && <FieldError>{failure}</FieldError>}
             </Field>
+            {/* Below md the buttons grow to a 44 px tap target, and Stop the turn wraps before it overflows. */}
+            <div className="flex w-full flex-wrap items-center gap-2">
+              <Button
+                size="lg"
+                className="max-md:h-11"
+                disabled={busy}
+                onClick={() => void respond("approve")}
+              >
+                {answering === "approve" ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <CheckIcon data-icon="inline-start" />
+                )}
+                Approve
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                className="max-md:h-11"
+                disabled={busy}
+                onClick={() => void respond("deny")}
+              >
+                {answering === "deny" ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <XIcon data-icon="inline-start" />
+                )}
+                Deny
+              </Button>
+              <Button
+                variant="link"
+                className="ml-auto max-md:h-11"
+                disabled={busy}
+                onClick={() => void stop()}
+              >
+                {answering === "stop" ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <CircleStopIcon data-icon="inline-start" />
+                )}
+                Stop the turn
+              </Button>
+            </div>
           </div>
         </CardContent>
-        <CardFooter>
-          {/* Below md the buttons grow to a 44 px tap target, and Stop the turn wraps before it overflows. */}
-          <div className="flex w-full flex-wrap items-center gap-2">
-            <Button className="max-md:h-11" disabled={busy} onClick={() => void respond("approve")}>
-              {answering === "approve" ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <CheckIcon data-icon="inline-start" />
-              )}
-              Approve
-            </Button>
-            <Button
-              variant="outline"
-              className="max-md:h-11"
-              disabled={busy}
-              onClick={() => void respond("deny")}
-            >
-              {answering === "deny" ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <XIcon data-icon="inline-start" />
-              )}
-              Deny
-            </Button>
-            <Button
-              variant="ghost"
-              className="ml-auto max-md:h-11"
-              disabled={busy}
-              onClick={() => void stop()}
-            >
-              {answering === "stop" ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <CircleStopIcon data-icon="inline-start" />
-              )}
-              Stop the turn
-            </Button>
-          </div>
-        </CardFooter>
       </Card>
     </section>
   )
@@ -393,11 +413,11 @@ function takeFocus(field: HTMLElement | null) {
 function Transcript({
   turns,
   instanceId,
-  name,
+  speaker,
 }: {
   turns: TurnBlock[]
   instanceId: string
-  name: string
+  speaker: Speaker
 }) {
   return (
     // A turn opens from its first marker, without a peek at the turn before it.
@@ -412,7 +432,7 @@ function Transcript({
           <MessageScrollerContent className="mx-auto w-full max-w-3xl">
             {turns.map((turn) => (
               <MessageScrollerItem key={turn.turnId} messageId={turn.turnId} scrollAnchor>
-                <Turn turn={turn} instanceId={instanceId} name={name} />
+                <Turn turn={turn} instanceId={instanceId} speaker={speaker} />
               </MessageScrollerItem>
             ))}
           </MessageScrollerContent>
@@ -443,57 +463,117 @@ function LinkedTurn({ turns }: { turns: TurnBlock[] }) {
   return null
 }
 
-const STARTED_BY_ICONS: Record<TurnBlock["startedBy"]["kind"], ReactNode> = {
-  user: <UserIcon />,
-  routine: <RepeatIcon />,
-  "factory-run": <FactoryIcon />,
-  "home-instance": <HouseIcon />,
+/** What started a turn the user did not: the instance acting on its own, so it wears ember. */
+const STARTED_BY_ICONS: Record<Exclude<TurnBlock["startedBy"]["kind"], "user">, LucideIcon> = {
+  routine: RepeatIcon,
+  "factory-run": FactoryIcon,
+  "home-instance": HouseIcon,
 }
 
-function Turn({ turn, instanceId, name }: { turn: TurnBlock; instanceId: string; name: string }) {
+/**
+ * The user's request in a bubble on the right, or what started the turn on its own. Then the
+ * instance beside its avatar: each reply in a tinted bubble, and the tool calls between replies as
+ * one rail of steps.
+ */
+function Turn({
+  turn,
+  instanceId,
+  speaker,
+}: {
+  turn: TurnBlock
+  instanceId: string
+  speaker: Speaker
+}) {
   const { startedBy } = turn
+  const started = (
+    <>
+      {originLabel(startedBy)} · <time dateTime={turn.startedAt}>{startedAt(turn.startedAt)}</time>
+    </>
+  )
   return (
-    <div className="flex flex-col gap-3 px-6">
-      <Marker variant="border">
-        <MarkerIcon>{STARTED_BY_ICONS[startedBy.kind]}</MarkerIcon>
-        <MarkerContent>
-          {originLabel(startedBy)} ·{" "}
-          <time dateTime={turn.startedAt}>{startedAt(turn.startedAt)}</time>
-        </MarkerContent>
-      </Marker>
-      <Message align="end">
-        <MessageContent>
-          <Bubble variant="secondary" align="end">
-            <BubbleContent className="whitespace-pre-wrap">{turn.request}</BubbleContent>
-          </Bubble>
-        </MessageContent>
-      </Message>
-      <Message>
-        <MessageContent>
-          {/* Flush in every turn, not only once a text bubble is in the message. */}
-          <MessageHeader className="px-0">{name}</MessageHeader>
-          {turn.steps.map((step, index) =>
-            step.kind === "text" ? (
-              <Bubble key={index} variant="ghost">
+    <div className="flex flex-col gap-4 px-6">
+      {startedBy.kind === "user" ? (
+        <div className="flex items-end justify-end gap-3">
+          <div className="flex min-w-0 flex-col items-end gap-1">
+            <p className="font-mono text-xs text-muted-foreground">{started}</p>
+            <Bubble align="end">
+              <BubbleContent className="whitespace-pre-wrap">{turn.request}</BubbleContent>
+            </Bubble>
+          </div>
+          <Avatar size="sm" aria-hidden>
+            <AvatarFallback>
+              <UserIcon className="size-3.5" />
+            </AvatarFallback>
+          </Avatar>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <p className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
+            <StartedByNode kind={startedBy.kind} />
+            <span>{started}</span>
+          </p>
+          <p className="pl-7 text-sm whitespace-pre-wrap text-muted-foreground">{turn.request}</p>
+        </div>
+      )}
+      <div className="flex gap-3">
+        <InstanceAvatar avatar={speaker.avatar} name={speaker.name} />
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          <p className="font-mono text-xs text-muted-foreground">{speaker.name}</p>
+          {railed(turn.steps).map((run) =>
+            run.kind === "text" ? (
+              <Bubble key={run.key} variant="tinted">
                 <BubbleContent>
-                  <Reply text={step.text} />
+                  <Reply text={run.text} />
                 </BubbleContent>
               </Bubble>
             ) : (
-              <ToolMarker
-                key={step.callId}
-                step={step}
-                waiting={turn.approval?.callId === step.callId}
-                end={turn.end}
-              />
+              <ol key={run.key} className="flex flex-col">
+                {run.steps.map((step, index) => (
+                  <ToolStepRow
+                    key={step.callId}
+                    step={step}
+                    waiting={turn.approval?.callId === step.callId}
+                    end={turn.end}
+                    last={index === run.steps.length - 1}
+                  />
+                ))}
+              </ol>
             ),
           )}
           <EndMarker turn={turn} />
           {turn.recap !== undefined && <RecapMarker recap={turn.recap} instanceId={instanceId} />}
-        </MessageContent>
-      </Message>
+        </div>
+      </div>
     </div>
   )
+}
+
+function StartedByNode({ kind }: { kind: keyof typeof STARTED_BY_ICONS }) {
+  const Icon = STARTED_BY_ICONS[kind]
+  return (
+    <span
+      aria-hidden
+      className="grid size-5 shrink-0 place-items-center rounded-full bg-ember text-on-ember"
+    >
+      <Icon className="size-3" />
+    </span>
+  )
+}
+
+type Run =
+  | { kind: "text"; key: string; text: string }
+  | { kind: "rail"; key: string; steps: ToolStep[] }
+
+/** A turn's steps with each stretch of consecutive tool calls gathered into one rail. */
+function railed(steps: TurnBlock["steps"]): Run[] {
+  const runs: Run[] = []
+  steps.forEach((step, index) => {
+    const last = runs.at(-1)
+    if (step.kind === "text") runs.push({ kind: "text", key: `text-${index}`, text: step.text })
+    else if (last?.kind === "rail") last.steps.push(step)
+    else runs.push({ kind: "rail", key: step.callId, steps: [step] })
+  })
+  return runs
 }
 
 /** How Streamdown renders a reply, built once so its memoization holds while a reply streams. */
@@ -519,22 +599,39 @@ function Reply({ text }: { text: string }) {
   return <Streamdown {...replyOptions}>{text}</Streamdown>
 }
 
-function ToolMarker({
+/** One tool call on the rail: a node with how the gate decided it, then the call and its outcome. */
+function ToolStepRow({
   step,
   waiting,
   end,
+  last,
 }: {
   step: ToolStep
   waiting: boolean
   end: TurnEnd | undefined
+  last: boolean
 }) {
-  const { icon, decision } = gateDecision(step, waiting, end)
+  const { icon: Icon, decision } = gateDecision(step, waiting, end)
   const call = [step.name, mainArgument(step.arguments)].filter(Boolean).join(" ")
   return (
-    <Marker>
-      <MarkerIcon>{icon}</MarkerIcon>
-      <MarkerContent>{`${call} · ${decision}`}</MarkerContent>
-    </Marker>
+    <li className="flex gap-3">
+      <span className="relative flex w-5 shrink-0 justify-center">
+        {!last && <span aria-hidden className="absolute top-6 bottom-0 w-px bg-border" />}
+        <span
+          aria-hidden
+          className={
+            waiting
+              ? "mt-0.5 grid size-5 place-items-center rounded-full bg-primary text-primary-foreground"
+              : "mt-0.5 grid size-5 place-items-center rounded-full bg-muted text-muted-foreground"
+          }
+        >
+          <Icon className="size-3" />
+        </span>
+      </span>
+      <span className="min-w-0 flex-1 pb-3 font-mono text-xs leading-6 wrap-break-word">
+        {`${call} · ${decision}`}
+      </span>
+    </li>
   )
 }
 
@@ -546,14 +643,14 @@ function gateDecision(
   { gate, durationMs }: ToolStep,
   waiting: boolean,
   end: TurnEnd | undefined,
-): { icon: ReactNode; decision: string } {
+): { icon: LucideIcon; decision: string } {
   if (gate === undefined && durationMs === undefined && end !== undefined) {
-    return { icon: <BanIcon />, decision: `not run, turn ${end.kind}` }
+    return { icon: BanIcon, decision: `not run, turn ${end.kind}` }
   }
   if (gate === undefined) {
     return waiting
-      ? { icon: <ShieldAlertIcon />, decision: "waiting for you" }
-      : { icon: <WrenchIcon />, decision: "running" }
+      ? { icon: ShieldAlertIcon, decision: "waiting for you" }
+      : { icon: WrenchIcon, decision: "running" }
   }
   if (gate.action === "deny") {
     const decision =
@@ -562,13 +659,13 @@ function gateDecision(
         : gate.reason
           ? `denied by you: ${gate.reason}`
           : "denied by you"
-    return { icon: <BanIcon />, decision }
+    return { icon: BanIcon, decision }
   }
   const took = durationMs === undefined ? "running" : `${durationMs.toLocaleString("en")} ms`
   if (gate.decidedBy === "user") {
-    return { icon: <CheckIcon />, decision: `approved by you · ${took}` }
+    return { icon: CheckIcon, decision: `approved by you · ${took}` }
   }
-  return { icon: <WrenchIcon />, decision: took }
+  return { icon: WrenchIcon, decision: took }
 }
 
 /** The first text argument. Tools take the thing they act on first: the path, the command, the pattern. */
@@ -581,7 +678,9 @@ function EndMarker({ turn }: { turn: TurnBlock }) {
   return (
     <Marker variant={variant}>
       <MarkerIcon>{icon}</MarkerIcon>
-      <MarkerContent>{outcome}</MarkerContent>
+      <MarkerContent>
+        <span className="font-mono text-xs">{outcome}</span>
+      </MarkerContent>
     </Marker>
   )
 }
@@ -625,6 +724,7 @@ function RecapMarker({ recap, instanceId }: { recap: Recap; instanceId: string }
           </MarkerIcon>
           <MarkerContent>
             <a
+              className="font-mono text-xs"
               href={nodePath(instanceId, recap.node)}
               onClick={(event) => {
                 event.preventDefault()
@@ -642,7 +742,9 @@ function RecapMarker({ recap, instanceId }: { recap: Recap; instanceId: string }
           <MarkerIcon>
             <MinusIcon />
           </MarkerIcon>
-          <MarkerContent>No episode</MarkerContent>
+          <MarkerContent>
+            <span className="font-mono text-xs">No episode</span>
+          </MarkerContent>
         </Marker>
       )
     case "failed":
@@ -653,8 +755,8 @@ function RecapMarker({ recap, instanceId }: { recap: Recap; instanceId: string }
             <TriangleAlertIcon />
           </MarkerIcon>
           <MarkerContent className="flex flex-col">
-            <span>Recap failed</span>
-            <span className="text-xs">{recap.message}</span>
+            <span className="font-mono text-xs">Recap failed</span>
+            <span className="font-mono text-xs">{recap.message}</span>
           </MarkerContent>
         </Marker>
       )

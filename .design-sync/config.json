@@ -1,0 +1,84 @@
+{
+  "projectId": "612b29c5-7ac1-4dc3-9f14-9ddef1b61ada",
+  "shape": "package",
+  "pkg": "@kinby/web",
+  "globalName": "Kinby",
+  "entry": "apps/web/node_modules/.ds/index.ts",
+  "readmeHeader": ".design-sync/conventions.md",
+  "buildCmd": "node .design-sync/build-ds.mjs",
+  "srcDir": "../../src/components",
+  "tsconfig": "../../tsconfig.app.json",
+  "cssEntry": "kinby.css",
+  "componentSrcMap": {
+    "Recharts": null
+  },
+  "overrides": {
+    "Dialog": {
+      "cardMode": "single",
+      "viewport": "640x480"
+    },
+    "AlertDialog": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "Sheet": {
+      "cardMode": "single",
+      "viewport": "800x520"
+    },
+    "DropdownMenu": {
+      "cardMode": "single",
+      "viewport": "480x420"
+    },
+    "Tooltip": {
+      "cardMode": "single",
+      "viewport": "360x200"
+    },
+    "Sidebar": {
+      "cardMode": "column"
+    },
+    "Table": {
+      "cardMode": "column"
+    },
+    "ChartContainer": {
+      "cardMode": "column"
+    },
+    "Alert": {
+      "cardMode": "column"
+    },
+    "Bubble": {
+      "cardMode": "column"
+    },
+    "Empty": {
+      "cardMode": "column"
+    },
+    "Field": {
+      "cardMode": "column"
+    },
+    "InputGroup": {
+      "cardMode": "column"
+    },
+    "Item": {
+      "cardMode": "column"
+    },
+    "Marker": {
+      "cardMode": "column"
+    },
+    "MessageScroller": {
+      "cardMode": "column"
+    },
+    "Skeleton": {
+      "cardMode": "column"
+    },
+    "Switch": {
+      "cardMode": "column"
+    },
+    "Tabs": {
+      "cardMode": "column"
+    }
+  },
+  "extraFonts": [
+    "../@fontsource-variable/geist/index.css",
+    "../@fontsource-variable/geist-mono/index.css",
+    "../@fontsource-variable/gabarito/index.css"
+  ]
+}
