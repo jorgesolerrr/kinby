@@ -40,11 +40,27 @@ class Fact(_MemoryNode):
 
 
 @dataclass(frozen=True)
-class Episode(_MemoryNode):
-    """One opened turn record with its tool trace."""
+class RecappedTurn:
+    """The turn an episode recaps, on its thread."""
 
     thread: UUID
     turn: UUID
+
+
+@dataclass(frozen=True)
+class RecappedRun:
+    """The factory run stop an episode recaps."""
+
+    run: UUID
+    #: Which stop of the run it was.
+    generation: int
+
+
+@dataclass(frozen=True)
+class Episode(_MemoryNode):
+    """One opened record of a turn or a factory run stop, with its tool trace."""
+
+    recaps: RecappedTurn | RecappedRun
     tools: tuple[str, ...]
 
 

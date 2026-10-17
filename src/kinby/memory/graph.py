@@ -18,7 +18,14 @@ from kinby.frontmatter import (
     render_frontmatter_value,
 )
 from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR
-from kinby.memory.facade import Episode, Fact, MemoryHit, MemoryNode
+from kinby.memory.facade import (
+    Episode,
+    Fact,
+    MemoryHit,
+    MemoryNode,
+    RecappedRun,
+    RecappedTurn,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -55,14 +62,22 @@ class _FactFrontmatter(_NodeFrontmatter):
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class _EpisodeFrontmatter(_NodeFrontmatter):
+class _TurnEpisodeFrontmatter(_NodeFrontmatter):
     thread: UUID
     turn: UUID
     tools: tuple[str, ...]
     tombstone: bool = False
 
 
-type _Frontmatter = _FactFrontmatter | _EpisodeFrontmatter
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class _RunEpisodeFrontmatter(_NodeFrontmatter):
+    run: UUID
+    generation: int
+    tools: tuple[str, ...]
+    tombstone: bool = False
+
+
+type _Frontmatter = _FactFrontmatter | _TurnEpisodeFrontmatter | _RunEpisodeFrontmatter
 _FRONTMATTER = TypeAdapter(_Frontmatter)
 
 
@@ -169,15 +184,12 @@ def _render_node(memory: MemoryNode) -> str:
     tools = (
         f"tools: {render_frontmatter_value(memory.tools)}\n" if isinstance(memory, Episode) else ""
     )
-    thread = f"thread: {memory.thread}\n" if memory.thread is not None else ""
-    turn = f"turn: {memory.turn}\n" if isinstance(memory, Episode) else ""
     source = "source: user\n" if isinstance(memory, Fact) and memory.added_by_user else ""
     body = memory.body.rstrip("\r\n")
     return (
         "---\n"
         f"date: {memory.date.isoformat()}\n"
-        f"{thread}"
-        f"{turn}"
+        f"{_origin(memory)}"
         f"description: {description}\n"
         f"subjects: {subjects}\n"
         f"{tools}"
@@ -185,6 +197,15 @@ def _render_node(memory: MemoryNode) -> str:
         "---\n"
         f"{body}\n"
     )
+
+
+def _origin(memory: MemoryNode) -> str:
+    """The frontmatter lines that say where *memory* came from."""
+    if isinstance(memory, Fact):
+        return "" if memory.thread is None else f"thread: {memory.thread}\n"
+    if isinstance(memory.recaps, RecappedTurn):
+        return f"thread: {memory.recaps.thread}\nturn: {memory.recaps.turn}\n"
+    return f"run: {memory.recaps.run}\ngeneration: {memory.recaps.generation}\n"
 
 
 def _read_node(path: Path) -> MemoryNode | None:
@@ -206,13 +227,17 @@ def _read_node(path: Path) -> MemoryNode | None:
             thread=frontmatter.thread,
             added_by_user=frontmatter.source == "user",
         )
+    recaps = (
+        RecappedTurn(frontmatter.thread, frontmatter.turn)
+        if isinstance(frontmatter, _TurnEpisodeFrontmatter)
+        else RecappedRun(frontmatter.run, frontmatter.generation)
+    )
     return Episode(
         node=node,
         date=frontmatter.date,
-        thread=frontmatter.thread,
         description=frontmatter.description,
         subjects=frontmatter.subjects,
         body=body,
-        turn=frontmatter.turn,
+        recaps=recaps,
         tools=frontmatter.tools,
     )

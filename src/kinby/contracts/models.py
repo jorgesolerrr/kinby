@@ -2026,10 +2026,14 @@ class MemoryOpenCommand(ContractModel):
 
 class MemoryOpenResult(NodeSummary):
     body: str
-    #: The thread the node was learned or recapped in. Null for a fact the user added.
+    #: The thread the node was learned or recapped in. Null for a fact the user added, and for
+    #: an episode of a factory run.
     thread: UUID | None
-    #: The recapped turn and its tool path. Null for a fact.
+    #: The recapped turn. Null for a fact, and for an episode of a factory run.
     turn: UUID | None
+    #: The recapped factory run. Null for a fact, and for an episode of a turn.
+    run: UUID | None
+    #: The episode's tool path. Null for a fact.
     tools: list[str] | None
 
 

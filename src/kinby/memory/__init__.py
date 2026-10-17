@@ -1,7 +1,15 @@
 """Short-term memory, long-term memory (profile + knowledge graph), and reasoning traces."""
 
 from kinby.contracts import NodeId
-from kinby.memory.facade import Episode, Fact, Memory, MemoryHit, MemoryNode
+from kinby.memory.facade import (
+    Episode,
+    Fact,
+    Memory,
+    MemoryHit,
+    MemoryNode,
+    RecappedRun,
+    RecappedTurn,
+)
 from kinby.memory.graph import GraphStore, InvalidNodeId, MemoryNodeError, NodeNotFound
 from kinby.memory.recap import RecapDraft, RecapWriter
 from kinby.memory.tools import memory_tools, open_memory, search_memory
@@ -19,6 +27,8 @@ __all__ = [
     "NodeNotFound",
     "RecapDraft",
     "RecapWriter",
+    "RecappedRun",
+    "RecappedTurn",
     "memory_tools",
     "open_memory",
     "search_memory",
