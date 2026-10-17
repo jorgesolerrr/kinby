@@ -491,6 +491,8 @@ describe("a running instance", () => {
     const alert = within(screen.getByRole("alert"))
     expect(alert.getByText("Ada failed")).toBeDefined()
     expect(alert.getByText("exited (1)")).toBeDefined()
+    expect(alert.getByText(/^Check its settings in Configure before you stop it/)).toBeDefined()
+    expect(screen.queryByText(/is running$/)).toBeNull()
   })
 
   it("follows a sign-in that runs when the page loads", async () => {

@@ -196,7 +196,9 @@ export function InstancePage({
           </section>
         )}
         {commands}
-        {logins.length === 0 && !commands && <ReadyForWork name={name} />}
+        {logins.length === 0 && !commands && observedState(instance) === "running" && (
+          <ReadyForWork name={name} />
+        )}
       </>
     )
   }
@@ -446,7 +448,9 @@ function ProcessAlert({ instance, name }: { instance: InstanceSummary; name: str
               ? "Its container keeps stopping, and the runtime keeps starting it again."
               : instance.detail}
           </p>
-          <p>Stop it, then check its settings in Configure before you start it again.</p>
+          <p>
+            Check its settings in Configure before you stop it. A stopped instance has no Configure.
+          </p>
         </AlertDescription>
       </Alert>
     </div>

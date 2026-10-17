@@ -48,7 +48,7 @@ describe("the app", () => {
     await signIn("a-guessed-token")
 
     expect((await screen.findByRole("alert")).textContent).toBe(
-      "Could not sign in. Check the token and sign in again.",
+      "Could not sign in. Check the token and that the hub is reachable, then sign in again.",
     )
     expect(screen.getAllByRole("alert")).toHaveLength(1)
     expect(screen.queryByRole("button", { name: /You/ })).toBeNull()
