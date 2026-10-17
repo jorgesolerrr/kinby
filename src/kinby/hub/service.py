@@ -140,6 +140,7 @@ from kinby.contracts import (
     Readiness,
     RecreateReason,
     RevisionBehind,
+    RunStop,
     Scope,
     SetupValue,
     SkillName,
@@ -207,7 +208,7 @@ from kinby.hub.models import (
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
 from kinby.hub.relay import relayed_call
-from kinby.hub.runs import FactoryRuns, UndeliveredCall
+from kinby.hub.runs import FactoryRuns, UndeliveredCall, Untold
 from kinby.hub.secrets import HubSecrets, replace_protected, write_protected
 from kinby.hub.setup import (
     ENVIRONMENT_NAME,
@@ -477,7 +478,7 @@ class Hub:
             )
             self.library.receive()
             self.secrets = HubSecrets(self.directory / "hub-secrets.json")
-            self.runs = FactoryRuns(self.registry, self.factories, self._run_step)
+            self.runs = FactoryRuns(self.registry, self.factories, self._run_step, self._tell_stop)
             self.approvals = HomeApprovals()
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
@@ -659,6 +660,14 @@ class Hub:
             return UndeliveredCall(str(exc) or type(exc).__name__)
         except Exception as exc:
             return StepResult(ending=StepEnding.FAILED, summary=str(exc) or type(exc).__name__)
+
+    async def _tell_stop(self, instance_id: UUID, stop: RunStop) -> Untold | None:
+        try:
+            endpoint = await self._endpoint(self._active_instance(instance_id))
+            await self._control.run_stopped(endpoint, stop)
+        except Exception as exc:
+            return Untold(str(exc) or type(exc).__name__)
+        return None
 
     def _schedule(self, work: Coroutine[object, object, None], *, eager: bool = False) -> None:
         """An eager task runs up to its first wait before the call that scheduled it returns."""

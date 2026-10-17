@@ -54,6 +54,7 @@ from kinby.contracts import (
     OperationState,
     ReasoningEffort,
     RepositoryCommands,
+    RunStop,
     StepEnding,
     StepResult,
     StepRunCommand,
@@ -804,6 +805,137 @@ def test_a_reports_delivery_only_marks_reported_its_own_stop(tmp_path):
 
     registry.mark_reported(run.run_id, registry.stop_generation(run.run_id))
     assert registry.unreported_runs() == []
+
+
+async def told(control: FakeControl, count: int) -> list[RunStop]:
+    """The run stops the hub told once *count* of them reached their instance, and no more."""
+    async with asyncio.timeout(5):
+        while len(control.stops) < count:
+            await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    return [stop for _, stop in control.stops]
+
+
+@pytest.mark.parametrize(
+    ("results", "status"),
+    [
+        ([], FactoryRunStatus.DONE),
+        ([StepResult(ending=StepEnding.FAILED)], FactoryRunStatus.NEEDS_HUMAN),
+    ],
+)
+def test_a_run_that_stops_tells_the_instance_that_owns_it_once_with_its_record(
+    tmp_path, results, status
+):
+    control = FakeControl()
+    control.step_results = results
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, NEEDS_HUMAN_FILES)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is status
+        assert await told(control, 1) == [
+            RunStop(
+                run_id=run.run_id,
+                factory="checks",
+                work_item={"issue": 7},
+                status=status,
+                generation=1,
+                attempts=finished.attempts,
+            )
+        ]
+        endpoint, _ = control.stops[0]
+        assert endpoint.address == f"http://kinby-{coder}:8787"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("method", "status", "after_the_restart"),
+    [
+        (FACTORY_RUN_RETRY, FactoryRunStatus.DONE, 1),
+        (FACTORY_RUN_CANCEL, FactoryRunStatus.CANCELLED, 0),
+    ],
+)
+def test_a_run_that_stops_again_after_needing_a_human_tells_only_its_new_attempts(
+    tmp_path, method, status, after_the_restart
+):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="Tests failed.")]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+        await told(control, 1)
+        await hub_client(hub).call(method, method.command(run_id=run.run_id))
+        finished = await settled(hub, run.run_id)
+        first, second = await told(control, 2)
+
+        assert (first.status, first.generation) == (FactoryRunStatus.NEEDS_HUMAN, 1)
+        assert first.attempts == finished.attempts[:1]
+        assert (second.status, second.generation) == (status, 2)
+        assert second.attempts == finished.attempts[1:]
+        assert len(second.attempts) == after_the_restart
+
+    asyncio.run(scenario())
+
+
+def test_a_run_stop_not_told_before_the_hub_stopped_is_told_after_a_restart(tmp_path, monkeypatch):
+    monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 60)
+    control = FakeControl()
+    control.stop_failures = [ControlUnreachable("Cannot connect to host kinby-instance:8787")]
+    runtime = FakeRuntime()
+    directory = tmp_path / "hub"
+    hub = factory_hub(directory, control, runtime)
+
+    def new_hub() -> Hub:
+        return Hub(
+            directory,
+            runtime=runtime,
+            images=FakeImages(),
+            control=control,
+            shipped_factories=directory / "shipped",
+        )
+
+    async def before_the_restart() -> UUID:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+        await told(control, 1)
+        return run.run_id
+
+    run_id = asyncio.run(before_the_restart())
+    hub.close()
+    restarted = new_hub()
+
+    async def after_the_restart() -> None:
+        await restarted.recover()
+        _, again = await told(control, 2)
+
+        assert (again.run_id, again.status, again.generation) == (
+            run_id,
+            FactoryRunStatus.DONE,
+            1,
+        )
+        restarted.close()
+
+    asyncio.run(after_the_restart())
+    once_more = new_hub()
+
+    async def after_the_second_restart() -> None:
+        await once_more.recover()
+        await asyncio.sleep(0.05)
+
+        assert len(control.stops) == 2
+        once_more.close()
+
+    asyncio.run(after_the_second_restart())
 
 
 @pytest.mark.parametrize(
