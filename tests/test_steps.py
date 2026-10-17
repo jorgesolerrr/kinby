@@ -1065,8 +1065,21 @@ def test_a_client_steps_prompt_has_no_skills_catalogue_when_the_instance_has_no_
         await run_client_step(runtime.dispatcher, "claude")
 
         [called] = recorded_calls(calls)
-        assert called.stdin.endswith("</factory-run-data>")
         assert "# Skills" not in called.stdin
+
+    asyncio.run(scenario())
+
+
+def test_a_client_steps_prompt_says_how_to_search_the_instances_memory(tmp_path, monkeypatch):
+    runtime, _ = step_instance(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    async def scenario() -> None:
+        await run_client_step(runtime.dispatcher, "claude")
+
+        [called] = recorded_calls(calls)
+        assert "kinby memory search" in called.stdin
+        assert "kinby memory open" in called.stdin
 
     asyncio.run(scenario())
 

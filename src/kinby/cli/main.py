@@ -83,6 +83,14 @@ from kinby.instance import (
 )
 from kinby.instance.permissions import load_permissions
 from kinby.instance.recap import load_recap_lens
+from kinby.memory import (
+    GraphStore,
+    InvalidNodeId,
+    NodeId,
+    NodeNotFound,
+    open_memory,
+    search_memory,
+)
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
@@ -923,6 +931,33 @@ def main(
     routine_run.add_argument("name", help="routine name")
     routine_run.add_argument("--payload", type=Path, help="delivery payload file")
     _add_instance_selector(routine_run, "instance that owns the routine")
+    memory_parser = subparsers.add_parser(
+        "memory",
+        help="search and open the instance's memory without changing it",
+    )
+    memory_parser.set_defaults(directory=None)
+    memory_subparsers = memory_parser.add_subparsers(dest="memory_command")
+    memory_search = memory_subparsers.add_parser(
+        "search",
+        help="print matching facts, and episodes under a date bound or when no fact matches",
+    )
+    memory_search.add_argument(
+        "query", nargs="+", help="words each hit's description or subjects hold"
+    )
+    memory_search.add_argument(
+        "--after",
+        type=date.fromisoformat,
+        help="include memories dated on or after this ISO 8601 date",
+    )
+    memory_search.add_argument(
+        "--before",
+        type=date.fromisoformat,
+        help="include memories dated on or before this ISO 8601 date",
+    )
+    memory_search.add_argument("--instance", dest="instance_directory", help="instance to search")
+    memory_open = memory_subparsers.add_parser("open", help="print one memory's body")
+    memory_open.add_argument("node", help="node id from kinby memory search")
+    memory_open.add_argument("--instance", dest="instance_directory", help="instance to read")
     usage_parser = subparsers.add_parser(
         "usage",
         help="show token totals",
@@ -1058,6 +1093,15 @@ def main(
                             _run_routine(instance, RoutineName(args.name), args.payload)
                         )
                     return asyncio.run(_list_routines(instance))
+            case "memory" if args.memory_command is not None:
+                memory = GraphStore(_load_selected_instance(args).path)
+                match args.memory_command:
+                    case "search":
+                        query = " ".join(args.query)
+                        print(search_memory(memory, query, after=args.after, before=args.before))
+                    case "open":
+                        print(open_memory(memory, NodeId(args.node)))
+                return 0
             case "usage":
                 command = _range_command(lambda: _usage_command(args))
                 if command is None:
@@ -1076,6 +1120,8 @@ def main(
         InstanceBusyError,
         InsecureContractUrl,
         ManifestError,
+        NodeNotFound,
+        InvalidNodeId,
     ) as exc:
         print(exc, file=sys.stderr)
         return 1
