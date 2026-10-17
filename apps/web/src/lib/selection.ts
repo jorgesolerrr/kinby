@@ -76,11 +76,6 @@ export function selectTurn(instanceId: string, threadId: string, turnId: string)
   navigate(turnPath(instanceId, threadId, turnId))
 }
 
-/** Open an instance's thread list page the same way. */
-export function openThreads(instanceId: string): void {
-  navigate(threadsPath(instanceId))
-}
-
 /** Open an instance's config panel the same way. */
 export function openConfig(instanceId: string): void {
   navigate(configPath(instanceId))
