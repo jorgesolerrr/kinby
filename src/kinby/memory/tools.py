@@ -8,7 +8,7 @@ from datetime import date
 
 from kinby.contracts import NodeId
 from kinby.core.clock import utc_today
-from kinby.memory.facade import Episode, Fact, Memory, new_node_id
+from kinby.memory.facade import Episode, Fact, Memory, RecappedRun, RecappedTurn, new_node_id
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 
@@ -95,7 +95,9 @@ def open_memory(memory: Memory, node: NodeId) -> str:
         "node": found.node,
         "body": found.body,
     }
-    if isinstance(found, Episode):
-        opened["turn"] = str(found.turn)
-        opened["tools"] = list(found.tools)
+    match found:
+        case Episode(recaps=RecappedTurn(turn=turn), tools=tools):
+            opened |= {"turn": str(turn), "tools": list(tools)}
+        case Episode(recaps=RecappedRun(run=run), tools=tools):
+            opened |= {"run": str(run), "tools": list(tools)}
     return json.dumps(opened, ensure_ascii=False)

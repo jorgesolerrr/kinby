@@ -19,11 +19,17 @@ from kinby.contracts import (
     ErrorEnvelope,
     Event,
     EventType,
+    FactoryRunStatus,
     MemoryRecapped,
     MessageDelta,
     ModelCompleted,
+    Payload,
     PermissionMode,
+    RunStop,
+    RunStopped,
     Scope,
+    StepAttempt,
+    StepEnding,
     ThreadCreateResult,
     ToolCall,
     ToolResult,
@@ -31,7 +37,7 @@ from kinby.contracts import (
     TurnStarted,
     Warning,
 )
-from kinby.core.dispatcher import TurnConfig, build_dispatcher
+from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
 from kinby.instance import load_instance
@@ -42,8 +48,11 @@ from kinby.memory import (
     MemoryNode,
     NodeId,
     RecapDraft,
+    RecappedRun,
+    RecappedTurn,
     RecapWriter,
 )
+from kinby.memory.recap import RecapModel
 from tests.helpers import (
     cannot_restore,
     does_not_park,
@@ -1006,8 +1015,7 @@ def test_catch_up_deletes_no_work_traces_and_keeps_other_nodes(tmp_path: Path) -
             description=description,
             subjects=(),
             body="## Path taken\n1. fetch: {}",
-            thread=uuid4(),
-            turn=turn_id,
+            recaps=RecappedTurn(thread=uuid4(), turn=turn_id),
             tools=("fetch",),
         )
 
@@ -1580,5 +1588,343 @@ def test_next_turn_starts_while_previous_recap_is_blocked(tmp_path: Path) -> Non
         ]
         assert [marker.turn_id for marker in markers] == [first.turn_id, second.turn_id]
         assert len(list((tmp_path / "memory" / "graph").glob("*.md"))) == 2
+
+    asyncio.run(scenario())
+
+
+_RUN_ID = UUID("33333333-3333-3333-3333-333333333333")
+_STARTED = datetime(2026, 10, 17, 9, tzinfo=UTC)
+_RUN_DRAFT = RecapDraft(
+    keep=True,
+    description="Recapped factory runs in the memory recap",
+    subjects=("memory recap", "src/kinby/memory/recap.py"),
+    happened="Issue 7 is done: a run stop writes an episode.",
+    decided="Share the recap worker between turns and runs.",
+    retrospective="Run the linter before the checks step.",
+)
+
+
+def _attempt(
+    step: str,
+    attempt: int,
+    summary: str,
+    *,
+    ending: StepEnding = StepEnding.CLEAN,
+    outcome: str | None = None,
+    values: dict[str, bool | int | str] | None = None,
+) -> StepAttempt:
+    return StepAttempt(
+        step=step,
+        attempt=attempt,
+        ending=ending,
+        outcome=outcome,
+        values=values or {},
+        summary=summary,
+        started_at=_STARTED,
+        ended_at=_STARTED,
+    )
+
+
+def _stop(
+    generation: int,
+    attempts: Sequence[StepAttempt],
+    status: FactoryRunStatus = FactoryRunStatus.DONE,
+) -> RunStop:
+    return RunStop(
+        run_id=_RUN_ID,
+        factory="toy",
+        work_item={"issue": 7},
+        status=status,
+        generation=generation,
+        attempts=list(attempts),
+    )
+
+
+_REVIEWED_RUN = _stop(
+    1,
+    [
+        _attempt("write", 1, "Wrote the change.", values={"title": "Recap runs"}),
+        _attempt(
+            "test",
+            1,
+            "2 tests failed in test_recap.py.",
+            ending=StepEnding.FAILED,
+            values={"failure": "2 tests failed in test_recap.py."},
+        ),
+        _attempt("write", 2, "Fixed the failing tests."),
+        _attempt("test", 2, "Tests passed."),
+        _attempt(
+            "review",
+            1,
+            "One thread to answer.",
+            outcome="changes",
+            values={"feedback": "Name the frame after the run record."},
+        ),
+        _attempt("write", 3, "Answered review.", values={"replies": "Renamed it to run record."}),
+        _attempt("test", 3, "Tests passed."),
+        _attempt("review", 2, "Approved.", outcome="approved"),
+    ],
+)
+
+
+def _run_recap(
+    tmp_path: Path, event_log: EventLog, policy: str, model: RecapModel
+) -> tuple[RecapWriter, Dispatcher]:
+    recap = RecapWriter(
+        event_log,
+        GraphStore(tmp_path),
+        _instance(tmp_path, policy=policy),
+        model_factory=lambda _: model,
+    )
+    dispatcher = build_dispatcher(
+        tmp_path / ".state",
+        event_log=event_log,
+        turns=TurnConfig(
+            fixed_turn_preparation,
+            fixed_permission_ceiling,
+            ClosingRunner(),
+            recap,
+        ),
+    )
+    return recap, dispatcher
+
+
+async def _tell(dispatcher: Dispatcher, stop: RunStop) -> None:
+    told = await dispatcher.dispatch(
+        "run.stopped", stop.model_dump(mode="json"), {Scope.INSTANCE_LIFECYCLE}
+    )
+    assert isinstance(told, AcceptedResult)
+
+
+def _run_markers(event_log: EventLog) -> list[Event]:
+    return [
+        event for event in event_log.stored(_RUN_ID) if isinstance(event.payload, MemoryRecapped)
+    ]
+
+
+def test_a_run_stop_writes_one_episode_with_its_sections_subjects_and_run(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=30, output_tokens=12)
+        recap, dispatcher = _run_recap(tmp_path, event_log, "every-turn", model)
+
+        await _tell(dispatcher, _REVIEWED_RUN)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        [marker] = _run_markers(event_log)
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload == MemoryRecapped(
+            node=marker.payload.node,
+            input_tokens=30,
+            output_tokens=12,
+            model="openai:main",
+        )
+        assert marker.payload.node is not None
+        assert GraphStore(tmp_path).open(marker.payload.node) == Episode(
+            node=marker.payload.node,
+            date=marker.timestamp.date(),
+            description="Recapped factory runs in the memory recap",
+            subjects=("memory recap", "src/kinby/memory/recap.py"),
+            body=(
+                "## What happened\n"
+                "Issue 7 is done: a run stop writes an episode.\n"
+                "## What was decided\n"
+                "Share the recap worker between turns and runs.\n"
+                "## What should have gone differently\n"
+                "Run the linter before the checks step."
+            ),
+            recaps=RecappedRun(run=_RUN_ID, generation=1),
+            tools=(),
+        )
+
+    asyncio.run(scenario())
+
+
+def test_the_run_recap_frame_holds_the_record_its_send_backs_and_review(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        recap, dispatcher = _run_recap(tmp_path, event_log, "every-turn", model)
+
+        await _tell(dispatcher, _REVIEWED_RUN)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        [(message,)] = model.calls
+        assert isinstance(message, HumanMessage)
+        prompt = message.text
+        assert _EXPECTED_DEFAULT_RECAP_LENS in prompt
+        assert "Factory: toy\nWork item: issue 7\nStatus: done" in prompt
+        assert (
+            "2. test, attempt 1: failed. 2 tests failed in test_recap.py.\n"
+            '   Values: {"failure": "2 tests failed in test_recap.py."}'
+        ) in prompt
+        assert "8. review, attempt 2: clean, outcome approved. Approved." in prompt
+        assert (
+            "## Send-backs\n"
+            "- test, attempt 1, sent the work back to write: 2 tests failed in test_recap.py.\n"
+            "- review, attempt 1, sent the work back to write: One thread to answer."
+        ) in prompt
+        assert '{"feedback": "Name the frame after the run record."}' in prompt
+        assert '{"replies": "Renamed it to run record."}' in prompt
+        assert "# Output contract" in prompt
+
+    asyncio.run(scenario())
+
+
+def test_a_send_back_to_a_step_an_earlier_stop_reached_counts(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        recap, dispatcher = _run_recap(tmp_path, event_log, "every-turn", model)
+        needs_human = _stop(
+            1,
+            [
+                _attempt("write", 1, "Wrote the change."),
+                _attempt("test", 1, "No checks list.", ending=StepEnding.NEEDS_HUMAN),
+            ],
+            FactoryRunStatus.NEEDS_HUMAN,
+        )
+        retried = _stop(
+            2,
+            [
+                _attempt("test", 2, "Lint failed.", ending=StepEnding.FAILED),
+                _attempt("write", 2, "Fixed the lint."),
+                _attempt("test", 3, "Tests passed."),
+            ],
+        )
+
+        await _tell(dispatcher, needs_human)
+        await _tell(dispatcher, retried)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        first, second = (message.text for (message,) in model.calls)
+        assert "## Send-backs\nNone." in first
+        assert "## Send-backs\n- test, attempt 2, sent the work back to write: Lint failed." in (
+            second
+        )
+        assert len(_run_markers(event_log)) == 2
+
+    asyncio.run(scenario())
+
+
+def test_catch_up_recaps_an_unrecapped_run_stop_once(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        await event_log.append(_RUN_ID, uuid4(), RunStopped(stop=_REVIEWED_RUN))
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        recap, dispatcher = _run_recap(tmp_path, event_log, "every-turn", model)
+
+        await recap.catch_up()
+        await asyncio.wait_for(recap.drain(), timeout=1)
+        await recap.catch_up()
+        await _tell(dispatcher, _REVIEWED_RUN)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        assert len(model.calls) == 1
+        assert len(_run_markers(event_log)) == 1
+        assert len(list((tmp_path / "memory" / "graph").glob("*.md"))) == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_trace_only_run_recap_writes_the_work_item_and_status_without_a_model(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        recap, dispatcher = _run_recap(tmp_path, event_log, "off", UnknownRecapModel())
+
+        await _tell(dispatcher, _REVIEWED_RUN)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        [marker] = _run_markers(event_log)
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload == MemoryRecapped(
+            node=marker.payload.node, input_tokens=0, output_tokens=0, model="openai:main"
+        )
+        assert marker.payload.node is not None
+        episode = GraphStore(tmp_path).open(marker.payload.node)
+        assert isinstance(episode, Episode)
+        assert (episode.description, episode.body, episode.recaps) == (
+            "toy run on issue 7",
+            "## What happened\nThe run stopped as done.",
+            RecappedRun(run=_RUN_ID, generation=1),
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_run_recap_warns_and_the_next_start_retries_it(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        failing, dispatcher = _run_recap(tmp_path, event_log, "every-turn", FailingRecapModel())
+
+        await _tell(dispatcher, _REVIEWED_RUN)
+        await asyncio.wait_for(failing.drain(), timeout=1)
+
+        assert event_log.stored(_RUN_ID)[-1].payload == Warning(
+            sources=("recap",),
+            message="The run recap failed: RuntimeError: recap response could not be parsed",
+        )
+        assert not _run_markers(event_log)
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        retry, _ = _run_recap(tmp_path, event_log, "every-turn", model)
+        await retry.catch_up()
+        await asyncio.wait_for(retry.drain(), timeout=1)
+        assert len(_run_markers(event_log)) == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_run_stop_writes_its_episode_even_from_a_draft_not_kept(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        model = ScriptedRecapModel(
+            _RUN_DRAFT.model_copy(update={"keep": False}), input_tokens=3, output_tokens=1
+        )
+        recap, dispatcher = _run_recap(tmp_path, event_log, "every-turn", model)
+
+        await _tell(dispatcher, _REVIEWED_RUN)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        [marker] = _run_markers(event_log)
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload.node is not None
+        assert GraphStore(tmp_path).open(marker.payload.node).description == (
+            _RUN_DRAFT.description
+        )
+
+    asyncio.run(scenario())
+
+
+class MarkerLosingEventLog(EventLog):
+    """Fails to append a recap marker, as a process stopping right after the episode would."""
+
+    async def append(self, thread_id: UUID, turn_id: UUID, payload: Payload) -> Event:
+        if isinstance(payload, MemoryRecapped):
+            raise OSError("stopped before the marker")
+        return await super().append(thread_id, turn_id, payload)
+
+
+def test_a_run_recap_retried_after_a_lost_marker_replaces_its_episode(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        state_dir = tmp_path / ".state"
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        lost, dispatcher = _run_recap(
+            tmp_path, MarkerLosingEventLog(state_dir), "every-turn", model
+        )
+        await _tell(dispatcher, _REVIEWED_RUN)
+        await asyncio.wait_for(lost.drain(), timeout=1)
+        assert len(list((tmp_path / "memory" / "graph").glob("*.md"))) == 1
+
+        event_log = EventLog(state_dir)
+        retry, _ = _run_recap(tmp_path, event_log, "every-turn", model)
+        await retry.catch_up()
+        await asyncio.wait_for(retry.drain(), timeout=1)
+
+        [episode] = (tmp_path / "memory" / "graph").glob("*.md")
+        [marker] = _run_markers(event_log)
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload.node == episode.stem
 
     asyncio.run(scenario())
