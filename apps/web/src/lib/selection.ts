@@ -35,7 +35,7 @@ export function turnPath(instanceId: string, threadId: string, turnId: string): 
   return `${threadPath(instanceId, threadId)}/${TURNS}/${encodeURIComponent(turnId)}`
 }
 
-function configPath(instanceId: string): string {
+export function configPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${CONFIG}`
 }
 
@@ -48,7 +48,7 @@ function corePath(instanceId: string): string {
   return `${configPath(instanceId)}/${CORE}`
 }
 
-function memoryPath(instanceId: string): string {
+export function memoryPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${MEMORY}`
 }
 

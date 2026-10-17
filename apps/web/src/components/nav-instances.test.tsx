@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 
 import { NavInstances } from "@/components/nav-instances"
 import { SidebarProvider } from "@/components/ui/sidebar"
+import { threadList } from "@/lib/thread-list"
 
 function thread(fields: Pick<ThreadSummary, "id"> & Partial<ThreadSummary>): ThreadSummary {
   return {
@@ -74,6 +75,7 @@ function sidebar(
   clock: FakeClock,
   instances: InstanceSummary[],
   selected?: InstanceSummary,
+  selectedClient?: Pick<InstanceClient, "call">,
 ): React.ReactElement {
   return (
     <SidebarProvider>
@@ -85,7 +87,7 @@ function sidebar(
         creating={false}
         anyRemoved={false}
         removedOpen={false}
-        threads={selected && <span>Ada's threads</span>}
+        selectedClient={selectedClient}
       />
     </SidebarProvider>
   )
@@ -280,6 +282,24 @@ describe("the needs-you count on an instance that is not selected", () => {
     rerender(sidebar(hub, clock, [ada], ada))
 
     expect(hub.closed).toEqual(["instance-1"])
-    expect(rowOf("Ada").getByText("Ada's threads")).toBeDefined()
+  })
+
+  it("counts the selected instance's threads from the list its threads column keeps", async () => {
+    const ada = instanceSummary({ instance_id: "instance-1", persona_name: "Ada", needs_human: 1 })
+    const hub = fakeHub({})
+    const selectedClient = stubCaller({
+      "thread.list": () => ({
+        threads: [thread({ id: "t1", status: "failed" }), thread({ id: "t2" })],
+        ceiling: "full-access",
+        cursor: null,
+      }),
+    })
+    render(sidebar(hub, fakeClock(), [ada], ada, selectedClient))
+    expect(needsYou(rowOf("Ada"))).toBe("1 waiting for you")
+
+    await act(() => threadList(selectedClient, "sidebar").list())
+
+    expect(needsYou(rowOf("Ada"))).toBe("2 waiting for you")
+    expect(hub.opened).toEqual([])
   })
 })
