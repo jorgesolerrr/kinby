@@ -58,6 +58,8 @@ def digest_session(claude_dir: Path, session: CodingSessionId) -> SessionDigest 
         return MissingSession(session)
     read: list[Path] = []
     changed: list[Path] = []
+    # The file each Read, Edit and Write call names, and the list it joins once it succeeds.
+    files: dict[str, tuple[Path, list[Path]]] = {}
     commands: dict[str, str] = {}
     failed: list[FailedCommand] = []
     searches: list[str] = []
@@ -75,9 +77,9 @@ def digest_session(claude_dir: Path, session: CodingSessionId) -> SessionDigest 
                     tools.append(name)
                     match name, args:
                         case "Read", {"file_path": str(path)}:
-                            read.append(Path(path))
+                            files[call] = (Path(path), read)
                         case "Edit" | "Write", {"file_path": str(path)}:
-                            changed.append(Path(path))
+                            files[call] = (Path(path), changed)
                         case "Bash", {"command": str(command)}:
                             # The rest of a command can be a heredoc holding a whole file.
                             commands[call] = next(iter(command.splitlines()), "")
@@ -91,6 +93,11 @@ def digest_session(claude_dir: Path, session: CodingSessionId) -> SessionDigest 
                 } if call in commands and _EXIT_CODE.match(output):
                     tail = output[-_FAILED_OUTPUT_TAIL_CHARS:].strip()
                     failed.append(FailedCommand(commands[call], tail))
+                case {"type": "tool_result", "tool_use_id": str(call)} if (
+                    call in files and not block.get("is_error")
+                ):
+                    path, touched = files[call]
+                    touched.append(path)
     return SessionDigest(
         session=session,
         read=tuple(dict.fromkeys(read)),

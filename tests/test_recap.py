@@ -1968,6 +1968,16 @@ def _implementing_session(tmp_path: Path) -> None:
             _returned("8", "PASSING COMMAND OUTPUT"),
             _used("9", "Bash", command="python3 - <<'EOF'\nHEREDOC FILE CONTENT\nEOF"),
             _returned("9", "Exit code 2\nTraceback", error=True),
+            _used("10", "Read", file_path="/instance/workspace/src/gone.py"),
+            _returned("10", "File does not exist.", error=True),
+            _used(
+                "11",
+                "Edit",
+                file_path="/instance/workspace/src/untouched.py",
+                old_string="ABSENT",
+                new_string="NEVER WRITTEN",
+            ),
+            _returned("11", "String to replace not found in file.", error=True),
             _said("Decided to digest each session once, because attempts share it."),
         ],
     )
@@ -2014,6 +2024,8 @@ def test_the_run_recap_frame_lists_what_the_claude_session_read_changed_and_fail
         assert "EARLY PYTEST OUTPUT" not in prompt
         assert "- python3 - <<'EOF'\n  Exit code 2\n  Traceback\n" in prompt
         assert "Memory searches:\n- session digest\n" in prompt
+        assert "/instance/workspace/src/gone.py" not in prompt
+        assert "/instance/workspace/src/untouched.py" not in prompt
         assert (
             "Assistant text:\nI will look at the recap first.\n\n"
             "Decided to digest each session once, because attempts share it."
