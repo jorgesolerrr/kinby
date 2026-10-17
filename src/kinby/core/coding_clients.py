@@ -30,6 +30,7 @@ from kinby.contracts import (
     TokenTotals,
     UsageSource,
 )
+from kinby.instance.layout import CLAUDE_DIR
 
 #: The API keys each client bills over its subscription login when both are set.
 _API_KEYS = {
@@ -245,7 +246,7 @@ def _environment(
     }
     environment["KINBY_INSTANCE"] = str(instance)
     if client is CodingClient.CLAUDE:
-        environment["CLAUDE_CONFIG_DIR"] = str(state_dir / "claude")
+        environment["CLAUDE_CONFIG_DIR"] = str(state_dir / CLAUDE_DIR)
         # `claude -p` exits when its turn ends, with whatever it left in the background still
         # running. So a suite longer than Claude's 10 minutes for one command ended the step
         # with the work uncommitted. Claude runs every command in the foreground instead, for

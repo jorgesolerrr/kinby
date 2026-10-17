@@ -15,7 +15,10 @@ from pydantic import ValidationError
 
 from kinby.contracts import (
     AcceptedResult,
+    CodingSessionId,
     CompletionOutcome,
+    DelegatedRun,
+    DelegatedRunOutcome,
     ErrorEnvelope,
     Event,
     EventType,
@@ -25,6 +28,7 @@ from kinby.contracts import (
     ModelCompleted,
     Payload,
     PermissionMode,
+    RunDelegated,
     RunStop,
     RunStopped,
     Scope,
@@ -35,6 +39,7 @@ from kinby.contracts import (
     ToolResult,
     TurnCompleted,
     TurnStarted,
+    UsageSource,
     Warning,
 )
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
@@ -1612,6 +1617,7 @@ def _attempt(
     ending: StepEnding = StepEnding.CLEAN,
     outcome: str | None = None,
     values: dict[str, bool | int | str] | None = None,
+    session: str | None = None,
 ) -> StepAttempt:
     return StepAttempt(
         step=step,
@@ -1620,6 +1626,7 @@ def _attempt(
         outcome=outcome,
         values=values or {},
         summary=summary,
+        session=None if session is None else CodingSessionId(session),
         started_at=_STARTED,
         ended_at=_STARTED,
     )
@@ -1926,5 +1933,302 @@ def test_a_run_recap_retried_after_a_lost_marker_replaces_its_episode(tmp_path: 
         [marker] = _run_markers(event_log)
         assert isinstance(marker.payload, MemoryRecapped)
         assert marker.payload.node == episode.stem
+
+    asyncio.run(scenario())
+
+
+_SESSION = "11111111-aaaa-4aaa-8aaa-111111111111"
+_RERUN_SESSION = "22222222-bbbb-4bbb-8bbb-222222222222"
+_FAILED_OUTPUT = (
+    "Exit code 1\nEARLY PYTEST OUTPUT\n" + "collected line\n" * 80 + "FAILED test_digest.py::test_x"
+)
+
+
+def _said(text: str) -> dict[str, object]:
+    return {
+        "type": "assistant",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": text}]},
+    }
+
+
+def _used(call_id: str, name: str, **arguments: object) -> dict[str, object]:
+    return {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": call_id, "name": name, "input": arguments}],
+        },
+    }
+
+
+def _returned(call_id: str, output: str, *, error: bool = False) -> dict[str, object]:
+    return {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": call_id,
+                    "content": output,
+                    "is_error": error,
+                }
+            ],
+        },
+        "toolUseResult": output,
+    }
+
+
+def _claude_session(tmp_path: Path, session: str, entries: Sequence[dict[str, object]]) -> None:
+    """A Claude session file where the instance runs Claude, under its state folder."""
+    project = tmp_path / ".state" / "claude" / "projects" / "-instance-workspace"
+    project.mkdir(parents=True, exist_ok=True)
+    lines = (json.dumps(entry) for entry in entries)
+    (project / f"{session}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _implementing_session(tmp_path: Path) -> None:
+    _claude_session(
+        tmp_path,
+        _SESSION,
+        [
+            {"type": "user", "message": {"role": "user", "content": "THE STEP PROMPT"}},
+            _said("I will look at the recap first."),
+            _used("1", "Bash", command='kinby memory search "session digest"'),
+            _returned("1", "SEARCH HITS OUTPUT"),
+            _used("2", "Read", file_path="/instance/workspace/src/recap.py"),
+            _returned("2", "READ FILE CONTENT"),
+            _used("3", "Grep", pattern="def _run_frame"),
+            _returned("3", "GREP OUTPUT"),
+            _used(
+                "4",
+                "Edit",
+                file_path="/instance/workspace/src/recap.py",
+                old_string="OLD EDIT TEXT",
+                new_string="NEW EDIT TEXT",
+            ),
+            _returned("4", "EDIT RESULT OUTPUT"),
+            _used(
+                "5",
+                "Write",
+                file_path="/instance/workspace/src/digest.py",
+                content="WRITTEN FILE CONTENT",
+            ),
+            _returned("5", "WRITE RESULT OUTPUT"),
+            _used("6", "Read", file_path="/instance/workspace/src/recap.py"),
+            _returned("6", "READ FILE CONTENT AGAIN"),
+            _used("7", "Bash", command="uv run pytest"),
+            _returned("7", _FAILED_OUTPUT, error=True),
+            _used("8", "Bash", command="git status"),
+            _returned("8", "PASSING COMMAND OUTPUT"),
+            _used("9", "Bash", command="python3 - <<'EOF'\nHEREDOC FILE CONTENT\nEOF"),
+            _returned("9", "Exit code 2\nTraceback", error=True),
+            _used("10", "Read", file_path="/instance/workspace/src/gone.py"),
+            _returned("10", "File does not exist.", error=True),
+            _used(
+                "11",
+                "Edit",
+                file_path="/instance/workspace/src/untouched.py",
+                old_string="ABSENT",
+                new_string="NEVER WRITTEN",
+            ),
+            _returned("11", "String to replace not found in file.", error=True),
+            _said("Decided to digest each session once, because attempts share it."),
+        ],
+    )
+
+
+_SESSION_RUN = _stop(
+    1,
+    [
+        _attempt("implement", 1, "Implemented it.", session=_SESSION),
+        _attempt("fix", 1, "Fixed the review.", session=_SESSION),
+    ],
+)
+
+
+def _run_prompt(model: ScriptedRecapModel) -> str:
+    [(message,)] = model.calls
+    assert isinstance(message, HumanMessage)
+    return message.text
+
+
+def test_the_run_recap_frame_lists_what_the_claude_session_read_changed_and_failed(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        _implementing_session(tmp_path)
+        event_log = EventLog(tmp_path / ".state")
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        recap, dispatcher = _run_recap(tmp_path, event_log, "every-turn", model)
+
+        await _tell(dispatcher, _SESSION_RUN)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        prompt = _run_prompt(model)
+        assert (
+            f"## Session {_SESSION}\n"
+            "Files read:\n"
+            "- /instance/workspace/src/recap.py\n"
+            "Files changed:\n"
+            "- /instance/workspace/src/recap.py\n"
+            "- /instance/workspace/src/digest.py\n"
+        ) in prompt
+        assert "Failed commands:\n- uv run pytest\n" in prompt
+        assert "FAILED test_digest.py::test_x" in prompt
+        assert "EARLY PYTEST OUTPUT" not in prompt
+        assert "- python3 - <<'EOF'\n  Exit code 2\n  Traceback\n" in prompt
+        assert "Memory searches:\n- session digest\n" in prompt
+        assert "/instance/workspace/src/gone.py" not in prompt
+        assert "/instance/workspace/src/untouched.py" not in prompt
+        assert (
+            "Assistant text:\nI will look at the recap first.\n\n"
+            "Decided to digest each session once, because attempts share it."
+        ) in prompt
+        [marker] = _run_markers(event_log)
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload.node is not None
+        episode = GraphStore(tmp_path).open(marker.payload.node)
+        assert isinstance(episode, Episode)
+        assert episode.tools == ("Bash", "Read", "Grep", "Edit", "Write")
+
+    asyncio.run(scenario())
+
+
+def test_the_run_recap_frame_holds_no_tool_output_or_file_content(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        _implementing_session(tmp_path)
+        event_log = EventLog(tmp_path / ".state")
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        recap, dispatcher = _run_recap(tmp_path, event_log, "every-turn", model)
+
+        await _tell(dispatcher, _SESSION_RUN)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        prompt = _run_prompt(model)
+        for withheld in (
+            "THE STEP PROMPT",
+            "SEARCH HITS OUTPUT",
+            "READ FILE CONTENT",
+            "GREP OUTPUT",
+            "OLD EDIT TEXT",
+            "NEW EDIT TEXT",
+            "EDIT RESULT OUTPUT",
+            "WRITTEN FILE CONTENT",
+            "WRITE RESULT OUTPUT",
+            "PASSING COMMAND OUTPUT",
+            "HEREDOC FILE CONTENT",
+        ):
+            assert withheld not in prompt
+
+    asyncio.run(scenario())
+
+
+def test_each_session_of_a_run_is_digested_once(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        _implementing_session(tmp_path)
+        _claude_session(
+            tmp_path,
+            _RERUN_SESSION,
+            [
+                _used("1", "Read", file_path="/instance/workspace/src/rerun.py"),
+                _returned("1", "RERUN FILE CONTENT"),
+            ],
+        )
+        event_log = EventLog(tmp_path / ".state")
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        recap, dispatcher = _run_recap(tmp_path, event_log, "every-turn", model)
+        rerun = _stop(
+            1,
+            [
+                _attempt("implement", 1, "Implemented it.", session=_SESSION),
+                _attempt("answer", 1, "Answered review.", session=_SESSION),
+                _attempt("fix", 1, "Session lost, ran in a new one.", session=_RERUN_SESSION),
+            ],
+        )
+
+        await _tell(dispatcher, rerun)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        prompt = _run_prompt(model)
+        assert prompt.count(f"## Session {_SESSION}\n") == 1
+        assert f"## Session {_RERUN_SESSION}\nFiles read:\n- /instance/workspace/src/rerun.py" in (
+            prompt
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_missing_session_file_still_writes_an_episode(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        recap, dispatcher = _run_recap(tmp_path, event_log, "every-turn", model)
+
+        await _tell(dispatcher, _SESSION_RUN)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        assert f"## Session {_SESSION}\nIts transcript is missing." in _run_prompt(model)
+        [marker] = _run_markers(event_log)
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload.node is not None
+
+    asyncio.run(scenario())
+
+
+def test_a_codex_only_run_is_recapped_from_its_record(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        _implementing_session(tmp_path)
+        event_log = EventLog(tmp_path / ".state")
+        codex = DelegatedRun(
+            usage_source=UsageSource.CHATGPT_SUBSCRIPTION,
+            client="codex",
+            models=[],
+            input_tokens=10,
+            output_tokens=2,
+            duration_ms=1,
+            client_turns=1,
+            outcome=DelegatedRunOutcome.COMPLETED,
+            session=CodingSessionId(_SESSION),
+        )
+        await event_log.append(_RUN_ID, uuid4(), RunDelegated(run=codex))
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        recap, dispatcher = _run_recap(tmp_path, event_log, "every-turn", model)
+
+        await _tell(dispatcher, _SESSION_RUN)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        prompt = _run_prompt(model)
+        assert "# Session digests\nNone." in prompt
+        assert "/instance/workspace/src/recap.py" not in prompt
+        [marker] = _run_markers(event_log)
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload.node is not None
+
+    asyncio.run(scenario())
+
+
+def test_a_trace_only_run_recap_lists_the_files_changed(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        _implementing_session(tmp_path)
+        event_log = EventLog(tmp_path / ".state")
+        recap, dispatcher = _run_recap(tmp_path, event_log, "off", UnknownRecapModel())
+
+        await _tell(dispatcher, _SESSION_RUN)
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        [marker] = _run_markers(event_log)
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload.node is not None
+        episode = GraphStore(tmp_path).open(marker.payload.node)
+        assert isinstance(episode, Episode)
+        assert (episode.body, episode.tools) == (
+            "## What happened\n"
+            "The run stopped as done.\n"
+            "## Files changed\n"
+            "- /instance/workspace/src/recap.py\n"
+            "- /instance/workspace/src/digest.py",
+            ("Bash", "Read", "Grep", "Edit", "Write"),
+        )
 
     asyncio.run(scenario())

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from itertools import pairwise
 from pathlib import Path
+from textwrap import indent
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 from uuid import UUID, uuid5
 
@@ -27,6 +28,7 @@ from kinby.contracts import (
     MemoryRecapped,
     MessageDelta,
     NodeId,
+    RunDelegated,
     RunStop,
     RunStopped,
     StepAttempt,
@@ -43,9 +45,10 @@ from kinby.contracts import (
 from kinby.core.model_calls import completed_model_call
 from kinby.core.models import init_model
 from kinby.instance import Instance, RecapPolicy, reload_manifest
-from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR
+from kinby.instance.layout import CLAUDE_DIR, GRAPH_DIR, MEMORY_DIR
 from kinby.instance.recap import load_recap_lens
 from kinby.memory.facade import Episode, Memory, RecappedRun, RecappedTurn, new_node_id
+from kinby.memory.session_digest import MissingSession, SessionDigest, digest_session
 from kinby.plugins.hub import hub_read
 
 if TYPE_CHECKING:
@@ -268,13 +271,26 @@ class RecapWriter:
         }
         stop, recorded_on = stops[request.generation]
         manifest = reload_manifest(self._instance, model_override=self._model_override)
+        digests = await asyncio.to_thread(
+            _session_digests, manifest.state_dir / CLAUDE_DIR, stop, events
+        )
         if manifest.memory.recap is RecapPolicy.TRACE_ONLY:
+            changed = dict.fromkeys(
+                path
+                for digest in digests
+                if isinstance(digest, SessionDigest)
+                for path in digest.changed
+            )
+            body = f"## What happened\nThe run stopped as {stop.status}."
+            if changed:
+                body = f"{body}\n## Files changed\n{_bullets(changed)}"
             episode = _run_episode(
                 request,
                 stop,
                 description=_shorten(_run_description(stop), _TRACE_DESCRIPTION_MAX_CHARS),
                 subjects=(),
-                body=f"## What happened\nThe run stopped as {stop.status}.",
+                body=body,
+                digests=digests,
                 recorded_on=recorded_on,
             )
             usage = TokenTotals(input_tokens=0, output_tokens=0)
@@ -284,7 +300,7 @@ class RecapWriter:
         reached = [attempt for each, _ in stops.values() for attempt in each.attempts]
         draft, usage = await self._draft(
             request,
-            _run_frame(stop, _send_backs(stop, reached), lens.text),
+            _run_frame(stop, _send_backs(stop, reached), digests, lens.text),
             manifest.models.recap,
         )
         # A run stop always leaves an episode, whatever the shared draft says about keeping it.
@@ -294,6 +310,7 @@ class RecapWriter:
             description=draft.description,
             subjects=draft.subjects,
             body=_narrative(draft),
+            digests=digests,
             recorded_on=recorded_on,
         )
         await self._finish(request, episode, usage, manifest.models.recap)
@@ -455,6 +472,7 @@ def _run_episode(
     description: str,
     subjects: tuple[str, ...],
     body: str,
+    digests: list[SessionDigest | MissingSession],
     recorded_on: date,
 ) -> Episode:
     """The episode of *stop*, under an id a retried recap of the stop writes again."""
@@ -465,7 +483,14 @@ def _run_episode(
         subjects=subjects,
         body=body,
         recaps=RecappedRun(request.run_id, request.generation),
-        tools=(),
+        tools=tuple(
+            dict.fromkeys(
+                tool
+                for digest in digests
+                if isinstance(digest, SessionDigest)
+                for tool in digest.tools
+            )
+        ),
     )
 
 
@@ -495,20 +520,69 @@ def _recap_frame(events: list[Event], calls: list[ToolCall], lens: str) -> str:
     )
 
 
-def _run_frame(stop: RunStop, send_backs: list[tuple[StepAttempt, str]], lens: str) -> str:
+def _run_frame(
+    stop: RunStop,
+    send_backs: list[tuple[StepAttempt, str]],
+    digests: list[SessionDigest | MissingSession],
+    lens: str,
+) -> str:
+    rendered = "\n\n".join(_render_digest(digest) for digest in digests) or "None."
     return (
         "Write a retrospective draft of this factory run, as code knowledge for the next session "
         "that works on the same area. Do not write facts. Set keep to true.\n\n"
         f"# Recap lens\n{lens}\n\n"
         f"# Run record\n{_render_run(stop, send_backs)}\n\n"
+        f"# Session digests\n{rendered}\n\n"
         "# Output contract\n"
         "Return its description and subjects, and text for "
-        "What happened (the work item and how the run ended), What was decided (each decision "
-        "and its reason), and What should have gone differently (review pushback, check "
+        "What happened (the work item, how the run ended, and the path taken: the main files "
+        "read and changed), What was decided (each decision and its reason, from the "
+        "assistant's text), and What should have gone differently (review pushback, check "
         "failures, dead ends). The review comments and the replies given are in the attempts' "
         "values. Name the area of the code in the description, and the area and its main paths "
         "in the subjects."
     )
+
+
+def _session_digests(
+    claude_dir: Path, stop: RunStop, events: list[Event]
+) -> list[SessionDigest | MissingSession]:
+    """A digest of each Claude session *stop*'s attempts ran in. Codex sessions have none yet."""
+    codex = {
+        event.payload.run.session
+        for event in events
+        if isinstance(event.payload, RunDelegated) and event.payload.run.client == "codex"
+    }
+    sessions = dict.fromkeys(
+        attempt.session
+        for attempt in stop.attempts
+        if attempt.session is not None and attempt.session not in codex
+    )
+    return [digest_session(claude_dir, session) for session in sessions]
+
+
+def _render_digest(digest: SessionDigest | MissingSession) -> str:
+    heading = f"## Session {digest.session}"
+    if isinstance(digest, MissingSession):
+        return f"{heading}\nIts transcript is missing."
+    failed = [
+        f"- {_shorten(failure.command, _TOOL_CALL_SUMMARY_MAX_CHARS)}\n{indent(failure.tail, '  ')}"
+        for failure in digest.failed
+    ]
+    return "\n".join(
+        (
+            heading,
+            f"Files read:\n{_bullets(digest.read)}",
+            f"Files changed:\n{_bullets(digest.changed)}",
+            "Failed commands:\n" + ("\n".join(failed) or "None."),
+            f"Memory searches:\n{_bullets(digest.searches)}",
+            "Assistant text:\n" + "\n\n".join(digest.said),
+        )
+    )
+
+
+def _bullets(items: Iterable[object]) -> str:
+    return "\n".join(f"- {item}" for item in items) or "None."
 
 
 def _render_run(stop: RunStop, send_backs: list[tuple[StepAttempt, str]]) -> str:
