@@ -9,6 +9,7 @@ import type {
 } from "@kinby/contract"
 import { type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
+import { InstanceAvatar } from "@/components/instance-avatar"
 import { Secrets } from "@/components/secrets-section"
 import { SubscriptionLogins } from "@/components/subscription-logins"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -146,29 +147,38 @@ export function InstancePage({
     const logins = status?.setup.logins ?? []
     return (
       <>
-        <div className="flex flex-wrap items-center gap-2 px-6 pt-6">
-          <Button variant="outline" onClick={() => openConfig(instance.instance_id)}>
-            <SlidersHorizontalIcon data-icon="inline-start" />
-            Configure
-          </Button>
-          <Button variant="outline" onClick={() => openMemory(instance.instance_id)}>
-            <BrainIcon data-icon="inline-start" />
-            Memory
-          </Button>
-          <Button variant="outline" onClick={() => openStats(instance.instance_id)}>
-            <ChartColumnIcon data-icon="inline-start" />
-            Stats
-          </Button>
-          <StopButton
-            caller={caller}
-            clock={clock}
-            instanceId={instance.instance_id}
-            name={name}
-            onStopping={() => setStopping(true)}
-            onStopped={stopped}
-          />
-          {removeMenu}
-        </div>
+        <header className="flex flex-col gap-4 px-6 pt-6">
+          <h1 className="flex min-w-0 items-center gap-3 text-xl font-semibold">
+            <InstanceAvatar avatar={instance.avatar} name={name} />
+            <span className="truncate">{name}</span>
+          </h1>
+          {/* Its pages on the left, and what starts or ends the instance apart on the right. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={() => openConfig(instance.instance_id)}>
+              <SlidersHorizontalIcon data-icon="inline-start" />
+              Configure
+            </Button>
+            <Button variant="outline" onClick={() => openMemory(instance.instance_id)}>
+              <BrainIcon data-icon="inline-start" />
+              Memory
+            </Button>
+            <Button variant="outline" onClick={() => openStats(instance.instance_id)}>
+              <ChartColumnIcon data-icon="inline-start" />
+              Stats
+            </Button>
+            <div className="ml-auto flex items-center gap-2">
+              <StopButton
+                caller={caller}
+                clock={clock}
+                instanceId={instance.instance_id}
+                name={name}
+                onStopping={() => setStopping(true)}
+                onStopped={stopped}
+              />
+              {removeMenu}
+            </div>
+          </div>
+        </header>
         <ProcessAlert instance={instance} name={name} />
         {logins.length > 0 && (
           <section className="flex max-w-2xl flex-col gap-3 p-6">

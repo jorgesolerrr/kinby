@@ -27,6 +27,7 @@ export function ArchiveButton({
       variant="ghost"
       size="icon-sm"
       aria-label={archived ? "Unarchive" : "Archive"}
+      title={archived ? "Unarchive" : "Archive"}
       onClick={() => void toggle()}
     >
       {changing ? <Spinner /> : archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}

@@ -430,6 +430,7 @@ describe("the instances", () => {
 
     expect(await screen.findByText("No instances yet")).toBeDefined()
     expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "kinby",
       "Usage",
       "Library",
       "Secrets",

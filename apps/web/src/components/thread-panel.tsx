@@ -27,6 +27,12 @@ import {
 } from "@/components/ui/card"
 import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from "@/components/ui/input-group"
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
 import { Message, MessageContent, MessageHeader } from "@/components/ui/message"
 import {
@@ -40,8 +46,6 @@ import {
 } from "@/components/ui/message-scroller"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import { Textarea } from "@/components/ui/textarea"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { reason } from "@/lib/operation"
 import { nodePath, openNode, useSelectedTurnId } from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
@@ -98,7 +102,7 @@ export function ThreadPanel({
 
   if (failure !== undefined) {
     return (
-      <div className="p-6">
+      <div className="mx-auto w-full max-w-3xl px-6 py-6">
         <Alert variant="destructive">
           <CircleAlertIcon />
           <AlertTitle>The thread did not load</AlertTitle>
@@ -114,7 +118,7 @@ export function ThreadPanel({
       {replayed ? (
         <>
           <Transcript turns={timeline.turns} instanceId={instanceId} name={name} />
-          <div className="mx-auto w-full max-w-3xl p-4">
+          <div className="mx-auto w-full max-w-3xl px-6 pb-6">
             {/* Nothing else is sent while the turn waits on the user. */}
             {approval === undefined ? (
               <Composer
@@ -186,35 +190,49 @@ function Composer({
 
   return (
     <Field data-invalid={failure !== undefined || undefined}>
-      <Textarea
-        ref={field}
-        aria-label={`Message ${name}`}
-        placeholder={`Message ${name}`}
-        value={message}
-        aria-invalid={failure !== undefined || undefined}
-        onChange={(event) => setMessage(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return
-          event.preventDefault()
-          void send()
-        }}
-      />
-      <div className="flex justify-end">
-        {running ? (
-          <Button size="icon" aria-label="Stop" onClick={() => void stop()}>
-            <SquareIcon />
-          </Button>
-        ) : (
-          <Button
-            size="icon"
-            aria-label="Send"
-            disabled={text === "" || sending}
-            onClick={() => void send()}
-          >
-            <ArrowUpIcon />
-          </Button>
-        )}
-      </div>
+      {/* Send sits inside the field, and a long draft scrolls in it instead of pushing the
+          transcript away. */}
+      <InputGroup>
+        <InputGroupTextarea
+          ref={field}
+          className="max-h-48"
+          aria-label={`Message ${name}`}
+          placeholder={`Message ${name}`}
+          value={message}
+          aria-invalid={failure !== undefined || undefined}
+          onChange={(event) => setMessage(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return
+            event.preventDefault()
+            void send()
+          }}
+        />
+        <InputGroupAddon align="block-end">
+          {running ? (
+            <InputGroupButton
+              size="icon-sm"
+              variant="default"
+              className="ml-auto"
+              aria-label="Stop"
+              onClick={() => void stop()}
+            >
+              <SquareIcon className="fill-current" />
+            </InputGroupButton>
+          ) : (
+            <InputGroupButton
+              size="icon-sm"
+              variant="default"
+              className="ml-auto"
+              aria-label="Send"
+              // aria-disabled, so an empty draft leaves the field looking ready to type in.
+              aria-disabled={text === "" || sending}
+              onClick={() => void send()}
+            >
+              <ArrowUpIcon />
+            </InputGroupButton>
+          )}
+        </InputGroupAddon>
+      </InputGroup>
       {failure !== undefined && <FieldError>{failure}</FieldError>}
     </Field>
   )
@@ -273,7 +291,12 @@ function ApprovalPanel({
   const busy = answering !== undefined
 
   return (
-    <section ref={ref} tabIndex={-1} aria-label={`Approve ${call}?`}>
+    <section
+      ref={ref}
+      tabIndex={-1}
+      aria-label={`Approve ${call}?`}
+      className="rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+    >
       <Card size="sm">
         <CardHeader>
           <CardTitle>{call}</CardTitle>
@@ -284,7 +307,7 @@ function ApprovalPanel({
         </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-3">
-            <pre className="max-h-40 overflow-auto font-mono text-xs whitespace-pre-wrap">
+            <pre className="max-h-40 overflow-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
               {JSON.stringify(approval.arguments, null, 2)}
             </pre>
             <Field data-invalid={failure !== undefined || undefined}>
@@ -489,6 +512,9 @@ const replyOptions = {
   plugins: { code },
   // Links open straight in a new tab, without Streamdown's confirmation dialog.
   linkSafety: { enabled: false },
+  // A reply's headings stay below the thread's own title, in kinby's heading face.
+  className:
+    "[&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_h4]:text-sm [&_:is(h1,h2,h3,h4)]:mt-5 [&_:is(h1,h2,h3,h4)]:font-heading [&_:is(h1,h2,h3,h4)]:font-semibold",
 } satisfies StreamdownProps
 
 /** What the instance wrote, as the Markdown it writes in. */
@@ -541,7 +567,7 @@ function gateDecision(
           : "denied by you"
     return { icon: <BanIcon />, decision }
   }
-  const took = durationMs === undefined ? "running" : `${durationMs} ms`
+  const took = durationMs === undefined ? "running" : `${durationMs.toLocaleString("en")} ms`
   if (gate.decidedBy === "user") {
     return { icon: <CheckIcon />, decision: `approved by you · ${took}` }
   }
@@ -624,15 +650,16 @@ function RecapMarker({ recap, instanceId }: { recap: Recap; instanceId: string }
       )
     case "failed":
       return (
-        <Tooltip>
-          <Marker render={<TooltipTrigger />}>
-            <MarkerIcon>
-              <TriangleAlertIcon />
-            </MarkerIcon>
-            <MarkerContent>Recap failed</MarkerContent>
-          </Marker>
-          <TooltipContent align="start">{recap.message}</TooltipContent>
-        </Tooltip>
+        // The reason shows inline, so touch and keyboard readers get it too.
+        <Marker className="items-start">
+          <MarkerIcon>
+            <TriangleAlertIcon />
+          </MarkerIcon>
+          <MarkerContent className="flex flex-col">
+            <span>Recap failed</span>
+            <span className="text-xs">{recap.message}</span>
+          </MarkerContent>
+        </Marker>
       )
   }
 }
@@ -650,11 +677,22 @@ function startedAt(timestamp: string): string {
 
 function TranscriptSkeleton() {
   return (
-    <output aria-label="Loading the thread" className="flex flex-col gap-6 p-6">
+    // Laid out like the transcript: a request bubble, then the reply as lines of text.
+    <output
+      aria-label="Loading the thread"
+      className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-6"
+    >
       <Skeleton className="h-10 w-2/5 self-end" />
-      <Skeleton className="h-24 w-3/5" />
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-5/6" />
+        <Skeleton className="h-4 w-2/3" />
+      </div>
       <Skeleton className="h-10 w-1/3 self-end" />
-      <Skeleton className="h-16 w-1/2" />
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-1/2" />
+      </div>
     </output>
   )
 }
