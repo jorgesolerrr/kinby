@@ -1380,6 +1380,7 @@ export interface MemoryOpenResult {
   description: string;
   kind: NodeKind;
   node: string;
+  run: string | null;
   source: NodeSource;
   subjects: string[];
   thread: string | null;

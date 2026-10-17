@@ -32,7 +32,7 @@ from kinby.core.turns import (
     TurnOutcome,
 )
 from kinby.instance import init_instance, load_instance
-from kinby.memory import Episode, Fact, GraphStore, NodeId, memory_tools
+from kinby.memory import Episode, Fact, GraphStore, NodeId, RecappedTurn, memory_tools
 from kinby.plugins import ToolContext
 
 _MODEL = "openai:gpt-5"
@@ -87,11 +87,11 @@ def test_memory_open_returns_the_turn_of_a_round_tripped_episode(tmp_path: Path)
     async def scenario() -> None:
         instance = _empty_instance(tmp_path)
         memory = GraphStore(instance.path)
+        thread_id = UUID("11111111-1111-1111-1111-111111111111")
         episode = Episode(
             node=NodeId("2026-09-01-checked-the-weather"),
             date=date(2026, 9, 1),
-            thread=UUID("11111111-1111-1111-1111-111111111111"),
-            turn=_TURN_ID,
+            recaps=RecappedTurn(thread=thread_id, turn=_TURN_ID),
             description="Checked the weather",
             subjects=(),
             tools=("weather",),
@@ -103,7 +103,7 @@ def test_memory_open_returns_the_turn_of_a_round_tripped_episode(tmp_path: Path)
         open_tool = next(tool for tool in memory_tools(memory) if tool.name == "memory_open")
         result = await open_tool.ainvoke(
             {"node": episode.node},
-            ToolContext(instance=instance, thread_id=episode.thread),
+            ToolContext(instance=instance, thread_id=thread_id),
         )
 
         assert opened == episode

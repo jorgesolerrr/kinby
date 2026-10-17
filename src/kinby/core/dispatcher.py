@@ -437,6 +437,8 @@ def build_dispatcher(
         )
         if recorded is None:
             recorded = await event_log.append(command.run_id, uuid4(), RunStopped(stop=command))
+            if turn_settings is not None and turn_settings.recap is not None:
+                turn_settings.recap.schedule_run_stop(command.run_id, command.generation)
         return accepted(recorded)
 
     async def subscribe_to_thread(command: ThreadSubscribeCommand) -> Stream[Event]:

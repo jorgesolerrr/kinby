@@ -1,4 +1,4 @@
-"""Write narrative recaps and deterministic tool traces after turns close."""
+"""Write narrative recaps and deterministic tool traces after turns close and factory runs stop."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, cast
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from langchain_core.exceptions import ModelNotFoundError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -26,6 +27,9 @@ from kinby.contracts import (
     MemoryRecapped,
     MessageDelta,
     NodeId,
+    RunStop,
+    RunStopped,
+    StepAttempt,
     TokenTotals,
     ToolCall,
     ToolResult,
@@ -41,7 +45,7 @@ from kinby.core.models import init_model
 from kinby.instance import Instance, RecapPolicy, reload_manifest
 from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR
 from kinby.instance.recap import load_recap_lens
-from kinby.memory.facade import Episode, Memory, new_node_id
+from kinby.memory.facade import Episode, Memory, RecappedRun, RecappedTurn, new_node_id
 from kinby.plugins.hub import hub_read
 
 if TYPE_CHECKING:
@@ -102,13 +106,33 @@ def _init_model(model: str) -> RecapModel:
 
 
 @dataclass(frozen=True)
-class _RecapRequest:
+class _TurnRecap:
     thread_id: UUID
     turn_id: UUID
 
 
+@dataclass(frozen=True)
+class _RunRecap:
+    """A factory run stop to recap. Its events go under the run, as a turn's go under its thread."""
+
+    run_id: UUID
+    generation: int
+
+    @property
+    def thread_id(self) -> UUID:
+        return self.run_id
+
+    @property
+    def turn_id(self) -> UUID:
+        """The same for every recap of this stop, so its marker is found again."""
+        return uuid5(self.run_id, str(self.generation))
+
+
+type _RecapRequest = _TurnRecap | _RunRecap
+
+
 class RecapWriter:
-    """Queue and write one episode at a time after turns close."""
+    """Queue and write one episode at a time after turns close and factory runs stop."""
 
     def __init__(
         self,
@@ -129,29 +153,37 @@ class RecapWriter:
 
     def schedule(self, thread_id: UUID, turn_id: UUID) -> None:
         """Queue a closed turn without waiting for its recap."""
-        self._queue.put_nowait(_RecapRequest(thread_id, turn_id))
+        self._enqueue(_TurnRecap(thread_id, turn_id))
+
+    def schedule_run_stop(self, run_id: UUID, generation: int) -> None:
+        """Queue a factory run stop without waiting for its recap."""
+        self._enqueue(_RunRecap(run_id, generation))
+
+    def _enqueue(self, request: _RecapRequest) -> None:
+        self._queue.put_nowait(request)
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._work())
 
     async def catch_up(self) -> None:
-        """Queue every closed turn that has no recap marker."""
+        """Queue every closed turn and factory run stop that has no recap marker."""
         events = await asyncio.to_thread(lambda: list(self._event_log.all_events()))
         await asyncio.to_thread(
             _delete_no_work_traces,
             self._instance.path / MEMORY_DIR / GRAPH_DIR,
             events,
         )
-        closed: list[_RecapRequest] = []
-        covered: set[_RecapRequest] = set()
+        ended: list[_RecapRequest] = []
+        covered: set[tuple[UUID, UUID]] = set()
         for event in events:
-            request = _RecapRequest(event.thread_id, event.turn_id)
             if isinstance(event.payload, MemoryRecapped):
-                covered.add(request)
+                covered.add((event.thread_id, event.turn_id))
+            elif isinstance(event.payload, RunStopped):
+                ended.append(_RunRecap(event.payload.stop.run_id, event.payload.stop.generation))
             elif is_turn_closing(event.payload):
-                closed.append(request)
-        for request in closed:
-            if request not in covered:
-                self.schedule(request.thread_id, request.turn_id)
+                ended.append(_TurnRecap(event.thread_id, event.turn_id))
+        for request in ended:
+            if (request.thread_id, request.turn_id) not in covered:
+                self._enqueue(request)
 
     async def drain(self) -> None:
         """Wait until every queued recap has finished."""
@@ -162,14 +194,19 @@ class RecapWriter:
     async def _work(self) -> None:
         while not self._queue.empty():
             request = await self._queue.get()
+            recapped = "turn" if isinstance(request, _TurnRecap) else "run"
             try:
-                await self._write(request)
+                match request:
+                    case _TurnRecap():
+                        await self._write_turn(request)
+                    case _RunRecap():
+                        await self._write_run(request)
             except Exception as exc:
-                logger.exception("The turn recap failed.")
+                logger.exception("The %s recap failed.", recapped)
                 message = (
                     str(exc)
                     if isinstance(exc, RecapModelNotFound)
-                    else f"The turn recap failed: {type(exc).__name__}: {exc}"
+                    else f"The {recapped} recap failed: {type(exc).__name__}: {exc}"
                 )
                 await self._event_log.append(
                     request.thread_id,
@@ -179,7 +216,7 @@ class RecapWriter:
             finally:
                 self._queue.task_done()
 
-    async def _write(self, request: _RecapRequest) -> None:
+    async def _write_turn(self, request: _TurnRecap) -> None:
         events = await asyncio.to_thread(
             self._turn_events,
             request.thread_id,
@@ -203,17 +240,15 @@ class RecapWriter:
         lens = load_recap_lens(self._instance.path)
         draft, usage = await self._draft(
             request,
-            events,
-            calls,
+            _recap_frame(events, calls, lens.text),
             manifest.models.recap,
-            lens.text,
         )
         episode = (
             _episode(
                 request,
                 description=draft.description,
                 subjects=draft.subjects,
-                body=_episode_body(draft, calls),
+                body=f"{_narrative(draft)}\n{_path_taken(calls)}",
                 calls=calls,
                 recorded_on=_recorded_on(events),
             )
@@ -222,9 +257,50 @@ class RecapWriter:
         )
         await self._finish(request, episode, usage, manifest.models.recap)
 
+    async def _write_run(self, request: _RunRecap) -> None:
+        events = await asyncio.to_thread(self._event_log.stored, request.run_id)
+        if self._is_recapped(event for event in events if event.turn_id == request.turn_id):
+            return
+        stops = {
+            event.payload.stop.generation: (event.payload.stop, event.timestamp.date())
+            for event in events
+            if isinstance(event.payload, RunStopped)
+        }
+        stop, recorded_on = stops[request.generation]
+        manifest = reload_manifest(self._instance, model_override=self._model_override)
+        if manifest.memory.recap is RecapPolicy.TRACE_ONLY:
+            episode = _run_episode(
+                request,
+                stop,
+                description=_shorten(_run_description(stop), _TRACE_DESCRIPTION_MAX_CHARS),
+                subjects=(),
+                body=f"## What happened\nThe run stopped as {stop.status}.",
+                recorded_on=recorded_on,
+            )
+            usage = TokenTotals(input_tokens=0, output_tokens=0)
+            await self._finish(request, episode, usage, manifest.models.recap)
+            return
+        lens = load_recap_lens(self._instance.path)
+        reached = [attempt for each, _ in stops.values() for attempt in each.attempts]
+        draft, usage = await self._draft(
+            request,
+            _run_frame(stop, _send_backs(stop, reached), lens.text),
+            manifest.models.recap,
+        )
+        # A run stop always leaves an episode, whatever the shared draft says about keeping it.
+        episode = _run_episode(
+            request,
+            stop,
+            description=draft.description,
+            subjects=draft.subjects,
+            body=_narrative(draft),
+            recorded_on=recorded_on,
+        )
+        await self._finish(request, episode, usage, manifest.models.recap)
+
     async def _write_trace_only(
         self,
-        request: _RecapRequest,
+        request: _TurnRecap,
         events: list[Event],
         calls: list[ToolCall],
         recap: str,
@@ -280,10 +356,8 @@ class RecapWriter:
     async def _draft(
         self,
         request: _RecapRequest,
-        events: list[Event],
-        calls: list[ToolCall],
+        frame: str,
         model_name: str,
-        lens: str,
     ) -> tuple[RecapDraft, TokenTotals]:
         model = self._model_factory(model_name)
         # Newer Anthropic models reject a forced tool_choice, so ask for native JSON output.
@@ -294,9 +368,7 @@ class RecapWriter:
         )
         started_at = asyncio.get_running_loop().time()
         try:
-            result = await runnable.ainvoke(
-                (HumanMessage(content=_recap_frame(events, calls, lens)),)
-            )
+            result = await runnable.ainvoke((HumanMessage(content=frame),))
         except ModelNotFoundError as exc:
             raise RecapModelNotFound(model_name) from exc
         if not isinstance(result, Mapping):
@@ -357,7 +429,7 @@ def _recorded_on(events: list[Event]) -> date:
 
 
 def _episode(
-    request: _RecapRequest,
+    request: _TurnRecap,
     *,
     description: str,
     subjects: tuple[str, ...],
@@ -368,16 +440,36 @@ def _episode(
     return Episode(
         node=new_node_id(recorded_on, description),
         date=recorded_on,
-        thread=request.thread_id,
         description=description,
         subjects=subjects,
         body=body,
-        turn=request.turn_id,
+        recaps=RecappedTurn(request.thread_id, request.turn_id),
         tools=tuple(dict.fromkeys(call.name for call in calls)),
     )
 
 
-def _episode_body(draft: RecapDraft, calls: list[ToolCall]) -> str:
+def _run_episode(
+    request: _RunRecap,
+    stop: RunStop,
+    *,
+    description: str,
+    subjects: tuple[str, ...],
+    body: str,
+    recorded_on: date,
+) -> Episode:
+    """The episode of *stop*, under an id a retried recap of the stop writes again."""
+    return Episode(
+        node=new_node_id(recorded_on, _run_description(stop), request.turn_id),
+        date=recorded_on,
+        description=description,
+        subjects=subjects,
+        body=body,
+        recaps=RecappedRun(request.run_id, request.generation),
+        tools=(),
+    )
+
+
+def _narrative(draft: RecapDraft) -> str:
     return "\n".join(
         (
             "## What happened",
@@ -386,7 +478,6 @@ def _episode_body(draft: RecapDraft, calls: list[ToolCall]) -> str:
             draft.decided.strip(),
             "## What should have gone differently",
             draft.retrospective.strip(),
-            _path_taken(calls),
         )
     )
 
@@ -402,6 +493,79 @@ def _recap_frame(events: list[Event], calls: list[ToolCall], lens: str) -> str:
         "Return whether to keep the episode, its description and subjects, and text for "
         "What happened, What was decided, and What should have gone differently."
     )
+
+
+def _run_frame(stop: RunStop, send_backs: list[tuple[StepAttempt, str]], lens: str) -> str:
+    return (
+        "Write a retrospective draft of this factory run, as code knowledge for the next session "
+        "that works on the same area. Do not write facts. Set keep to true.\n\n"
+        f"# Recap lens\n{lens}\n\n"
+        f"# Run record\n{_render_run(stop, send_backs)}\n\n"
+        "# Output contract\n"
+        "Return its description and subjects, and text for "
+        "What happened (the work item and how the run ended), What was decided (each decision "
+        "and its reason), and What should have gone differently (review pushback, check "
+        "failures, dead ends). The review comments and the replies given are in the attempts' "
+        "values. Name the area of the code in the description, and the area and its main paths "
+        "in the subjects."
+    )
+
+
+def _render_run(stop: RunStop, send_backs: list[tuple[StepAttempt, str]]) -> str:
+    attempts = []
+    for number, attempt in enumerate(stop.attempts, 1):
+        ending = f"{attempt.ending}"
+        if attempt.outcome is not None:
+            ending = f"{ending}, outcome {attempt.outcome}"
+        rendered = (
+            f"{number}. {attempt.step}, attempt {attempt.attempt}: {ending}. {attempt.summary}"
+        )
+        if attempt.values:
+            values = json.dumps(attempt.values, ensure_ascii=False)
+            rendered = f"{rendered}\n   Values: {values}"
+        attempts.append(rendered)
+    sent = [
+        f"- {attempt.step}, attempt {attempt.attempt}, sent the work back to {back}: "
+        f"{attempt.summary}"
+        for attempt, back in send_backs
+    ]
+    return "\n".join(
+        (
+            f"Factory: {stop.factory}",
+            f"Work item: {_work_item(stop)}",
+            f"Status: {stop.status}",
+            "",
+            "## Attempts",
+            *attempts,
+            "",
+            "## Send-backs",
+            *(sent or ["None."]),
+        )
+    )
+
+
+def _send_backs(stop: RunStop, reached: list[StepAttempt]) -> list[tuple[StepAttempt, str]]:
+    """Each attempt of *stop* that sent the work back, with the step it went back to.
+
+    The instance holds no factory file, so it orders the steps by when the run first reached
+    each: a run reaches a step first from the one before it, and a send-back goes to an earlier
+    step. An attempt followed by one at an earlier step sent the work back.
+    """
+    order = list(dict.fromkeys(attempt.step for attempt in reached))
+    return [
+        (attempt, following.step)
+        for attempt, following in pairwise(stop.attempts)
+        if order.index(following.step) < order.index(attempt.step)
+    ]
+
+
+def _work_item(stop: RunStop) -> str:
+    return ", ".join(f"{name} {value}" for name, value in stop.work_item.items())
+
+
+def _run_description(stop: RunStop) -> str:
+    work_item = _work_item(stop)
+    return f"{stop.factory} run on {work_item}" if work_item else f"{stop.factory} run"
 
 
 def _render_turn(events: list[Event], calls: list[ToolCall]) -> str:

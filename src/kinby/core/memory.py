@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
+from uuid import UUID
 
 from kinby.contracts import (
     MemoryAddCommand,
@@ -27,7 +28,15 @@ from kinby.core.errors import (
     InvalidMemoryNode,
     MemoryNodeNotFound,
 )
-from kinby.memory import Episode, Fact, GraphStore, InvalidNodeId, MemoryNode, NodeNotFound
+from kinby.memory import (
+    Episode,
+    Fact,
+    GraphStore,
+    InvalidNodeId,
+    MemoryNode,
+    NodeNotFound,
+    RecappedTurn,
+)
 from kinby.memory.facade import new_node_id
 
 
@@ -63,13 +72,14 @@ class InstanceMemory:
     async def open(self, command: MemoryOpenCommand) -> MemoryOpenResult:
         with _refusals():
             memory = self._graph.open(command.node)
-        episode = memory if isinstance(memory, Episode) else None
+        thread, turn, run = _origin(memory)
         return MemoryOpenResult(
             **_summary(memory).model_dump(),
             body=memory.body,
-            thread=memory.thread,
-            turn=None if episode is None else episode.turn,
-            tools=None if episode is None else list(episode.tools),
+            thread=thread,
+            turn=turn,
+            run=run,
+            tools=list(memory.tools) if isinstance(memory, Episode) else None,
         )
 
     async def add(self, command: MemoryAddCommand) -> MemoryWriteResult:
@@ -136,6 +146,15 @@ def _summary(memory: MemoryNode) -> NodeSummary:
         subjects=list(memory.subjects),
         source=_source(memory),
     )
+
+
+def _origin(memory: MemoryNode) -> tuple[UUID | None, UUID | None, UUID | None]:
+    """The thread, turn and factory run *memory* came from, where it has them."""
+    if isinstance(memory, Fact):
+        return memory.thread, None, None
+    if isinstance(memory.recaps, RecappedTurn):
+        return memory.recaps.thread, memory.recaps.turn, None
+    return None, None, memory.recaps.run
 
 
 def _kind(memory: MemoryNode) -> NodeKind:

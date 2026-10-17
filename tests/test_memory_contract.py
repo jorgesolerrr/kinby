@@ -11,6 +11,7 @@ from tests.test_scheduler import FakeClock, call, runtime
 
 _THREAD_ID = UUID("11111111-1111-1111-1111-111111111111")
 _TURN_ID = UUID("22222222-2222-2222-2222-222222222222")
+_RUN_ID = UUID("33333333-3333-3333-3333-333333333333")
 
 
 def _dispatcher(path: Path):
@@ -316,6 +317,7 @@ def test_open_returns_an_agent_fact(tmp_path: Path) -> None:
             "body": "Markdown until evals justify a database.",
             "thread": str(_THREAD_ID),
             "turn": None,
+            "run": None,
             "tools": None,
         }
 
@@ -353,6 +355,32 @@ def test_open_returns_an_episode_with_its_turn_and_tool_path(tmp_path: Path) -> 
             ["grep", "bash"],
         )
         assert opened.body == "Found the stale tag, then rebuilt."
+
+    asyncio.run(scenario())
+
+
+def test_a_factory_run_episode_opens_with_its_run_and_can_be_forgotten(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        node = _node(
+            tmp_path,
+            "2026-10-17-recapped-runs",
+            description="Recapped factory runs",
+            thread=None,
+            extra=f"run: {_RUN_ID}\ngeneration: 1\ntools: []\n",
+        )
+
+        opened = await call(dispatcher, "memory.open", node=node)
+        await call(dispatcher, "memory.forget", node=node)
+
+        assert (opened.kind, opened.thread, opened.turn, opened.run, opened.tools) == (
+            "episode",
+            None,
+            None,
+            _RUN_ID,
+            [],
+        )
+        assert await _listed(dispatcher) == []
 
     asyncio.run(scenario())
 

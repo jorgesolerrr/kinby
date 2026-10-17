@@ -51,6 +51,7 @@ import { threadList, threadTitle } from "@/lib/thread-list"
 import {
   BookOpenIcon,
   CircleXIcon,
+  FactoryIcon,
   LightbulbIcon,
   MessageSquareIcon,
   PencilIcon,
@@ -509,7 +510,7 @@ function NodePane({
         </div>
       )}
       <p className="text-sm whitespace-pre-wrap">{opened.body}</p>
-      {opened.tools !== null && (
+      {opened.tools !== null && opened.tools.length > 0 && (
         <p className="text-sm text-muted-foreground">Tool path: {opened.tools.join(" → ")}</p>
       )}
       <Separator />
@@ -695,6 +696,14 @@ function Origin({
     return pacing.stop
   }, [threads, clock, missing])
 
+  if (opened.run !== null) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <FactoryIcon className="size-4" />
+        Recap of a factory run
+      </p>
+    )
+  }
   if (opened.source === "user" || threadId === null) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">

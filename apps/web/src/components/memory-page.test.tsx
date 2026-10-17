@@ -55,6 +55,7 @@ function opened(node: NodeSummary, fields: Partial<MemoryOpenResult> = {}): Memo
     body: `The body of ${node.description}.`,
     thread: node.source === "user" ? null : THREAD,
     turn: null,
+    run: null,
     tools: null,
     ...fields,
   }
@@ -340,6 +341,29 @@ describe("the memory page", () => {
     await user.click(await pane().findByRole("button", { name: "Old deploy day" }))
 
     expect(window.location.pathname).toBe(`/instances/instance-1/threads/${THREAD}`)
+  })
+
+  it("says a factory run's episode recaps the run, with no thread", async () => {
+    const shipped = summary({
+      node: "2026-10-17-shipped-run-recaps",
+      description: "Shipped run recaps",
+      kind: "episode",
+      source: "recap",
+    })
+    const { user } = openPage({
+      "memory.list": () => listing([shipped]),
+      "memory.open": () =>
+        opened(shipped, {
+          thread: null,
+          run: "33333333-3333-3333-3333-333333333333",
+          tools: [],
+        }),
+    })
+
+    await user.click(await nodeButton("Shipped run recaps"))
+
+    expect(await pane().findByText("Recap of a factory run")).toBeDefined()
+    expect(pane().queryByText(/Added by you|Recap of a turn in|Tool path/)).toBeNull()
   })
 
   it("says a fact the agent remembered was remembered in its thread", async () => {

@@ -40,11 +40,27 @@ class Fact(_MemoryNode):
 
 
 @dataclass(frozen=True)
-class Episode(_MemoryNode):
-    """One opened turn record with its tool trace."""
+class RecappedTurn:
+    """The turn an episode recaps, on its thread."""
 
     thread: UUID
     turn: UUID
+
+
+@dataclass(frozen=True)
+class RecappedRun:
+    """The factory run stop an episode recaps."""
+
+    run: UUID
+    #: Which stop of the run it was.
+    generation: int
+
+
+@dataclass(frozen=True)
+class Episode(_MemoryNode):
+    """One opened record of a turn or a factory run stop, with its tool trace."""
+
+    recaps: RecappedTurn | RecappedRun
     tools: tuple[str, ...]
 
 
@@ -69,8 +85,11 @@ class Memory(Protocol):
     def forget(self, node: NodeId) -> None: ...
 
 
-def new_node_id(recorded_on: date, description: str) -> NodeId:
-    """Create a readable, chronologically sortable graph node id."""
+def new_node_id(recorded_on: date, description: str, key: UUID | None = None) -> NodeId:
+    """Create a readable, chronologically sortable graph node id.
+
+    The same *key* and *description* give the same id, so a node written again replaces itself.
+    """
     slug = re.sub(r"[^a-z0-9]+", "-", description.casefold()).strip("-")
     readable = (slug or "fact")[:64].rstrip("-")
-    return NodeId(f"{recorded_on.isoformat()}-{uuid7().hex}-{readable}")
+    return NodeId(f"{recorded_on.isoformat()}-{(key or uuid7()).hex}-{readable}")
