@@ -1097,7 +1097,17 @@ class TemplateBehind(ContractModel):
     message: str
 
 
-InstanceNotice = Annotated[RevisionBehind | TemplateBehind, Field(discriminator="code")]
+class HubRouteMissing(ContractModel):
+    """The instance's environment lacks the hub route or scopes the registry grants it, or holds
+    others, so an update is there."""
+
+    code: Literal["hub_route_missing"] = "hub_route_missing"
+    message: str
+
+
+InstanceNotice = Annotated[
+    RevisionBehind | TemplateBehind | HubRouteMissing, Field(discriminator="code")
+]
 
 
 class InstanceSummary(ContractModel):

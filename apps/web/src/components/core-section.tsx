@@ -23,6 +23,7 @@ type InstanceNotice = InstanceSummary["notices"][number]
 const NOTICE_TITLES: Record<InstanceNotice["code"], string> = {
   revision_behind: "Behind the hub",
   template_behind: "Behind the factory",
+  hub_route_missing: "No hub route",
 }
 
 /**

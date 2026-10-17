@@ -33,6 +33,7 @@ from kinby.contracts import (
     ContractModel,
     ErrorEnvelope,
     FactoryRunCancelCommand,
+    HubRouteMissing,
     InstanceListCommand,
     InstanceRecreateCommand,
     InstanceSecretsSetCommand,
@@ -79,8 +80,8 @@ async def show_instances(client: ContractClient) -> int:
 
 
 async def update(client: ContractClient, revision: str, chosen: list[UUID]) -> int:
-    """Update each chosen instance, or every active one, that runs another revision or whose
-    template is behind its factory's."""
+    """Update each chosen instance, or every active one, that runs another revision, whose
+    template is behind its factory's, or whose environment lacks its hub route."""
     failures = 0
     instances = await _instances(client)
     for unknown in set(chosen) - {instance.instance_id for instance in instances}:
@@ -90,8 +91,8 @@ async def update(client: ContractClient, revision: str, chosen: list[UUID]) -> i
         name = instance.persona_name or instance.manifest_id
         if chosen and instance.instance_id not in chosen:
             continue
-        template_behind = any(isinstance(n, TemplateBehind) for n in instance.notices)
-        if instance.source_revision == revision and not template_behind:
+        repairable = any(isinstance(n, TemplateBehind | HubRouteMissing) for n in instance.notices)
+        if instance.source_revision == revision and not repairable:
             print(f"{instance.instance_id} {name}: already on {revision[:12]}")
             continue
         print(f"{instance.instance_id} {name}: updating to {revision[:12]}", flush=True)

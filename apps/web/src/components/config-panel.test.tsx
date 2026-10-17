@@ -106,6 +106,18 @@ const templateBehind = instanceSummary({
   ],
 })
 
+const routeMissing = instanceSummary({
+  instance_id: "instance-1",
+  notices: [
+    {
+      code: "hub_route_missing",
+      message:
+        "The instance cannot reach the hub with the scopes it holds, factory:intake. " +
+        "An instance update gives it the route.",
+    },
+  ],
+})
+
 const methodNotFound = (method: string): never => {
   throw new CallError({
     code: "NOT_FOUND",
@@ -230,6 +242,14 @@ describe("ConfigPanel", () => {
 
     const section = screen.getByRole("button", { name: "Core version" })
     expect(section.textContent).toContain("behind the factory")
+    expect(section.textContent).not.toContain("the kinby it runs, update")
+  })
+
+  it("says the core section has no hub route in place of its hint", () => {
+    openPanel({}, routeMissing)
+
+    const section = screen.getByRole("button", { name: "Core version" })
+    expect(section.textContent).toContain("no hub route")
     expect(section.textContent).not.toContain("the kinby it runs, update")
   })
 

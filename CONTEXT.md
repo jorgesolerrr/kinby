@@ -164,7 +164,7 @@ _Avoid_: upgrade, rollout
 
 ### Instance notice
 
-Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, or the **instance template** its **factory** serves now differs from the files the **hub** recorded when it copied them. An **instance update** answers both.
+Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, the **instance template** its **factory** serves now differs from the files the **hub** recorded when it copied them, or the instance's environment lacks the hub route and the scopes the registry grants it. An **instance update** answers all three.
 _Avoid_: warning, alert
 
 ### Instance removal
