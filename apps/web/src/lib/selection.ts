@@ -35,7 +35,7 @@ export function turnPath(instanceId: string, threadId: string, turnId: string): 
   return `${threadPath(instanceId, threadId)}/${TURNS}/${encodeURIComponent(turnId)}`
 }
 
-function configPath(instanceId: string): string {
+export function configPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${CONFIG}`
 }
 
@@ -48,7 +48,7 @@ function corePath(instanceId: string): string {
   return `${configPath(instanceId)}/${CORE}`
 }
 
-function memoryPath(instanceId: string): string {
+export function memoryPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${MEMORY}`
 }
 
@@ -74,11 +74,6 @@ export function selectThread(instanceId: string, threadId: string): void {
 /** Select a thread scrolled to one of its turns the same way. */
 export function selectTurn(instanceId: string, threadId: string, turnId: string): void {
   navigate(turnPath(instanceId, threadId, turnId))
-}
-
-/** Open an instance's thread list page the same way. */
-export function openThreads(instanceId: string): void {
-  navigate(threadsPath(instanceId))
 }
 
 /** Open an instance's config panel the same way. */

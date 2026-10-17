@@ -54,13 +54,28 @@ const names = (list: HTMLElement) =>
 
 describe("LibraryPage", () => {
   it("lists the skills and the factories apart, each with where it came from", async () => {
-    openPage()
+    const { user } = openPage()
 
     const skills = await screen.findByRole("list", { name: "Skills" })
-    const factories = screen.getByRole("list", { name: "Factories" })
     expect(names(skills)).toEqual(["tdd, shipped skill", "unslop, shipped skill"])
-    expect(names(factories)).toEqual(["software, shipped factory", "tickets, written factory"])
     expect(within(skills).getByText("Test first.")).toBeTruthy()
+    expect(screen.getByRole("tab", { name: "Skills 2" })).toBeTruthy()
+    await user.click(screen.getByRole("tab", { name: "Factories 2" }))
+
+    const factories = await screen.findByRole("list", { name: "Factories" })
+    expect(names(factories)).toEqual(["software, shipped factory", "tickets, written factory"])
+    expect(screen.queryByRole("list", { name: "Skills" })).toBeNull()
+  })
+
+  it("searches the names and descriptions", async () => {
+    const { user } = openPage()
+    await screen.findByRole("list", { name: "Skills" })
+
+    await user.type(screen.getByRole("searchbox", { name: "Search the library" }), "ai tells")
+
+    expect(names(screen.getByRole("list", { name: "Skills" }))).toEqual(["unslop, shipped skill"])
+    await user.type(screen.getByRole("searchbox", { name: "Search the library" }), " and more")
+    expect(screen.getByText('Nothing matches "ai tells and more"')).toBeTruthy()
   })
 
   it("opens a skill's SKILL.md to edit and lists its other files", async () => {
@@ -80,6 +95,7 @@ describe("LibraryPage", () => {
   it("opens a factory to read its factory file", async () => {
     const { user } = openPage()
 
+    await user.click(await screen.findByRole("tab", { name: /Factories/ }))
     await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
 
     const file = await screen.findByRole("textbox", { name: "factory.yaml" })
@@ -92,6 +108,7 @@ describe("LibraryPage", () => {
   it("opens a factory to list the instances that hold its roles", async () => {
     const { user } = openPage()
 
+    await user.click(await screen.findByRole("tab", { name: /Factories/ }))
     await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
 
     expect(await screen.findByRole("region", { name: "software-coder" })).toBeDefined()
@@ -150,8 +167,8 @@ describe("LibraryPage, adding from git", () => {
     await user.click(screen.getByRole("checkbox", { name: "caveman" }))
     await user.click(screen.getByRole("button", { name: "Add 1 skill" }))
 
-    expect(await screen.findByRole("button", { name: "grill, git skill" })).toBeTruthy()
-    expect(screen.getByText(`${shown.url} at ${commit}`)).toBeTruthy()
+    await user.click(await screen.findByRole("button", { name: "grill, git skill" }))
+    expect(await screen.findByText(`${shown.url} at ${commit}`)).toBeTruthy()
     expect(caller.calls.filter((call) => call.method.startsWith("library.git"))).toEqual([
       { method: "library.git.preview", params: { address: "owner/repo#main" } },
       {
@@ -228,7 +245,7 @@ describe("LibraryPage, writing, editing and deleting a skill", () => {
   it("writes a new skill from its name, description and instructions", async () => {
     const { caller, user } = openEditablePage()
 
-    await user.click(await screen.findByRole("button", { name: "Write a skill" }))
+    await user.click(await screen.findByRole("button", { name: "Write" }))
     await user.type(screen.getByRole("textbox", { name: "Name" }), "grill")
     await user.type(screen.getByRole("textbox", { name: "Description" }), "Ask why.")
     await user.type(screen.getByRole("textbox", { name: "Instructions" }), "Ask why five times.")
@@ -246,7 +263,7 @@ describe("LibraryPage, writing, editing and deleting a skill", () => {
       throw refused({ name: 'The library already holds a skill "tdd".' })
     })
 
-    await user.click(await screen.findByRole("button", { name: "Write a skill" }))
+    await user.click(await screen.findByRole("button", { name: "Write" }))
     await user.type(screen.getByRole("textbox", { name: "Name" }), "tdd")
     await user.type(screen.getByRole("textbox", { name: "Description" }), "Mine.")
     await user.click(screen.getByRole("button", { name: "Create" }))
@@ -259,8 +276,8 @@ describe("LibraryPage, writing, editing and deleting a skill", () => {
 
     const skills = await screen.findByRole("list", { name: "Skills" })
     const pr = within(skills).getByRole("button", { name: "pr, git skill, edited" })
-    expect(within(pr).getByText("Edited")).toBeTruthy()
-    expect(within(skills).getAllByText("Edited")).toHaveLength(1)
+    expect(within(pr).getByText(/· edited/)).toBeTruthy()
+    expect(within(skills).getAllByText(/· edited/)).toHaveLength(1)
   })
 
   it("saves an edit over the SKILL.md it read", async () => {
@@ -364,9 +381,23 @@ describe("LibraryPage, moving a skill to a newer version", () => {
     openUpdatablePage()
 
     const skills = await screen.findByRole("list", { name: "Skills" })
-    const unslop = within(skills).getByRole("button", { name: "unslop, shipped skill, newer" })
-    expect(within(unslop).getByText("Newer version")).toBeTruthy()
-    expect(within(skills).getAllByText("Newer version")).toHaveLength(1)
+    expect(names(skills)).toEqual([
+      "tdd, shipped skill",
+      "unslop, shipped skill, newer",
+      "pr, git skill",
+    ])
+  })
+
+  it("says a newer version is out on opening a skill the list marks, and reads its diff", async () => {
+    const { caller, user } = openUpdatablePage()
+
+    await user.click(await screen.findByRole("button", { name: "unslop, shipped skill, newer" }))
+    expect(await screen.findByText("A newer version is out")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Read the diff" }))
+
+    expect(await screen.findByRole("textbox", { name: "Diff" })).toBeTruthy()
+    expect(screen.getByText("The version this kinby ships.")).toBeTruthy()
+    expect(updates(caller)).toEqual([{ method: "library.skill.check", params: { name: "unslop" } }])
   })
 
   it("checks a git skill, shows the diff, marks it and moves it to the commit it showed", async () => {
@@ -463,14 +494,14 @@ describe("LibraryPage, moving a skill to a newer version", () => {
     await user.click(await screen.findByRole("button", { name: "Check for a newer version" }))
     await user.click(await screen.findByRole("button", { name: "Move to this version" }))
 
-    const alert = await screen.findByRole("alert")
-    expect(within(alert).getByText(/holds no skill "pr"/)).toBeTruthy()
+    const reason = await screen.findByText(/holds no skill "pr"/)
+    expect(reason.closest("[role=alert]")?.textContent).toMatch(/^The hub refused it/)
   })
 
   it("offers no check for a written skill", async () => {
     const { user } = openEditablePage()
 
-    await user.click(await screen.findByRole("button", { name: "Write a skill" }))
+    await user.click(await screen.findByRole("button", { name: "Write" }))
     await user.type(screen.getByRole("textbox", { name: "Name" }), "grill")
     await user.type(screen.getByRole("textbox", { name: "Description" }), "Ask why.")
     await user.click(screen.getByRole("button", { name: "Create" }))

@@ -467,8 +467,8 @@ function ReadyForWork({ name }: { name: string }) {
         </EmptyMedia>
         <EmptyTitle>{name} is running</EmptyTitle>
         <EmptyDescription>
-          Start a thread with + beside {name} in the sidebar, or open Configure to change what it
-          does.
+          Start a thread with New thread above {name}&apos;s threads, or open Configure to change
+          what it does.
         </EmptyDescription>
       </EmptyHeader>
     </Empty>

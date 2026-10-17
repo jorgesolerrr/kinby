@@ -8,14 +8,19 @@ import {
   type ThreadListCommand,
   type ThreadSummary,
 } from "@kinby/contract"
-import { type Answers, type StubCaller, fakeClock, stubCaller } from "@kinby/contract/testing"
+import {
+  type Answers,
+  type StubCaller,
+  fakeClock,
+  instanceSummary,
+  stubCaller,
+} from "@kinby/contract/testing"
 import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
-import { NavThreads } from "@/components/nav-threads"
 import { ThreadHeader } from "@/components/thread-header"
-import { SidebarMenu, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar"
+import { ThreadsColumn } from "@/components/threads-column"
 import { threadList } from "@/lib/thread-list"
 
 function thread(fields: Partial<ThreadSummary> = {}): ThreadSummary {
@@ -355,23 +360,21 @@ describe("a thread's header", () => {
     })
   })
 
-  describe("beside the sidebar", () => {
+  describe("beside the threads column", () => {
+    const ada = instanceSummary({ instance_id: "hub-ada", persona_name: "Ada" })
+
     /**
-     * Render thread t1's header beside Ada's threads in the sidebar. `poll` advances the sidebar's
+     * Render thread t1's header beside Ada's threads column. `poll` advances the column's
      * clock to its next poll and returns the filters `thread.list` was called with meanwhile.
      */
     function openBesideSidebar(client: StubCaller) {
       const clock = fakeClock()
       const instance = connected(client)
       render(
-        <SidebarProvider>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <NavThreads client={instance} clock={clock} instanceId="hub-ada" />
-            </SidebarMenuItem>
-          </SidebarMenu>
+        <>
+          <ThreadsColumn client={instance} clock={clock} instance={ada} />
           <ThreadHeader client={instance} threadId="t1" />
-        </SidebarProvider>,
+        </>,
       )
       const listings = () =>
         client.calls
@@ -398,7 +401,7 @@ describe("a thread's header", () => {
 
     it("lists only the sidebar's threads on each poll", async () => {
       const { poll } = openBesideSidebar(listing(() => [thread()]))
-      await screen.findByRole("heading")
+      await screen.findByRole("heading", { level: 1 })
 
       for (const _ of [1, 2, 3]) expect(await poll()).toEqual<ThreadFilter[]>(["sidebar"])
     })
@@ -406,12 +409,12 @@ describe("a thread's header", () => {
     it("shows a title the instance sets after the next poll of the sidebar", async () => {
       let title: string | null = null
       const { poll } = openBesideSidebar(listing(() => [thread({ title })]))
-      expect((await screen.findByRole("heading")).textContent).toBe("Untitled thread")
+      expect((await screen.findByRole("heading", { level: 1 })).textContent).toBe("Untitled thread")
 
       title = "Deploy notes"
 
       expect(await poll()).toEqual<ThreadFilter[]>(["sidebar"])
-      expect(screen.getByRole("heading").textContent).toBe("Deploy notes")
+      expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Deploy notes")
     })
 
     it.each([
@@ -428,7 +431,7 @@ describe("a thread's header", () => {
         ),
       )
 
-      expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
+      expect((await screen.findByRole("heading", { level: 1 })).textContent).toBe("Deploy notes")
       expect(listings().filter((filter) => filter === "all")).toHaveLength(1)
       expect(await poll()).toEqual<ThreadFilter[]>(["sidebar"])
     })
@@ -453,7 +456,7 @@ describe("a thread's header", () => {
       await user.click(await screen.findByRole("button", { name: "Deploy notes" }))
       await user.keyboard(" v2{Enter}")
 
-      expect(screen.getByRole("heading").textContent).toBe("Deploy notes v2")
+      expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Deploy notes v2")
       expect(screen.getByRole("link", { name: "Deploy notes v2" })).toBeDefined()
     })
 
@@ -480,7 +483,7 @@ describe("a thread's header", () => {
 
       expect(client.calls).toContainEqual({ method: "thread.archive", params: { thread_id: "t1" } })
       expect(screen.queryByRole("link", { name: "Deploy notes" })).toBeNull()
-      expect(screen.getByRole("heading").textContent).toBe("Deploy notes")
+      expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Deploy notes")
 
       await user.click(screen.getByRole("button", { name: "Unarchive" }))
 
@@ -542,7 +545,7 @@ describe("a thread's header", () => {
         }),
       )
 
-      expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
+      expect((await screen.findByRole("heading", { level: 1 })).textContent).toBe("Deploy notes")
       expect(screen.getByRole("link", { name: "Deploy notes" })).toBeDefined()
     })
   })

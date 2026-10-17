@@ -1,13 +1,12 @@
 import { CallError } from "@kinby/contract"
 import type { RoutineSummary, ThreadListResult, ThreadSummary } from "@kinby/contract"
-import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
+import { type Answers, fakeClock, instanceSummary, stubCaller } from "@kinby/contract/testing"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it } from "vitest"
 
-import { NavThreads } from "@/components/nav-threads"
 import { ThreadListPage } from "@/components/thread-list-page"
-import { SidebarMenu, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar"
+import { ThreadsColumn } from "@/components/threads-column"
 
 function thread(fields: Pick<ThreadSummary, "id"> & Partial<ThreadSummary>): ThreadSummary {
   return {
@@ -266,20 +265,19 @@ describe("the thread list page", () => {
     }
     const clock = fakeClock()
     render(
-      <SidebarProvider>
-        <nav aria-label="Sidebar">
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <NavThreads client={client} clock={clock} instanceId="hub-ada" />
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </nav>
+      <>
+        <ThreadsColumn
+          client={client}
+          clock={clock}
+          instance={instanceSummary({ instance_id: "hub-ada", persona_name: "Ada" })}
+        />
         <ThreadListPage client={client} clock={clock} instanceId="hub-ada" />
-      </SidebarProvider>,
+      </>,
     )
     const user = userEvent.setup()
-    const sidebar = within(screen.getByRole("navigation", { name: "Sidebar" }))
-    const sidebarTitles = () => sidebar.queryAllByRole("link").map((link) => link.textContent)
+    const sidebar = within(screen.getByRole("navigation", { name: "Threads" }))
+    const sidebarTitles = () =>
+      sidebar.queryAllByRole("link").map((link) => within(link).getByTitle(/./).textContent)
     const row = async (title: string) =>
       within(await screen.findByRole("row", { name: new RegExp(title) }))
     expect(await sidebar.findByRole("link", { name: "Deploy notes" })).toBeDefined()

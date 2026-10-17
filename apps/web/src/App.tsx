@@ -1,23 +1,27 @@
 import { browserClock } from "@kinby/contract"
 import type { Client, Clock, InstanceSummary } from "@kinby/contract"
 import { cn } from "cn"
-import { useCallback, useSyncExternalStore } from "react"
+import { MessagesSquareIcon } from "lucide-react"
+import { useCallback, useState, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { HubSecretsPage } from "@/components/hub-secrets-page"
 import { Onboarding } from "@/components/onboarding"
 import { LibraryPage } from "@/components/library-page"
 import { MainPanel } from "@/components/main-panel"
-import { NavThreads } from "@/components/nav-threads"
 import { PageBoundary } from "@/components/page-boundary"
 import { RemovedInstancesPage } from "@/components/removed-instances-page"
 import { SignIn } from "@/components/sign-in"
+import { ThreadsColumn } from "@/components/threads-column"
 import { UsagePage } from "@/components/usage-page"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { KinbyMark } from "@/components/kinby-mark"
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useInstanceClient } from "@/hooks/use-instance-client"
+import { useIsMobile } from "@/hooks/use-mobile"
 import { usePolled } from "@/hooks/use-polled"
 import {
   useConfigOpen,
@@ -73,6 +77,29 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
       : undefined
   const instanceClient = useInstanceClient(client, running)
   const threadId = useSelectedThreadId()
+  const isMobile = useIsMobile()
+  const [threadsShown, setThreadsShown] = useState(false)
+  // The threads column stands beside the sidebar for the instance the hub relays to. A hub page
+  // selects no instance, so it shows none.
+  const columnFor = instanceClient !== undefined && running !== undefined ? selected : undefined
+  const column = columnFor !== undefined && instanceClient !== undefined && (
+    <ThreadsColumn
+      key={columnFor.instance_id}
+      client={instanceClient}
+      clock={clock}
+      instance={columnFor}
+      onPicked={() => setThreadsShown(false)}
+    />
+  )
+  // An open thread, config panel, memory page, stats page, the library, or a page beside the
+  // threads column scrolls inside the window, not the page.
+  const fixed =
+    threadId !== undefined ||
+    configOpen ||
+    memoryOpen ||
+    statsOpen ||
+    libraryOpen ||
+    (column !== false && !isMobile)
 
   return (
     <TooltipProvider>
@@ -86,61 +113,69 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           usageOpen={usageOpen}
           libraryOpen={libraryOpen}
           secretsOpen={secretsOpen}
-          threadsOpen={threadsOpen}
           client={client}
           clock={clock}
-          threads={
-            instanceClient !== undefined &&
-            running !== undefined && (
-              <NavThreads client={instanceClient} clock={clock} instanceId={running} />
-            )
-          }
+          selectedClient={columnFor !== undefined ? instanceClient : undefined}
           onSignOut={() => void client.signOut()}
         />
-        {/* An open thread, config panel, memory page, or stats page scrolls inside the window, not
-            the page. */}
-        <SidebarInset
-          className={cn(
-            (threadId !== undefined || configOpen || memoryOpen || statsOpen) && "h-svh",
+        <SidebarInset className={cn(fixed && "h-svh", "md:flex-row")}>
+          {column !== false && !isMobile && (
+            <div className="flex w-80 shrink-0 flex-col border-r">{column}</div>
           )}
-        >
-          <header className="flex h-12 shrink-0 items-center gap-2 px-3">
-            <SidebarTrigger />
-            {/* Mounted throughout, so a screen reader hears the connection drop. */}
-            <output>{!connected && <Badge variant="destructive">Reconnecting</Badge>}</output>
-          </header>
-          <PageBoundary path={path}>
-            {creating ? (
-              <Onboarding caller={client} clock={clock} onPublished={listAgain} />
-            ) : usageOpen ? (
-              <UsagePage client={client} clock={clock} />
-            ) : libraryOpen ? (
-              <LibraryPage client={client} clock={clock} />
-            ) : secretsOpen ? (
-              <HubSecretsPage client={client} clock={clock} />
-            ) : removedOpen ? (
-              <RemovedInstancesPage
-                caller={client}
-                clock={clock}
-                removed={listed?.removed}
-                onChanged={listAgain}
-              />
-            ) : (
-              <MainPanel
-                caller={client}
-                clock={clock}
-                instances={instances}
-                selected={selected}
-                threadId={threadId}
-                threadsOpen={threadsOpen}
-                configOpen={configOpen}
-                memoryOpen={memoryOpen}
-                statsOpen={statsOpen}
-                instanceClient={instanceClient}
-                onChanged={listAgain}
-              />
-            )}
-          </PageBoundary>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <header className="flex h-12 shrink-0 items-center gap-2 px-3">
+              <SidebarTrigger />
+              {column !== false && isMobile && (
+                <Sheet open={threadsShown} onOpenChange={setThreadsShown}>
+                  <SheetTrigger
+                    render={<Button variant="ghost" size="icon-sm" aria-label="Threads" />}
+                  >
+                    <MessagesSquareIcon />
+                  </SheetTrigger>
+                  <SheetContent side="left" showCloseButton={false}>
+                    <SheetTitle className="sr-only">Threads</SheetTitle>
+                    {column}
+                  </SheetContent>
+                </Sheet>
+              )}
+              {/* Mounted throughout, so a screen reader hears the connection drop. */}
+              <output>{!connected && <Badge variant="destructive">Reconnecting</Badge>}</output>
+            </header>
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <PageBoundary path={path}>
+                {creating ? (
+                  <Onboarding caller={client} clock={clock} onPublished={listAgain} />
+                ) : usageOpen ? (
+                  <UsagePage client={client} clock={clock} />
+                ) : libraryOpen ? (
+                  <LibraryPage client={client} clock={clock} />
+                ) : secretsOpen ? (
+                  <HubSecretsPage client={client} clock={clock} />
+                ) : removedOpen ? (
+                  <RemovedInstancesPage
+                    caller={client}
+                    clock={clock}
+                    removed={listed?.removed}
+                    onChanged={listAgain}
+                  />
+                ) : (
+                  <MainPanel
+                    caller={client}
+                    clock={clock}
+                    instances={instances}
+                    selected={selected}
+                    threadId={threadId}
+                    threadsOpen={threadsOpen}
+                    configOpen={configOpen}
+                    memoryOpen={memoryOpen}
+                    statsOpen={statsOpen}
+                    instanceClient={instanceClient}
+                    onChanged={listAgain}
+                  />
+                )}
+              </PageBoundary>
+            </div>
+          </div>
         </SidebarInset>
       </SidebarProvider>
     </TooltipProvider>

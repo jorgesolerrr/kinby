@@ -1,4 +1,4 @@
-import type { Client, Clock, InstanceSummary } from "@kinby/contract"
+import type { Client, Clock, InstanceClient, InstanceSummary } from "@kinby/contract"
 import type * as React from "react"
 
 import { KinbyMark } from "@/components/kinby-mark"
@@ -26,10 +26,9 @@ export function AppSidebar({
   usageOpen,
   libraryOpen,
   secretsOpen,
-  threadsOpen,
   client,
   clock,
-  threads,
+  selectedClient,
   onSignOut,
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
@@ -42,12 +41,11 @@ export function AppSidebar({
   usageOpen: boolean
   libraryOpen: boolean
   secretsOpen: boolean
-  threadsOpen: boolean
   /** Reaches the instances that are not selected, to count their threads that need the user. */
   client: Pick<Client, "instance">
   clock: Clock
-  /** The selected instance's threads, when it has them to show. */
-  threads: React.ReactNode
+  /** The selected instance's connection, whose threads column lists the threads its row counts. */
+  selectedClient: Pick<InstanceClient, "call"> | undefined
   onSignOut: () => void
 }) {
   return (
@@ -75,13 +73,6 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <NavMain
-          usageOpen={usageOpen}
-          libraryOpen={libraryOpen}
-          secretsOpen={secretsOpen}
-          threadsOpen={threadsOpen}
-          instanceId={selected?.instance_id}
-        />
         <NavInstances
           instances={instances}
           selected={selected}
@@ -90,10 +81,11 @@ export function AppSidebar({
           removedOpen={removedOpen}
           client={client}
           clock={clock}
-          threads={threads}
+          selectedClient={selectedClient}
         />
       </SidebarContent>
       <SidebarFooter>
+        <NavMain usageOpen={usageOpen} libraryOpen={libraryOpen} secretsOpen={secretsOpen} />
         <NavUser onSignOut={onSignOut} />
       </SidebarFooter>
       <SidebarRail />

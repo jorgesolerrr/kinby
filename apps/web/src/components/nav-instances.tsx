@@ -1,5 +1,4 @@
-import type { Client, Clock, InstanceClient, InstanceSummary, ThreadStatus } from "@kinby/contract"
-import type * as React from "react"
+import type { Client, Clock, InstanceClient, InstanceSummary } from "@kinby/contract"
 import { useCallback, useId, useSyncExternalStore } from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
@@ -21,6 +20,7 @@ import {
   REMOVED_PATH,
   selectInstance,
 } from "@/lib/selection"
+import { needsYou, threadList } from "@/lib/thread-list"
 import { ArchiveRestoreIcon, PlusIcon } from "lucide-react"
 
 export function NavInstances({
@@ -31,7 +31,7 @@ export function NavInstances({
   removedOpen,
   client,
   clock,
-  threads,
+  selectedClient,
 }: {
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
@@ -42,8 +42,8 @@ export function NavInstances({
   /** Reaches the instances that are not selected, to count their threads that need the user. */
   client: Pick<Client, "instance">
   clock: Clock
-  /** Shown in the selected instance's row, in place of its state. */
-  threads: React.ReactNode
+  /** The selected instance's connection, whose threads column lists the threads its row counts. */
+  selectedClient: Pick<InstanceClient, "call"> | undefined
 }) {
   const home = instances.filter((instance) => instance.home)
   const others = instances.filter((instance) => !instance.home)
@@ -62,7 +62,7 @@ export function NavInstances({
               isSelected={isSelected}
               client={client}
               clock={clock}
-              threads={threads}
+              selectedClient={isSelected ? selectedClient : undefined}
             />
           )
         })}
@@ -110,7 +110,8 @@ export function NavInstances({
 /**
  * An instance's row: its avatar, its name, and under the name what needs the user or else its
  * state, with an ember dot while something waits. The link is named by the instance alone; the
- * second line is its description. The selected instance's threads hang under the row.
+ * second line is its description. The selected instance counts the threads its threads column
+ * lists, and the others count on connections of their own.
  */
 function InstanceRow({
   instance,
@@ -118,14 +119,14 @@ function InstanceRow({
   isSelected,
   client,
   clock,
-  threads,
+  selectedClient,
 }: {
   instance: InstanceSummary
   name: string
   isSelected: boolean
   client: Pick<Client, "instance">
   clock: Clock
-  threads: React.ReactNode
+  selectedClient: Pick<InstanceClient, "call"> | undefined
 }) {
   const statusId = useId()
   return (
@@ -143,7 +144,9 @@ function InstanceRow({
         render={
           <a href={instancePath(instance.instance_id)}>
             <InstanceAvatar avatar={instance.avatar} name={name} />
-            {!isSelected && instance.process === "running" ? (
+            {selectedClient !== undefined ? (
+              <ListedNeedsYou client={selectedClient} instance={instance} id={statusId} />
+            ) : !isSelected && instance.process === "running" ? (
               <NeedsYouBadge client={client} clock={clock} instance={instance} id={statusId} />
             ) : (
               <NeedsYou count={instance.needs_human} instance={instance} id={statusId} />
@@ -151,16 +154,12 @@ function InstanceRow({
           </a>
         }
       />
-      {isSelected && threads}
     </SidebarMenuItem>
   )
 }
 
 /** How often an instance that is not selected has its threads counted while the page is visible. */
 const COUNT_INTERVAL_MS = 5_000
-
-/** The statuses that wait on the user. */
-const NEEDS_YOU: ReadonlySet<ThreadStatus> = new Set(["awaiting_approval", "failed"])
 
 /**
  * How many of a running instance's sidebar threads and factory runs need the user, in place of its
@@ -201,11 +200,32 @@ function NeedsYouCount({
     () =>
       client
         .call("thread.list", { filter: "sidebar" })
-        .then(({ threads }) => threads.filter((thread) => NEEDS_YOU.has(thread.status)).length),
+        .then(({ threads }) => threads.filter(needsYou).length),
     [client],
   )
   const [threadsNeedingYou = 0] = usePolled(count, clock, connected, COUNT_INTERVAL_MS)
   return <NeedsYou count={threadsNeedingYou + instance.needs_human} instance={instance} id={id} />
+}
+
+/** What needs the user among the threads the selected instance's threads column last listed. */
+function ListedNeedsYou({
+  client,
+  instance,
+  id,
+}: {
+  client: Pick<InstanceClient, "call">
+  instance: InstanceSummary
+  id: string
+}) {
+  const list = threadList(client, "sidebar")
+  const threads = useSyncExternalStore(list.onChange, list.view)?.threads ?? []
+  return (
+    <NeedsYou
+      count={threads.filter(needsYou).length + instance.needs_human}
+      instance={instance}
+      id={id}
+    />
+  )
 }
 
 /**

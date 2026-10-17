@@ -10,8 +10,17 @@ import type {
   PreviewedSkill,
   SkillResult,
 } from "@kinby/contract"
-import { CircleXIcon, Trash2Icon } from "lucide-react"
-import { type FormEvent, useCallback, useEffect, useId, useState } from "react"
+import { cn } from "cn"
+import {
+  ArrowLeftIcon,
+  CircleXIcon,
+  GitBranchIcon,
+  LibraryIcon,
+  PlusIcon,
+  SearchIcon,
+  Trash2Icon,
+} from "lucide-react"
+import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { FactoryInstances } from "@/components/factory-instances"
@@ -31,6 +40,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import {
   Field,
   FieldContent,
@@ -42,10 +52,11 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item"
-import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { usePace } from "@/hooks/use-pace"
 import { useRead } from "@/hooks/use-read"
@@ -60,22 +71,37 @@ const KINDS: { kind: LibraryKind; title: string }[] = [
 ]
 
 /**
- * The hub's library: the skills and factories an instance can pick. Any entry opens to read, and a
- * skill to edit or delete.
+ * The hub's library: the skills and factories an instance can pick, listed on the left with a
+ * search, and the open entry, or a skill being written or added from git, filling the rest. Any
+ * entry opens to read, and a skill to edit or delete. A narrow screen shows one side at a time.
  */
 export function LibraryPage({ client, clock }: { client: Caller; clock: Clock }) {
   const list = useCallback(() => client.call("library.list", {}), [client])
   const { value: listed, failure, readAgain } = useRead(list, clock)
+  const [kind, setKind] = useState<LibraryKind>("skill")
+  const [query, setQuery] = useState("")
   const [opened, setOpened] = useState<LibraryEntry>()
   const [form, setForm] = useState<"write" | "git">()
   // A git skill's newer commit is known only from a check, which the list does not run.
   const [checkedNewer, setCheckedNewer] = useState<string[]>([])
   const marked = (name: string, newer: boolean) =>
     setCheckedNewer((names) => [...names.filter((each) => each !== name), ...(newer ? [name] : [])])
+  const isNewer = (entry: LibraryEntry) => entry.newer === true || checkedNewer.includes(entry.name)
   const shown =
     opened &&
     (listed?.entries.find((entry) => entry.kind === opened.kind && entry.name === opened.name) ??
       opened)
+  const wanted = query.trim().toLocaleLowerCase()
+  const entries = listed?.entries.filter(
+    (entry) =>
+      entry.kind === kind &&
+      `${entry.name} ${entry.description ?? ""}`.toLocaleLowerCase().includes(wanted),
+  )
+  const title = KINDS.find((each) => each.kind === kind)?.title
+  const back = () => {
+    setForm(undefined)
+    setOpened(undefined)
+  }
 
   const writeNew: WriteNew = async (name, content) => {
     try {
@@ -88,96 +114,150 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
   }
 
   return (
-    <div className="flex flex-col gap-4 p-6">
-      <div className="flex max-w-2xl items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold">Library</h1>
-        {form === undefined && (
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setForm("write")}>
-              Write a skill
-            </Button>
+    <div className="flex min-h-0 flex-1">
+      <section
+        aria-label="Entries"
+        className={cn(
+          "flex min-h-0 w-full flex-col md:w-96 md:shrink-0 md:border-r",
+          (form !== undefined || shown !== undefined) && "hidden md:flex",
+        )}
+      >
+        <div className="flex flex-col gap-3 border-b p-4">
+          <div className="flex items-center gap-2">
+            <h1 className="flex-1 font-heading text-xl font-semibold">Library</h1>
             <Button variant="outline" size="sm" onClick={() => setForm("git")}>
+              <GitBranchIcon data-icon="inline-start" />
               Add from git
             </Button>
-          </div>
-        )}
-      </div>
-      {form === "write" && (
-        <section className="flex max-w-2xl flex-col gap-3" aria-label="Write a skill">
-          <NewSkill
-            write={writeNew}
-            onCreated={() => {
-              setForm(undefined)
-              readAgain()
-            }}
-          />
-          <div>
-            <Button variant="outline" onClick={() => setForm(undefined)}>
-              Cancel
+            <Button size="sm" onClick={() => setForm("write")}>
+              <PlusIcon data-icon="inline-start" />
+              Write
             </Button>
           </div>
-        </section>
-      )}
-      {form === "git" && (
-        <AddFromGit
-          client={client}
-          onAdded={() => {
-            setForm(undefined)
-            readAgain()
-          }}
-          onCancel={() => setForm(undefined)}
-        />
-      )}
-      {failure !== undefined && <Failure error={failure} />}
-      {listed === undefined
-        ? failure === undefined && <Skeleton className="h-72 w-full max-w-2xl" />
-        : KINDS.map(({ kind, title }) => (
-            <section key={kind} className="flex max-w-2xl flex-col gap-2">
-              <h2 className="font-medium">{title}</h2>
-              <ItemGroup aria-label={title}>
-                {listed.entries
-                  .filter((entry) => entry.kind === kind)
-                  .map((entry) => (
-                    <EntryItem
-                      key={entry.name}
-                      entry={entry}
-                      newer={entry.newer === true || checkedNewer.includes(entry.name)}
-                      selected={opened?.kind === kind && opened.name === entry.name}
-                      onSelect={() => setOpened(entry)}
-                    />
-                  ))}
-              </ItemGroup>
-            </section>
-          ))}
-      {shown !== undefined && (
-        <>
-          <Separator className="max-w-2xl" />
-          {shown.kind === "skill" ? (
-            <SkillEntry
-              key={shown.name}
-              client={client}
-              clock={clock}
-              entry={shown}
-              onSaved={readAgain}
-              onChecked={(newer) => marked(shown.name, newer)}
-              onMoved={() => {
-                marked(shown.name, false)
-                readAgain()
-              }}
-              onDeleted={() => {
-                setOpened(undefined)
+          <InputGroup>
+            <InputGroupInput
+              type="search"
+              aria-label="Search the library"
+              placeholder="Search the library"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            <InputGroupAddon>
+              <SearchIcon />
+            </InputGroupAddon>
+          </InputGroup>
+          <Tabs value={kind} onValueChange={(picked: LibraryKind) => setKind(picked)}>
+            <TabsList className="w-full">
+              {KINDS.map(({ kind, title }) => (
+                <TabsTrigger key={kind} value={kind}>
+                  {title}{" "}
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {listed?.entries.filter((entry) => entry.kind === kind).length}
+                  </span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+          {failure !== undefined && <Failure error={failure} />}
+          {entries === undefined ? (
+            failure === undefined && <Skeleton className="h-72 w-full" />
+          ) : entries.length === 0 ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>
+                  {wanted === ""
+                    ? `No ${title?.toLowerCase()} yet`
+                    : `Nothing matches "${query.trim()}"`}
+                </EmptyTitle>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            <ItemGroup aria-label={title}>
+              {entries.map((entry) => (
+                <EntryItem
+                  key={entry.name}
+                  entry={entry}
+                  newer={isNewer(entry)}
+                  selected={
+                    form === undefined && opened?.kind === kind && opened.name === entry.name
+                  }
+                  onSelect={() => {
+                    setForm(undefined)
+                    setOpened(entry)
+                  }}
+                />
+              ))}
+            </ItemGroup>
+          )}
+        </div>
+      </section>
+      {form === "write" ? (
+        <Pane title="Write a skill" onBack={back}>
+          <div className="flex max-w-2xl flex-col gap-3 p-6">
+            <NewSkill
+              write={writeNew}
+              onCreated={() => {
+                setForm(undefined)
                 readAgain()
               }}
             />
-          ) : (
-            <FactoryEntry key={shown.name} client={client} clock={clock} name={shown.name} />
-          )}
-        </>
+            <div>
+              <Button variant="outline" onClick={() => setForm(undefined)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </Pane>
+      ) : form === "git" ? (
+        <Pane title="Add from git" onBack={back}>
+          <AddFromGit
+            client={client}
+            onAdded={() => {
+              setForm(undefined)
+              readAgain()
+            }}
+            onCancel={() => setForm(undefined)}
+          />
+        </Pane>
+      ) : shown?.kind === "skill" ? (
+        <SkillEntry
+          key={shown.name}
+          client={client}
+          clock={clock}
+          entry={shown}
+          newer={isNewer(shown)}
+          onBack={back}
+          onSaved={readAgain}
+          onChecked={(newer) => marked(shown.name, newer)}
+          onMoved={() => {
+            marked(shown.name, false)
+            readAgain()
+          }}
+          onDeleted={() => {
+            setOpened(undefined)
+            readAgain()
+          }}
+        />
+      ) : shown?.kind === "factory" ? (
+        <FactoryEntry key={shown.name} client={client} clock={clock} entry={shown} onBack={back} />
+      ) : (
+        <Empty className="hidden md:flex">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <LibraryIcon />
+            </EmptyMedia>
+            <EmptyTitle>Nothing open</EmptyTitle>
+            <EmptyDescription>Pick a skill or a factory to read it here.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       )}
     </div>
   )
 }
 
+/** One entry's dense row: its name, where it came from, an ember dot for a newer version, and its description. */
 function EntryItem({
   entry,
   newer,
@@ -191,8 +271,8 @@ function EntryItem({
 }) {
   return (
     <Item
-      size="sm"
-      variant={selected ? "outline" : "default"}
+      size="xs"
+      variant={selected ? "muted" : "default"}
       className="text-left"
       render={
         <button
@@ -203,21 +283,85 @@ function EntryItem({
         />
       }
     >
-      <ItemContent>
-        <ItemTitle>
-          {entry.name}
-          <Badge variant="secondary">{LIBRARY_SOURCES[entry.source]}</Badge>
-          {entry.edited && <Badge variant="outline">Edited</Badge>}
-          {newer && <Badge>Newer version</Badge>}
+      <ItemContent className="min-w-0">
+        <ItemTitle className="w-full">
+          <span className="min-w-0 flex-1 truncate font-mono">{entry.name}</span>
+          {newer && <span aria-hidden className="size-2 shrink-0 rounded-full bg-ember" />}
+          <span className="shrink-0 text-xs font-normal text-muted-foreground">
+            {LIBRARY_SOURCES[entry.source]}
+            {entry.edited && " · edited"}
+          </span>
         </ItemTitle>
         {entry.description !== null && <ItemDescription>{entry.description}</ItemDescription>}
-        {entry.git != null && (
-          <ItemDescription>
-            {entry.git.url} at {entry.git.commit}
-          </ItemDescription>
-        )}
       </ItemContent>
     </Item>
+  )
+}
+
+/** The right side's frame: a header with the back link a narrow screen needs, then `children`. */
+function Pane({
+  title,
+  onBack,
+  children,
+}: {
+  title: string
+  onBack: () => void
+  children: ReactNode
+}) {
+  return (
+    <section aria-label={title} className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+      <header className="flex items-center gap-2 border-b px-6 py-4">
+        <BackButton onBack={onBack} />
+        <h2 className="font-heading text-lg font-semibold">{title}</h2>
+      </header>
+      {children}
+    </section>
+  )
+}
+
+function BackButton({ onBack }: { onBack: () => void }) {
+  return (
+    <Button variant="ghost" size="icon-sm" className="md:hidden" aria-label="Back" onClick={onBack}>
+      <ArrowLeftIcon />
+    </Button>
+  )
+}
+
+/**
+ * An open entry: a header with its name, badges, where it came from and `actions`, then `children`
+ * filling the rest.
+ */
+function EntryPane({
+  entry,
+  actions,
+  onBack,
+  children,
+}: {
+  entry: LibraryEntry
+  actions?: ReactNode
+  onBack: () => void
+  children: ReactNode
+}) {
+  return (
+    <section aria-label={entry.name} className="flex min-w-0 flex-1 flex-col">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-6 py-4">
+        <BackButton onBack={onBack} />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <h2 className="flex flex-wrap items-center gap-2 font-mono text-lg font-semibold">
+            {entry.name}
+            <Badge variant="secondary">{LIBRARY_SOURCES[entry.source]}</Badge>
+            {entry.edited && <Badge variant="outline">Edited</Badge>}
+          </h2>
+          {(entry.git != null || entry.description !== null) && (
+            <p className="truncate text-sm text-muted-foreground">
+              {entry.git != null ? `${entry.git.url} at ${entry.git.commit}` : entry.description}
+            </p>
+          )}
+        </div>
+        {actions}
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-6">{children}</div>
+    </section>
   )
 }
 
@@ -302,7 +446,7 @@ function AddFromGit({
   }
 
   return (
-    <section className="flex max-w-2xl flex-col gap-4" aria-label="Add from git">
+    <div className="flex max-w-2xl flex-col gap-4 p-6">
       <form onSubmit={previewAddress}>
         <FieldGroup>
           <Field>
@@ -357,7 +501,7 @@ function AddFromGit({
           </Field>
         </FieldSet>
       )}
-    </section>
+    </div>
   )
 }
 
@@ -393,13 +537,15 @@ function SkillPreview({
 }
 
 /**
- * A library skill's `SKILL.md` to edit, a shipped or git skill's newer version to move to, and
- * Delete. An instance that picked it keeps its copy.
+ * A library skill's `SKILL.md` to edit at full height, a shipped or git skill's newer version to
+ * move to, and Delete, with the actions in its header. An instance that picked it keeps its copy.
  */
 function SkillEntry({
   client,
   clock,
   entry,
+  newer,
+  onBack,
   onSaved,
   onChecked,
   onMoved,
@@ -408,6 +554,9 @@ function SkillEntry({
   client: Caller
   clock: Clock
   entry: LibraryEntry
+  /** Whether the list or a check found a newer version. */
+  newer: boolean
+  onBack: () => void
   onSaved: () => void
   onChecked: (newer: boolean) => void
   onMoved: () => void
@@ -445,14 +594,17 @@ function SkillEntry({
     void load(pacing)
     return pacing.stop
   }, [clock, load])
+  const version = useNewerVersion({
+    client,
+    name,
+    edited: entry.edited === true,
+    onChecked,
+    onMoved: () => {
+      void load(pacing)
+      onMoved()
+    },
+  })
 
-  if (opened === undefined) {
-    return failure === undefined ? (
-      <Skeleton className="h-72 w-full max-w-2xl" />
-    ) : (
-      <Failure error={failure} />
-    )
-  }
   const act = async (action: () => Promise<void>) => {
     setBusy(true)
     setNotice(undefined)
@@ -469,20 +621,79 @@ function SkillEntry({
       setBusy(false)
     }
   }
-  const save = () =>
+  const save = (read: SkillResult) =>
     act(async () => {
-      show(await client.call("library.skill.write", { name, content: draft, hash: opened.hash }))
+      show(await client.call("library.skill.write", { name, content: draft, hash: read.hash }))
       setNotice("saved")
       onSaved()
     })
-  const remove = () =>
+  const remove = (read: SkillResult) =>
     act(async () => {
-      await client.call("library.skill.delete", { name, hash: opened.hash })
+      await client.call("library.skill.delete", { name, hash: read.hash })
       onDeleted()
     })
 
+  const actions = (
+    <div className="flex flex-wrap items-center gap-2">
+      {version.checked !== undefined && version.checked.newer === null && (
+        <span className="text-sm text-muted-foreground">No newer version.</span>
+      )}
+      {entry.source !== "written" && (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={version.busy}
+          onClick={() => void version.check()}
+        >
+          {version.busy && <Spinner data-icon="inline-start" />}
+          Check for a newer version
+        </Button>
+      )}
+      <AlertDialog>
+        <AlertDialogTrigger
+          render={
+            <Button variant="destructive" size="sm" disabled={busy || opened === undefined} />
+          }
+        >
+          <Trash2Icon data-icon="inline-start" />
+          Delete
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Instances that picked it keep their copy.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => opened !== undefined && void remove(opened)}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <Button
+        size="sm"
+        disabled={busy || opened === undefined || draft === opened.content}
+        onClick={() => opened !== undefined && void save(opened)}
+      >
+        {busy && <Spinner data-icon="inline-start" />}
+        Save
+      </Button>
+    </div>
+  )
+
   return (
-    <div className="flex max-w-2xl flex-col gap-3">
+    <EntryPane entry={entry} actions={actions} onBack={onBack}>
+      {notice === "saved" && (
+        <p className="text-sm text-muted-foreground">
+          Saved. Instances take it when they pick it or update.
+        </p>
+      )}
       {notice === "stale" && (
         <Alert variant="destructive">
           <CircleXIcon />
@@ -499,95 +710,58 @@ function SkillEntry({
         </Alert>
       )}
       {failure !== undefined && <Failure error={failure} />}
-      <Field data-invalid={invalid !== undefined || undefined}>
-        <FieldLabel htmlFor={id}>SKILL.md</FieldLabel>
-        <Textarea
-          id={id}
-          className="min-h-72"
-          value={draft}
-          readOnly={busy}
-          aria-invalid={invalid !== undefined || undefined}
-          onChange={(event) => {
-            setDraft(event.target.value)
-            if (notice === "saved") setNotice(undefined)
-          }}
-        />
-        {invalid !== undefined && <FieldError>{invalid}</FieldError>}
-        {opened.files.length > 0 && (
-          <FieldDescription>Other files: {opened.files.join(", ")}</FieldDescription>
-        )}
-      </Field>
       {entry.source !== "written" && (
-        <NewerVersionCheck
-          client={client}
+        <NewerVersionNotice
           name={name}
+          newer={newer}
+          version={version}
           edited={entry.edited === true}
-          unsaved={draft !== opened.content}
-          onChecked={onChecked}
-          onMoved={() => {
-            void load(pacing)
-            onMoved()
-          }}
+          unsaved={opened !== undefined && draft !== opened.content}
         />
       )}
-      <div className="flex items-center gap-3">
-        <Button disabled={busy || draft === opened.content} onClick={() => void save()}>
-          {busy && <Spinner data-icon="inline-start" />}
-          Save
-        </Button>
-        {notice === "saved" && (
-          <span className="text-sm text-muted-foreground">
-            Saved. Instances take it when they pick it or update.
-          </span>
-        )}
-        <AlertDialog>
-          <AlertDialogTrigger
-            render={<Button className="ml-auto" variant="destructive" disabled={busy} />}
-          >
-            <Trash2Icon data-icon="inline-start" />
-            Delete
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Instances that picked it keep their copy.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction variant="destructive" onClick={() => void remove()}>
-                Delete
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </div>
-    </div>
+      {opened === undefined ? (
+        failure === undefined && <Skeleton className="min-h-72 w-full flex-1" />
+      ) : (
+        <Field className="min-h-96 flex-1" data-invalid={invalid !== undefined || undefined}>
+          <FieldLabel htmlFor={id}>SKILL.md</FieldLabel>
+          <Textarea
+            id={id}
+            className="min-h-0 flex-1 resize-none"
+            value={draft}
+            readOnly={busy}
+            aria-invalid={invalid !== undefined || undefined}
+            onChange={(event) => {
+              setDraft(event.target.value)
+              if (notice === "saved") setNotice(undefined)
+            }}
+          />
+          {invalid !== undefined && <FieldError>{invalid}</FieldError>}
+          {opened.files.length > 0 && (
+            <FieldDescription>Other files: {opened.files.join(", ")}</FieldDescription>
+          )}
+        </Field>
+      )}
+    </EntryPane>
   )
 }
 
 /**
- * Check a shipped or git skill for a newer version, read the diff, and move the library's skill
- * to it. A skill the user edited moves only after they agree to overwrite the edits, and one with
- * unsaved edits only once they are saved.
+ * Check a shipped or git skill for a newer version, and move the library's skill to the one a
+ * check showed. A skill the user edited moves over the edits, once they agree to it.
  */
-function NewerVersionCheck({
+function useNewerVersion({
   client,
   name,
   edited,
-  unsaved,
   onChecked,
   onMoved,
 }: {
   client: Caller
   name: string
   edited: boolean
-  unsaved: boolean
   onChecked: (newer: boolean) => void
   onMoved: () => void
 }) {
-  const id = useId()
   const [checked, setChecked] = useState<LibrarySkillCheckResult>()
   const { busy, refusal, failure, ask } = useHubCall()
 
@@ -608,71 +782,123 @@ function NewerVersionCheck({
       setChecked(undefined)
       onMoved()
     })
+  return { checked, busy, refusal, failure, check, move }
+}
 
-  const newer = checked?.newer
+/**
+ * That a newer version is out, with its diff once checked and the move to it. A skill with unsaved
+ * edits moves only once they are saved.
+ */
+function NewerVersionNotice({
+  name,
+  newer: known,
+  version,
+  edited,
+  unsaved,
+}: {
+  name: string
+  newer: boolean
+  version: ReturnType<typeof useNewerVersion>
+  edited: boolean
+  unsaved: boolean
+}) {
+  const id = useId()
+  const newer = version.checked?.newer
   return (
     <section className="flex flex-col gap-3" aria-label="Newer version">
-      <div className="flex items-center gap-3">
-        <Button variant="outline" disabled={busy} onClick={() => void check()}>
-          {busy && <Spinner data-icon="inline-start" />}
-          Check for a newer version
-        </Button>
-        {checked !== undefined && newer === null && (
-          <span className="text-sm text-muted-foreground">No newer version.</span>
-        )}
-      </div>
-      {failure !== undefined && <Failure error={failure} />}
-      {refusal !== undefined && <Refusal reason={refusal} />}
-      {newer != null && (
+      {version.failure !== undefined && <Failure error={version.failure} />}
+      {version.refusal !== undefined && <Refusal reason={version.refusal} />}
+      {newer != null ? (
         <>
+          <Alert>
+            <AlertTitle>A newer version is out</AlertTitle>
+            <AlertDescription>
+              <p>
+                {newer.commit === null ? "The version this kinby ships." : `Commit ${newer.commit}`}
+              </p>
+              {unsaved && <p>Save your edits to SKILL.md before moving it.</p>}
+            </AlertDescription>
+            <AlertAction>
+              {edited ? (
+                <AlertDialog>
+                  <AlertDialogTrigger
+                    render={<Button size="sm" disabled={version.busy || unsaved} />}
+                  >
+                    Move to this version
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Overwrite your edits to {name}?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        The newer version replaces the library&apos;s copy you edited. Instances
+                        that picked it keep theirs.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        variant="destructive"
+                        onClick={() => void version.move(newer)}
+                      >
+                        Overwrite
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              ) : (
+                <Button
+                  size="sm"
+                  disabled={version.busy || unsaved}
+                  onClick={() => void version.move(newer)}
+                >
+                  Move to this version
+                </Button>
+              )}
+            </AlertAction>
+          </Alert>
           <Field>
             <FieldLabel htmlFor={id}>Diff</FieldLabel>
             <Textarea id={id} className="min-h-48" value={newer.diff} readOnly />
-            <FieldDescription>
-              {newer.commit === null ? "The version this kinby ships." : `Commit ${newer.commit}`}
-            </FieldDescription>
           </Field>
-          <div className="flex items-center gap-3">
-            {edited ? (
-              <AlertDialog>
-                <AlertDialogTrigger render={<Button disabled={busy || unsaved} />}>
-                  Move to this version
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Overwrite your edits to {name}?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      The newer version replaces the library&apos;s copy you edited. Instances that
-                      picked it keep theirs.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction variant="destructive" onClick={() => void move(newer)}>
-                      Overwrite
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            ) : (
-              <Button disabled={busy || unsaved} onClick={() => void move(newer)}>
-                Move to this version
-              </Button>
-            )}
-            {unsaved && (
-              <span className="text-sm text-muted-foreground">
-                Save your edits to SKILL.md before moving it.
-              </span>
-            )}
-          </div>
         </>
+      ) : (
+        known && (
+          <Alert>
+            <AlertTitle>A newer version is out</AlertTitle>
+            <AlertDescription>
+              Read the diff, then move the library&apos;s copy to it. Instances that picked it keep
+              theirs.
+            </AlertDescription>
+            <AlertAction>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={version.busy}
+                onClick={() => void version.check()}
+              >
+                Read the diff
+              </Button>
+            </AlertAction>
+          </Alert>
+        )
       )}
     </section>
   )
 }
 
-/** A factory's `factory.yaml`, read-only, its other files, and the instances holding its roles. */
-function FactoryEntry({ client, clock, name }: { client: Caller; clock: Clock; name: string }) {
+/** A factory's `factory.yaml` at full height, read-only, its other files, and the instances holding its roles. */
+function FactoryEntry({
+  client,
+  clock,
+  entry,
+  onBack,
+}: {
+  client: Caller
+  clock: Clock
+  entry: LibraryEntry
+  onBack: () => void
+}) {
+  const { name } = entry
   const id = useId()
   const read = useCallback(async () => {
     const { "factory.yaml": content = "", ...others } = (await client.call("factory.get", { name }))
@@ -681,23 +907,31 @@ function FactoryEntry({ client, clock, name }: { client: Caller; clock: Clock; n
   }, [client, name])
   const { value: opened, failure } = useRead(read, clock)
 
-  if (opened === undefined) {
-    return failure === undefined ? (
-      <Skeleton className="h-72 w-full max-w-2xl" />
-    ) : (
-      <Failure error={failure} />
-    )
-  }
   return (
-    <>
-      <Field className="max-w-2xl">
-        <FieldLabel htmlFor={id}>factory.yaml</FieldLabel>
-        <Textarea id={id} className="min-h-72" value={opened.content} readOnly />
-        {opened.files.length > 0 && (
-          <FieldDescription>Other files: {opened.files.join(", ")}</FieldDescription>
-        )}
-      </Field>
-      <FactoryInstances client={client} clock={clock} factory={name} />
-    </>
+    <EntryPane entry={entry} onBack={onBack}>
+      {opened === undefined ? (
+        failure === undefined ? (
+          <Skeleton className="min-h-72 w-full flex-1" />
+        ) : (
+          <Failure error={failure} />
+        )
+      ) : (
+        <>
+          <Field className="min-h-96 flex-1">
+            <FieldLabel htmlFor={id}>factory.yaml</FieldLabel>
+            <Textarea
+              id={id}
+              className="min-h-0 flex-1 resize-none"
+              value={opened.content}
+              readOnly
+            />
+            {opened.files.length > 0 && (
+              <FieldDescription>Other files: {opened.files.join(", ")}</FieldDescription>
+            )}
+          </Field>
+          <FactoryInstances client={client} clock={clock} factory={name} />
+        </>
+      )}
+    </EntryPane>
   )
 }
