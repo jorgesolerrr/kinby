@@ -63,9 +63,6 @@
     "Marker": {
       "cardMode": "column"
     },
-    "Message": {
-      "cardMode": "column"
-    },
     "MessageScroller": {
       "cardMode": "column"
     },

@@ -22,7 +22,13 @@ function instanceClient(answers: Answers = {}) {
 /** Open thread t1 of Ada's instance, from a client that answers from `answers`. */
 function openThread(answers: Answers = {}, client = instanceClient(answers)) {
   const rendered = render(
-    <ThreadPanel client={client} instanceId="hub-ada" threadId="t1" name="Ada" />,
+    <ThreadPanel
+      client={client}
+      instanceId="hub-ada"
+      threadId="t1"
+      name="Ada"
+      avatar={{ shape: "circle", color: "blue" }}
+    />,
   )
   const subscription = () => {
     const latest = client.subscriptions.at(-1)
@@ -493,14 +499,11 @@ describe("a thread's panel", () => {
       subscription().subscribed(events.length)
       for (const event of events) subscription().deliver(event)
     })
-    // jsdom has no Tailwind, so read the paddings the header's classes can resolve to.
-    const paddings = (header: HTMLElement) =>
-      new Set([...header.classList].flatMap((name) => /(?:^|:)px-(.+)$/.exec(name)?.[1] ?? []))
-
+    // jsdom has no Tailwind, so compare the classes the two names are drawn with.
     const [toolsOnly, withText] = screen.getAllByText("Ada")
 
-    expect(paddings(toolsOnly as HTMLElement)).toEqual(new Set(["0"]))
-    expect(paddings(withText as HTMLElement)).toEqual(new Set(["0"]))
+    expect(toolsOnly?.className).toBe(withText?.className)
+    expect(toolsOnly?.parentElement?.className).toBe(withText?.parentElement?.className)
   })
 
   it("starts a turn with the message when Enter is pressed", async () => {

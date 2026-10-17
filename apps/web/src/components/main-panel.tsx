@@ -65,6 +65,7 @@ export function MainPanel({
         instanceId={selected.instance_id}
         threadId={threadId}
         name={instanceName(selected)}
+        avatar={selected.avatar}
       />
     )
   }
