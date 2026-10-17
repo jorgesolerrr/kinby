@@ -86,6 +86,7 @@ from kinby.instance.recap import load_recap_lens
 from kinby.memory import (
     GraphStore,
     InvalidNodeId,
+    MemoryNodeError,
     NodeId,
     NodeNotFound,
     open_memory,
@@ -1122,6 +1123,7 @@ def main(
         ManifestError,
         NodeNotFound,
         InvalidNodeId,
+        MemoryNodeError,
     ) as exc:
         print(exc, file=sys.stderr)
         return 1

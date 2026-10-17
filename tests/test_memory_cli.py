@@ -100,6 +100,20 @@ def test_memory_open_of_an_unknown_node_exits_non_zero_and_says_so(
     assert output.err == 'Graph node "2026-09-03-never-written" was not found.\n'
 
 
+def test_memory_open_of_a_node_with_invalid_frontmatter_exits_non_zero_and_says_so(
+    instance: Instance, capsys: pytest.CaptureFixture[str]
+) -> None:
+    broken = instance.path / "memory" / "graph" / "2026-09-03-broken.md"
+    broken.write_text("No frontmatter.\n", encoding="utf-8")
+
+    status = main(["memory", "open", "2026-09-03-broken"])
+    output = capsys.readouterr()
+
+    assert status == 1
+    assert output.out == ""
+    assert output.err == f'Graph node "{broken}" has invalid frontmatter.\n'
+
+
 def test_memory_commands_run_while_the_instance_serves_and_change_nothing(
     instance: Instance, capsys: pytest.CaptureFixture[str]
 ) -> None:
