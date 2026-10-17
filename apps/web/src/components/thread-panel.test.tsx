@@ -487,6 +487,17 @@ describe("a thread's panel", () => {
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message Ada" }))
   })
 
+  it("puts focus back in the composer when the field around it is clicked", async () => {
+    const { subscription } = openThread()
+    await act(async () => subscription().subscribed(0))
+    const composer = screen.getByRole("textbox", { name: "Message Ada" })
+    composer.blur()
+
+    fireEvent.click(screen.getByText("›"))
+
+    expect(document.activeElement).toBe(composer)
+  })
+
   it("lines up the instance's name the same in a turn of only tool steps as in one with text", async () => {
     const events = thread(
       ["turn-1", started("List the repo")],
