@@ -52,6 +52,7 @@ class SharedCodeStep:
 #: The code steps that make a routine dreaming's consolidation or reflection stage (ADR 0099).
 CONSOLIDATION_STEP = SharedCodeStep("consolidate")
 REFLECTION_STEP = SharedCodeStep("reflect")
+DREAMING_STEPS = (CONSOLIDATION_STEP, REFLECTION_STEP)
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,7 @@ class Routine:
 
     @property
     def is_dreaming_stage(self) -> bool:
-        return self.code_step in (CONSOLIDATION_STEP, REFLECTION_STEP)
+        return self.code_step in DREAMING_STEPS
 
 
 def load_routines(

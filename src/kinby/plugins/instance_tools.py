@@ -37,7 +37,6 @@ from kinby.instance.manifest import with_repository_commands
 from kinby.instance.permissions import load_permissions
 from kinby.plugins.routines import (
     Routine,
-    is_dreaming_stage,
     load_routine,
     load_routine_file,
     load_routines,
@@ -282,13 +281,10 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
     ) -> str:
         """Create or replace a routine from its complete ROUTINE.md and optional run.py."""
         recorded = partial(_recorded, context)
-        # Dreaming proposes no code, so the gate's trust in a tool's write flag holds (ADR 0099).
-        on_stage = context.routine is not None and is_dreaming_stage(
-            context.instance, context.routine
-        )
         async with context.instance.routine_lock:
             routine = await asyncio.to_thread(
-                partial(write_routine, code_step_allowed=not on_stage),
+                # Dreaming proposes no code, so the gate's trust in a write flag holds (ADR 0099).
+                partial(write_routine, code_step_allowed=not context.dreaming_stage),
                 context.instance,
                 RoutineName(name),
                 content,

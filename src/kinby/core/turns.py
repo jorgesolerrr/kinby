@@ -272,9 +272,12 @@ class Turns:
         parked = {
             thread: origin
             for thread, origin in self._parked().items()
-            if not (isinstance(origin, RoutineOrigin) and self._is_dreaming_stage(origin.name))
+            if not self._holds_only_its_thread(origin)
         }
         return {**self._live(), **parked}
+
+    def _holds_only_its_thread(self, origin: Origin) -> bool:
+        return isinstance(origin, RoutineOrigin) and self._is_dreaming_stage(origin.name)
 
     def _live(self) -> dict[UUID, Origin]:
         origins = {
@@ -721,6 +724,9 @@ class Turns:
         if command.thread_id in self._claims or (running is not None and not running.task.done()):
             raise _thread_busy(command.thread_id)
         origin = _turn_origin(events, pending.event.turn_id)
+        if self._holds_only_its_thread(origin):
+            # A parked stage let other work in, so it takes the instance back like a new turn.
+            self.require_available(origin)
         # The parked turn itself owns the instance reservation.
         claim = TurnClaim(origin)
         self._claims[command.thread_id] = claim

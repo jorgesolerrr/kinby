@@ -27,9 +27,11 @@ from kinby.contracts import (
     ToolResult,
     TurnCompleted,
     TurnStarted,
+    UserOrigin,
     is_turn_closing,
 )
 from kinby.core.dispatcher import ScheduledTurnConfig, TurnConfig, build_dispatcher
+from kinby.core.errors import InstanceBusy
 from kinby.core.events import EventLog
 from kinby.core.scheduler import SchedulerConfig
 from kinby.core.threads import ThreadStore
@@ -349,6 +351,89 @@ def test_routine_write_with_a_code_step_is_refused_on_a_stage_turn(
     assert result.error
     assert "code step" in result.output
     assert not (instance.path / "routines" / "invoices").exists()
+
+
+def test_a_stage_that_rewrites_its_own_routine_still_writes_no_code_step(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    reflection_stage(instance, mode="full-access")
+    consolidate(instance, "Invoices go out on the first")
+    unstaged = "---\ndescription: Reflect on the week\nmode: full-access\n---\nReflect.\n"
+    model = ReflectingModel(
+        ("routine_write", {"name": "reflection", "content": unstaged}),
+        ("routine_write", {"name": "invoices", "content": _ROUTINE, "code": _CODE}),
+    )
+
+    events = reflect(instance, model)
+
+    rewrite, with_code = [
+        event.payload
+        for event in events
+        if isinstance(event.payload, ToolResult) and event.payload.name == "routine_write"
+    ]
+    assert not rewrite.error
+    assert with_code.error
+    assert "code step" in with_code.output
+    assert not (instance.path / "routines" / "invoices").exists()
+
+
+class HeldModel:
+    """Answer once the test releases it."""
+
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+
+    def bind_tools(self, tools: Sequence[StructuredTool]) -> Self:
+        return self
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        await self.release.wait()
+        usage = {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6}
+        yield AIMessageChunk(content="Hello.", usage_metadata=usage)
+
+
+def test_an_approved_reflection_resumes_only_once_the_instance_is_free(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    reflection_stage(instance)
+    consolidate(instance, "Invoices go out on the first")
+    proposing = ReflectingModel(("remember", _PROPOSALS["remember"]))
+    approval = reflect(instance, proposing)[-1]
+    assert isinstance(approval.payload, ApprovalRequested)
+    approve = ThreadApprovalRespondCommand(
+        thread_id=approval.thread_id,
+        approval_id=approval.payload.approval_id,
+        decision=ApprovalDecision.APPROVE,
+    )
+
+    async def scenario() -> list[Event]:
+        held = HeldModel()
+        models = iter([held, proposing])
+        log = EventLog(instance.manifest.state_dir)
+        store = ThreadStore(instance.manifest.state_dir)
+        runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: next(models))
+        turns = Turns(
+            store,
+            log,
+            runner,
+            runner.prepare_for_turn,
+            runner.permission_ceiling,
+            no_recap,
+            is_dreaming_stage=partial(is_dreaming_stage, instance),
+        )
+        await turns.wake(store.create(None).id, "Hello", UserOrigin())
+        with pytest.raises(InstanceBusy):
+            await turns.respond(approve)
+        held.release.set()
+        await turns.wait_idle()
+        await turns.respond(approve)
+        await turns.wait_idle()
+        return log.stored(approval.thread_id)
+
+    events = asyncio.run(scenario())
+
+    assert outcome(events) is CompletionOutcome.WORK
+    assert _remembered(instance)
 
 
 def test_a_reflection_waiting_on_approval_does_not_block_a_consolidation(tmp_path: Path) -> None:
