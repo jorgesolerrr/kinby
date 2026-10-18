@@ -62,6 +62,8 @@ class _FactFrontmatter(_NodeFrontmatter):
     #: Written only on a fact dreaming learned from episodes.
     sources: tuple[NodeId, ...] = ()
     tombstone: bool = False
+    #: Absent on a tombstone written before a forget recorded its day.
+    forgotten: date | None = None
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
@@ -70,6 +72,7 @@ class _TurnEpisodeFrontmatter(_NodeFrontmatter):
     turn: UUID
     tools: tuple[str, ...]
     tombstone: bool = False
+    forgotten: date | None = None
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
@@ -78,10 +81,19 @@ class _RunEpisodeFrontmatter(_NodeFrontmatter):
     generation: int
     tools: tuple[str, ...]
     tombstone: bool = False
+    forgotten: date | None = None
 
 
 type _Frontmatter = _FactFrontmatter | _TurnEpisodeFrontmatter | _RunEpisodeFrontmatter
 _FRONTMATTER = TypeAdapter(_Frontmatter)
+
+
+@dataclass(frozen=True)
+class ForgottenFact:
+    """A fact a forget tombstoned, with the day of the forget when the tombstone records it."""
+
+    fact: Fact
+    forgotten_on: date | None
 
 
 class GraphStore:
@@ -122,8 +134,8 @@ class GraphStore:
         """
         terms = query.casefold().split()
         matches: list[MemoryNode] = []
-        for memory, tombstone in self._read_all():
-            if tombstone:
+        for memory, frontmatter in self._read_all():
+            if frontmatter.tombstone:
                 continue
             if after is not None and memory.date < after:
                 continue
@@ -134,16 +146,16 @@ class GraphStore:
                 matches.append(memory)
         return sorted(matches, key=lambda memory: (memory.date, memory.node), reverse=True)
 
-    def forgotten_facts(self) -> list[Fact]:
+    def forgotten_facts(self) -> list[ForgottenFact]:
         """Every fact a forget left a tombstone on, which dreaming must not write back."""
         return [
-            memory
-            for memory, tombstone in self._read_all()
-            if tombstone and isinstance(memory, Fact)
+            ForgottenFact(memory, frontmatter.forgotten)
+            for memory, frontmatter in self._read_all()
+            if frontmatter.tombstone and isinstance(memory, Fact)
         ]
 
-    def _read_all(self) -> Iterator[tuple[MemoryNode, bool]]:
-        """Each readable node with whether it is tombstoned, skipping invalid files."""
+    def _read_all(self) -> Iterator[tuple[MemoryNode, _Frontmatter]]:
+        """Each readable node with its frontmatter, skipping invalid files."""
         if not self._path.is_dir():
             return
         for path in self._path.glob("*.md"):
@@ -166,13 +178,13 @@ class GraphStore:
         _write_node(self._node_path(memory.node), _render_node(memory))
         return memory.node
 
-    def forget(self, node: NodeId) -> None:
+    def forget(self, node: NodeId, forgotten_on: date) -> None:
         path = self._node_path(node)
         if _read_node(path) is None:
             return
         lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
         closing = next(index for index, line in enumerate(lines[1:], 1) if line.strip() == "---")
-        lines.insert(closing, "tombstone: true\n")
+        lines[closing:closing] = ["tombstone: true\n", f"forgotten: {forgotten_on.isoformat()}\n"]
         _write_node(path, "".join(lines))
 
     def _node_path(self, node: NodeId) -> Path:
@@ -229,11 +241,11 @@ def _origin(memory: MemoryNode) -> str:
 
 
 def _read_node(path: Path) -> MemoryNode | None:
-    memory, tombstone = _parse_node(path)
-    return None if tombstone else memory
+    memory, frontmatter = _parse_node(path)
+    return None if frontmatter.tombstone else memory
 
 
-def _parse_node(path: Path) -> tuple[MemoryNode, bool]:
+def _parse_node(path: Path) -> tuple[MemoryNode, _Frontmatter]:
     try:
         values, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         frontmatter = _FRONTMATTER.validate_python(values)
@@ -251,7 +263,7 @@ def _parse_node(path: Path) -> tuple[MemoryNode, bool]:
             added_by_user=frontmatter.source == "user",
             sources=frontmatter.sources,
         )
-        return fact, frontmatter.tombstone
+        return fact, frontmatter
     recaps = (
         RecappedTurn(frontmatter.thread, frontmatter.turn)
         if isinstance(frontmatter, _TurnEpisodeFrontmatter)
@@ -266,4 +278,4 @@ def _parse_node(path: Path) -> tuple[MemoryNode, bool]:
         recaps=recaps,
         tools=frontmatter.tools,
     )
-    return episode, frontmatter.tombstone
+    return episode, frontmatter

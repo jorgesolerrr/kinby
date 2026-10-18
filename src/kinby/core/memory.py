@@ -92,21 +92,24 @@ class InstanceMemory:
         if isinstance(replaced, Episode):
             raise EpisodeNotCorrectable(f'Graph node "{command.node}" is an episode.')
         corrected = self._graph.remember(self._user_fact(command))
-        self._graph.forget(replaced.node)
+        self._graph.forget(replaced.node, self._today())
         return MemoryWriteResult(node=corrected)
 
     async def forget(self, command: MemoryForgetCommand) -> MemoryForgetResult:
         with _refusals():
             self._graph.open(command.node)
-        self._graph.forget(command.node)
+        self._graph.forget(command.node, self._today())
         return MemoryForgetResult()
+
+    def _today(self) -> date:
+        return self._clock().astimezone(UTC).date()
 
     def _user_fact(self, command: MemoryAddCommand) -> Fact:
         """The fact *command* describes, dated today and belonging to no thread."""
         description = command.description.strip()
         if not description:
             raise InvalidFact({"description": "Describe the fact."})
-        today = self._clock().astimezone(UTC).date()
+        today = self._today()
         return Fact(
             node=new_node_id(today, description),
             date=today,

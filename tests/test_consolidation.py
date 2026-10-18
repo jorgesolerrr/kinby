@@ -307,11 +307,14 @@ def test_a_refused_call_writes_nothing_and_covers_nothing(tmp_path: Path, cited:
     assert covering.episodes == (monday, thursday)
 
 
+_FORGOTTEN_ON = _DAY - timedelta(days=10)
+
+
 def forgotten(instance: Instance, *sources: NodeId) -> NodeId:
-    """Cover *sources*, learn a billing fact from them, then forget it."""
+    """Cover *sources*, learn a billing fact from them, then forget it on _FORGOTTEN_ON."""
     fire(instance, ConsolidatingModel())
     node = fact(instance, "Invoices go out late", ("billing",), sources)
-    GraphStore(instance.path).forget(node)
+    GraphStore(instance.path).forget(node, _FORGOTTEN_ON)
     return node
 
 
@@ -321,7 +324,7 @@ def test_the_frame_lists_the_forgotten_facts_on_the_batch_subjects(tmp_path: Pat
     old = episode(instance, "Sent the invoices late", _DAY - timedelta(days=30))
     gone = forgotten(instance, old)
     elsewhere = fact(instance, "The dentist is on Main Street", ("health",))
-    GraphStore(instance.path).forget(elsewhere)
+    GraphStore(instance.path).forget(elsewhere, _FORGOTTEN_ON)
     episode(instance, "Billing retries failed cards")
     model = ConsolidatingModel()
 
@@ -333,7 +336,7 @@ def test_the_frame_lists_the_forgotten_facts_on_the_batch_subjects(tmp_path: Pat
     assert elsewhere not in model.wake
 
 
-@pytest.mark.parametrize("cited", ["all", "some"])
+@pytest.mark.parametrize("cited", ["all", "some", "an episode before the forget"])
 def test_relearning_a_forgotten_fact_from_its_sources_is_refused(
     tmp_path: Path, cited: str
 ) -> None:
@@ -342,10 +345,15 @@ def test_relearning_a_forgotten_fact_from_its_sources_is_refused(
     monday = episode(instance, "Sent the invoices late on Monday", _DAY - timedelta(days=30))
     thursday = episode(instance, "Sent the invoices late on Thursday", _DAY - timedelta(days=27))
     forgotten(instance, monday, thursday)
+    late = episode(instance, "Sent the invoices late again", _FORGOTTEN_ON - timedelta(days=1))
     new = episode(instance, "Billing retries failed cards")
     memory = GraphStore(instance.path)
     before = memory.nodes()
-    sources = {"all": (monday, thursday), "some": (monday,)}[cited]
+    sources = {
+        "all": (monday, thursday),
+        "some": (monday,),
+        "an episode before the forget": (monday, late),
+    }[cited]
     model = ConsolidatingModel(
         [learned("Billing retries cards", new), learned("Invoices go out late", *sources)]
     )

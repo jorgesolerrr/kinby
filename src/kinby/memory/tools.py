@@ -61,7 +61,7 @@ def memory_tools(
     @tool(write=True)
     def forget(node: NodeId) -> str:
         """Forget one memory node by the id returned from memory_search."""
-        memory.forget(node)
+        memory.forget(node, today())
         return f'Forgot memory node "{node}".'
 
     return memory_search, memory_open, remember, forget
