@@ -507,11 +507,36 @@ class LangGraphRunner:
             message = routine.prompt
             delivery = self._delivery_for_turn(turn)
             declared = routine.code_step
+            consolidate = (
+                consolidate_tool(
+                    GraphStore(self._instance.path),
+                    self._event_log,
+                    turn.thread_id,
+                    turn.turn_id,
+                    emit,
+                    today=self._today,
+                )
+                if routine.is_dreaming_stage
+                else None
+            )
             if declared is None:
                 code_step = None
-            elif routine.is_dreaming_stage:
+            elif consolidate is not None:
+                writes = ToolCall(
+                    call_id=str(uuid4()), name=consolidate.name, arguments={}, write=True
+                )
+                unasked = evaluate(
+                    self._gate_policy,
+                    routine.mode,
+                    writes,
+                    consolidate,
+                    self._instance.manifest.workspace.path,
+                )
                 code_step = consolidation_step(
-                    GraphStore(self._instance.path), self._event_log, today=self._today
+                    GraphStore(self._instance.path),
+                    self._event_log,
+                    today=self._today,
+                    prune=unasked.action is GateAction.ALLOW,
                 )
             else:
                 try:
@@ -524,15 +549,7 @@ class LangGraphRunner:
                 tools = ToolSnapshot(
                     tuple(tool for tool in tools.tools if tool.name != code_step.name)
                 )
-            if routine.is_dreaming_stage:
-                consolidate = consolidate_tool(
-                    GraphStore(self._instance.path),
-                    self._event_log,
-                    turn.thread_id,
-                    turn.turn_id,
-                    emit,
-                    today=self._today,
-                )
+            if consolidate is not None:
                 tools = ToolSnapshot((*tools.tools, consolidate))
             if code_step is not None and isinstance(graph_input, ModelState):
                 code_started = asyncio.get_running_loop().time()

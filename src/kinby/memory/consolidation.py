@@ -116,8 +116,13 @@ class ConsolidationRefused(ValueError):
     """A consolidate call the batch does not support. Nothing was written."""
 
 
-def consolidation_step(graph: GraphStore, log: EventLog, *, today: Callable[[], date]) -> Tool:
-    """The stage's code step: prune, then frame the oldest uncovered episodes or report no work."""
+def consolidation_step(
+    graph: GraphStore, log: EventLog, *, today: Callable[[], date], prune: bool
+) -> Tool:
+    """The stage's code step: prune, then frame the oldest uncovered episodes or report no work.
+
+    It prunes only when *prune*, which the gate grants when the stage's writes need no approval.
+    """
 
     @tool(write=False)
     def consolidate() -> str | None:
@@ -128,7 +133,8 @@ def consolidation_step(graph: GraphStore, log: EventLog, *, today: Callable[[], 
             if isinstance(event.payload, MemoryConsolidated)
             for node in event.payload.episodes
         }
-        _prune(graph, covered, today() - PRUNE_AGE)
+        if prune:
+            _prune(graph, covered, today() - PRUNE_AGE)
         nodes = graph.nodes()
         batch = sorted(
             (node for node in nodes if isinstance(node, Episode) and node.node not in covered),

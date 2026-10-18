@@ -562,3 +562,17 @@ def test_a_pruned_episode_is_not_written_again_by_the_recap(tmp_path: Path) -> N
         assert GraphStore(instance.path).nodes() == []
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["ask", "read-only"])
+def test_a_stage_that_may_not_write_unasked_prunes_nothing(tmp_path: Path, mode: str) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    old = episode(instance, "Sent the invoices late", _DAY - timedelta(days=100))
+    fire(instance, ConsolidatingModel())
+    consolidation_stage(instance, mode=mode)
+
+    events = fire(instance, ConsolidatingModel())
+
+    assert completed(events).outcome is CompletionOutcome.NO_WORK
+    assert [node.node for node in GraphStore(instance.path).nodes()] == [old]
