@@ -97,6 +97,8 @@ from kinby.instance.permissions import (
     load_permissions,
     validate_bash_regexes,
 )
+from kinby.memory import GraphStore
+from kinby.memory.consolidation import consolidate_tool, consolidation_step
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
@@ -507,6 +509,8 @@ class LangGraphRunner:
             declared = routine.code_step
             if declared is None:
                 code_step = None
+            elif routine.is_dreaming_stage:
+                code_step = consolidation_step(GraphStore(self._instance.path), self._event_log)
             else:
                 try:
                     code_step = resolve_code_step(declared, tools)
@@ -518,6 +522,15 @@ class LangGraphRunner:
                 tools = ToolSnapshot(
                     tuple(tool for tool in tools.tools if tool.name != code_step.name)
                 )
+            if routine.is_dreaming_stage:
+                consolidate = consolidate_tool(
+                    GraphStore(self._instance.path),
+                    self._event_log,
+                    turn.thread_id,
+                    turn.turn_id,
+                    today=self._today,
+                )
+                tools = ToolSnapshot((*tools.tools, consolidate))
             if code_step is not None and isinstance(graph_input, ModelState):
                 code_started = asyncio.get_running_loop().time()
                 output = await self._run_code_step(

@@ -2164,6 +2164,7 @@ export interface Event {
     | RunDelegated
     | RunStopped
     | MemoryRecapped
+    | MemoryConsolidated
     | RoutineFailureHandled
     | RoutineFailuresReset
     | SignalReceived
@@ -2280,6 +2281,14 @@ export interface MemoryRecapped {
   node: string | null;
   output_tokens: number;
   type: "memory.recapped";
+}
+/**
+ * A consolidation finished its writes. Every episode it lists is covered.
+ */
+export interface MemoryConsolidated {
+  episodes: string[];
+  facts: string[];
+  type: "memory.consolidated";
 }
 export interface RoutineFailureHandled {
   name: string;
