@@ -25,7 +25,8 @@ def memory_tools(
         after: date | None = None,
         before: date | None = None,
     ) -> str:
-        """Search the facts you learned by their descriptions and subjects.
+        """Search the facts you learned by their descriptions and subjects, and by those of the
+        episodes each fact was learned from.
 
         A search with an inclusive after or before date also returns the episodes in that range,
         and a search no fact matches returns the matching episodes instead.

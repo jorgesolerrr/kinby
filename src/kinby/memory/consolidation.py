@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Collection
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -23,12 +24,17 @@ if TYPE_CHECKING:
 BATCH_LIMIT = 50
 #: How old a covered episode no live fact cites gets before it is pruned (ADR 0074).
 PRUNE_AGE = timedelta(days=90)
+#: The fewest episodes a fact cites, since one episode repeats nothing.
+MIN_SOURCES = 2
 
 _RULES = (
     "Write a fact for a lesson or detail several episodes repeat, and an area fact for an area "
-    "of the work they share: where it lives, what was decided about it, and why.",
-    "Every fact cites as sources the episodes it was learned from: episodes of this batch, or "
-    "the sources of a fact shown here.",
+    "of the work they share: where it lives, what was decided about it, and why. A fact cites "
+    "at least two episodes, so one episode alone makes no fact.",
+    "Every fact cites as sources the episodes it was learned from: episodes of this batch, "
+    "earlier episodes, or the sources of a fact shown here.",
+    "Earlier episodes were reviewed on another night and taught no fact alone. Cite one with "
+    "an episode of this batch that repeats its lesson or shares its area.",
     "An area is a subject, and the latest fact about a subject wins. To update an area fact, "
     "write a new fact on its subject that cites its sources and the new episodes.",
     "Write nothing the episodes do not support. A batch that teaches nothing needs no fact.",
@@ -84,6 +90,7 @@ class _FramedForgottenFact:
 class _Subject:
     subject: str
     episodes: tuple[NodeId, ...]
+    earlier: tuple[NodeId, ...]
     facts: tuple[NodeId, ...]
     forgotten: tuple[NodeId, ...]
 
@@ -96,6 +103,7 @@ class _ConsolidationFrame:
     contract: str
     subjects: tuple[_Subject, ...]
     episodes: tuple[_FramedEpisode, ...]
+    earlier: tuple[_FramedEpisode, ...]
     facts: tuple[_FramedFact, ...]
     forgotten: tuple[_FramedForgottenFact, ...]
 
@@ -105,9 +113,11 @@ class _ConsolidationFrame:
 
     @property
     def citable(self) -> frozenset[NodeId]:
-        return frozenset(self.batch) | {
-            source for fact in (*self.facts, *self.forgotten) for source in fact.sources
-        }
+        return (
+            frozenset(self.batch)
+            | {episode.node for episode in self.earlier}
+            | {source for fact in (*self.facts, *self.forgotten) for source in fact.sources}
+        )
 
 
 _FRAME = TypeAdapter(_ConsolidationFrame)
@@ -129,25 +139,34 @@ def consolidation_step(
 
     @tool(write=False)
     def consolidate() -> str | None:
-        """Prune old episodes, then frame the oldest uncovered ones and the facts on them."""
+        """Prune old episodes, then frame the oldest uncovered ones with what is on their
+        subjects: earlier episodes no fact cites, facts, and forgotten facts."""
         covered = {
             node
             for event in log.all_events()
             if isinstance(event.payload, MemoryConsolidated)
             for node in event.payload.episodes
         }
+        cutoff = today() - PRUNE_AGE
         if prune:
-            _prune(graph, covered, today() - PRUNE_AGE)
+            _prune(graph, covered, cutoff)
         nodes = graph.nodes()
+        episodes = [node for node in nodes if isinstance(node, Episode)]
+        facts = [node for node in nodes if isinstance(node, Fact)]
         batch = sorted(
-            (node for node in nodes if isinstance(node, Episode) and node.node not in covered),
+            (episode for episode in episodes if episode.node not in covered),
             key=lambda episode: (episode.date, episode.node),
         )[:BATCH_LIMIT]
         if not batch:
             return None
-        frame = _frame(
-            batch, [node for node in nodes if isinstance(node, Fact)], graph.forgotten_facts()
-        )
+        cited = {source for fact in facts for source in fact.sources}
+        # Newest first, as nodes() returns them, so the cap keeps the most recent.
+        earlier = [
+            episode
+            for episode in episodes
+            if episode.node in covered and episode.node not in cited and episode.date >= cutoff
+        ]
+        frame = _frame(batch, earlier, facts, graph.forgotten_facts())
         return _FRAME.dump_json(frame, indent=2).decode()
 
     return consolidate
@@ -177,10 +196,11 @@ def consolidate_tool(
     async def consolidate(facts: tuple[LearnedFact, ...]) -> str:
         """Write this consolidation's facts and cover every episode of its batch.
 
-        Each fact cites as sources the episodes it was learned from: episodes of the batch, or
-        the sources of a fact the frame shows. A fact citing a forgotten fact's sources is
-        refused unless it also cites an episode recorded after the forget. Call with no facts
-        when the batch teaches nothing. A refused call writes nothing and covers nothing.
+        Each fact cites as sources at least two episodes it was learned from: episodes of the
+        batch, earlier episodes the frame shows, or the sources of a fact it shows. A fact
+        citing a forgotten fact's sources is refused unless it also cites an episode recorded
+        after the forget. Call with no facts when the batch teaches nothing. A refused call
+        writes nothing and covers nothing.
         """
         frame = await asyncio.to_thread(_turn_frame, log, thread_id, turn_id)
         writing = asyncio.create_task(write_and_cover(frame, facts))
@@ -190,7 +210,7 @@ def consolidate_tool(
         written = await asyncio.shield(writing)
         return f"Wrote {len(written)} facts and covered {len(frame.batch)} episodes."
 
-    return consolidate
+    return replace(consolidate, consolidation=True)
 
 
 def _prune(graph: GraphStore, covered: set[NodeId], cutoff: date) -> None:
@@ -208,12 +228,21 @@ def _prune(graph: GraphStore, covered: set[NodeId], cutoff: date) -> None:
 
 
 def _frame(
-    batch: list[Episode], facts: list[Fact], forgotten: list[ForgottenFact]
+    batch: list[Episode],
+    earlier: list[Episode],
+    facts: list[Fact],
+    forgotten: list[ForgottenFact],
 ) -> _ConsolidationFrame:
+    """Frame *batch* with the *earlier* episodes, facts and forgotten facts on its subjects."""
     subjects: dict[str, str] = {}
     for episode in batch:
         for subject in episode.subjects:
             subjects.setdefault(subject.casefold(), subject)
+    framed_earlier = [
+        episode
+        for episode in earlier
+        if any(subject.casefold() in subjects for subject in episode.subjects)
+    ][:BATCH_LIMIT]
     framed_facts = _on(subjects, facts)
     framed_forgotten = _forgotten_on(subjects, forgotten)
     return _ConsolidationFrame(
@@ -223,21 +252,14 @@ def _frame(
             _Subject(
                 subject=subject,
                 episodes=_about(key, batch),
+                earlier=_about(key, framed_earlier),
                 facts=_about(key, framed_facts),
                 forgotten=_about(key, [gone.fact for gone in framed_forgotten]),
             )
             for key, subject in subjects.items()
         ),
-        episodes=tuple(
-            _FramedEpisode(
-                node=episode.node,
-                date=episode.date,
-                description=episode.description,
-                subjects=episode.subjects,
-                body=episode.body,
-            )
-            for episode in batch
-        ),
+        episodes=tuple(_framed_episode(episode) for episode in batch),
+        earlier=tuple(_framed_episode(episode) for episode in framed_earlier),
         facts=tuple(
             _FramedFact(
                 node=fact.node,
@@ -260,6 +282,16 @@ def _frame(
             )
             for gone in framed_forgotten
         ),
+    )
+
+
+def _framed_episode(episode: Episode) -> _FramedEpisode:
+    return _FramedEpisode(
+        node=episode.node,
+        date=episode.date,
+        description=episode.description,
+        subjects=episode.subjects,
+        body=episode.body,
     )
 
 
@@ -306,8 +338,8 @@ def _write(
     forgotten = graph.forgotten_facts()
     refusals: list[str] = []
     for fact in facts:
-        if not fact.sources:
-            refusals.append(f'Fact "{fact.description}" cites no source.')
+        if len(set(fact.sources)) < MIN_SOURCES:
+            refusals.append(f'Fact "{fact.description}" cites fewer than {MIN_SOURCES} episodes.')
         elif any(
             _writes_back(fact, gone, episodes)
             for gone in _forgotten_on({subject.casefold() for subject in fact.subjects}, forgotten)

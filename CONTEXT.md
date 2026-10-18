@@ -34,7 +34,7 @@ One distilled record in the **knowledge graph** of a single **turn** or **factor
 
 ### Fact
 
-An atomic, timestamped statement in the **knowledge graph**, recorded when it is learned. Recency decides which fact is current: the latest fact about a subject wins. The agent remembers a fact in a **thread**; the user can add one from a client, and that fact belongs to no thread. A fact **dreaming** writes cites its **source episodes**, the episodes it was learned from.
+An atomic, timestamped statement in the **knowledge graph**, recorded when it is learned. Recency decides which fact is current: the latest fact about a subject wins. The agent remembers a fact in a **thread**; the user can add one from a client, and that fact belongs to no thread. A fact **dreaming** writes cites its **source episodes**, the episodes it was learned from. A search finds such a fact by its own words or by those of its source episodes.
 
 ### Correction
 
@@ -51,7 +51,7 @@ _Avoid_: dream phase
 
 ### Consolidation
 
-The nightly **dreaming stage**. It reviews uncovered **episodes** and writes a **fact** for a lesson or detail they repeat, or an **area fact** for an area they share, citing them as its **source episodes**.
+The nightly **dreaming stage**. It reviews uncovered **episodes** and writes a **fact** for a lesson or detail at least two episodes repeat, or an **area fact** for an area they share, citing them as its **source episodes**. A source may be an earlier episode on the same subjects that it covered on another night and no fact cites. Its own write needs no approval.
 
 ### Reflection
 

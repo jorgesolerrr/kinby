@@ -96,6 +96,10 @@ class ForgottenFact:
     forgotten_on: date | None
 
 
+def _searchable(memory: MemoryNode) -> str:
+    return " ".join((memory.description, *memory.subjects)).casefold()
+
+
 class GraphStore:
     """The markdown knowledge graph feed for one instance."""
 
@@ -131,17 +135,20 @@ class GraphStore:
         """Every live node matching *query* within inclusive date bounds, newest first.
 
         Each term of *query* must be a case-insensitive substring of the description or a subject.
+        A fact also matches on its source episodes' descriptions and subjects, since it takes
+        their place in recall (ADR 0100).
         """
         terms = query.casefold().split()
+        live = [memory for memory, frontmatter in self._read_all() if not frontmatter.tombstone]
+        text = {memory.node: _searchable(memory) for memory in live}
         matches: list[MemoryNode] = []
-        for memory, frontmatter in self._read_all():
-            if frontmatter.tombstone:
-                continue
+        for memory in live:
             if after is not None and memory.date < after:
                 continue
             if before is not None and memory.date > before:
                 continue
-            searchable = " ".join((memory.description, *memory.subjects)).casefold()
+            sources = memory.sources if isinstance(memory, Fact) else ()
+            searchable = " ".join((text[memory.node], *(text.get(node, "") for node in sources)))
             if all(term in searchable for term in terms):
                 matches.append(memory)
         return sorted(matches, key=lambda memory: (memory.date, memory.node), reverse=True)
