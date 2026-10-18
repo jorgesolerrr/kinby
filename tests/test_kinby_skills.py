@@ -162,8 +162,7 @@ def test_write_routine_github_example_loads_and_filters_deliveries(tmp_path, mon
     routines, warnings = load_routines(instance)
 
     assert not warnings
-    assert len(routines) == 1
-    routine = routines[0]
+    [routine] = [routine for routine in routines if routine.name == "ready-for-agent"]
     assert routine.mode is PermissionMode.ASK
     code_step = routine.code_step
     assert isinstance(code_step, Tool)
@@ -248,8 +247,7 @@ def test_write_routine_daily_example_loads_with_documented_defaults(tmp_path):
     routines, warnings = load_routines(instance)
 
     assert not warnings
-    assert len(routines) == 1
-    routine = routines[0]
+    [routine] = [routine for routine in routines if routine.name == "daily-summary"]
     assert routine.name == "daily-summary"
     assert routine.description == "Summarize today's notes."
     assert routine.schedule == "0 18 * * *"

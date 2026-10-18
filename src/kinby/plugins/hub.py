@@ -114,7 +114,7 @@ async def instance_create(
     manifest_id: str | None = None,
     persona_name: str | None = None,
     factory_role: FactoryRole | None = None,
-    config: dict[str, SetupValue] | None = None,
+    setup: dict[str, SetupValue] | None = None,
     hub_secrets: dict[str, HubSecretName] | None = None,
     picks: list[SkillName] | None = None,
 ) -> str:
@@ -122,7 +122,7 @@ async def instance_create(
 
     model is the instance's model, like "anthropic:claude-sonnet-5". A factory_role, a factory
     and the name of one of its roles, makes the instance that role, named after it; leave it out
-    for a vanilla instance. config holds the setup fields the image or the role declares. A
+    for a vanilla instance. setup holds the setup fields the image or the role declares. A
     secret field takes only a hub secret, named in hub_secrets by field name: never put a
     secret's value in any argument. A secret field left out waits as pending setup. picks names
     the library skills the instance picks.
@@ -132,11 +132,13 @@ async def instance_create(
         persona_name=persona_name,
         factory_role=factory_role,
         model=model,
-        config=config or {},
+        config=setup or {},
         hub_secrets=hub_secrets or {},
         picks=picks or [],
     )
-    return await _write(instance_create, command.model_dump(mode="json"), context)
+    arguments = command.model_dump(mode="json")
+    arguments["setup"] = arguments.pop("config")
+    return await _write(instance_create, arguments, context)
 
 
 @tool(write=True, hub=True)

@@ -4997,6 +4997,7 @@
     },
     "RoutineOrigin": {
       "additionalProperties": false,
+      "description": "A routine's run. ``dreaming_stage`` says whether the routine was a dreaming stage when\nits turn started, so a later reader never reloads a routine file that may have changed.",
       "properties": {
         "delivery_id": {
           "anyOf": [
@@ -5008,6 +5009,10 @@
             }
           ],
           "default": null
+        },
+        "dreaming_stage": {
+          "default": false,
+          "type": "boolean"
         },
         "kind": {
           "const": "routine",

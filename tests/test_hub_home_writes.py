@@ -230,6 +230,30 @@ def test_kinby_creates_an_instance_once_the_user_approves_it_through_the_relay(
     asyncio.run(scenario())
 
 
+def test_kinby_creates_an_instance_with_the_setup_values_the_user_approved(tmp_path, monkeypatch):
+    def script(_: UUID) -> list[AIMessageChunk]:
+        bob = {
+            "manifest_id": "bob",
+            "model": "openai:gpt-5",
+            "setup": {"behavior_prompt": "Answer in haiku.\n"},
+        }
+        return [calling("create-1", "instance_create", bob), AIMessageChunk(content="Done.")]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            payloads = await relayed_turn(kinby)
+            [result] = [payload for payload in payloads if isinstance(payload, ToolResult)]
+            assert not result.error, result.output
+            created = LifecycleOperationResult.model_validate_json(result.output)
+            operation = await finished_operation(hub_client(kinby.hub), created)
+
+        assert operation.state is OperationState.SUCCEEDED
+        system = kinby.hub.instances_directory / str(created.instance_id) / "SYSTEM.md"
+        assert system.read_text() == "Answer in haiku.\n"
+
+    asyncio.run(scenario())
+
+
 def test_the_hub_runs_a_home_write_once_for_the_approval_it_saw_and_its_arguments(
     tmp_path, monkeypatch
 ):

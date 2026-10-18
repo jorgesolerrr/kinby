@@ -99,11 +99,16 @@ from kinby.instance.permissions import (
 )
 from kinby.memory import GraphStore
 from kinby.memory.consolidation import consolidate_tool, consolidation_step
+from kinby.memory.reflection import reflection_step
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
 from kinby.plugins.routines import (
+    CONSOLIDATION_STEP,
+    DREAMING_STEPS,
+    REFLECTION_STEP,
     Routine,
+    SharedCodeStep,
     load_routines,
     resolve_code_step,
     strip_signal_credentials,
@@ -445,6 +450,7 @@ class LangGraphRunner:
                                     if isinstance(turn.origin, RoutineOrigin)
                                     else None
                                 ),
+                                dreaming_stage=self._opened_with_dreaming_step(turn),
                                 run_reporter=_run_reporter(emit),
                             ),
                             user_message=HumanMessage(
@@ -515,7 +521,7 @@ class LangGraphRunner:
                     turn.turn_id,
                     today=self._today,
                 )
-                if routine.is_dreaming_stage
+                if declared == CONSOLIDATION_STEP
                 else None
             )
             if declared is None:
@@ -536,6 +542,10 @@ class LangGraphRunner:
                     self._event_log,
                     today=self._today,
                     prune=unasked.action is GateAction.ALLOW,
+                )
+            elif declared == REFLECTION_STEP:
+                code_step = reflection_step(
+                    GraphStore(self._instance.path), self._event_log, routine.name
                 )
             else:
                 try:
@@ -573,6 +583,22 @@ class LangGraphRunner:
             elif delivery is not None:
                 payload = delivery.body
         return _PreparedTurn(tools, progress, permission_mode, message, payload)
+
+    def _opened_with_dreaming_step(self, turn: PreparedTurnRequest) -> bool:
+        """Whether a routine turn's code step was a dreaming stage's. The log keeps the call
+        from when the turn started, so a rewrite of the routine during the turn cannot change
+        it."""
+        if not isinstance(turn.origin, RoutineOrigin):
+            return False
+        call = next(
+            (
+                event.payload
+                for event in self._event_log.stored(turn.thread_id)
+                if event.turn_id == turn.turn_id and isinstance(event.payload, ToolCall)
+            ),
+            None,
+        )
+        return call is not None and SharedCodeStep(call.name) in DREAMING_STEPS
 
     def _delivery_for_turn(self, turn: PreparedTurnRequest) -> Delivery | None:
         return next(
