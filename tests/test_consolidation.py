@@ -2,7 +2,7 @@ import asyncio
 import random
 import threading
 from collections.abc import AsyncIterator, Sequence
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Self
 from uuid import uuid4
@@ -18,8 +18,10 @@ from kinby.contracts import (
     Event,
     MemoryConsolidated,
     MemoryRecapped,
+    RoutineListResult,
     RoutineName,
     RoutineOrigin,
+    RoutineSummary,
     RoutineTrigger,
     ThreadApprovalRespondCommand,
     ThreadTurnInterruptCommand,
@@ -32,7 +34,8 @@ from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ClosedTurnHook, Turns
-from kinby.instance import Instance
+from kinby.instance import Instance, init_from_template, init_instance, load_instance
+from kinby.instance.init import DEFAULT_CONSOLIDATION_LENS
 from kinby.memory import (
     Episode,
     Fact,
@@ -43,7 +46,9 @@ from kinby.memory import (
     RecapWriter,
 )
 from kinby.memory.facade import new_node_id
+from kinby.plugins.routines import load_routine
 from tests.test_routines import instance_at, no_recap, routine_file, unused_recap
+from tests.test_scheduler import FakeClock, call, runtime
 
 _LENS = "Look for lessons the episodes repeat."
 _DAY = date(2026, 9, 1)
@@ -492,3 +497,61 @@ def test_an_interrupt_during_the_writes_still_covers_the_batch(
     assert covering.episodes == (monday,)
     [written] = covering.facts
     assert GraphStore(tmp_path).open(written).description == "Invoices go out late"
+
+
+def test_a_new_instance_ships_a_nightly_consolidation_stage(tmp_path: Path) -> None:
+    async def scenario() -> RoutineSummary:
+        instance = load_instance(init_instance(tmp_path / "alice", model="openai:gpt-5"))
+        clock = FakeClock(datetime(2026, 9, 6, 12, tzinfo=UTC))
+        listed = await call(runtime(instance, clock), "routine.list")
+        assert isinstance(listed, RoutineListResult)
+        assert listed.warnings == ()
+        [stage] = [routine for routine in listed.routines if routine.name == "consolidation"]
+        return stage
+
+    stage = asyncio.run(scenario())
+
+    assert stage.enabled
+    assert stage.next_run == datetime(2026, 9, 7, 3, tzinfo=UTC)
+    routine = load_routine(load_instance(tmp_path / "alice"), RoutineName("consolidation"))
+    assert routine is not None
+    assert routine.is_dreaming_stage
+
+
+def test_the_shipped_stage_body_is_the_lens_inside_the_frame(tmp_path: Path) -> None:
+    instance = load_instance(init_instance(tmp_path / "alice", model="openai:gpt-5"))
+    monday = episode(instance, "Sent the invoices late on Monday")
+    shipped = ConsolidatingModel(calls=0)
+    fire(instance, shipped)
+    episode(instance, "Sent the invoices late on Thursday")
+    source = instance.path / "routines" / "consolidation" / "ROUTINE.md"
+    source.write_text(source.read_text().replace(DEFAULT_CONSOLIDATION_LENS, _LENS))
+    edited = ConsolidatingModel(calls=0)
+
+    fire(instance, edited)
+
+    assert DEFAULT_CONSOLIDATION_LENS in shipped.wake
+    assert monday in shipped.wake
+    assert _LENS in edited.wake
+    assert DEFAULT_CONSOLIDATION_LENS not in edited.wake
+    assert monday in edited.wake
+    assert "consolidate" in edited.tools
+
+
+def test_an_instance_template_ships_its_own_consolidation_lens(tmp_path: Path) -> None:
+    own = (
+        "---\ndescription: Consolidate review lessons\n"
+        f"schedule: 0 4 * * *\nrun: consolidate\n---\n{_LENS}\n"
+    )
+    target = init_from_template(
+        tmp_path / "coder",
+        {"routines/consolidation/ROUTINE.md": own},
+        model="openai:gpt-5",
+        settings={},
+    )
+
+    routine = load_routine(load_instance(target), RoutineName("consolidation"))
+
+    assert routine is not None
+    assert routine.prompt.strip() == _LENS
+    assert routine.schedule == "0 4 * * *"
