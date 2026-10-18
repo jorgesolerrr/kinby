@@ -28,6 +28,7 @@ from kinby.contracts import (
     MemoryRecapped,
     MessageDelta,
     NodeId,
+    RoutineOrigin,
     RunDelegated,
     RunStop,
     RunStopped,
@@ -50,6 +51,7 @@ from kinby.instance.recap import load_recap_lens
 from kinby.memory.facade import Episode, Memory, RecappedRun, RecappedTurn, new_node_id
 from kinby.memory.session_digest import MissingSession, SessionDigest, digest_session
 from kinby.plugins.hub import hub_read
+from kinby.plugins.routines import load_routine
 
 if TYPE_CHECKING:
     from kinby.contracts import Event
@@ -227,11 +229,13 @@ class RecapWriter:
         )
         if self._is_recapped(events):
             return
-        if any(
+        no_work = any(
             isinstance(event.payload, TurnCompleted)
             and event.payload.outcome is CompletionOutcome.NO_WORK
             for event in events
-        ):
+        )
+        # A stage writes no episode, so dreaming never consolidates its own runs (ADR 0099).
+        if no_work or self._is_dreaming_stage(events):
             await self._finish(request, None, TokenTotals(input_tokens=0, output_tokens=0), None)
             return
         calls = [event.payload for event in events if isinstance(event.payload, ToolCall)]
@@ -414,6 +418,13 @@ class RecapWriter:
 
     def _turn_events(self, thread_id: UUID, turn_id: UUID) -> list[Event]:
         return [event for event in self._event_log.stored(thread_id) if event.turn_id == turn_id]
+
+    def _is_dreaming_stage(self, events: list[Event]) -> bool:
+        started = next(event.payload for event in events if isinstance(event.payload, TurnStarted))
+        if not isinstance(started.origin, RoutineOrigin):
+            return False
+        routine = load_routine(self._instance, started.origin.name)
+        return routine is not None and routine.is_dreaming_stage
 
     @staticmethod
     def _is_recapped(events: Iterable[Event]) -> bool:

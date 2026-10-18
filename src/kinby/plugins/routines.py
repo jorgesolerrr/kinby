@@ -49,6 +49,10 @@ class SharedCodeStep:
     name: str
 
 
+#: The code step that makes a routine dreaming's consolidation stage (ADR 0099).
+CONSOLIDATION_STEP = SharedCodeStep("consolidate")
+
+
 @dataclass(frozen=True)
 class TokenSignalConfig:
     secret_name: str
@@ -104,6 +108,10 @@ class Routine:
     budgets: Budgets
     code_step: SharedCodeStep | Tool | None
     signal: SignalConfig | None = None
+
+    @property
+    def is_dreaming_stage(self) -> bool:
+        return self.code_step == CONSOLIDATION_STEP
 
 
 def load_routines(

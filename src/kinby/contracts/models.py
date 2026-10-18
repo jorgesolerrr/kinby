@@ -160,6 +160,7 @@ class EventType(StrEnum):
     RUN_DELEGATED = "run.delegated"
     RUN_STOPPED = "run.stopped"
     MEMORY_RECAPPED = "memory.recapped"
+    MEMORY_CONSOLIDATED = "memory.consolidated"
     ROUTINE_FAILURE_HANDLED = "routine.failure.handled"
     ROUTINE_FAILURES_RESET = "routine.failures.reset"
     SIGNAL_RECEIVED = "signal.received"
@@ -432,6 +433,14 @@ class MemoryRecapped(TokenTotals):
     model: str | None = None
 
 
+class MemoryConsolidated(ContractModel):
+    """A consolidation finished its writes. Every episode it lists is covered."""
+
+    type: Literal[EventType.MEMORY_CONSOLIDATED] = EventType.MEMORY_CONSOLIDATED
+    episodes: tuple[NodeId, ...]
+    facts: tuple[NodeId, ...]
+
+
 class RoutineNoticeKind(StrEnum):
     FIRST_FAILURE = "first-failure"
     DISABLED = "disabled"
@@ -486,6 +495,7 @@ Payload = Annotated[
     | RunDelegated
     | RunStopped
     | MemoryRecapped
+    | MemoryConsolidated
     | RoutineFailureHandled
     | RoutineFailuresReset
     | SignalReceived
