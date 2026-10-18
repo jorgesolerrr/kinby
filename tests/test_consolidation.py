@@ -330,6 +330,89 @@ def test_a_refused_call_writes_nothing_and_covers_nothing(tmp_path: Path, cited:
     assert covering.episodes == (monday, thursday)
 
 
+_FORGOTTEN_ON = _DAY - timedelta(days=10)
+
+
+def forgotten(instance: Instance, *sources: NodeId) -> NodeId:
+    """Cover *sources*, learn a billing fact from them, then forget it on _FORGOTTEN_ON."""
+    fire(instance, ConsolidatingModel())
+    node = fact(instance, "Invoices go out late", ("billing",), sources)
+    GraphStore(instance.path).forget(node, _FORGOTTEN_ON)
+    return node
+
+
+def test_the_frame_lists_the_forgotten_facts_on_the_batch_subjects(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    old = episode(instance, "Sent the invoices late", _DAY - timedelta(days=30))
+    gone = forgotten(instance, old)
+    elsewhere = fact(instance, "The dentist is on Main Street", ("health",))
+    GraphStore(instance.path).forget(elsewhere, _FORGOTTEN_ON)
+    episode(instance, "Billing retries failed cards")
+    model = ConsolidatingModel()
+
+    fire(instance, model)
+
+    assert gone in model.wake
+    assert old in model.wake
+    assert "forgotten" in model.wake
+    assert elsewhere not in model.wake
+
+
+@pytest.mark.parametrize("cited", ["all", "some", "an episode before the forget"])
+def test_relearning_a_forgotten_fact_from_its_sources_is_refused(
+    tmp_path: Path, cited: str
+) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    monday = episode(instance, "Sent the invoices late on Monday", _DAY - timedelta(days=30))
+    thursday = episode(instance, "Sent the invoices late on Thursday", _DAY - timedelta(days=27))
+    forgotten(instance, monday, thursday)
+    late = episode(instance, "Sent the invoices late again", _FORGOTTEN_ON - timedelta(days=1))
+    new = episode(instance, "Billing retries failed cards")
+    memory = GraphStore(instance.path)
+    before = memory.nodes()
+    sources = {
+        "all": (monday, thursday),
+        "some": (monday,),
+        "an episode before the forget": (monday, late),
+    }[cited]
+    model = ConsolidatingModel(
+        [learned("Billing retries cards", new), learned("Invoices go out late", *sources)]
+    )
+
+    events = fire(instance, model)
+
+    [result] = [
+        event.payload
+        for event in events
+        if isinstance(event.payload, ToolResult) and event.payload.name == "consolidate"
+    ][1:]
+    assert result.error
+    assert "Invoices go out late" in result.output
+    assert consolidated(events) == []
+    assert memory.nodes() == before
+
+
+def test_a_forgotten_fact_is_learned_again_from_an_episode_after_the_forget(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    monday = episode(instance, "Sent the invoices late on Monday", _DAY - timedelta(days=30))
+    forgotten(instance, monday)
+    again = episode(instance, "Sent the invoices late again")
+    model = ConsolidatingModel([learned("Invoices go out late", monday, again)])
+
+    events = fire(instance, model)
+
+    [covering] = consolidated(events)
+    assert covering.episodes == (again,)
+    learned_fact = GraphStore(instance.path).open(covering.facts[0])
+    assert isinstance(learned_fact, Fact)
+    assert learned_fact.sources == (monday, again)
+
+
 def test_a_parked_consolidation_covers_its_batch_after_a_restart(tmp_path: Path) -> None:
     async def scenario() -> tuple[list[Event], NodeId, NodeId]:
         instance = instance_at(tmp_path)
