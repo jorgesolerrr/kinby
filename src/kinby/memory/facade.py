@@ -37,6 +37,8 @@ class Fact(_MemoryNode):
 
     thread: UUID | None
     added_by_user: bool = False
+    #: The episodes dreaming learned the fact from. Empty on a fact remembered or added.
+    sources: tuple[NodeId, ...] = ()
 
 
 @dataclass(frozen=True)
