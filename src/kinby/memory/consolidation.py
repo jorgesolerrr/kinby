@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Collection
-from datetime import date
+from datetime import date, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 #: The most episodes one consolidation reviews, so a first run on a large graph fits its budget.
 BATCH_LIMIT = 50
+#: How old a covered episode no live fact cites gets before it is pruned (ADR 0074).
+PRUNE_AGE = timedelta(days=90)
 
 _RULES = (
     "Write a fact for a lesson or detail several episodes repeat, and an area fact for an area "
@@ -117,18 +119,25 @@ class ConsolidationRefused(ValueError):
     """A consolidate call the batch does not support. Nothing was written."""
 
 
-def consolidation_step(graph: GraphStore, log: EventLog) -> Tool:
-    """The stage's code step: frame the oldest uncovered episodes, or report no work."""
+def consolidation_step(
+    graph: GraphStore, log: EventLog, *, today: Callable[[], date], prune: bool
+) -> Tool:
+    """The stage's code step: prune, then frame the oldest uncovered episodes or report no work.
+
+    It prunes only when *prune*, which the gate grants when the stage's writes need no approval.
+    """
 
     @tool(write=False)
     def consolidate() -> str | None:
-        """Frame the oldest uncovered episodes and the facts on their subjects."""
+        """Prune old episodes, then frame the oldest uncovered ones and the facts on them."""
         covered = {
             node
             for event in log.all_events()
             if isinstance(event.payload, MemoryConsolidated)
             for node in event.payload.episodes
         }
+        if prune:
+            _prune(graph, covered, today() - PRUNE_AGE)
         nodes = graph.nodes()
         batch = sorted(
             (node for node in nodes if isinstance(node, Episode) and node.node not in covered),
@@ -182,6 +191,20 @@ def consolidate_tool(
         return f"Wrote {len(written)} facts and covered {len(frame.batch)} episodes."
 
     return consolidate
+
+
+def _prune(graph: GraphStore, covered: set[NodeId], cutoff: date) -> None:
+    """Delete each episode from before *cutoff* that is covered and cited by no live fact."""
+    nodes = graph.nodes()
+    cited = {source for node in nodes if isinstance(node, Fact) for source in node.sources}
+    for node in nodes:
+        if (
+            isinstance(node, Episode)
+            and node.date < cutoff
+            and node.node in covered
+            and node.node not in cited
+        ):
+            graph.prune(node.node)
 
 
 def _frame(

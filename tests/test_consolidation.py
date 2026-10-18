@@ -18,6 +18,7 @@ from kinby.contracts import (
     Event,
     MemoryConsolidated,
     MemoryRecapped,
+    PermissionMode,
     RoutineListResult,
     RoutineName,
     RoutineOrigin,
@@ -25,6 +26,7 @@ from kinby.contracts import (
     RoutineTrigger,
     ThreadApprovalRespondCommand,
     ThreadTurnInterruptCommand,
+    ToolCall,
     ToolResult,
     TurnCompleted,
     TurnStarted,
@@ -48,6 +50,7 @@ from kinby.memory import (
     RecapWriter,
 )
 from kinby.memory.facade import new_node_id
+from kinby.memory.graph import NodeNotFound
 from kinby.plugins.routines import load_routine
 from tests.test_recap import ScriptedRecapModel
 from tests.test_routines import instance_at, no_recap, routine_file, unused_recap
@@ -161,7 +164,9 @@ async def _fire(
 ) -> list[Event]:
     log = EventLog(instance.manifest.state_dir)
     store = ThreadStore(instance.manifest.state_dir)
-    runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
+    runner = LangGraphRunner(
+        instance, event_log=log, model_factory=lambda _: model, today=lambda: _DAY
+    )
     turns = Turns(
         store, log, runner, runner.prepare_for_turn, runner.permission_ceiling, after_turn
     )
@@ -549,6 +554,96 @@ def test_a_recap_caught_up_late_reads_the_stage_from_the_turn(tmp_path: Path, st
 
     assert (marker.node is None) is stage
     assert bool(model.calls) is not stage
+
+
+def test_a_firing_prunes_old_covered_episodes_no_live_fact_cites(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    old = _DAY - timedelta(days=100)
+    uncited = episode(instance, "Sent the invoices late", old)
+    cited = episode(instance, "Moved billing to the new provider", old)
+    cited_by_forgotten = episode(instance, "Retried the failed cards", old)
+    recent = episode(instance, "Billing retries failed cards", _DAY - timedelta(days=30))
+    fire(instance, ConsolidatingModel())
+    fact(instance, "Billing lives in payments", ("billing",), (cited,))
+    GraphStore(instance.path).forget(
+        fact(instance, "Cards are retried", ("billing",), (cited_by_forgotten,)), _FORGOTTEN_ON
+    )
+    uncovered = episode(instance, "Billed a new customer", old)
+
+    events = fire(instance, ConsolidatingModel())
+
+    memory = GraphStore(instance.path)
+    episodes = {node.node for node in memory.nodes() if isinstance(node, Episode)}
+    assert episodes == {cited, recent, uncovered}
+    for pruned in (uncited, cited_by_forgotten):
+        with pytest.raises(NodeNotFound, match="was not found"):
+            memory.open(pruned)
+    assert [covering.episodes for covering in consolidated(events)] == [(uncovered,)]
+
+
+def test_pruning_runs_on_a_firing_with_no_work(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    episode(instance, "Sent the invoices late", _DAY - timedelta(days=100))
+    fire(instance, ConsolidatingModel())
+
+    events = fire(instance, ConsolidatingModel())
+
+    assert completed(events).outcome is CompletionOutcome.NO_WORK
+    assert GraphStore(instance.path).nodes() == []
+
+
+def test_a_pruned_episode_is_not_written_again_by_the_recap(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        with (instance.path / "kinby.toml").open("a") as manifest:
+            manifest.write('[memory]\nrecap = "off"\n')
+        consolidation_stage(instance)
+        recorded = datetime(2026, 5, 1, tzinfo=UTC)
+        log = EventLog(instance.manifest.state_dir, clock=lambda: recorded)
+        thread_id, turn_id = uuid4(), uuid4()
+        for payload in (
+            TurnStarted(
+                message="Send the invoices",
+                model="test-model",
+                permission_mode=PermissionMode.FULL_ACCESS,
+            ),
+            ToolCall(call_id="send-1", name="send", arguments={}),
+            TurnCompleted(input_tokens=4, output_tokens=2),
+        ):
+            await log.append(thread_id, turn_id, payload)
+        writer = RecapWriter(log, GraphStore(instance.path), instance)
+        await writer.catch_up()
+        await writer.drain()
+        [recapped] = GraphStore(instance.path).nodes()
+        await _fire(instance, ConsolidatingModel())
+        await _fire(instance, ConsolidatingModel())
+        restarted = EventLog(instance.manifest.state_dir)
+        retry = RecapWriter(restarted, GraphStore(instance.path), instance)
+
+        await retry.catch_up()
+        await retry.drain()
+
+        assert isinstance(recapped, Episode)
+        assert recapped.date == recorded.date()
+        assert GraphStore(instance.path).nodes() == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["ask", "read-only"])
+def test_a_stage_that_may_not_write_unasked_prunes_nothing(tmp_path: Path, mode: str) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    old = episode(instance, "Sent the invoices late", _DAY - timedelta(days=100))
+    fire(instance, ConsolidatingModel())
+    consolidation_stage(instance, mode=mode)
+
+    events = fire(instance, ConsolidatingModel())
+
+    assert completed(events).outcome is CompletionOutcome.NO_WORK
+    assert [node.node for node in GraphStore(instance.path).nodes()] == [old]
 
 
 def test_a_second_consolidate_call_in_one_turn_is_refused(tmp_path: Path) -> None:

@@ -187,6 +187,10 @@ class GraphStore:
         lines[closing:closing] = ["tombstone: true\n", f"forgotten: {forgotten_on.isoformat()}\n"]
         _write_node(path, "".join(lines))
 
+    def prune(self, node: NodeId) -> None:
+        """Delete *node*'s file, leaving no tombstone (ADR 0074)."""
+        self._node_path(node).unlink(missing_ok=True)
+
     def _node_path(self, node: NodeId) -> Path:
         relative = Path(f"{node}.md")
         if relative.parent != Path():
