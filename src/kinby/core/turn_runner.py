@@ -99,10 +99,13 @@ from kinby.instance.permissions import (
 )
 from kinby.memory import GraphStore
 from kinby.memory.consolidation import consolidate_tool, consolidation_step
+from kinby.memory.reflection import reflection_step
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
 from kinby.plugins.routines import (
+    CONSOLIDATION_STEP,
+    REFLECTION_STEP,
     Routine,
     load_routines,
     resolve_code_step,
@@ -509,8 +512,12 @@ class LangGraphRunner:
             declared = routine.code_step
             if declared is None:
                 code_step = None
-            elif routine.is_dreaming_stage:
+            elif declared == CONSOLIDATION_STEP:
                 code_step = consolidation_step(GraphStore(self._instance.path), self._event_log)
+            elif declared == REFLECTION_STEP:
+                code_step = reflection_step(
+                    GraphStore(self._instance.path), self._event_log, routine.name
+                )
             else:
                 try:
                     code_step = resolve_code_step(declared, tools)
@@ -522,7 +529,7 @@ class LangGraphRunner:
                 tools = ToolSnapshot(
                     tuple(tool for tool in tools.tools if tool.name != code_step.name)
                 )
-            if routine.is_dreaming_stage:
+            if declared == CONSOLIDATION_STEP:
                 consolidate = consolidate_tool(
                     GraphStore(self._instance.path),
                     self._event_log,

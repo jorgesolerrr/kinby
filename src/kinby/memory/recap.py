@@ -51,7 +51,7 @@ from kinby.instance.recap import load_recap_lens
 from kinby.memory.facade import Episode, Memory, RecappedRun, RecappedTurn, new_node_id
 from kinby.memory.session_digest import MissingSession, SessionDigest, digest_session
 from kinby.plugins.hub import hub_read
-from kinby.plugins.routines import load_routine
+from kinby.plugins.routines import is_dreaming_stage
 
 if TYPE_CHECKING:
     from kinby.contracts import Event
@@ -423,8 +423,7 @@ class RecapWriter:
         started = next(event.payload for event in events if isinstance(event.payload, TurnStarted))
         if not isinstance(started.origin, RoutineOrigin):
             return False
-        routine = load_routine(self._instance, started.origin.name)
-        return routine is not None and routine.is_dreaming_stage
+        return is_dreaming_stage(self._instance, started.origin.name)
 
     @staticmethod
     def _is_recapped(events: Iterable[Event]) -> bool:

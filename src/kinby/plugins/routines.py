@@ -49,8 +49,9 @@ class SharedCodeStep:
     name: str
 
 
-#: The code step that makes a routine dreaming's consolidation stage (ADR 0099).
+#: The code steps that make a routine dreaming's consolidation or reflection stage (ADR 0099).
 CONSOLIDATION_STEP = SharedCodeStep("consolidate")
+REFLECTION_STEP = SharedCodeStep("reflect")
 
 
 @dataclass(frozen=True)
@@ -111,7 +112,7 @@ class Routine:
 
     @property
     def is_dreaming_stage(self) -> bool:
-        return self.code_step == CONSOLIDATION_STEP
+        return self.code_step in (CONSOLIDATION_STEP, REFLECTION_STEP)
 
 
 def load_routines(
@@ -139,6 +140,12 @@ def load_routine(instance: Instance, name: RoutineName) -> Routine | None:
     if path is None:
         return None
     return load_routine_file(path, load_permissions(instance), instance)
+
+
+def is_dreaming_stage(instance: Instance, name: RoutineName) -> bool:
+    """Whether the routine *name* is a dreaming stage. A routine that is gone or broken is not."""
+    routines, _ = load_routines(instance)
+    return any(routine.name == name and routine.is_dreaming_stage for routine in routines)
 
 
 def _routine_paths(instance: Instance) -> tuple[Path, ...]:

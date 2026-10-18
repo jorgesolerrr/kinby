@@ -37,6 +37,7 @@ from kinby.instance.manifest import with_repository_commands
 from kinby.instance.permissions import load_permissions
 from kinby.plugins.routines import (
     Routine,
+    is_dreaming_stage,
     load_routine,
     load_routine_file,
     load_routines,
@@ -144,6 +145,8 @@ def write_routine(
     content: str,
     recorded: Recorder,
     code: str | None = None,
+    *,
+    code_step_allowed: bool = True,
 ) -> Routine:
     """Create or replace a routine once its staged copy loads. Hold the routine lock."""
     validate_name(name)
@@ -161,9 +164,14 @@ def write_routine(
             staged.mkdir()
         routine_path = staged / ROUTINE_FILE
         routine_path.write_text(content, encoding="utf-8")
-        if code is not None:
+        # Loading a run.py runs it, so a refused one is never written.
+        if code is not None and code_step_allowed:
             (staged / ROUTINE_CODE_FILE).write_text(code, encoding="utf-8")
         routine = load_routine_file(routine_path, load_permissions(instance), instance)
+        if not code_step_allowed and (code is not None or routine.code_step is not None):
+            raise ValueError(
+                "A dreaming stage cannot write a routine with a code step, run or run.py."
+            )
         previous = Path(temporary) / ".previous"
         if target.exists():
             target.rename(previous)
@@ -274,9 +282,18 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
     ) -> str:
         """Create or replace a routine from its complete ROUTINE.md and optional run.py."""
         recorded = partial(_recorded, context)
+        # Dreaming proposes no code, so the gate's trust in a tool's write flag holds (ADR 0099).
+        on_stage = context.routine is not None and is_dreaming_stage(
+            context.instance, context.routine
+        )
         async with context.instance.routine_lock:
             routine = await asyncio.to_thread(
-                write_routine, context.instance, RoutineName(name), content, recorded, code
+                partial(write_routine, code_step_allowed=not on_stage),
+                context.instance,
+                RoutineName(name),
+                content,
+                recorded,
+                code,
             )
         result = f"Wrote routines/{name}/ROUTINE.md."
         if routine.enabled and routine.schedule is not None:

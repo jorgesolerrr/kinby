@@ -26,6 +26,7 @@ from kinby.contracts import (
     Payload,
     PermissionMode,
     PromptVersion,
+    RoutineName,
     RoutineOrigin,
     SystemPrompt,
     ThreadApprovalRespondCommand,
@@ -235,6 +236,8 @@ class Turns:
         permission_ceiling: Callable[[], PermissionMode],
         after_turn: ClosedTurnHook,
         snapshots: SnapshotStore | None = None,
+        *,
+        is_dreaming_stage: Callable[[RoutineName], bool] = lambda _: False,
     ) -> None:
         self._store = store
         self._log = log
@@ -243,6 +246,7 @@ class Turns:
         self._permission_ceiling = permission_ceiling
         self._after_turn = after_turn
         self._snapshots = snapshots
+        self._is_dreaming_stage = is_dreaming_stage
         self._changed = asyncio.Event()
         self._running: dict[UUID, RunningTurn] = {}
         self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim | RevertClaim | StepClaim] = {}
@@ -260,6 +264,19 @@ class Turns:
 
     def running(self) -> dict[UUID, Origin]:
         """What each thread is working on: a live turn, a reserved one, or a parked approval."""
+        return {**self._live(), **self._parked()}
+
+    def holding(self) -> dict[UUID, Origin]:
+        """What holds the instance: what is running, except a dreaming stage parked on an
+        approval, which holds only its own thread (ADR 0099)."""
+        parked = {
+            thread: origin
+            for thread, origin in self._parked().items()
+            if not (isinstance(origin, RoutineOrigin) and self._is_dreaming_stage(origin.name))
+        }
+        return {**self._live(), **parked}
+
+    def _live(self) -> dict[UUID, Origin]:
         origins = {
             thread: running.request.origin
             for thread, running in self._running.items()
@@ -268,12 +285,15 @@ class Turns:
         for thread, claim in self._claims.items():
             if isinstance(claim, TurnClaim):
                 origins[thread] = claim.origin
-        grouped = events_by_thread(self._store.threads(), self._log.all_events())
-        for thread_id, events in grouped.items():
-            pending = pending_approval(events)
-            if pending is not None:
-                origins[thread_id] = _turn_origin(events, pending.event.turn_id)
         return origins
+
+    def _parked(self) -> dict[UUID, Origin]:
+        grouped = events_by_thread(self._store.threads(), self._log.all_events())
+        return {
+            thread_id: _turn_origin(events, pending.event.turn_id)
+            for thread_id, events in grouped.items()
+            if (pending := pending_approval(events)) is not None
+        }
 
     def require_available(self, origin: Origin) -> None:
         self.require_admitting()
@@ -283,7 +303,7 @@ class Turns:
             raise InstanceBusy(
                 "A factory step is running. Wait for it to finish before starting a turn."
             )
-        running = self.running().values()
+        running = self.holding().values()
         routine = next((item for item in running if isinstance(item, RoutineOrigin)), None)
         if routine is not None:
             raise InstanceBusy(f'Routine "{routine.name}" is running. Waiting for it to finish.')
@@ -294,14 +314,14 @@ class Turns:
     async def step(self) -> AsyncIterator[None]:
         """Hold the instance for one factory step, the way a routine's turn holds it.
 
-        The step waits for every live turn, parked approval and claim to finish, and no turn
-        starts while it runs. A draining instance takes no step.
+        The step waits for everything holding the instance to finish, and no turn starts while
+        it runs. A draining instance takes no step.
         """
         while True:
             # Clear before reading, so a change made while reading is never missed.
             self._changed.clear()
             self.require_admitting()
-            if not self.running() and not self._claims:
+            if not self.holding() and not self._claims:
                 break
             await self._changed.wait()
         key = uuid4()
@@ -337,10 +357,11 @@ class Turns:
             await self._changed.wait()
 
     async def wait_idle(self) -> None:
-        """Wait until nothing holds the instance: no live turn, no parked approval, no claim."""
+        """Wait until nothing holds the instance: no live turn, no parked approval but a dreaming
+        stage's, no claim."""
         while True:
             self._changed.clear()
-            if not self.running() and not self._claims:
+            if not self.holding() and not self._claims:
                 return
             await self._changed.wait()
 
@@ -479,7 +500,7 @@ class Turns:
     def _claim_revert(self, thread_id: UUID) -> RevertClaim:
         # The workspace is shared by every thread, so a revert under any running
         # turn would change the files out from under it.
-        if self.running() or self._claims:
+        if self.holding() or self._claims:
             raise InstanceBusy("A turn is running. Wait for it to finish before reverting.")
         claim = RevertClaim()
         self._claims[thread_id] = claim

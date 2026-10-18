@@ -319,7 +319,7 @@ class Scheduler:
             scheduled = min(due, key=lambda item: item[0]) if due else None
             if delivery is None and scheduled is None:
                 return
-            if self._turns.running():
+            if self._turns.holding():
                 return
             if delivery is not None and (
                 scheduled is None or delivery.delivery.received_at <= scheduled[0]
