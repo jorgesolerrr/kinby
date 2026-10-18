@@ -510,7 +510,9 @@ class LangGraphRunner:
             if declared is None:
                 code_step = None
             elif routine.is_dreaming_stage:
-                code_step = consolidation_step(GraphStore(self._instance.path), self._event_log)
+                code_step = consolidation_step(
+                    GraphStore(self._instance.path), self._event_log, today=self._today
+                )
             else:
                 try:
                     code_step = resolve_code_step(declared, tools)
