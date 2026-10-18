@@ -2,7 +2,7 @@ import asyncio
 import random
 import threading
 from collections.abc import AsyncIterator, Sequence
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Self
 from uuid import uuid4
@@ -18,13 +18,16 @@ from kinby.contracts import (
     Event,
     MemoryConsolidated,
     MemoryRecapped,
+    RoutineListResult,
     RoutineName,
     RoutineOrigin,
+    RoutineSummary,
     RoutineTrigger,
     ThreadApprovalRespondCommand,
     ThreadTurnInterruptCommand,
     ToolResult,
     TurnCompleted,
+    TurnStarted,
     UserOrigin,
     is_turn_closing,
 )
@@ -32,21 +35,29 @@ from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ClosedTurnHook, Turns
-from kinby.instance import Instance
+from kinby.instance import Instance, init_from_template, init_instance, load_instance
+from kinby.instance.init import DEFAULT_CONSOLIDATION_LENS
 from kinby.memory import (
     Episode,
     Fact,
     GraphStore,
     MemoryNode,
     NodeId,
+    RecapDraft,
     RecappedTurn,
     RecapWriter,
 )
 from kinby.memory.facade import new_node_id
+from kinby.plugins.routines import load_routine
+from tests.test_recap import ScriptedRecapModel
 from tests.test_routines import instance_at, no_recap, routine_file, unused_recap
+from tests.test_scheduler import FakeClock, call, runtime
 
 _LENS = "Look for lessons the episodes repeat."
 _DAY = date(2026, 9, 1)
+_STAGE = RoutineOrigin(
+    name=RoutineName("consolidation"), trigger=RoutineTrigger.SCHEDULED, dreaming_stage=True
+)
 
 
 class ConsolidatingModel:
@@ -158,7 +169,7 @@ async def _fire(
     await turns.wake(
         thread.id,
         "",
-        RoutineOrigin(name=RoutineName("consolidation"), trigger=RoutineTrigger.SCHEDULED),
+        _STAGE,
     )
     subscription = (await log.subscribe(thread.id)).items
     events: list[Event] = []
@@ -418,7 +429,7 @@ def test_a_parked_consolidation_covers_its_batch_after_a_restart(tmp_path: Path)
         await turns.wake(
             thread.id,
             "",
-            RoutineOrigin(name=RoutineName("consolidation"), trigger=RoutineTrigger.SCHEDULED),
+            _STAGE,
         )
         subscription = (await log.subscribe(thread.id)).items
         async with asyncio.timeout(5):
@@ -502,6 +513,44 @@ def test_a_stage_turn_writes_no_episode(tmp_path: Path) -> None:
     assert sorted(type(node).__name__ for node in graph) == ["Episode", "Fact"]
 
 
+@pytest.mark.parametrize("stage", [True, False])
+def test_a_recap_caught_up_late_reads_the_stage_from_the_turn(tmp_path: Path, stage: bool) -> None:
+    """The routine file changed between the turn and its recap: the turn's origin decides."""
+    instance = instance_at(tmp_path)
+    if stage:
+        routine_file(instance, "description: Digest the week", name="consolidation")
+    else:
+        consolidation_stage(instance)
+    draft = RecapDraft(
+        keep=True,
+        description="Digested the week",
+        subjects=("week",),
+        happened="Read the week's notes.",
+        decided="Nothing.",
+        retrospective="Nothing.",
+    )
+    model = ScriptedRecapModel(draft, input_tokens=3, output_tokens=2)
+
+    async def scenario() -> MemoryRecapped:
+        log = EventLog(instance.manifest.state_dir)
+        thread_id, turn_id = uuid4(), uuid4()
+        origin = _STAGE.model_copy(update={"dreaming_stage": stage})
+        await log.append(thread_id, turn_id, TurnStarted(message="", model="m", origin=origin))
+        await log.append(thread_id, turn_id, TurnCompleted(input_tokens=1, output_tokens=1))
+        graph = GraphStore(instance.path)
+        writer = RecapWriter(log, graph, instance, model_factory=lambda _: model)
+        await writer.catch_up()
+        await writer.drain()
+        stored = log.stored(thread_id)
+        [marker] = [event.payload for event in stored if isinstance(event.payload, MemoryRecapped)]
+        return marker
+
+    marker = asyncio.run(scenario())
+
+    assert (marker.node is None) is stage
+    assert bool(model.calls) is not stage
+
+
 def test_a_second_consolidate_call_in_one_turn_is_refused(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     consolidation_stage(instance)
@@ -555,7 +604,7 @@ def test_an_interrupt_during_the_writes_still_covers_the_batch(
         await turns.wake(
             thread.id,
             "",
-            RoutineOrigin(name=RoutineName("consolidation"), trigger=RoutineTrigger.SCHEDULED),
+            _STAGE,
         )
         await asyncio.to_thread(WaitingGraphStore.writing.wait)
         await turns.interrupt(ThreadTurnInterruptCommand(thread_id=thread.id))
@@ -575,3 +624,61 @@ def test_an_interrupt_during_the_writes_still_covers_the_batch(
     assert covering.episodes == (monday,)
     [written] = covering.facts
     assert GraphStore(tmp_path).open(written).description == "Invoices go out late"
+
+
+def test_a_new_instance_ships_a_nightly_consolidation_stage(tmp_path: Path) -> None:
+    async def scenario() -> RoutineSummary:
+        instance = load_instance(init_instance(tmp_path / "alice", model="openai:gpt-5"))
+        clock = FakeClock(datetime(2026, 9, 6, 12, tzinfo=UTC))
+        listed = await call(runtime(instance, clock), "routine.list")
+        assert isinstance(listed, RoutineListResult)
+        assert listed.warnings == ()
+        [stage] = [routine for routine in listed.routines if routine.name == "consolidation"]
+        return stage
+
+    stage = asyncio.run(scenario())
+
+    assert stage.enabled
+    assert stage.next_run == datetime(2026, 9, 7, 3, tzinfo=UTC)
+    routine = load_routine(load_instance(tmp_path / "alice"), RoutineName("consolidation"))
+    assert routine is not None
+    assert routine.is_dreaming_stage
+
+
+def test_the_shipped_stage_body_is_the_lens_inside_the_frame(tmp_path: Path) -> None:
+    instance = load_instance(init_instance(tmp_path / "alice", model="openai:gpt-5"))
+    monday = episode(instance, "Sent the invoices late on Monday")
+    shipped = ConsolidatingModel(calls=0)
+    fire(instance, shipped)
+    episode(instance, "Sent the invoices late on Thursday")
+    source = instance.path / "routines" / "consolidation" / "ROUTINE.md"
+    source.write_text(source.read_text().replace(DEFAULT_CONSOLIDATION_LENS, _LENS))
+    edited = ConsolidatingModel(calls=0)
+
+    fire(instance, edited)
+
+    assert DEFAULT_CONSOLIDATION_LENS in shipped.wake
+    assert monday in shipped.wake
+    assert _LENS in edited.wake
+    assert DEFAULT_CONSOLIDATION_LENS not in edited.wake
+    assert monday in edited.wake
+    assert "consolidate" in edited.tools
+
+
+def test_an_instance_template_ships_its_own_consolidation_lens(tmp_path: Path) -> None:
+    own = (
+        "---\ndescription: Consolidate review lessons\n"
+        f"schedule: 0 4 * * *\nrun: consolidate\n---\n{_LENS}\n"
+    )
+    target = init_from_template(
+        tmp_path / "coder",
+        {"routines/consolidation/ROUTINE.md": own},
+        model="openai:gpt-5",
+        settings={},
+    )
+
+    routine = load_routine(load_instance(target), RoutineName("consolidation"))
+
+    assert routine is not None
+    assert routine.prompt.strip() == _LENS
+    assert routine.schedule == "0 4 * * *"

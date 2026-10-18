@@ -29,6 +29,8 @@ class ToolContext:
     turn_id: UUID | None = None
     #: The routine whose turn the tool runs in. None in a turn the user started.
     routine: RoutineName | None = None
+    #: Whether the turn is a dreaming stage's, as it started, so its own writes cannot change it.
+    dreaming_stage: bool = False
     #: The approval the user gave this call. None for a call the gate let through on its own.
     approval_id: UUID | None = None
     run_reporter: RunReporter | None = field(default=None, repr=False)

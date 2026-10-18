@@ -26,6 +26,7 @@ from kinby.instance.layout import (
     PERMISSIONS_NAME,
     PROFILE_NAME,
     RECAP_NAME,
+    ROUTINE_FILE,
     ROUTINES_DIR,
     SKILLS_DIR,
     STATE_DIR,
@@ -43,6 +44,20 @@ DEFAULT_BEHAVIOR_PROMPT = (
     "Edit it to change how the agent acts. -->\n"
     "\n"
     "You are a personal AI teammate.\n"
+)
+#: The body of a new instance's consolidation routine: what that dreaming stage looks for.
+DEFAULT_CONSOLIDATION_LENS = (
+    "Look for lessons the episodes repeat: a mistake made twice, a fix that worked again, "
+    "a preference the user restated. Look for areas of the work they share, such as a "
+    "feature of a repository or a recurring errand. Prefer a few facts a later session "
+    "would search for over many small ones."
+)
+#: The body of a new instance's reflection routine: what that dreaming stage looks for.
+DEFAULT_REFLECTION_LENS = (
+    "Look for how the user works: a workflow they repeat that a skill could hold, work they "
+    "do on a schedule that a routine could do, a pattern a later search should find as a "
+    "fact. Propose a few things the week clearly shows, through remember, skill_write or "
+    "routine_write, rather than many guesses."
 )
 _PROTECTED_TEMPLATE_ROOTS = {STATE_DIR, WORKSPACE_DIR}
 _FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir")
@@ -258,6 +273,31 @@ def _write_starter_tree(directory: Path, model: str) -> None:
         "An optional run.py beside it supplies the code step. "
         "When kinby's defaults are enabled, read the write-routine skill "
         "for the format.",
+    )
+    (directory / ROUTINES_DIR / "consolidation").mkdir()
+    (directory / ROUTINES_DIR / "consolidation" / ROUTINE_FILE).write_text(
+        (
+            "---\n"
+            "description: Consolidate the episodes no consolidation has covered into cited facts.\n"
+            "schedule: 0 3 * * *\n"
+            "run: consolidate\n"
+            "---\n"
+            f"{DEFAULT_CONSOLIDATION_LENS}\n"
+        ),
+        encoding="utf-8",
+    )
+    (directory / ROUTINES_DIR / "reflection").mkdir()
+    (directory / ROUTINES_DIR / "reflection" / ROUTINE_FILE).write_text(
+        (
+            "---\n"
+            "description: Reflect on what consolidation learned this week and make proposals.\n"
+            "schedule: 0 4 * * 0\n"
+            "mode: ask\n"
+            "run: reflect\n"
+            "---\n"
+            f"{DEFAULT_REFLECTION_LENS}\n"
+        ),
+        encoding="utf-8",
     )
     (directory / WORKSPACE_DIR).mkdir(exist_ok=True)
     (directory / STATE_DIR).mkdir(exist_ok=True)
