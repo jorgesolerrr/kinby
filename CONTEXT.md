@@ -42,11 +42,33 @@ The user replacing a **fact** they judge wrong: a new fact, dated the day of the
 
 ### Dreaming
 
-The consolidation that reviews uncovered **episodes** and writes a **fact** for a lesson or detail they repeat, or an **area fact** for an area they share, citing them as its **source episodes**. It never rewrites, merges or tombstones an episode, and it never writes back a fact the user forgot.
+An **instance**'s periodic review of its own memory, run in **stages** on different cadences, each a **routine** with its own lens. Each stage leaves a **dream report**. Dreaming never rewrites, merges or tombstones an episode, never writes back a fact the user forgot, and never edits the **profile**.
+
+### Dreaming stage
+
+One cadence of **dreaming**: **consolidation** nightly, **reflection** weekly. An instance can add its own, such as a monthly one.
+_Avoid_: dream phase
+
+### Consolidation
+
+The nightly **dreaming stage**. It reviews uncovered **episodes** and writes a **fact** for a lesson or detail they repeat, or an **area fact** for an area they share, citing them as its **source episodes**.
+
+### Reflection
+
+The weekly **dreaming stage**. It looks across the period's facts and episodes for patterns in how the user works and makes **proposals**.
+
+### Proposal
+
+A change **reflection** suggests from a pattern it found: a **fact**, a **skill**, or a **routine** without a **code step**. Nothing a proposal adds is code. It is applied only through the gate.
+
+### Dream report
+
+What a **dreaming stage** leaves on its **thread**: the facts it wrote, with their sources, and its **proposals**. The user acts on it by replying in that thread.
+_Avoid_: dream artifact
 
 ### Area fact
 
-A **fact** **dreaming** writes about one area of the work, such as a feature of a repository: where it lives and what was decided about it, and why. When a later **episode** touches the area, a new area fact citing the old sources and the new one takes its place.
+A **fact** **consolidation** writes about one area of the work, such as a feature of a repository: where it lives and what was decided about it, and why. When a later **episode** touches the area, a new area fact citing the old sources and the new one takes its place.
 
 ### Source episode
 
@@ -54,7 +76,7 @@ An **episode** a **fact** cites as the evidence it was learned from. While a liv
 
 ### Covered
 
-Said of an **episode** that **dreaming** has reviewed, whether or not it wrote a fact from it. Only a consolidation that finished its writes covers an episode; a failed one leaves its episodes uncovered for the next run.
+Said of an **episode** that **consolidation** has reviewed, whether or not it wrote a fact from it. Only a consolidation that finished its writes covers an episode; a failed one leaves its episodes uncovered for the next run.
 
 ### Prune
 
