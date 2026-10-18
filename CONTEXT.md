@@ -726,7 +726,7 @@ What a **step** hands on: a short summary plus the named values the **factory** 
 
 ### Step attempt
 
-One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, interrupted when the **hub** stopped while it ran, or needing a human when the step lacks what only the user can supply, such as **repository commands** its instance does not hold. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. A failed or interrupted attempt is tried again under the step's retry; a timed-out one, or one needing a human, never is and is never sent back. A step that declares where its failures go sends a failed attempt back there instead, with what failed. After that the run is **needs human**.
+One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or needing a human when the step lacks what only the user can supply, such as **repository commands** its instance does not hold. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. Neither is one the **hub** stopped during, or whose answer a lost connection kept from the hub: the instance, not the connection, says how it ended, and a call the instance does not hold is offered again. A failed attempt is tried again under the step's retry; a timed-out one, or one needing a human, never is and is never sent back. A step that declares where its failures go sends a failed attempt back there instead, with what failed. After that the run is **needs human**.
 
 ### Hook
 
@@ -739,7 +739,8 @@ The **routine** that starts **factory runs**: it finds new **work items** and ha
 
 ### Needs human
 
-A **factory run** stopped for the user because a **step** ran out of retries or send-backs, lacked what only the user can supply, or because the run's final check failed. Nothing it did is undone. The **factory** can say so where the **work item** came from, as the **software factory** labels its issue `ready-for-human`. The user retries the step, sends the run back, or cancels it.
+A **factory run** stopped for the user because a **step** ran out of retries or send-backs, lacked what only the user can supply, or because the run's final check failed. Nothing it did is undone. The **factory** can say so where the **work item** came from, as the **software factory** labels its issue `ready-for-human`. Its work stays where it is until the run ends. The user retries the step, sends the run back, or cancels it; handing the same **work item** in again retries it. A run whose work finished elsewhere ends without the user: done when its change was merged, cancelled when its work item or change was closed.
+_Avoid_: stopped run (a **stop** also ends a run as done or cancelled), restart
 
 ### Run stop
 
