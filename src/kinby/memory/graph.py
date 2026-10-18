@@ -58,6 +58,8 @@ class _FactFrontmatter(_NodeFrontmatter):
     thread: UUID | None = None
     #: Written only on a fact the user added.
     source: Literal["user"] | None = None
+    #: Written only on a fact dreaming learned from episodes.
+    sources: tuple[NodeId, ...] = ()
     tombstone: bool = False
 
 
@@ -185,6 +187,11 @@ def _render_node(memory: MemoryNode) -> str:
         f"tools: {render_frontmatter_value(memory.tools)}\n" if isinstance(memory, Episode) else ""
     )
     source = "source: user\n" if isinstance(memory, Fact) and memory.added_by_user else ""
+    sources = (
+        f"sources: {render_frontmatter_value(memory.sources)}\n"
+        if isinstance(memory, Fact) and memory.sources
+        else ""
+    )
     body = memory.body.rstrip("\r\n")
     return (
         "---\n"
@@ -194,6 +201,7 @@ def _render_node(memory: MemoryNode) -> str:
         f"subjects: {subjects}\n"
         f"{tools}"
         f"{source}"
+        f"{sources}"
         "---\n"
         f"{body}\n"
     )
@@ -226,6 +234,7 @@ def _read_node(path: Path) -> MemoryNode | None:
             body=body,
             thread=frontmatter.thread,
             added_by_user=frontmatter.source == "user",
+            sources=frontmatter.sources,
         )
     recaps = (
         RecappedTurn(frontmatter.thread, frontmatter.turn)

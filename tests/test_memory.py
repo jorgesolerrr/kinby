@@ -429,6 +429,34 @@ def test_remember_writes_a_fact_that_later_recall_finds(tmp_path: Path) -> None:
     assert events_path.read_bytes() == b"canonical transcript\n"
 
 
+def test_remember_writes_a_fact_with_its_source_episodes(tmp_path: Path) -> None:
+    node = NodeId("2026-09-03-deploys-on-friday")
+    fact = Fact(
+        node=node,
+        date=date(2026, 9, 3),
+        thread=_THREAD_ID,
+        description="Deploys on Friday",
+        subjects=("deployment",),
+        body="Every deploy so far went out on a Friday.",
+        sources=(NodeId("2026-08-29-deployed-kinby"), NodeId("2026-09-01-deployed-kinby")),
+    )
+    memory = _graph_store(tmp_path)
+
+    memory.remember(fact)
+
+    assert memory.open(node) == fact
+    assert (tmp_path / "memory" / "graph" / f"{node}.md").read_text(encoding="utf-8") == (
+        "---\n"
+        "date: 2026-09-03\n"
+        f"thread: {_THREAD_ID}\n"
+        'description: "Deploys on Friday"\n'
+        'subjects: ["deployment"]\n'
+        'sources: ["2026-08-29-deployed-kinby", "2026-09-01-deployed-kinby"]\n'
+        "---\n"
+        "Every deploy so far went out on a Friday.\n"
+    )
+
+
 def test_remember_escapes_frontmatter_values(tmp_path: Path) -> None:
     node = NodeId("2026-09-01-frontmatter-shaped-fact")
     fact = Fact(
