@@ -116,12 +116,13 @@ def reflection_stage(instance: Instance, mode: str = "ask") -> None:
 
 
 def consolidate(instance: Instance, description: str) -> tuple[NodeId, NodeId]:
-    """Consolidate one new episode into one fact, as the nightly stage does. The fact, then its
-    source."""
+    """Consolidate two new episodes into one fact, as the nightly stage does. The fact, then its
+    first source."""
     consolidation_stage(instance)
     source = episode(instance, f"{description}, again")
+    repeat = episode(instance, f"{description}, once more")
     [covering] = consolidated(
-        fire_consolidation(instance, ConsolidatingModel([learned(description, source)]))
+        fire_consolidation(instance, ConsolidatingModel([learned(description, source, repeat)]))
     )
     return covering.facts[0], source
 
@@ -445,12 +446,13 @@ def test_a_reflection_waiting_on_approval_does_not_block_a_consolidation(tmp_pat
         name="consolidation",
     )
     thursday = episode(instance, "Sent the invoices on Thursday")
+    again = episode(instance, "Sent the invoices on Thursday again")
 
     async def scenario() -> tuple[list[Event], list[Event]]:
         models = iter(
             [
                 ReflectingModel(("remember", _PROPOSALS["remember"])),
-                ConsolidatingModel([learned("Invoices go out on Thursdays", thursday)]),
+                ConsolidatingModel([learned("Invoices go out on Thursdays", thursday, again)]),
             ]
         )
         clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))

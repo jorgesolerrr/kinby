@@ -12,7 +12,6 @@ from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.tools import StructuredTool
 
 from kinby.contracts import (
-    ApprovalDecision,
     ApprovalRequested,
     CompletionOutcome,
     Event,
@@ -24,7 +23,6 @@ from kinby.contracts import (
     RoutineOrigin,
     RoutineSummary,
     RoutineTrigger,
-    ThreadApprovalRespondCommand,
     ThreadTurnInterruptCommand,
     ToolCall,
     ToolResult,
@@ -265,6 +263,76 @@ def test_the_frame_groups_the_batch_by_subject_with_the_facts_on_it(tmp_path: Pa
     assert learned_fact.sources == (old, new)
 
 
+def test_a_fact_from_one_episode_is_refused(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    lone = episode(instance, "Sent the invoices late on Monday")
+    model = ConsolidatingModel([learned("Invoices go out late", lone, lone)])
+
+    events = fire(instance, model)
+
+    [result] = [
+        event.payload
+        for event in events
+        if isinstance(event.payload, ToolResult) and event.payload.name == "consolidate"
+    ][1:]
+    assert result.error
+    assert "fewer than 2 episodes" in result.output
+    assert "at least two episodes" in model.wake
+    assert consolidated(events) == []
+    assert [node.node for node in GraphStore(instance.path).nodes()] == [lone]
+
+
+def test_a_lesson_repeated_on_a_later_night_cites_the_earlier_episode(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    monday = episode(instance, "Sent the invoices late on Monday", _DAY - timedelta(days=3))
+    elsewhere = episode(
+        instance, "Booked a dentist", _DAY - timedelta(days=3), subjects=("health",)
+    )
+    stale = episode(instance, "Sent the invoices late in May", _DAY - timedelta(days=100))
+    fire(instance, ConsolidatingModel())
+    cited = episode(instance, "Moved billing to the new provider", _DAY - timedelta(days=2))
+    also = episode(instance, "Billing moved providers", _DAY - timedelta(days=2))
+    fire(instance, ConsolidatingModel([learned("Billing lives at the new provider", cited, also)]))
+    thursday = episode(instance, "Sent the invoices late on Thursday")
+    model = ConsolidatingModel([learned("Invoices go out late", monday, thursday)])
+
+    events = fire(instance, model)
+
+    assert monday in model.wake
+    assert elsewhere not in model.wake
+    assert stale not in model.wake
+    [covering] = consolidated(events)
+    assert covering.episodes == (thursday,)
+    learned_fact = GraphStore(instance.path).open(covering.facts[0])
+    assert isinstance(learned_fact, Fact)
+    assert learned_fact.sources == (monday, thursday)
+
+
+def test_a_consolidated_fact_is_recalled_by_its_sources_terms(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    monday = episode(instance, "Stopped the e2e test instance Pirate", subjects=("hub",))
+    tuesday = episode(instance, "Stopped the e2e test instance Scratch", subjects=("hub",))
+    model = ConsolidatingModel(
+        [
+            {
+                "description": "Hub instance inventory and state",
+                "subjects": ["Pirate", "Scratch"],
+                "body": "Pirate and Scratch are stopped.",
+                "sources": [monday, tuesday],
+            }
+        ]
+    )
+
+    [covering] = consolidated(fire(instance, model))
+
+    assert [hit.node for hit in GraphStore(instance.path).recall("e2e stopped")] == list(
+        covering.facts
+    )
+
+
 def test_a_batch_holds_the_fifty_oldest_and_the_next_firing_the_rest(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     consolidation_stage(instance)
@@ -298,17 +366,17 @@ def test_an_episode_recapped_late_with_an_older_date_is_still_offered(tmp_path: 
     assert [covering.episodes for covering in consolidated(events)] == [(late,)]
 
 
-@pytest.mark.parametrize("cited", ["covered episode", "fact", "unknown node", "no source"])
+@pytest.mark.parametrize("cited", ["episode off the subjects", "fact", "unknown node", "no source"])
 def test_a_refused_call_writes_nothing_and_covers_nothing(tmp_path: Path, cited: str) -> None:
     instance = instance_at(tmp_path)
     consolidation_stage(instance)
-    covered = episode(instance, "Moved billing", _DAY - timedelta(days=30))
+    covered = episode(instance, "Booked a dentist", _DAY - timedelta(days=30), ("health",))
     fire(instance, ConsolidatingModel())
     known = fact(instance, "Billing lives in payments", ("billing",))
     monday = episode(instance, "Sent the invoices late on Monday")
     thursday = episode(instance, "Sent the invoices late on Thursday", _DAY + timedelta(days=3))
     outside = {
-        "covered episode": (covered,),
+        "episode off the subjects": (covered,),
         "fact": (known,),
         "unknown node": (NodeId("2026-09-01-nothing-here"),),
         "no source": (),
@@ -316,7 +384,10 @@ def test_a_refused_call_writes_nothing_and_covers_nothing(tmp_path: Path, cited:
     memory = GraphStore(instance.path)
     before = memory.nodes()
     model = ConsolidatingModel(
-        [learned("Invoices go out late", monday), learned("Billing is broken", *outside)]
+        [
+            learned("Invoices go out late", monday, thursday),
+            learned("Billing is broken", monday, *outside),
+        ]
     )
 
     events = fire(instance, model)
@@ -364,7 +435,7 @@ def test_the_frame_lists_the_forgotten_facts_on_the_batch_subjects(tmp_path: Pat
     assert elsewhere not in model.wake
 
 
-@pytest.mark.parametrize("cited", ["all", "some", "an episode before the forget"])
+@pytest.mark.parametrize("cited", ["all", "an episode before the forget"])
 def test_relearning_a_forgotten_fact_from_its_sources_is_refused(
     tmp_path: Path, cited: str
 ) -> None:
@@ -375,15 +446,15 @@ def test_relearning_a_forgotten_fact_from_its_sources_is_refused(
     forgotten(instance, monday, thursday)
     late = episode(instance, "Sent the invoices late again", _FORGOTTEN_ON - timedelta(days=1))
     new = episode(instance, "Billing retries failed cards")
+    again = episode(instance, "Billing retried the failed cards again")
     memory = GraphStore(instance.path)
     before = memory.nodes()
     sources = {
         "all": (monday, thursday),
-        "some": (monday,),
         "an episode before the forget": (monday, late),
     }[cited]
     model = ConsolidatingModel(
-        [learned("Billing retries cards", new), learned("Invoices go out late", *sources)]
+        [learned("Billing retries cards", new, again), learned("Invoices go out late", *sources)]
     )
 
     events = fire(instance, model)
@@ -418,64 +489,6 @@ def test_a_forgotten_fact_is_learned_again_from_an_episode_after_the_forget(
     assert learned_fact.sources == (monday, again)
 
 
-def test_a_parked_consolidation_covers_its_batch_after_a_restart(tmp_path: Path) -> None:
-    async def scenario() -> tuple[list[Event], NodeId, NodeId]:
-        instance = instance_at(tmp_path)
-        consolidation_stage(instance, mode="ask")
-        monday = episode(instance, "Sent the invoices late on Monday")
-        model = ConsolidatingModel([learned("Invoices go out late", monday)])
-        log = EventLog(instance.manifest.state_dir)
-        store = ThreadStore(instance.manifest.state_dir)
-        runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
-        turns = Turns(
-            store, log, runner, runner.prepare_for_turn, runner.permission_ceiling, no_recap
-        )
-        thread = store.create(None)
-        await turns.wake(
-            thread.id,
-            "",
-            _STAGE,
-        )
-        subscription = (await log.subscribe(thread.id)).items
-        async with asyncio.timeout(5):
-            while True:
-                event = await anext(subscription)
-                if isinstance(event.payload, ApprovalRequested):
-                    approval = event.payload
-                    break
-        await subscription.aclose()
-        waited = episode(instance, "Written while it waited", _DAY - timedelta(days=1))
-        log = EventLog(instance.manifest.state_dir)
-        restarted = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
-        resumed = Turns(
-            store,
-            log,
-            restarted,
-            restarted.prepare_for_turn,
-            restarted.permission_ceiling,
-            no_recap,
-        )
-        await resumed.respond(
-            ThreadApprovalRespondCommand(
-                thread_id=thread.id,
-                approval_id=approval.approval_id,
-                decision=ApprovalDecision.APPROVE,
-            )
-        )
-        await resumed.wait_idle()
-        return log.stored(thread.id), monday, waited
-
-    events, monday, waited = asyncio.run(scenario())
-
-    [covering] = consolidated(events)
-    assert covering.episodes == (monday,)
-    assert len(covering.facts) == 1
-    instance = instance_at(tmp_path)
-    consolidation_stage(instance)
-    [later] = consolidated(fire(instance, ConsolidatingModel()))
-    assert later.episodes == (waited,)
-
-
 def test_consolidate_is_offered_only_on_a_stage_turn(tmp_path: Path) -> None:
     async def scenario() -> list[str]:
         instance = instance_at(tmp_path)
@@ -501,9 +514,10 @@ def test_a_stage_turn_writes_no_episode(tmp_path: Path) -> None:
         instance = instance_at(tmp_path)
         consolidation_stage(instance)
         monday = episode(instance, "Sent the invoices late on Monday")
+        tuesday = episode(instance, "Sent the invoices late on Tuesday")
         log = EventLog(instance.manifest.state_dir)
         writer = RecapWriter(log, GraphStore(instance.path), instance, model_factory=unused_recap)
-        model = ConsolidatingModel([learned("Invoices go out late", monday)])
+        model = ConsolidatingModel([learned("Invoices go out late", monday, tuesday)])
         events = await _fire(instance, model, writer.schedule)
         await writer.drain()
         return EventLog(instance.manifest.state_dir).stored(events[0].thread_id)
@@ -515,7 +529,7 @@ def test_a_stage_turn_writes_no_episode(tmp_path: Path) -> None:
     assert markers[0].node is None
     assert markers[0].total == 0
     graph = GraphStore(instance_at(tmp_path).path).nodes()
-    assert sorted(type(node).__name__ for node in graph) == ["Episode", "Fact"]
+    assert sorted(type(node).__name__ for node in graph) == ["Episode", "Episode", "Fact"]
 
 
 @pytest.mark.parametrize("stage", [True, False])
@@ -632,13 +646,40 @@ def test_a_pruned_episode_is_not_written_again_by_the_recap(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("mode", ["ask", "read-only"])
-def test_a_stage_that_may_not_write_unasked_prunes_nothing(tmp_path: Path, mode: str) -> None:
+@pytest.mark.parametrize("mode", ["ask", "auto"])
+def test_consolidation_writes_and_prunes_unasked_where_writes_ask(
+    tmp_path: Path, mode: str
+) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance, mode=mode)
+    old = episode(instance, "Sent the invoices late", _DAY - timedelta(days=100))
+    monday = episode(instance, "Sent the invoices late on Monday")
+    model = ConsolidatingModel([learned("Invoices go out late", old, monday)])
+
+    events = fire(instance, model)
+
+    assert not [event for event in events if isinstance(event.payload, ApprovalRequested)]
+    [covering] = consolidated(events)
+    assert len(covering.facts) == 1
+    stale = episode(instance, "Billed a customer twice", _DAY - timedelta(days=100))
+    fire(instance, ConsolidatingModel())
+
+    pruned = fire(instance, ConsolidatingModel())
+
+    assert completed(pruned).outcome is CompletionOutcome.NO_WORK
+    episodes = {
+        node.node for node in GraphStore(instance.path).nodes() if isinstance(node, Episode)
+    }
+    assert episodes == {old, monday}
+    assert stale not in episodes
+
+
+def test_a_read_only_stage_prunes_nothing(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     consolidation_stage(instance)
     old = episode(instance, "Sent the invoices late", _DAY - timedelta(days=100))
     fire(instance, ConsolidatingModel())
-    consolidation_stage(instance, mode=mode)
+    consolidation_stage(instance, mode="read-only")
 
     events = fire(instance, ConsolidatingModel())
 
@@ -646,11 +687,30 @@ def test_a_stage_that_may_not_write_unasked_prunes_nothing(tmp_path: Path, mode:
     assert [node.node for node in GraphStore(instance.path).nodes()] == [old]
 
 
+def test_an_allow_rule_does_not_let_a_read_only_stage_write_or_prune(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    old = episode(instance, "Sent the invoices late", _DAY - timedelta(days=100))
+    fire(instance, ConsolidatingModel())
+    (instance.path / "permissions.toml").write_text(
+        '[tools]\nconsolidate = "allow"\n', encoding="utf-8"
+    )
+    consolidation_stage(instance, mode="read-only")
+    monday = episode(instance, "Sent the invoices late on Monday")
+    tuesday = episode(instance, "Sent the invoices late on Tuesday")
+
+    events = fire(instance, ConsolidatingModel([learned("Invoices go out late", monday, tuesday)]))
+
+    assert not consolidated(events)
+    assert {node.node for node in GraphStore(instance.path).nodes()} == {old, monday, tuesday}
+
+
 def test_a_second_consolidate_call_in_one_turn_is_refused(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     consolidation_stage(instance)
     monday = episode(instance, "Sent the invoices late on Monday")
-    model = ConsolidatingModel([learned("Invoices go out late", monday)], calls=2)
+    tuesday = episode(instance, "Sent the invoices late on Tuesday")
+    model = ConsolidatingModel([learned("Invoices go out late", monday, tuesday)], calls=2)
 
     events = fire(instance, model)
 
@@ -683,12 +743,13 @@ class WaitingGraphStore(GraphStore):
 def test_an_interrupt_during_the_writes_still_covers_the_batch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def scenario() -> tuple[MemoryConsolidated, NodeId]:
+    async def scenario() -> tuple[MemoryConsolidated, tuple[NodeId, NodeId]]:
         instance = instance_at(tmp_path)
         consolidation_stage(instance)
         monday = episode(instance, "Sent the invoices late on Monday")
+        tuesday = episode(instance, "Sent the invoices late on Tuesday")
         monkeypatch.setattr("kinby.core.turn_runner.GraphStore", WaitingGraphStore)
-        model = ConsolidatingModel([learned("Invoices go out late", monday)])
+        model = ConsolidatingModel([learned("Invoices go out late", monday, tuesday)])
         log = EventLog(instance.manifest.state_dir)
         store = ThreadStore(instance.manifest.state_dir)
         runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
@@ -712,11 +773,11 @@ def test_an_interrupt_during_the_writes_still_covers_the_batch(
                     break
         await subscription.aclose()
         await turns.wait_idle()
-        return event.payload, monday
+        return event.payload, (monday, tuesday)
 
-    covering, monday = asyncio.run(scenario())
+    covering, batch = asyncio.run(scenario())
 
-    assert covering.episodes == (monday,)
+    assert covering.episodes == batch
     [written] = covering.facts
     assert GraphStore(tmp_path).open(written).description == "Invoices go out late"
 

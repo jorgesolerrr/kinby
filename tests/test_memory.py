@@ -245,6 +245,47 @@ def test_recall_returns_facts_over_newer_episodes(tmp_path: Path) -> None:
     assert [memory.node for memory in memories] == [fact]
 
 
+def test_recall_finds_a_fact_by_its_source_episodes(tmp_path: Path) -> None:
+    """A fact takes its sources' place, so a term only an episode holds still finds it."""
+    graph = GraphStore(tmp_path)
+    stopped = graph.remember(
+        Episode(
+            node=NodeId("2026-08-20-stopped-the-two-e2e-test-instances"),
+            date=date(2026, 8, 20),
+            description="Stopped the two e2e test instances, Pirate and Scratch",
+            subjects=("hub",),
+            body="Both are stopped.",
+            recaps=RecappedTurn(_THREAD_ID, _TURN_ID),
+            tools=("instance_lifecycle",),
+        )
+    )
+    inventory = graph.remember(
+        Fact(
+            node=NodeId("2026-08-31-hub-instance-inventory"),
+            date=date(2026, 8, 31),
+            description="Hub instance inventory and the state of the test instances",
+            subjects=("Pirate", "Scratch"),
+            body="Pirate and Scratch are stopped.",
+            thread=None,
+            sources=(stopped,),
+        )
+    )
+    other = graph.remember(
+        Fact(
+            node=NodeId("2026-08-31-the-e2e-ping-routine-stalls"),
+            date=date(2026, 8, 31),
+            description="The e2e-ping routine stalls on approval",
+            subjects=("Scratch",),
+            body="It waits on an approval.",
+            thread=None,
+        )
+    )
+
+    assert {hit.node for hit in graph.recall("e2e")} == {inventory, other}
+    assert [hit.node for hit in graph.recall("e2e test instances")] == [inventory]
+    assert [hit.node for hit in graph.recall("pirate stopped")] == [inventory]
+
+
 def test_recall_returns_episodes_when_no_fact_matches(tmp_path: Path) -> None:
     _write_node(
         tmp_path,

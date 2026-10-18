@@ -60,6 +60,8 @@ class Tool:
     paths: tuple[str, ...] = ()
     #: A hub tool, which reaches past the instance into the hub (ADR 0096).
     hub: bool = False
+    #: Consolidation's own write, which needs no approval (ADR 0100).
+    consolidation: bool = False
     context_parameter: str | None = field(default=None, repr=False)
 
     async def ainvoke(
