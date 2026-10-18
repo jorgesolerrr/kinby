@@ -46,7 +46,7 @@ An **instance**'s periodic review of its own memory, run in **stages** on differ
 
 ### Dreaming stage
 
-One cadence of **dreaming**: **consolidation** nightly, **reflection** weekly. An instance can add its own, such as a monthly one.
+One cadence of **dreaming**: **consolidation** nightly, **reflection** and the **learning review** weekly. An instance can add its own, such as a monthly one.
 _Avoid_: dream phase
 
 ### Consolidation
@@ -60,6 +60,19 @@ The weekly **dreaming stage**. It looks across the period's facts and episodes f
 ### Proposal
 
 A change **reflection** suggests from a pattern it found: a **fact**, a **skill**, or a **routine** without a **code step**. Nothing a proposal adds is code. It is applied only through the gate.
+
+### Learning review
+
+The weekly **dreaming stage** that judges whether the **instance** learned from its memory. It reads the week's **turns** and **factory runs** that went badly, next to the **facts** that matched them and what each one **recalled**, and names every **repeated mistake** and **ignored lesson**, citing the turn or run and the fact. It writes nothing to memory and makes no **proposals**; its **dream report** is read by the user, who rates it. A week with nothing gone badly costs nothing.
+_Avoid_: judge, audit
+
+### Repeated mistake
+
+A **learning review** verdict: a **turn** or **factory run** went wrong in a way a **fact** already described, and did not **recall** that fact.
+
+### Ignored lesson
+
+A **learning review** verdict: a **turn** or **factory run** **recalled** a **fact** and then did what the fact warned against.
 
 ### Dream report
 
@@ -414,6 +427,14 @@ One request to a model during a **turn**, recorded as an event with its tokens a
 
 A **turn** whose recorded **model calls** do not sum to the **token usage** on its closing event.
 
+### Recall
+
+The record that a **turn**, or a **coding client**'s session inside a **factory run**, read given **facts** or **episodes** from memory. It ties work to the memory it used.
+
+### Memory tokens
+
+What memory costs a **turn**, measured from the provider's own token counts. Two numbers: the size, the tokens memory added to the context once; and the carried tokens, that size re-read by every later **model call** in the turn. The **profile** counts by its size on every turn.
+
 ### Navigation
 
 The read-only **tool** calls and model reasoning a **turn** spends locating what it needs in the **workspace**. A turn's navigation records all read calls and their duration. It also records the read calls before the first write, distinct paths, repeat opens, tokens before the first write, and write calls. The write count identifies turns that acted. Memory tools and the skill tool are not navigation. Its trend for one workspace shows whether memory is teaching the agent the workspace.
@@ -694,6 +715,10 @@ The unit of work a **factory** carries, such as one issue.
 ### Factory run
 
 One **work item**'s trip through a **factory**'s **steps**. It belongs to the **instance** that handed the work item in. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
+
+### Run usage
+
+The derived record of one **factory run**'s cost: its tokens and price across its **steps**' **turns**, **delegated runs** and recap, the **step attempts** per step, its retries and send-backs, and the time from start to done. Nothing stores it; it is read from the **hub** and the **instance**.
 
 ### Step result
 
