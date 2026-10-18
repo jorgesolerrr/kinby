@@ -27,6 +27,7 @@ from kinby.contracts import (
     ThreadTurnInterruptCommand,
     ToolResult,
     TurnCompleted,
+    TurnStarted,
     UserOrigin,
     is_turn_closing,
 )
@@ -42,16 +43,21 @@ from kinby.memory import (
     GraphStore,
     MemoryNode,
     NodeId,
+    RecapDraft,
     RecappedTurn,
     RecapWriter,
 )
 from kinby.memory.facade import new_node_id
 from kinby.plugins.routines import load_routine
+from tests.test_recap import ScriptedRecapModel
 from tests.test_routines import instance_at, no_recap, routine_file, unused_recap
 from tests.test_scheduler import FakeClock, call, runtime
 
 _LENS = "Look for lessons the episodes repeat."
 _DAY = date(2026, 9, 1)
+_STAGE = RoutineOrigin(
+    name=RoutineName("consolidation"), trigger=RoutineTrigger.SCHEDULED, dreaming_stage=True
+)
 
 
 class ConsolidatingModel:
@@ -163,7 +169,7 @@ async def _fire(
     await turns.wake(
         thread.id,
         "",
-        RoutineOrigin(name=RoutineName("consolidation"), trigger=RoutineTrigger.SCHEDULED),
+        _STAGE,
     )
     subscription = (await log.subscribe(thread.id)).items
     events: list[Event] = []
@@ -340,7 +346,7 @@ def test_a_parked_consolidation_covers_its_batch_after_a_restart(tmp_path: Path)
         await turns.wake(
             thread.id,
             "",
-            RoutineOrigin(name=RoutineName("consolidation"), trigger=RoutineTrigger.SCHEDULED),
+            _STAGE,
         )
         subscription = (await log.subscribe(thread.id)).items
         async with asyncio.timeout(5):
@@ -424,6 +430,44 @@ def test_a_stage_turn_writes_no_episode(tmp_path: Path) -> None:
     assert sorted(type(node).__name__ for node in graph) == ["Episode", "Fact"]
 
 
+@pytest.mark.parametrize("stage", [True, False])
+def test_a_recap_caught_up_late_reads_the_stage_from_the_turn(tmp_path: Path, stage: bool) -> None:
+    """The routine file changed between the turn and its recap: the turn's origin decides."""
+    instance = instance_at(tmp_path)
+    if stage:
+        routine_file(instance, "description: Digest the week", name="consolidation")
+    else:
+        consolidation_stage(instance)
+    draft = RecapDraft(
+        keep=True,
+        description="Digested the week",
+        subjects=("week",),
+        happened="Read the week's notes.",
+        decided="Nothing.",
+        retrospective="Nothing.",
+    )
+    model = ScriptedRecapModel(draft, input_tokens=3, output_tokens=2)
+
+    async def scenario() -> MemoryRecapped:
+        log = EventLog(instance.manifest.state_dir)
+        thread_id, turn_id = uuid4(), uuid4()
+        origin = _STAGE.model_copy(update={"dreaming_stage": stage})
+        await log.append(thread_id, turn_id, TurnStarted(message="", model="m", origin=origin))
+        await log.append(thread_id, turn_id, TurnCompleted(input_tokens=1, output_tokens=1))
+        graph = GraphStore(instance.path)
+        writer = RecapWriter(log, graph, instance, model_factory=lambda _: model)
+        await writer.catch_up()
+        await writer.drain()
+        stored = log.stored(thread_id)
+        [marker] = [event.payload for event in stored if isinstance(event.payload, MemoryRecapped)]
+        return marker
+
+    marker = asyncio.run(scenario())
+
+    assert (marker.node is None) is stage
+    assert bool(model.calls) is not stage
+
+
 def test_a_second_consolidate_call_in_one_turn_is_refused(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     consolidation_stage(instance)
@@ -477,7 +521,7 @@ def test_an_interrupt_during_the_writes_still_covers_the_batch(
         await turns.wake(
             thread.id,
             "",
-            RoutineOrigin(name=RoutineName("consolidation"), trigger=RoutineTrigger.SCHEDULED),
+            _STAGE,
         )
         await asyncio.to_thread(WaitingGraphStore.writing.wait)
         await turns.interrupt(ThreadTurnInterruptCommand(thread_id=thread.id))

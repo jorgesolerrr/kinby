@@ -143,12 +143,6 @@ def load_routine(instance: Instance, name: RoutineName) -> Routine | None:
     return load_routine_file(path, load_permissions(instance), instance)
 
 
-def is_dreaming_stage(instance: Instance, name: RoutineName) -> bool:
-    """Whether the routine *name* is a dreaming stage. A routine that is gone or broken is not."""
-    routines, _ = load_routines(instance)
-    return any(routine.name == name and routine.is_dreaming_stage for routine in routines)
-
-
 def _routine_paths(instance: Instance) -> tuple[Path, ...]:
     return tuple(sorted((instance.path / ROUTINES_DIR).glob(f"*/{ROUTINE_FILE}")))
 

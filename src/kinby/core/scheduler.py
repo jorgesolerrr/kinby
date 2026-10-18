@@ -268,11 +268,12 @@ class Scheduler:
 
     async def _fire(self, routine: Routine, trigger: RoutineTrigger) -> AcceptedResult:
         now = self._clock()
-        self._turns.require_available(RoutineOrigin(name=routine.name, trigger=trigger))
+        origin = RoutineOrigin(
+            name=routine.name, trigger=trigger, dreaming_stage=routine.is_dreaming_stage
+        )
+        self._turns.require_available(origin)
         accepted = await self._turns.wake_new_thread(
-            f"{routine.name} · {self._local_minute(now)}",
-            routine.prompt,
-            RoutineOrigin(name=routine.name, trigger=trigger),
+            f"{routine.name} · {self._local_minute(now)}", routine.prompt, origin
         )
         if routine.enabled and routine.schedule:
             self._armed[routine.name] = ArmedRoutine(
@@ -324,7 +325,13 @@ class Scheduler:
             if delivery is not None and (
                 scheduled is None or delivery.delivery.received_at <= scheduled[0]
             ):
-                origin = delivery.origin.model_copy(update={"trigger": RoutineTrigger.SIGNAL})
+                stage = any(
+                    routine.name == delivery.origin.name and routine.is_dreaming_stage
+                    for routine in routines
+                )
+                origin = delivery.origin.model_copy(
+                    update={"trigger": RoutineTrigger.SIGNAL, "dreaming_stage": stage}
+                )
                 firing = self._turns.wake_recorded(
                     delivery.thread_id,
                     delivery.turn_id,

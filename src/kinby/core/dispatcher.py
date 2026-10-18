@@ -6,7 +6,6 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Map
 from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 from typing import cast, overload
 from uuid import UUID, uuid4
@@ -75,7 +74,6 @@ from kinby.contracts import (
     InstanceProbeResult,
     Method,
     PermissionMode,
-    RoutineName,
     RunStop,
     RunStopped,
     Scope,
@@ -120,7 +118,6 @@ from kinby.core.usage import TimeRange, usage_totals
 from kinby.instance import Instance, ModelPrice
 from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
 from kinby.memory import GraphStore, RecapWriter
-from kinby.plugins.routines import is_dreaming_stage
 
 Handler = Callable[[ContractModel], Awaitable[ContractModel]]
 SubscriptionHandler = Callable[[ContractModel], Awaitable[Stream[ContractModel]]]
@@ -159,7 +156,6 @@ class TurnConfig:
     runner: TurnRunner
     recap: RecapWriter | None = None
     snapshots: SnapshotStore | None = None
-    is_dreaming_stage: Callable[[RoutineName], bool] = lambda _: False
 
 
 @dataclass(frozen=True)
@@ -340,7 +336,6 @@ def build_dispatcher(
             turn_settings.permission_ceiling,
             after_turn,
             turn_settings.snapshots,
-            is_dreaming_stage=turn_settings.is_dreaming_stage,
         )
         if isinstance(turns, ScheduledTurnConfig):
             scheduler = Scheduler(turns.scheduler, event_log, store, turn_service)
@@ -552,5 +547,4 @@ async def turn_config(
         runner,
         recap,
         snapshots,
-        partial(is_dreaming_stage, instance),
     )

@@ -26,7 +26,6 @@ from kinby.contracts import (
     Payload,
     PermissionMode,
     PromptVersion,
-    RoutineName,
     RoutineOrigin,
     SystemPrompt,
     ThreadApprovalRespondCommand,
@@ -236,8 +235,6 @@ class Turns:
         permission_ceiling: Callable[[], PermissionMode],
         after_turn: ClosedTurnHook,
         snapshots: SnapshotStore | None = None,
-        *,
-        is_dreaming_stage: Callable[[RoutineName], bool] = lambda _: False,
     ) -> None:
         self._store = store
         self._log = log
@@ -246,7 +243,6 @@ class Turns:
         self._permission_ceiling = permission_ceiling
         self._after_turn = after_turn
         self._snapshots = snapshots
-        self._is_dreaming_stage = is_dreaming_stage
         self._changed = asyncio.Event()
         self._running: dict[UUID, RunningTurn] = {}
         self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim | RevertClaim | StepClaim] = {}
@@ -276,8 +272,9 @@ class Turns:
         }
         return {**self._live(), **parked}
 
-    def _holds_only_its_thread(self, origin: Origin) -> bool:
-        return isinstance(origin, RoutineOrigin) and self._is_dreaming_stage(origin.name)
+    @staticmethod
+    def _holds_only_its_thread(origin: Origin) -> bool:
+        return isinstance(origin, RoutineOrigin) and origin.dreaming_stage
 
     def _live(self) -> dict[UUID, Origin]:
         origins = {

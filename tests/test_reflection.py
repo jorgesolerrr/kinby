@@ -1,7 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 from typing import Self
 from uuid import UUID, uuid4
@@ -40,7 +39,7 @@ from kinby.core.turns import ClosedTurnHook, Turns
 from kinby.instance import Instance, init_instance, load_instance
 from kinby.instance.init import DEFAULT_REFLECTION_LENS
 from kinby.memory import Fact, GraphStore, RecapWriter
-from kinby.plugins.routines import is_dreaming_stage, load_routine
+from kinby.plugins.routines import load_routine
 from tests.test_consolidation import (
     ConsolidatingModel,
     consolidated,
@@ -140,7 +139,6 @@ def stage_turns(
         runner.prepare_for_turn,
         runner.permission_ceiling,
         after_turn,
-        is_dreaming_stage=partial(is_dreaming_stage, instance),
     )
     return turns, store, log
 
@@ -150,7 +148,9 @@ async def wake_reflection(turns: Turns, store: ThreadStore) -> UUID:
     await turns.wake(
         thread.id,
         "",
-        RoutineOrigin(name=RoutineName("reflection"), trigger=RoutineTrigger.SCHEDULED),
+        RoutineOrigin(
+            name=RoutineName("reflection"), trigger=RoutineTrigger.SCHEDULED, dreaming_stage=True
+        ),
     )
     return thread.id
 
@@ -419,7 +419,6 @@ def test_an_approved_reflection_resumes_only_once_the_instance_is_free(tmp_path:
             runner.prepare_for_turn,
             runner.permission_ceiling,
             no_recap,
-            is_dreaming_stage=partial(is_dreaming_stage, instance),
         )
         await turns.wake(store.create(None).id, "Hello", UserOrigin())
         with pytest.raises(InstanceBusy):
@@ -461,12 +460,7 @@ def test_a_reflection_waiting_on_approval_does_not_block_a_consolidation(tmp_pat
             instance.manifest.state_dir,
             event_log=log,
             turns=ScheduledTurnConfig(
-                TurnConfig(
-                    runner.prepare_for_turn,
-                    runner.permission_ceiling,
-                    runner,
-                    is_dreaming_stage=partial(is_dreaming_stage, instance),
-                ),
+                TurnConfig(runner.prepare_for_turn, runner.permission_ceiling, runner),
                 SchedulerConfig(instance, clock),
             ),
         )
