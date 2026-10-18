@@ -339,15 +339,17 @@ def _open_pull_request(
     """Push the branch and open its pull request, which closes the issue, with the title and body
     the coding client wrote. With no title written, it takes the issue's.
 
-    A pull request based on a sibling's agent branch joins that sibling pull request's stack. The
-    repository's maintainer reviews it. An issue an earlier failure handed to a human loses its
-    ready-for-human label.
+    A pull request based on another agent pull request's branch joins that pull request's stack,
+    whatever the label on the issue it closes. The repository's maintainer reviews it. An issue an
+    earlier failure handed to a human loses its ready-for-human label.
     """
     if not body:
         raise MissingPullRequestBody("The coding session wrote no pull request body.")
     found = _issue(workspace, issue)
-    under = next(
-        (pull for pull in _sibling_pull_requests(workspace, found) if pull.branch == base), None
+    under = (
+        next((pull for pull in _agent_pull_requests(workspace) if pull.branch == base), None)
+        if base.startswith(AGENT_BRANCH_PREFIX)
+        else None
     )
     maintainer = _repository(workspace).maintainer
     _git(workspace, "push", "--force-with-lease", "-u", "origin", branch)

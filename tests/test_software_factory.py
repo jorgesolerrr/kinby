@@ -1539,6 +1539,31 @@ def test_publish_stacks_a_sub_issues_pull_request_on_its_siblings(
     asyncio.run(scenario())
 
 
+def test_publish_stacks_on_a_blocker_whose_issue_was_handed_to_a_human(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    implemented(workspace, "agent/8-dark-theme")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(8, "Dark theme", parent=5))
+    github.answer(
+        "repos/{owner}/{repo}/pulls",
+        output=[[pull_request(41, "agent/7-light-theme", closes=7, stack=3)]],
+    )
+    github.answer("repo", "view", output=REPOSITORY)
+    github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        branch = {"branch": "agent/8-dark-theme", "base": "agent/7-light-theme"}
+        result = await opened(dispatcher, 8, branch | BODY)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        [stacked] = [arguments for arguments in github.calls if "POST" in arguments]
+        assert "repos/{owner}/{repo}/stacks/3/add" in stacked
+
+    asyncio.run(scenario())
+
+
 def test_publish_stacks_no_sub_issues_pull_request_based_on_the_default_branch(
     tmp_path, monkeypatch
 ):
