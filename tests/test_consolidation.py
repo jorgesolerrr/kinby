@@ -687,6 +687,24 @@ def test_a_read_only_stage_prunes_nothing(tmp_path: Path) -> None:
     assert [node.node for node in GraphStore(instance.path).nodes()] == [old]
 
 
+def test_an_allow_rule_does_not_let_a_read_only_stage_write_or_prune(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    old = episode(instance, "Sent the invoices late", _DAY - timedelta(days=100))
+    fire(instance, ConsolidatingModel())
+    (instance.path / "permissions.toml").write_text(
+        '[tools]\nconsolidate = "allow"\n', encoding="utf-8"
+    )
+    consolidation_stage(instance, mode="read-only")
+    monday = episode(instance, "Sent the invoices late on Monday")
+    tuesday = episode(instance, "Sent the invoices late on Tuesday")
+
+    events = fire(instance, ConsolidatingModel([learned("Invoices go out late", monday, tuesday)]))
+
+    assert not consolidated(events)
+    assert {node.node for node in GraphStore(instance.path).nodes()} == {old, monday, tuesday}
+
+
 def test_a_second_consolidate_call_in_one_turn_is_refused(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     consolidation_stage(instance)

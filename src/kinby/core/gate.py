@@ -47,14 +47,15 @@ def evaluate(
     """Evaluate one call without running the tool or changing state.
 
     A hub tool's write asks in every mode but read-only, ahead of any rule (ADR 0096).
-    Consolidation's own write runs unasked in every mode but read-only, also ahead of any
-    rule (ADR 0100).
+    Consolidation's own write runs unasked in every mode but read-only, where it is denied,
+    also ahead of any rule (ADR 0100).
     """
     if tool is not None and tool.hub and tool.write:
         action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ASK
         return GateDecision(action, GateRule("hub.write"))
-    if tool is not None and tool.consolidation and mode is not PermissionMode.READ_ONLY:
-        return GateDecision(GateAction.ALLOW, GateRule("consolidation.write"))
+    if tool is not None and tool.consolidation:
+        action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ALLOW
+        return GateDecision(action, GateRule("consolidation.write"))
     if (
         mode is not PermissionMode.READ_ONLY
         and call.name == "bash"
