@@ -591,8 +591,8 @@ def test_forget_tombstones_a_fact_or_an_episode(tmp_path: Path) -> None:
         assert forgot_fact.model_dump() == {}
         assert forgot_episode.model_dump() == {}
         files = _graph_files(tmp_path)
-        assert "tombstone: true\n" in files[fact]
-        assert "tombstone: true\n" in files[episode]
+        assert "tombstone: true\nforgotten: 2026-09-28\n" in files[fact]
+        assert "tombstone: true\nforgotten: 2026-09-28\n" in files[episode]
         assert await _listed(dispatcher) == []
         assert _events(tmp_path) == events
 

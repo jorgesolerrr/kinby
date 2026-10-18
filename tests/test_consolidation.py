@@ -1,5 +1,6 @@
 import asyncio
 import random
+import threading
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -22,6 +23,7 @@ from kinby.contracts import (
     RoutineOrigin,
     RoutineTrigger,
     ThreadApprovalRespondCommand,
+    ThreadTurnInterruptCommand,
     ToolCall,
     ToolResult,
     TurnCompleted,
@@ -34,7 +36,15 @@ from kinby.core.threads import ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ClosedTurnHook, Turns
 from kinby.instance import Instance
-from kinby.memory import Episode, Fact, GraphStore, NodeId, RecappedTurn, RecapWriter
+from kinby.memory import (
+    Episode,
+    Fact,
+    GraphStore,
+    MemoryNode,
+    NodeId,
+    RecappedTurn,
+    RecapWriter,
+)
 from kinby.memory.facade import new_node_id
 from kinby.memory.graph import NodeNotFound
 from tests.test_routines import instance_at, no_recap, routine_file, unused_recap
@@ -44,10 +54,11 @@ _DAY = date(2026, 9, 1)
 
 
 class ConsolidatingModel:
-    """Call consolidate once with *facts*, then end the turn."""
+    """Call consolidate *calls* times in one response with *facts*, then end the turn."""
 
-    def __init__(self, facts: list[dict[str, object]] | None = None) -> None:
+    def __init__(self, facts: list[dict[str, object]] | None = None, *, calls: int = 1) -> None:
         self.facts = facts or []
+        self.calls = calls
         self.messages: list[list[BaseMessage]] = []
         self.tools: list[str] = []
 
@@ -72,6 +83,7 @@ class ConsolidatingModel:
                         "args": {"facts": self.facts},
                         "type": "tool_call",
                     }
+                    for _ in range(self.calls)
                 ],
                 usage_metadata=usage,
             )
@@ -313,11 +325,14 @@ def test_a_refused_call_writes_nothing_and_covers_nothing(tmp_path: Path, cited:
     assert covering.episodes == (monday, thursday)
 
 
+_FORGOTTEN_ON = _DAY - timedelta(days=10)
+
+
 def forgotten(instance: Instance, *sources: NodeId) -> NodeId:
-    """Cover *sources*, learn a billing fact from them, then forget it."""
+    """Cover *sources*, learn a billing fact from them, then forget it on _FORGOTTEN_ON."""
     fire(instance, ConsolidatingModel())
     node = fact(instance, "Invoices go out late", ("billing",), sources)
-    GraphStore(instance.path).forget(node)
+    GraphStore(instance.path).forget(node, _FORGOTTEN_ON)
     return node
 
 
@@ -327,7 +342,7 @@ def test_the_frame_lists_the_forgotten_facts_on_the_batch_subjects(tmp_path: Pat
     old = episode(instance, "Sent the invoices late", _DAY - timedelta(days=30))
     gone = forgotten(instance, old)
     elsewhere = fact(instance, "The dentist is on Main Street", ("health",))
-    GraphStore(instance.path).forget(elsewhere)
+    GraphStore(instance.path).forget(elsewhere, _FORGOTTEN_ON)
     episode(instance, "Billing retries failed cards")
     model = ConsolidatingModel()
 
@@ -339,7 +354,7 @@ def test_the_frame_lists_the_forgotten_facts_on_the_batch_subjects(tmp_path: Pat
     assert elsewhere not in model.wake
 
 
-@pytest.mark.parametrize("cited", ["all", "some"])
+@pytest.mark.parametrize("cited", ["all", "some", "an episode before the forget"])
 def test_relearning_a_forgotten_fact_from_its_sources_is_refused(
     tmp_path: Path, cited: str
 ) -> None:
@@ -348,10 +363,15 @@ def test_relearning_a_forgotten_fact_from_its_sources_is_refused(
     monday = episode(instance, "Sent the invoices late on Monday", _DAY - timedelta(days=30))
     thursday = episode(instance, "Sent the invoices late on Thursday", _DAY - timedelta(days=27))
     forgotten(instance, monday, thursday)
+    late = episode(instance, "Sent the invoices late again", _FORGOTTEN_ON - timedelta(days=1))
     new = episode(instance, "Billing retries failed cards")
     memory = GraphStore(instance.path)
     before = memory.nodes()
-    sources = {"all": (monday, thursday), "some": (monday,)}[cited]
+    sources = {
+        "all": (monday, thursday),
+        "some": (monday,),
+        "an episode before the forget": (monday, late),
+    }[cited]
     model = ConsolidatingModel(
         [learned("Billing retries cards", new), learned("Invoices go out late", *sources)]
     )
@@ -499,7 +519,7 @@ def test_a_firing_prunes_old_covered_episodes_no_live_fact_cites(tmp_path: Path)
     fire(instance, ConsolidatingModel())
     fact(instance, "Billing lives in payments", ("billing",), (cited,))
     GraphStore(instance.path).forget(
-        fact(instance, "Cards are retried", ("billing",), (cited_by_forgotten,))
+        fact(instance, "Cards are retried", ("billing",), (cited_by_forgotten,)), _FORGOTTEN_ON
     )
     uncovered = episode(instance, "Billed a new customer", old)
 
@@ -576,3 +596,78 @@ def test_a_stage_that_may_not_write_unasked_prunes_nothing(tmp_path: Path, mode:
 
     assert completed(events).outcome is CompletionOutcome.NO_WORK
     assert [node.node for node in GraphStore(instance.path).nodes()] == [old]
+
+
+def test_a_second_consolidate_call_in_one_turn_is_refused(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    monday = episode(instance, "Sent the invoices late on Monday")
+    model = ConsolidatingModel([learned("Invoices go out late", monday)], calls=2)
+
+    events = fire(instance, model)
+
+    first, second = [
+        event.payload
+        for event in events
+        if isinstance(event.payload, ToolResult) and event.payload.name == "consolidate"
+    ][1:]
+    assert not first.error
+    assert second.error
+    assert "already" in second.output
+    [covering] = consolidated(events)
+    facts = [node for node in GraphStore(instance.path).nodes() if isinstance(node, Fact)]
+    assert [fact.node for fact in facts] == list(covering.facts)
+
+
+class WaitingGraphStore(GraphStore):
+    """Hold each write until the test lets it finish."""
+
+    writing = threading.Event()
+    release = threading.Event()
+
+    def remember(self, memory: MemoryNode) -> NodeId:
+        if isinstance(memory, Fact):
+            self.writing.set()
+            self.release.wait()
+        return super().remember(memory)
+
+
+def test_an_interrupt_during_the_writes_still_covers_the_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> tuple[MemoryConsolidated, NodeId]:
+        instance = instance_at(tmp_path)
+        consolidation_stage(instance)
+        monday = episode(instance, "Sent the invoices late on Monday")
+        monkeypatch.setattr("kinby.core.turn_runner.GraphStore", WaitingGraphStore)
+        model = ConsolidatingModel([learned("Invoices go out late", monday)])
+        log = EventLog(instance.manifest.state_dir)
+        store = ThreadStore(instance.manifest.state_dir)
+        runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
+        turns = Turns(
+            store, log, runner, runner.prepare_for_turn, runner.permission_ceiling, no_recap
+        )
+        thread = store.create(None)
+        await turns.wake(
+            thread.id,
+            "",
+            RoutineOrigin(name=RoutineName("consolidation"), trigger=RoutineTrigger.SCHEDULED),
+        )
+        await asyncio.to_thread(WaitingGraphStore.writing.wait)
+        await turns.interrupt(ThreadTurnInterruptCommand(thread_id=thread.id))
+        subscription = (await log.subscribe(thread.id)).items
+        WaitingGraphStore.release.set()
+        async with asyncio.timeout(5):
+            while True:
+                event = await anext(subscription)
+                if isinstance(event.payload, MemoryConsolidated):
+                    break
+        await subscription.aclose()
+        await turns.wait_idle()
+        return event.payload, monday
+
+    covering, monday = asyncio.run(scenario())
+
+    assert covering.episodes == (monday,)
+    [written] = covering.facts
+    assert GraphStore(tmp_path).open(written).description == "Invoices go out late"

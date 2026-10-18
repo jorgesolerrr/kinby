@@ -19,6 +19,7 @@ from kinby.memory import (
 
 _THREAD_ID = UUID("11111111-1111-1111-1111-111111111111")
 _TURN_ID = UUID("22222222-2222-2222-2222-222222222222")
+_FORGOTTEN_ON = date(2026, 9, 28)
 
 
 def _write_node(
@@ -384,8 +385,8 @@ def test_recall_falls_back_to_episodes_past_a_forgotten_fact(tmp_path: Path) -> 
         )
     memory = _graph_store(tmp_path)
 
-    memory.forget(forgotten_fact)
-    memory.forget(forgotten_episode)
+    memory.forget(forgotten_fact, _FORGOTTEN_ON)
+    memory.forget(forgotten_episode, _FORGOTTEN_ON)
 
     assert [hit.node for hit in memory.recall("deployment")] == [episode]
     assert [hit.node for hit in memory.recall("deployment", after=date(2026, 8, 1))] == [episode]
@@ -496,7 +497,7 @@ def test_forget_tombstones_a_fact_and_excludes_it_from_recall_and_open(
     node_path = tmp_path / "memory" / "graph" / f"{node}.md"
     memory = _graph_store(tmp_path)
 
-    memory.forget(node)
+    memory.forget(node, _FORGOTTEN_ON)
 
     assert node_path.is_file()
     assert "tombstone: true\n" in node_path.read_text(encoding="utf-8")
@@ -621,7 +622,7 @@ def test_a_broken_node_is_skipped_with_a_warning_and_still_refuses_to_open(
     with pytest.raises(MemoryNodeError, match="invalid frontmatter"):
         memory.open(broken)
     with pytest.raises(MemoryNodeError, match="invalid frontmatter"):
-        memory.forget(broken)
+        memory.forget(broken, _FORGOTTEN_ON)
 
 
 def test_remember_and_forget_leave_no_staging_file(tmp_path: Path) -> None:
@@ -640,7 +641,7 @@ def test_remember_and_forget_leave_no_staging_file(tmp_path: Path) -> None:
         )
     )
     after_remember = sorted(path.name for path in graph_path.iterdir())
-    memory.forget(node)
+    memory.forget(node, _FORGOTTEN_ON)
 
     assert after_remember == [f"{node}.md"]
     assert sorted(path.name for path in graph_path.iterdir()) == [f"{node}.md"]

@@ -513,7 +513,6 @@ class LangGraphRunner:
                     self._event_log,
                     turn.thread_id,
                     turn.turn_id,
-                    emit,
                     today=self._today,
                 )
                 if routine.is_dreaming_stage
