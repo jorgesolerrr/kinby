@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import date
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -93,6 +93,8 @@ class _ConsolidationFrame:
 
 
 _FRAME = TypeAdapter(_ConsolidationFrame)
+#: Writes a consolidate call started, held until they finish, since the loop holds tasks weakly.
+_finishing: set[asyncio.Task[tuple[NodeId, ...]]] = set()
 
 
 class ConsolidationRefused(ValueError):
@@ -129,11 +131,20 @@ def consolidate_tool(
     log: EventLog,
     thread_id: UUID,
     turn_id: UUID,
-    report: Callable[[MemoryConsolidated], Awaitable[object]],
     *,
     today: Callable[[], date],
 ) -> Tool:
     """The model's one write on a consolidation turn, checked against the turn's frame."""
+
+    async def write_and_cover(
+        frame: _ConsolidationFrame, facts: tuple[LearnedFact, ...]
+    ) -> tuple[NodeId, ...]:
+        written = await asyncio.to_thread(_write, graph, frame, facts, thread_id, today())
+        # The log, not the turn's emit, which refuses events once the turn is interrupted.
+        await log.append(
+            thread_id, turn_id, MemoryConsolidated(episodes=frame.batch, facts=written)
+        )
+        return written
 
     @tool(write=True)
     async def consolidate(facts: tuple[LearnedFact, ...]) -> str:
@@ -143,9 +154,12 @@ def consolidate_tool(
         the sources of a fact the frame shows. Call with no facts when the batch teaches nothing.
         A refused call writes nothing and covers nothing.
         """
-        frame = _FRAME.validate_json(await asyncio.to_thread(_turn_frame, log, thread_id, turn_id))
-        written = await asyncio.to_thread(_write, graph, frame, facts, thread_id, today())
-        await report(MemoryConsolidated(episodes=frame.batch, facts=written))
+        frame = await asyncio.to_thread(_turn_frame, log, thread_id, turn_id)
+        writing = asyncio.create_task(write_and_cover(frame, facts))
+        _finishing.add(writing)
+        writing.add_done_callback(_finishing.discard)
+        # An interrupt cancels this call but not the writes, so no fact lands without coverage.
+        written = await asyncio.shield(writing)
         return f"Wrote {len(written)} facts and covered {len(frame.batch)} episodes."
 
     return consolidate
@@ -200,12 +214,13 @@ def _about(subject: str, nodes: list[Episode] | list[Fact]) -> tuple[NodeId, ...
     )
 
 
-def _turn_frame(log: EventLog, thread_id: UUID, turn_id: UUID) -> str:
+def _turn_frame(log: EventLog, thread_id: UUID, turn_id: UUID) -> _ConsolidationFrame:
     """The frame this turn's code step returned, which the event log keeps across a restart."""
-    return next(
-        event.payload.output
-        for event in log.stored(thread_id)
-        if event.turn_id == turn_id and isinstance(event.payload, ToolResult)
+    payloads = [event.payload for event in log.stored(thread_id) if event.turn_id == turn_id]
+    if any(isinstance(payload, MemoryConsolidated) for payload in payloads):
+        raise ConsolidationRefused("Nothing was written. This turn already covered its batch.")
+    return _FRAME.validate_json(
+        next(payload.output for payload in payloads if isinstance(payload, ToolResult))
     )
 
 
