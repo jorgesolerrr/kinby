@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from datetime import date
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -30,6 +30,8 @@ _RULES = (
     "An area is a subject, and the latest fact about a subject wins. To update an area fact, "
     "write a new fact on its subject that cites its sources and the new episodes.",
     "Write nothing the episodes do not support. A batch that teaches nothing needs no fact.",
+    "The user forgot the forgotten facts: do not write them back. A fact citing only a "
+    "forgotten fact's sources is refused; an episode of this batch can teach its subject again.",
 )
 _CONTRACT = (
     "Call consolidate once with every fact. The call covers every episode of this batch, "
@@ -67,10 +69,20 @@ class _FramedFact:
 
 
 @dataclass(frozen=True)
+class _ForgottenFact:
+    node: NodeId
+    date: date
+    description: str
+    subjects: tuple[str, ...]
+    sources: tuple[NodeId, ...]
+
+
+@dataclass(frozen=True)
 class _Subject:
     subject: str
     episodes: tuple[NodeId, ...]
     facts: tuple[NodeId, ...]
+    forgotten: tuple[NodeId, ...]
 
 
 @dataclass(frozen=True)
@@ -82,6 +94,7 @@ class _ConsolidationFrame:
     subjects: tuple[_Subject, ...]
     episodes: tuple[_FramedEpisode, ...]
     facts: tuple[_FramedFact, ...]
+    forgotten: tuple[_ForgottenFact, ...]
 
     @property
     def batch(self) -> tuple[NodeId, ...]:
@@ -89,7 +102,9 @@ class _ConsolidationFrame:
 
     @property
     def citable(self) -> frozenset[NodeId]:
-        return frozenset(self.batch) | {source for fact in self.facts for source in fact.sources}
+        return frozenset(self.batch) | {
+            source for fact in (*self.facts, *self.forgotten) for source in fact.sources
+        }
 
 
 _FRAME = TypeAdapter(_ConsolidationFrame)
@@ -118,7 +133,9 @@ def consolidation_step(graph: GraphStore, log: EventLog) -> Tool:
         )[:BATCH_LIMIT]
         if not batch:
             return None
-        frame = _frame(batch, [node for node in nodes if isinstance(node, Fact)])
+        frame = _frame(
+            batch, [node for node in nodes if isinstance(node, Fact)], graph.forgotten_facts()
+        )
         return _FRAME.dump_json(frame, indent=2).decode()
 
     return consolidate
@@ -140,8 +157,9 @@ def consolidate_tool(
         """Write this consolidation's facts and cover every episode of its batch.
 
         Each fact cites as sources the episodes it was learned from: episodes of the batch, or
-        the sources of a fact the frame shows. Call with no facts when the batch teaches nothing.
-        A refused call writes nothing and covers nothing.
+        the sources of a fact the frame shows. A fact citing only a forgotten fact's sources is
+        refused. Call with no facts when the batch teaches nothing. A refused call writes nothing
+        and covers nothing.
         """
         frame = _FRAME.validate_json(await asyncio.to_thread(_turn_frame, log, thread_id, turn_id))
         written = await asyncio.to_thread(_write, graph, frame, facts, thread_id, today())
@@ -151,14 +169,13 @@ def consolidate_tool(
     return consolidate
 
 
-def _frame(batch: list[Episode], facts: list[Fact]) -> _ConsolidationFrame:
+def _frame(batch: list[Episode], facts: list[Fact], forgotten: list[Fact]) -> _ConsolidationFrame:
     subjects: dict[str, str] = {}
     for episode in batch:
         for subject in episode.subjects:
             subjects.setdefault(subject.casefold(), subject)
-    framed_facts = [
-        fact for fact in facts if any(subject.casefold() in subjects for subject in fact.subjects)
-    ]
+    framed_facts = _on(subjects, facts)
+    framed_forgotten = _on(subjects, forgotten)
     return _ConsolidationFrame(
         rules=_RULES,
         contract=_CONTRACT,
@@ -167,6 +184,7 @@ def _frame(batch: list[Episode], facts: list[Fact]) -> _ConsolidationFrame:
                 subject=subject,
                 episodes=_about(key, batch),
                 facts=_about(key, framed_facts),
+                forgotten=_about(key, framed_forgotten),
             )
             for key, subject in subjects.items()
         ),
@@ -191,7 +209,24 @@ def _frame(batch: list[Episode], facts: list[Fact]) -> _ConsolidationFrame:
             )
             for fact in framed_facts
         ),
+        forgotten=tuple(
+            _ForgottenFact(
+                node=fact.node,
+                date=fact.date,
+                description=fact.description,
+                subjects=fact.subjects,
+                sources=fact.sources,
+            )
+            for fact in framed_forgotten
+        ),
     )
+
+
+def _on(subjects: Collection[str], facts: list[Fact]) -> list[Fact]:
+    """The facts on any of *subjects*, which are casefolded."""
+    return [
+        fact for fact in facts if any(subject.casefold() in subjects for subject in fact.subjects)
+    ]
 
 
 def _about(subject: str, nodes: list[Episode] | list[Fact]) -> tuple[NodeId, ...]:
@@ -217,10 +252,16 @@ def _write(
     learned_on: date,
 ) -> tuple[NodeId, ...]:
     episodes = {node.node for node in graph.nodes() if isinstance(node, Episode)}
+    forgotten = graph.forgotten_facts()
     refusals: list[str] = []
     for fact in facts:
         if not fact.sources:
             refusals.append(f'Fact "{fact.description}" cites no source.')
+        elif any(
+            set(fact.sources) <= set(gone.sources)
+            for gone in _on({subject.casefold() for subject in fact.subjects}, forgotten)
+        ):
+            refusals.append(f'Fact "{fact.description}" cites only a forgotten fact\'s sources.')
         for source in fact.sources:
             if source not in frame.citable:
                 refusals.append(f'Source "{source}" is outside the batch.')

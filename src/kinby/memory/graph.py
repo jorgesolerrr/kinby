@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
@@ -119,17 +120,10 @@ class GraphStore:
 
         Each term of *query* must be a case-insensitive substring of the description or a subject.
         """
-        if not self._path.is_dir():
-            return []
         terms = query.casefold().split()
         matches: list[MemoryNode] = []
-        for path in self._path.glob("*.md"):
-            try:
-                memory = _read_node(path)
-            except MemoryNodeError:
-                _logger.warning('Skipped graph node "%s": it has invalid frontmatter.', path)
-                continue
-            if memory is None:
+        for memory, tombstone in self._read_all():
+            if tombstone:
                 continue
             if after is not None and memory.date < after:
                 continue
@@ -139,6 +133,24 @@ class GraphStore:
             if all(term in searchable for term in terms):
                 matches.append(memory)
         return sorted(matches, key=lambda memory: (memory.date, memory.node), reverse=True)
+
+    def forgotten_facts(self) -> list[Fact]:
+        """Every fact a forget left a tombstone on, which dreaming must not write back."""
+        return [
+            memory
+            for memory, tombstone in self._read_all()
+            if tombstone and isinstance(memory, Fact)
+        ]
+
+    def _read_all(self) -> Iterator[tuple[MemoryNode, bool]]:
+        """Each readable node with whether it is tombstoned, skipping invalid files."""
+        if not self._path.is_dir():
+            return
+        for path in self._path.glob("*.md"):
+            try:
+                yield _parse_node(path)
+            except MemoryNodeError:
+                _logger.warning('Skipped graph node "%s": it has invalid frontmatter.', path)
 
     def open(self, node: NodeId) -> MemoryNode:
         path = self._node_path(node)
@@ -217,16 +229,19 @@ def _origin(memory: MemoryNode) -> str:
 
 
 def _read_node(path: Path) -> MemoryNode | None:
+    memory, tombstone = _parse_node(path)
+    return None if tombstone else memory
+
+
+def _parse_node(path: Path) -> tuple[MemoryNode, bool]:
     try:
         values, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         frontmatter = _FRONTMATTER.validate_python(values)
     except (UnicodeDecodeError, FrontmatterError, ValidationError) as exc:
         raise MemoryNodeError(f'Graph node "{path}" has invalid frontmatter.') from exc
-    if frontmatter.tombstone:
-        return None
     node = NodeId(path.stem)
     if isinstance(frontmatter, _FactFrontmatter):
-        return Fact(
+        fact = Fact(
             node=node,
             date=frontmatter.date,
             description=frontmatter.description,
@@ -236,12 +251,13 @@ def _read_node(path: Path) -> MemoryNode | None:
             added_by_user=frontmatter.source == "user",
             sources=frontmatter.sources,
         )
+        return fact, frontmatter.tombstone
     recaps = (
         RecappedTurn(frontmatter.thread, frontmatter.turn)
         if isinstance(frontmatter, _TurnEpisodeFrontmatter)
         else RecappedRun(frontmatter.run, frontmatter.generation)
     )
-    return Episode(
+    episode = Episode(
         node=node,
         date=frontmatter.date,
         description=frontmatter.description,
@@ -250,3 +266,4 @@ def _read_node(path: Path) -> MemoryNode | None:
         recaps=recaps,
         tools=frontmatter.tools,
     )
+    return episode, frontmatter.tombstone
