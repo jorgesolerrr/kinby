@@ -50,7 +50,7 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
-from kinby.core.turn_metrics import estimate_memory_tokens, turn_metrics
+from kinby.core.turn_metrics import turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.instance import load_instance
 from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR, PROFILE_NAME
@@ -64,6 +64,7 @@ else:
 
 _CASES_DIR = Path(__file__).parent / "cases"
 _JUDGE_MODEL = "openai/gpt-5-mini"
+_CHARACTERS_PER_PROFILE_TOKEN = 4
 _FACT_GRADER_TEMPLATE = """
 You are comparing a submitted answer to a reference answer for a personal memory question.
 
@@ -419,7 +420,7 @@ def _memory_token_estimate(
         raise MemoryEvalError("The memory eval recorded no closed turn metrics.")
     profile_path = instance_path / MEMORY_DIR / PROFILE_NAME
     profile = profile_path.read_text(encoding="utf-8").strip("\r\n")
-    return record.memory_tokens + estimate_memory_tokens(len(profile))
+    return record.memory_tokens + len(profile) / _CHARACTERS_PER_PROFILE_TOKEN
 
 
 def _sample(case_path: Path, arm: MemoryArm) -> Sample:

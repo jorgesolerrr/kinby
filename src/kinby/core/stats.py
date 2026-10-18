@@ -76,6 +76,10 @@ class _BucketTotals:
     tool_calls: Counter[str] = field(default_factory=Counter)
     memory_calls: Counter[str] = field(default_factory=Counter)
     turns_without_memory: int = 0
+    memory_tokens: float = 0
+    memory_carried_tokens: float = 0
+    memory_carried_cost: float | None = None
+    memory_estimated_turns: int = 0
     approvals_requested: int = 0
     denies: Counter[str] = field(default_factory=Counter)
     tool_duration: Counter[str] = field(default_factory=Counter)
@@ -117,6 +121,10 @@ class _BucketTotals:
         self.tool_calls.update(record.tool_calls)
         self.memory_calls.update(record.memory_calls.model_dump())
         self.turns_without_memory += not record.memory_consulted
+        self.memory_tokens += record.memory_tokens
+        self.memory_carried_tokens += record.memory_carried_tokens
+        self.memory_carried_cost = _added_cost(self.memory_carried_cost, record.memory_carried_cost)
+        self.memory_estimated_turns += not record.memory_measured
         self.approvals_requested += record.approvals_requested
         self.denies.update(record.denies.model_dump())
         self.tool_duration.update(record.tool_duration.model_dump())
@@ -277,6 +285,10 @@ def _stats_summary(totals: _BucketTotals) -> StatsSummary:
         tool_calls=dict(totals.tool_calls),
         memory_calls=MemoryCallCounts.model_validate(totals.memory_calls),
         turns_without_memory=totals.turns_without_memory,
+        memory_tokens=totals.memory_tokens,
+        memory_carried_tokens=totals.memory_carried_tokens,
+        memory_carried_cost=totals.memory_carried_cost,
+        memory_estimated_turns=totals.memory_estimated_turns,
         approvals_requested=totals.approvals_requested,
         denies=DenyCounts.model_validate(totals.denies),
         tool_duration=ToolTime.model_validate(totals.tool_duration),

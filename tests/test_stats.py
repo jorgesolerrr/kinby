@@ -210,7 +210,7 @@ def test_stats_get_reports_one_turn_record_from_the_event_log(tmp_path: Path) ->
         assert record.approvals_requested == 1
         assert record.denies == DenyCounts(policy=1, user=1)
         assert record.tool_duration == ToolTime(read_ms=4, write_ms=10)
-        assert record.memory_tokens == 3
+        assert record.memory_measured is False
         assert record.rating is None
         assert result.buckets[0].cost == 0.00008375
 
@@ -508,6 +508,87 @@ def test_a_turn_metrics_record_without_an_outcome_reads_as_work() -> None:
     del stored["outcome"]
 
     assert TurnMetrics.model_validate(stored).outcome == "work"
+
+
+def _model_call(input_tokens: int, output_tokens: int) -> ModelCompleted:
+    return ModelCompleted(
+        model="anthropic:claude-haiku-4-5",
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        duration_ms=1,
+    )
+
+
+def _tool_result(name: str, output: str) -> ToolResult:
+    return ToolResult(call_id=f"{name}-{len(output)}", name=name, output=output, error=False)
+
+
+def test_stats_get_measures_memory_tokens_from_model_call_deltas(tmp_path: Path) -> None:
+    started_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = [
+        *_turn_events(
+            uuid4(),
+            uuid4(),
+            started_at,
+            TurnStarted(message="recall", model="anthropic:claude-haiku-4-5"),
+            _model_call(1000, 50),
+            _tool_result("memory_search", "found"),
+            _model_call(1250, 40),
+            _tool_result("memory_open", "a" * 30),
+            _tool_result("bash", "b" * 10),
+            _model_call(1690, 20),
+            _tool_result("bash", "done"),
+            _model_call(1800, 30),
+            TurnCompleted(input_tokens=5740, output_tokens=140),
+        ),
+        *_turn_events(
+            uuid4(),
+            uuid4(),
+            started_at,
+            TurnStarted(message="before model calls", model="anthropic:claude-haiku-4-5"),
+            _tool_result("memory_search", "found"),
+            TurnCompleted(input_tokens=10, output_tokens=2),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get",
+            {},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    measured, unmeasured = result.records
+    assert measured.memory_tokens == 200 + 300
+    assert measured.memory_carried_tokens == 200 * 2 + 300 * 1
+    assert measured.memory_carried_cost == pytest.approx(700 * 0.1 / 1_000_000)
+    assert measured.memory_measured is True
+    assert unmeasured.memory_tokens == 0
+    assert unmeasured.memory_measured is False
+    assert result.total.memory_tokens == 500
+    assert result.total.memory_carried_tokens == 700
+    assert result.total.memory_carried_cost == pytest.approx(700 * 0.1 / 1_000_000)
+    assert result.total.memory_estimated_turns == 1
+
+
+def test_a_turn_metrics_record_from_a_core_that_estimated_memory_reads_as_estimated() -> None:
+    record = turn_metrics(
+        _turn_events(
+            uuid4(),
+            uuid4(),
+            datetime(2026, 9, 1, 10, tzinfo=UTC),
+            TurnStarted(message="do", model="openai:gpt-5"),
+            _model_call(3, 2),
+            TurnCompleted(input_tokens=3, output_tokens=2),
+        )
+    ).records[0]
+    stored = record.model_dump(mode="json")
+    del stored["memory_measured"]
+
+    assert record.memory_measured is True
+    assert TurnMetrics.model_validate(stored).memory_measured is False
 
 
 def test_stats_warning_eligibility_is_scoped_to_each_turn(
@@ -1664,7 +1745,7 @@ def test_stats_get_counts_write_memory_calls_without_marking_consulted(
         "forget": 1,
     }
     assert result.records[0].memory_consulted is False
-    assert result.records[0].memory_tokens == 3.5
+    assert result.records[0].memory_measured is False
     assert result.buckets[0].turns_without_memory == 1
 
 
