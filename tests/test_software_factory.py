@@ -1204,6 +1204,7 @@ def test_prepare_checks_out_a_fresh_agent_branch_from_the_default_branch(tmp_pat
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode!"), [comment("helper", "COLLABORATOR")])
     github.answer("repo", "view", output=REPOSITORY)
+    github.answer(ISSUE.format(number=7) + "/dependencies/blocked_by", output=blockers())
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
@@ -1260,6 +1261,7 @@ def test_prepare_trusts_a_comment_linears_github_app_wrote(tmp_path, monkeypatch
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"), [comment("linear-code[bot]", "NONE", "Bot")])
     github.answer("repo", "view", output=REPOSITORY)
+    github.answer(ISSUE.format(number=7) + "/dependencies/blocked_by", output=blockers())
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
@@ -1293,33 +1295,124 @@ def test_prepare_fails_on_a_comment_by_another_bot_or_a_user_named_like_linears_
     asyncio.run(scenario())
 
 
-def test_prepare_stacks_a_sub_issue_on_its_newest_siblings_agent_branch(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    git(workspace, "switch", "-c", "agent/7-light-theme")
-    commit(workspace, "light.py", "LIGHT = True\n")
-    git(workspace, "push", "origin", "agent/7-light-theme")
+def pushed(workspace: Path, number: int, start: str = "main") -> str:
+    """Push issue *number*'s agent branch to origin, one commit on *start*, and name it."""
+    branch = f"agent/{number}-step"
+    git(workspace, "switch", "-c", branch, f"origin/{start}")
+    commit(workspace, f"step{number}.py", f"STEP = {number}\n")
+    git(workspace, "push", "origin", branch)
     git(workspace, "switch", "main")
-    github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_issue(github, issue(8, "Dark theme", parent=5))
+    return branch
+
+
+def answer_sub_issue(
+    github: FakeGitHub, number: int, blocking: Sequence[int], *pulled: int
+) -> None:
+    """Answer for sub-issue *number* of #5, blocked by the issues *blocking*, among siblings whose
+    agent pull requests close *pulled*, oldest first."""
+    answer_issue(github, issue(number, "Dark theme", parent=5))
     answer_issue(github, issue(5, "Themes"))
     github.answer(
-        "repos/{owner}/{repo}/issues",
-        output=[[issue(7, "Light theme", parent=5), issue(8, "Dark theme", parent=5)]],
+        ISSUE.format(number=number) + "/dependencies/blocked_by", output=blockers(*blocking)
     )
+    siblings = sorted({*pulled, *blocking, number})
     github.answer(
-        "repos/{owner}/{repo}/pulls",
-        output=[[pull_request(41, "agent/7-light-theme", closes=7), pull_request(40, "fix", 3)]],
+        "repos/{owner}/{repo}/issues",
+        output=[[issue(sibling, f"Step {sibling}", parent=5) for sibling in siblings]],
     )
+    pulls = [pull_request(40 + closes, f"agent/{closes}-step", closes) for closes in pulled]
+    github.answer("repos/{owner}/{repo}/pulls", output=[[*pulls[::-1], pull_request(30, "fix", 3)]])
     github.answer("repo", "view", output=REPOSITORY)
+
+
+def test_prepare_starts_a_sub_issue_with_no_open_blocker_from_the_default_branch(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    pushed(workspace, 7)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_sub_issue(github, 8, (), 7)
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
         result = await prepared(dispatcher, 8)
 
         assert result.ending is StepEnding.CLEAN, result.summary
-        assert result.values == {"branch": "agent/8-dark-theme", "base": "agent/7-light-theme"}
-        assert git(workspace, "log", "-1", "--format=%s") == "Write light.py"
+        assert result.values == {"branch": "agent/8-dark-theme", "base": "main"}
+        assert git(workspace, "rev-parse", "HEAD") == git(workspace, "rev-parse", "origin/main")
+
+    asyncio.run(scenario())
+
+
+def test_prepare_stacks_a_sub_issue_on_the_top_of_its_blockers_linear_stack(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    pushed(workspace, 8, pushed(workspace, 7))
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_sub_issue(github, 9, (7, 8), 7, 8)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await prepared(dispatcher, 9)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.values == {"branch": "agent/9-dark-theme", "base": "agent/8-step"}
+        assert (
+            git(workspace, "log", "--format=%s")
+            == "Write step8.py\nWrite step7.py\nWrite README.md"
+        )
+
+    asyncio.run(scenario())
+
+
+def forked(workspace: Path) -> None:
+    """The stack #771 → #774 → #775 and #771 → #772 → #773 forked into, as 1 → 4 → 5 and
+    1 → 2 → 3."""
+    first = pushed(workspace, 1)
+    pushed(workspace, 5, pushed(workspace, 4, first))
+    pushed(workspace, 3, pushed(workspace, 2, first))
+
+
+def test_prepare_hands_a_human_blockers_on_a_forked_stack_no_branch_holds(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    forked(workspace)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_sub_issue(github, 6, (3, 4), 1, 4, 5, 2, 3)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await prepared(dispatcher, 6)
+
+        assert result.ending is StepEnding.FAILED
+        assert result.summary == (
+            'Tool "prepare_branch" failed: DivergedBlockers: No agent branch holds every open '
+            "blocker's agent branch, so a human picks the base: agent/3-step, agent/4-step."
+        )
+
+    asyncio.run(scenario())
+
+
+def test_prepare_stacks_on_a_sibling_branch_that_holds_a_forked_stacks_blockers(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    forked(workspace)
+    git(workspace, "switch", "-c", "agent/7-step", "origin/agent/3-step")
+    git(workspace, "merge", "--no-edit", "origin/agent/4-step")
+    git(workspace, "push", "origin", "agent/7-step")
+    git(workspace, "switch", "main")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_sub_issue(github, 6, (3, 4), 1, 4, 5, 2, 3, 7)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await prepared(dispatcher, 6)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.values == {"branch": "agent/6-dark-theme", "base": "agent/7-step"}
 
     asyncio.run(scenario())
 
@@ -1442,6 +1535,61 @@ def test_publish_stacks_a_sub_issues_pull_request_on_its_siblings(
         assert pulls == (
             ["pull_requests[]=43"] if stack else ["pull_requests[]=41", "pull_requests[]=43"]
         )
+
+    asyncio.run(scenario())
+
+
+def test_publish_stacks_on_a_blocker_whose_issue_was_handed_to_a_human(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    implemented(workspace, "agent/8-dark-theme")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(8, "Dark theme", parent=5))
+    github.answer(
+        "repos/{owner}/{repo}/pulls",
+        output=[[pull_request(41, "agent/7-light-theme", closes=7, stack=3)]],
+    )
+    github.answer("repo", "view", output=REPOSITORY)
+    github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        branch = {"branch": "agent/8-dark-theme", "base": "agent/7-light-theme"}
+        result = await opened(dispatcher, 8, branch | BODY)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        [stacked] = [arguments for arguments in github.calls if "POST" in arguments]
+        assert "repos/{owner}/{repo}/stacks/3/add" in stacked
+
+    asyncio.run(scenario())
+
+
+def test_publish_stacks_no_sub_issues_pull_request_based_on_the_default_branch(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    implemented(workspace, "agent/8-dark-theme")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(8, "Dark theme", parent=5))
+    github.answer(
+        "repos/{owner}/{repo}/issues",
+        output=[[issue(7, "Light theme", parent=5), issue(8, "Dark theme", parent=5)]],
+    )
+    github.answer(
+        "repos/{owner}/{repo}/pulls",
+        output=[[pull_request(41, "agent/7-light-theme", closes=7, stack=3)]],
+    )
+    github.answer("repo", "view", output=REPOSITORY)
+    github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        branch = {"branch": "agent/8-dark-theme", "base": "main"}
+        result = await opened(dispatcher, 8, branch | BODY)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert not any("POST" in arguments for arguments in github.calls)
 
     asyncio.run(scenario())
 

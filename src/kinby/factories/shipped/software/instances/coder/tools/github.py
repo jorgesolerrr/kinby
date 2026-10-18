@@ -96,6 +96,10 @@ class UntrustedTicket(RuntimeError):
     ticket text."""
 
 
+class DivergedBlockers(RuntimeError):
+    """No agent branch holds every open blocker's agent branch."""
+
+
 class UntrustedFeedback(RuntimeError):
     """Review feedback left to answer has an author babysitting does not trust."""
 
@@ -169,9 +173,9 @@ async def scan_ready_issues(signal: dict[str, object], context: ToolContext) -> 
 def prepare_branch(issue: int, context: ToolContext) -> dict[str, str]:
     """Check out a fresh agent branch for the issue, once a trusted author wrote all its text.
 
-    A sub-issue's branch starts from its newest sibling's agent branch, so its pull request
-    stacks on that one. Any other starts from the default branch. Whatever an earlier run left
-    uncommitted in the workspace goes.
+    The branch starts from one that holds every open blocker's agent branch, so its pull request
+    stacks on the blockers' work. With no blocker open, it starts from the default branch.
+    Whatever an earlier run left uncommitted in the workspace goes.
     """
     workspace = context.workspace
     found = _issue(workspace, issue)
@@ -180,12 +184,11 @@ def prepare_branch(issue: int, context: ToolContext) -> dict[str, str]:
         raise UntrustedTicket(
             f"Ticket text from untrusted authors needs a human: {', '.join(untrusted)}."
         )
-    siblings = _sibling_pull_requests(workspace, found)
-    base = siblings[-1].branch if siblings else _repository(workspace).default_branch
     words = re.findall(r"[a-z0-9]+", found.title.lower())
     branch = f"{AGENT_BRANCH_PREFIX}{issue}-{'-'.join(words) or 'issue'}"
     _clean(workspace)
     _git(workspace, "fetch", "--prune", "origin")
+    base = _base(workspace, found)
     _git(workspace, "switch", "--discard-changes", "-C", branch, f"origin/{base}")
     return {"branch": branch, "base": base}
 
@@ -336,14 +339,18 @@ def _open_pull_request(
     """Push the branch and open its pull request, which closes the issue, with the title and body
     the coding client wrote. With no title written, it takes the issue's.
 
-    A sub-issue's pull request joins the stack of its siblings' pull requests. The repository's
-    maintainer reviews it. An issue an earlier failure handed to a human loses its
-    ready-for-human label.
+    A pull request based on another agent pull request's branch joins that pull request's stack,
+    whatever the label on the issue it closes. The repository's maintainer reviews it. An issue an
+    earlier failure handed to a human loses its ready-for-human label.
     """
     if not body:
         raise MissingPullRequestBody("The coding session wrote no pull request body.")
     found = _issue(workspace, issue)
-    siblings = _sibling_pull_requests(workspace, found)
+    under = (
+        next((pull for pull in _agent_pull_requests(workspace) if pull.branch == base), None)
+        if base.startswith(AGENT_BRANCH_PREFIX)
+        else None
+    )
     maintainer = _repository(workspace).maintainer
     _git(workspace, "push", "--force-with-lease", "-u", "origin", branch)
     url = _gh(
@@ -361,8 +368,8 @@ def _open_pull_request(
         *(() if maintainer is None else ("--reviewer", maintainer)),
     )
     number = int(url.strip().rsplit("/", 1)[1])
-    if siblings:
-        _stack(workspace, siblings, number)
+    if under is not None:
+        _stack(workspace, under, number)
     if READY_FOR_HUMAN_LABEL in found.labels:
         _gh(workspace, "issue", "edit", str(issue), "--remove-label", READY_FOR_HUMAN_LABEL)
     return {"pr": number}
@@ -524,19 +531,23 @@ def _oldest_eligible_issue(workspace: Path, labeled: int | None) -> int | None:
     for issue in issues:
         if issue.number in covered:
             continue
-        blocking = _pages(
-            workspace, f"repos/{{owner}}/{{repo}}/issues/{issue.number}/dependencies/blocked_by"
-        )
         stack = issue.parent or issue.number
         if not all(
             blocker["number"] in covered and (_parent(blocker) or blocker["number"]) == stack
-            for blocker in blocking
-            if blocker["state"] == "open"
+            for blocker in _open_blockers(workspace, issue.number)
         ):
             continue
         if issue.number in confirmed or _ready_issue(workspace, issue.number) is not None:
             return issue.number
     return None
+
+
+def _open_blockers(workspace: Path, number: int) -> list[dict]:
+    """The open issues that block the issue."""
+    blocking = _pages(
+        workspace, f"repos/{{owner}}/{{repo}}/issues/{number}/dependencies/blocked_by"
+    )
+    return [blocker for blocker in blocking if blocker["state"] == "open"]
 
 
 def _ready_issue(workspace: Path, number: int) -> Issue | None:
@@ -642,17 +653,54 @@ def _sibling_pull_requests(workspace: Path, issue: Issue) -> list[AgentPullReque
     return newest_first[::-1]
 
 
-def _stack(workspace: Path, siblings: list[AgentPullRequest], number: int) -> None:
-    """Add the pull request to the stack of its siblings', or stack it on top of them all.
+def _base(workspace: Path, issue: Issue) -> str:
+    """The branch the issue's agent branch starts from, after a fetch: the one agent branch of
+    its open blockers, or with several, theirs or a sibling's that holds them all. With no blocker
+    open, the default branch.
 
-    The pull request is open either way, its base the newest sibling's branch, so a stack GitHub
-    refuses fails nothing.
+    Blockers whose branches no agent branch holds together need a human to pick the base.
     """
-    newest = siblings[-1]
-    if newest.stack is None:
-        endpoint, pulls = "repos/{owner}/{repo}/stacks", [pull.number for pull in siblings]
+    blocking = {blocker["number"] for blocker in _open_blockers(workspace, issue.number)}
+    pulls = _agent_pull_requests(workspace) if blocking else []
+    branches = [pull.branch for pull in pulls if pull.closes in blocking]
+    if not branches:
+        return _repository(workspace).default_branch
+    if len(branches) == 1:
+        return branches[0]
+    holding = set.intersection(*(_holding(workspace, branch) for branch in branches))
+    siblings = [pull.branch for pull in _sibling_pull_requests(workspace, issue)]
+    base = next((branch for branch in [*branches, *siblings] if branch in holding), None)
+    if base is None:
+        raise DivergedBlockers(
+            "No agent branch holds every open blocker's agent branch, so a human picks the base: "
+            f"{', '.join(sorted(branches))}."
+        )
+    return base
+
+
+def _holding(workspace: Path, branch: str) -> set[str]:
+    """The branches on origin that hold the branch."""
+    held = _git(
+        workspace,
+        "branch",
+        "--remotes",
+        "--format=%(refname:lstrip=3)",
+        "--contains",
+        f"origin/{branch}",
+    )
+    return set(held.split())
+
+
+def _stack(workspace: Path, under: AgentPullRequest, number: int) -> None:
+    """Add the pull request to the stack of the one *under* it, or stack the two.
+
+    The pull request is open either way, its base the branch of the one under it, so a stack
+    GitHub refuses fails nothing.
+    """
+    if under.stack is None:
+        endpoint, pulls = "repos/{owner}/{repo}/stacks", [under.number]
     else:
-        endpoint, pulls = f"repos/{{owner}}/{{repo}}/stacks/{newest.stack}/add", []
+        endpoint, pulls = f"repos/{{owner}}/{{repo}}/stacks/{under.stack}/add", []
     arguments = ["api", "--method", "POST", "-H", f"X-GitHub-Api-Version: {GITHUB_API_VERSION}"]
     arguments.append(endpoint)
     for pull in (*pulls, number):
