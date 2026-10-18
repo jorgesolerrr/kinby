@@ -921,6 +921,7 @@
           "discriminator": {
             "mapping": {
               "approval.requested": "#/$defs/ApprovalRequested",
+              "memory.consolidated": "#/$defs/MemoryConsolidated",
               "memory.recapped": "#/$defs/MemoryRecapped",
               "message.delta": "#/$defs/MessageDelta",
               "mode.pinned": "#/$defs/ModePinned",
@@ -991,6 +992,9 @@
             },
             {
               "$ref": "#/$defs/MemoryRecapped"
+            },
+            {
+              "$ref": "#/$defs/MemoryConsolidated"
             },
             {
               "$ref": "#/$defs/RoutineFailureHandled"
@@ -3495,6 +3499,36 @@
         }
       },
       "title": "MemoryCallCounts",
+      "type": "object"
+    },
+    "MemoryConsolidated": {
+      "additionalProperties": false,
+      "description": "A consolidation finished its writes. Every episode it lists is covered.",
+      "properties": {
+        "episodes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "facts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": {
+          "const": "memory.consolidated",
+          "default": "memory.consolidated",
+          "type": "string"
+        }
+      },
+      "required": [
+        "episodes",
+        "facts",
+        "type"
+      ],
+      "title": "MemoryConsolidated",
       "type": "object"
     },
     "MemoryCorrectCommand": {
