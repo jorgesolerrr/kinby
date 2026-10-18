@@ -103,7 +103,11 @@ def home_write(tool: str, arguments: Mapping[str, JsonValue]) -> HomeWrite:
     try:
         match tool:
             case instance_create.name:
-                create = InstanceCreateCommand.model_validate(arguments)
+                # The tool takes the config as setup: LangChain keeps a tool's config for itself.
+                own = dict(arguments)
+                if "setup" in own:
+                    own["config"] = own.pop("setup") or {}
+                create = InstanceCreateCommand.model_validate(own)
                 if create.secrets or create.save_to_hub:
                     raise PermissionDenied(
                         "The home instance names hub secrets, and never sends a secret's value."

@@ -15,7 +15,7 @@ Done when you know the role, or know there is none.
 
 Read `factory.describe` with the factory's `name` for a role: its `instances` hold each role's setup fields and logins, and its `suggested_picks` hold the skills each role proposes. Read `image.describe` for a vanilla instance.
 
-Every instance asks for its model, its API key and its behavior prompt. The model goes in `model`, as `provider:model`, like `anthropic:claude-sonnet-5`. Every other configuration field goes in `config` by its field name, such as `behavior_prompt`. Take each field's default unless the user wants another value.
+Every instance asks for its model, its API key and its behavior prompt. The model goes in `model`, as `provider:model`, like `anthropic:claude-sonnet-5`. Every other configuration field goes in `setup` by its field name, such as `behavior_prompt`. Take each field's default unless the user wants another value.
 
 A vanilla instance needs `manifest_id`, a short name like a folder name. A role names the instance `<factory>-<role>` unless you give one. `persona_name` is the name the user calls it by.
 
