@@ -1,3 +1,4 @@
+import { availableParallelism } from "node:os"
 import path from "node:path"
 
 import tailwindcss from "@tailwindcss/vite"
@@ -19,5 +20,12 @@ export default defineConfig({
       "/auth": hub,
     },
   },
-  test: { environment: "jsdom", setupFiles: ["./src/test-setup.ts"] },
+  test: {
+    environment: "jsdom",
+    setupFiles: ["./src/test-setup.ts"],
+    // The jsdom tests are CPU-bound, and the suite is no faster past four workers. Vitest's
+    // default of one per core less one oversubscribes a laptop's cores: the first test of a
+    // heavy file then outruns the 5 s timeout. Below four cores, vitest's default stands.
+    maxWorkers: Math.min(4, Math.max(availableParallelism() - 1, 1)),
+  },
 })
