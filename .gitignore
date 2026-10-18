@@ -13,6 +13,8 @@ node_modules/
 apps/web/dist/
 *.tsbuildinfo
 .claude/worktrees/
+# The files check:linux copies into its container, as git on the host lists them.
+/.check-files
 
 # design-sync
 .ds-sync/

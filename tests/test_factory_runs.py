@@ -63,6 +63,7 @@ from kinby.contracts import (
 )
 from kinby.hub import ControlConnectionLost, ControlUndelivered, ControlUnreachable, Hub
 from kinby.hub.registry import HubRegistry
+from kinby.hub.runs import FactoryRuns, _QueuedReport
 from kinby.plugins.intake import hand_to_factory, intake_tools
 from tests.test_hub import (
     FakeControl,
@@ -599,6 +600,21 @@ async def reported(hub: Hub) -> None:
             await asyncio.sleep(0.01)
 
 
+def held_report_retries(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
+    """Hold every failed report's retry, in place of its backoff, until the event is set.
+
+    A test then decides when a retry lands, however slow the machine running it.
+    """
+    release = asyncio.Event()
+
+    async def report_later(runs: FactoryRuns, report: _QueuedReport) -> None:
+        await release.wait()
+        runs._put_report(report)
+
+    monkeypatch.setattr(FactoryRuns, "_report_later", report_later)
+    return release
+
+
 def test_a_failed_needs_human_call_is_tried_again_until_it_is_delivered(tmp_path, monkeypatch):
     monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 0.01)
     control = FakeControl()
@@ -622,7 +638,7 @@ def test_a_failed_needs_human_call_is_tried_again_until_it_is_delivered(tmp_path
 
 
 def test_a_report_for_a_stop_the_user_already_retried_is_not_sent_again(tmp_path, monkeypatch):
-    monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 0.2)
+    retries = held_report_retries(monkeypatch)
     control = FakeControl()
     control.step_results = [
         StepResult(ending=StepEnding.FAILED, summary="First failure."),
@@ -640,8 +656,12 @@ def test_a_report_for_a_stop_the_user_already_retried_is_not_sent_again(tmp_path
             while len(control.steps) < 2:
                 await asyncio.sleep(0.01)
         await hub_client(hub).call(FACTORY_RUN_RETRY, FactoryRunRetryCommand(run_id=run.run_id))
+        async with asyncio.timeout(5):
+            while len(control.steps) < 4:
+                await asyncio.sleep(0.01)
+        # Both failed reports retry now, the first one's stop already retried by the user.
+        retries.set()
         await reported(hub)
-        await asyncio.sleep(0.3)
 
         assert reports(control) == ["First failure.", "Second failure.", "Second failure."]
 
@@ -697,7 +717,7 @@ def test_a_needs_human_call_that_fails_a_thousand_times_is_still_tried_again(tmp
 def test_a_report_backing_off_goes_to_the_instance_that_replaced_its_own(tmp_path, monkeypatch):
     """A report in another role than the run's instance goes to whichever instance holds that
     role when the report is tried again."""
-    monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 0.2)
+    retries = held_report_retries(monkeypatch)
     control = FakeControl()
     control.step_results = [
         StepResult(ending=StepEnding.FAILED, summary="Tests failed."),
@@ -724,6 +744,7 @@ def test_a_report_backing_off_goes_to_the_instance_that_replaced_its_own(tmp_pat
         assert isinstance(removal, LifecycleOperationResult)
         assert (await finished_operation(client, removal)).state is OperationState.SUCCEEDED
         replacement = await created_in(hub, runtime, "checker", "checks-checker")
+        retries.set()
         await reported(hub)
 
         endpoint, _ = control.steps[-1]

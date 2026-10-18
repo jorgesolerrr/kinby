@@ -581,9 +581,9 @@ def _login_versus_rotate(directory: Path) -> None:
         assert access.session_open(session) is False
 
 
-def test_rotation_closes_a_login_that_raced_it(tmp_path: Path) -> None:
-    for index in range(40):
-        _login_versus_rotate(tmp_path / "hub" / str(index))
+@pytest.mark.parametrize("attempt", range(40))
+def test_rotation_closes_a_login_that_raced_it(tmp_path: Path, attempt: int) -> None:
+    _login_versus_rotate(tmp_path / "hub" / str(attempt))
 
 
 def test_concurrent_first_starts_keep_one_access_token(tmp_path: Path) -> None:

@@ -8,6 +8,7 @@
 !src/**
 !docker/
 !docker/entrypoint.sh
+!docker/check.sh
 !package.json
 !bun.lock
 !apps/

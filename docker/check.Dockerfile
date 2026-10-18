@@ -1,5 +1,6 @@
 # Runs `bun run check` on Linux for a Windows host. `bun run check:linux` builds this image and
-# mounts the checkout at /kinby. The venv and node_modules stay inside the container.
+# mounts the checkout read-only at /source. check.sh copies it to /kinby on the container's disk,
+# where the venv and node_modules already are.
 FROM oven/bun:1.4.2 AS bun
 
 FROM python:3.14-slim
@@ -23,4 +24,5 @@ COPY apps/web/package.json apps/web/
 COPY packages/contract/package.json packages/contract/
 RUN bun install --frozen-lockfile
 
-CMD ["bun", "run", "check"]
+COPY docker/check.sh /usr/local/bin/kinby-check
+CMD ["sh", "/usr/local/bin/kinby-check"]

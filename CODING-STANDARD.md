@@ -72,7 +72,8 @@ Signature and type changes are judged against `docs/types-before-after.md`: the 
 
 ## Tests
 
-- pytest, in `tests/`, run with `uv run pytest`. Every behavior change lands with a test that fails without it.
+- pytest, in `tests/`, run with `uv run pytest -n auto`. Every behavior change lands with a test that fails without it.
+- Tests run in parallel on a busy machine. A test shares no state with another, and waits on an event the code under test sets, never on a sleep it hopes is long enough.
 - Test through public entry points, the CLI or the package API, not private internals. Tests that survive a refactor are the point.
 
 ## Type checking
