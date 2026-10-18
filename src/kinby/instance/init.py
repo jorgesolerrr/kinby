@@ -52,6 +52,13 @@ DEFAULT_CONSOLIDATION_LENS = (
     "feature of a repository or a recurring errand. Prefer a few facts a later session "
     "would search for over many small ones."
 )
+#: The body of a new instance's reflection routine: what that dreaming stage looks for.
+DEFAULT_REFLECTION_LENS = (
+    "Look for how the user works: a workflow they repeat that a skill could hold, work they "
+    "do on a schedule that a routine could do, a pattern a later search should find as a "
+    "fact. Propose a few things the week clearly shows, through remember, skill_write or "
+    "routine_write, rather than many guesses."
+)
 _PROTECTED_TEMPLATE_ROOTS = {STATE_DIR, WORKSPACE_DIR}
 _FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir")
 
@@ -276,6 +283,19 @@ def _write_starter_tree(directory: Path, model: str) -> None:
             "run: consolidate\n"
             "---\n"
             f"{DEFAULT_CONSOLIDATION_LENS}\n"
+        ),
+        encoding="utf-8",
+    )
+    (directory / ROUTINES_DIR / "reflection").mkdir()
+    (directory / ROUTINES_DIR / "reflection" / ROUTINE_FILE).write_text(
+        (
+            "---\n"
+            "description: Reflect on what consolidation learned this week and make proposals.\n"
+            "schedule: 0 4 * * 0\n"
+            "mode: ask\n"
+            "run: reflect\n"
+            "---\n"
+            f"{DEFAULT_REFLECTION_LENS}\n"
         ),
         encoding="utf-8",
     )

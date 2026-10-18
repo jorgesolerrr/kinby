@@ -209,10 +209,14 @@ class FileChange(ContractModel):
 
 
 class RoutineOrigin(ContractModel):
+    """A routine's run. ``dreaming_stage`` says whether the routine was a dreaming stage when
+    its turn started, so a later reader never reloads a routine file that may have changed."""
+
     kind: Literal["routine"] = "routine"
     name: RoutineName
     trigger: RoutineTrigger
     delivery_id: DeliveryId | None = None
+    dreaming_stage: bool = False
 
 
 class FactoryRunOrigin(ContractModel):
