@@ -149,6 +149,19 @@ function RecallSplit({ usage, failure }: { usage?: StatsRunsResult; failure?: un
   if (usage.runs.length === 0) {
     return <p className="text-muted-foreground">No factory run started in this range.</p>
   }
+  // A run whose only recall was in a left-out instance would read as one that recalled none.
+  const leftOut = usage.skipped.length + usage.unreachable.length + usage.outdated.length
+  if (leftOut > 0) {
+    return (
+      <p className="text-muted-foreground">
+        Runs are not split by recall while{" "}
+        {leftOut === 1
+          ? "1 instance is left out: it is"
+          : `${leftOut} instances are left out: each is`}{" "}
+        not running, did not answer, or runs an older core.
+      </p>
+    )
+  }
   const groups: [string, RunUsage[]][] = [
     ["Recalled a fact", usage.runs.filter((run) => run.recalled_fact)],
     ["Recalled none", usage.runs.filter((run) => !run.recalled_fact)],

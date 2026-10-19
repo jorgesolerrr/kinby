@@ -815,6 +815,25 @@ describe("the Quality tab", () => {
     ])
     expect(within(memory).getByText(/need not come from memory/)).toBeTruthy()
   })
+  it("splits no runs by recall while an instance's recalls are left out", async () => {
+    openStats(undefined, {
+      "stats.runs": () =>
+        runsResult({
+          runs: [runUsage(factoryRun(7), { recalled_fact: true }), runUsage(factoryRun(8))],
+          unreachable: ["hub-bob"],
+        }),
+    })
+
+    await openTab("Quality")
+
+    const memory = screen.getByRole("region", { name: "Memory" })
+    expect(
+      await within(memory).findByText(
+        "Runs are not split by recall while 1 instance is left out: it is not running, did not answer, or runs an older core.",
+      ),
+    ).toBeTruthy()
+    expect(within(memory).queryByRole("table")).toBeNull()
+  })
   it("says so on the Memory card when no run started in the range", async () => {
     openStats()
 
