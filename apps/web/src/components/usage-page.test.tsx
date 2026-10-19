@@ -45,7 +45,9 @@ function bucket(start: string, fields: Partial<StatsBucket> = {}): StatsBucket {
   }
 }
 
+/** The hub's summary, with no factory runs in each instance that has buckets unless given. */
 function usage(fields: Partial<StatsSummaryResult> = {}): StatsSummaryResult {
+  const noRuns = { runs: 0, tokens: 0, cost: null }
   return {
     buckets: {},
     api: { input_tokens: 0, output_tokens: 0, cost: null },
@@ -55,6 +57,8 @@ function usage(fields: Partial<StatsSummaryResult> = {}): StatsSummaryResult {
     ],
     plan_use: [],
     limits: [],
+    runs: Object.fromEntries(Object.keys(fields.buckets ?? {}).map((id) => [id, noRuns])),
+    run_total: noRuns,
     skipped: [],
     unreachable: [],
     outdated: [],
@@ -68,8 +72,8 @@ const runs = (claude: number, chatgpt: number): StatsBucket["subscriptions"] => 
 ]
 
 /**
- * Ada ran on two days, research ran nothing, idle is stopped, far did not answer in time, and old
- * runs a core whose answer the hub cannot read.
+ * Ada ran on two days and made two factory runs, research ran nothing, idle is stopped, far did
+ * not answer in time, and old runs a core whose answer the hub cannot read.
  */
 const hubUsage = usage({
   buckets: {
@@ -100,6 +104,11 @@ const hubUsage = usage({
     { usage_source: "claude-subscription", runs: 3 },
     { usage_source: "chatgpt-subscription", runs: 1 },
   ],
+  runs: {
+    "hub-ada": { runs: 2, tokens: 1_376, cost: 0.75 },
+    "hub-research": { runs: 0, tokens: 0, cost: null },
+  },
+  run_total: { runs: 2, tokens: 1_376, cost: 0.75 },
   skipped: ["hub-idle"],
   unreachable: ["hub-far"],
   outdated: ["hub-old"],
@@ -199,14 +208,14 @@ describe("the usage page", () => {
     expect(screen.getByText(/ChatGPT runs: 1 in 5h · 6 in 7d · limited until/)).toBeDefined()
   })
 
-  it("lists each instance's turns, API cost, and plan runs, and why one is not counted", async () => {
+  it("lists each instance's turns, API cost, plan runs, and factory runs, and why one is not counted", async () => {
     openUsage(hubAnswers)
 
     const table = await screen.findByRole("table", { name: "Instances" })
 
     expect(rows(table)).toEqual([
-      ["Ada", "7", "$0.50", "3", "1"],
-      ["research", "0", "not priced", "0", "0"],
+      ["Ada", "7", "$0.50", "3", "1", "2"],
+      ["research", "0", "not priced", "0", "0", "0"],
       ["Idle", "Not counted: not running"],
       ["Far", "Not counted: didn't answer"],
       ["Old", "Not counted: runs an older kinby, update core"],
@@ -222,6 +231,7 @@ describe("the usage page", () => {
     expect(tile("Turns")).toBe("Turns71 failed · 1 interrupted")
     expect(tile("API cost")).toBe("API cost$0.5012,000 in · 3,400 out")
     expect(tile("Plan runs")).toBe("Plan runs4Claude 3 · ChatGPT 1")
+    expect(tile("Factory runs")).toBe("Factory runs21,376 tokens · $0.75")
     expect(within(totals).getByText("2 of 5 instances counted.")).toBeDefined()
     const table = screen.getByRole("table", { name: "Instances" })
     expect(table.compareDocumentPosition(totals)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
@@ -303,7 +313,7 @@ describe("the usage page", () => {
       within(table)
         .getAllByRole("columnheader")
         .map((header) => header.textContent),
-    ).toEqual(["Instance", "Turns", "API cost", "Claude runs", "ChatGPT runs"])
+    ).toEqual(["Instance", "Turns", "API cost", "Claude runs", "ChatGPT runs", "Factory runs"])
     expect(screen.queryByText(/inbox/)).toBeNull()
     expect(screen.queryByRole("tab", { name: "Origin" })).toBeNull()
     expect(screen.queryByRole("tab", { name: "Quality" })).toBeNull()

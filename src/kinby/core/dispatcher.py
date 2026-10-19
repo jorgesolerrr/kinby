@@ -109,7 +109,14 @@ from kinby.core.models import count_tokens
 from kinby.core.pricing import SHIPPED_PRICES
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
-from kinby.core.stats import TurnRun, active_limits, plan_use, stats_buckets, stats_summary
+from kinby.core.stats import (
+    TurnRun,
+    active_limits,
+    plan_use,
+    run_tokens,
+    stats_buckets,
+    stats_summary,
+)
 from kinby.core.steps import run_step
 from kinby.core.threads import ThreadRecord, ThreadStore, thread_list, thread_summary
 from kinby.core.turn_metrics import TurnKey, turn_metrics
@@ -377,11 +384,13 @@ def build_dispatcher(
             for record in metrics.records
             for reported in record.delegated_runs
             if time_range.includes(reported.timestamp)
-        ] + [
-            TurnRun(None, reported)
-            for reported in metrics.runs_outside_turns
-            if time_range.includes(reported.timestamp)
         ]
+        step_runs = [
+            step_run
+            for step_run in metrics.step_runs
+            if time_range.includes(step_run.reported.timestamp)
+        ]
+        runs += [TurnRun(None, step_run.reported) for step_run in step_runs]
         selected_turns = {TurnKey(record.thread_id, record.turn_id) for record in records}
         return StatsGetResult(
             records=records,
@@ -404,6 +413,11 @@ def build_dispatcher(
                 for mismatch in metrics.warnings
                 if TurnKey(mismatch.thread_id, mismatch.turn_id) in selected_turns
             ],
+            runs=run_tokens(
+                records,
+                step_runs,
+                (recap for recap in metrics.run_recaps if time_range.includes(recap.timestamp)),
+            ),
         )
 
     async def rate_turn(command: ThreadTurnRateCommand) -> AcceptedResult:

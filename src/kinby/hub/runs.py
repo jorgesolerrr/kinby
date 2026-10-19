@@ -51,6 +51,7 @@ from kinby.contracts import (
     RepositoryCommandList,
     RunStop,
     StepAttempt,
+    StepAttempts,
     StepEnding,
     StepId,
     StepResult,
@@ -233,6 +234,24 @@ class FactoryRuns:
     async def list(self, command: FactoryRunListCommand) -> FactoryRunListResult:
         return FactoryRunListResult(
             runs=self._registry.runs(command.factory, command.status, command.instance_id)
+        )
+
+    def rework(self, run: FactoryRun) -> Rework:
+        """The run's attempts per step, and its retries and send-backs by the tally rules.
+
+        Its last attempt was not tried again or sent back yet, whatever it ended in. Without the
+        factory's file, no attempt reads as either.
+        """
+        attempts = self._registry.attempts(run.run_id)
+        factory = self._factory(run.factory)
+        tally = (
+            _tally(factory, attempts[:-1]) if factory is not None else _Tally(Counter(), Counter())
+        )
+        per_step = Counter(attempt.step for attempt in attempts)
+        return Rework(
+            [StepAttempts(step=step, attempts=count) for step, count in per_step.items()],
+            tally.failures.total(),
+            tally.sent_back.total(),
         )
 
     async def get(self, command: FactoryRunGetCommand) -> FactoryRunDetail:
@@ -1036,6 +1055,15 @@ def _outcome(step: Step, name: str | None) -> Outcome | None:
     if name is None:
         return "next"
     return step.outcomes.get(name)
+
+
+@dataclass(frozen=True)
+class Rework:
+    """What a run did again: its attempts per step, in the order it first reached each."""
+
+    attempts: list[StepAttempts]
+    retries: int
+    send_backs: int
 
 
 @dataclass(frozen=True)

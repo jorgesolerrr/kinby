@@ -1737,11 +1737,11 @@ class HubRegistry:
 
     def runs(
         self,
-        factory: FactoryName,
+        factory: FactoryName | None,
         status: FactoryRunStatus | None,
         instance_id: UUID | None = None,
     ) -> list[FactoryRun]:
-        """The factory's runs, oldest first, in one status or in any.
+        """The factory's runs, or every factory's, oldest first, in one status or in any.
 
         With *instance_id*, only the runs that instance handed in.
         """
@@ -1751,11 +1751,11 @@ class HubRegistry:
             rows = connection.execute(
                 f"""
                 SELECT {_RUN_COLUMNS} FROM factory_runs
-                WHERE factory = ? AND (? IS NULL OR status = ?)
+                WHERE (? IS NULL OR factory = ?) AND (? IS NULL OR status = ?)
                     AND (? IS NULL OR instance_id = ?)
                 ORDER BY rowid
                 """,
-                (factory, wanted, wanted, owner, owner),
+                (factory, factory, wanted, wanted, owner, owner),
             ).fetchall()
         return [_factory_run(row) for row in rows]
 

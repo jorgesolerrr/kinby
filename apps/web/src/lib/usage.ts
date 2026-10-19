@@ -1,11 +1,18 @@
-import type { InstanceSummary, StatsBucket, StatsSummaryResult, UsageSource } from "@kinby/contract"
+import type {
+  InstanceSummary,
+  RunTotals,
+  StatsBucket,
+  StatsSummaryResult,
+  UsageSource,
+} from "@kinby/contract"
 
 import { turnCount } from "@/lib/stats"
 
-/** An instance the hub summed, with its buckets. */
+/** An instance the hub summed, with its buckets and its factory runs. */
 export interface CountedRow {
   instance: InstanceSummary
   buckets: StatsBucket[]
+  runs: RunTotals
 }
 
 /** An instance the hub left out of the totals, and why. */
@@ -22,7 +29,7 @@ export function usageRows(usage: StatsSummaryResult, instances: InstanceSummary[
   return instances.flatMap((instance): UsageRow[] => {
     const id = instance.instance_id
     const buckets = usage.buckets[id]
-    if (buckets !== undefined) return [{ instance, buckets }]
+    if (buckets !== undefined) return [{ instance, buckets, runs: usage.runs[id] }]
     if (usage.skipped.includes(id)) return [{ instance, notCounted: "not running" }]
     if (usage.unreachable.includes(id)) return [{ instance, notCounted: "didn't answer" }]
     if (usage.outdated.includes(id)) {

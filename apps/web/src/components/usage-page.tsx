@@ -151,6 +151,7 @@ function InstanceTable({ rows, sources }: { rows: UsageRow[]; sources: UsageSour
                 {SOURCE_LABELS[source]} runs
               </TableHead>
             ))}
+            <TableHead className="text-right">Factory runs</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -160,7 +161,7 @@ function InstanceTable({ rows, sources }: { rows: UsageRow[]; sources: UsageSour
                 <StatsLink instance={row.instance} />
               </TableCell>
               {"notCounted" in row ? (
-                <TableCell colSpan={2 + sources.length}>
+                <TableCell colSpan={3 + sources.length}>
                   <span className="text-muted-foreground">Not counted: {row.notCounted}</span>
                 </TableCell>
               ) : (
@@ -172,6 +173,7 @@ function InstanceTable({ rows, sources }: { rows: UsageRow[]; sources: UsageSour
                       {runsIn(row.buckets, source)}
                     </TableCell>
                   ))}
+                  <TableCell className="text-right">{row.runs.runs}</TableCell>
                 </>
               )}
             </TableRow>
@@ -182,7 +184,10 @@ function InstanceTable({ rows, sources }: { rows: UsageRow[]; sources: UsageSour
   )
 }
 
-/** The counted instances' turns, API cost, and plan runs, and how many of them were counted. */
+/**
+ * The counted instances' turns, API cost, plan runs, and factory runs, and how many of them were
+ * counted.
+ */
 function Totals({ usage }: { usage: StatsSummaryResult }) {
   const titleId = useId()
   const buckets = Object.values(usage.buckets).flat()
@@ -200,7 +205,7 @@ function Totals({ usage }: { usage: StatsSummaryResult }) {
           {counted} of {asked} instances counted.
         </p>
       </div>
-      <TileStrip className="grid-cols-1 sm:grid-cols-3">
+      <TileStrip className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         <Tile
           title="Turns"
           value={String(turnsIn(buckets))}
@@ -217,6 +222,11 @@ function Totals({ usage }: { usage: StatsSummaryResult }) {
           note={usage.subscriptions
             .map((use) => `${SOURCE_LABELS[use.usage_source]} ${use.runs ?? 0}`)
             .join(" · ")}
+        />
+        <Tile
+          title="Factory runs"
+          value={String(usage.run_total.runs)}
+          note={`${tokens(usage.run_total.tokens)} tokens · ${money(usage.run_total.cost)}`}
         />
       </TileStrip>
     </section>

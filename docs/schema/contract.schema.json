@@ -5469,6 +5469,154 @@
       "title": "RunStopped",
       "type": "object"
     },
+    "RunTokens": {
+      "additionalProperties": false,
+      "description": "One factory run's tokens in this instance: its agent steps' turns and its recap, priced,\nand its client steps' delegated runs, counted per subscription usage source.",
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/ApiUse"
+        },
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "subscriptions": {
+          "items": {
+            "$ref": "#/$defs/SubscriptionUse"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "api",
+        "subscriptions"
+      ],
+      "title": "RunTokens",
+      "type": "object"
+    },
+    "RunTotals": {
+      "additionalProperties": false,
+      "description": "Factory runs with tokens in a range, their input and output tokens across every usage\nsource, and their API cost.",
+      "properties": {
+        "cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runs": {
+          "type": "integer"
+        },
+        "tokens": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "runs",
+        "tokens",
+        "cost"
+      ],
+      "title": "RunTotals",
+      "type": "object"
+    },
+    "RunUsage": {
+      "additionalProperties": false,
+      "description": "One factory run's cost and rework, read from the hub and its instances, stored nowhere.",
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/ApiUse"
+        },
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/StepAttempts"
+          },
+          "type": "array"
+        },
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retries": {
+          "type": "integer"
+        },
+        "run": {
+          "$ref": "#/$defs/FactoryRun"
+        },
+        "send_backs": {
+          "type": "integer"
+        },
+        "subscriptions": {
+          "items": {
+            "$ref": "#/$defs/SubscriptionUse"
+          },
+          "type": "array"
+        },
+        "tokens": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run",
+        "tokens",
+        "api",
+        "subscriptions",
+        "attempts",
+        "retries",
+        "send_backs",
+        "duration_seconds"
+      ],
+      "title": "RunUsage",
+      "type": "object"
+    },
+    "RunWeek": {
+      "additionalProperties": false,
+      "description": "The medians of the runs created in one UTC week, which starts on Monday.",
+      "properties": {
+        "attempts": {
+          "type": "number"
+        },
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runs": {
+          "type": "integer"
+        },
+        "start": {
+          "format": "date",
+          "type": "string"
+        },
+        "tokens": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "start",
+        "runs",
+        "tokens",
+        "attempts",
+        "duration_seconds"
+      ],
+      "title": "RunWeek",
+      "type": "object"
+    },
     "SecretSetup": {
       "additionalProperties": false,
       "description": "One secret field an instance declares, and whether it holds a value. Never the value.",
@@ -6144,6 +6292,20 @@
           },
           "type": "array"
         },
+        "runs": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RunTokens"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "total": {
           "$ref": "#/$defs/StatsSummary"
         },
@@ -6169,6 +6331,93 @@
         "unpriced_models"
       ],
       "title": "StatsGetResult",
+      "type": "object"
+    },
+    "StatsRunsCommand": {
+      "additionalProperties": false,
+      "description": "The run usage of the factory runs one instance handed in, created in the range.",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "StatsRunsCommand",
+      "type": "object"
+    },
+    "StatsRunsResult": {
+      "additionalProperties": false,
+      "description": "Tokens leave out every instance in ``skipped``, ``unreachable``, or ``outdated``.",
+      "properties": {
+        "outdated": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/RunUsage"
+          },
+          "type": "array"
+        },
+        "skipped": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "unreachable": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "weeks": {
+          "items": {
+            "$ref": "#/$defs/RunWeek"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "runs",
+        "weeks",
+        "skipped",
+        "unreachable",
+        "outdated"
+      ],
+      "title": "StatsRunsResult",
       "type": "object"
     },
     "StatsSummary": {
@@ -6349,6 +6598,18 @@
           },
           "type": "array"
         },
+        "run_total": {
+          "$ref": "#/$defs/RunTotals"
+        },
+        "runs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RunTotals"
+          },
+          "propertyNames": {
+            "format": "uuid"
+          },
+          "type": "object"
+        },
         "skipped": {
           "items": {
             "format": "uuid",
@@ -6376,6 +6637,8 @@
         "subscriptions",
         "plan_use",
         "limits",
+        "runs",
+        "run_total",
         "skipped",
         "unreachable",
         "outdated"
@@ -6463,6 +6726,23 @@
         "ended_at"
       ],
       "title": "StepAttempt",
+      "type": "object"
+    },
+    "StepAttempts": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "type": "integer"
+        },
+        "step": {
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "step",
+        "attempts"
+      ],
+      "title": "StepAttempts",
       "type": "object"
     },
     "StepEnding": {
@@ -9585,6 +9865,22 @@
           ],
           "type": "object"
         },
+        "stats.runs": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/StatsRunsCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/StatsRunsResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "stats.summary": {
           "additionalProperties": false,
           "properties": {
@@ -10002,7 +10298,8 @@
         "hub.secret.list",
         "hub.secret.set",
         "hub.secret.delete",
-        "stats.summary"
+        "stats.summary",
+        "stats.runs"
       ],
       "type": "object"
     },
