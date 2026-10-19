@@ -1739,6 +1739,7 @@ export interface TurnMetrics {
   profile_version?: string | null;
   prompt_version: string | null;
   rating: TurnRated | null;
+  recalled?: string[];
   recap_input_tokens: number;
   recap_output_tokens: number;
   started_at: string | null;
@@ -2182,6 +2183,7 @@ export interface Event {
     | RunDelegated
     | RunStopped
     | MemoryRecapped
+    | MemoryRecalled
     | MemoryConsolidated
     | ProfileCounted
     | RoutineFailureHandled
@@ -2306,6 +2308,13 @@ export interface MemoryRecapped {
   node: string | null;
   output_tokens: number;
   type: "memory.recapped";
+}
+/**
+ * A memory search or open returned these facts and episodes to the turn.
+ */
+export interface MemoryRecalled {
+  nodes: string[];
+  type: "memory.recalled";
 }
 /**
  * A consolidation finished its writes. Every episode it lists is covered.

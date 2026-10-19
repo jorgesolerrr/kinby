@@ -12,11 +12,12 @@ from uuid import UUID
 from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import JsonValue
 
-from kinby.contracts import DelegatedRun, RoutineName
+from kinby.contracts import DelegatedRun, NodeId, RoutineName
 from kinby.instance import Instance
 
 ToolFunction = Callable[..., object]
 RunReporter = Callable[[DelegatedRun], Awaitable[object]]
+RecallReporter = Callable[[tuple[NodeId, ...]], Awaitable[object]]
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class ToolContext:
     #: The approval the user gave this call. None for a call the gate let through on its own.
     approval_id: UUID | None = None
     run_reporter: RunReporter | None = field(default=None, repr=False)
+    recall_reporter: RecallReporter | None = field(default=None, repr=False)
 
     @property
     def workspace(self) -> Path:
@@ -47,6 +49,12 @@ class ToolContext:
 
             raise NoActiveTurn(f'Thread "{self.thread_id}" has no open turn to report a run in.')
         await self.run_reporter(run)
+
+    async def report_recall(self, nodes: tuple[NodeId, ...]) -> None:
+        """Record that the turn that invoked the tool read *nodes* from memory. Outside a turn
+        there is nothing to record."""
+        if self.recall_reporter is not None:
+            await self.recall_reporter(nodes)
 
 
 @dataclass(frozen=True)
