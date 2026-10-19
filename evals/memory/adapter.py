@@ -35,6 +35,7 @@ from langchain_core.messages import (
 )
 from langchain_core.messages import ToolCall as LangChainToolCall
 from langchain_core.tools import StructuredTool
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import ValidationError
 
 from kinby.memory.recap import RecapDraft
@@ -144,7 +145,10 @@ def _tool_info(tool: StructuredTool) -> ToolInfo:
     return ToolInfo(
         name=tool.name,
         description=tool.description,
-        parameters=ToolParams.model_validate(tool.get_input_jsonschema()),
+        # The schema a provider sees, without the context kinby injects into a tool call.
+        parameters=ToolParams.model_validate(
+            convert_to_openai_tool(tool)["function"]["parameters"]
+        ),
     )
 
 
