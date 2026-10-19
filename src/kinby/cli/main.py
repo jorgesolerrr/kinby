@@ -68,6 +68,7 @@ from kinby.core.contract_server import ContractServer
 from kinby.core.pricing import instance_prices
 from kinby.core.receiver import Receiver
 from kinby.core.runtime_lock import InstanceBusyError, runtime_lock
+from kinby.core.session_recalls import keep_recall
 from kinby.instance import (
     PLACEHOLDER_MODEL,
     FeedbackPolicy,
@@ -89,8 +90,8 @@ from kinby.memory import (
     MemoryNodeError,
     NodeId,
     NodeNotFound,
+    hits_json,
     open_memory,
-    search_memory,
 )
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
@@ -1095,11 +1096,14 @@ def main(
                         )
                     return asyncio.run(_list_routines(instance))
             case "memory" if args.memory_command is not None:
-                memory = GraphStore(_load_selected_instance(args).path)
+                instance = _load_selected_instance(args)
+                memory = GraphStore(instance.path)
                 match args.memory_command:
                     case "search":
                         query = " ".join(args.query)
-                        print(search_memory(memory, query, after=args.after, before=args.before))
+                        hits = memory.recall(query, after=args.after, before=args.before)
+                        print(hits_json(hits))
+                        keep_recall(instance.manifest.state_dir, tuple(hit.node for hit in hits))
                     case "open":
                         print(open_memory(memory, NodeId(args.node)))
                 return 0

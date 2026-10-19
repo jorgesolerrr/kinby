@@ -9,7 +9,7 @@ import sys
 import tomllib
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -23,6 +23,7 @@ from kinby.contracts import (
     ClientStepRun,
     CodeStepRun,
     CodingClient,
+    CodingSessionId,
     CommandStepRun,
     ContractModel,
     ErrorCode,
@@ -30,6 +31,7 @@ from kinby.contracts import (
     FactoryRunOrigin,
     FactoryRunStatus,
     InstanceDrainCommand,
+    MemoryRecalled,
     PlanLimit,
     ReasoningEffort,
     RepositoryCommands,
@@ -51,8 +53,11 @@ from kinby.contracts import (
 from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
 from kinby.core.events import EventLog
 from kinby.core.runtime import InstanceRuntime
+from kinby.core.session_recalls import keep_recall
 from kinby.hub import ControlEndpoint, ControlUndelivered, HttpInstanceControl
+from kinby.instance import Instance
 from kinby.instance.layout import PERMISSIONS_NAME, STATE_DIR
+from kinby.memory import Fact, GraphStore, NodeId
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_drain import WaitingRunner, booted, call, opened_thread
 from tests.test_gate import ScriptedModel
@@ -1043,13 +1048,14 @@ async def run_client_step(
     resume: str | None = None,
     hook: str | None = None,
     attempt: int = 1,
+    timeout_seconds: int = 1,
 ) -> ContractModel:
     command = StepRunCommand(
         step=ClientStepRun(
             client=CodingClient(client),
             prompt="Implement the issue.",
             resume=resume,
-            timeout_seconds=1,
+            timeout_seconds=timeout_seconds,
         ),
         hook=hook,
         origin=ORIGIN,
@@ -1405,6 +1411,92 @@ def test_a_client_runs_delegated_run_names_the_step_and_attempt_it_ran_in(tmp_pa
             for event in log.all_events()
             if isinstance(event.payload, RunDelegated)
         ] == [(ORIGIN.run_id, "test", 2)]
+
+    asyncio.run(scenario())
+
+
+DEPLOYS = Fact(
+    node=NodeId("2026-09-02-deploys-run-from-the-hub"),
+    date=date(2026, 9, 2),
+    thread=UUID("11111111-1111-1111-1111-111111111111"),
+    description="Deploys run from the hub",
+    subjects=("deployment",),
+    body="The hub builds the image and recreates the container.",
+)
+#: The stub's body that runs a memory search DEPLOYS answers, and one nothing answers.
+SEARCHING = (
+    "import contextlib, io\n"
+    "from kinby.cli import main\n"
+    "with contextlib.redirect_stdout(io.StringIO()):\n"
+    "    main(['memory', 'search', 'deployment'])\n"
+    "    main(['memory', 'search', 'nothing', 'matches'])\n"
+)
+
+
+def remembering_runtime(tmp_path: Path) -> tuple[Instance, ScheduledDispatcher, EventLog]:
+    """An instance that remembers DEPLOYS, and its dispatcher and event log."""
+    instance = instance_at(tmp_path)
+    instance.manifest.workspace.path.mkdir(parents=True)
+    GraphStore(instance.path).remember(DEPLOYS)
+    return instance, *signal_runtime(instance, RoutineModel())
+
+
+def recalls(log: EventLog) -> list[tuple[UUID, MemoryRecalled]]:
+    return [
+        (event.thread_id, event.payload)
+        for event in log.all_events()
+        if isinstance(event.payload, MemoryRecalled)
+    ]
+
+
+def test_a_memory_search_in_a_client_session_is_a_recall_on_the_runs_thread(tmp_path, monkeypatch):
+    _, dispatcher, log = remembering_runtime(tmp_path)
+    stub_client(tmp_path, monkeypatch, "claude", SEARCHING + streaming(CLAUDE_STREAM))
+
+    async def scenario() -> None:
+        await run_client_step(dispatcher, "claude", attempt=2, timeout_seconds=60)
+
+        assert recalls(log) == [
+            (
+                ORIGIN.run_id,
+                MemoryRecalled(
+                    nodes=(DEPLOYS.node,),
+                    step="test",
+                    attempt=2,
+                    session=CodingSessionId("claude-1"),
+                ),
+            )
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_claude_session_cut_off_before_its_result_still_names_the_session_of_its_recalls(
+    tmp_path, monkeypatch
+):
+    _, dispatcher, log = remembering_runtime(tmp_path)
+    started = streaming(CLAUDE_STREAM[:2])
+    stub_client(tmp_path, monkeypatch, "claude", f"{started}{SEARCHING}sys.exit(1)")
+
+    async def scenario() -> None:
+        await run_client_step(dispatcher, "claude", timeout_seconds=60)
+
+        assert [recall.session for _, recall in recalls(log)] == ["claude-1"]
+
+    asyncio.run(scenario())
+
+
+def test_a_client_step_records_no_recall_an_abandoned_execution_kept(tmp_path, monkeypatch):
+    instance, dispatcher, log = remembering_runtime(tmp_path)
+    monkeypatch.setenv("KINBY_RUN", str(ORIGIN.run_id))
+    monkeypatch.setenv("KINBY_STEP", ORIGIN.step)
+    keep_recall(instance.manifest.state_dir, (DEPLOYS.node,))
+    stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    async def scenario() -> None:
+        await run_client_step(dispatcher, "claude")
+
+        assert recalls(log) == []
 
     asyncio.run(scenario())
 

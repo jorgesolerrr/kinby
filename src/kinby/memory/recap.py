@@ -583,7 +583,7 @@ def _render_digest(digest: SessionDigest | MissingSession) -> str:
             f"Files read:\n{_bullets(digest.read)}",
             f"Files changed:\n{_bullets(digest.changed)}",
             "Failed commands:\n" + ("\n".join(failed) or "None."),
-            f"Memory searches:\n{_bullets(digest.searches)}",
+            "Memory searches:\n" + _bullets(search.query for search in digest.searches),
             "Assistant text:\n" + "\n\n".join(digest.said),
         )
     )

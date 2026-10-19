@@ -41,6 +41,9 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Instance:
     memory.remember(_FACT)
     memory.remember(_EPISODE)
     monkeypatch.setenv("KINBY_INSTANCE", str(path))
+    # Outside a factory run's coding session, even when the suite runs inside one.
+    for variable in ("KINBY_RUN", "KINBY_STEP", "KINBY_ATTEMPT"):
+        monkeypatch.delenv(variable, raising=False)
     return load_instance(path)
 
 

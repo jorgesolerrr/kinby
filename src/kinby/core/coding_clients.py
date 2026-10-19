@@ -10,7 +10,7 @@ import json
 import os
 import re
 import signal
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -25,11 +25,13 @@ from kinby.contracts import (
     CodingSessionId,
     DelegatedRun,
     DelegatedRunOutcome,
+    FactoryRunOrigin,
     ReasoningEffort,
     StepEnding,
     TokenTotals,
     UsageSource,
 )
+from kinby.core.session_recalls import session_environment
 from kinby.instance.layout import CLAUDE_DIR
 
 #: The API keys each client bills over its subscription login when both are set.
@@ -39,7 +41,7 @@ _API_KEYS = {
 }
 #: How much of a failed client's error output the summary keeps, from the end.
 _ERROR_TAIL = 2_000
-#: Claude's names for its token counts, in the order _claude_tokens reads them.
+#: Claude's names for its token counts, in the order claude_tokens reads them.
 _STREAMED_USAGE = (
     "input_tokens",
     "output_tokens",
@@ -61,11 +63,15 @@ class CodingRun:
     #: What the client said last, then why the run did not end clean and whether the session it
     #: resumed was lost.
     summary: str
-    #: The session the run went on in. None when the stream does not name it.
+    #: The session the run went on in. None when the stream does not name it, or when Claude's
+    #: was cut off before its result.
     session: CodingSessionId | None
     #: The run as the client reports it, None when it never started. A run in a session counts
     #: the session's running total.
     reported: DelegatedRun | None
+    #: The session whose transcript holds the run, named from the stream's start, so a run cut
+    #: off before its end has one too.
+    transcript: CodingSessionId | None
 
 
 async def run_coding_client(
@@ -75,6 +81,8 @@ async def run_coding_client(
     *,
     instance: Path,
     state_dir: Path,
+    origin: FactoryRunOrigin,
+    attempt: int | None,
     resume: CodingSessionId | None,
     timeout_seconds: int,
     model: CodingModel | None,
@@ -82,7 +90,8 @@ async def run_coding_client(
 ) -> CodingRun:
     """Run *client* in *workspace* with *prompt* on its input, continuing *resume* if given.
 
-    A `kinby` command the client runs finds *instance*, wherever the workspace is.
+    A `kinby` command the client runs finds *instance*, wherever the workspace is, and knows the
+    step of the run *origin* names and the *attempt* at it.
 
     Claude keeps its sessions in *state_dir*, which outlives the container. When Claude no
     longer has *resume*, the prompt runs once more in a new session, and that run is the one
@@ -97,6 +106,8 @@ async def run_coding_client(
         workspace,
         instance=instance,
         state_dir=state_dir,
+        origin=origin,
+        attempt=attempt,
         timeout_seconds=timeout_seconds,
         deadline=asyncio.get_running_loop().time() + timeout_seconds,
         model=model,
@@ -124,6 +135,8 @@ async def _run(
     *,
     instance: Path,
     state_dir: Path,
+    origin: FactoryRunOrigin,
+    attempt: int | None,
     timeout_seconds: int,
     deadline: float,
     model: CodingModel | None,
@@ -139,7 +152,8 @@ async def _run(
             process = await asyncio.create_subprocess_exec(
                 *_command(client, workspace, resume, model, effort),
                 cwd=workspace,
-                env=_environment(client, instance, state_dir, timeout_seconds),
+                env=_environment(client, instance, state_dir, timeout_seconds)
+                | session_environment(origin, attempt),
                 stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
@@ -147,7 +161,8 @@ async def _run(
                 start_new_session=True,
             )
         except OSError as exc:
-            return CodingRun(StepEnding.FAILED, f"{client} could not start: {exc}", None, None), ""
+            ran = CodingRun(StepEnding.FAILED, f"{client} could not start: {exc}", None, None, None)
+            return ran, ""
         started = monotonic()
         timed_out = False
         try:
@@ -168,7 +183,9 @@ async def _run(
         )
     events = _json_events(output)
     said, reported = (_claude if client is CodingClient.CLAUDE else _codex)(events, duration_ms)
-    ran = CodingRun(StepEnding.CLEAN, said, reported.session, reported)
+    ran = CodingRun(
+        StepEnding.CLEAN, said, reported.session, reported, reported.session or _started(events)
+    )
     if timed_out:
         reason = f"{client} ran past its {timeout_seconds}-second timeout and was killed."
         return _ended(ran, StepEnding.TIMED_OUT, reason), errors
@@ -239,7 +256,7 @@ def _command(
 
 def _environment(
     client: CodingClient, instance: Path, state_dir: Path, timeout_seconds: int
-) -> Mapping[str, str]:
+) -> dict[str, str]:
     """A client runs on its subscription login, never on an API key the instance holds."""
     environment = {
         name: value for name, value in os.environ.items() if name not in _API_KEYS[client]
@@ -259,7 +276,7 @@ def _environment(
 def _ended(ran: CodingRun, ending: StepEnding, reason: str) -> CodingRun:
     """*ran* ending as *ending*, with *reason* after what the client said."""
     summary = f"{ran.summary}\n{reason}" if ran.summary else reason
-    return CodingRun(ending, summary, ran.session, ran.reported)
+    return CodingRun(ending, summary, ran.session, ran.reported, ran.transcript)
 
 
 def _claude(events: list[dict[str, object]], duration_ms: int) -> tuple[str, DelegatedRun]:
@@ -279,7 +296,7 @@ def _claude(events: list[dict[str, object]], duration_ms: int) -> tuple[str, Del
             and isinstance(message_id := message.get("id"), str)
         }
         counted = [
-            (model, _claude_tokens(usage, _STREAMED_USAGE))
+            (model, claude_tokens(usage))
             for message in messages.values()
             if isinstance(model := message.get("model"), str)
             and isinstance(usage := message.get("usage"), dict)
@@ -288,7 +305,7 @@ def _claude(events: list[dict[str, object]], duration_ms: int) -> tuple[str, Del
     else:
         by_model = result.get("modelUsage")
         counted = [
-            (model, _claude_tokens(usage, _RESULT_USAGE))
+            (model, claude_tokens(usage, _RESULT_USAGE))
             for model, usage in (by_model.items() if isinstance(by_model, dict) else ())
             if isinstance(usage, dict)
         ]
@@ -322,7 +339,24 @@ def _claude(events: list[dict[str, object]], duration_ms: int) -> tuple[str, Del
     )
 
 
-def _claude_tokens(usage: dict[object, object], names: tuple[str, str, str, str]) -> TokenTotals:
+def _started(events: list[dict[str, object]]) -> CodingSessionId | None:
+    """The session Claude's init event names, which a stream cut off before its result holds."""
+    return next(
+        (
+            CodingSessionId(session)
+            for event in events
+            if event.get("type") == "system"
+            and event.get("subtype") == "init"
+            and isinstance(session := event.get("session_id"), str)
+            and session
+        ),
+        None,
+    )
+
+
+def claude_tokens(
+    usage: dict[object, object], names: tuple[str, str, str, str] = _STREAMED_USAGE
+) -> TokenTotals:
     """One model's counts as Claude names them: uncached input, output, cache read and created.
 
     kinby's input counts cached input too.

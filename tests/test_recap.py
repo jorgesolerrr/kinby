@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import get_ident
-from typing import Self
+from typing import Any, Self
 from uuid import UUID, uuid4
 
 import pytest
@@ -58,6 +58,7 @@ from kinby.memory import (
     RecapWriter,
 )
 from kinby.memory.recap import RecapModel
+from kinby.memory.session_digest import MemorySearch, SessionDigest, digest_session
 from tests.helpers import (
     cannot_restore,
     does_not_park,
@@ -2157,6 +2158,47 @@ def test_each_session_of_a_run_is_digested_once(tmp_path: Path) -> None:
         )
 
     asyncio.run(scenario())
+
+
+def _counted(entry: dict[str, Any], message: str, input_tokens: int, output_tokens: int) -> dict:
+    """*entry* as a part of model call *message*, with the usage Claude records on each part."""
+    usage = {
+        "input_tokens": 10,
+        "cache_read_input_tokens": input_tokens - 10,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": output_tokens,
+    }
+    return {**entry, "message": {**entry["message"], "id": message, "usage": usage}}
+
+
+def test_the_session_digest_counts_each_memory_search_by_how_much_the_next_input_grew(
+    tmp_path: Path,
+) -> None:
+    _claude_session(
+        tmp_path,
+        _SESSION,
+        [
+            {"type": "user", "message": {"role": "user", "content": "THE STEP PROMPT"}},
+            _counted(_used("1", "Bash", command="kinby memory search digest"), "m1", 1000, 20),
+            _returned("1", "SEARCH HITS"),
+            # One call that searched and read at once, recorded in parts as Claude streamed it.
+            _counted(_used("2", "Bash", command="kinby memory search recap"), "m2", 1300, 1),
+            _counted(_used("3", "Read", file_path="/workspace/recap.py"), "m2", 1300, 30),
+            _returned("2", "H" * 300),
+            _returned("3", "R" * 100),
+            _counted(_used("4", "Bash", command="kinby memory search unanswered"), "m3", 1730, 10),
+            _returned("4", "[]"),
+        ],
+    )
+
+    digest = digest_session(tmp_path / ".state" / "claude", CodingSessionId(_SESSION))
+
+    assert isinstance(digest, SessionDigest)
+    assert digest.searches == (
+        MemorySearch("digest", tokens=280),
+        MemorySearch("recap", tokens=300),
+        MemorySearch("unanswered", tokens=None),
+    )
 
 
 def test_a_missing_session_file_still_writes_an_episode(tmp_path: Path) -> None:
