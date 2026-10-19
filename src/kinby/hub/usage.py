@@ -42,9 +42,10 @@ class Uncounted(StrEnum):
 
 def summed_usage(answers: Mapping[UUID, StatsGetResult | Uncounted]) -> StatsSummaryResult:
     """Sum every counted instance per usage source. One account per source (ADR 0063)."""
+    read = {instance_id: _with_runs(answer) for instance_id, answer in answers.items()}
     counted = {
         instance_id: answer
-        for instance_id, answer in answers.items()
+        for instance_id, answer in read.items()
         if isinstance(answer, StatsGetResult)
     }
     totals = [answer.total for answer in counted.values()]
@@ -54,12 +55,22 @@ def summed_usage(answers: Mapping[UUID, StatsGetResult | Uncounted]) -> StatsSum
         subscriptions=_summed_uses([use for total in totals for use in total.subscriptions]),
         plan_use=_summed_plan_use([use for answer in counted.values() for use in answer.plan_use]),
         limits=_latest_resets(limit for answer in counted.values() for limit in answer.limits),
-        runs={instance_id: _run_totals(answer.runs or []) for instance_id, answer in counted.items()},
+        runs={
+            instance_id: _run_totals(answer.runs or []) for instance_id, answer in counted.items()
+        },
         run_total=_run_totals([run for answer in counted.values() for run in answer.runs or []]),
-        skipped=_left_out(answers, Uncounted.SKIPPED),
-        unreachable=_left_out(answers, Uncounted.UNREACHABLE),
-        outdated=_left_out(answers, Uncounted.OUTDATED),
+        skipped=_left_out(read, Uncounted.SKIPPED),
+        unreachable=_left_out(read, Uncounted.UNREACHABLE),
+        outdated=_left_out(read, Uncounted.OUTDATED),
     )
+
+
+def _with_runs(answer: StatsGetResult | Uncounted) -> StatsGetResult | Uncounted:
+    """A core older than run usage is outdated, as one older than plan use is, so its runs
+    never read as none."""
+    if isinstance(answer, StatsGetResult) and answer.runs is None:
+        return Uncounted.OUTDATED
+    return answer
 
 
 def run_usage(

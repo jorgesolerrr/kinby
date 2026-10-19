@@ -144,6 +144,7 @@ def _answer(
         plan_use=plan_use or _plan_use((0, 0), (0, 0)),
         limits=limits or [],
         unpriced_models=[],
+        runs=[],
     )
 
 
@@ -632,3 +633,17 @@ def test_the_summary_prices_no_run_when_no_instance_priced_one():
 
     assert summary.runs == {counted: RunTotals(runs=1, tokens=11, cost=None)}
     assert summary.run_total == RunTotals(runs=1, tokens=11, cost=None)
+
+
+def test_the_summary_counts_a_core_without_run_tokens_as_outdated():
+    counted, older = uuid4(), uuid4()
+
+    summary = summed_usage(
+        {
+            counted: _answer(_used()),
+            older: StatsGetResult.model_validate(_answer(_used()).model_dump(exclude={"runs"})),
+        }
+    )
+
+    assert summary.outdated == [older]
+    assert list(summary.runs) == [counted]

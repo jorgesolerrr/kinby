@@ -69,6 +69,7 @@ function stats(fields: Partial<StatsGetResult> = {}): StatsGetResult {
     limits: [],
     unpriced_models: [],
     warnings: [],
+    runs: [],
     ...fields,
   }
 }
