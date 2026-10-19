@@ -28,6 +28,10 @@ from kinby.contracts import (
     NavigationMeans,
     Origin,
     OriginUse,
+    Payload,
+    PermissionMode,
+    ProfileCounted,
+    ProfileVersion,
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
@@ -60,8 +64,9 @@ from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.pricing import instance_prices, price_map
 from kinby.core.turn_metrics import TurnKey
-from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
-from kinby.instance import ModelPrice, init_instance, load_instance
+from kinby.core.turn_runner import LangGraphRunner
+from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome, TurnPreparation
+from kinby.instance import Budgets, ModelName, ModelPrice, init_instance, load_instance
 from tests.helpers import (
     cannot_restore,
     does_not_park,
@@ -69,7 +74,7 @@ from tests.helpers import (
     fixed_turn_preparation,
     thread_events,
 )
-from tests.test_routines import instance_at
+from tests.test_routines import RoutineModel, instance_at
 from tests.test_scheduler import call
 
 
@@ -600,6 +605,148 @@ def test_stats_get_counts_no_memory_from_a_step_its_input_shrank_across(tmp_path
     assert record.memory_tokens == 0
     assert record.memory_carried_tokens == 0
     assert record.memory_carried_cost == 0
+    assert record.memory_measured is False
+
+
+class ProfileTokenizer:
+    def __init__(self) -> None:
+        self.counted: list[tuple[ModelName, str]] = []
+
+    def __call__(self, model: ModelName, text: str) -> int:
+        self.counted.append((model, text))
+        return len(text)
+
+
+def test_stats_get_adds_each_turns_profile_size_counted_once_per_profile_version(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> list[TurnMetrics]:
+        instance = instance_at(tmp_path)
+        profile = instance.path / "memory" / "profile.md"
+        profile.parent.mkdir()
+        log = EventLog(instance.manifest.state_dir)
+        runner = LangGraphRunner(
+            instance, event_log=log, model_factory=lambda _: RoutineModel(), tokenizer=tokenizer
+        )
+        dispatcher = build_dispatcher(
+            instance.manifest.state_dir,
+            event_log=log,
+            turns=TurnConfig(runner.prepare_for_turn, runner.permission_ceiling, runner),
+        )
+        for text in ("Prefers tea.", "Prefers tea.", "Prefers green tea."):
+            profile.write_text(text, encoding="utf-8")
+            await _record_metrics_turn(dispatcher)
+        result = await dispatcher.dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+        assert isinstance(result, StatsGetResult)
+        return result.records
+
+    tokenizer = ProfileTokenizer()
+
+    first, second, edited = asyncio.run(scenario())
+
+    assert tokenizer.counted == [
+        ("openai:gpt-5", "Prefers tea."),
+        ("openai:gpt-5", "Prefers green tea."),
+    ]
+    assert first.profile_version is not None
+    assert second.profile_version == first.profile_version
+    assert edited.profile_version not in (None, first.profile_version)
+    assert [first.memory_tokens, second.memory_tokens, edited.memory_tokens] == [12, 12, 18]
+    assert all(record.memory_measured for record in (first, second, edited))
+
+
+def _profile_runner(tmp_path: Path, tokenizer: ProfileTokenizer) -> tuple[LangGraphRunner, Path]:
+    instance = instance_at(tmp_path)
+    profile = instance.path / "memory" / "profile.md"
+    profile.parent.mkdir()
+    profile.write_text("Prefers tea.", encoding="utf-8")
+    runner = LangGraphRunner(
+        instance,
+        event_log=EventLog(instance.manifest.state_dir),
+        model_factory=lambda _: RoutineModel(),
+        tokenizer=tokenizer,
+    )
+    return runner, profile
+
+
+async def _run_prepared(
+    runner: LangGraphRunner, preparation: TurnPreparation, emitted: list[Payload]
+) -> None:
+    async def emit(payload: Payload) -> Event:
+        emitted.append(payload)
+        return Event(
+            sequence=len(emitted),
+            thread_id=uuid4(),
+            turn_id=uuid4(),
+            payload=payload,
+            timestamp=datetime.now(UTC),
+        )
+
+    await runner.run(
+        PreparedTurnRequest(
+            thread_id=uuid4(),
+            turn_id=uuid4(),
+            message="Hello",
+            model=preparation.model,
+            permission_mode=PermissionMode.ASK,
+            system_prompt=preparation.system_prompt,
+        ),
+        TurnContext(Budgets(), emit),
+    )
+
+
+def _counted(emitted: list[Payload]) -> list[ProfileCounted]:
+    return [payload for payload in emitted if isinstance(payload, ProfileCounted)]
+
+
+def test_a_turn_counts_the_profile_it_was_prepared_with_after_the_file_changes(
+    tmp_path: Path,
+) -> None:
+    tokenizer = ProfileTokenizer()
+    runner, profile = _profile_runner(tmp_path, tokenizer)
+    emitted: list[Payload] = []
+
+    preparation = runner.prepare_for_turn()
+    profile.write_text("Prefers coffee.", encoding="utf-8")
+    asyncio.run(_run_prepared(runner, preparation, emitted))
+
+    assert tokenizer.counted == [("openai:gpt-5", "Prefers tea.")]
+    assert [(counted.version, counted.tokens) for counted in _counted(emitted)] == [
+        (preparation.profile_version, 12)
+    ]
+
+
+def test_turns_that_start_together_count_a_new_profile_version_once(tmp_path: Path) -> None:
+    tokenizer = ProfileTokenizer()
+    runner, _ = _profile_runner(tmp_path, tokenizer)
+    emitted: list[Payload] = []
+
+    async def scenario() -> None:
+        first = runner.prepare_for_turn()
+        second = runner.prepare_for_turn()
+        await asyncio.gather(
+            _run_prepared(runner, first, emitted), _run_prepared(runner, second, emitted)
+        )
+
+    asyncio.run(scenario())
+
+    assert tokenizer.counted == [("openai:gpt-5", "Prefers tea.")]
+    assert len(_counted(emitted)) == 1
+
+
+def test_a_turn_whose_profile_version_was_never_counted_reads_as_estimated() -> None:
+    record = turn_metrics(
+        _turn_events(
+            uuid4(),
+            uuid4(),
+            datetime(2026, 9, 1, 10, tzinfo=UTC),
+            TurnStarted(message="do", model="openai:gpt-5", profile_version=ProfileVersion("abc")),
+            _model_call(3, 2),
+            TurnCompleted(input_tokens=3, output_tokens=2),
+        )
+    ).records[0]
+
+    assert record.memory_tokens == 0
     assert record.memory_measured is False
 
 

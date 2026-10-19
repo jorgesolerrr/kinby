@@ -22,6 +22,8 @@ from kinby.contracts import (
     ModelCompleted,
     Navigation,
     Origin,
+    ProfileCounted,
+    ProfileVersion,
     PromptVersion,
     ReportedRun,
     RunDelegated,
@@ -80,6 +82,7 @@ class _TurnEvents:
     started_at: datetime
     model: str
     prompt_version: PromptVersion | None
+    profile_version: ProfileVersion | None
     origin: Origin
     tool_calls: Counter[str] = field(default_factory=Counter)
     tool_writes: dict[str, bool | None] = field(default_factory=dict)
@@ -129,6 +132,9 @@ def turn_metrics(
     unpriced_models_by_turn: dict[TurnKey, set[UnpricedModel]] = {}
     mismatches: list[ModelCallMismatch] = []
     runs_outside_turns: list[ReportedRun] = []
+    profile_sizes: dict[ProfileVersion, int] = {}
+    #: Records that read a profile, each sized once every count has been read.
+    profiled: list[tuple[TurnMetrics, ProfileVersion]] = []
 
     for event in events:
         key = TurnKey(event.thread_id, event.turn_id)
@@ -138,8 +144,12 @@ def turn_metrics(
                 event.timestamp,
                 payload.model,
                 payload.prompt_version,
+                payload.profile_version,
                 payload.origin,
             )
+            continue
+        if isinstance(payload, ProfileCounted):
+            profile_sizes[payload.version] = payload.tokens
             continue
 
         turn = open_turns.get(key)
@@ -223,6 +233,7 @@ def turn_metrics(
                 turn_id=event.turn_id,
                 model=turn.model if turn else None,
                 prompt_version=turn.prompt_version if turn else None,
+                profile_version=turn.profile_version if turn else None,
                 origin=turn.origin if turn else None,
                 closing_kind=_closing_kind(payload),
                 outcome=outcome,
@@ -253,6 +264,8 @@ def turn_metrics(
                 delegated_runs=turn.delegated_runs if turn else [],
             )
             records.append(record)
+            if turn is not None and turn.model_calls and turn.profile_version is not None:
+                profiled.append((record, turn.profile_version))
             closed_turns[key] = record
             closing_totals[key] = payload
             continue
@@ -289,6 +302,12 @@ def turn_metrics(
             )
         elif isinstance(payload, TurnRated):
             record.rating = payload
+
+    for record, version in profiled:
+        if version in profile_sizes:
+            record.memory_tokens += profile_sizes[version]
+        else:
+            record.memory_measured = False
 
     return TurnMetricsResult(
         records,

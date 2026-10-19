@@ -14,6 +14,7 @@ from kinby.contracts import (
     FactoryRunOrigin,
     HomeInstanceOrigin,
     Origin,
+    ProfileVersion,
     PromptVersion,
     RoutineTrigger,
     StepValue,
@@ -138,8 +139,16 @@ def prompt_version(sections: Sequence[PromptSection]) -> PromptVersion:
     stable_sections = tuple(
         section for section in sections if section.name is not PromptSectionName.ENVIRONMENT
     )
-    prompt = render_system_prompt(stable_sections)
-    return PromptVersion(sha256(prompt.encode("utf-8")).hexdigest()[:12])
+    return PromptVersion(_short_hash(render_system_prompt(stable_sections)))
+
+
+def profile_version(profile: PromptSection) -> ProfileVersion:
+    """Hash the profile into a short version."""
+    return ProfileVersion(_short_hash(profile.text))
+
+
+def _short_hash(text: str) -> str:
+    return sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
 def render_wake(origin: Origin, message: str, payload: str | None = None) -> str:

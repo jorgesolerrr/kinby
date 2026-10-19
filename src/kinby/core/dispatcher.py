@@ -105,6 +105,7 @@ from kinby.core.config import InstanceConfig
 from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
 from kinby.core.memory import InstanceMemory
+from kinby.core.models import count_tokens
 from kinby.core.pricing import SHIPPED_PRICES
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
@@ -529,6 +530,7 @@ async def turn_config(
         instance,
         event_log=event_log,
         model_override=model_override,
+        tokenizer=count_tokens,
     )
     recap = RecapWriter(
         event_log,

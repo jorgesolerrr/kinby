@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -42,6 +43,8 @@ from kinby.contracts import (
     GateOutcome,
     MessageDelta,
     PermissionMode,
+    ProfileCounted,
+    ProfileVersion,
     RoutineOrigin,
     RoutineTrigger,
     RunDelegated,
@@ -68,11 +71,13 @@ from kinby.core.errors import (
 from kinby.core.events import EventLog
 from kinby.core.gate import evaluate
 from kinby.core.model_calls import completed_model_call
-from kinby.core.models import init_model, is_anthropic_model
+from kinby.core.models import Tokenizer, init_model, is_anthropic_model
 from kinby.core.pricing import price_map
 from kinby.core.prompt import (
     PromptSection,
+    PromptSectionName,
     assemble_system_prompt,
+    profile_version,
     prompt_version,
     render_system_prompt,
     render_wake,
@@ -115,6 +120,8 @@ from kinby.plugins.routines import (
 )
 from kinby.plugins.skills import load_skills
 from kinby.plugins.tools import RunReporter, Tool, ToolContext
+
+logger = logging.getLogger(__name__)
 
 _TOOL_ARGUMENTS = TypeAdapter(dict[str, JsonValue])
 _CHECKPOINTS_NAME = "checkpoints.sqlite"
@@ -265,7 +272,9 @@ class LangGraphRunner:
         model_override: str | None = None,
         gate_policy: GatePolicy | None = None,
         today: Callable[[], date] = utc_today,
+        tokenizer: Tokenizer | None = None,
     ) -> None:
+        """Count each profile version with *tokenizer*. Without one, the profile goes uncounted."""
         self._instance = instance
         self._event_log = (
             event_log if event_log is not None else EventLog(instance.manifest.state_dir)
@@ -275,6 +284,10 @@ class LangGraphRunner:
         self._gate_policy_override = gate_policy
         self._gate_policy = gate_policy if gate_policy is not None else SHIPPED_POLICY
         self._today = today
+        self._tokenizer = tokenizer
+        #: The profile versions turns were prepared with and no count holds yet, by their text.
+        self._uncounted_profiles: dict[ProfileVersion, str] = {}
+        self._counting_profiles = asyncio.Lock()
         instance.manifest.state_dir.mkdir(parents=True, exist_ok=True)
         self._tools = ToolRegistry(
             instance.path,
@@ -282,6 +295,7 @@ class LangGraphRunner:
         )
         self._emitted_tool_calls: set[tuple[UUID, UUID, str]] = set()
         self._checkpoint_path = instance.manifest.state_dir / _CHECKPOINTS_NAME
+        self._checkpoint_setup = asyncio.Lock()
         graph_builder = StateGraph(ModelState, context_schema=ModelContext)
         graph_builder.add_node("model", self._call_model)
         graph_builder.add_node("tools", self._call_tools)
@@ -297,6 +311,14 @@ class LangGraphRunner:
         self._instance = replace(self._instance, manifest=manifest)
         self._gate_policy = self._load_gate_policy()
         sections = self._prompt_sections()
+        profile = next(
+            (section for section in sections if section.name is PromptSectionName.PROFILE), None
+        )
+        version = None
+        if profile is not None:
+            version = profile_version(profile)
+            if self._tokenizer is not None:
+                self._uncounted_profiles[version] = profile.text
         limit = manifest.budgets.usd_per_day
         daily_budget = None
         if limit is not None:
@@ -320,6 +342,7 @@ class LangGraphRunner:
             ceiling=self._gate_policy.ceiling,
             prompt_version=prompt_version(sections),
             system_prompt=render_system_prompt(sections),
+            profile_version=version,
             daily_budget=daily_budget,
             budgets=manifest.budgets,
         )
@@ -337,6 +360,7 @@ class LangGraphRunner:
         return self._gate_policy_override
 
     async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnResult:
+        await self._count_profiles(turn.model, context.emit)
         config, start_step = await self._start_config(turn)
         progress = _BudgetProgress(context.budgets, start_step)
         return await self._invoke(
@@ -387,6 +411,29 @@ class LangGraphRunner:
             _graph_config(turn),
             replace(progress, resumes=progress.resumes + 1),
         )
+
+    async def _count_profiles(self, model: ModelName, emit: Emit) -> None:
+        """Count each profile version a turn was prepared with, once."""
+        tokenizer = self._tokenizer
+        if tokenizer is None:
+            return
+        async with self._counting_profiles:
+            counted = {
+                event.payload.version
+                for event in self._event_log.all_events()
+                if isinstance(event.payload, ProfileCounted)
+            }
+            for version, text in list(self._uncounted_profiles.items()):
+                if version not in counted:
+                    try:
+                        tokens = await asyncio.to_thread(tokenizer, model, text)
+                    except Exception:
+                        # Without a count its turns' memory tokens read as estimated, and the
+                        # next turn retries.
+                        logger.warning("The profile's tokens could not be counted.", exc_info=True)
+                        continue
+                    await emit(ProfileCounted(version=version, tokens=tokens))
+                del self._uncounted_profiles[version]
 
     def _prepare_restored_turn(self, turn: TurnRequest) -> PreparedTurnRequest:
         if isinstance(turn, PreparedTurnRequest):
@@ -749,6 +796,9 @@ class LangGraphRunner:
     ]:
         async with AsyncSqliteSaver.from_conn_string(str(self._checkpoint_path)) as checkpointer:
             checkpointer.serde = _CHECKPOINT_SERIALIZER
+            # Two turns that set up a new checkpoint file at once fail with "database is locked".
+            async with self._checkpoint_setup:
+                await checkpointer.setup()
             yield self._graph_builder.compile(checkpointer=checkpointer), checkpointer
 
     async def _call_model(

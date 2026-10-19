@@ -1736,6 +1736,7 @@ export interface TurnMetrics {
   origin: (UserOrigin | RoutineOrigin | FactoryRunOrigin | HomeInstanceOrigin) | null;
   outcome?: CompletionOutcome;
   output_tokens: number;
+  profile_version?: string | null;
   prompt_version: string | null;
   rating: TurnRated | null;
   recap_input_tokens: number;
@@ -2182,6 +2183,7 @@ export interface Event {
     | RunStopped
     | MemoryRecapped
     | MemoryConsolidated
+    | ProfileCounted
     | RoutineFailureHandled
     | RoutineFailuresReset
     | SignalReceived
@@ -2200,6 +2202,7 @@ export interface TurnStarted {
   model: string;
   origin?: UserOrigin | RoutineOrigin | FactoryRunOrigin | HomeInstanceOrigin;
   permission_mode?: PermissionMode | null;
+  profile_version?: string | null;
   prompt_version?: string | null;
   snapshot?: string | null;
   type: "turn.started";
@@ -2311,6 +2314,14 @@ export interface MemoryConsolidated {
   episodes: string[];
   facts: string[];
   type: "memory.consolidated";
+}
+/**
+ * The provider's tokenizer counted a profile version, once for every turn that ran with it.
+ */
+export interface ProfileCounted {
+  tokens: number;
+  type: "profile.counted";
+  version: string;
 }
 export interface RoutineFailureHandled {
   name: string;
