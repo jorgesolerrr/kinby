@@ -35,6 +35,7 @@ from kinby.contracts import (
     RepositoryCommands,
     RoutineListResult,
     RoutineRunOutcome,
+    RunDelegated,
     RunStop,
     RunStopped,
     StatsGetResult,
@@ -1036,7 +1037,12 @@ def recorded_calls(calls: Path) -> list[ClientCall]:
 
 
 async def run_client_step(
-    dispatcher: Dispatcher, client: str, *, resume: str | None = None, hook: str | None = None
+    dispatcher: Dispatcher,
+    client: str,
+    *,
+    resume: str | None = None,
+    hook: str | None = None,
+    attempt: int = 1,
 ) -> ContractModel:
     command = StepRunCommand(
         step=ClientStepRun(
@@ -1047,6 +1053,7 @@ async def run_client_step(
         ),
         hook=hook,
         origin=ORIGIN,
+        attempt=attempt,
         work_item={"issue": 7},
         results={"branch": "agent/7"},
     )
@@ -1380,6 +1387,24 @@ def test_each_client_run_is_a_delegated_run_of_the_instance(tmp_path, monkeypatc
         assert isinstance(stats, StatsGetResult)
         assert [use.runs for use in stats.plan_use] == [1, 1, 0, 0]
         assert stats.limits == []
+
+    asyncio.run(scenario())
+
+
+def test_a_client_runs_delegated_run_names_the_step_and_attempt_it_ran_in(tmp_path, monkeypatch):
+    instance = instance_at(tmp_path)
+    instance.manifest.workspace.path.mkdir(parents=True)
+    stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    dispatcher, log = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        await run_client_step(dispatcher, "claude", attempt=2)
+
+        assert [
+            (event.thread_id, event.payload.step, event.payload.attempt)
+            for event in log.all_events()
+            if isinstance(event.payload, RunDelegated)
+        ] == [(ORIGIN.run_id, "test", 2)]
 
     asyncio.run(scenario())
 

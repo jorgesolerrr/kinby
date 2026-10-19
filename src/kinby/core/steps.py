@@ -136,7 +136,11 @@ async def _run_client_step(
         await log.append(
             command.origin.run_id,
             uuid4(),
-            RunDelegated(run=own_tokens(ran.reported, earlier)),
+            RunDelegated(
+                run=own_tokens(ran.reported, earlier),
+                step=command.origin.step,
+                attempt=command.attempt,
+            ),
         )
     return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session)
 

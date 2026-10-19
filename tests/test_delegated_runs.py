@@ -226,6 +226,12 @@ def test_usage_get_places_a_run_by_its_own_timestamp_not_its_turns_close(
     asyncio.run(scenario())
 
 
+def test_a_delegated_run_recorded_before_runs_named_their_step_still_reads() -> None:
+    stored = {"type": "run.delegated", "run": COMPLETED_RUN.model_dump(mode="json")}
+
+    assert RunDelegated.model_validate(stored) == RunDelegated(run=COMPLETED_RUN)
+
+
 def test_a_tool_context_without_a_turn_refuses_a_report(tmp_path: Path) -> None:
     context = ToolContext(instance=instance_at(tmp_path), thread_id=uuid4())
 

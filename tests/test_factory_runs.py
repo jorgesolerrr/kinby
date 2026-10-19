@@ -229,6 +229,7 @@ def test_an_intake_hands_a_work_item_to_a_one_step_factory_that_runs_to_done(tmp
         assert command == StepRunCommand(
             step=CommandStepRun(run=["uv run pytest", "uv run ruff check ."], timeout_seconds=600),
             origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="test"),
+            attempt=1,
             work_item={"issue": 7},
         )
         assert endpoint.token == instance_environment(hub, coder)["KINBY_CONTROL_TOKEN"]
@@ -342,6 +343,7 @@ def test_a_failing_step_is_tried_again_under_its_retry_then_needs_a_human(
             (number, StepEnding.FAILED) for number in range(1, attempts + 1)
         ]
         assert finished.attempts[-1].summary == '"uv run pytest" exited with code 1.'
+        assert [command.attempt for _, command in control.steps] == list(range(1, attempts + 1))
         assert stopped == FactoryRunListResult(runs=[finished.run])
         assert done == FactoryRunListResult(runs=[])
 
@@ -374,7 +376,7 @@ def test_a_step_its_instance_did_not_take_waits_for_it_and_keeps_its_retries(tmp
             (1, StepEnding.FAILED),
             (2, StepEnding.CLEAN),
         ]
-        assert len(control.steps) == 4
+        assert [command.attempt for _, command in control.steps] == [1, 1, 1, 2]
 
     asyncio.run(scenario())
 
@@ -1143,11 +1145,13 @@ def test_the_hub_hands_each_step_its_hook_and_the_values_earlier_steps_recorded(
                 step=CommandStepRun(run=["make implement"]),
                 hook="record_branch",
                 origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="implement"),
+                attempt=1,
                 work_item={"issue": 7},
             ),
             StepRunCommand(
                 step=CodeStepRun(call="open_pull_request"),
                 origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="open-pr"),
+                attempt=1,
                 work_item={"issue": 7},
                 results=BRANCH,
             ),
@@ -1784,6 +1788,7 @@ def test_the_hub_sends_an_agent_step_its_prompt_and_names_its_run_and_step(tmp_p
             step=AgentStepRun(prompt="Implement it.\n"),
             hook="record_branch",
             origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="implement"),
+            attempt=1,
             work_item={"issue": 7},
         )
 
