@@ -130,6 +130,8 @@ from kinby.contracts.models import (
     SkillWriteCommand,
     StatsGetCommand,
     StatsGetResult,
+    StatsRunsCommand,
+    StatsRunsResult,
     StatsSummaryResult,
     StepResult,
     StepRunCommand,
@@ -430,6 +432,7 @@ HUB_SECRET_DELETE = Method(
 )
 #: The same time range and bucket size as stats.get, asked of every running instance.
 STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
+STATS_RUNS = Method("stats.runs", Scope.HUB_READ, StatsRunsCommand, StatsRunsResult)
 
 METHODS = (
     THREAD_CREATE,
@@ -528,6 +531,7 @@ METHODS = (
     HUB_SECRET_SET,
     HUB_SECRET_DELETE,
     STATS_SUMMARY,
+    STATS_RUNS,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE)
 

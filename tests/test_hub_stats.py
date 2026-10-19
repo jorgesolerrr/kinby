@@ -2,19 +2,22 @@
 
 import asyncio
 import logging
-from datetime import UTC, date, datetime
-from uuid import uuid4
+from datetime import UTC, date, datetime, timedelta
+from statistics import median
+from uuid import UUID, uuid4
 
 import pytest
 from aiohttp import web
 
 from kinby.contracts import (
+    STATS_RUNS,
     STATS_SUMMARY,
     ApiUse,
     ControlToken,
     ErrorCode,
     ErrorEnvelope,
     ErrorFrame,
+    FactoryRunStatus,
     FrameId,
     MemoryCallCounts,
     OriginUse,
@@ -22,13 +25,18 @@ from kinby.contracts import (
     PlanUse,
     ResultFrame,
     RoutineName,
+    RunTokens,
+    RunWeek,
     Scope,
     SourceRuns,
     StatsBucket,
     StatsBucketSize,
     StatsGetCommand,
     StatsGetResult,
+    StatsRunsCommand,
+    StatsRunsResult,
     StatsSummary,
+    StepAttempts,
     SubscriptionUse,
     UsageSource,
 )
@@ -41,8 +49,20 @@ from kinby.hub import (
 )
 from kinby.hub.usage import Uncounted, summed_usage
 from tests.test_contract_server import TOKEN, served_dispatcher
+from tests.test_factory_runs import (
+    FIXED,
+    REVIEW,
+    REVIEW_FILES,
+    factory_hub,
+    failing,
+    handed_in,
+    reviewed,
+    settled,
+    started_coder,
+)
 from tests.test_hub import (
     FakeControl,
+    FakeRuntime,
     control_server,
     created_instance,
     hub_at,
@@ -421,3 +441,143 @@ def test_a_stats_call_that_cannot_connect_is_unreachable():
 
     with pytest.raises(ControlUnreachable):
         asyncio.run(HttpInstanceControl().stats(nobody, StatsGetCommand()))
+
+
+def _tokens(run_id: UUID, *, input_tokens: int, cost: float | None, claude: int = 0) -> RunTokens:
+    """A run's tokens in one instance: its turns at *input_tokens*, and a Claude run of *claude*."""
+    return RunTokens(
+        run_id=run_id,
+        api=ApiUse(input_tokens=input_tokens, output_tokens=input_tokens // 10, cost=cost),
+        subscriptions=[
+            SubscriptionUse(
+                usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+                runs=1 if claude else 0,
+                input_tokens=claude,
+                output_tokens=claude // 5,
+            ),
+            SubscriptionUse(usage_source=UsageSource.CHATGPT_SUBSCRIPTION),
+        ],
+    )
+
+
+def test_run_usage_joins_each_instances_tokens_with_the_runs_attempts(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        FIXED,
+        reviewed("changes"),
+        FIXED,
+        reviewed("clean"),
+        failing('"make publish" exited with code 1.'),
+    ]
+    runtime = FakeRuntime()
+    retried = REVIEW.replace('run: ["make publish"]\n', 'run: ["make publish"]\n    retry: 1\n')
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES | {"factory.yaml": retried})
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        reviewer = await started_instance(hub_client(hub), hub, name="bob")
+        reworked = (await settled(hub, (await handed_in(hub, coder, 7)).run_id)).run
+        clean = (await settled(hub, (await handed_in(hub, coder, 8)).run_id)).run
+        control.usage[_address(coder)] = _answer(_used()).model_copy(
+            update={
+                "runs": [
+                    _tokens(reworked.run_id, input_tokens=100, cost=0.5, claude=1000),
+                    _tokens(clean.run_id, input_tokens=10, cost=None),
+                ]
+            }
+        )
+        control.usage[_address(reviewer.instance_id)] = _answer(_used()).model_copy(
+            update={"runs": [_tokens(reworked.run_id, input_tokens=50, cost=0.25)]}
+        )
+
+        usage = await hub_client(hub, {Scope.HUB_READ}).call(
+            STATS_RUNS, StatsRunsCommand(instance_id=coder)
+        )
+
+        assert isinstance(usage, StatsRunsResult), usage
+        assert [run.run for run in usage.runs] == [reworked, clean]
+        first, second = usage.runs
+        assert first.api == ApiUse(input_tokens=150, output_tokens=15, cost=0.75)
+        assert first.subscriptions == [
+            SubscriptionUse(
+                usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+                runs=1,
+                input_tokens=1000,
+                output_tokens=200,
+            ),
+            SubscriptionUse(usage_source=UsageSource.CHATGPT_SUBSCRIPTION),
+        ]
+        assert first.attempts == [
+            StepAttempts(step="fix", attempts=2),
+            StepAttempts(step="review", attempts=2),
+            StepAttempts(step="publish", attempts=2),
+        ]
+        durations = [(run.updated_at - run.created_at).total_seconds() for run in (reworked, clean)]
+        assert (first.tokens, first.retries, first.send_backs) == (1365, 1, 1)
+        assert (second.tokens, second.api.cost) == (11, None)
+        assert (second.retries, second.send_backs) == (0, 0)
+        assert [first.duration_seconds, second.duration_seconds] == durations
+        created = reworked.created_at.astimezone(UTC).date()
+        assert usage.weeks == [
+            RunWeek(
+                start=created - timedelta(days=created.weekday()),
+                runs=2,
+                tokens=688,
+                attempts=4.5,
+                duration_seconds=median(durations),
+            )
+        ]
+        assert (usage.skipped, usage.unreachable, usage.outdated) == ([], [], [])
+
+    asyncio.run(scenario())
+
+
+def test_a_failure_that_stopped_the_run_is_no_retry(tmp_path):
+    control = FakeControl()
+    control.step_results = [failing('"uv run pytest" exited with code 1.')]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        stopped = (await settled(hub, (await handed_in(hub, coder, 7)).run_id)).run
+        control.usage[_address(coder)] = _answer(_used())
+
+        usage = await hub_client(hub, {Scope.HUB_READ}).call(
+            STATS_RUNS, StatsRunsCommand(instance_id=coder)
+        )
+
+        assert isinstance(usage, StatsRunsResult), usage
+        assert stopped.status is FactoryRunStatus.NEEDS_HUMAN
+        [run] = usage.runs
+        assert (run.attempts, run.retries, run.duration_seconds) == (
+            [StepAttempts(step="test", attempts=1)],
+            0,
+            None,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_run_usage_counts_a_core_without_run_tokens_as_outdated(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        older = await started_instance(hub_client(hub), hub, name="bob")
+        await settled(hub, (await handed_in(hub, coder, 7)).run_id)
+        control.usage[_address(coder)] = _answer(_used()).model_copy(update={"runs": []})
+        control.usage[_address(older.instance_id)] = StatsGetResult.model_validate(
+            _answer(_used()).model_dump(exclude={"runs"})
+        )
+
+        usage = await hub_client(hub, {Scope.HUB_READ}).call(
+            STATS_RUNS, StatsRunsCommand(instance_id=coder)
+        )
+
+        assert isinstance(usage, StatsRunsResult), usage
+        assert usage.outdated == [older.instance_id]
+
+    asyncio.run(scenario())

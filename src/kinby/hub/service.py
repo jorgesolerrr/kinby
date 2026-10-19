@@ -69,6 +69,7 @@ from kinby.contracts import (
     LIBRARY_SKILL_WRITE,
     OPERATION_GET,
     RELAYED_READS,
+    STATS_RUNS,
     STATS_SUMMARY,
     THREAD_ASK,
     Avatar,
@@ -146,6 +147,8 @@ from kinby.contracts import (
     SkillName,
     StatsGetCommand,
     StatsGetResult,
+    StatsRunsCommand,
+    StatsRunsResult,
     StatsSummaryResult,
     StepEnding,
     StepResult,
@@ -173,6 +176,7 @@ from kinby.core.errors import (
     NameTaken,
     PermissionDenied,
 )
+from kinby.core.usage import TimeRange
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.factories.file import InstanceName
 from kinby.hub.access import HubAccess, new_control_token
@@ -221,7 +225,7 @@ from kinby.hub.setup import (
     setup_errors,
 )
 from kinby.hub.template_sync import sync_template
-from kinby.hub.usage import Uncounted, summed_usage
+from kinby.hub.usage import Uncounted, run_usage, summed_usage
 from kinby.instance import (
     PLACEHOLDER_MODEL,
     Instance,
@@ -542,6 +546,7 @@ class Hub:
         dispatcher.register(HUB_SECRET_SET, self.set_hub_secret)
         dispatcher.register(HUB_SECRET_DELETE, self.delete_hub_secret)
         dispatcher.register(STATS_SUMMARY, self.stats_summary)
+        dispatcher.register(STATS_RUNS, self.stats_runs)
 
     def instance_scopes(self, instance_id: UUID) -> frozenset[Scope]:
         """The scopes the registry grants one of the hub's instances on its hub route."""
@@ -2565,11 +2570,25 @@ class Hub:
 
     async def stats_summary(self, command: StatsGetCommand) -> StatsSummaryResult:
         """Ask every instance at once, and keep none of the answers (ADR 0063)."""
+        return summed_usage(await self._answers(command))
+
+    async def stats_runs(self, command: StatsRunsCommand) -> StatsRunsResult:
+        """Join the runs the instance handed in with their tokens in every instance, which are
+        asked at once, and keep none of the answers (ADR 0063)."""
+        self._active_instance(command.instance_id)
+        created = TimeRange(command.since, command.until)
+        runs = [
+            run
+            for run in self.registry.runs(None, None, command.instance_id)
+            if created.includes(run.created_at)
+        ]
+        answers = await self._answers(StatsGetCommand(since=command.since, until=command.until))
+        return run_usage([(run, self.runs.rework(run)) for run in runs], answers)
+
+    async def _answers(self, command: StatsGetCommand) -> dict[UUID, StatsGetResult | Uncounted]:
         records = [record for record in self.registry.managed_instances() if record.active]
         answers = await asyncio.gather(*(self._usage(record, command) for record in records))
-        return summed_usage(
-            dict(zip((record.instance_id for record in records), answers, strict=True))
-        )
+        return dict(zip((record.instance_id for record in records), answers, strict=True))
 
     async def _usage(
         self, record: ManagedInstance, command: StatsGetCommand

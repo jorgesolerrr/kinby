@@ -1,4 +1,4 @@
-import type { Client, Clock, FactoryRun, FactoryRunStatus } from "@kinby/contract"
+import type { Client, Clock } from "@kinby/contract"
 import { useCallback } from "react"
 
 import { Failure } from "@/components/config-alerts"
@@ -6,15 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useRead } from "@/hooks/use-read"
-
-const STATUSES: Record<FactoryRunStatus, string> = {
-  running: "Running",
-  queued: "Queued",
-  parked: "Parked",
-  "needs-human": "Needs a human",
-  done: "Done",
-  cancelled: "Cancelled",
-}
+import { standing, workItem } from "@/lib/factory-runs"
 
 /** The instances that hold one of the factory's roles, each with its runs and needs-human count. */
 export function FactoryInstances({
@@ -88,14 +80,4 @@ export function FactoryInstances({
       ))}
     </section>
   )
-}
-
-function workItem(run: FactoryRun): string {
-  return Object.entries(run.work_item)
-    .map(([name, value]) => `${name} ${String(value)}`)
-    .join(", ")
-}
-
-function standing(run: FactoryRun): string {
-  return run.step === null ? STATUSES[run.status] : `${STATUSES[run.status]} at ${run.step}`
 }

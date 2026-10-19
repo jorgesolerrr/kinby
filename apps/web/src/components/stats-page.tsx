@@ -1,4 +1,5 @@
 import type {
+  Client,
   Clock,
   InstanceClient,
   OriginUse,
@@ -17,6 +18,7 @@ import { PlansStrip } from "@/components/plans-strip"
 import { RangeHeader } from "@/components/range-header"
 import { Origins } from "@/components/stats-origin"
 import { Quality } from "@/components/stats-quality"
+import { Runs } from "@/components/stats-runs"
 import { Spend, UnpricedNotice } from "@/components/stats-spend"
 import { Tile, TileStrip } from "@/components/tile"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -72,10 +74,12 @@ type Caller = Pick<InstanceClient, "call">
  */
 export function StatsPage({
   client,
+  caller,
   clock,
   instanceId,
 }: {
   client: Caller
+  caller: Pick<Client, "call">
   clock: Clock
   instanceId: string
 }) {
@@ -131,6 +135,7 @@ export function StatsPage({
             <TabsTrigger value="spend">Spend</TabsTrigger>
             <TabsTrigger value="origin">Origin</TabsTrigger>
             <TabsTrigger value="quality">Quality</TabsTrigger>
+            <TabsTrigger value="runs">Runs</TabsTrigger>
           </TabsList>
           {stats === undefined ? (
             value === undefined &&
@@ -171,6 +176,17 @@ export function StatsPage({
               <TabsContent value="quality">
                 <div className="flex flex-col gap-4 pt-4">
                   <Quality stats={stats} by={by} starts={starts} />
+                </div>
+              </TabsContent>
+              <TabsContent value="runs">
+                <div className="flex flex-col gap-4 pt-4">
+                  <Runs
+                    caller={caller}
+                    clock={clock}
+                    instanceId={instanceId}
+                    range={range}
+                    stats={stats}
+                  />
                 </div>
               </TabsContent>
             </>

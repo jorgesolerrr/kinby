@@ -119,6 +119,7 @@ export function MainPanel({
       <StatsPage
         key={selected.instance_id}
         client={instanceClient}
+        caller={caller}
         clock={clock}
         instanceId={selected.instance_id}
       />

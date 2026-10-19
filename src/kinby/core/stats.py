@@ -1,4 +1,5 @@
-"""Aggregate per-turn metrics into UTC reporting buckets, and read each plan's use and limits."""
+"""Aggregate per-turn metrics into UTC reporting buckets, read each plan's use and limits, and
+count each factory run's tokens."""
 
 from __future__ import annotations
 
@@ -6,12 +7,15 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from uuid import UUID
 
 from kinby.contracts import (
+    ApiUse,
     CompletionOutcome,
     DelegatedRun,
     DenyCounts,
     Event,
+    FactoryRunOrigin,
     MemoryCallCounts,
     NavigationMeans,
     Origin,
@@ -22,17 +26,20 @@ from kinby.contracts import (
     RoutineName,
     RoutineOrigin,
     RunDelegated,
+    RunTokens,
     SourceRuns,
     StatsBucket,
     StatsBucketSize,
     StatsSummary,
     SubscriptionUse,
+    TokenTotals,
     ToolTime,
     TurnClosingKind,
     TurnMetrics,
     TurnVerdict,
     UsageSource,
 )
+from kinby.core.turn_metrics import RunRecap, StepRun
 
 #: Every usage source that is counted, never priced, in the order results list them.
 SUBSCRIPTION_SOURCES = tuple(source for source in UsageSource if source is not UsageSource.API)
@@ -150,6 +157,23 @@ class _BucketTotals:
         return self.origins.setdefault(_routine(origin), _OriginTotals())
 
 
+@dataclass
+class _RunTotals:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cost: float | None = None
+    delegated_runs: list[DelegatedRun] = field(default_factory=list)
+
+    def add(self, tokens: TokenTotals, cost: float | None) -> None:
+        self.input_tokens += tokens.input_tokens
+        self.output_tokens += tokens.output_tokens
+        self.cache_read_tokens += tokens.cache_read_tokens
+        self.cache_creation_tokens += tokens.cache_creation_tokens
+        self.cost = _added_cost(self.cost, cost)
+
+
 def stats_buckets(
     records: Iterable[TurnMetrics],
     runs: Iterable[TurnRun],
@@ -158,10 +182,10 @@ def stats_buckets(
     """Group turns by their UTC close and subscription runs by their own timestamp."""
     totals_by_start: dict[date, _BucketTotals] = {}
     for record in records:
-        start = _bucket_start(record.closed_at, by)
+        start = bucket_start(record.closed_at, by)
         totals_by_start.setdefault(start, _BucketTotals()).add(record)
     for run in _subscription_runs(runs):
-        start = _bucket_start(run.reported.timestamp, by)
+        start = bucket_start(run.reported.timestamp, by)
         totals_by_start.setdefault(start, _BucketTotals()).add_run(run)
 
     return [_stats_bucket(start, totals_by_start[start]) for start in sorted(totals_by_start)]
@@ -175,6 +199,40 @@ def stats_summary(records: Iterable[TurnMetrics], runs: Iterable[TurnRun]) -> St
     for run in _subscription_runs(runs):
         totals.add_run(run)
     return _stats_summary(totals)
+
+
+def run_tokens(
+    records: Iterable[TurnMetrics], step_runs: Iterable[StepRun], recaps: Iterable[RunRecap]
+) -> list[RunTokens]:
+    """Each factory run's tokens: its agent steps' turns, its client steps' runs and its recap."""
+    totals: dict[UUID, _RunTotals] = {}
+    for record in records:
+        if isinstance(record.origin, FactoryRunOrigin):
+            run = totals.setdefault(record.origin.run_id, _RunTotals())
+            run.add(record, record.cost)
+            run.delegated_runs += (reported.run for reported in record.delegated_runs)
+    for step_run in step_runs:
+        totals.setdefault(step_run.run_id, _RunTotals()).delegated_runs.append(
+            step_run.reported.run
+        )
+    for recap in recaps:
+        totals.setdefault(recap.run_id, _RunTotals()).add(recap.tokens, recap.cost)
+    return [
+        RunTokens(
+            run_id=run_id,
+            api=ApiUse(
+                input_tokens=run.input_tokens,
+                output_tokens=run.output_tokens,
+                cache_read_tokens=run.cache_read_tokens,
+                cache_creation_tokens=run.cache_creation_tokens,
+                cost=run.cost,
+            ),
+            subscriptions=[
+                _subscription_use(source, run.delegated_runs) for source in SUBSCRIPTION_SOURCES
+            ],
+        )
+        for run_id, run in totals.items()
+    ]
 
 
 def plan_use(events: Iterable[Event], now: datetime) -> list[PlanUse]:
@@ -232,7 +290,8 @@ def _added_cost(total: float | None, cost: float | None) -> float | None:
     return cost if total is None else total + cost
 
 
-def _bucket_start(timestamp: datetime, by: StatsBucketSize) -> date:
+def bucket_start(timestamp: datetime, by: StatsBucketSize) -> date:
+    """The UTC day, or the Monday of the UTC week, *timestamp* falls in."""
     start = timestamp.astimezone(UTC).date()
     if by is StatsBucketSize.WEEK:
         start -= timedelta(days=start.weekday())
